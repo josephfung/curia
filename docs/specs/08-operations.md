@@ -56,20 +56,20 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
     environment:
-      POSTGRES_DB: ceo_office
+      POSTGRES_DB: curia
       POSTGRES_USER: ${DB_USER}
       POSTGRES_PASSWORD: ${DB_PASSWORD}
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${DB_USER}"]
       interval: 5s
 
-  ceo-office:
+  curia:
     build: .
     depends_on:
       postgres:
         condition: service_healthy
     environment:
-      DATABASE_URL: postgres://${DB_USER}:${DB_PASSWORD}@postgres:5432/ceo_office
+      DATABASE_URL: postgres://${DB_USER}:${DB_PASSWORD}@postgres:5432/curia
       NODE_ENV: ${NODE_ENV:-development}
     env_file: .env
     healthcheck:
@@ -187,7 +187,7 @@ Migrations run automatically on startup (before the bus starts accepting events)
 ## Project Structure
 
 ```
-ceo-office/
+curia/
 ├── src/
 │   ├── bus/                    # Message bus, event types, layer permissions
 │   │   ├── bus.ts
