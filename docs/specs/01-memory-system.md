@@ -23,16 +23,25 @@ Short-lived context for active agent tasks. Stored in `working_memory` table, sc
 
 ## Tier 2: The Bullpen (inter-agent discussion)
 
-Shared workspace where agents have structured, threaded conversations:
+Shared workspace where agents — and the user — have structured, threaded conversations:
 - Any agent can open a thread addressed to other agents
 - Flows through the bus as `agent.discuss` events (same security model)
 - Threaded and async — agents subscribe to `agent.discuss` events and respond when addressed. The dispatcher also checks for pending Bullpen threads when routing any `agent.task`, ensuring agents see discussion messages even if they only activate via inbound user messages.
 - All threads are logged, auditable, and visible to the user via dashboard
 - Dispatcher can mediate stuck discussions or escalate to user
 
+### User Participation
+
+The CEO can participate in Bullpen threads:
+- **Observe** — all threads are visible via the dashboard SSE stream or HTTP API
+- **Intervene** — send a message to a thread via any channel (e.g., `@bullpen: focus on Q2 expenses, not Q1`) or the dashboard. The dispatcher translates this into an `agent.discuss` event with `sender: "user"`.
+- **Start threads** — ask a question that multiple agents respond to (e.g., `@bullpen: what does everyone know about this vendor?`)
+
+User messages in the Bullpen carry the same audit trail as any other event. The `sender` field distinguishes user messages from agent messages.
+
 **Tables:**
 - `bullpen_threads` — id, topic, participants (TEXT[]), status, created_at
-- `bullpen_messages` — id, thread_id, agent_id, content (JSONB), created_at
+- `bullpen_messages` — id, thread_id, sender_type (TEXT: "agent" | "user"), sender_id (TEXT), content (JSONB), created_at
 
 ---
 

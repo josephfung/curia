@@ -29,6 +29,54 @@ The merged config is validated against a TypeScript-derived JSON Schema at start
 
 ---
 
+## Onboarding (New Instance Setup)
+
+Setting up a new Curia deployment requires configuring channels, skills, and their secrets (API keys, OAuth tokens, IMAP passwords).
+
+### `curia setup` CLI
+
+A guided CLI command walks through each configured channel and skill, prompting for credentials:
+
+```
+$ curia setup
+Curia Setup
+===========
+
+Coordinator persona:
+  Display name [Curia]: Alex
+  Tone [professional]: professional but warm
+
+Setting up email channel...
+  IMAP host: imap.gmail.com
+  IMAP username: joseph@example.com
+  IMAP password: ********
+  Testing connection... ✓ Connected (14 unread messages)
+  Stored as EMAIL_IMAP_PASSWORD.
+
+Setting up Telegram channel...
+  Bot token: ********
+  Testing connection... ✓ Bot @alex_curia_bot is active
+  Stored as TELEGRAM_BOT_TOKEN.
+
+Setting up Google Calendar skill...
+  This requires OAuth. Opening browser...
+  ✓ Authorized. Token stored as GOOGLE_OAUTH_REFRESH_TOKEN.
+
+Summary:
+  ✓ Email channel ready
+  ✓ Telegram channel ready
+  ✗ Signal channel not configured (skipped)
+  ✓ Google Calendar skill ready
+
+Run 'docker compose up' to start Curia.
+```
+
+**How it works:** The CLI reads all channel adapter configs and skill manifests, identifies which secrets are required, checks which are already set, and prompts for the missing ones. It validates connectivity for each service before storing the secret. Adding a new integration = declaring `secrets` in a skill manifest, and `curia setup` automatically picks it up.
+
+**Future:** A web-based onboarding wizard (via the HTTP API dashboard) with OAuth redirect flows and a visual status page.
+
+---
+
 ## Deployment
 
 ### Local Development
