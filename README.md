@@ -349,13 +349,20 @@ Infrastructure is managed separately via the [ceo-deploy](https://github.com/jos
 
 ## Contributing
 
-Curia is in early development. If you're interested in contributing, start by reading the [architecture spec](docs/specs/00-overview.md) to understand the design philosophy. Issues and PRs welcome.
+Curia is in early development and welcomes contributions — including AI-assisted ones.
+
+- Read the **[Contributing Guide](CONTRIBUTING.md)** for dev setup, code standards, and how to add channels/skills/agents
+- Read **[CLAUDE.md](CLAUDE.md)** for repo-level conventions (if you're using Claude Code, these load automatically)
+- Check **[open issues](https://github.com/josephfung/curia/issues)** — look for `good first issue` labels
+- Report security vulnerabilities via **[SECURITY.md](SECURITY.md)** — not public issues
+
+We evaluate code quality, not authorship. AI-generated contributions are held to the same review standards as human-written code. See the [AI contributions policy](CONTRIBUTING.md#ai-assisted-contributions) for details.
 
 ---
 
 ## License
 
-MIT
+[MIT](LICENSE)
 
 ---
 
