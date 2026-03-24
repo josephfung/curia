@@ -1,5 +1,57 @@
 # 02 — Agent System
 
+## Coordinator Agent & Unified Persona
+
+All external communication flows through a single **Coordinator agent** — the user's unified point of contact. The Coordinator is a persona (e.g., "Alex") that the CEO names and configures. Specialist agents (expense-tracker, research-analyst, etc.) work internally but never communicate directly with the outside world.
+
+### How It Works
+
+1. Every inbound message routes to the Coordinator — no exceptions
+2. The Coordinator decides: handle it directly (small talk, acknowledgments) or delegate to specialists
+3. Specialist agents return results to the Coordinator via the Bullpen or `agent.response`
+4. The Coordinator synthesizes results and responds in its own voice
+5. The external recipient never knows multiple agents were involved
+
+### Coordinator Config
+
+```yaml
+# agents/coordinator.yaml
+name: coordinator
+role: coordinator                # special role — dispatch always routes here
+persona:
+  display_name: Alex             # what end-users see in emails, messages
+  tone: professional but warm
+  email_signature: |
+    Alex
+    Office of Joseph Fung
+model:
+  provider: anthropic
+  model: claude-sonnet-4-20250514
+system_prompt: |
+  You are ${persona.display_name}, executive assistant to the CEO.
+  You are the single point of contact for all communications.
+  You have a team of specialists you can delegate to, but you always
+  respond in your own voice. The sender should never know multiple
+  agents were involved.
+
+  For casual messages, respond naturally as yourself.
+  For tasks, delegate to the appropriate specialist and synthesize
+  their work into your response.
+pinned_skills:
+  - skill-registry
+  - scheduler
+  - memory-query
+allow_discovery: true
+```
+
+The `role: coordinator` field tells the dispatch layer to route all inbound messages here. There is exactly one coordinator per deployment.
+
+### Internal Agent Handles
+
+Specialist agents have internal handles (e.g., `@expense-tracker`, `@research-analyst`) used in the Bullpen and audit log. These are never exposed to external users — they're internal identifiers for the Coordinator and other agents to reference.
+
+---
+
 ## Agent Definition (Hybrid: YAML + optional TypeScript)
 
 ### Simple Agents (YAML config)
@@ -182,14 +234,12 @@ Every LLM call records: provider, model, input tokens, output tokens, estimated 
 
 ## Dispatch Layer
 
-Routes inbound messages to the correct agent based on:
-- Channel-specific rules (e.g., "all Telegram messages go to general-assistant")
-- Explicit addressing (e.g., "@expense-tracker process this receipt")
-- Keyword/intent matching (configurable patterns in dispatch rules)
+**All inbound messages route to the Coordinator.** The dispatch layer does not classify or route messages to specialist agents — that's the Coordinator's job. The dispatcher's responsibilities are:
 
-Enforces policy: rate limits, blocked senders, required approvals. Mediates Bullpen discussions — can escalate to user if agents are stuck.
-
-The dispatcher also:
-- Translates `agent.response` → `outbound.message` (completing the response loop)
-- Checks for pending Bullpen threads on every `agent.task` routing
-- Subscribes to `agent.error` and notifies the user on the originating channel
+- Route every `inbound.message` to the Coordinator agent
+- Enforce policy: rate limits, blocked senders, required approvals
+- Translate `agent.response` → `outbound.message` (completing the response loop)
+- Inject `persona.display_name` and `persona.email_signature` into outbound messages
+- Check for pending Bullpen threads on every `agent.task` routing
+- Subscribe to `agent.error` and notify the user on the originating channel
+- Mediate Bullpen discussions — escalate to user if agents are stuck

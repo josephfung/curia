@@ -158,3 +158,22 @@ The framework ships with these skills (in `skills/` but part of core):
 - `scheduler` — create/list/cancel scheduled jobs
 - `memory-query` — search entity memory and knowledge graph
 - `memory-store` — write facts to entity memory (with validation gates)
+- `web-fetch` — HTTP GET with configurable timeouts and size limits
+- `file-reader` — read files from a configured data directory (not arbitrary filesystem)
+- `file-writer` — write files to a configured output directory
+
+---
+
+## Recommended MCP Servers
+
+These are not bundled but documented as recommended integrations:
+
+| Server | Purpose | Link |
+|---|---|---|
+| **Filesystem** | Scoped file access (read/write/search) | [modelcontextprotocol/servers/filesystem](https://github.com/modelcontextprotocol/servers/tree/main/src/filesystem) |
+| **Google Drive** | Read/search Google Docs and Sheets | [modelcontextprotocol/servers/gdrive](https://github.com/modelcontextprotocol/servers/tree/main/src/gdrive) |
+| **GitHub** | Repo management, issues, PRs | [modelcontextprotocol/servers/github](https://github.com/modelcontextprotocol/servers/tree/main/src/github) |
+| **Brave Search** | Web search for research agents | [modelcontextprotocol/servers/brave-search](https://github.com/modelcontextprotocol/servers/tree/main/src/brave-search) |
+| **Fetch** | Web fetching with robots.txt compliance | [modelcontextprotocol/servers/fetch](https://github.com/modelcontextprotocol/servers/tree/main/src/fetch) |
+
+Custom MCP servers will be needed for Google Calendar and expense platforms (Expensify, QuickBooks). These can be built as local skills initially and promoted to MCP servers when the protocol stabilizes for those APIs.
