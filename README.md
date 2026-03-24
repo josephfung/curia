@@ -1,0 +1,364 @@
+<p align="center">
+  <img src="docs/assets/ceo-office-header.png" alt="CEO Office" width="800" />
+</p>
+
+<p align="center">
+  <strong>The AI executive staff your C-Suite will use and your Board will trust.</strong>
+</p>
+
+<p align="center">
+  <a href="#quick-start">Quick Start</a> &middot;
+  <a href="#architecture">Architecture</a> &middot;
+  <a href="#security">Security</a> &middot;
+  <a href="docs/specs/00-overview.md">Full Spec</a>
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/status-pre--alpha-orange" alt="Status: Pre-Alpha" />
+  <img src="https://img.shields.io/badge/license-MIT-blue" alt="License: MIT" />
+  <img src="https://img.shields.io/badge/node-%3E%3D22-brightgreen" alt="Node >= 22" />
+  <img src="https://img.shields.io/badge/typescript-ESM-blue" alt="TypeScript ESM" />
+</p>
+
+---
+
+## The Problem
+
+AI agents are powerful. They're also black boxes with root access.
+
+Most agent frameworks treat security as a configuration option and audit trails as an afterthought. They give agents unrestricted tool access, swallow errors silently, and lose context across restarts. When something goes wrong — and it will — there's no way to trace what happened or why.
+
+That's fine for a demo. It's not fine when the agent is reading your email, tracking your expenses, or acting on your behalf.
+
+**CEO Office was built for the people who can't afford "it probably won't go rogue."**
+
+---
+
+## What Is CEO Office?
+
+A multi-agent AI platform designed for executives and their teams. It runs continuously on your own server, handles real workflows across multiple channels, and maintains a sophisticated memory of your world — all with the security posture and audit trail that enterprise governance demands.
+
+Think of it as a digital executive office: specialized agents sit at their desks, collaborate in the bullpen, use shared tools, and report to you. Every action is logged. Every decision is traceable. Every agent stays in its lane.
+
+### What It Actually Does
+
+- **Reads your email** and extracts action items, receipts, and scheduling requests
+- **Tracks expenses** from receipts and bank notifications, categorized and summarized
+- **Researches topics** across multiple sessions, building on previous findings
+- **Manages your calendar** with context about attendees and past interactions
+- **Responds on your behalf** across Signal, Telegram, and email — with your voice and your boundaries
+- **Remembers everything that matters** — who people are, what was decided, what's still pending — in a knowledge graph that gets smarter over time
+
+### What Makes It Different
+
+| | Typical Agent Framework | CEO Office |
+|---|---|---|
+| **Security model** | "Trust the agent" | Hard-enforced layer separation — channel adapters *physically cannot* invoke tools |
+| **Audit trail** | Console.log | Append-only Postgres with causal tracing across every event |
+| **Memory** | Conversation history (lost on restart) | Knowledge graph + entity memory + temporal awareness (survives restarts, ages gracefully) |
+| **Error handling** | Retry and hope | Error budgets, state continuity, pattern detection — agents resume, not restart |
+| **Agent communication** | Agents work in isolation | The Bullpen — structured, auditable, threaded inter-agent discussions |
+| **Multi-channel** | Single chat interface | Email, Signal, Telegram, CLI, HTTP API — same agent, any channel |
+
+---
+
+## Architecture
+
+Four hard-separated layers connected by a message bus. No layer can call another directly. Every event is audited.
+
+```
+┌─────────────────────────────────────────────────────┐
+│                    Channel Layer                     │
+│         Signal  Telegram  Email  CLI  HTTP API       │
+│                                                      │
+│  Translates platform messages into normalized events │
+│  CANNOT invoke tools, access memory, or execute code │
+└──────────────────────┬──────────────────────────────┘
+                       │
+┌──────────────────────▼──────────────────────────────┐
+│                   Dispatch Layer                     │
+│                                                      │
+│  Routes messages to the right agent                  │
+│  Enforces rate limits, permissions, and policy       │
+│  Translates agent responses back to channels         │
+└──────────────────────┬──────────────────────────────┘
+                       │
+┌──────────────────────▼──────────────────────────────┐
+│                    Agent Layer                       │
+│                                                      │
+│  LLM-powered agents with isolated memory scopes     │
+│  Can request tool use — cannot execute directly      │
+│  Collaborate via the Bullpen (threaded discussions)  │
+└──────────────────────┬──────────────────────────────┘
+                       │
+┌──────────────────────▼──────────────────────────────┐
+│                  Execution Layer                     │
+│                                                      │
+│  Runs skills (local or MCP), validates permissions   │
+│  Sanitizes all outputs before returning to agents    │
+└─────────────────────────────────────────────────────┘
+```
+
+The message bus enforces these boundaries at registration time. A channel adapter registered as `layer: "channel"` that attempts to publish a `skill.invoke` event gets an error — not a warning, not a log entry, an error. The architecture prevents misuse; it doesn't just discourage it.
+
+**[Full architecture spec →](docs/specs/00-overview.md)**
+
+---
+
+## Security
+
+Security isn't a feature of CEO Office. It's the reason it exists.
+
+### 1. Hard Layer Separation
+
+Every component declares its layer at startup. The bus enforces which event types each layer can publish or subscribe to. A compromised Telegram adapter can spam inbound messages — but it cannot invoke a skill, write to memory, or execute code. The boundary is architectural, not policy.
+
+### 2. Append-Only Audit Trail
+
+Every event that flows through the bus — every message received, every tool invoked, every inter-agent discussion — is written to an append-only audit log in Postgres *before* it's delivered to subscribers. No UPDATE, no DELETE. If the process crashes mid-delivery, the event is still logged.
+
+Every event carries a `parent_event_id`, so you can trace the full causal chain: "This expense was categorized because this email was received, which triggered this agent, which invoked this skill, which returned this result."
+
+### 3. Secrets Never Touch the LLM
+
+Agents don't see passwords, API keys, or tokens. Ever. Skills access secrets through a scoped interface (`ctx.secret()`), validated against the skill's declared manifest. The LLM sees "email-parser connected to inbox" — never the IMAP password. Every secret access is audit-logged.
+
+### 4. Tool Output Sanitization
+
+All skill results are sanitized before being fed back to the LLM: XML/HTML tags stripped, outputs truncated, secret-like patterns redacted. Error messages are wrapped in structured tags to prevent prompt injection. Nothing from the outside world reaches the LLM unfiltered.
+
+### 5. Intent Drift Detection
+
+Long-running tasks store an intent anchor — the original task description. On each execution burst, the system compares current progress against the anchor. If the agent has drifted from its goal, the task is **paused**, not just flagged. In unattended mode, drift detection blocks — it doesn't advise.
+
+### 6. Error Budgets
+
+Every agent task has hard caps: maximum LLM round-trips, maximum dollar spend, maximum consecutive errors. When a budget is exceeded, the task stops. No infinite loops, no surprise bills, no runaway agents.
+
+---
+
+## Memory
+
+Most agent frameworks forget everything between sessions. CEO Office remembers — and knows what it doesn't know anymore.
+
+### Knowledge Graph
+
+People, organizations, projects, decisions, events — stored as nodes and edges in Postgres with full relationship traversal. Ask "what decisions did we make about Project X that involved Person Y?" and get a real answer, not a hallucination.
+
+### Entity Memory
+
+Configurable facts about the people and things in your world. "Joseph takes his coffee black." "Board meetings are quarterly, first Thursday." Facts carry confidence scores and source attribution — the system knows *why* it believes something and *how recently* that belief was confirmed.
+
+### Temporal Awareness
+
+Not all facts age the same way. "Joseph was born in Toronto" is permanent. "Joseph lives in Kitchener" decays slowly. "Joseph's current project focus" decays fast. Every fact carries a decay class, so stale information loses confidence over time rather than being trusted forever.
+
+### Semantic Search
+
+Entity descriptions and facts are embedded via pgvector, enabling queries like "find everything related to our fundraising strategy" even when the word "fundraising" doesn't appear in any node labels.
+
+### The Bullpen
+
+Agents don't work in isolation. When the expense tracker finds a receipt that might relate to a benefits claim, it opens a thread in the Bullpen — a structured, auditable discussion space where agents coordinate. Every exchange is logged, visible to you, and interruptible. Think of it as overhearing your staff collaborate at their desks.
+
+---
+
+## Agents
+
+Define agents in YAML. No code required for simple agents:
+
+```yaml
+name: expense-tracker
+description: Tracks and categorizes expenses from receipts and emails
+
+model:
+  provider: anthropic
+  model: claude-sonnet-4-20250514
+  fallback:
+    provider: openai
+    model: gpt-4o
+
+system_prompt: |
+  You are an expense tracking assistant for a CEO.
+  Extract amounts, vendors, categories, and dates from receipts.
+
+pinned_skills:
+  - email-parser
+  - spreadsheet-writer
+
+memory:
+  scopes: [expenses, vendors, budgets]
+
+schedule:
+  - cron: "0 9 * * 1"
+    task: "Generate weekly expense summary"
+
+error_budget:
+  max_turns: 20
+  max_cost_usd: 1.00
+```
+
+Need custom logic? Add a TypeScript handler as an escape hatch — same config, plus hooks for `onTask`, `onSkillResult`, and `beforeRespond`.
+
+Agents discover new skills automatically. A built-in skill registry lets agents find capabilities they weren't explicitly configured with. Sensitive skills (payments, deletions) require your approval on first use — once, not every time.
+
+---
+
+## Skills
+
+Two types, one interface. Agents don't know or care which kind they're using.
+
+**Local skills** — directories with a manifest and handler:
+```
+skills/email-parser/
+  skill.json      # name, inputs, outputs, permissions, sensitivity
+  handler.ts      # implementation
+  handler.test.ts # tests
+```
+
+**MCP skills** — connect to any Model Context Protocol server:
+```yaml
+mcp_servers:
+  - name: github
+    transport: sse
+    url: https://mcp-server.example.com/sse
+```
+
+Skills declare their permissions and required secrets in their manifest. The execution layer validates both before invocation. No skill can access a secret it didn't declare. No skill can exceed its declared permissions.
+
+---
+
+## Channels
+
+Talk to your agents wherever you are:
+
+| Channel | How It Works |
+|---|---|
+| **Email** | IMAP polling + SMTP. Agents read your inbox, extract action items, reply on your behalf. |
+| **Signal** | Via signal-cli. End-to-end encrypted messaging with your agents. |
+| **Telegram** | Bot API. Quick commands and conversations on the go. |
+| **CLI** | Interactive terminal for local development and testing. |
+| **HTTP API** | REST + SSE for web dashboards, mobile apps, and programmatic access. |
+
+Every channel is a thin adapter that normalizes messages in and out. Adding a new channel means implementing one interface — no core changes required. All channels share the same security model: they can pass messages, nothing more.
+
+---
+
+## Scheduling
+
+Agents work while you sleep.
+
+**Recurring tasks** via cron:
+```yaml
+schedule:
+  - cron: "0 9 * * 1"
+    task: "Generate weekly expense summary"
+  - cron: "0 */4 * * *"
+    task: "Check inbox for new receipts"
+```
+
+**Long-running tasks** execute in bursts. A research task spanning days doesn't hold a process open — it saves progress, sleeps, and the scheduler wakes it up for the next chunk. Full state in Postgres. Survives restarts.
+
+**Dynamic scheduling** — agents can create their own scheduled jobs at runtime. "Remind me every Friday to review the expense report" just works.
+
+---
+
+## Multi-Provider LLM Support
+
+| Provider | Models | Use Case |
+|---|---|---|
+| **Anthropic** | Claude Opus, Sonnet, Haiku | Primary — best for nuanced reasoning and long context |
+| **OpenAI** | GPT-4o, o1-pro, GPT-4o-mini | Fallback, cost optimization |
+| **Ollama** | Llama, Mistral, Gemma, etc. | Local/private — no data leaves your server |
+
+Each agent specifies its provider and model. Configure fallbacks for resilience — if Anthropic is down, the agent switches to OpenAI automatically. All providers normalize to a common response type. No `any` types, no provider-specific leaks.
+
+---
+
+## Quick Start
+
+> **Note:** CEO Office is in pre-alpha. The spec is complete; implementation is underway. Star the repo to follow progress.
+
+```bash
+# Clone
+git clone https://github.com/josephfung/ceo-office.git
+cd ceo-office
+
+# Configure
+cp .env.example .env
+# Edit .env with your API keys and channel credentials
+
+# Run
+docker compose up
+```
+
+The framework starts Postgres, runs migrations, connects to configured channels, and loads your agents. Talk to it via CLI immediately; other channels activate as configured.
+
+---
+
+## Project Status
+
+| Component | Status |
+|---|---|
+| Architecture spec | Done |
+| Message bus with layer enforcement | Planned |
+| Audit logger (write-ahead, append-only) | Planned |
+| Agent runtime (YAML config + handler) | Planned |
+| LLM providers (Anthropic, OpenAI, Ollama) | Planned |
+| Knowledge graph + entity memory | Planned |
+| Working memory + Bullpen | Planned |
+| Scheduler (cron + persistent tasks) | Planned |
+| Error recovery (budgets, patterns, continuity) | Planned |
+| Channel: CLI | Planned |
+| Channel: Email (IMAP/SMTP) | Planned |
+| Channel: Telegram | Planned |
+| Channel: Signal | Planned |
+| Channel: HTTP API + SSE | Planned |
+| Skills system (local + MCP) | Planned |
+| Web dashboard | Future |
+| Voice/telephony channel | Future |
+
+---
+
+## Documentation
+
+- **[Architecture Overview](docs/specs/00-overview.md)** — Layers, bus, message flow, design principles
+- **[Memory System](docs/specs/01-memory-system.md)** — Knowledge graph, entity memory, Bullpen, embeddings
+- **[Agent System](docs/specs/02-agent-system.md)** — Agent definition, lifecycle, LLM providers
+- **[Skills & Execution](docs/specs/03-skills-and-execution.md)** — Local + MCP skills, discovery, secrets
+- **[Channels](docs/specs/04-channels.md)** — Adapter interface, launch channels
+- **[Error Recovery](docs/specs/05-error-recovery.md)** — Budgets, state continuity, pattern detection
+- **[Audit & Security](docs/specs/06-audit-and-security.md)** — Audit log, security model, drift detection
+- **[Scheduler](docs/specs/07-scheduler.md)** — Jobs, persistent tasks, burst execution
+- **[Operations](docs/specs/08-operations.md)** — Config, deployment, health, monitoring
+
+---
+
+## Deployment
+
+CEO Office runs anywhere Docker runs:
+
+- **Local development** — `docker compose up` on your laptop
+- **Single VPS** — One Hetzner/DigitalOcean/Linode instance with Docker + Caddy
+- **Multiple instances** — Separate VPS per user/org. No multi-tenant complexity.
+
+Infrastructure is managed separately via the [ceo-deploy](https://github.com/josephfung/ceo-deploy) repo (Terraform + Docker Compose + Caddy). Security hardening, backups, and runbooks included.
+
+---
+
+## Contributing
+
+CEO Office is in early development. If you're interested in contributing, start by reading the [architecture spec](docs/specs/00-overview.md) to understand the design philosophy. Issues and PRs welcome.
+
+---
+
+## License
+
+MIT
+
+---
+
+<p align="center">
+  <strong>Auditable. Secure. Memory that lasts.</strong><br/>
+  <em>The executive AI platform built for the people who sign the checks.</em>
+</p>
