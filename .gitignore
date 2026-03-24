@@ -1,0 +1,29 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Environment and secrets
+.env
+.env.local
+.env.production
+
+# Config overrides (only default.yaml is tracked)
+config/local.yaml
+config/production.yaml
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+*.swp
+*.swo
+
+# Test coverage
+coverage/
+
+# Docker volumes
+pgdata/
