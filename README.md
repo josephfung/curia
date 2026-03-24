@@ -1,9 +1,10 @@
 <p align="center">
-  <img src="docs/assets/ceo-office-header.png" alt="CEO Office" width="800" />
+  <img src="docs/assets/curia-header.png" alt="Curia" width="800" />
 </p>
 
 <p align="center">
-  <strong>The AI executive staff your C-Suite will use and your Board will trust.</strong>
+  <strong>The AI executive staff your C-Suite will use and your Board will trust.</strong><br/>
+  <em>Curia — the Roman administrative court. Where governance happened.</em>
 </p>
 
 <p align="center">
@@ -30,11 +31,11 @@ Most agent frameworks treat security as a configuration option and audit trails 
 
 That's fine for a demo. It's not fine when the agent is reading your email, tracking your expenses, or acting on your behalf.
 
-**CEO Office was built for the people who can't afford "it probably won't go rogue."**
+**Curia was built for the people who can't afford "it probably won't go rogue."**
 
 ---
 
-## What Is CEO Office?
+## What Is Curia?
 
 A multi-agent AI platform designed for executives and their teams. It runs continuously on your own server, handles real workflows across multiple channels, and maintains a sophisticated memory of your world — all with the security posture and audit trail that enterprise governance demands.
 
@@ -51,7 +52,7 @@ Think of it as a digital executive office: specialized agents sit at their desks
 
 ### What Makes It Different
 
-| | Typical Agent Framework | CEO Office |
+| | Typical Agent Framework | Curia |
 |---|---|---|
 | **Security model** | "Trust the agent" | Hard-enforced layer separation — channel adapters *physically cannot* invoke tools |
 | **Audit trail** | Console.log | Append-only Postgres with causal tracing across every event |
@@ -107,7 +108,7 @@ The message bus enforces these boundaries at registration time. A channel adapte
 
 ## Security
 
-Security isn't a feature of CEO Office. It's the reason it exists.
+Security isn't a feature of Curia. It's the reason it exists.
 
 ### 1. Hard Layer Separation
 
@@ -139,7 +140,7 @@ Every agent task has hard caps: maximum LLM round-trips, maximum dollar spend, m
 
 ## Memory
 
-Most agent frameworks forget everything between sessions. CEO Office remembers — and knows what it doesn't know anymore.
+Most agent frameworks forget everything between sessions. Curia remembers — and knows what it doesn't know anymore.
 
 ### Knowledge Graph
 
@@ -277,12 +278,12 @@ Each agent specifies its provider and model. Configure fallbacks for resilience 
 
 ## Quick Start
 
-> **Note:** CEO Office is in pre-alpha. The spec is complete; implementation is underway. Star the repo to follow progress.
+> **Note:** Curia is in pre-alpha. The spec is complete; implementation is underway. Star the repo to follow progress.
 
 ```bash
 # Clone
-git clone https://github.com/josephfung/ceo-office.git
-cd ceo-office
+git clone https://github.com/josephfung/curia.git
+cd curia
 
 # Configure
 cp .env.example .env
@@ -336,7 +337,7 @@ The framework starts Postgres, runs migrations, connects to configured channels,
 
 ## Deployment
 
-CEO Office runs anywhere Docker runs:
+Curia runs anywhere Docker runs:
 
 - **Local development** — `docker compose up` on your laptop
 - **Single VPS** — One Hetzner/DigitalOcean/Linode instance with Docker + Caddy
@@ -348,7 +349,7 @@ Infrastructure is managed separately via the [ceo-deploy](https://github.com/jos
 
 ## Contributing
 
-CEO Office is in early development. If you're interested in contributing, start by reading the [architecture spec](docs/specs/00-overview.md) to understand the design philosophy. Issues and PRs welcome.
+Curia is in early development. If you're interested in contributing, start by reading the [architecture spec](docs/specs/00-overview.md) to understand the design philosophy. Issues and PRs welcome.
 
 ---
 

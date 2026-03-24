@@ -1,4 +1,4 @@
-# CEO Office Framework — Architecture Overview
+# Curia Framework — Architecture Overview
 
 **Date:** 2026-03-24
 **Status:** Approved
@@ -21,9 +21,9 @@
 
 ## Context
 
-After auditing four open-source agent frameworks (agentsystems, Daemora, ForgeAI, Edict), all were found to be high-risk for production use — single-maintainer projects with no code review, thin tests, and immature architectures. The decision is to build a minimal custom framework ("CEO Office") purpose-built for a long-running, VPS-hosted executive assistant system.
+After auditing four open-source agent frameworks (agentsystems, Daemora, ForgeAI, Edict), all were found to be high-risk for production use — single-maintainer projects with no code review, thin tests, and immature architectures. The decision is to build a minimal custom framework ("Curia") purpose-built for a long-running, VPS-hosted executive assistant system.
 
-The framework replaces the existing Zora dependency entirely (clean break). It lives in the `ceo-office` repo (currently an empty scaffold) and deploys via the existing `ceo-deploy` infrastructure (Hetzner VPS, Docker Compose, Caddy).
+The framework replaces the existing Zora dependency entirely (clean break). It lives in the `curia` repo (currently an empty scaffold) and deploys via the existing `ceo-deploy` infrastructure (Hetzner VPS, Docker Compose, Caddy).
 
 **Zora migration:** No data migration. Zora's audit logs, policies, and dashboard state are discarded. The existing Zora container in `ceo-deploy` will be replaced with the new framework container. This is a conscious decision — Zora was an evaluation, not a production system with accumulated data worth preserving.
 
