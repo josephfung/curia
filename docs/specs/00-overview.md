@@ -16,6 +16,7 @@
 | 06 | [Audit & Security](06-audit-and-security.md) | Audit log, redaction, tool sanitization, intent drift, security |
 | 07 | [Scheduler](07-scheduler.md) | Job model, persistent tasks, burst execution |
 | 08 | [Operations](08-operations.md) | Config, deployment, health checks, logging, project structure |
+| 09 | [Contacts & Identity](09-contacts-and-identity.md) | Contact resolution, identity verification, authorization, channel identity linking |
 
 ---
 
