@@ -4,6 +4,8 @@ import {
   createAgentTask,
   createAgentResponse,
   createOutboundMessage,
+  createSkillInvoke,
+  createSkillResult,
   type BusEvent,
 } from '../../../src/bus/events.js';
 
@@ -62,6 +64,35 @@ describe('Event Types', () => {
     });
     expect(event.type).toBe('outbound.message');
     expect(event.sourceLayer).toBe('dispatch');
+  });
+
+  it('createSkillInvoke creates a skill.invoke event', () => {
+    const event = createSkillInvoke({
+      agentId: 'coordinator',
+      conversationId: 'conv-1',
+      skillName: 'web-fetch',
+      input: { url: 'https://example.com' },
+      taskEventId: 'task-1',
+      parentEventId: 'parent-1',
+    });
+    expect(event.type).toBe('skill.invoke');
+    expect(event.sourceLayer).toBe('agent');
+    expect(event.payload.skillName).toBe('web-fetch');
+    expect(event.parentEventId).toBe('parent-1');
+  });
+
+  it('createSkillResult creates a skill.result event', () => {
+    const event = createSkillResult({
+      agentId: 'coordinator',
+      conversationId: 'conv-1',
+      skillName: 'web-fetch',
+      result: { success: true, data: 'page content' },
+      durationMs: 250,
+      parentEventId: 'invoke-1',
+    });
+    expect(event.type).toBe('skill.result');
+    expect(event.sourceLayer).toBe('execution');
+    expect(event.payload.durationMs).toBe(250);
   });
 
   it('type narrows via discriminated union', () => {

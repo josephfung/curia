@@ -45,6 +45,22 @@ interface OutboundMessagePayload {
   content: string;
 }
 
+interface SkillInvokePayload {
+  agentId: string;
+  conversationId: string;
+  skillName: string;
+  input: Record<string, unknown>;
+  taskEventId: string;  // traces back to the agent.task that triggered this
+}
+
+interface SkillResultPayload {
+  agentId: string;
+  conversationId: string;
+  skillName: string;
+  result: { success: true; data: unknown } | { success: false; error: string };
+  durationMs: number;
+}
+
 // -- Discriminated union --
 // The `type` field is the discriminant; `sourceLayer` records which layer emitted the event.
 
@@ -72,11 +88,27 @@ export interface OutboundMessageEvent extends BaseEvent {
   payload: OutboundMessagePayload;
 }
 
+export interface SkillInvokeEvent extends BaseEvent {
+  type: 'skill.invoke';
+  sourceLayer: 'agent';
+  payload: SkillInvokePayload;
+}
+
+export interface SkillResultEvent extends BaseEvent {
+  type: 'skill.result';
+  // sourceLayer is 'execution' because the result logically comes from the execution layer,
+  // even though the agent layer publishes it on behalf (execution layer has no bus access in Phase 3).
+  sourceLayer: 'execution';
+  payload: SkillResultPayload;
+}
+
 export type BusEvent =
   | InboundMessageEvent
   | AgentTaskEvent
   | AgentResponseEvent
-  | OutboundMessageEvent;
+  | OutboundMessageEvent
+  | SkillInvokeEvent
+  | SkillResultEvent;
 
 // Convenience alias for use in handler maps / switch statements.
 export type EventType = BusEvent['type'];
@@ -138,6 +170,36 @@ export function createOutboundMessage(
     timestamp: new Date(),
     type: 'outbound.message',
     sourceLayer: 'dispatch',
+    payload: rest,
+    parentEventId,
+  };
+}
+
+export function createSkillInvoke(
+  // parentEventId is required — every skill invocation must trace back to the agent.task that triggered it.
+  payload: SkillInvokePayload & { parentEventId: string },
+): SkillInvokeEvent {
+  const { parentEventId, ...rest } = payload;
+  return {
+    id: randomUUID(),
+    timestamp: new Date(),
+    type: 'skill.invoke',
+    sourceLayer: 'agent',
+    payload: rest,
+    parentEventId,
+  };
+}
+
+export function createSkillResult(
+  // parentEventId is required — results must reference the skill.invoke event they respond to.
+  payload: SkillResultPayload & { parentEventId: string },
+): SkillResultEvent {
+  const { parentEventId, ...rest } = payload;
+  return {
+    id: randomUUID(),
+    timestamp: new Date(),
+    type: 'skill.result',
+    sourceLayer: 'execution',
     payload: rest,
     parentEventId,
   };

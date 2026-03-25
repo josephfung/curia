@@ -28,6 +28,9 @@ import { Dispatcher } from './dispatch/dispatcher.js';
 import { CliAdapter } from './channels/cli/cli-adapter.js';
 import { loadAgentConfig } from './agents/loader.js';
 import { WorkingMemory } from './memory/working-memory.js';
+import { SkillRegistry } from './skills/registry.js';
+import { ExecutionLayer } from './skills/execution.js';
+import { loadSkillsFromDirectory } from './skills/loader.js';
 
 async function main(): Promise<void> {
   // 1. Config & logging — no dependencies, must come first.
@@ -74,6 +77,26 @@ async function main(): Promise<void> {
   // the working_memory table is reachable before the first message arrives.
   const memory = WorkingMemory.createWithPostgres(pool, logger);
 
+  // Skill registry — loads all skills from the skills/ directory.
+  // Skills are the framework's extension mechanism; agents invoke them
+  // via the LLM's tool-use API through the execution layer.
+  const skillRegistry = new SkillRegistry();
+  const skillsDir = path.resolve(import.meta.dirname, '../skills');
+  try {
+    const skillCount = await loadSkillsFromDirectory(skillsDir, skillRegistry, logger);
+    logger.info({ skillCount }, 'Skills loaded');
+  } catch (err) {
+    // Fail hard on skill loading errors — a broken skill.json or handler should
+    // not silently degrade the system to no-tools mode. Consistent with how we
+    // handle missing DATABASE_URL and ANTHROPIC_API_KEY.
+    logger.fatal({ err }, 'Failed to load skills');
+    process.exit(1);
+  }
+
+  // Execution layer — validates permissions, runs handlers, sanitizes output.
+  // Sits between agents and skills as a security boundary.
+  const executionLayer = new ExecutionLayer(skillRegistry, logger);
+
   // 6. Coordinator agent — subscribes to agent.task, publishes agent.response.
   // Must register before the dispatcher so there is a handler for agent.task
   // by the time the first inbound.message is converted.
@@ -82,6 +105,13 @@ async function main(): Promise<void> {
     path.resolve(import.meta.dirname, '../agents/coordinator.yaml'),
   );
 
+  // Build tool definitions from the coordinator's pinned skills
+  const pinnedSkills = coordinatorConfig.pinned_skills ?? [];
+  const skillToolDefs = skillRegistry.toToolDefinitions(pinnedSkills);
+  if (skillToolDefs.length > 0) {
+    logger.info({ skills: pinnedSkills }, 'Coordinator tools configured');
+  }
+
   const coordinator = new AgentRuntime({
     agentId: coordinatorConfig.name,
     systemPrompt: coordinatorConfig.system_prompt,
@@ -89,6 +119,9 @@ async function main(): Promise<void> {
     bus,
     logger,
     memory,
+    executionLayer,
+    pinnedSkills,
+    skillToolDefs,
   });
   coordinator.register();
 

@@ -1,0 +1,115 @@
+// execution.ts — the execution layer runs skills within controlled boundaries.
+//
+// This is the security boundary between agents and the outside world.
+// It resolves skills from the registry, validates permissions, provides
+// a sandboxed SkillContext, enforces timeouts, and sanitizes outputs.
+//
+// Skills never see the bus, database, or raw filesystem. They get:
+// - validated input
+// - scoped secret access (only secrets declared in their manifest)
+// - a scoped logger
+// And they return a SkillResult. That's it.
+
+import type { SkillResult, SkillContext } from './types.js';
+import type { SkillRegistry } from './registry.js';
+import { sanitizeOutput } from './sanitize.js';
+import type { Logger } from '../logger.js';
+
+export class ExecutionLayer {
+  private registry: SkillRegistry;
+  private logger: Logger;
+
+  constructor(registry: SkillRegistry, logger: Logger) {
+    this.registry = registry;
+    this.logger = logger;
+  }
+
+  /**
+   * Invoke a skill by name with the given input.
+   *
+   * Steps:
+   * 1. Resolve the skill from the registry
+   * 2. Build a sandboxed SkillContext with scoped secret access
+   * 3. Execute the handler with a timeout
+   * 4. Sanitize the output (strip injection vectors, redact secrets, truncate)
+   * 5. Return the result
+   *
+   * Never throws — always returns a SkillResult.
+   */
+  async invoke(
+    skillName: string,
+    input: Record<string, unknown>,
+  ): Promise<SkillResult> {
+    const skill = this.registry.get(skillName);
+
+    if (!skill) {
+      return { success: false, error: `Skill '${skillName}' not found in registry` };
+    }
+
+    const { manifest, handler } = skill;
+    const skillLogger = this.logger.child({ skill: skillName });
+
+    // Build the sandboxed context — secret access is restricted to
+    // only the secrets declared in the skill's manifest
+    const declaredSecrets = new Set(manifest.secrets);
+    const ctx: SkillContext = {
+      input,
+      secret: (name: string): string => {
+        if (!declaredSecrets.has(name)) {
+          throw new Error(`Secret '${name}' is not declared in the manifest for skill '${skillName}'`);
+        }
+        const value = process.env[name];
+        if (!value) {
+          throw new Error(`Secret '${name}' is declared but not set in the environment`);
+        }
+        // Log at debug level — info is too noisy for every secret access
+        skillLogger.debug({ secretName: name }, 'Secret accessed');
+        return value;
+      },
+      log: skillLogger,
+    };
+
+    skillLogger.info({ input: Object.keys(input) }, 'Invoking skill');
+
+    // Track the timeout timer so we can clean it up after the race resolves.
+    // Without cleanup, successful skill invocations leak timers that keep the
+    // process alive during graceful shutdown.
+    let timer: NodeJS.Timeout;
+    const timeoutPromise = new Promise<SkillResult>((_, reject) => {
+      timer = setTimeout(
+        () => reject(new Error(`Skill '${skillName}' timed out after ${manifest.timeout}ms`)),
+        manifest.timeout,
+      );
+    });
+
+    try {
+      const result = await Promise.race([
+        handler.execute(ctx),
+        timeoutPromise,
+      ]);
+
+      // Sanitize successful output before returning
+      if (result.success && typeof result.data === 'string') {
+        return { success: true, data: sanitizeOutput(result.data) };
+      } else if (result.success && result.data !== null && result.data !== undefined) {
+        const sanitized = sanitizeOutput(JSON.stringify(result.data));
+        try {
+          return { success: true, data: JSON.parse(sanitized) };
+        } catch (parseErr) {
+          // Sanitization broke the JSON (e.g., truncation mid-key) — return as string
+          skillLogger.warn({ err: parseErr, skillName }, 'Sanitized output is not valid JSON, returning as string');
+          return { success: true, data: sanitized };
+        }
+      }
+
+      return result;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      skillLogger.error({ err }, 'Skill invocation failed');
+      return { success: false, error: message };
+    } finally {
+      // Clean up the timeout timer whether we succeeded, failed, or timed out
+      clearTimeout(timer!);
+    }
+  }
+}
