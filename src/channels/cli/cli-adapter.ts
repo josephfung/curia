@@ -18,22 +18,24 @@ export class CliAdapter {
   private bus: EventBus;
   private logger: Logger;
   private rl?: readline.Interface;
+  private onExit?: () => void;
 
-  constructor(bus: EventBus, logger: Logger) {
+  constructor(bus: EventBus, logger: Logger, onExit?: () => void) {
     this.bus = bus;
     this.logger = logger;
+    this.onExit = onExit;
   }
 
   start(): void {
     // Subscribe to outbound messages directed at the CLI channel.
-    // We filter by channelId === 'cli' because the bus delivers to all
-    // outbound.message subscribers regardless of destination channel.
     this.bus.subscribe('outbound.message', 'channel', (event) => {
       if (event.type === 'outbound.message' && event.payload.channelId === 'cli') {
         const outbound = event as OutboundMessageEvent;
-        // Write response before the next prompt so the layout reads naturally:
-        // user input → blank line → assistant reply → blank line → prompt
-        process.stdout.write(`\n${outbound.payload.content}\n\n> `);
+        // Clear the current prompt line, write response, re-prompt
+        readline.clearLine(process.stdout, 0);
+        readline.cursorTo(process.stdout, 0);
+        process.stdout.write(`\n${outbound.payload.content}\n\n`);
+        this.rl?.prompt();
       }
     });
 
@@ -43,20 +45,27 @@ export class CliAdapter {
       prompt: '> ',
     });
 
+    // Handle Ctrl+C — readline emits 'close' on SIGINT
+    this.rl.on('close', () => {
+      this.logger.info('CLI closed');
+      if (this.onExit) {
+        this.onExit();
+      } else {
+        process.exit(0);
+      }
+    });
+
     this.rl.prompt();
 
     this.rl.on('line', (line) => {
       const content = line.trim();
 
-      // Skip blank lines — just re-prompt without publishing an event
       if (!content) {
         this.rl?.prompt();
         return;
       }
 
-      // Exit commands — clean shutdown rather than SIGINT
       if (content === '/quit' || content === '/exit') {
-        this.logger.info('CLI exit requested');
         this.stop();
         return;
       }
@@ -68,19 +77,20 @@ export class CliAdapter {
         content,
       });
 
-      // Publish to bus — errors are logged, not thrown (don't crash the REPL).
-      // Using void + .catch to handle the Promise without blocking readline's
-      // synchronous 'line' event callback, which does not support async.
       void this.bus.publish('channel', event).catch((err) => {
         this.logger.error({ err }, 'Failed to publish CLI message');
+        this.rl?.prompt();
       });
     });
 
     this.logger.info('CLI adapter started');
   }
 
+  prompt(): void {
+    this.rl?.prompt();
+  }
+
   stop(): void {
     this.rl?.close();
-    this.logger.info('CLI adapter stopped');
   }
 }

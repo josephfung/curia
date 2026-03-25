@@ -91,27 +91,29 @@ Keep responses concise — a few sentences unless detail is requested.`,
   const dispatcher = new Dispatcher({ bus, logger });
   dispatcher.register();
 
-  // 8. CLI channel — the last thing to start, since opening readline
-  // immediately prompts for user input. Everything upstream must be
-  // fully wired before the user can type their first message.
-  const cli = new CliAdapter(bus, logger);
-  cli.start();
-
-  logger.info('Curia is ready. Type a message or /quit to exit.');
-
   // 9. Graceful shutdown — stop accepting new input first, let any in-flight
   // async bus deliveries drain (they are awaited inside bus.publish), then
   // close the DB pool so Postgres cleans up server-side connections cleanly.
   const shutdown = async () => {
     logger.info('Shutting down...');
-    cli.stop();
     await pool.end();
-    logger.info('Goodbye.');
     process.exit(0);
   };
 
-  process.on('SIGINT', () => void shutdown());
   process.on('SIGTERM', () => void shutdown());
+
+  // 8. CLI channel — the last thing to start, since opening readline
+  // immediately prompts for user input. Everything upstream must be
+  // fully wired before the user can type their first message.
+  // The onExit callback handles both /quit and Ctrl+C.
+  const cli = new CliAdapter(bus, logger, () => void shutdown());
+  cli.start();
+
+  // Print a clean welcome after all the startup logs have settled
+  setTimeout(() => {
+    process.stdout.write('\nCuria is ready. Type a message or /quit to exit.\n\n');
+    cli.prompt();
+  }, 100);
 }
 
 // Pre-logger fallback — if main() throws during config loading (before the
