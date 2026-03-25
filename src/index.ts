@@ -19,6 +19,7 @@
 import * as path from 'node:path';
 import { loadConfig } from './config.js';
 import { createLogger } from './logger.js';
+import { HttpAdapter } from './channels/http/http-adapter.js';
 import { createPool } from './db/connection.js';
 import { EventBus } from './bus/bus.js';
 import { AuditLogger } from './audit/logger.js';
@@ -177,11 +178,34 @@ async function main(): Promise<void> {
   const dispatcher = new Dispatcher({ bus, logger });
   dispatcher.register();
 
-  // 9. Graceful shutdown — stop accepting new input first, let any in-flight
-  // async bus deliveries drain (they are awaited inside bus.publish), then
-  // close the DB pool so Postgres cleans up server-side connections cleanly.
+  // HTTP API channel — REST + SSE endpoints for external clients.
+  // Runs alongside the CLI channel so both can be used simultaneously.
+  const httpAdapter = new HttpAdapter({
+    bus,
+    logger,
+    pool,
+    agentRegistry,
+    port: config.httpPort,
+    apiToken: config.apiToken,
+    agentNames: agentConfigs.map(c => c.name),
+    skillNames: skillRegistry.list().map(s => s.manifest.name),
+  });
+
+  try {
+    await httpAdapter.start();
+  } catch (err) {
+    logger.fatal({ err }, 'Failed to start HTTP API');
+    process.exit(1);
+  }
+
+  // Graceful shutdown — stop accepting new input first, then close connections.
   const shutdown = async () => {
     logger.info('Shutting down...');
+    try {
+      await httpAdapter.stop();
+    } catch (err) {
+      logger.error({ err }, 'Error stopping HTTP API during shutdown');
+    }
     try {
       await pool.end();
     } catch (err) {
