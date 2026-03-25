@@ -27,6 +27,10 @@ export interface SkillManifest {
   secrets: string[];
   /** Per-invocation timeout in ms. Default 30000. */
   timeout: number;
+  /** If true, this skill receives bus and agent registry access in its context.
+   *  This grants unrestricted bus publish/subscribe including layer impersonation.
+   *  Only for framework-internal skills like 'delegate' — external skills should never set this. */
+  infrastructure?: boolean;
 }
 
 /**
@@ -41,6 +45,10 @@ export interface SkillContext {
   secret(name: string): string;
   /** Scoped pino child logger */
   log: Logger;
+  /** Bus access — only available to infrastructure skills (manifest.infrastructure: true) */
+  bus?: import('../bus/bus.js').EventBus;
+  /** Agent registry — only available to infrastructure skills */
+  agentRegistry?: import('../agents/agent-registry.js').AgentRegistry;
 }
 
 /**

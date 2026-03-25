@@ -26,7 +26,8 @@ import { AnthropicProvider } from './agents/llm/anthropic.js';
 import { AgentRuntime } from './agents/runtime.js';
 import { Dispatcher } from './dispatch/dispatcher.js';
 import { CliAdapter } from './channels/cli/cli-adapter.js';
-import { loadAgentConfig } from './agents/loader.js';
+import { loadAllAgentConfigs, interpolateRuntimeContext } from './agents/loader.js';
+import { AgentRegistry } from './agents/agent-registry.js';
 import { WorkingMemory } from './memory/working-memory.js';
 import { SkillRegistry } from './skills/registry.js';
 import { ExecutionLayer } from './skills/execution.js';
@@ -93,37 +94,82 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  // Execution layer — validates permissions, runs handlers, sanitizes output.
-  // Sits between agents and skills as a security boundary.
-  const executionLayer = new ExecutionLayer(skillRegistry, logger);
+  // Agent registry — tracks all running agents for delegation and listing.
+  const agentRegistry = new AgentRegistry();
 
-  // 6. Coordinator agent — subscribes to agent.task, publishes agent.response.
-  // Must register before the dispatcher so there is a handler for agent.task
-  // by the time the first inbound.message is converted.
-  // Load coordinator config from YAML — persona fields are interpolated by the loader.
-  const coordinatorConfig = loadAgentConfig(
-    path.resolve(import.meta.dirname, '../agents/coordinator.yaml'),
-  );
+  // Execution layer — now with bus and agent registry for infrastructure skills.
+  const executionLayer = new ExecutionLayer(skillRegistry, logger, { bus, agentRegistry });
 
-  // Build tool definitions from the coordinator's pinned skills
-  const pinnedSkills = coordinatorConfig.pinned_skills ?? [];
-  const skillToolDefs = skillRegistry.toToolDefinitions(pinnedSkills);
-  if (skillToolDefs.length > 0) {
-    logger.info({ skills: pinnedSkills }, 'Coordinator tools configured');
+  // Load all agent configs from the agents/ directory.
+  // Fail hard on errors — consistent with skill loading and DB connection checks.
+  const agentsDir = path.resolve(import.meta.dirname, '../agents');
+  let agentConfigs;
+  try {
+    agentConfigs = loadAllAgentConfigs(agentsDir);
+    logger.info({ agents: agentConfigs.map(c => c.name) }, 'Agent configs loaded');
+  } catch (err) {
+    logger.fatal({ err }, 'Failed to load agent configs');
+    process.exit(1);
   }
 
-  const coordinator = new AgentRuntime({
-    agentId: coordinatorConfig.name,
-    systemPrompt: coordinatorConfig.system_prompt,
-    provider: llmProvider,
-    bus,
-    logger,
-    memory,
-    executionLayer,
-    pinnedSkills,
-    skillToolDefs,
-  });
-  coordinator.register();
+  // Two-pass agent registration:
+  // Pass 1: Register all agents in the registry so specialistSummary() is complete
+  //         before the Coordinator's system prompt is interpolated.
+  // Pass 2: Create AgentRuntime instances with fully interpolated prompts.
+  // Without this split, the coordinator (alphabetically first) would be interpolated
+  // before any specialists are registered, resulting in an empty specialist list.
+
+  // Pass 1: Populate registry with all agent names, roles, and descriptions
+  try {
+    for (const agentConfig of agentConfigs) {
+      agentRegistry.register(agentConfig.name, {
+        role: agentConfig.role ?? 'specialist',
+        description: agentConfig.description ?? agentConfig.name,
+      });
+    }
+  } catch (err) {
+    logger.fatal({ err }, 'Failed during agent registration');
+    process.exit(1);
+  }
+
+  // Pass 2: Create AgentRuntime for each config (now all specialists are known)
+  for (const agentConfig of agentConfigs) {
+    // Build tool definitions from pinned skills
+    const agentPinnedSkills = agentConfig.pinned_skills ?? [];
+    const agentToolDefs = skillRegistry.toToolDefinitions(agentPinnedSkills);
+
+    // For the coordinator, interpolate runtime context (specialist list).
+    // This runs in pass 2 so all specialists are already in the registry.
+    let systemPrompt = agentConfig.system_prompt;
+    if (agentConfig.role === 'coordinator') {
+      systemPrompt = interpolateRuntimeContext(systemPrompt, {
+        availableSpecialists: agentRegistry.specialistSummary(),
+      });
+    }
+
+    const agent = new AgentRuntime({
+      agentId: agentConfig.name,
+      systemPrompt,
+      provider: llmProvider,
+      bus,
+      logger,
+      memory,
+      executionLayer,
+      pinnedSkills: agentPinnedSkills,
+      skillToolDefs: agentToolDefs,
+    });
+    agent.register();
+
+    if (agentToolDefs.length > 0) {
+      logger.info({ agent: agentConfig.name, skills: agentPinnedSkills }, 'Agent tools configured');
+    }
+  }
+
+  // Verify we have a coordinator — the system requires exactly one.
+  if (!agentRegistry.has('coordinator')) {
+    logger.fatal('No coordinator agent found in agents/ directory');
+    process.exit(1);
+  }
 
   // 7. Dispatcher — subscribes to inbound.message + agent.response.
   // Registered after the coordinator so agent.task already has a handler
@@ -136,7 +182,11 @@ async function main(): Promise<void> {
   // close the DB pool so Postgres cleans up server-side connections cleanly.
   const shutdown = async () => {
     logger.info('Shutting down...');
-    await pool.end();
+    try {
+      await pool.end();
+    } catch (err) {
+      logger.error({ err }, 'Error closing database pool during shutdown');
+    }
     process.exit(0);
   };
 

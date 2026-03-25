@@ -113,3 +113,21 @@ function interpolatePersona(
     return value ?? `\${persona.${field}}`;
   });
 }
+
+/**
+ * Interpolate runtime context placeholders in the system prompt.
+ * Currently supports:
+ * - ${available_specialists} — list of specialist agents from the agent registry
+ *
+ * This runs at bootstrap time (after all agents are registered) and is separate
+ * from persona interpolation which runs at config load time.
+ */
+export function interpolateRuntimeContext(
+  systemPrompt: string,
+  context: { availableSpecialists?: string },
+): string {
+  return systemPrompt.replace(
+    /\$\{available_specialists\}/g,
+    context.availableSpecialists ?? 'No specialists available yet.',
+  );
+}

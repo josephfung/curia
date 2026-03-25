@@ -4,24 +4,32 @@
 // It resolves skills from the registry, validates permissions, provides
 // a sandboxed SkillContext, enforces timeouts, and sanitizes outputs.
 //
-// Skills never see the bus, database, or raw filesystem. They get:
-// - validated input
-// - scoped secret access (only secrets declared in their manifest)
-// - a scoped logger
-// And they return a SkillResult. That's it.
+// Normal skills get: validated input, scoped secret access, a scoped logger.
+// They cannot access the bus, database, or filesystem directly.
+//
+// Infrastructure skills (manifest.infrastructure: true) additionally receive
+// bus and agent registry access. This effectively grants unrestricted bus
+// publish/subscribe including layer impersonation. Only framework-internal
+// skills like 'delegate' should use this — it is a privileged escape hatch.
 
 import type { SkillResult, SkillContext } from './types.js';
 import type { SkillRegistry } from './registry.js';
 import { sanitizeOutput } from './sanitize.js';
 import type { Logger } from '../logger.js';
+import type { EventBus } from '../bus/bus.js';
+import type { AgentRegistry } from '../agents/agent-registry.js';
 
 export class ExecutionLayer {
   private registry: SkillRegistry;
   private logger: Logger;
+  private bus?: EventBus;
+  private agentRegistry?: AgentRegistry;
 
-  constructor(registry: SkillRegistry, logger: Logger) {
+  constructor(registry: SkillRegistry, logger: Logger, options?: { bus?: EventBus; agentRegistry?: AgentRegistry }) {
     this.registry = registry;
     this.logger = logger;
+    this.bus = options?.bus;
+    this.agentRegistry = options?.agentRegistry;
   }
 
   /**
@@ -68,6 +76,24 @@ export class ExecutionLayer {
       },
       log: skillLogger,
     };
+
+    // Infrastructure skills get bus and agent registry access.
+    // This is intentionally gated behind a manifest flag so normal skills
+    // cannot escalate their privileges by accessing the bus directly.
+    if (manifest.infrastructure) {
+      if (!this.bus || !this.agentRegistry) {
+        skillLogger.error(
+          { skillName },
+          'Infrastructure skill invoked but ExecutionLayer was not constructed with bus/agentRegistry',
+        );
+        return {
+          success: false,
+          error: `Infrastructure skill '${skillName}' cannot run: bus or agent registry not available in ExecutionLayer`,
+        };
+      }
+      ctx.bus = this.bus;
+      ctx.agentRegistry = this.agentRegistry;
+    }
 
     skillLogger.info({ input: Object.keys(input) }, 'Invoking skill');
 
