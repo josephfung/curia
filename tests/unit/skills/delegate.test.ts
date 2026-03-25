@@ -3,7 +3,7 @@ import { DelegateHandler } from '../../../skills/delegate/handler.js';
 import type { SkillContext } from '../../../src/skills/types.js';
 import { AgentRegistry } from '../../../src/agents/agent-registry.js';
 import { EventBus } from '../../../src/bus/bus.js';
-import type { AgentResponseEvent } from '../../../src/bus/events.js';
+
 import pino from 'pino';
 
 const logger = pino({ level: 'silent' });
