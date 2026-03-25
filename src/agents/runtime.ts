@@ -1,4 +1,4 @@
-import type { LLMProvider, Message, ToolDefinition, ToolResult } from './llm/provider.js';
+import type { LLMProvider, Message, ToolDefinition, ContentBlock, ToolUseContent, ToolResultContent, TextContent } from './llm/provider.js';
 import type { EventBus } from '../bus/bus.js';
 import { createAgentResponse, createSkillInvoke, createSkillResult, type AgentTaskEvent } from '../bus/events.js';
 import type { Logger } from '../logger.js';
@@ -102,8 +102,9 @@ export class AgentRuntime {
 
     // Tool-use loop: call LLM, handle tool calls, feed results back, repeat.
     // The Anthropic API requires the full conversation context including the
-    // assistant's tool_use response and the user's tool_result turn. We build
-    // this up in the messages array across iterations.
+    // assistant's tool_use content blocks and the user's tool_result blocks.
+    // We build these as structured ContentBlock[] in the messages array so
+    // the provider can pass them through to the API correctly.
     let response = await provider.chat({ messages, tools: skillToolDefs });
     let iterations = 0;
 
@@ -114,23 +115,26 @@ export class AgentRuntime {
         'LLM requested tool calls',
       );
 
-      // Append the assistant's tool_use turn to the conversation so the LLM
-      // has full context on the next call. We represent the assistant turn as
-      // a text summary since our Message type doesn't carry tool_use blocks.
-      // The actual tool results are passed via the toolResults parameter.
-      const toolCallSummary = response.toolCalls
-        .map(tc => `[Calling tool: ${tc.name}]`)
-        .join(' ');
-      messages.push({
-        role: 'assistant',
-        content: response.content
-          ? `${response.content} ${toolCallSummary}`
-          : toolCallSummary,
-      });
+      // Build the assistant turn with the actual tool_use content blocks.
+      // The Anthropic API requires these to exist so tool_result blocks can
+      // reference their IDs in the next user turn.
+      const assistantBlocks: ContentBlock[] = [];
+      if (response.content) {
+        assistantBlocks.push({ type: 'text', text: response.content } as TextContent);
+      }
+      for (const tc of response.toolCalls) {
+        assistantBlocks.push({
+          type: 'tool_use',
+          id: tc.id,
+          name: tc.name,
+          input: tc.input,
+        } as ToolUseContent);
+      }
+      messages.push({ role: 'assistant', content: assistantBlocks });
 
       // Execute each tool call through the execution layer.
       // Publish skill.invoke and skill.result bus events for audit coverage.
-      const toolResults: ToolResult[] = [];
+      const toolResultBlocks: ContentBlock[] = [];
       for (const toolCall of response.toolCalls) {
         logger.info({ agentId, skill: toolCall.name, callId: toolCall.id }, 'Invoking skill');
 
@@ -165,23 +169,31 @@ export class AgentRuntime {
 
         if (result.success) {
           const resultContent = typeof result.data === 'string' ? result.data : JSON.stringify(result.data);
-          toolResults.push({ id: toolCall.id, content: resultContent });
+          toolResultBlocks.push({
+            type: 'tool_result',
+            tool_use_id: toolCall.id,
+            content: resultContent,
+          } as ToolResultContent);
         } else {
           // Sanitize error messages before sending to LLM — skill errors
           // can contain injection vectors from external sources
           const sanitizedError = sanitizeOutput(result.error, { isError: true });
-          toolResults.push({ id: toolCall.id, content: sanitizedError, is_error: true });
+          toolResultBlocks.push({
+            type: 'tool_result',
+            tool_use_id: toolCall.id,
+            content: sanitizedError,
+            is_error: true,
+          } as ToolResultContent);
         }
       }
 
-      // Append a user turn summarizing tool results for conversation context
-      const resultsSummary = toolResults
-        .map(tr => tr.is_error ? `[Tool error: ${tr.content}]` : `[Tool result received]`)
-        .join(' ');
-      messages.push({ role: 'user', content: resultsSummary });
+      // Append tool results as a user turn with structured content blocks.
+      // This is the format the Anthropic API expects — each tool_result references
+      // a tool_use_id from the preceding assistant turn.
+      messages.push({ role: 'user', content: toolResultBlocks });
 
-      // Feed tool results back to the LLM and continue the loop
-      response = await provider.chat({ messages, tools: skillToolDefs, toolResults });
+      // Continue the loop — the full conversation history is now in messages
+      response = await provider.chat({ messages, tools: skillToolDefs });
     }
 
     // Handle the final response (text or error)

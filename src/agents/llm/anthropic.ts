@@ -39,12 +39,34 @@ export class AnthropicProvider implements LLMProvider {
     // not as an element in the messages array. We extract it here so agent
     // code can use a uniform Message[] convention without knowing this detail.
     const systemMessage = messages.find((m) => m.role === 'system');
+
+    // Build the Anthropic message array from our provider-neutral Message type.
+    // Messages with string content are simple text; messages with ContentBlock[]
+    // carry tool_use or tool_result blocks for multi-turn tool-use conversations.
     const conversationMessages: MessageParam[] = messages
       .filter((m) => m.role !== 'system')
-      .map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content }));
+      .map((m) => {
+        if (typeof m.content === 'string') {
+          return { role: m.role as 'user' | 'assistant', content: m.content };
+        }
+        // ContentBlock[] — map our provider-neutral blocks to Anthropic SDK shapes
+        return {
+          role: m.role as 'user' | 'assistant',
+          content: m.content.map(block => {
+            if (block.type === 'tool_use') {
+              return { type: 'tool_use' as const, id: block.id, name: block.name, input: block.input };
+            }
+            if (block.type === 'tool_result') {
+              return { type: 'tool_result' as const, tool_use_id: block.tool_use_id, content: block.content, is_error: block.is_error };
+            }
+            // TextContent
+            return { type: 'text' as const, text: block.text };
+          }),
+        } as MessageParam;
+      });
 
-    // If the caller has tool results from a previous tool_use response, we
-    // append them as a user turn so the model can see the execution outcomes.
+    // Legacy toolResults parameter — append as a user turn if provided.
+    // Prefer building tool_result blocks directly in the messages array instead.
     if (toolResults && toolResults.length > 0) {
       const toolResultBlocks: ToolResultBlockParam[] = toolResults.map(tr => ({
         type: 'tool_result' as const,
@@ -63,7 +85,8 @@ export class AnthropicProvider implements LLMProvider {
       const createParams: Anthropic.Messages.MessageCreateParamsNonStreaming = {
         model,
         max_tokens: 4096,
-        system: systemMessage?.content,
+        // System messages are always plain strings (never content blocks)
+        system: typeof systemMessage?.content === 'string' ? systemMessage.content : undefined,
         messages: conversationMessages,
       };
 
