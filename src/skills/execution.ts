@@ -4,11 +4,13 @@
 // It resolves skills from the registry, validates permissions, provides
 // a sandboxed SkillContext, enforces timeouts, and sanitizes outputs.
 //
-// Skills never see the bus, database, or raw filesystem. They get:
-// - validated input
-// - scoped secret access (only secrets declared in their manifest)
-// - a scoped logger
-// And they return a SkillResult. That's it.
+// Normal skills get: validated input, scoped secret access, a scoped logger.
+// They cannot access the bus, database, or filesystem directly.
+//
+// Infrastructure skills (manifest.infrastructure: true) additionally receive
+// bus and agent registry access. This effectively grants unrestricted bus
+// publish/subscribe including layer impersonation. Only framework-internal
+// skills like 'delegate' should use this — it is a privileged escape hatch.
 
 import type { SkillResult, SkillContext } from './types.js';
 import type { SkillRegistry } from './registry.js';

@@ -28,6 +28,7 @@ export interface SkillManifest {
   /** Per-invocation timeout in ms. Default 30000. */
   timeout: number;
   /** If true, this skill receives bus and agent registry access in its context.
+   *  This grants unrestricted bus publish/subscribe including layer impersonation.
    *  Only for framework-internal skills like 'delegate' — external skills should never set this. */
   infrastructure?: boolean;
 }

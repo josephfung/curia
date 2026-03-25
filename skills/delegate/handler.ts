@@ -61,6 +61,10 @@ export class DelegateHandler implements SkillHandler {
     ctx.log.info({ targetAgent: agent, task: task.slice(0, 100) }, 'Delegating task to specialist');
 
     // Publish an agent.task event for the specialist.
+    // parentEventId uses a delegate-prefixed UUID. Ideally this would trace back
+    // to the Coordinator's skill.invoke event, but SkillContext doesn't currently
+    // carry the invoking event's ID. TODO: Add invokeEventId to SkillContext so
+    // infrastructure skills can maintain the full audit causal chain.
     const taskEvent = createAgentTask({
       agentId: agent,
       conversationId,
@@ -73,25 +77,34 @@ export class DelegateHandler implements SkillHandler {
     // Set up a one-time listener for the specialist's response BEFORE
     // publishing the task, so we don't miss a fast response.
     // TODO: The EventBus has no unsubscribe mechanism, so this subscriber
-    // persists after the delegation completes. For Phase 4 this is acceptable
-    // (the filter prevents duplicate processing), but Phase 5 should add
+    // persists after the delegation completes. The settled guard makes it
+    // a near-zero-cost no-op after resolution. Phase 5 should add
     // bus.unsubscribe() or a one-shot subscription pattern.
     const responsePromise = new Promise<string>((resolve, reject) => {
+      let settled = false;
+
       const timeout = setTimeout(() => {
-        reject(new Error(`Specialist '${agent}' did not respond within ${SPECIALIST_TIMEOUT_MS}ms`));
+        if (!settled) {
+          settled = true;
+          reject(new Error(`Specialist '${agent}' did not respond within ${SPECIALIST_TIMEOUT_MS}ms`));
+        }
       }, SPECIALIST_TIMEOUT_MS);
 
       ctx.bus!.subscribe('agent.response', 'system', async (event) => {
+        if (settled) return; // Skip processing after settlement — prevents double-resolve
         const responseEvent = event as AgentResponseEvent;
         // Match on the task event ID — the specialist sets parentEventId to the task ID
         if (responseEvent.parentEventId === taskEvent.id) {
+          settled = true;
           clearTimeout(timeout);
           resolve(responseEvent.payload.content);
         }
       });
     });
 
-    // Publish the task to the bus — the specialist will pick it up
+    // Publish the task to the bus — the specialist will pick it up.
+    // We publish as 'dispatch' layer because only dispatch can publish agent.task
+    // per the permission model. Infrastructure skills are trusted to impersonate layers.
     await ctx.bus.publish('dispatch', taskEvent);
 
     try {
