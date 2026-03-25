@@ -6,9 +6,37 @@
 //
 // Adding a new provider: implement LLMProvider, wire it in the DI layer.
 
+/**
+ * Content block types for multi-turn tool-use conversations.
+ * The Anthropic API requires assistant turns to contain tool_use blocks
+ * and user turns to contain tool_result blocks — plain strings won't work.
+ * These mirror the Anthropic SDK shapes but are provider-neutral.
+ */
+export interface ToolUseContent {
+  type: 'tool_use';
+  id: string;
+  name: string;
+  input: Record<string, unknown>;
+}
+
+export interface ToolResultContent {
+  type: 'tool_result';
+  tool_use_id: string;
+  content: string;
+  is_error?: boolean;
+}
+
+export interface TextContent {
+  type: 'text';
+  text: string;
+}
+
+export type ContentBlock = TextContent | ToolUseContent | ToolResultContent;
+
 export interface Message {
   role: 'system' | 'user' | 'assistant';
-  content: string;
+  /** Plain string for simple messages, or an array of content blocks for tool-use turns */
+  content: string | ContentBlock[];
 }
 
 export interface LLMUsage {
