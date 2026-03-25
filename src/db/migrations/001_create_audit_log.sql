@@ -7,9 +7,9 @@ CREATE TABLE audit_log (
   source_layer      TEXT NOT NULL,
   source_id         TEXT NOT NULL,
   payload           JSONB NOT NULL,
-  conversation_id   UUID,
-  task_id           UUID,
-  parent_event_id   UUID,
+  conversation_id   TEXT,
+  task_id           TEXT,
+  parent_event_id   TEXT,
   acknowledged      BOOLEAN NOT NULL DEFAULT false
 );
 
