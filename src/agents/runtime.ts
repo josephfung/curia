@@ -84,6 +84,15 @@ export class AgentRuntime {
     if (response.type === 'error') {
       logger.error({ agentId, error: response.error }, 'LLM call failed');
       responseContent = "I'm sorry, I was unable to process that request. Please try again.";
+    } else if (response.type === 'tool_use') {
+      // TODO: full tool-use execution loop is not yet wired in the runtime.
+      // For now, fall back to the optional text preamble the model may have
+      // included alongside the tool calls, or a placeholder if there was none.
+      logger.info(
+        { agentId, inputTokens: response.usage.inputTokens, outputTokens: response.usage.outputTokens },
+        'Agent task completed (tool_use — execution not yet wired)',
+      );
+      responseContent = response.content ?? '[tool call initiated]';
     } else {
       logger.info(
         { agentId, inputTokens: response.usage.inputTokens, outputTokens: response.usage.outputTokens },

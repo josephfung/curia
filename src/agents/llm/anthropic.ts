@@ -10,7 +10,8 @@
 //      can be used with different Claude versions without re-instantiation.
 
 import Anthropic from '@anthropic-ai/sdk';
-import type { LLMProvider, LLMResponse, Message } from './provider.js';
+import type { MessageParam, ToolUseBlock, TextBlock, ToolResultBlockParam } from '@anthropic-ai/sdk/resources/messages/messages.js';
+import type { LLMProvider, LLMResponse, LLMUsage, Message, ToolCall, ToolDefinition, ToolResult } from './provider.js';
 import type { Logger } from '../../logger.js';
 
 export class AnthropicProvider implements LLMProvider {
@@ -25,53 +26,114 @@ export class AnthropicProvider implements LLMProvider {
 
   async chat({
     messages,
+    tools,
+    toolResults,
     options,
   }: {
     messages: Message[];
+    tools?: ToolDefinition[];
+    toolResults?: ToolResult[];
     options?: Record<string, unknown>;
   }): Promise<LLMResponse> {
     // Anthropic requires the system prompt as a separate top-level parameter,
     // not as an element in the messages array. We extract it here so agent
     // code can use a uniform Message[] convention without knowing this detail.
     const systemMessage = messages.find((m) => m.role === 'system');
-    const conversationMessages = messages
+    const conversationMessages: MessageParam[] = messages
       .filter((m) => m.role !== 'system')
       .map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content }));
+
+    // If the caller has tool results from a previous tool_use response, we
+    // append them as a user turn so the model can see the execution outcomes.
+    if (toolResults && toolResults.length > 0) {
+      const toolResultBlocks: ToolResultBlockParam[] = toolResults.map(tr => ({
+        type: 'tool_result' as const,
+        tool_use_id: tr.id,
+        content: tr.content,
+        is_error: tr.is_error,
+      }));
+      conversationMessages.push({ role: 'user', content: toolResultBlocks });
+    }
 
     // Default to the latest Claude Sonnet; callers can override via options.model.
     // Using a default here ensures we never accidentally call without a model.
     const model = (options?.model as string) ?? 'claude-sonnet-4-20250514';
 
     try {
-      const response = await this.client.messages.create({
+      const createParams: Anthropic.Messages.MessageCreateParamsNonStreaming = {
         model,
         max_tokens: 4096,
         system: systemMessage?.content,
         messages: conversationMessages,
-      });
+      };
 
-      // response.content is an array of content blocks (text, tool_use, etc.).
-      // We extract the first text block; if the model returns only tool_use
-      // blocks (e.g., in a tool-calling flow), content will be an empty string.
-      // Future work: extend LLMResponse to carry tool_use blocks natively.
-      const textContent = response.content.find((c) => c.type === 'text');
+      // Only attach the tools array when tools are provided — the API rejects
+      // an empty tools array, so we omit the key entirely when there are none.
+      if (tools && tools.length > 0) {
+        createParams.tools = tools.map(t => ({
+          name: t.name,
+          description: t.description,
+          // Cast required because ToolDefinition.input_schema is a narrower shape
+          // than the SDK's polymorphic Tool['input_schema'] union type.
+          input_schema: t.input_schema as Anthropic.Messages.Tool['input_schema'],
+        }));
+      }
+
+      const response = await this.client.messages.create(createParams);
 
       this.logger.debug(
         {
           model,
           inputTokens: response.usage.input_tokens,
           outputTokens: response.usage.output_tokens,
+          stopReason: response.stop_reason,
         },
         'Anthropic API call completed',
       );
 
+      const usage: LLMUsage = {
+        inputTokens: response.usage.input_tokens,
+        outputTokens: response.usage.output_tokens,
+      };
+
+      // Use type guard functions for narrowing — avoids casting and is safer
+      // than checking c.type === 'tool_use' without narrowing to ToolUseBlock.
+      const toolUseBlocks = response.content.filter(
+        (c): c is ToolUseBlock => c.type === 'tool_use',
+      );
+      if (toolUseBlocks.length > 0) {
+        const toolCalls: ToolCall[] = toolUseBlocks.map((block) => ({
+          id: block.id,
+          name: block.name,
+          // block.input is typed as unknown by the SDK; we assert the shape
+          // we expect since all well-formed tool inputs are plain objects.
+          input: block.input as Record<string, unknown>,
+        }));
+
+        // The model may emit a text preamble alongside tool calls (e.g.
+        // "Let me look that up…"). Preserve it so callers can surface it.
+        const textBlock = response.content.find(
+          (c): c is TextBlock => c.type === 'text',
+        );
+
+        return {
+          type: 'tool_use',
+          toolCalls,
+          content: textBlock?.text,
+          usage,
+        };
+      }
+
+      // response.content is an array of content blocks (text, tool_use, etc.).
+      // We extract the first text block; if the model returns only tool_use
+      // blocks, content will be an empty string.
+      const textContent = response.content.find(
+        (c): c is TextBlock => c.type === 'text',
+      );
       return {
         type: 'text',
         content: textContent?.text ?? '',
-        usage: {
-          inputTokens: response.usage.input_tokens,
-          outputTokens: response.usage.output_tokens,
-        },
+        usage,
       };
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unknown Anthropic error';
