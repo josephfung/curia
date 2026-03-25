@@ -14,14 +14,20 @@ import type { SkillResult, SkillContext } from './types.js';
 import type { SkillRegistry } from './registry.js';
 import { sanitizeOutput } from './sanitize.js';
 import type { Logger } from '../logger.js';
+import type { EventBus } from '../bus/bus.js';
+import type { AgentRegistry } from '../agents/agent-registry.js';
 
 export class ExecutionLayer {
   private registry: SkillRegistry;
   private logger: Logger;
+  private bus?: EventBus;
+  private agentRegistry?: AgentRegistry;
 
-  constructor(registry: SkillRegistry, logger: Logger) {
+  constructor(registry: SkillRegistry, logger: Logger, options?: { bus?: EventBus; agentRegistry?: AgentRegistry }) {
     this.registry = registry;
     this.logger = logger;
+    this.bus = options?.bus;
+    this.agentRegistry = options?.agentRegistry;
   }
 
   /**
@@ -68,6 +74,14 @@ export class ExecutionLayer {
       },
       log: skillLogger,
     };
+
+    // Infrastructure skills get bus and agent registry access.
+    // This is intentionally gated behind a manifest flag so normal skills
+    // cannot escalate their privileges by accessing the bus directly.
+    if (manifest.infrastructure) {
+      ctx.bus = this.bus;
+      ctx.agentRegistry = this.agentRegistry;
+    }
 
     skillLogger.info({ input: Object.keys(input) }, 'Invoking skill');
 
