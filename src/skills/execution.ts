@@ -62,7 +62,8 @@ export class ExecutionLayer {
         if (!value) {
           throw new Error(`Secret '${name}' is declared but not set in the environment`);
         }
-        skillLogger.info({ secretName: name }, 'Secret accessed');
+        // Log at debug level — info is too noisy for every secret access
+        skillLogger.debug({ secretName: name }, 'Secret accessed');
         return value;
       },
       log: skillLogger,
@@ -70,12 +71,21 @@ export class ExecutionLayer {
 
     skillLogger.info({ input: Object.keys(input) }, 'Invoking skill');
 
+    // Track the timeout timer so we can clean it up after the race resolves.
+    // Without cleanup, successful skill invocations leak timers that keep the
+    // process alive during graceful shutdown.
+    let timer: NodeJS.Timeout;
+    const timeoutPromise = new Promise<SkillResult>((_, reject) => {
+      timer = setTimeout(
+        () => reject(new Error(`Skill '${skillName}' timed out after ${manifest.timeout}ms`)),
+        manifest.timeout,
+      );
+    });
+
     try {
       const result = await Promise.race([
         handler.execute(ctx),
-        new Promise<SkillResult>((_, reject) =>
-          setTimeout(() => reject(new Error(`Skill '${skillName}' timed out after ${manifest.timeout}ms`)), manifest.timeout),
-        ),
+        timeoutPromise,
       ]);
 
       // Sanitize successful output before returning
@@ -85,8 +95,9 @@ export class ExecutionLayer {
         const sanitized = sanitizeOutput(JSON.stringify(result.data));
         try {
           return { success: true, data: JSON.parse(sanitized) };
-        } catch {
-          // If sanitization broke the JSON (e.g., truncation), return as string
+        } catch (parseErr) {
+          // Sanitization broke the JSON (e.g., truncation mid-key) — return as string
+          skillLogger.warn({ err: parseErr, skillName }, 'Sanitized output is not valid JSON, returning as string');
           return { success: true, data: sanitized };
         }
       }
@@ -96,6 +107,9 @@ export class ExecutionLayer {
       const message = err instanceof Error ? err.message : String(err);
       skillLogger.error({ err }, 'Skill invocation failed');
       return { success: false, error: message };
+    } finally {
+      // Clean up the timeout timer whether we succeeded, failed, or timed out
+      clearTimeout(timer!);
     }
   }
 }

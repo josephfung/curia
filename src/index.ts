@@ -86,7 +86,11 @@ async function main(): Promise<void> {
     const skillCount = await loadSkillsFromDirectory(skillsDir, skillRegistry, logger);
     logger.info({ skillCount }, 'Skills loaded');
   } catch (err) {
-    logger.warn({ err }, 'Failed to load skills — starting without skills');
+    // Fail hard on skill loading errors — a broken skill.json or handler should
+    // not silently degrade the system to no-tools mode. Consistent with how we
+    // handle missing DATABASE_URL and ANTHROPIC_API_KEY.
+    logger.fatal({ err }, 'Failed to load skills');
+    process.exit(1);
   }
 
   // Execution layer — validates permissions, runs handlers, sanitizes output.

@@ -4,6 +4,7 @@ import { createAgentResponse, createSkillInvoke, createSkillResult, type AgentTa
 import type { Logger } from '../logger.js';
 import type { WorkingMemory } from '../memory/working-memory.js';
 import type { ExecutionLayer } from '../skills/execution.js';
+import { sanitizeOutput } from '../skills/sanitize.js';
 
 export interface AgentConfig {
   agentId: string;
@@ -49,7 +50,34 @@ export class AgentRuntime {
     this.config.logger.info({ agentId: this.config.agentId }, 'Agent registered');
   }
 
+  /**
+   * Top-level error boundary for task processing.
+   * Ensures the user always gets a response, even if something unexpected throws.
+   */
   private async handleTask(taskEvent: AgentTaskEvent): Promise<void> {
+    try {
+      await this.processTask(taskEvent);
+    } catch (err) {
+      this.config.logger.error(
+        { err, agentId: this.config.agentId, conversationId: taskEvent.payload.conversationId },
+        'Unhandled error in agent task processing',
+      );
+      // Best-effort: try to send an error response so the user isn't left hanging
+      try {
+        const responseEvent = createAgentResponse({
+          agentId: this.config.agentId,
+          conversationId: taskEvent.payload.conversationId,
+          content: "I'm sorry, an unexpected error occurred while processing your request.",
+          parentEventId: taskEvent.id,
+        });
+        await this.config.bus.publish('agent', responseEvent);
+      } catch (publishErr) {
+        this.config.logger.error({ err: publishErr }, 'Failed to publish error response');
+      }
+    }
+  }
+
+  private async processTask(taskEvent: AgentTaskEvent): Promise<void> {
     const { agentId, systemPrompt, provider, bus, logger, memory, executionLayer, skillToolDefs } = this.config;
     const { content, conversationId } = taskEvent.payload;
 
@@ -72,7 +100,10 @@ export class AgentRuntime {
       await memory.addTurn(conversationId, agentId, { role: 'user', content });
     }
 
-    // Tool-use loop: call LLM, handle tool calls, feed results back, repeat
+    // Tool-use loop: call LLM, handle tool calls, feed results back, repeat.
+    // The Anthropic API requires the full conversation context including the
+    // assistant's tool_use response and the user's tool_result turn. We build
+    // this up in the messages array across iterations.
     let response = await provider.chat({ messages, tools: skillToolDefs });
     let iterations = 0;
 
@@ -83,9 +114,22 @@ export class AgentRuntime {
         'LLM requested tool calls',
       );
 
+      // Append the assistant's tool_use turn to the conversation so the LLM
+      // has full context on the next call. We represent the assistant turn as
+      // a text summary since our Message type doesn't carry tool_use blocks.
+      // The actual tool results are passed via the toolResults parameter.
+      const toolCallSummary = response.toolCalls
+        .map(tc => `[Calling tool: ${tc.name}]`)
+        .join(' ');
+      messages.push({
+        role: 'assistant',
+        content: response.content
+          ? `${response.content} ${toolCallSummary}`
+          : toolCallSummary,
+      });
+
       // Execute each tool call through the execution layer.
-      // Publish skill.invoke and skill.result bus events for audit coverage —
-      // every skill invocation is recorded even if the process crashes mid-execution.
+      // Publish skill.invoke and skill.result bus events for audit coverage.
       const toolResults: ToolResult[] = [];
       for (const toolCall of response.toolCalls) {
         logger.info({ agentId, skill: toolCall.name, callId: toolCall.id }, 'Invoking skill');
@@ -120,14 +164,23 @@ export class AgentRuntime {
         await bus.publish('agent', resultEvent);
 
         if (result.success) {
-          const content = typeof result.data === 'string' ? result.data : JSON.stringify(result.data);
-          toolResults.push({ id: toolCall.id, content });
+          const resultContent = typeof result.data === 'string' ? result.data : JSON.stringify(result.data);
+          toolResults.push({ id: toolCall.id, content: resultContent });
         } else {
-          toolResults.push({ id: toolCall.id, content: result.error, is_error: true });
+          // Sanitize error messages before sending to LLM — skill errors
+          // can contain injection vectors from external sources
+          const sanitizedError = sanitizeOutput(result.error, { isError: true });
+          toolResults.push({ id: toolCall.id, content: sanitizedError, is_error: true });
         }
       }
 
-      // Feed tool results back to the LLM and continue the loop.
+      // Append a user turn summarizing tool results for conversation context
+      const resultsSummary = toolResults
+        .map(tr => tr.is_error ? `[Tool error: ${tr.content}]` : `[Tool result received]`)
+        .join(' ');
+      messages.push({ role: 'user', content: resultsSummary });
+
+      // Feed tool results back to the LLM and continue the loop
       response = await provider.chat({ messages, tools: skillToolDefs, toolResults });
     }
 

@@ -32,6 +32,24 @@ describe('WebFetchHandler', () => {
     }
   });
 
+  it('blocks requests to private/internal addresses (SSRF protection)', async () => {
+    const privateUrls = [
+      'https://localhost/admin',
+      'https://127.0.0.1/secret',
+      'https://10.0.0.1/internal',
+      'https://192.168.1.1/router',
+      'https://169.254.169.254/latest/meta-data/',
+      'https://metadata.google.internal/computeMetadata/v1/',
+    ];
+    for (const privateUrl of privateUrls) {
+      const result = await handler.execute(makeCtx({ url: privateUrl }));
+      expect(result.success, `Expected ${privateUrl} to be blocked`).toBe(false);
+      if (!result.success) {
+        expect(result.error).toContain('internal/private');
+      }
+    }
+  });
+
   it('rejects non-HTTP(S) protocols', async () => {
     const result = await handler.execute(makeCtx({ url: 'file:///etc/passwd' }));
     expect(result.success).toBe(false);

@@ -130,9 +130,13 @@ export class AnthropicProvider implements LLMProvider {
       const textContent = response.content.find(
         (c): c is TextBlock => c.type === 'text',
       );
+      const content = textContent?.text ?? '';
+      if (!content) {
+        this.logger.warn({ model, stopReason: response.stop_reason }, 'LLM returned empty text response');
+      }
       return {
         type: 'text',
-        content: textContent?.text ?? '',
+        content,
         usage,
       };
     } catch (err) {
