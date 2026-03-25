@@ -1,4 +1,4 @@
-import type { LLMProvider, Message, ToolDefinition, ToolResult, ToolCall } from './llm/provider.js';
+import type { LLMProvider, Message, ToolDefinition, ToolResult } from './llm/provider.js';
 import type { EventBus } from '../bus/bus.js';
 import { createAgentResponse, createSkillInvoke, createSkillResult, type AgentTaskEvent } from '../bus/events.js';
 import type { Logger } from '../logger.js';
