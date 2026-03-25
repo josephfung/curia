@@ -1,0 +1,88 @@
+// http-adapter.ts — Fastify-based HTTP channel adapter.
+//
+// Provides REST + SSE endpoints for external clients (dashboards, mobile apps,
+// integrations). Uses the EventRouter (shared subscriber pattern) to avoid
+// per-request bus subscriber leaks.
+//
+// Endpoints:
+//   POST   /api/messages        — send a message, get response
+//   GET    /api/messages/stream — SSE real-time event stream
+//   GET    /api/health          — system health check
+//   GET    /api/agents/status   — agent registry snapshot
+//
+// The adapter subscribes to the bus at startup via EventRouter:
+//   - 'channel' layer for outbound.message (respects permission model)
+//   - 'system' layer for skill.invoke/skill.result (observability — documented
+//     privilege escalation for the HTTP channel since SSE needs to stream these)
+
+import Fastify, { type FastifyInstance } from 'fastify';
+import cors from '@fastify/cors';
+import type { EventBus } from '../../bus/bus.js';
+import type { Logger } from '../../logger.js';
+import type { Pool } from 'pg';
+import type { AgentRegistry } from '../../agents/agent-registry.js';
+import { validateBearerToken } from './auth.js';
+import { EventRouter } from './event-router.js';
+import { healthRoutes } from './routes/health.js';
+import { agentRoutes } from './routes/agents.js';
+import { messageRoutes } from './routes/messages.js';
+
+export interface HttpAdapterConfig {
+  bus: EventBus;
+  logger: Logger;
+  pool: Pool;
+  agentRegistry: AgentRegistry;
+  port: number;
+  apiToken: string | undefined;
+  agentNames: string[];
+  skillNames: string[];
+}
+
+export class HttpAdapter {
+  private app: FastifyInstance;
+  private config: HttpAdapterConfig;
+  private eventRouter: EventRouter;
+
+  constructor(config: HttpAdapterConfig) {
+    this.config = config;
+    this.eventRouter = new EventRouter(config.logger);
+    this.app = Fastify({
+      logger: false, // We use our own pino logger, not Fastify's built-in
+    });
+  }
+
+  async start(): Promise<void> {
+    const { bus, logger, pool, agentRegistry, port, apiToken, agentNames, skillNames } = this.config;
+
+    // Register shared bus subscriptions BEFORE starting the server.
+    // One subscriber per event type, dispatches to HTTP clients via Maps/Sets.
+    this.eventRouter.setupSubscriptions(bus);
+
+    // CORS — allow all origins in dev, restrict in production later
+    await this.app.register(cors, { origin: true });
+
+    // Auth hook — runs before every request
+    this.app.addHook('onRequest', async (request, reply) => {
+      // Skip auth for health endpoint — it's used by load balancers and monitors
+      if (request.url === '/api/health') return;
+
+      if (!validateBearerToken(request.headers.authorization, apiToken)) {
+        return reply.status(401).send({ error: 'Unauthorized — provide a valid Bearer token' });
+      }
+    });
+
+    // Register routes — message routes receive the eventRouter, not raw bus
+    await this.app.register(healthRoutes, { pool, agentNames, skillNames });
+    await this.app.register(agentRoutes, { agentRegistry });
+    await this.app.register(messageRoutes, { bus, logger, eventRouter: this.eventRouter });
+
+    // Start listening
+    await this.app.listen({ port, host: '0.0.0.0' });
+    logger.info({ port }, 'HTTP API listening');
+  }
+
+  async stop(): Promise<void> {
+    await this.app.close();
+    this.config.logger.info('HTTP API stopped');
+  }
+}
