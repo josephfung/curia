@@ -1,0 +1,7 @@
+channels:
+  cli:
+    enabled: true
+
+agents:
+  coordinator:
+    config_path: agents/coordinator.yaml
