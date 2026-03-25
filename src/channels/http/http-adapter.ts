@@ -48,6 +48,7 @@ export class HttpAdapter {
     this.eventRouter = new EventRouter(config.logger);
     this.app = Fastify({
       logger: false, // We use our own pino logger, not Fastify's built-in
+      bodyLimit: 64 * 1024, // 64 KiB — generous for chat messages, prevents abuse
     });
   }
 
@@ -63,8 +64,9 @@ export class HttpAdapter {
 
     // Auth hook — runs before every request
     this.app.addHook('onRequest', async (request, reply) => {
-      // Skip auth for health endpoint — it's used by load balancers and monitors
-      if (request.url === '/api/health') return;
+      // Skip auth for health endpoint — it's used by load balancers and monitors.
+      // Use routeOptions.url (the registered pattern) so query strings don't break the match.
+      if (request.routeOptions.url === '/api/health') return;
 
       if (!validateBearerToken(request.headers.authorization, apiToken)) {
         return reply.status(401).send({ error: 'Unauthorized — provide a valid Bearer token' });
@@ -72,7 +74,7 @@ export class HttpAdapter {
     });
 
     // Register routes — message routes receive the eventRouter, not raw bus
-    await this.app.register(healthRoutes, { pool, agentNames, skillNames });
+    await this.app.register(healthRoutes, { pool, logger, agentNames, skillNames });
     await this.app.register(agentRoutes, { agentRegistry });
     await this.app.register(messageRoutes, { bus, logger, eventRouter: this.eventRouter });
 

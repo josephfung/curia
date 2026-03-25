@@ -2,6 +2,9 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import Fastify from 'fastify';
 import { healthRoutes } from '../../../../src/channels/http/routes/health.js';
 import type { Pool } from 'pg';
+import pino from 'pino';
+
+const logger = pino({ level: 'silent' });
 
 describe('GET /api/health', () => {
   const mockPool = {
@@ -13,6 +16,7 @@ describe('GET /api/health', () => {
   beforeAll(async () => {
     app.register(healthRoutes, {
       pool: mockPool,
+      logger,
       agentNames: ['coordinator', 'research-analyst'],
       skillNames: ['web-fetch', 'delegate'],
     });
@@ -46,6 +50,7 @@ describe('GET /api/health', () => {
     const failApp = Fastify();
     failApp.register(healthRoutes, {
       pool: failPool,
+      logger,
       agentNames: ['coordinator'],
       skillNames: [],
     });

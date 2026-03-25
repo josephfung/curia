@@ -63,18 +63,16 @@ export class EventRouter {
         pending.resolve(event.payload.content);
       }
 
-      // Stream to all SSE clients (filtered by conversationId if set)
+      // Stream to all SSE clients (filtered by conversationId if set).
+      // Wrap writes in try/catch so a dead client doesn't abort delivery
+      // to the remaining clients in this dispatch cycle.
       const sseData = JSON.stringify({
         type: 'message',
         conversation_id: convId,
         content: event.payload.content,
         timestamp: event.timestamp,
       });
-      for (const client of this.sseClients) {
-        if (!client.conversationId || client.conversationId === convId) {
-          client.res.write(`data: ${sseData}\n\n`);
-        }
-      }
+      this.broadcastToSseClients(sseData, convId);
     });
 
     // skill.invoke — observability stream for SSE clients
@@ -87,11 +85,7 @@ export class EventRouter {
         conversation_id: event.payload.conversationId,
         timestamp: event.timestamp,
       });
-      for (const client of this.sseClients) {
-        if (!client.conversationId || client.conversationId === event.payload.conversationId) {
-          client.res.write(`data: ${sseData}\n\n`);
-        }
-      }
+      this.broadcastToSseClients(sseData, event.payload.conversationId);
     });
 
     // skill.result — observability stream for SSE clients
@@ -106,18 +100,27 @@ export class EventRouter {
         conversation_id: event.payload.conversationId,
         timestamp: event.timestamp,
       });
-      for (const client of this.sseClients) {
-        if (!client.conversationId || client.conversationId === event.payload.conversationId) {
-          client.res.write(`data: ${sseData}\n\n`);
-        }
-      }
+      this.broadcastToSseClients(sseData, event.payload.conversationId);
     });
 
     this.logger.info('HTTP event router subscriptions registered');
   }
 
-  /** Register a pending POST response. Returns a promise that resolves with the response content. */
+  /**
+   * Register a pending POST response. Returns a promise that resolves with the response content.
+   * If a request is already pending for this conversationId, rejects it first to avoid
+   * orphaned promises and leaked timeouts.
+   */
   waitForResponse(conversationId: string, timeoutMs: number): Promise<string> {
+    // Reject any existing pending request for this conversationId to prevent
+    // orphaned promises. This can happen if two POSTs race with the same ID.
+    const existing = this.pendingResponses.get(conversationId);
+    if (existing) {
+      clearTimeout(existing.timeout);
+      this.pendingResponses.delete(conversationId);
+      existing.reject(new Error('Superseded by a newer request for the same conversation_id'));
+    }
+
     return new Promise<string>((resolve, reject) => {
       const timeout = setTimeout(() => {
         this.pendingResponses.delete(conversationId);
@@ -134,6 +137,27 @@ export class EventRouter {
     if (pending) {
       clearTimeout(pending.timeout);
       this.pendingResponses.delete(conversationId);
+    }
+  }
+
+  /**
+   * Send an SSE payload to all matching clients. Wraps each write in try/catch
+   * so a dead client (TCP reset between close event and write) doesn't abort
+   * delivery to remaining clients in this dispatch cycle.
+   */
+  private broadcastToSseClients(sseData: string, conversationId?: string): void {
+    for (const client of this.sseClients) {
+      if (!client.conversationId || client.conversationId === conversationId) {
+        try {
+          client.res.write(`data: ${sseData}\n\n`);
+        } catch {
+          // Client connection is dead — remove it. The 'close' event handler
+          // will also fire eventually, but cleaning up here prevents repeated
+          // failed writes for subsequent events in this tick.
+          this.sseClients.delete(client);
+          this.logger.debug({ conversationId: client.conversationId }, 'Removed dead SSE client');
+        }
+      }
     }
   }
 

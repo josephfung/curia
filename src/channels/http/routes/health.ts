@@ -6,9 +6,11 @@
 
 import type { FastifyInstance } from 'fastify';
 import type { Pool } from 'pg';
+import type { Logger } from '../../../logger.js';
 
 export interface HealthRouteOptions {
   pool: Pool;
+  logger: Logger;
   agentNames: string[];
   skillNames: string[];
 }
@@ -17,7 +19,7 @@ export async function healthRoutes(
   app: FastifyInstance,
   options: HealthRouteOptions,
 ): Promise<void> {
-  const { pool, agentNames, skillNames } = options;
+  const { pool, logger, agentNames, skillNames } = options;
   const startTime = Date.now();
 
   app.get('/api/health', async (_request, reply) => {
@@ -25,7 +27,8 @@ export async function healthRoutes(
 
     try {
       await pool.query('SELECT 1');
-    } catch {
+    } catch (err) {
+      logger.warn({ err }, 'Health check: database probe failed');
       dbStatus = 'disconnected';
     }
 

@@ -51,7 +51,7 @@ describe('HTTP API integration', () => {
     dispatcher.register();
 
     app.register(messageRoutes, { bus, logger, eventRouter });
-    app.register(healthRoutes, { pool: mockPool, agentNames: ['coordinator'], skillNames: ['web-fetch'] });
+    app.register(healthRoutes, { pool: mockPool, logger, agentNames: ['coordinator'], skillNames: ['web-fetch'] });
     app.register(agentRoutes, { agentRegistry });
 
     await app.ready();

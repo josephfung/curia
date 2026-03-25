@@ -42,8 +42,8 @@ export async function messageRoutes(
       sender_id?: string;
     };
 
-    if (!body?.content || typeof body.content !== 'string') {
-      return reply.status(400).send({ error: 'Missing required field: content (string)' });
+    if (!body?.content || typeof body.content !== 'string' || body.content.trim().length === 0) {
+      return reply.status(400).send({ error: 'Missing required field: content (non-empty string)' });
     }
 
     const conversationId = body.conversation_id ?? `http-${randomUUID()}`;
@@ -63,6 +63,9 @@ export async function messageRoutes(
       await bus.publish('channel', inboundEvent);
       const content = await responsePromise;
 
+      // TODO: agent_id is hardcoded — OutboundMessagePayload doesn't carry agentId.
+      // Once we add agentId to the outbound event, extract it here for accuracy
+      // in multi-agent delegation scenarios.
       return reply.send({
         conversation_id: conversationId,
         content,
@@ -73,7 +76,10 @@ export async function messageRoutes(
       eventRouter.cancelPending(conversationId);
       const message = err instanceof Error ? err.message : String(err);
       logger.error({ err, conversationId }, 'HTTP message handling failed');
-      return reply.status(504).send({ error: message });
+
+      // Distinguish timeout errors (504) from internal failures (500)
+      const isTimeout = message.includes('timeout') || message.includes('Timeout');
+      return reply.status(isTimeout ? 504 : 500).send({ error: message });
     }
   });
 
@@ -85,6 +91,10 @@ export async function messageRoutes(
    */
   app.get('/api/messages/stream', async (request: FastifyRequest, reply: FastifyReply) => {
     const query = request.query as { conversation_id?: string };
+
+    // Tell Fastify we're taking over the response — prevents it from
+    // sending a default reply after the async handler returns.
+    reply.hijack();
 
     // Set SSE headers
     reply.raw.writeHead(200, {
@@ -103,7 +113,20 @@ export async function messageRoutes(
       conversationId: query.conversation_id,
     });
 
+    // Periodic heartbeat to prevent proxies (nginx, ALB, Cloudflare) from
+    // closing idle connections — most have a 60-120s idle timeout.
+    const heartbeat = setInterval(() => {
+      try {
+        reply.raw.write(':ping\n\n');
+      } catch {
+        clearInterval(heartbeat);
+      }
+    }, 30000);
+
     // Clean up when client disconnects
-    request.raw.on('close', cleanup);
+    request.raw.on('close', () => {
+      clearInterval(heartbeat);
+      cleanup();
+    });
   });
 }
