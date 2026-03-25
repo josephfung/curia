@@ -32,6 +32,8 @@ describe('loadConfig', () => {
 
   it('defaults LOG_LEVEL to info', () => {
     process.env.DATABASE_URL = 'postgres://test:test@localhost:5432/test';
+    // Explicitly remove LOG_LEVEL to test the default — CI sets LOG_LEVEL=error
+    delete process.env.LOG_LEVEL;
     const config = loadConfig();
     expect(config.logLevel).toBe('info');
   });
