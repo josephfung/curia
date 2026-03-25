@@ -16,6 +16,7 @@
  * and the audit logger must be connected before events start flowing.
  */
 
+import * as path from 'node:path';
 import { loadConfig } from './config.js';
 import { createLogger } from './logger.js';
 import { createPool } from './db/connection.js';
@@ -25,6 +26,8 @@ import { AnthropicProvider } from './agents/llm/anthropic.js';
 import { AgentRuntime } from './agents/runtime.js';
 import { Dispatcher } from './dispatch/dispatcher.js';
 import { CliAdapter } from './channels/cli/cli-adapter.js';
+import { loadAgentConfig } from './agents/loader.js';
+import { WorkingMemory } from './memory/working-memory.js';
 
 async function main(): Promise<void> {
   // 1. Config & logging — no dependencies, must come first.
@@ -67,21 +70,25 @@ async function main(): Promise<void> {
   }
   const llmProvider = new AnthropicProvider(config.anthropicApiKey, logger);
 
+  // Working memory — created after the pool is confirmed healthy so we know
+  // the working_memory table is reachable before the first message arrives.
+  const memory = WorkingMemory.createWithPostgres(pool, logger);
+
   // 6. Coordinator agent — subscribes to agent.task, publishes agent.response.
   // Must register before the dispatcher so there is a handler for agent.task
   // by the time the first inbound.message is converted.
-  // TODO: Load system prompt from agents/coordinator.yaml instead of
-  // hardcoding here; requires a yaml-parsing step at startup.
+  // Load coordinator config from YAML — persona fields are interpolated by the loader.
+  const coordinatorConfig = loadAgentConfig(
+    path.resolve(import.meta.dirname, '../agents/coordinator.yaml'),
+  );
+
   const coordinator = new AgentRuntime({
-    agentId: 'coordinator',
-    systemPrompt: `You are Curia, an AI executive assistant. You are professional,
-concise, and helpful. You handle all communications on behalf of the CEO.
-For casual messages, respond naturally and warmly.
-For tasks, acknowledge the request and describe what you would do.
-Keep responses concise — a few sentences unless detail is requested.`,
+    agentId: coordinatorConfig.name,
+    systemPrompt: coordinatorConfig.system_prompt,
     provider: llmProvider,
     bus,
     logger,
+    memory,
   });
   coordinator.register();
 

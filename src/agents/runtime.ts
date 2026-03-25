@@ -2,6 +2,7 @@ import type { LLMProvider, Message } from './llm/provider.js';
 import type { EventBus } from '../bus/bus.js';
 import { createAgentResponse, type AgentTaskEvent } from '../bus/events.js';
 import type { Logger } from '../logger.js';
+import { WorkingMemory } from '../memory/working-memory.js';
 
 export interface AgentConfig {
   agentId: string;
@@ -9,6 +10,8 @@ export interface AgentConfig {
   provider: LLMProvider;
   bus: EventBus;
   logger: Logger;
+  /** Optional working memory for conversation persistence across turns. */
+  memory?: WorkingMemory;
 }
 
 /**
@@ -45,19 +48,35 @@ export class AgentRuntime {
   }
 
   /**
-   * Process a task: call the LLM with system prompt + user content,
-   * then publish the response back to the bus as agent.response.
+   * Process a task: load conversation history (if memory is configured),
+   * call the LLM with system prompt + history + user content, persist both
+   * the user message and assistant response to memory, then publish the
+   * response back to the bus as agent.response.
    */
   private async handleTask(taskEvent: AgentTaskEvent): Promise<void> {
-    const { agentId, systemPrompt, provider, bus, logger } = this.config;
+    const { agentId, systemPrompt, provider, bus, logger, memory } = this.config;
     const { content, conversationId } = taskEvent.payload;
 
+    // Load conversation history from working memory (if configured).
+    // Without memory, each task is treated as a fresh single-turn exchange.
+    const history = memory
+      ? await memory.getHistory(conversationId, agentId)
+      : [];
+
+    // Assemble LLM context: system prompt + prior turns + new user message
     const messages: Message[] = [
       { role: 'system', content: systemPrompt },
+      ...history,
       { role: 'user', content },
     ];
 
-    logger.info({ agentId, conversationId }, 'Agent processing task');
+    logger.info({ agentId, conversationId, historyLength: history.length }, 'Agent processing task');
+
+    // Persist the incoming user message before calling the LLM so that a
+    // crash during the LLM call still records what the user said
+    if (memory) {
+      await memory.addTurn(conversationId, agentId, { role: 'user', content });
+    }
 
     const response = await provider.chat({ messages });
 
@@ -71,6 +90,11 @@ export class AgentRuntime {
         'Agent task completed',
       );
       responseContent = response.content;
+    }
+
+    // Persist the assistant response so subsequent turns include it as context
+    if (memory) {
+      await memory.addTurn(conversationId, agentId, { role: 'assistant', content: responseContent });
     }
 
     // Publish response back to the bus — the dispatcher subscribes to

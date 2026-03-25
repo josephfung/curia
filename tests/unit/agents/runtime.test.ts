@@ -4,6 +4,7 @@ import { EventBus } from '../../../src/bus/bus.js';
 import { createAgentTask, type AgentResponseEvent } from '../../../src/bus/events.js';
 import type { LLMProvider } from '../../../src/agents/llm/provider.js';
 import { createLogger } from '../../../src/logger.js';
+import { WorkingMemory } from '../../../src/memory/working-memory.js';
 
 function createMockProvider(response: string): LLMProvider {
   return {
@@ -92,5 +93,74 @@ describe('AgentRuntime', () => {
 
     expect(responses).toHaveLength(1);
     expect(responses[0]?.payload.content).toContain('unable to process');
+  });
+
+  it('includes conversation history in LLM context', async () => {
+    const provider = createMockProvider('Response 2');
+    const memory = WorkingMemory.createInMemory();
+
+    // Seed conversation history
+    await memory.addTurn('conv-1', 'coordinator', { role: 'user', content: 'First message' });
+    await memory.addTurn('conv-1', 'coordinator', { role: 'assistant', content: 'First response' });
+
+    const runtime = new AgentRuntime({
+      agentId: 'coordinator',
+      systemPrompt: 'You are helpful.',
+      provider,
+      bus,
+      logger: createLogger('error'),
+      memory,
+    });
+    runtime.register();
+
+    const task = createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'conv-1',
+      channelId: 'cli',
+      senderId: 'user',
+      content: 'Second message',
+      parentEventId: 'parent-1',
+    });
+    await bus.publish('dispatch', task);
+
+    // LLM should receive system + history + new message
+    expect(provider.chat).toHaveBeenCalledWith({
+      messages: [
+        { role: 'system', content: 'You are helpful.' },
+        { role: 'user', content: 'First message' },
+        { role: 'assistant', content: 'First response' },
+        { role: 'user', content: 'Second message' },
+      ],
+    });
+  });
+
+  it('saves both user message and assistant response to memory', async () => {
+    const provider = createMockProvider('Bot reply');
+    const memory = WorkingMemory.createInMemory();
+
+    const runtime = new AgentRuntime({
+      agentId: 'coordinator',
+      systemPrompt: 'You are helpful.',
+      provider,
+      bus,
+      logger: createLogger('error'),
+      memory,
+    });
+    runtime.register();
+
+    const task = createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'conv-1',
+      channelId: 'cli',
+      senderId: 'user',
+      content: 'Hello',
+      parentEventId: 'parent-1',
+    });
+    await bus.publish('dispatch', task);
+
+    const history = await memory.getHistory('conv-1', 'coordinator');
+    expect(history).toHaveLength(2);
+    expect(history[0]).toEqual({ role: 'user', content: 'Hello' });
+    expect(history[1]).toEqual({ role: 'assistant', content: 'Bot reply' });
   });
 });
