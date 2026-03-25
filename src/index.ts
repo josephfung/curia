@@ -101,9 +101,16 @@ async function main(): Promise<void> {
   const executionLayer = new ExecutionLayer(skillRegistry, logger, { bus, agentRegistry });
 
   // Load all agent configs from the agents/ directory.
+  // Fail hard on errors — consistent with skill loading and DB connection checks.
   const agentsDir = path.resolve(import.meta.dirname, '../agents');
-  const agentConfigs = loadAllAgentConfigs(agentsDir);
-  logger.info({ agents: agentConfigs.map(c => c.name) }, 'Agent configs loaded');
+  let agentConfigs;
+  try {
+    agentConfigs = loadAllAgentConfigs(agentsDir);
+    logger.info({ agents: agentConfigs.map(c => c.name) }, 'Agent configs loaded');
+  } catch (err) {
+    logger.fatal({ err }, 'Failed to load agent configs');
+    process.exit(1);
+  }
 
   // Two-pass agent registration:
   // Pass 1: Register all agents in the registry so specialistSummary() is complete
@@ -113,11 +120,16 @@ async function main(): Promise<void> {
   // before any specialists are registered, resulting in an empty specialist list.
 
   // Pass 1: Populate registry with all agent names, roles, and descriptions
-  for (const agentConfig of agentConfigs) {
-    agentRegistry.register(agentConfig.name, {
-      role: agentConfig.role ?? 'specialist',
-      description: agentConfig.description ?? agentConfig.name,
-    });
+  try {
+    for (const agentConfig of agentConfigs) {
+      agentRegistry.register(agentConfig.name, {
+        role: agentConfig.role ?? 'specialist',
+        description: agentConfig.description ?? agentConfig.name,
+      });
+    }
+  } catch (err) {
+    logger.fatal({ err }, 'Failed during agent registration');
+    process.exit(1);
   }
 
   // Pass 2: Create AgentRuntime for each config (now all specialists are known)
@@ -170,7 +182,11 @@ async function main(): Promise<void> {
   // close the DB pool so Postgres cleans up server-side connections cleanly.
   const shutdown = async () => {
     logger.info('Shutting down...');
-    await pool.end();
+    try {
+      await pool.end();
+    } catch (err) {
+      logger.error({ err }, 'Error closing database pool during shutdown');
+    }
     process.exit(0);
   };
 

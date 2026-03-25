@@ -81,6 +81,16 @@ export class ExecutionLayer {
     // This is intentionally gated behind a manifest flag so normal skills
     // cannot escalate their privileges by accessing the bus directly.
     if (manifest.infrastructure) {
+      if (!this.bus || !this.agentRegistry) {
+        skillLogger.error(
+          { skillName },
+          'Infrastructure skill invoked but ExecutionLayer was not constructed with bus/agentRegistry',
+        );
+        return {
+          success: false,
+          error: `Infrastructure skill '${skillName}' cannot run: bus or agent registry not available in ExecutionLayer`,
+        };
+      }
       ctx.bus = this.bus;
       ctx.agentRegistry = this.agentRegistry;
     }

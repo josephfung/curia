@@ -80,10 +80,11 @@ export class DelegateHandler implements SkillHandler {
     // persists after the delegation completes. The settled guard makes it
     // a near-zero-cost no-op after resolution. Phase 5 should add
     // bus.unsubscribe() or a one-shot subscription pattern.
+    let timeoutHandle: NodeJS.Timeout;
     const responsePromise = new Promise<string>((resolve, reject) => {
       let settled = false;
 
-      const timeout = setTimeout(() => {
+      timeoutHandle = setTimeout(() => {
         if (!settled) {
           settled = true;
           reject(new Error(`Specialist '${agent}' did not respond within ${SPECIALIST_TIMEOUT_MS}ms`));
@@ -92,12 +93,21 @@ export class DelegateHandler implements SkillHandler {
 
       ctx.bus!.subscribe('agent.response', 'system', async (event) => {
         if (settled) return; // Skip processing after settlement — prevents double-resolve
-        const responseEvent = event as AgentResponseEvent;
-        // Match on the task event ID — the specialist sets parentEventId to the task ID
-        if (responseEvent.parentEventId === taskEvent.id) {
-          settled = true;
-          clearTimeout(timeout);
-          resolve(responseEvent.payload.content);
+        try {
+          const responseEvent = event as AgentResponseEvent;
+          // Match on the task event ID — the specialist sets parentEventId to the task ID
+          if (responseEvent.parentEventId === taskEvent.id) {
+            settled = true;
+            clearTimeout(timeoutHandle);
+            resolve(responseEvent.payload.content);
+          }
+        } catch (err) {
+          // Fail fast on malformed events rather than silently hanging until timeout
+          if (!settled) {
+            settled = true;
+            clearTimeout(timeoutHandle);
+            reject(err instanceof Error ? err : new Error(String(err)));
+          }
         }
       });
     });
@@ -105,9 +115,8 @@ export class DelegateHandler implements SkillHandler {
     // Publish the task to the bus — the specialist will pick it up.
     // We publish as 'dispatch' layer because only dispatch can publish agent.task
     // per the permission model. Infrastructure skills are trusted to impersonate layers.
-    await ctx.bus.publish('dispatch', taskEvent);
-
     try {
+      await ctx.bus.publish('dispatch', taskEvent);
       const response = await responsePromise;
       ctx.log.info({ targetAgent: agent }, 'Specialist responded');
 
@@ -122,6 +131,10 @@ export class DelegateHandler implements SkillHandler {
       const message = err instanceof Error ? err.message : String(err);
       ctx.log.error({ err, targetAgent: agent }, 'Delegation failed');
       return { success: false, error: message };
+    } finally {
+      // Always clean up the timeout — prevents unhandled rejection if publish()
+      // throws before responsePromise is awaited
+      clearTimeout(timeoutHandle!);
     }
   }
 }
