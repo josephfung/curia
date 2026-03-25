@@ -1,0 +1,19 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    environment:
+      POSTGRES_DB: curia
+      POSTGRES_USER: ${DB_USER:-curia}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-curia_dev}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-curia}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  pgdata:

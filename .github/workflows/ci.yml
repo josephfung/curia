@@ -9,32 +9,47 @@ on:
 jobs:
   ci:
     runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_DB: curia_test
+          POSTGRES_USER: curia
+          POSTGRES_PASSWORD: curia_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U curia"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+
     steps:
       - uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
 
       - name: Use Node.js
         uses: actions/setup-node@v4
         with:
           node-version: "22"
+          cache: "pnpm"
 
-      # TODO: Uncomment when package.json exists
-      # - name: Install dependencies
-      #   run: pnpm install --frozen-lockfile
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
 
-      # - name: Lint
-      #   run: pnpm run lint
+      - name: Type check
+        run: pnpm run typecheck
 
-      # - name: Type check
-      #   run: pnpm run typecheck
+      - name: Lint
+        run: pnpm run lint
 
-      # - name: Run tests
-      #   run: pnpm test
-
-      - name: Verify project structure
-        run: |
-          test -f README.md
-          test -f docs/specs/00-overview.md
-          test -d agents
-          test -d skills
-          test -d config
-          echo "Project structure verified"
+      - name: Run tests
+        run: pnpm test
+        env:
+          DATABASE_URL: postgres://curia:curia_test@localhost:5432/curia_test
+          LOG_LEVEL: error
