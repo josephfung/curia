@@ -99,6 +99,31 @@ No core code changes needed. The adapter registers with the bus as `layer: "chan
 - Each adapter handles its own platform authentication (bot tokens, IMAP credentials) via `ctx.secret()`
 - Rate limiting is enforced at the dispatch layer, not per-adapter (centralized policy)
 
+### Trust Levels
+
+Each channel is assigned a trust level that the dispatch layer tags on every inbound message:
+
+| Channel | Trust Level | Rationale |
+|---|---|---|
+| **CLI** | `high` | Requires SSH/physical access to the host |
+| **Signal** | `high` | Strong identity via phone number + Signal protocol |
+| **Telegram** | `medium` | Platform-verified `chat_id`, but account compromise is possible |
+| **HTTP API** | `medium` | Token-authenticated, but tokens can be leaked |
+| **Email** | `low` | From headers are trivially spoofable; relies on SPF/DKIM/DMARC |
+
+Trust levels gate which actions the Coordinator can take based on the originating channel. See [06-audit-and-security.md](06-audit-and-security.md#trust-gated-actions) for policy configuration.
+
+### Sender Allowlists
+
+Each channel maintains an allowlist of authorized senders. Messages from unknown senders are rejected silently (default) or held for pairing approval (configurable). This is configured per-channel in `config/default.yaml`.
+
+### Email Validation
+
+The email adapter performs additional validation before publishing `inbound.message`:
+- SPF, DKIM, and DMARC header validation
+- Reply-To vs From header consistency check
+- Messages failing validation are tagged `sender_verified: false` in metadata (not blocked — the Coordinator decides how to handle unverified messages)
+
 ---
 
 ## Reconnection & Resilience
