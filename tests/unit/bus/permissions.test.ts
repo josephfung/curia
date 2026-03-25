@@ -35,4 +35,29 @@ describe('Bus Permissions', () => {
   it('blocks channel from subscribing to agent.task', () => {
     expect(canSubscribe('channel', 'agent.task')).toBe(false);
   });
+
+  it('agent layer can publish skill.invoke', () => {
+    expect(canPublish('agent', 'skill.invoke')).toBe(true);
+  });
+
+  it('agent layer can publish skill.result (on behalf of execution layer)', () => {
+    expect(canPublish('agent', 'skill.result')).toBe(true);
+  });
+
+  it('execution layer can publish skill.result', () => {
+    expect(canPublish('execution', 'skill.result')).toBe(true);
+  });
+
+  it('agent layer can subscribe to skill.result', () => {
+    expect(canSubscribe('agent', 'skill.result')).toBe(true);
+  });
+
+  it('execution layer can subscribe to skill.invoke', () => {
+    expect(canSubscribe('execution', 'skill.invoke')).toBe(true);
+  });
+
+  it('channel layer cannot publish skill events', () => {
+    expect(canPublish('channel', 'skill.invoke')).toBe(false);
+    expect(canPublish('channel', 'skill.result')).toBe(false);
+  });
 });
