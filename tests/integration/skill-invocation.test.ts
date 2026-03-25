@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { EventBus } from '../../src/bus/bus.js';
 import { AgentRuntime } from '../../src/agents/runtime.js';
 import { SkillRegistry } from '../../src/skills/registry.js';

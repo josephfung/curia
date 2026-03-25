@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import { ExecutionLayer } from '../../../src/skills/execution.js';
 import { SkillRegistry } from '../../../src/skills/registry.js';
 import type { SkillManifest, SkillHandler, SkillContext } from '../../../src/skills/types.js';

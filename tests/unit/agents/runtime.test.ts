@@ -175,7 +175,7 @@ function createToolUseProvider(toolCallName: string, toolCallInput: Record<strin
   let callCount = 0;
   return {
     id: 'mock',
-    chat: async ({ toolResults }: { toolResults?: ToolResult[] }) => {
+    chat: async ({ toolResults: _toolResults }: { toolResults?: ToolResult[] }) => {
       callCount++;
       if (callCount === 1) {
         return {
