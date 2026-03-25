@@ -45,11 +45,12 @@ CREATE TABLE contact_channel_identities (
   verified_at         TIMESTAMPTZ,
   source              TEXT NOT NULL,
   created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
 
   UNIQUE(channel, channel_identifier)
 );
 
-CREATE INDEX idx_cci_lookup ON contact_channel_identities (channel, channel_identifier);
+-- UNIQUE constraint above creates an implicit index on (channel, channel_identifier)
 CREATE INDEX idx_cci_contact ON contact_channel_identities (contact_id);
 ```
 
@@ -78,14 +79,20 @@ CREATE TABLE contact_auth_overrides (
   permission      TEXT NOT NULL,
   granted         BOOLEAN NOT NULL,
   granted_by      TEXT NOT NULL DEFAULT 'ceo',
-  created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  revoked_at      TIMESTAMPTZ,
+
+  UNIQUE(contact_id, permission)
 );
 
-CREATE INDEX idx_cao_contact ON contact_auth_overrides (contact_id);
+CREATE INDEX idx_cao_contact_perm ON contact_auth_overrides (contact_id, permission)
+  WHERE revoked_at IS NULL;
 ```
 
 - `granted: true` — explicitly grants a permission beyond the role's defaults.
 - `granted: false` — explicitly denies a permission that the role's defaults would allow.
+- `revoked_at` — soft-delete timestamp. When an override is revoked, the row is preserved with `revoked_at` set for audit history. Only rows with `revoked_at IS NULL` are active.
+- `UNIQUE(contact_id, permission)` — prevents contradictory overrides for the same contact and permission. Updating an override upserts the existing row.
 - Overrides always win over role defaults.
 
 ---
@@ -210,11 +217,13 @@ Held messages are queued in working memory with a `held_for_identification` flag
 
 If the CEO identifies the sender, the held message is re-processed with full contact context. If the CEO says "I don't know them," the held message is discarded and the sender remains unresolved.
 
+**Rate limiting:** A maximum of 20 held messages per channel are queued at any time (configurable). When the cap is reached, the oldest held message is discarded. This prevents a flood of unknown-sender messages from consuming unbounded working memory.
+
 ---
 
 ## Authorization Model
 
-Authorization is a three-layer stack. All three layers must agree for an action to proceed.
+Authorization is evaluated through a three-layer stack where per-contact overrides take precedence over role defaults, and channel trust acts as a final gate.
 
 ### Layer 1: Role Defaults (Config)
 
@@ -232,7 +241,7 @@ roles:
       - schedule_meetings
     default_deny:
       - send_on_behalf
-      - access_personal_calendar
+      - see_personal_calendar
 
   board_member:
     description: "Board of Directors member"
@@ -300,7 +309,7 @@ Roles are **open-ended** — the CEO can create new roles at any time by assigni
 Stored in `contact_auth_overrides`. Explicit grants and denials that override role defaults:
 
 - CEO says "Jenna can send emails on my behalf" → grant `send_on_behalf` for Jenna
-- CEO says "Don't let board members see the Q3 financials yet" → deny `view_financial_reports` for contacts with role `board_member` (individual overrides per contact)
+- CEO says "Don't let board members see the Q3 financials yet" → the Coordinator creates individual `view_financial_reports` deny overrides for each current contact with role `board_member`. Note: future contacts assigned the `board_member` role will not inherit these overrides — the Coordinator should mention this to the CEO and offer to update role defaults instead if the restriction is meant to be permanent.
 
 ### Layer 3: Channel Trust
 
@@ -323,20 +332,21 @@ When an action's trust requirement exceeds the channel's trust level, the Coordi
 Verified contact requests an action
         │
         ▼
-  1. Look up role defaults
+  1. Check contact_auth_overrides FIRST
+     → Explicit grant? → use it (skip role defaults)
+     → Explicit denial? → use it (skip role defaults)
+     → No override? → fall through to step 2
+        │
+        ▼
+  2. Check role defaults
      → Is the action in default_permissions? → allowed
      → Is the action in default_deny? → denied
-     → Not listed? → ask CEO
+     → Not listed in either? → escalate to CEO
         │
         ▼
-  2. Check contact_auth_overrides
-     → Explicit grant? → overrides deny
-     → Explicit denial? → overrides allow
-        │
-        ▼
-  3. Check channel trust level
-     → Channel trust >= action requirement? → proceed
-     → Channel trust < action requirement? → escalate to CEO
+  3. Check channel trust level (final gate)
+     → Channel trust >= action's trust requirement? → proceed
+     → Channel trust < action's trust requirement? → escalate to CEO
         │
         ▼
   ALLOW / DENY / ESCALATE
@@ -376,7 +386,7 @@ permissions:
   access_internal_docs:
     description: "Access internal company documents"
     sensitivity: medium
-  access_personal_calendar:
+  see_personal_calendar:
     description: "View personal (non-work) calendar"
     sensitivity: medium
   manage_personal_appointments:
@@ -384,7 +394,7 @@ permissions:
     sensitivity: medium
 ```
 
-The `sensitivity` field maps to the trust policy: high-sensitivity permissions require high-trust channels. New permissions can be added at any time — the Coordinator normalizes CEO requests to existing permission names when possible ("can she see my calendar?" → `see_personal_calendar`) and creates new entries when needed.
+The `sensitivity` field maps directly to channel trust requirements: `high` sensitivity requires a `high` trust channel, `medium` requires `medium` or higher, `low` has no channel restriction. When the trust policy in [06-audit-and-security.md](06-audit-and-security.md#trust-gated-actions) defines an explicit rule for an action category, that rule takes precedence over the generic sensitivity mapping. New permissions can be added at any time — the Coordinator normalizes CEO requests to existing permission names when possible ("can she see my calendar?" → `see_personal_calendar`) and creates new entries when needed.
 
 ---
 
@@ -402,6 +412,7 @@ Contact CRUD operations are exposed as skills, invoked by the Coordinator during
 | `contact.revoke-permission` | Remove a permission override |
 | `contact.lookup` | Look up a contact by name, role, or channel identifier |
 | `contact.list` | List all contacts, optionally filtered by role |
+| `contact.merge` | Merge two contacts into one (consolidates channel identities and overrides) |
 
 All contact mutations are audit-logged. The Coordinator confirms changes with the CEO before writing:
 
@@ -422,7 +433,7 @@ type ContactResolvedEvent = {
   contact_id: string;
   display_name: string;
   role: string | null;
-  kg_node_id: string;
+  kg_node_id: string | null;
   verification_status: 'verified' | 'unverified';
   channel: string;
   channel_identifier: string;
@@ -450,7 +461,8 @@ Both events are audit-logged before delivery (write-ahead, per [06-audit-and-sec
 | **02 — Agent System** | Coordinator receives enriched messages with contact context. Role and permissions are included in the Coordinator's system prompt context for each conversation. Specialist agents never see external contact info directly. |
 | **03 — Skills & Execution** | Contact management operations (`contact.create`, `contact.link-identity`, etc.) are skills with manifests in `skills/contact/`. |
 | **04 — Channels** | Channel adapters produce `InboundMessage` with `sender_id`. The contact resolver in the dispatch layer enriches this before routing to the Coordinator. Email adapter extracts To/CC participants into `metadata.participants`. |
-| **06 — Audit & Security** | Every identity resolution is audit-logged. Failed resolution attempts are logged for security review. Authorization decisions (allow/deny/escalate) are logged with the full context: contact, role, permission, channel trust. The existing sender allowlist mechanism (04-channels.md) is superseded by contact resolution — known verified contacts are implicitly allowlisted. |
+| **05 — Error Recovery** | Contact resolution and authorization check failures are handled as `AgentError` types. If the contacts DB is unreachable, the resolver degrades gracefully: messages are tagged as `resolution_failed` and treated as unknown senders (safe default). Error budgets from spec 05 apply to contact management skills. |
+| **06 — Audit & Security** | Every identity resolution is audit-logged. Failed resolution attempts are logged for security review. Authorization decisions (allow/deny/escalate) are logged with the full context: contact, role, permission, channel trust. The per-channel sender allowlist from spec 04 is fully superseded by contact resolution once the contacts system is deployed — all channels use the contact resolver, and the old allowlist config is ignored. Specs 04 and 06 should be updated to note this deprecation. |
 | **08 — Operations** | Contact tables added via migration. Role defaults and permissions registry added to `config/`. |
 
 ---
@@ -473,7 +485,7 @@ The migration depends on `kg_nodes` existing (for the foreign key), so it must r
 - **Spoofing defense** — a spoofed email From header might match a known contact's email, but the email channel's low trust level prevents consequential actions. The Coordinator will ask for Signal/CLI confirmation before acting on sensitive requests from email.
 - **Impersonation on new channels** — someone claiming to be a known contact on a new channel identity is `self_claimed` (unverified) until the CEO confirms. The Coordinator never auto-promotes self-claimed identities.
 - **Contact deletion** — removing a contact also cascades to channel identities and auth overrides (ON DELETE CASCADE). The KG person node is not deleted — it retains historical facts even if the contact record is removed.
-- **Allowlist supersession** — the per-channel sender allowlist from [04-channels.md](04-channels.md#sender-allowlists) is superseded by the contact system for channels where contacts are enabled. Unknown senders on contact-enabled channels follow the unknown sender policy in this spec rather than the blanket allowlist behavior.
+- **Allowlist supersession** — once the contact system is deployed, it fully replaces the per-channel sender allowlist from [04-channels.md](04-channels.md#sender-allowlists). All channels use the contact resolver pipeline. Unknown senders follow the unknown sender policy defined in this spec. The old allowlist configuration is ignored. Specs 04 and 06 should be updated to mark the allowlist as deprecated.
 
 ---
 
