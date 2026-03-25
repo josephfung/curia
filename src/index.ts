@@ -109,11 +109,9 @@ Keep responses concise — a few sentences unless detail is requested.`,
   const cli = new CliAdapter(bus, logger, () => void shutdown());
   cli.start();
 
-  // Print a clean welcome after all the startup logs have settled
-  setTimeout(() => {
-    process.stdout.write('\nCuria is ready. Type a message or /quit to exit.\n\n');
-    cli.prompt();
-  }, 100);
+  // Print welcome directly to stdout (logger writes to curia.log in dev mode)
+  process.stdout.write('\nCuria is ready. Type a message, /quit to exit, or Ctrl+C.\n\n');
+  cli.prompt();
 }
 
 // Pre-logger fallback — if main() throws during config loading (before the

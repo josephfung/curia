@@ -43,9 +43,17 @@ export class CliAdapter {
       input: process.stdin,
       output: process.stdout,
       prompt: '> ',
+      // Let us handle SIGINT ourselves rather than readline's default behavior
+      // which just emits 'close' — we want a clean shutdown sequence
     });
 
-    // Handle Ctrl+C — readline emits 'close' on SIGINT
+    // Handle Ctrl+C — process SIGINT directly since readline can swallow it
+    process.on('SIGINT', () => {
+      process.stdout.write('\n');
+      this.stop();
+    });
+
+    // Handle readline close (e.g., stdin EOF)
     this.rl.on('close', () => {
       this.logger.info('CLI closed');
       if (this.onExit) {
