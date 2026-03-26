@@ -26,6 +26,7 @@ import { ExecutionLayer } from '../../src/skills/execution.js';
 import { loadSkillsFromDirectory } from '../../src/skills/loader.js';
 import { ContactService } from '../../src/contacts/contact-service.js';
 import { ContactResolver } from '../../src/contacts/contact-resolver.js';
+import { NylasClient } from '../../src/channels/email/nylas-client.js';
 import { createInboundMessage, type OutboundMessageEvent } from '../../src/bus/events.js';
 import type { Logger } from '../../src/logger.js';
 
@@ -87,8 +88,18 @@ export async function createHarness(): Promise<CuriaHarness> {
   // Agent registry — tracks all running agents for delegation and listing.
   const agentRegistry = new AgentRegistry();
 
+  // Nylas client — optional, same as src/index.ts. EmailAdapter is intentionally
+  // skipped here: smoke tests should not start polling for real emails during runs.
+  // The nylasClient is still passed to ExecutionLayer so email skills can be invoked
+  // if a smoke test explicitly calls email-send or email-reply.
+  let nylasClient: NylasClient | undefined;
+  if (config.nylasApiKey && config.nylasGrantId) {
+    nylasClient = new NylasClient(config.nylasApiKey, config.nylasGrantId, logger);
+  }
+
   // Execution layer — with bus and agent registry for infrastructure skills.
-  const executionLayer = new ExecutionLayer(skillRegistry, logger, { bus, agentRegistry, contactService });
+  // nylasClient passed through so email skills work in tests that exercise them.
+  const executionLayer = new ExecutionLayer(skillRegistry, logger, { bus, agentRegistry, contactService, nylasClient });
 
   // Load all agent configs from the agents/ directory.
   const agentsDir = path.resolve(import.meta.dirname, '../../agents');
