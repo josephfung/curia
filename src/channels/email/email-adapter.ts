@@ -75,49 +75,67 @@ export class EmailAdapter {
     if (this.processing) return;
     this.processing = true;
 
+    // Separate try/catch for the Nylas API call so a transient network error
+    // doesn't silently drop already-fetched messages.
+    let messages;
     try {
-      const messages = await this.config.nylasClient.listMessages({
+      messages = await this.config.nylasClient.listMessages({
         receivedAfter: this.lastSeenTimestamp,
         unread: true,
         limit: 25,
       });
+    } catch (err) {
+      this.config.logger.error({ err }, 'Email polling failed — will retry');
+      this.processing = false;
+      return;
+    }
 
+    try {
       for (const msg of messages) {
-        // Skip emails sent by Nathan Curia (self) — we only want inbound messages
-        // from external senders, not our own outgoing replies.
-        const fromEmail = msg.from[0]?.email;
-        if (fromEmail === this.config.selfEmail) continue;
-
-        const converted = convertNylasMessage(msg);
-
-        // Auto-create contacts from participants before publishing the inbound event,
-        // so the contact resolver in the dispatch layer can find them immediately.
-        await this.extractParticipants(converted.metadata.participants);
-
-        // Publish inbound message to the bus
-        const event = createInboundMessage({
-          conversationId: converted.conversationId,
-          channelId: converted.channelId,
-          senderId: converted.senderId,
-          content: converted.content,
-          metadata: converted.metadata as unknown as Record<string, unknown>,
-        });
-        await this.config.bus.publish('channel', event);
-
-        this.config.logger.info(
-          { from: fromEmail, subject: msg.subject, threadId: msg.threadId },
-          'Email received and published to bus',
-        );
-
-        // Advance the high-water mark so subsequent polls skip this message.
-        // +1 ensures the next poll's receivedAfter excludes the exact timestamp
-        // we just processed (Nylas timestamps are Unix seconds integers).
+        // Advance the high-water mark BEFORE processing so a permanently broken
+        // message (e.g. malformed payload) is never retried on the next poll cycle.
+        // +1 ensures the next poll's receivedAfter excludes this exact timestamp
+        // (Nylas timestamps are Unix seconds integers).
         if (msg.date >= this.lastSeenTimestamp) {
           this.lastSeenTimestamp = msg.date + 1;
         }
+
+        // Skip emails sent by Nathan Curia (self) — we only want inbound messages
+        // from external senders, not our own outgoing replies.
+        // Case-insensitive to guard against inconsistent casing from mail servers.
+        const fromEmail = msg.from[0]?.email;
+        if (fromEmail?.toLowerCase() === this.config.selfEmail.toLowerCase()) continue;
+
+        try {
+          const converted = convertNylasMessage(msg);
+
+          // Auto-create contacts from participants before publishing the inbound event,
+          // so the contact resolver in the dispatch layer can find them immediately.
+          await this.extractParticipants(converted.metadata.participants);
+
+          // Publish inbound message to the bus
+          const event = createInboundMessage({
+            conversationId: converted.conversationId,
+            channelId: converted.channelId,
+            senderId: converted.senderId,
+            content: converted.content,
+            metadata: converted.metadata as unknown as Record<string, unknown>,
+          });
+          await this.config.bus.publish('channel', event);
+
+          this.config.logger.info(
+            { from: fromEmail, subject: msg.subject, threadId: msg.threadId },
+            'Email received and published to bus',
+          );
+        } catch (err) {
+          // Log and skip — the high-water mark was already advanced above,
+          // so this message will not be retried on the next poll cycle.
+          this.config.logger.error(
+            { err, messageId: msg.id, threadId: msg.threadId, from: fromEmail },
+            'Failed to process inbound email — skipping message',
+          );
+        }
       }
-    } catch (err) {
-      this.config.logger.error({ err }, 'Email polling failed — will retry');
     } finally {
       this.processing = false;
     }
@@ -183,8 +201,9 @@ export class EmailAdapter {
     const { contactService, logger, selfEmail } = this.config;
 
     for (const p of participants) {
-      // Don't create a contact for ourselves
-      if (p.email === selfEmail) continue;
+      // Don't create a contact for ourselves — case-insensitive to guard against
+      // inconsistent casing from mail servers (e.g. "User@Example.com" vs "user@example.com").
+      if (p.email.toLowerCase() === selfEmail.toLowerCase()) continue;
 
       try {
         // Check if this email is already linked to a contact
