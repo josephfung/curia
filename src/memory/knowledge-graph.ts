@@ -21,6 +21,10 @@ export interface CreateNodeOptions {
   confidence?: number;    // defaults to 0.7
   decayClass?: DecayClass; // defaults to 'slow_decay'
   source: string;
+  /** Pre-computed embedding; when provided, skips the embed API call.
+   *  Used by EntityMemory.storeFact() to avoid double-embedding — the validator
+   *  already embedded the label during dedup checks. */
+  embedding?: number[];
 }
 
 export interface CreateEdgeOptions {
@@ -97,7 +101,9 @@ export class KnowledgeGraphStore {
    */
   async createNode(options: CreateNodeOptions): Promise<KgNode> {
     const now = new Date();
-    const embedding = await this.embeddingService.embed(options.label);
+    // Use pre-computed embedding if provided (avoids redundant API call when
+    // the validator already embedded the label during dedup checks).
+    const embedding = options.embedding ?? await this.embeddingService.embed(options.label);
 
     const node: KgNode = {
       id: createNodeId(),
@@ -169,7 +175,7 @@ export class KnowledgeGraphStore {
     return this.backend.findNodesByType(type);
   }
 
-  /** Find nodes by label (case-insensitive substring match) */
+  /** Find nodes by label (case-insensitive exact match) */
   async findNodesByLabel(label: string): Promise<KgNode[]> {
     return this.backend.findNodesByLabel(label);
   }
@@ -302,9 +308,10 @@ class PostgresBackend implements KnowledgeGraphBackend {
   }
 
   async findNodesByLabel(label: string): Promise<KgNode[]> {
-    // Case-insensitive match using ILIKE
+    // Case-insensitive exact match using lower() to leverage the idx_kg_nodes_label index.
+    // ILIKE would require a pg_trgm index; lower() = lower() uses the btree on lower(label).
     const result = await this.pool.query<PgNodeRow>(
-      'SELECT * FROM kg_nodes WHERE label ILIKE $1',
+      'SELECT * FROM kg_nodes WHERE lower(label) = lower($1)',
       [label],
     );
     return result.rows.map(pgRowToNode);

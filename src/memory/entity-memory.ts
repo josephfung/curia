@@ -119,6 +119,9 @@ export class EntityMemory {
           confidence: result.node.temporal.confidence,
           decayClass: result.node.temporal.decayClass,
           source: result.node.temporal.source,
+          // Pass the pre-computed embedding from the validator's dedup check
+          // to avoid a redundant OpenAI API call.
+          embedding: result.node.embedding,
         });
 
         // If edge creation fails, the node we just created becomes an orphan
