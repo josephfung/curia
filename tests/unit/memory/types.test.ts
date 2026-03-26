@@ -1,9 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  type KgNode,
-  type KgEdge,
   NODE_TYPES,
-  EDGE_TYPES,
   DECAY_CLASSES,
   createNodeId,
   createEdgeId,

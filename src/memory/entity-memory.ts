@@ -60,7 +60,6 @@ export class EntityMemory {
     // embeddingService is accepted to keep the constructor signature stable for callers
     // that wire the dependency graph. All embedding work is currently delegated to the
     // store (createNode embeds labels; semanticSearch embeds query strings internally).
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     _embeddingService: EmbeddingService,
   ) {}
 
