@@ -31,6 +31,8 @@ interface AgentTaskPayload {
   senderId: string;
   content: string;
   metadata?: Record<string, unknown>;
+  /** Resolved sender context from the contact resolver. Undefined if contacts not configured. */
+  senderContext?: import('../contacts/types.js').InboundSenderContext;
 }
 
 interface AgentResponsePayload {

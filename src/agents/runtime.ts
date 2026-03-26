@@ -96,6 +96,21 @@ export class AgentRuntime {
       { role: 'user', content },
     ];
 
+    // Inject resolved sender context as a system message so the coordinator
+    // knows who it's talking to. Inserted after the system prompt but before
+    // history, so it's visible but doesn't pollute working memory.
+    const senderCtx = taskEvent.payload.senderContext;
+    if (senderCtx?.resolved) {
+      let senderInfo = `Current sender: ${senderCtx.displayName}`;
+      if (senderCtx.role) senderInfo += ` (${senderCtx.role})`;
+      senderInfo += senderCtx.verified ? ' [verified]' : ' [unverified]';
+      if (senderCtx.knowledgeSummary) {
+        senderInfo += `\n\nKnown context about ${senderCtx.displayName}:\n${senderCtx.knowledgeSummary}`;
+      }
+      // Insert after system prompt (index 0) but before history
+      messages.splice(1, 0, { role: 'system', content: senderInfo });
+    }
+
     logger.info({ agentId, conversationId, historyLength: history.length }, 'Agent processing task');
 
     // Persist the incoming user message

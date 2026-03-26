@@ -1,11 +1,14 @@
 import type { EventBus } from '../bus/bus.js';
 import type { InboundMessageEvent, AgentResponseEvent } from '../bus/events.js';
-import { createAgentTask, createOutboundMessage } from '../bus/events.js';
+import { createAgentTask, createOutboundMessage, createContactResolved, createContactUnknown } from '../bus/events.js';
 import type { Logger } from '../logger.js';
+import type { ContactResolver } from '../contacts/contact-resolver.js';
+import type { InboundSenderContext } from '../contacts/types.js';
 
 export interface DispatcherConfig {
   bus: EventBus;
   logger: Logger;
+  contactResolver?: ContactResolver;
 }
 
 /**
@@ -21,6 +24,7 @@ export interface DispatcherConfig {
 export class Dispatcher {
   private bus: EventBus;
   private logger: Logger;
+  private contactResolver?: ContactResolver;
   /**
    * Maps agent.task event ID → channel routing info.
    * When the agent publishes agent.response (with parentEventId pointing to the task),
@@ -34,6 +38,7 @@ export class Dispatcher {
   constructor(config: DispatcherConfig) {
     this.bus = config.bus;
     this.logger = config.logger;
+    this.contactResolver = config.contactResolver;
   }
 
   register(): void {
@@ -57,12 +62,39 @@ export class Dispatcher {
       'Dispatching to coordinator',
     );
 
+    // Resolve sender if contact resolver is available
+    let senderContext: InboundSenderContext | undefined;
+    if (this.contactResolver) {
+      senderContext = await this.contactResolver.resolve(payload.channelId, payload.senderId);
+
+      // Publish contact event for audit trail
+      if (senderContext.resolved) {
+        await this.bus.publish('dispatch', createContactResolved({
+          contactId: senderContext.contactId,
+          displayName: senderContext.displayName,
+          role: senderContext.role,
+          kgNodeId: null, // not available on SenderContext directly
+          verificationStatus: senderContext.verified ? 'verified' : 'unverified',
+          channel: payload.channelId,
+          channelIdentifier: payload.senderId,
+          parentEventId: event.id,
+        }));
+      } else {
+        await this.bus.publish('dispatch', createContactUnknown({
+          channel: senderContext.channel,
+          senderId: senderContext.senderId,
+          parentEventId: event.id,
+        }));
+      }
+    }
+
     const taskEvent = createAgentTask({
       agentId: 'coordinator',
       conversationId: payload.conversationId,
       channelId: payload.channelId,
       senderId: payload.senderId,
       content: payload.content,
+      senderContext,
       parentEventId: event.id,
     });
 
