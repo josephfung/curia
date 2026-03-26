@@ -30,3 +30,7 @@ curia.log
 
 # Docker volumes
 pgdata/
+
+# Smoke test outputs (timestamped, not committed)
+tests/smoke/results/*.json
+tests/smoke/reports/*.html
