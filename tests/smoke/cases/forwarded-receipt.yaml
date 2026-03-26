@@ -1,0 +1,41 @@
+name: Forwarded Receipt (No Context)
+description: Agent should recognize an implicit expense submission from a forwarded receipt
+tags:
+  - inference
+  - expense
+  - single-turn
+
+turns:
+  - role: user
+    content: |
+      ---------- Forwarded message ----------
+      From: receipts@uber.com
+      Subject: Your trip receipt
+
+      Trip on March 20, 2026
+      From: 44 Gaukel St, Kitchener
+      To: Pearson Airport, Toronto
+      Total: $127.43 CAD
+      Payment: Visa ending in 4521
+
+expected_behaviors:
+  - id: detect-expense
+    description: Recognizes this as an expense/receipt without being explicitly told
+    weight: critical
+  - id: extract-amount
+    description: Extracts the dollar amount ($127.43 CAD)
+    weight: important
+  - id: extract-vendor
+    description: Identifies Uber as the vendor
+    weight: important
+  - id: categorize
+    description: Suggests a category like transportation or travel
+    weight: nice-to-have
+  - id: confirm-action
+    description: Confirms what it will do or asks what to do with the receipt
+    weight: important
+
+failure_modes:
+  - Doesn't detect it as an expense
+  - Treats it as a generic forwarded email with no action
+  - Leaves it unprocessed

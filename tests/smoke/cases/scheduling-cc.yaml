@@ -1,0 +1,47 @@
+name: Copied on Scheduling (No Mention)
+description: Agent should recognize an implicit scheduling task from a forwarded thread where the user is CC'd but not mentioned by name
+tags:
+  - inference
+  - scheduling
+  - single-turn
+
+turns:
+  - role: user
+    content: |
+      ---------- Forwarded message ----------
+      From: Lisa Park <lisa.park@acme.co>
+      To: Derek Huang <derek.huang@acme.co>
+      CC: me
+      Subject: Re: Q2 Planning Offsite
+
+      Derek — does the week of April 14 work for you? I was thinking we book
+      the boardroom at the Waterloo office for the full day, maybe 9am–4pm.
+      We'll need lunch catered too.
+
+      Lisa
+
+      > On Mar 23, Derek Huang wrote:
+      > Lisa, let's lock in a date for the Q2 offsite. I'm flexible most of
+      > April but want to avoid the week of the 21st — I'll be in Vancouver.
+
+expected_behaviors:
+  - id: detect-scheduling
+    description: Recognizes this as a scheduling/calendar coordination request
+    weight: critical
+  - id: identify-parties
+    description: Identifies Lisa Park and Derek Huang as the people coordinating
+    weight: important
+  - id: infer-user-involvement
+    description: Understands the user is CC'd and likely needs to attend or be aware
+    weight: critical
+  - id: offer-calendar-help
+    description: Offers to check calendar availability or block the proposed time
+    weight: important
+  - id: note-logistics
+    description: Captures logistics details (boardroom, catering, 9am–4pm)
+    weight: nice-to-have
+
+failure_modes:
+  - Ignores the forwarded thread entirely and asks what the user needs
+  - Treats it as informational only and takes no action
+  - Assumes the user is Lisa or Derek instead of a third party

@@ -1,0 +1,36 @@
+name: Role/Person Mismatch
+description: Agent should detect when the user assigns a role to a person that may not match known records and ask for clarification
+tags:
+  - contacts
+  - conflict
+  - single-turn
+
+turns:
+  - role: user
+    content: |
+      Ask our CFO Jenna to review the Q3 budget forecast before Thursday's
+      exec meeting. She should pay special attention to the R&D line items —
+      we went over by 15% last quarter.
+
+expected_behaviors:
+  - id: detect-role-conflict
+    description: Identifies that Jenna may not be the CFO in known records and flags the potential mismatch
+    weight: critical
+  - id: ask-clarification
+    description: Asks the user to confirm Jenna's role or full name before proceeding
+    weight: critical
+  - id: preserve-request
+    description: Retains the full request (review Q3 budget forecast, focus on R&D line items, Thursday deadline) while resolving the conflict
+    weight: important
+  - id: no-wrong-person
+    description: Does not send the request to the wrong person based on a guess
+    weight: critical
+  - id: suggest-resolution
+    description: If records exist, suggests the known CFO or known Jennas to help resolve the mismatch
+    weight: nice-to-have
+
+failure_modes:
+  - Sends the request to the wrong person without checking
+  - Flags the mismatch but loses the original request details
+  - Ignores the role label entirely and just searches for any Jenna
+  - Asks for clarification on the role but not the person

@@ -15,7 +15,8 @@
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src/ tests/",
-    "migrate": "tsx --env-file=.env node_modules/node-pg-migrate/bin/node-pg-migrate.js up --migrations-dir src/db/migrations --migration-file-language sql"
+    "migrate": "tsx --env-file=.env node_modules/node-pg-migrate/bin/node-pg-migrate.js up --migrations-dir src/db/migrations --migration-file-language sql",
+    "smoke": "tsx --env-file=.env tests/smoke/cli.ts"
   },
   "license": "MIT",
   "dependencies": {

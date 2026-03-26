@@ -1,0 +1,46 @@
+name: Photo of Receipt Only
+description: Agent receives an image of a receipt with no accompanying text — tests image processing capability (expected to fail until image support is built)
+tags:
+  - inference
+  - expense
+  - image
+  - single-turn
+
+turns:
+  - role: user
+    content: |
+      [Image: photo of a crumpled Starbucks receipt showing:
+       Store #4412 — 137 King St W, Kitchener
+       Date: March 22, 2026
+       1x Venti Latte         $6.45
+       1x Bacon Gouda Sandwich $8.30
+       Subtotal: $14.75
+       Tax: $1.92
+       Total: $16.67
+       Visa ending 9083]
+
+expected_behaviors:
+  - id: process-image
+    description: Processes the receipt image and extracts structured data
+    weight: critical
+  - id: extract-total
+    description: Extracts the total amount ($16.67)
+    weight: critical
+  - id: extract-vendor
+    description: Identifies Starbucks as the vendor
+    weight: important
+  - id: extract-date
+    description: Captures the transaction date (March 22, 2026)
+    weight: important
+  - id: categorize-expense
+    description: Suggests a category like meals or food & beverage
+    weight: nice-to-have
+  - id: confirm-action
+    description: Confirms what it will do with the receipt or asks for instructions
+    weight: important
+
+failure_modes:
+  - Cannot parse the image at all and returns an error
+  - Ignores the image and asks the user to describe the receipt in text
+  - Extracts the subtotal instead of the total
+  - Misidentifies the vendor

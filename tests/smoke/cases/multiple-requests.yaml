@@ -1,0 +1,39 @@
+name: Multiple Requests in One Message
+description: Agent should decompose a single message containing multiple unrelated requests and address each one separately
+tags:
+  - multi-task
+  - single-turn
+
+turns:
+  - role: user
+    content: |
+      Hey Curia, a few things:
+
+      1) Can you check if the Q2 board deck has been shared with me yet? I think
+         Priya was supposed to send it by end of day yesterday.
+      2) Remind me to call Sarah Chen about the Nexus partnership deal tomorrow at 2pm.
+      3) Also — what time is my flight to Montreal on Thursday? I can't remember
+         if it's the 7am or the 9am.
+
+expected_behaviors:
+  - id: identify-all-tasks
+    description: Recognizes all three distinct requests in the message
+    weight: critical
+  - id: handle-deck-check
+    description: Addresses the board deck status check (item 1)
+    weight: important
+  - id: handle-reminder
+    description: Sets or offers to set the reminder for the Sarah Chen call at 2pm tomorrow (item 2)
+    weight: important
+  - id: handle-flight-lookup
+    description: Addresses the flight time lookup for Thursday Montreal trip (item 3)
+    weight: important
+  - id: no-task-mixing
+    description: Does not conflate details between the three tasks (e.g., doesn't mix Sarah Chen with the board deck)
+    weight: critical
+
+failure_modes:
+  - Only addresses one or two of the three requests
+  - Merges details from different requests together
+  - Responds with a single generic acknowledgment without addressing specifics
+  - Handles them sequentially but drops the last one
