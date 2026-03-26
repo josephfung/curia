@@ -61,6 +61,26 @@ interface SkillResultPayload {
   durationMs: number;
 }
 
+// Memory event payloads — used for the knowledge graph audit trail (Phase 6).
+// `source` is a structured provenance string (e.g. "agent:coordinator/task:task-1/channel:cli").
+
+interface MemoryStorePayload {
+  agentId: string;
+  conversationId: string;
+  nodeId: string;
+  nodeType: string;
+  label: string;
+  source: string;
+}
+
+interface MemoryQueryPayload {
+  agentId: string;
+  conversationId: string;
+  queryType: string; // 'entity' | 'search' | 'facts'
+  queryParams: Record<string, unknown>;
+  resultCount: number;
+}
+
 // -- Discriminated union --
 // The `type` field is the discriminant; `sourceLayer` records which layer emitted the event.
 
@@ -102,13 +122,30 @@ export interface SkillResultEvent extends BaseEvent {
   payload: SkillResultPayload;
 }
 
+// Memory events — emitted by the agent layer whenever the knowledge graph is written to or queried.
+// These form the audit trail for memory operations (Phase 6).
+
+export interface MemoryStoreEvent extends BaseEvent {
+  type: 'memory.store';
+  sourceLayer: 'agent';
+  payload: MemoryStorePayload;
+}
+
+export interface MemoryQueryEvent extends BaseEvent {
+  type: 'memory.query';
+  sourceLayer: 'agent';
+  payload: MemoryQueryPayload;
+}
+
 export type BusEvent =
   | InboundMessageEvent
   | AgentTaskEvent
   | AgentResponseEvent
   | OutboundMessageEvent
   | SkillInvokeEvent
-  | SkillResultEvent;
+  | SkillResultEvent
+  | MemoryStoreEvent    // Phase 6: knowledge graph write audit
+  | MemoryQueryEvent;   // Phase 6: knowledge graph read audit
 
 // Convenience alias for use in handler maps / switch statements.
 export type EventType = BusEvent['type'];
@@ -200,6 +237,36 @@ export function createSkillResult(
     timestamp: new Date(),
     type: 'skill.result',
     sourceLayer: 'execution',
+    payload: rest,
+    parentEventId,
+  };
+}
+
+export function createMemoryStore(
+  // parentEventId is required — every memory write must trace back to the agent.task that triggered it.
+  payload: MemoryStorePayload & { parentEventId: string },
+): MemoryStoreEvent {
+  const { parentEventId, ...rest } = payload;
+  return {
+    id: randomUUID(),
+    timestamp: new Date(),
+    type: 'memory.store',
+    sourceLayer: 'agent',
+    payload: rest,
+    parentEventId,
+  };
+}
+
+export function createMemoryQuery(
+  // parentEventId is required — every memory read must trace back to the agent.task that triggered it.
+  payload: MemoryQueryPayload & { parentEventId: string },
+): MemoryQueryEvent {
+  const { parentEventId, ...rest } = payload;
+  return {
+    id: randomUUID(),
+    timestamp: new Date(),
+    type: 'memory.query',
+    sourceLayer: 'agent',
     payload: rest,
     parentEventId,
   };

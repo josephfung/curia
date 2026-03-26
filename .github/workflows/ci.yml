@@ -42,6 +42,11 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Run database migrations
+        run: pnpm tsx node_modules/node-pg-migrate/bin/node-pg-migrate.js up --migrations-dir src/db/migrations --migration-file-language sql
+        env:
+          DATABASE_URL: postgres://curia:curia_test@localhost:5432/curia_test
+
       - name: Type check
         run: pnpm run typecheck
 

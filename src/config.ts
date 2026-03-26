@@ -1,6 +1,7 @@
 export interface Config {
   databaseUrl: string;
   anthropicApiKey: string | undefined;
+  openaiApiKey: string | undefined;
   logLevel: string;
   httpPort: number;
   apiToken: string | undefined;
@@ -20,6 +21,7 @@ export function loadConfig(): Config {
   return {
     databaseUrl,
     anthropicApiKey: process.env.ANTHROPIC_API_KEY,
+    openaiApiKey: process.env.OPENAI_API_KEY,
     logLevel: process.env.LOG_LEVEL ?? 'info',
     httpPort,
     apiToken: process.env.API_TOKEN,
