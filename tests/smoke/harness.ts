@@ -173,20 +173,28 @@ export async function createHarness(): Promise<CuriaHarness> {
         }
       });
 
-      // Publish the inbound message as the channel layer.
-      const inbound = createInboundMessage({
-        conversationId: options.conversationId,
-        channelId: options.channelId ?? 'smoke-test',
-        senderId: options.senderId ?? 'smoke-test-user',
-        content: options.content,
-      });
-      bus.publish('channel', inbound).catch((err) => {
+      // Publish the inbound message
+      try {
+        const inbound = createInboundMessage({
+          conversationId: options.conversationId,
+          channelId: options.channelId ?? 'smoke-test',
+          senderId: options.senderId ?? 'smoke-test-user',
+          content: options.content,
+        });
+        bus.publish('channel', inbound).catch((err) => {
+          if (!resolved) {
+            resolved = true;
+            clearTimeout(timeout);
+            reject(err);
+          }
+        });
+      } catch (err) {
         if (!resolved) {
           resolved = true;
           clearTimeout(timeout);
-          reject(err);
+          reject(err instanceof Error ? err : new Error(String(err)));
         }
-      });
+      }
     });
   }
 

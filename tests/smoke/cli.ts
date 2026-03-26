@@ -44,7 +44,15 @@ async function main(): Promise<void> {
 
   // Boot harness
   process.stdout.write('   Booting Curia stack...\n');
-  const harness = await createHarness();
+  let harness;
+  try {
+    harness = await createHarness();
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    process.stderr.write(`\nFailed to boot Curia stack: ${detail}\n`);
+    process.stderr.write('Check that DATABASE_URL and ANTHROPIC_API_KEY are set and the database is reachable.\n');
+    process.exit(1);
+  }
   process.stdout.write('   Stack ready.\n\n');
 
   // Run test cases
@@ -59,7 +67,11 @@ async function main(): Promise<void> {
   });
 
   // Shut down harness (we don't need it for evaluation)
-  await harness.shutdown();
+  try {
+    await harness.shutdown();
+  } catch (err) {
+    process.stderr.write(`  [WARN] Harness shutdown error: ${err instanceof Error ? err.message : String(err)}\n`);
+  }
 
   // Evaluate with judge
   process.stdout.write('\n-- Evaluating Responses --\n\n');
@@ -84,7 +96,11 @@ async function main(): Promise<void> {
   // Save results JSON
   mkdirSync(RESULTS_DIR, { recursive: true });
   const resultsFile = path.join(RESULTS_DIR, `${fileTimestamp(timestamp)}.json`);
-  writeFileSync(resultsFile, JSON.stringify(runResult, null, 2));
+  try {
+    writeFileSync(resultsFile, JSON.stringify(runResult, null, 2));
+  } catch (err) {
+    process.stderr.write(`  [WARN] Failed to write results: ${err instanceof Error ? err.message : String(err)}\n`);
+  }
 
   // Load historical data for trend
   const history = loadHistory(RESULTS_DIR);
@@ -93,7 +109,11 @@ async function main(): Promise<void> {
   mkdirSync(REPORTS_DIR, { recursive: true });
   const html = generateReport(runResult, history);
   const reportFile = path.join(REPORTS_DIR, `${fileTimestamp(timestamp)}.html`);
-  writeFileSync(reportFile, html);
+  try {
+    writeFileSync(reportFile, html);
+  } catch (err) {
+    process.stderr.write(`  [WARN] Failed to write report: ${err instanceof Error ? err.message : String(err)}\n`);
+  }
 
   // Summary
   process.stdout.write('\n-- Summary --\n\n');
@@ -145,7 +165,9 @@ function loadHistory(resultsDir: string): HistoricalEntry[] {
           caseCount: data.cases.length,
           passRate: totalBehaviors > 0 ? passBehaviors / totalBehaviors : 0,
         };
-      } catch {
+      } catch (err) {
+        const detail = err instanceof Error ? err.message : String(err);
+        process.stderr.write(`  [WARN] Skipping corrupt results file ${f}: ${detail}\n`);
         return null;
       }
     })

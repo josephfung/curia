@@ -124,11 +124,24 @@ Rate each behavior. Respond with JSON only.`;
     const content = json.choices[0]?.message?.content ?? '';
     return parseJudgeResponse(content, exec.testCase.expectedBehaviors);
   } catch (err) {
-    // Return all-MISS rather than throwing so one bad case doesn't abort the run
+    const message = err instanceof Error ? err.message : String(err);
+
+    // Systemic errors should abort — falling back to all-MISS would produce
+    // a garbage run that's indistinguishable from "Curia is broken."
+    if (message.includes('401') || message.includes('403')) {
+      throw new Error(`Judge API authentication failed — check OPENAI_API_KEY: ${message}`);
+    }
+    if (message.includes('429')) {
+      throw new Error(`Judge API rate limited — wait and retry: ${message}`);
+    }
+
+    // Per-case failure: fall back to MISS but warn the operator
+    process.stderr.write(`  [WARN] Judge failed for "${exec.testCase.name}": ${message}\n`);
+
     return exec.testCase.expectedBehaviors.map(b => ({
       behaviorId: b.id,
       rating: 'MISS' as BehaviorRating,
-      justification: `Judge error: ${err instanceof Error ? err.message : String(err)}`,
+      justification: `Judge error: ${message}`,
     }));
   }
 }
@@ -152,12 +165,13 @@ export function parseJudgeResponse(
       rating: (['PASS', 'PARTIAL', 'MISS'].includes(s.rating) ? s.rating : 'MISS') as BehaviorRating,
       justification: s.justification ?? '',
     }));
-  } catch {
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
     if (!fallbackBehaviors) return [];
     return fallbackBehaviors.map(b => ({
       behaviorId: b.id,
       rating: 'MISS' as BehaviorRating,
-      justification: 'Failed to parse judge response',
+      justification: `Failed to parse judge response: ${detail}`,
     }));
   }
 }
