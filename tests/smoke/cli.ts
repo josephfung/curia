@@ -93,6 +93,10 @@ async function main(): Promise<void> {
     durationMs: Date.now() - startTime,
   };
 
+  // Load historical data BEFORE writing current results, so the trend chart
+  // shows only previous runs (not the current run duplicated as history).
+  const history = loadHistory(RESULTS_DIR);
+
   // Save results JSON
   mkdirSync(RESULTS_DIR, { recursive: true });
   const resultsFile = path.join(RESULTS_DIR, `${fileTimestamp(timestamp)}.json`);
@@ -101,9 +105,6 @@ async function main(): Promise<void> {
   } catch (err) {
     process.stderr.write(`  [WARN] Failed to write results: ${err instanceof Error ? err.message : String(err)}\n`);
   }
-
-  // Load historical data for trend
-  const history = loadHistory(RESULTS_DIR);
 
   // Generate HTML report
   mkdirSync(REPORTS_DIR, { recursive: true });

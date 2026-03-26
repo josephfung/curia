@@ -132,46 +132,47 @@ export async function createHarness(): Promise<CuriaHarness> {
   // -- No HTTP adapter, no CLI adapter, no SIGTERM handler --
   // This harness is headless: the only way to inject messages is sendMessage().
 
-  /**
-   * Publish an inbound.message and wait for the corresponding outbound.message.
-   *
-   * IMPORTANT: bus.subscribe() returns void — there is no unsubscribe mechanism.
-   * We use a `resolved` boolean flag inside the handler to ignore events after
-   * the first match or timeout. The handler stays registered but becomes a no-op.
-   */
+  // Single persistent listener for outbound messages. Uses a Map to dispatch
+  // responses to the correct sendMessage() caller by conversationId.
+  // This avoids accumulating dead handlers (bus.subscribe returns void —
+  // there is no unsubscribe mechanism).
+  const pendingResponses = new Map<string, {
+    resolve: (value: { content: string; durationMs: number }) => void;
+    reject: (reason: Error) => void;
+    start: number;
+    timeout: ReturnType<typeof setTimeout>;
+  }>();
+
+  bus.subscribe('outbound.message', 'channel', (event) => {
+    const outbound = event as OutboundMessageEvent;
+    const pending = pendingResponses.get(outbound.payload.conversationId);
+    if (pending) {
+      pendingResponses.delete(outbound.payload.conversationId);
+      clearTimeout(pending.timeout);
+      pending.resolve({
+        content: outbound.payload.content,
+        durationMs: Date.now() - pending.start,
+      });
+    }
+  });
+
   async function sendMessage(options: {
     conversationId: string;
     content: string;
     senderId?: string;
     channelId?: string;
   }): Promise<{ content: string; durationMs: number }> {
-    const start = Date.now();
-
     return new Promise((resolve, reject) => {
-      let resolved = false;
+      const start = Date.now();
 
       const timeout = setTimeout(() => {
-        if (!resolved) {
-          resolved = true;
+        if (pendingResponses.has(options.conversationId)) {
+          pendingResponses.delete(options.conversationId);
           reject(new Error('Timeout waiting for response (60s)'));
         }
       }, 60_000);
 
-      // Subscribe to outbound.message as the channel layer (matching how
-      // real channel adapters receive responses). The handler filters by
-      // conversationId so concurrent sendMessage() calls don't cross-talk.
-      bus.subscribe('outbound.message', 'channel', (event) => {
-        if (resolved) return;
-        const outbound = event as OutboundMessageEvent;
-        if (outbound.payload.conversationId === options.conversationId) {
-          resolved = true;
-          clearTimeout(timeout);
-          resolve({
-            content: outbound.payload.content,
-            durationMs: Date.now() - start,
-          });
-        }
-      });
+      pendingResponses.set(options.conversationId, { resolve, reject, start, timeout });
 
       // Publish the inbound message
       try {
@@ -182,15 +183,15 @@ export async function createHarness(): Promise<CuriaHarness> {
           content: options.content,
         });
         bus.publish('channel', inbound).catch((err) => {
-          if (!resolved) {
-            resolved = true;
+          if (pendingResponses.has(options.conversationId)) {
+            pendingResponses.delete(options.conversationId);
             clearTimeout(timeout);
             reject(err);
           }
         });
       } catch (err) {
-        if (!resolved) {
-          resolved = true;
+        if (pendingResponses.has(options.conversationId)) {
+          pendingResponses.delete(options.conversationId);
           clearTimeout(timeout);
           reject(err instanceof Error ? err : new Error(String(err)));
         }
