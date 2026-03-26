@@ -6,6 +6,10 @@ export interface Config {
   httpPort: number;
   apiToken: string | undefined;
   timezone: string;
+  nylasApiKey: string | undefined;
+  nylasGrantId: string | undefined;
+  nylasPollingIntervalMs: number;
+  nylasSelfEmail: string;
 }
 
 export function loadConfig(): Config {
@@ -27,5 +31,9 @@ export function loadConfig(): Config {
     httpPort,
     apiToken: process.env.API_TOKEN,
     timezone: process.env.TIMEZONE ?? 'America/Toronto',
+    nylasApiKey: process.env.NYLAS_API_KEY,
+    nylasGrantId: process.env.NYLAS_GRANT_ID,
+    nylasPollingIntervalMs: parseInt(process.env.NYLAS_POLL_INTERVAL_MS ?? '30000', 10),
+    nylasSelfEmail: process.env.NYLAS_SELF_EMAIL ?? '',
   };
 }
