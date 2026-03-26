@@ -30,6 +30,10 @@ import { CliAdapter } from './channels/cli/cli-adapter.js';
 import { loadAllAgentConfigs, interpolateRuntimeContext } from './agents/loader.js';
 import { AgentRegistry } from './agents/agent-registry.js';
 import { WorkingMemory } from './memory/working-memory.js';
+import { EmbeddingService } from './memory/embedding.js';
+import { KnowledgeGraphStore } from './memory/knowledge-graph.js';
+import { MemoryValidator } from './memory/validation.js';
+import { EntityMemory } from './memory/entity-memory.js';
 import { SkillRegistry } from './skills/registry.js';
 import { ExecutionLayer } from './skills/execution.js';
 import { loadSkillsFromDirectory } from './skills/loader.js';
@@ -78,6 +82,19 @@ async function main(): Promise<void> {
   // Working memory — created after the pool is confirmed healthy so we know
   // the working_memory table is reachable before the first message arrives.
   const memory = WorkingMemory.createWithPostgres(pool, logger);
+
+  // Entity memory — optional, requires OPENAI_API_KEY for embeddings.
+  // If not configured, agents still work — they just don't have KG access.
+  let entityMemory: EntityMemory | undefined;
+  if (config.openaiApiKey) {
+    const embeddingService = EmbeddingService.createWithOpenAI(config.openaiApiKey, logger);
+    const kgStore = KnowledgeGraphStore.createWithPostgres(pool, embeddingService, logger);
+    const validator = new MemoryValidator(kgStore, embeddingService);
+    entityMemory = new EntityMemory(kgStore, validator, embeddingService);
+    logger.info('Entity memory initialized with knowledge graph');
+  } else {
+    logger.warn('OPENAI_API_KEY not set — entity memory disabled (knowledge graph unavailable)');
+  }
 
   // Skill registry — loads all skills from the skills/ directory.
   // Skills are the framework's extension mechanism; agents invoke them
@@ -155,6 +172,7 @@ async function main(): Promise<void> {
       bus,
       logger,
       memory,
+      entityMemory,
       executionLayer,
       pinnedSkills: agentPinnedSkills,
       skillToolDefs: agentToolDefs,

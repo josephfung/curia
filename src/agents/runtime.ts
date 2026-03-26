@@ -3,6 +3,7 @@ import type { EventBus } from '../bus/bus.js';
 import { createAgentResponse, createSkillInvoke, createSkillResult, type AgentTaskEvent } from '../bus/events.js';
 import type { Logger } from '../logger.js';
 import type { WorkingMemory } from '../memory/working-memory.js';
+import type { EntityMemory } from '../memory/entity-memory.js';
 import type { ExecutionLayer } from '../skills/execution.js';
 import { sanitizeOutput } from '../skills/sanitize.js';
 
@@ -14,6 +15,8 @@ export interface AgentConfig {
   logger: Logger;
   /** Optional working memory for conversation persistence across turns. */
   memory?: WorkingMemory;
+  /** Optional entity memory for knowledge graph access. */
+  entityMemory?: EntityMemory;
   /** Optional execution layer for skill invocations via tool-use. */
   executionLayer?: ExecutionLayer;
   /** Skill names to include as tools in every LLM call. */
