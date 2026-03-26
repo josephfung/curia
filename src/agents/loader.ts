@@ -13,6 +13,7 @@ export interface AgentYamlConfig {
   persona?: {
     display_name?: string;
     tone?: string;
+    title?: string;
     email_signature?: string;
   };
   model: {
