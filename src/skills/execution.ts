@@ -18,18 +18,21 @@ import { sanitizeOutput } from './sanitize.js';
 import type { Logger } from '../logger.js';
 import type { EventBus } from '../bus/bus.js';
 import type { AgentRegistry } from '../agents/agent-registry.js';
+import type { ContactService } from '../contacts/contact-service.js';
 
 export class ExecutionLayer {
   private registry: SkillRegistry;
   private logger: Logger;
   private bus?: EventBus;
   private agentRegistry?: AgentRegistry;
+  private contactService?: ContactService;
 
-  constructor(registry: SkillRegistry, logger: Logger, options?: { bus?: EventBus; agentRegistry?: AgentRegistry }) {
+  constructor(registry: SkillRegistry, logger: Logger, options?: { bus?: EventBus; agentRegistry?: AgentRegistry; contactService?: ContactService }) {
     this.registry = registry;
     this.logger = logger;
     this.bus = options?.bus;
     this.agentRegistry = options?.agentRegistry;
+    this.contactService = options?.contactService;
   }
 
   /**
@@ -93,6 +96,7 @@ export class ExecutionLayer {
       }
       ctx.bus = this.bus;
       ctx.agentRegistry = this.agentRegistry;
+      ctx.contactService = this.contactService;
     }
 
     skillLogger.info({ input: Object.keys(input) }, 'Invoking skill');

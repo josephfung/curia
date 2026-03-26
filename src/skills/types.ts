@@ -49,6 +49,8 @@ export interface SkillContext {
   bus?: import('../bus/bus.js').EventBus;
   /** Agent registry — only available to infrastructure skills */
   agentRegistry?: import('../agents/agent-registry.js').AgentRegistry;
+  /** Contact service — only available to infrastructure skills */
+  contactService?: import('../contacts/contact-service.js').ContactService;
 }
 
 /**

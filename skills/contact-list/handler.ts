@@ -1,0 +1,49 @@
+// handler.ts — contact-list skill implementation.
+//
+// Lists all contacts, optionally filtered by role.
+// Returns an array of contact summaries.
+//
+// This is an infrastructure skill — it requires contactService access.
+
+import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+
+export class ContactListHandler implements SkillHandler {
+  async execute(ctx: SkillContext): Promise<SkillResult> {
+    const { role } = ctx.input as {
+      role?: string;
+    };
+
+    // Infrastructure skills need contactService
+    if (!ctx.contactService) {
+      return {
+        success: false,
+        error: 'contact-list skill requires infrastructure access (contactService). Is infrastructure: true set in the manifest?',
+      };
+    }
+
+    ctx.log.info({ role: role ?? '(all)' }, 'Listing contacts');
+
+    try {
+      const contacts = role && typeof role === 'string'
+        ? await ctx.contactService.findContactByRole(role)
+        : await ctx.contactService.listContacts();
+
+      return {
+        success: true,
+        data: {
+          contacts: contacts.map((c) => ({
+            contact_id: c.id,
+            display_name: c.displayName,
+            role: c.role,
+            kg_node_id: c.kgNodeId,
+          })),
+          count: contacts.length,
+        },
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      ctx.log.error({ err, role }, 'Failed to list contacts');
+      return { success: false, error: `Failed to list contacts: ${message}` };
+    }
+  }
+}
