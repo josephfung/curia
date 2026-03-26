@@ -50,7 +50,14 @@ export function convertNylasMessage(msg: NylasMessage): ConvertedEmail {
 
   // htmlToText returns '' for an empty/falsy body, so also check snippet
   const bodyText = msg.body ? htmlToText(msg.body) : '';
-  const content = bodyText || msg.snippet || '(empty email)';
+
+  // Cap email body at 50KB of text to prevent context stuffing and excessive token usage.
+  // Emails larger than this are truncated with a note.
+  const MAX_BODY_LENGTH = 50_000;
+  let content = bodyText || msg.snippet || '(empty email)';
+  if (content.length > MAX_BODY_LENGTH) {
+    content = content.slice(0, MAX_BODY_LENGTH) + '\n\n[Email truncated — original was ' + content.length + ' characters]';
+  }
 
   // Prepend subject so the LLM always has full context even in isolated chunks
   const formattedContent = `Subject: ${msg.subject}\n\n${content}`;

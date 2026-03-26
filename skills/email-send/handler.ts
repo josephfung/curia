@@ -15,21 +15,38 @@ const MAX_TO_LENGTH = 1000;
 const MAX_SUBJECT_LENGTH = 500;
 const MAX_BODY_LENGTH = 50000;
 
+// Minimal RFC-5321-style check: requires at least one non-whitespace/@ char on
+// each side of @ and a dot in the domain. Rejects plain strings, IP-only domains
+// that lack a dot, and values with embedded spaces.
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
 /**
  * Parse a comma-separated list of email addresses into the array format
  * that Nylas expects: `[{ email: string }]`. Trims whitespace from each
- * address. Skips empty segments (e.g., trailing comma).
+ * address. Skips empty segments (e.g., trailing comma). Throws if any
+ * segment fails the basic email format check — the caller returns a SkillResult
+ * error on failure so the LLM receives a structured message instead of a
+ * raw exception.
  */
 function parseRecipients(raw: string): Array<{ email: string }> {
   return raw
     .split(',')
     .map((s) => s.trim())
     .filter((s) => s.length > 0)
-    .map((email) => ({ email }));
+    .map((email) => {
+      if (!EMAIL_REGEX.test(email)) {
+        throw new Error(`Invalid email address: ${email}`);
+      }
+      return { email };
+    });
 }
 
 export class EmailSendHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {
+    // SECURITY TODO: Outbound email has no approval gate. The LLM can send emails
+    // to any address without human confirmation. This must be addressed before
+    // production deployment — options include: recipient allowlist, CEO confirmation
+    // via CLI/HTTP, or per-contact send permissions (Phase B authorization model).
     const { to, cc, subject, body } = ctx.input as {
       to?: string;
       cc?: string;
@@ -59,8 +76,14 @@ export class EmailSendHandler implements SkillHandler {
       return { success: false, error: `body must be ${MAX_BODY_LENGTH} characters or fewer` };
     }
 
-    // Parse recipients
-    const toRecipients = parseRecipients(to);
+    // Parse recipients — parseRecipients now throws on invalid email format
+    let toRecipients: Array<{ email: string }>;
+    try {
+      toRecipients = parseRecipients(to);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return { success: false, error: message };
+    }
     if (toRecipients.length === 0) {
       return { success: false, error: 'to field contains no valid email addresses' };
     }
@@ -70,8 +93,14 @@ export class EmailSendHandler implements SkillHandler {
       return { success: false, error: `cc must be ${MAX_TO_LENGTH} characters or fewer` };
     }
 
-    // Parse optional cc
-    const ccRecipients = cc && typeof cc === 'string' ? parseRecipients(cc) : undefined;
+    // Parse optional cc — also validate email format
+    let ccRecipients: Array<{ email: string }> | undefined;
+    try {
+      ccRecipients = cc && typeof cc === 'string' ? parseRecipients(cc) : undefined;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return { success: false, error: message };
+    }
 
     // Infrastructure skills need nylasClient
     if (!ctx.nylasClient) {

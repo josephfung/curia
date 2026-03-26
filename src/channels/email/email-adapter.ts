@@ -10,6 +10,7 @@ import type { NylasClient } from './nylas-client.js';
 import type { ContactService } from '../../contacts/contact-service.js';
 import { convertNylasMessage } from './message-converter.js';
 import { createInboundMessage, type OutboundMessageEvent } from '../../bus/events.js';
+import { sanitizeOutput } from '../../skills/sanitize.js';
 
 export interface EmailAdapterConfig {
   bus: EventBus;
@@ -113,12 +114,22 @@ export class EmailAdapter {
           // so the contact resolver in the dispatch layer can find them immediately.
           await this.extractParticipants(converted.metadata.participants);
 
+          // Sanitize email content to mitigate prompt injection from external senders.
+          // This strips known injection patterns (system/instruction/prompt tags) before
+          // the content reaches the LLM's context window.
+          const sanitizedContent = sanitizeOutput(converted.content, {
+            // Use a large limit here — body truncation already happened in the converter.
+            // We pass maxLength large enough to never double-truncate; the converter's
+            // 50KB cap + subject prefix keeps us well under this ceiling.
+            maxLength: 60_000,
+          });
+
           // Publish inbound message to the bus
           const event = createInboundMessage({
             conversationId: converted.conversationId,
             channelId: converted.channelId,
             senderId: converted.senderId,
-            content: converted.content,
+            content: sanitizedContent,
             metadata: converted.metadata as unknown as Record<string, unknown>,
           });
           await this.config.bus.publish('channel', event);

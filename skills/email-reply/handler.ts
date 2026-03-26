@@ -15,6 +15,10 @@ const MAX_BODY_LENGTH = 50000;
 
 export class EmailReplyHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {
+    // SECURITY TODO: Outbound email has no approval gate. The LLM can send emails
+    // to any address without human confirmation. This must be addressed before
+    // production deployment — options include: recipient allowlist, CEO confirmation
+    // via CLI/HTTP, or per-contact send permissions (Phase B authorization model).
     const { reply_to_message_id: replyToMessageId, body } = ctx.input as {
       reply_to_message_id?: string;
       body?: string;
