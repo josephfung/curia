@@ -19,6 +19,7 @@ import type { Logger } from '../logger.js';
 import type { EventBus } from '../bus/bus.js';
 import type { AgentRegistry } from '../agents/agent-registry.js';
 import type { ContactService } from '../contacts/contact-service.js';
+import type { NylasClient } from '../channels/email/nylas-client.js';
 
 export class ExecutionLayer {
   private registry: SkillRegistry;
@@ -26,13 +27,15 @@ export class ExecutionLayer {
   private bus?: EventBus;
   private agentRegistry?: AgentRegistry;
   private contactService?: ContactService;
+  private nylasClient?: NylasClient;
 
-  constructor(registry: SkillRegistry, logger: Logger, options?: { bus?: EventBus; agentRegistry?: AgentRegistry; contactService?: ContactService }) {
+  constructor(registry: SkillRegistry, logger: Logger, options?: { bus?: EventBus; agentRegistry?: AgentRegistry; contactService?: ContactService; nylasClient?: NylasClient }) {
     this.registry = registry;
     this.logger = logger;
     this.bus = options?.bus;
     this.agentRegistry = options?.agentRegistry;
     this.contactService = options?.contactService;
+    this.nylasClient = options?.nylasClient;
   }
 
   /**
@@ -97,6 +100,11 @@ export class ExecutionLayer {
       ctx.bus = this.bus;
       ctx.agentRegistry = this.agentRegistry;
       ctx.contactService = this.contactService;
+      // nylasClient is optional — only email skills need it, so we inject it
+      // when available but don't gate on it (other infra skills don't need it)
+      if (this.nylasClient) {
+        ctx.nylasClient = this.nylasClient;
+      }
     }
 
     skillLogger.info({ input: Object.keys(input) }, 'Invoking skill');
