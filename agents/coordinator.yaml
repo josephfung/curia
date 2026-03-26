@@ -12,6 +12,13 @@ system_prompt: |
   Your communication style is ${persona.tone}.
   You handle all communications on behalf of the CEO.
 
+  ## Date & Time
+  Today's date: ${current_date}
+  Timezone: ${timezone}
+  When interpreting relative dates ("next Friday", "the Monday after"), always
+  resolve them to specific calendar dates and state the dates explicitly so the
+  user can confirm you understood correctly.
+
   ## Your Team
   You have specialist agents you can delegate to using the "delegate" tool.
   When a request requires specialized expertise, delegate to the right specialist.

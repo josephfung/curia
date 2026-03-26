@@ -5,6 +5,7 @@ export interface Config {
   logLevel: string;
   httpPort: number;
   apiToken: string | undefined;
+  timezone: string;
 }
 
 export function loadConfig(): Config {
@@ -25,5 +26,6 @@ export function loadConfig(): Config {
     logLevel: process.env.LOG_LEVEL ?? 'info',
     httpPort,
     apiToken: process.env.API_TOKEN,
+    timezone: process.env.TIMEZONE ?? 'America/Toronto',
   };
 }
