@@ -104,8 +104,18 @@ export async function createHarness(): Promise<CuriaHarness> {
 
     let systemPrompt = agentConfig.system_prompt;
     if (agentConfig.role === 'coordinator') {
+      const now = new Date();
+      const currentDate = now.toLocaleDateString('en-CA', {
+        timeZone: config.timezone,
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        weekday: 'long',
+      });
       systemPrompt = interpolateRuntimeContext(systemPrompt, {
         availableSpecialists: agentRegistry.specialistSummary(),
+        currentDate,
+        timezone: config.timezone,
       });
     }
 

@@ -156,12 +156,24 @@ async function main(): Promise<void> {
     const agentPinnedSkills = agentConfig.pinned_skills ?? [];
     const agentToolDefs = skillRegistry.toToolDefinitions(agentPinnedSkills);
 
-    // For the coordinator, interpolate runtime context (specialist list).
+    // For the coordinator, interpolate runtime context (specialist list, date, timezone).
     // This runs in pass 2 so all specialists are already in the registry.
+    // Date is formatted as "YYYY-MM-DD, DayName" in the configured timezone
+    // so agents can resolve relative references like "next Friday".
     let systemPrompt = agentConfig.system_prompt;
     if (agentConfig.role === 'coordinator') {
+      const now = new Date();
+      const currentDate = now.toLocaleDateString('en-CA', {
+        timeZone: config.timezone,
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        weekday: 'long',
+      });
       systemPrompt = interpolateRuntimeContext(systemPrompt, {
         availableSpecialists: agentRegistry.specialistSummary(),
+        currentDate,
+        timezone: config.timezone,
       });
     }
 

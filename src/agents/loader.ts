@@ -118,16 +118,31 @@ function interpolatePersona(
  * Interpolate runtime context placeholders in the system prompt.
  * Currently supports:
  * - ${available_specialists} — list of specialist agents from the agent registry
+ * - ${current_date} — today's date in the configured timezone (YYYY-MM-DD, Day)
+ * - ${timezone} — the configured IANA timezone name
  *
  * This runs at bootstrap time (after all agents are registered) and is separate
  * from persona interpolation which runs at config load time.
  */
 export function interpolateRuntimeContext(
   systemPrompt: string,
-  context: { availableSpecialists?: string },
+  context: {
+    availableSpecialists?: string;
+    currentDate?: string;
+    timezone?: string;
+  },
 ): string {
-  return systemPrompt.replace(
-    /\$\{available_specialists\}/g,
-    context.availableSpecialists ?? 'No specialists available yet.',
-  );
+  return systemPrompt
+    .replace(
+      /\$\{available_specialists\}/g,
+      context.availableSpecialists ?? 'No specialists available yet.',
+    )
+    .replace(
+      /\$\{current_date\}/g,
+      context.currentDate ?? new Date().toISOString().split('T')[0] ?? '',
+    )
+    .replace(
+      /\$\{timezone\}/g,
+      context.timezone ?? 'UTC',
+    );
 }
