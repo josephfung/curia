@@ -87,11 +87,11 @@ export class ExecutionLayer {
       if (!this.bus || !this.agentRegistry) {
         skillLogger.error(
           { skillName },
-          'Infrastructure skill invoked but ExecutionLayer was not constructed with bus/agentRegistry',
+          'Infrastructure skill invoked but ExecutionLayer was not constructed with bus/agentRegistry/contactService',
         );
         return {
           success: false,
-          error: `Infrastructure skill '${skillName}' cannot run: bus or agent registry not available in ExecutionLayer`,
+          error: `Infrastructure skill '${skillName}' cannot run: bus, agent registry, or contactService not available in ExecutionLayer — ensure all three are passed to the ExecutionLayer constructor`,
         };
       }
       ctx.bus = this.bus;

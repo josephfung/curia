@@ -76,6 +76,7 @@ export interface SenderContext {
   displayName: string;
   role: string | null;
   verified: boolean;
+  kgNodeId: string | null;
   /** Facts from the KG about this person, formatted for prompt inclusion */
   knowledgeSummary: string;
 }

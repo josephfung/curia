@@ -31,7 +31,8 @@ export class ContactResolver {
    * CLI and smoke-test channels always resolve as the primary user (CEO).
    */
   async resolve(channel: string, senderId: string): Promise<InboundSenderContext> {
-    // CLI and smoke-test are always the primary user — no resolution needed
+    // CLI and smoke-test are always the primary user — no resolution needed.
+    // kgNodeId is null here because synthetic IDs have no KG node.
     if (channel === 'cli' || channel === 'smoke-test') {
       return {
         resolved: true,
@@ -39,6 +40,7 @@ export class ContactResolver {
         displayName: 'CEO',
         role: 'ceo',
         verified: true,
+        kgNodeId: null,
         knowledgeSummary: '',
       };
     }
@@ -79,6 +81,7 @@ export class ContactResolver {
       displayName: resolved.displayName,
       role: resolved.role,
       verified: resolved.verified,
+      kgNodeId: resolved.kgNodeId,
       knowledgeSummary,
     };
   }

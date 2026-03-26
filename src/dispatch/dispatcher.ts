@@ -62,29 +62,45 @@ export class Dispatcher {
       'Dispatching to coordinator',
     );
 
-    // Resolve sender if contact resolver is available
+    // Resolve sender if contact resolver is available.
+    // Wrapped in try/catch so DB errors degrade gracefully (no sender context)
+    // rather than silently dropping the message — the task still dispatches,
+    // just without enriched sender info.
     let senderContext: InboundSenderContext | undefined;
     if (this.contactResolver) {
-      senderContext = await this.contactResolver.resolve(payload.channelId, payload.senderId);
+      try {
+        senderContext = await this.contactResolver.resolve(payload.channelId, payload.senderId);
 
-      // Publish contact event for audit trail
-      if (senderContext.resolved) {
-        await this.bus.publish('dispatch', createContactResolved({
-          contactId: senderContext.contactId,
-          displayName: senderContext.displayName,
-          role: senderContext.role,
-          kgNodeId: null, // not available on SenderContext directly
-          verificationStatus: senderContext.verified ? 'verified' : 'unverified',
-          channel: payload.channelId,
-          channelIdentifier: payload.senderId,
-          parentEventId: event.id,
-        }));
-      } else {
-        await this.bus.publish('dispatch', createContactUnknown({
-          channel: senderContext.channel,
-          senderId: senderContext.senderId,
-          parentEventId: event.id,
-        }));
+        // Publish contact event for audit trail.
+        // Skip audit for synthetic IDs (primary-user from CLI/smoke-test) to
+        // avoid polluting the audit trail with non-real contacts.
+        if (senderContext.resolved) {
+          if (senderContext.contactId !== 'primary-user') {
+            await this.bus.publish('dispatch', createContactResolved({
+              contactId: senderContext.contactId,
+              displayName: senderContext.displayName,
+              role: senderContext.role,
+              kgNodeId: senderContext.kgNodeId,
+              verificationStatus: senderContext.verified ? 'verified' : 'unverified',
+              channel: payload.channelId,
+              channelIdentifier: payload.senderId,
+              parentEventId: event.id,
+            }));
+          }
+        } else {
+          await this.bus.publish('dispatch', createContactUnknown({
+            channel: senderContext.channel,
+            senderId: senderContext.senderId,
+            parentEventId: event.id,
+          }));
+        }
+      } catch (err) {
+        // Resolution failure must not drop the message — log and continue without
+        // sender context. The coordinator will handle the missing context gracefully.
+        this.logger.error(
+          { err, channelId: payload.channelId, senderId: payload.senderId },
+          'Contact resolution failed — proceeding without sender context',
+        );
       }
     }
 
