@@ -1,0 +1,40 @@
+name: Two Messages, One Task (Context Carry)
+description: Agent must link a follow-up message to context established in the first message
+tags:
+  - context
+  - multi-turn
+
+turns:
+  - role: user
+    content: |
+      I just got out of a call with Nadia from Meridian Ventures. She's interested
+      in co-leading the Series B but wants to see our updated cap table and the
+      last two quarterly financials before their IC meeting on April 8th.
+  - role: user
+    delay_ms: 2000
+    content: |
+      Can you draft a short email to her with those docs attached? Keep it warm
+      but professional — we really want them in this round.
+
+expected_behaviors:
+  - id: link-context
+    description: Connects "her" and "those docs" in the second message to Nadia and the cap table / quarterly financials from the first
+    weight: critical
+  - id: identify-recipient
+    description: Identifies Nadia at Meridian Ventures as the email recipient
+    weight: important
+  - id: identify-attachments
+    description: Understands that the updated cap table and last two quarterly financials should be attached
+    weight: important
+  - id: capture-deadline
+    description: Notes the April 8th IC meeting as a deadline driver
+    weight: important
+  - id: match-tone
+    description: Drafts or proposes a warm but professional tone as requested
+    weight: nice-to-have
+
+failure_modes:
+  - Treats the second message as a standalone request with no context
+  - Asks who "her" refers to despite it being clear from the first message
+  - Misses one or more of the requested attachments
+  - Ignores the April 8th deadline context

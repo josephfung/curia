@@ -1,0 +1,42 @@
+name: Natural Language Deadlines
+description: Agent should correctly parse relative date references like "next Friday" and "the Monday after" and confirm its interpretation
+tags:
+  - scheduling
+  - inference
+  - single-turn
+
+turns:
+  - role: user
+    content: |
+      I need the investor update letter drafted by next Friday. Keep it to
+      one page — hit ARR growth, new hires, and the Meridian partnership.
+
+      Also, the board slides need to be finalized the Monday after that.
+      Priya is pulling the data but I want a first pass from you by then
+      so I can review before the board meeting that Wednesday.
+
+expected_behaviors:
+  - id: parse-next-friday
+    description: Correctly interprets "next Friday" as a specific date relative to today
+    weight: critical
+  - id: parse-monday-after
+    description: Correctly interprets "the Monday after that" as the Monday following next Friday
+    weight: critical
+  - id: confirm-dates
+    description: States the interpreted dates explicitly so the user can verify
+    weight: important
+  - id: capture-investor-update
+    description: Captures the investor update task with its requirements (one page, ARR growth, new hires, Meridian partnership)
+    weight: important
+  - id: capture-board-slides
+    description: Captures the board slides task and notes the dependency on Priya's data
+    weight: important
+  - id: note-board-meeting
+    description: Notes the board meeting on Wednesday as context for the slides deadline
+    weight: nice-to-have
+
+failure_modes:
+  - Interprets "next Friday" as this coming Friday instead of the following one (or vice versa)
+  - Misses "the Monday after" as a relative reference and asks for a date
+  - Doesn't confirm the interpreted dates, leaving room for miscommunication
+  - Treats both tasks as having the same deadline

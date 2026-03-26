@@ -1,0 +1,39 @@
+name: Register Me After Event Link
+description: Agent should connect a follow-up registration request to a previously shared event link
+tags:
+  - context
+  - multi-turn
+  - action
+
+turns:
+  - role: user
+    content: |
+      https://www.eventbrite.ca/e/toronto-founders-summit-2026-tickets-987654321
+
+      Looks interesting — Raj Patel mentioned this at dinner last week.
+  - role: user
+    delay_ms: 2000
+    content: |
+      Actually, register me for that. Use my usual email.
+
+expected_behaviors:
+  - id: resolve-reference
+    description: Connects "that" in the second message to the Toronto Founders Summit link from the first message
+    weight: critical
+  - id: attempt-registration
+    description: Attempts to register the user or explains how it would proceed with registration
+    weight: critical
+  - id: use-known-email
+    description: Uses the user's known/default email for registration rather than asking for it
+    weight: important
+  - id: confirm-details
+    description: Confirms the event name and any key details (date, location) before or after registering
+    weight: important
+  - id: note-source
+    description: Optionally notes the Raj Patel context for future reference
+    weight: nice-to-have
+
+failure_modes:
+  - Asks "register for what?" despite the link being in the previous message
+  - Ignores the link entirely and asks the user to provide event details
+  - Registers for the wrong event or hallucinates event details

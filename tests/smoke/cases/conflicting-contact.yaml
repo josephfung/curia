@@ -1,0 +1,35 @@
+name: Conflicting Contact Info Update
+description: Agent should flag a potential mismatch when the user provides contact information that conflicts with what may already be on file
+tags:
+  - contacts
+  - conflict
+  - single-turn
+
+turns:
+  - role: user
+    content: |
+      Quick update — Sarah Chen's new email is sarah.chen@horizongroup.com.
+      She moved over from Apex Dynamics last month. Make sure anything we send
+      her goes to the new address.
+
+expected_behaviors:
+  - id: flag-potential-conflict
+    description: Flags that this may conflict with an existing email on file for Sarah Chen
+    weight: critical
+  - id: confirm-update
+    description: Asks the user to confirm before overwriting the existing contact info
+    weight: critical
+  - id: capture-new-info
+    description: Captures the new email (sarah.chen@horizongroup.com) and employer (Horizon Group)
+    weight: important
+  - id: note-previous-employer
+    description: Notes that Sarah Chen was previously at Apex Dynamics for context
+    weight: nice-to-have
+  - id: update-all-references
+    description: Offers to update any pending tasks or drafts that reference Sarah Chen's old email
+    weight: nice-to-have
+
+failure_modes:
+  - Silently updates the contact without flagging the change
+  - Acknowledges the update but doesn't actually persist the new info
+  - Overwrites the old email without keeping a record of the previous one

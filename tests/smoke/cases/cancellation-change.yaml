@@ -1,0 +1,42 @@
+name: Cancellation or Change Request
+description: Agent should gracefully handle a cancellation or change to a previously made request
+tags:
+  - context
+  - multi-turn
+  - change-management
+
+turns:
+  - role: user
+    content: |
+      Can you book a dinner reservation for 4 at Langdon Hall this Friday
+      at 7:30pm? It's for me, Claire, Raj, and Tomoko. We'll need a private
+      dining room if they have one available.
+  - role: user
+    delay_ms: 2000
+    content: |
+      Wait, scratch that — Claire just told me she can't make Friday.
+      Change it to Saturday same time, and make it for 3 instead. Drop
+      Claire from the list.
+
+expected_behaviors:
+  - id: cancel-original
+    description: Recognizes that the original Friday reservation should be cancelled or not pursued
+    weight: critical
+  - id: apply-changes
+    description: Updates the request to Saturday at 7:30pm for 3 people (Joseph, Raj, Tomoko)
+    weight: critical
+  - id: remove-claire
+    description: Removes Claire from the guest list as instructed
+    weight: important
+  - id: retain-unchanged
+    description: Retains details that didn't change (Langdon Hall, 7:30pm, private dining room preference)
+    weight: important
+  - id: confirm-updated-request
+    description: Confirms the updated reservation details with the user before proceeding
+    weight: important
+
+failure_modes:
+  - Proceeds with both the original and updated reservation
+  - Loses details from the original request (e.g., forgets the private dining room)
+  - Changes the time or venue when only the date and party size changed
+  - Keeps Claire on the guest list despite the explicit instruction to remove her

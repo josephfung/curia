@@ -1,0 +1,50 @@
+name: Tracking Third-Party Promises
+description: Agent should log a commitment made by a third party, identify the person and deadline, and offer to track it
+tags:
+  - inference
+  - tracking
+  - single-turn
+
+turns:
+  - role: user
+    content: |
+      FYI — forwarding this from David Marchetti. He said he'd have the due
+      diligence report for the Apex acquisition to us by next Wednesday. His
+      team is also supposed to send over the environmental assessment separately
+      but he didn't give a date on that one.
+
+      ---------- Forwarded message ----------
+      From: David Marchetti <dmarchetti@owlcapital.com>
+      Subject: Re: Apex DD Timeline
+
+      Joseph — we're on track. Full DD report will be in your hands by
+      Wednesday March 31st. Environmental piece is still with the
+      consultants, will send as soon as it lands.
+
+      David
+
+expected_behaviors:
+  - id: log-commitment
+    description: Logs David Marchetti's commitment to deliver the due diligence report
+    weight: critical
+  - id: identify-person
+    description: Identifies David Marchetti (Owl Capital) as the person who made the commitment
+    weight: important
+  - id: identify-deadline
+    description: Captures Wednesday March 31st as the deadline for the DD report
+    weight: critical
+  - id: track-second-item
+    description: Notes the environmental assessment as a separate deliverable with no firm date
+    weight: important
+  - id: offer-reminder
+    description: Offers to set a reminder or follow-up if the report doesn't arrive by the deadline
+    weight: important
+  - id: suggest-follow-up
+    description: Suggests following up on the environmental assessment timeline
+    weight: nice-to-have
+
+failure_modes:
+  - Treats the forwarded message as informational only and takes no action
+  - Misses the second deliverable (environmental assessment)
+  - Gets the deadline wrong
+  - Doesn't offer any tracking or reminder mechanism

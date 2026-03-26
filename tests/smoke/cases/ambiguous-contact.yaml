@@ -1,0 +1,34 @@
+name: Ambiguous Contact Reference
+description: Agent should recognize that "Michael" is ambiguous and ask for clarification rather than guessing which Michael the user means
+tags:
+  - contacts
+  - disambiguation
+  - single-turn
+
+turns:
+  - role: user
+    content: |
+      Can you send Michael the updated term sheet? The one we finalized
+      yesterday with the new liquidation preference.
+
+expected_behaviors:
+  - id: detect-ambiguity
+    description: Recognizes that "Michael" is ambiguous and could refer to multiple contacts
+    weight: critical
+  - id: ask-clarification
+    description: Asks the user to specify which Michael (ideally offering known Michaels if available)
+    weight: critical
+  - id: preserve-request
+    description: Retains the rest of the request (send updated term sheet, liquidation preference) while resolving the ambiguity
+    weight: important
+  - id: no-guessing
+    description: Does not silently pick a Michael and proceed without confirmation
+    weight: critical
+  - id: suggest-candidates
+    description: If contact data is available, offers a short list of possible Michaels to choose from
+    weight: nice-to-have
+
+failure_modes:
+  - Picks a Michael at random and sends the document without asking
+  - Asks for clarification but forgets the rest of the request afterward
+  - Doesn't recognize the ambiguity and proceeds as if only one Michael exists

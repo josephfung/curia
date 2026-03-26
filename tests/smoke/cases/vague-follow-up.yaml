@@ -1,0 +1,41 @@
+name: Vague Follow Up on This
+description: Agent must infer what "this" refers to from prior context and propose a concrete follow-up action
+tags:
+  - context
+  - multi-turn
+  - inference
+
+turns:
+  - role: user
+    content: |
+      Just had coffee with Tina Walsh from Lighthouse Partners. She mentioned
+      they're looking for a technical advisor for their new climate-tech fund.
+      Sounded like it could be a good fit for me — 2 days a month, decent
+      advisory fee, and I'd get exposure to their portfolio companies.
+  - role: user
+    delay_ms: 2000
+    content: |
+      Can you follow up on this?
+
+expected_behaviors:
+  - id: infer-referent
+    description: Understands "this" refers to the Lighthouse Partners advisory opportunity with Tina Walsh
+    weight: critical
+  - id: propose-action
+    description: Proposes a specific follow-up action (e.g., drafting an email to Tina, scheduling a call, requesting more details)
+    weight: critical
+  - id: preserve-details
+    description: Retains key details from the context (climate-tech fund, 2 days/month, advisory fee)
+    weight: important
+  - id: appropriate-tone
+    description: Suggests outreach that conveys interest without overcommitting
+    weight: nice-to-have
+  - id: ask-before-sending
+    description: Confirms the proposed follow-up with the user before executing it
+    weight: important
+
+failure_modes:
+  - Asks "follow up on what?" despite clear prior context
+  - Proposes a generic follow-up with no specifics from the conversation
+  - Sends a follow-up without confirming with the user first
+  - Confuses the details (wrong person, wrong company, wrong role)
