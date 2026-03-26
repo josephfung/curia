@@ -25,7 +25,6 @@ import { SkillRegistry } from '../../src/skills/registry.js';
 import { ExecutionLayer } from '../../src/skills/execution.js';
 import { loadSkillsFromDirectory } from '../../src/skills/loader.js';
 import { createInboundMessage, type OutboundMessageEvent } from '../../src/bus/events.js';
-import type { DbPool } from '../../src/db/connection.js';
 import type { Logger } from '../../src/logger.js';
 
 export interface CuriaHarness {
