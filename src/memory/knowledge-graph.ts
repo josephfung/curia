@@ -465,11 +465,19 @@ function pgRowToEdge(row: PgEdgeRow): KgEdge {
 /** Parse a pgvector string like "[0.1,0.2,0.3]" into a number array */
 function parseVector(vectorStr: string): number[] {
   // pgvector returns strings like "[0.1,0.2,0.3]"
-  return vectorStr
+  const values = vectorStr
     .replace(/^\[/, '')
     .replace(/\]$/, '')
     .split(',')
     .map(Number);
+
+  // Guard against corrupted DB rows where a token failed to parse (e.g. empty
+  // string after split, or a non-numeric character in the stored vector).
+  if (values.some(Number.isNaN)) {
+    throw new Error(`Malformed pgvector string: contains NaN values`);
+  }
+
+  return values;
 }
 
 // -- In-memory backend --

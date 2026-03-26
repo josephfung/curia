@@ -121,13 +121,21 @@ export class EntityMemory {
           source: result.node.temporal.source,
         });
 
-        await this.store.createEdge({
-          sourceNodeId: options.entityNodeId,
-          targetNodeId: persistedNode.id,
-          type: 'relates_to',
-          properties: {},
-          source: options.source,
-        });
+        // If edge creation fails, the node we just created becomes an orphan
+        // (unreachable via any entity) — attempt to clean it up before re-throwing.
+        try {
+          await this.store.createEdge({
+            sourceNodeId: options.entityNodeId,
+            targetNodeId: persistedNode.id,
+            type: 'relates_to',
+            properties: {},
+            source: options.source,
+          });
+        } catch (err) {
+          // Attempt to clean up the orphan node; ignore errors (best effort)
+          try { await this.store.deleteNode(persistedNode.id); } catch { /* best effort */ }
+          throw err;
+        }
 
         this.validator.recordWrite(options.source);
         return { stored: true, nodeId: persistedNode.id };

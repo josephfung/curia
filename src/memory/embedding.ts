@@ -34,12 +34,18 @@ export class EmbeddingService {
    * Returns 0 if either vector is the zero vector (safe default).
    */
   static cosineSimilarity(a: number[], b: number[]): number {
+    // Callers should never pass mismatched vectors — surface misuse immediately
+    // rather than silently computing a nonsensical similarity score.
+    if (a.length !== b.length) {
+      throw new Error(`Vector dimension mismatch: ${a.length} vs ${b.length}`);
+    }
     let dotProduct = 0;
     let normA = 0;
     let normB = 0;
     for (let i = 0; i < a.length; i++) {
-      const ai = a[i] ?? 0;
-      const bi = b[i] ?? 0;
+      // Arrays are guaranteed same length by the check above; ! asserts index is in-bounds
+      const ai = a[i]!;
+      const bi = b[i]!;
       dotProduct += ai * bi;
       normA += ai * ai;
       normB += bi * bi;
@@ -57,32 +63,52 @@ class OpenAIBackend implements EmbeddingBackend {
   constructor(private apiKey: string, private logger: Logger) {}
 
   async embed(text: string): Promise<number[]> {
-    const response = await fetch('https://api.openai.com/v1/embeddings', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${this.apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: 'text-embedding-3-small',
-        input: text,
-        // Requesting the canonical dimension so the DB schema never has to change
-        // if we upgrade models later.
-        dimensions: EMBEDDING_DIMENSIONS,
-      }),
-    });
+    // Wrap the fetch so network errors surface with context (text length helps
+    // diagnose truncation or oversized input issues).
+    let response: Response;
+    try {
+      response = await fetch('https://api.openai.com/v1/embeddings', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${this.apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: 'text-embedding-3-small',
+          input: text,
+          // Requesting the canonical dimension so the DB schema never has to change
+          // if we upgrade models later.
+          dimensions: EMBEDDING_DIMENSIONS,
+        }),
+      });
+    } catch (err) {
+      this.logger.error({ err, textLength: text.length }, 'OpenAI embedding fetch failed');
+      throw new Error(`OpenAI embedding fetch error: ${(err as Error).message}`);
+    }
 
     if (!response.ok) {
-      const body = await response.text();
+      // Use .catch() so a body-read failure doesn't swallow the HTTP error
+      const body = await response.text().catch(() => '<body unreadable>');
       this.logger.error({ status: response.status, body }, 'OpenAI embedding request failed');
       throw new Error(`OpenAI embedding API error: ${response.status}`);
     }
 
-    const json = await response.json() as {
-      data: Array<{ embedding: number[] }>;
-    };
+    // Wrap JSON parse so a malformed response surfaces as a distinct error
+    // rather than an unhandled rejection with no context.
+    let json: { data: Array<{ embedding: number[] }> };
+    try {
+      json = await response.json() as { data: Array<{ embedding: number[] }> };
+    } catch (err) {
+      this.logger.error({ err }, 'OpenAI embedding response JSON parse failed');
+      throw new Error(`OpenAI embedding response parse error: ${(err as Error).message}`);
+    }
+
     const embedding = json.data[0]?.embedding;
     if (!embedding || embedding.length !== EMBEDDING_DIMENSIONS) {
+      this.logger.error(
+        { expected: EMBEDDING_DIMENSIONS, actual: embedding?.length },
+        'OpenAI embedding dimension mismatch',
+      );
       throw new Error(`Unexpected embedding dimensions: ${embedding?.length}`);
     }
     return embedding;

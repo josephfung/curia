@@ -54,13 +54,13 @@ export class MemoryValidator {
   }
 
   /**
-   * Full validation pipeline: rate limit → dedup → create.
+   * Full validation pipeline: rate limit → entity existence → dedup → create.
    *
    * Contradiction detection is a separate method (validateContradiction) because
    * it requires attribute metadata that not all callers have.
    *
    * Returns a ValidationResult discriminated union:
-   * - 'rejected' if the rate limit is exceeded
+   * - 'rejected' if the rate limit is exceeded or the entity node does not exist
    * - 'update' if a near-duplicate fact already exists (caller should merge)
    * - 'create' with a fully-constructed KgNode ready to persist
    */
@@ -74,7 +74,18 @@ export class MemoryValidator {
       };
     }
 
-    // 2. Deduplication — scoped to the entity's edges, not a global scan.
+    // 2. Entity existence — reject early if the target entity has been deleted
+    //    or was never created. Avoids creating dangling fact nodes/edges and
+    //    surfaces the problem with a clear message rather than a FK violation.
+    const entityNode = await this.store.getNode(options.entityNodeId);
+    if (!entityNode) {
+      return {
+        action: 'rejected',
+        reason: `Entity node not found: ${options.entityNodeId}`,
+      };
+    }
+
+    // 4. Deduplication — scoped to the entity's edges, not a global scan.
     //    Spec line 115: "same entity + similar label" prevents cross-entity false matches
     //    and avoids a full table scan as the fact count grows.
     const entityEdges = await this.store.getEdgesForNode(options.entityNodeId);
@@ -107,7 +118,7 @@ export class MemoryValidator {
       }
     }
 
-    // 3. No duplicate found — construct a new fact node with full provenance.
+    // 5. No duplicate found — construct a new fact node with full provenance.
     //    The node is NOT persisted here; the caller owns the store write so that
     //    it can coordinate with edge creation atomically.
     const now = new Date();
