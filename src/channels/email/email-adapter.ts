@@ -109,9 +109,11 @@ export class EmailAdapter {
           'Email received and published to bus',
         );
 
-        // Advance the high-water mark so subsequent polls skip this message
-        if (msg.date > this.lastSeenTimestamp) {
-          this.lastSeenTimestamp = msg.date;
+        // Advance the high-water mark so subsequent polls skip this message.
+        // +1 ensures the next poll's receivedAfter excludes the exact timestamp
+        // we just processed (Nylas timestamps are Unix seconds integers).
+        if (msg.date >= this.lastSeenTimestamp) {
+          this.lastSeenTimestamp = msg.date + 1;
         }
       }
     } catch (err) {
@@ -137,21 +139,28 @@ export class EmailAdapter {
     const threadId = conversationId.slice('email:'.length);
 
     // Find the original message in this thread so we can reply to it.
-    // We fetch recent messages and look for a match by threadId.
+    // Pass threadId directly to Nylas so the API filters server-side —
+    // much cheaper than fetching 50 messages and scanning locally.
     try {
-      const messages = await nylasClient.listMessages({ limit: 50 });
-      const threadMessage = messages.find(m => m.threadId === threadId);
+      const messages = await nylasClient.listMessages({ limit: 1, threadId });
+      const threadMessage = messages[0];
       if (!threadMessage) {
         logger.warn({ threadId }, 'Cannot find message to reply to in thread');
         return;
       }
 
       const fromEmail = threadMessage.from[0]?.email;
-      if (!fromEmail) return;
+      if (!fromEmail) {
+        logger.warn({ threadId, messageId: threadMessage.id }, 'Cannot reply — original message has no from address');
+        return;
+      }
 
+      // Strip any existing "Re:" prefix before prepending our own to avoid
+      // "Re: Re: Re: ..." chains when replying to already-replied threads.
+      const baseSubject = threadMessage.subject.replace(/^Re:\s*/i, '');
       await nylasClient.sendMessage({
         to: [{ email: fromEmail }],
-        subject: `Re: ${threadMessage.subject}`,
+        subject: `Re: ${baseSubject}`,
         body: outbound.payload.content,
         replyToMessageId: threadMessage.id,
       });

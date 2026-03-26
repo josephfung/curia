@@ -56,7 +56,10 @@ export class EmailReplyHandler implements SkillHandler {
         };
       }
 
-      const replySubject = `Re: ${original.subject}`;
+      // Strip any existing "Re:" prefix (case-insensitive) before prepending our own,
+      // so we never produce "Re: Re: Re: ..." subject lines.
+      const baseSubject = original.subject.replace(/^Re:\s*/i, '');
+      const replySubject = `Re: ${baseSubject}`;
 
       const sent = await ctx.nylasClient.sendMessage({
         to: [{ email: originalFrom }],

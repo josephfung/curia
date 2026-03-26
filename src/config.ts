@@ -23,6 +23,11 @@ export function loadConfig(): Config {
     throw new Error(`HTTP_PORT must be a valid port number (1-65535), got: ${process.env.HTTP_PORT}`);
   }
 
+  const nylasPollingIntervalMs = parseInt(process.env.NYLAS_POLL_INTERVAL_MS ?? '30000', 10);
+  if (isNaN(nylasPollingIntervalMs) || nylasPollingIntervalMs < 1000) {
+    throw new Error(`NYLAS_POLL_INTERVAL_MS must be a number >= 1000, got: ${process.env.NYLAS_POLL_INTERVAL_MS}`);
+  }
+
   return {
     databaseUrl,
     anthropicApiKey: process.env.ANTHROPIC_API_KEY,
@@ -33,7 +38,7 @@ export function loadConfig(): Config {
     timezone: process.env.TIMEZONE ?? 'America/Toronto',
     nylasApiKey: process.env.NYLAS_API_KEY,
     nylasGrantId: process.env.NYLAS_GRANT_ID,
-    nylasPollingIntervalMs: parseInt(process.env.NYLAS_POLL_INTERVAL_MS ?? '30000', 10),
+    nylasPollingIntervalMs,
     nylasSelfEmail: process.env.NYLAS_SELF_EMAIL ?? '',
   };
 }

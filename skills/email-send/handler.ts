@@ -65,6 +65,11 @@ export class EmailSendHandler implements SkillHandler {
       return { success: false, error: 'to field contains no valid email addresses' };
     }
 
+    // cc length check uses the same limit as to — prevents oversized CC lists
+    if (cc && cc.length > MAX_TO_LENGTH) {
+      return { success: false, error: `cc must be ${MAX_TO_LENGTH} characters or fewer` };
+    }
+
     // Parse optional cc
     const ccRecipients = cc && typeof cc === 'string' ? parseRecipients(cc) : undefined;
 

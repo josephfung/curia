@@ -86,6 +86,8 @@ export interface ListMessagesOptions {
   unread?: boolean;
   /** Max number of messages to return (default 50, max 200 per Nylas) */
   limit?: number;
+  /** Filter messages to a specific thread ID — used when looking up a reply target */
+  threadId?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -118,6 +120,9 @@ export class NylasClient {
     }
     if (options?.limit !== undefined) {
       queryParams.limit = options.limit;
+    }
+    if (options?.threadId !== undefined) {
+      queryParams.threadId = options.threadId;
     }
 
     this.log.debug({ queryParams }, 'listing messages');
