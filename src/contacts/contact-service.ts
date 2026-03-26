@@ -104,7 +104,17 @@ export class ContactService {
       updatedAt: now,
     };
 
-    await this.backend.createContact(contact);
+    try {
+      await this.backend.createContact(contact);
+    } catch (err) {
+      // If the DB insert fails after we auto-created a KG node, that node is now
+      // orphaned — it exists in the knowledge graph with no corresponding contact row.
+      // TODO: Clean up the orphaned KG node once EntityMemory exposes a delete method.
+      // For now, the orphan will remain. It won't cause functional issues (it's just a
+      // person node with no contact link), but should be cleaned up when entity deletion
+      // is added. Tracked by: https://github.com/curia-ai/curia/issues/TBD
+      throw err;
+    }
     return contact;
   }
 
@@ -153,6 +163,14 @@ export class ContactService {
    * If options.verified is explicitly provided, that takes precedence.
    */
   async linkIdentity(options: LinkIdentityOptions): Promise<ChannelIdentity> {
+    // Validate the contact exists before creating an identity for it.
+    // Postgres would catch this via FK constraint, but the in-memory backend
+    // would silently create a dangling reference without this check.
+    const contact = await this.backend.getContact(options.contactId);
+    if (!contact) {
+      throw new Error(`Contact not found: ${options.contactId}`);
+    }
+
     const now = new Date();
 
     // Determine verification status: explicit override > auto-verify logic
