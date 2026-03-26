@@ -181,6 +181,12 @@ export class ContactService {
       verified = AUTO_VERIFIED_SOURCES.has(options.source);
     }
 
+    // Prevent force-verifying self-claimed identities — they must go through
+    // the CEO confirmation flow to become verified.
+    if (options.source === 'self_claimed' && verified) {
+      throw new Error('Cannot force-verify a self_claimed identity — CEO confirmation required');
+    }
+
     const identity: ChannelIdentity = {
       id: randomUUID(),
       contactId: options.contactId,
@@ -501,6 +507,14 @@ class InMemoryContactBackend implements ContactServiceBackend {
   }
 
   async createIdentity(identity: ChannelIdentity): Promise<void> {
+    // Enforce UNIQUE(channel, channel_identifier) to match Postgres behavior.
+    // Without this, the in-memory backend would silently allow duplicates
+    // that Postgres would reject via its unique index.
+    for (const existing of this.identities.values()) {
+      if (existing.channel === identity.channel && existing.channelIdentifier === identity.channelIdentifier) {
+        throw new Error(`Channel identity already exists: ${identity.channel}:${identity.channelIdentifier}`);
+      }
+    }
     this.identities.set(identity.id, identity);
   }
 

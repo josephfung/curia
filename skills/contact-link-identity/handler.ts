@@ -28,6 +28,20 @@ export class ContactLinkIdentityHandler implements SkillHandler {
       return { success: false, error: 'Missing required input: identifier (string)' };
     }
 
+    // Input length limits — prevent oversized payloads reaching the DB
+    if (identifier.length > 500) {
+      return { success: false, error: 'Identifier must be 500 characters or fewer' };
+    }
+    if (label && label.length > 200) {
+      return { success: false, error: 'Label must be 200 characters or fewer' };
+    }
+
+    // Channel allowlist — only accept known channel types
+    const ALLOWED_CHANNELS = ['email', 'phone', 'signal', 'telegram'];
+    if (!ALLOWED_CHANNELS.includes(channel)) {
+      return { success: false, error: `Invalid channel '${channel}'. Allowed: ${ALLOWED_CHANNELS.join(', ')}` };
+    }
+
     // Infrastructure skills need contactService
     if (!ctx.contactService) {
       return {

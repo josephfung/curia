@@ -29,6 +29,23 @@ export class ContactCreateHandler implements SkillHandler {
       return { success: false, error: 'Missing required input: name (string)' };
     }
 
+    // Input length limits — prevent oversized payloads reaching the DB or LLM context
+    if (name.length > 500) {
+      return { success: false, error: 'Name must be 500 characters or fewer' };
+    }
+    if (role && role.length > 200) {
+      return { success: false, error: 'Role must be 200 characters or fewer' };
+    }
+    if (notes && notes.length > 5000) {
+      return { success: false, error: 'Notes must be 5000 characters or fewer' };
+    }
+    for (const ch of CHANNEL_INPUTS) {
+      const val = ({ email, phone, signal, telegram } as Record<string, string | undefined>)[ch];
+      if (val && val.length > 500) {
+        return { success: false, error: `${ch} identifier must be 500 characters or fewer` };
+      }
+    }
+
     // Infrastructure skills need contactService
     if (!ctx.contactService) {
       return {

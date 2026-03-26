@@ -31,6 +31,11 @@ export class ContactLookupHandler implements SkillHandler {
       return { success: false, error: `Invalid lookup type: "${by}". Must be one of: name, role, channel` };
     }
 
+    // Input length limits — prevent oversized payloads reaching the DB
+    if (query.length > 500) {
+      return { success: false, error: 'Query must be 500 characters or fewer' };
+    }
+
     // Infrastructure skills need contactService
     if (!ctx.contactService) {
       return {

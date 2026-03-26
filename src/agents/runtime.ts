@@ -101,11 +101,21 @@ export class AgentRuntime {
     // history, so it's visible but doesn't pollute working memory.
     const senderCtx = taskEvent.payload.senderContext;
     if (senderCtx?.resolved) {
-      let senderInfo = `Current sender: ${senderCtx.displayName}`;
-      if (senderCtx.role) senderInfo += ` (${senderCtx.role})`;
+      // Sanitize sender fields before prompt inclusion — these originate from
+      // external sources (self-claimed names, imported roles) and could contain
+      // prompt injection attempts.
+      const safeName = sanitizeOutput(senderCtx.displayName);
+      const safeRole = senderCtx.role ? sanitizeOutput(senderCtx.role) : null;
+      // Length-limit knowledgeSummary to prevent context stuffing
+      const safeKnowledge = senderCtx.knowledgeSummary
+        ? sanitizeOutput(senderCtx.knowledgeSummary).slice(0, 2000)
+        : '';
+
+      let senderInfo = `Current sender: ${safeName}`;
+      if (safeRole) senderInfo += ` (${safeRole})`;
       senderInfo += senderCtx.verified ? ' [verified]' : ' [unverified]';
-      if (senderCtx.knowledgeSummary) {
-        senderInfo += `\n\nKnown context about ${senderCtx.displayName}:\n${senderCtx.knowledgeSummary}`;
+      if (safeKnowledge) {
+        senderInfo += `\n\nKnown context about ${safeName}:\n${safeKnowledge}`;
       }
       // Insert after system prompt (index 0) but before history
       messages.splice(1, 0, { role: 'system', content: senderInfo });

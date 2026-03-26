@@ -22,6 +22,11 @@ export class ContactSetRoleHandler implements SkillHandler {
       return { success: false, error: 'Missing required input: role (string)' };
     }
 
+    // Input length limit — prevent oversized payloads reaching the DB
+    if (role.length > 200) {
+      return { success: false, error: 'Role must be 200 characters or fewer' };
+    }
+
     // Infrastructure skills need contactService
     if (!ctx.contactService) {
       return {
