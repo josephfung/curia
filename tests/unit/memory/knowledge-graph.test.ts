@@ -73,6 +73,16 @@ describe('KnowledgeGraphStore', () => {
       expect(await store.getNode(node.id)).toBeUndefined();
     });
 
+    it('cascade-deletes edges when a node is deleted', async () => {
+      const a = await store.createNode({ type: 'person', label: 'A', properties: {}, source: 'test' });
+      const b = await store.createNode({ type: 'person', label: 'B', properties: {}, source: 'test' });
+      await store.createEdge({ sourceNodeId: a.id, targetNodeId: b.id, type: 'relates_to', properties: {}, source: 'test' });
+
+      await store.deleteNode(a.id);
+      const edges = await store.getEdgesForNode(b.id);
+      expect(edges).toHaveLength(0);
+    });
+
     it('finds nodes by type', async () => {
       await store.createNode({ type: 'person', label: 'Alice', properties: {}, source: 'test' });
       await store.createNode({ type: 'person', label: 'Bob', properties: {}, source: 'test' });
@@ -137,6 +147,19 @@ describe('KnowledgeGraphStore', () => {
       const labels = result.nodes.map(n => n.label).sort();
       expect(labels).toEqual(['A', 'B', 'C']);
       expect(result.edges).toHaveLength(2);
+    });
+
+    it('handles cycles without infinite loops or duplicate nodes', async () => {
+      const a = await store.createNode({ type: 'person', label: 'A', properties: {}, source: 'test' });
+      const b = await store.createNode({ type: 'project', label: 'B', properties: {}, source: 'test' });
+      const c = await store.createNode({ type: 'decision', label: 'C', properties: {}, source: 'test' });
+      await store.createEdge({ sourceNodeId: a.id, targetNodeId: b.id, type: 'relates_to', properties: {}, source: 'test' });
+      await store.createEdge({ sourceNodeId: b.id, targetNodeId: c.id, type: 'relates_to', properties: {}, source: 'test' });
+      await store.createEdge({ sourceNodeId: c.id, targetNodeId: a.id, type: 'relates_to', properties: {}, source: 'test' });
+
+      const result = await store.traverse(a.id, { maxDepth: 10 });
+      expect(result.nodes).toHaveLength(3);
+      expect(result.edges).toHaveLength(3);
     });
 
     it('defaults to depth 3 (spec requirement)', async () => {
