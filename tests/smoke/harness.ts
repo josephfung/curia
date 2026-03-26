@@ -24,6 +24,8 @@ import { EntityMemory } from '../../src/memory/entity-memory.js';
 import { SkillRegistry } from '../../src/skills/registry.js';
 import { ExecutionLayer } from '../../src/skills/execution.js';
 import { loadSkillsFromDirectory } from '../../src/skills/loader.js';
+import { ContactService } from '../../src/contacts/contact-service.js';
+import { ContactResolver } from '../../src/contacts/contact-resolver.js';
 import { createInboundMessage, type OutboundMessageEvent } from '../../src/bus/events.js';
 import type { Logger } from '../../src/logger.js';
 
@@ -71,6 +73,11 @@ export async function createHarness(): Promise<CuriaHarness> {
     entityMemory = new EntityMemory(kgStore, validator, embeddingService);
   }
 
+  // Contact system — provides identity resolution and contact management.
+  // Always initialized (contacts work even without entity memory / KG).
+  const contactService = ContactService.createWithPostgres(pool, entityMemory, logger);
+  const contactResolver = new ContactResolver(contactService, entityMemory, logger);
+
   // Skill registry — loads all skills from the skills/ directory.
   // Resolve relative to this file's location, up to project root, into skills/.
   const skillRegistry = new SkillRegistry();
@@ -81,7 +88,7 @@ export async function createHarness(): Promise<CuriaHarness> {
   const agentRegistry = new AgentRegistry();
 
   // Execution layer — with bus and agent registry for infrastructure skills.
-  const executionLayer = new ExecutionLayer(skillRegistry, logger, { bus, agentRegistry });
+  const executionLayer = new ExecutionLayer(skillRegistry, logger, { bus, agentRegistry, contactService });
 
   // Load all agent configs from the agents/ directory.
   const agentsDir = path.resolve(import.meta.dirname, '../../agents');
@@ -136,7 +143,7 @@ export async function createHarness(): Promise<CuriaHarness> {
 
   // Dispatcher — subscribes to inbound.message + agent.response.
   // Registered after agents so agent.task already has handlers.
-  const dispatcher = new Dispatcher({ bus, logger });
+  const dispatcher = new Dispatcher({ bus, logger, contactResolver });
   dispatcher.register();
 
   // -- No HTTP adapter, no CLI adapter, no SIGTERM handler --

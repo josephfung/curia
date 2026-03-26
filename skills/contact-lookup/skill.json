@@ -1,0 +1,18 @@
+{
+  "name": "contact-lookup",
+  "description": "Look up a contact by name, role, or channel identifier. Returns matching contacts with their details.",
+  "version": "1.0.0",
+  "sensitivity": "normal",
+  "infrastructure": true,
+  "inputs": {
+    "query": "string",
+    "by": "string"
+  },
+  "outputs": {
+    "contacts": "array",
+    "count": "number"
+  },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 15000
+}

@@ -1,0 +1,26 @@
+{
+  "name": "contact-create",
+  "description": "Create a new contact. Provide the person's name and optionally their role, notes, and channel identifiers (email, phone, signal, telegram). Automatically creates a knowledge graph entry.",
+  "version": "1.0.0",
+  "sensitivity": "normal",
+  "infrastructure": true,
+  "inputs": {
+    "name": "string",
+    "role": "string?",
+    "notes": "string?",
+    "email": "string?",
+    "phone": "string?",
+    "signal": "string?",
+    "telegram": "string?"
+  },
+  "outputs": {
+    "contact_id": "string",
+    "display_name": "string",
+    "role": "string?",
+    "kg_node_id": "string?",
+    "identities_added": "number"
+  },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 30000
+}

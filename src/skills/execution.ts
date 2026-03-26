@@ -18,18 +18,21 @@ import { sanitizeOutput } from './sanitize.js';
 import type { Logger } from '../logger.js';
 import type { EventBus } from '../bus/bus.js';
 import type { AgentRegistry } from '../agents/agent-registry.js';
+import type { ContactService } from '../contacts/contact-service.js';
 
 export class ExecutionLayer {
   private registry: SkillRegistry;
   private logger: Logger;
   private bus?: EventBus;
   private agentRegistry?: AgentRegistry;
+  private contactService?: ContactService;
 
-  constructor(registry: SkillRegistry, logger: Logger, options?: { bus?: EventBus; agentRegistry?: AgentRegistry }) {
+  constructor(registry: SkillRegistry, logger: Logger, options?: { bus?: EventBus; agentRegistry?: AgentRegistry; contactService?: ContactService }) {
     this.registry = registry;
     this.logger = logger;
     this.bus = options?.bus;
     this.agentRegistry = options?.agentRegistry;
+    this.contactService = options?.contactService;
   }
 
   /**
@@ -84,15 +87,16 @@ export class ExecutionLayer {
       if (!this.bus || !this.agentRegistry) {
         skillLogger.error(
           { skillName },
-          'Infrastructure skill invoked but ExecutionLayer was not constructed with bus/agentRegistry',
+          'Infrastructure skill invoked but ExecutionLayer was not constructed with bus/agentRegistry/contactService',
         );
         return {
           success: false,
-          error: `Infrastructure skill '${skillName}' cannot run: bus or agent registry not available in ExecutionLayer`,
+          error: `Infrastructure skill '${skillName}' cannot run: bus, agent registry, or contactService not available in ExecutionLayer — ensure all three are passed to the ExecutionLayer constructor`,
         };
       }
       ctx.bus = this.bus;
       ctx.agentRegistry = this.agentRegistry;
+      ctx.contactService = this.contactService;
     }
 
     skillLogger.info({ input: Object.keys(input) }, 'Invoking skill');

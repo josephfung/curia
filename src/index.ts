@@ -37,6 +37,8 @@ import { EntityMemory } from './memory/entity-memory.js';
 import { SkillRegistry } from './skills/registry.js';
 import { ExecutionLayer } from './skills/execution.js';
 import { loadSkillsFromDirectory } from './skills/loader.js';
+import { ContactService } from './contacts/contact-service.js';
+import { ContactResolver } from './contacts/contact-resolver.js';
 
 async function main(): Promise<void> {
   // 1. Config & logging — no dependencies, must come first.
@@ -96,6 +98,12 @@ async function main(): Promise<void> {
     logger.warn('OPENAI_API_KEY not set — entity memory disabled (knowledge graph unavailable)');
   }
 
+  // Contact system — provides identity resolution and contact management.
+  // Always initialized (contacts work even without entity memory / KG).
+  const contactService = ContactService.createWithPostgres(pool, entityMemory, logger);
+  const contactResolver = new ContactResolver(contactService, entityMemory, logger);
+  logger.info('Contact system initialized');
+
   // Skill registry — loads all skills from the skills/ directory.
   // Skills are the framework's extension mechanism; agents invoke them
   // via the LLM's tool-use API through the execution layer.
@@ -116,7 +124,7 @@ async function main(): Promise<void> {
   const agentRegistry = new AgentRegistry();
 
   // Execution layer — now with bus and agent registry for infrastructure skills.
-  const executionLayer = new ExecutionLayer(skillRegistry, logger, { bus, agentRegistry });
+  const executionLayer = new ExecutionLayer(skillRegistry, logger, { bus, agentRegistry, contactService });
 
   // Load all agent configs from the agents/ directory.
   // Fail hard on errors — consistent with skill loading and DB connection checks.
@@ -205,7 +213,7 @@ async function main(): Promise<void> {
   // 7. Dispatcher — subscribes to inbound.message + agent.response.
   // Registered after the coordinator so agent.task already has a handler
   // when the dispatcher fans the first inbound message out.
-  const dispatcher = new Dispatcher({ bus, logger });
+  const dispatcher = new Dispatcher({ bus, logger, contactResolver });
   dispatcher.register();
 
   // HTTP API channel — REST + SSE endpoints for external clients.

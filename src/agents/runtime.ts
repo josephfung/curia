@@ -96,6 +96,31 @@ export class AgentRuntime {
       { role: 'user', content },
     ];
 
+    // Inject resolved sender context as a system message so the coordinator
+    // knows who it's talking to. Inserted after the system prompt but before
+    // history, so it's visible but doesn't pollute working memory.
+    const senderCtx = taskEvent.payload.senderContext;
+    if (senderCtx?.resolved) {
+      // Sanitize sender fields before prompt inclusion — these originate from
+      // external sources (self-claimed names, imported roles) and could contain
+      // prompt injection attempts.
+      const safeName = sanitizeOutput(senderCtx.displayName);
+      const safeRole = senderCtx.role ? sanitizeOutput(senderCtx.role) : null;
+      // Length-limit knowledgeSummary to prevent context stuffing
+      const safeKnowledge = senderCtx.knowledgeSummary
+        ? sanitizeOutput(senderCtx.knowledgeSummary).slice(0, 2000)
+        : '';
+
+      let senderInfo = `Current sender: ${safeName}`;
+      if (safeRole) senderInfo += ` (${safeRole})`;
+      senderInfo += senderCtx.verified ? ' [verified]' : ' [unverified]';
+      if (safeKnowledge) {
+        senderInfo += `\n\nKnown context about ${safeName}:\n${safeKnowledge}`;
+      }
+      // Insert after system prompt (index 0) but before history
+      messages.splice(1, 0, { role: 'system', content: senderInfo });
+    }
+
     logger.info({ agentId, conversationId, historyLength: history.length }, 'Agent processing task');
 
     // Persist the incoming user message

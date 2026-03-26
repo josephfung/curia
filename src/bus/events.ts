@@ -31,6 +31,8 @@ interface AgentTaskPayload {
   senderId: string;
   content: string;
   metadata?: Record<string, unknown>;
+  /** Resolved sender context from the contact resolver. Undefined if contacts not configured. */
+  senderContext?: import('../contacts/types.js').InboundSenderContext;
 }
 
 interface AgentResponsePayload {
@@ -59,6 +61,27 @@ interface SkillResultPayload {
   skillName: string;
   result: { success: true; data: unknown } | { success: false; error: string };
   durationMs: number;
+}
+
+// Contact event payloads — emitted by the dispatch layer during contact resolution (Contacts Phase A).
+
+interface ContactResolvedPayload {
+  contactId: string;
+  displayName: string;
+  role: string | null;
+  kgNodeId: string | null;
+  // 'verified' means the contact has been confirmed via an authoritative source (e.g. KG match);
+  // 'unverified' means the identity was inferred but not confirmed.
+  verificationStatus: 'verified' | 'unverified';
+  channel: string;
+  channelIdentifier: string;
+}
+
+interface ContactUnknownPayload {
+  channel: string;
+  senderId: string;
+  /** Channel trust level. Optional in Phase A; Phase B will make it required. */
+  channelTrustLevel?: 'low' | 'medium' | 'high';
 }
 
 // Memory event payloads — used for the knowledge graph audit trail (Phase 6).
@@ -122,6 +145,21 @@ export interface SkillResultEvent extends BaseEvent {
   payload: SkillResultPayload;
 }
 
+// Contact events — emitted by the dispatch layer during the contact resolution step.
+// contact.resolved fires when a sender maps to a known contact; contact.unknown fires when no match is found.
+
+export interface ContactResolvedEvent extends BaseEvent {
+  type: 'contact.resolved';
+  sourceLayer: 'dispatch';
+  payload: ContactResolvedPayload;
+}
+
+export interface ContactUnknownEvent extends BaseEvent {
+  type: 'contact.unknown';
+  sourceLayer: 'dispatch';
+  payload: ContactUnknownPayload;
+}
+
 // Memory events — emitted by the agent layer whenever the knowledge graph is written to or queried.
 // These form the audit trail for memory operations (Phase 6).
 
@@ -144,8 +182,10 @@ export type BusEvent =
   | OutboundMessageEvent
   | SkillInvokeEvent
   | SkillResultEvent
-  | MemoryStoreEvent    // Phase 6: knowledge graph write audit
-  | MemoryQueryEvent;   // Phase 6: knowledge graph read audit
+  | MemoryStoreEvent      // Phase 6: knowledge graph write audit
+  | MemoryQueryEvent      // Phase 6: knowledge graph read audit
+  | ContactResolvedEvent  // Contacts Phase A: sender matched to a known contact
+  | ContactUnknownEvent;  // Contacts Phase A: sender has no contact record
 
 // Convenience alias for use in handler maps / switch statements.
 export type EventType = BusEvent['type'];
@@ -267,6 +307,36 @@ export function createMemoryQuery(
     timestamp: new Date(),
     type: 'memory.query',
     sourceLayer: 'agent',
+    payload: rest,
+    parentEventId,
+  };
+}
+
+export function createContactResolved(
+  // parentEventId is required — every resolution must trace back to the inbound event that triggered it.
+  payload: ContactResolvedPayload & { parentEventId: string },
+): ContactResolvedEvent {
+  const { parentEventId, ...rest } = payload;
+  return {
+    id: randomUUID(),
+    timestamp: new Date(),
+    type: 'contact.resolved',
+    sourceLayer: 'dispatch',
+    payload: rest,
+    parentEventId,
+  };
+}
+
+export function createContactUnknown(
+  // parentEventId is required — unknown-contact signals must trace back to the inbound event.
+  payload: ContactUnknownPayload & { parentEventId: string },
+): ContactUnknownEvent {
+  const { parentEventId, ...rest } = payload;
+  return {
+    id: randomUUID(),
+    timestamp: new Date(),
+    type: 'contact.unknown',
+    sourceLayer: 'dispatch',
     payload: rest,
     parentEventId,
   };

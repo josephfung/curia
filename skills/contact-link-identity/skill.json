@@ -1,0 +1,20 @@
+{
+  "name": "contact-link-identity",
+  "description": "Add a channel identity (email, phone, Signal, Telegram) to an existing contact.",
+  "version": "1.0.0",
+  "sensitivity": "normal",
+  "infrastructure": true,
+  "inputs": {
+    "contact_id": "string",
+    "channel": "string",
+    "identifier": "string",
+    "label": "string?"
+  },
+  "outputs": {
+    "identity_id": "string",
+    "verified": "boolean"
+  },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 15000
+}

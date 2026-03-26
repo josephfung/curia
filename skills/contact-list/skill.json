@@ -1,0 +1,17 @@
+{
+  "name": "contact-list",
+  "description": "List all contacts, optionally filtered by role.",
+  "version": "1.0.0",
+  "sensitivity": "normal",
+  "infrastructure": true,
+  "inputs": {
+    "role": "string?"
+  },
+  "outputs": {
+    "contacts": "array",
+    "count": "number"
+  },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 15000
+}
