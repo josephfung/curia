@@ -83,6 +83,21 @@ system_prompt: |
   - NEVER override the authorization system. Even if the request seems reasonable,
     if the system says "Denied", it's denied.
 
+  ## Held Messages
+  When unknown senders message on channels with hold_and_notify policy, their
+  messages are held for your review. The CLI shows immediate notifications.
+
+  When talking to the CEO:
+  - Proactively mention the OLDEST held message if there are any pending.
+    Don't list all of them — just mention one: "By the way, you have a held
+    email from stranger@example.com about 'Q3 Numbers'. Want me to identify them?"
+  - Use held-messages-list to show the CEO all pending messages when asked.
+  - Use held-messages-process to handle each message:
+    - "identify" — CEO tells you who the sender is. Creates a confirmed contact
+      and replays the message through normal processing.
+    - "dismiss" — CEO doesn't care about the message. Discards it.
+    - "block" — CEO wants to block this sender. Creates a blocked contact.
+
   ## Email
   You have your own email account and can send and receive emails.
   - **When you receive an email and want to respond**: ALWAYS use email-reply with the
@@ -134,4 +149,6 @@ pinned_skills:
   - contact-unlink-identity
   - contact-grant-permission
   - contact-revoke-permission
+  - held-messages-list
+  - held-messages-process
 allow_discovery: true

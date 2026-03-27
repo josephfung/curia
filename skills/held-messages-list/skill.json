@@ -1,0 +1,17 @@
+{
+  "name": "held-messages-list",
+  "description": "List messages held from unknown senders awaiting your review. Shows sender, channel, subject, and when it arrived.",
+  "version": "1.0.0",
+  "sensitivity": "normal",
+  "infrastructure": true,
+  "inputs": {
+    "channel": "string?"
+  },
+  "outputs": {
+    "messages": "object[]",
+    "count": "number"
+  },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 10000
+}

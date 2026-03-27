@@ -20,6 +20,7 @@ import type { EventBus } from '../bus/bus.js';
 import type { AgentRegistry } from '../agents/agent-registry.js';
 import type { ContactService } from '../contacts/contact-service.js';
 import type { NylasClient } from '../channels/email/nylas-client.js';
+import type { HeldMessageService } from '../contacts/held-messages.js';
 
 export class ExecutionLayer {
   private registry: SkillRegistry;
@@ -28,14 +29,16 @@ export class ExecutionLayer {
   private agentRegistry?: AgentRegistry;
   private contactService?: ContactService;
   private nylasClient?: NylasClient;
+  private heldMessages?: HeldMessageService;
 
-  constructor(registry: SkillRegistry, logger: Logger, options?: { bus?: EventBus; agentRegistry?: AgentRegistry; contactService?: ContactService; nylasClient?: NylasClient }) {
+  constructor(registry: SkillRegistry, logger: Logger, options?: { bus?: EventBus; agentRegistry?: AgentRegistry; contactService?: ContactService; nylasClient?: NylasClient; heldMessages?: HeldMessageService }) {
     this.registry = registry;
     this.logger = logger;
     this.bus = options?.bus;
     this.agentRegistry = options?.agentRegistry;
     this.contactService = options?.contactService;
     this.nylasClient = options?.nylasClient;
+    this.heldMessages = options?.heldMessages;
   }
 
   /**
@@ -104,6 +107,10 @@ export class ExecutionLayer {
       // when available but don't gate on it (other infra skills don't need it)
       if (this.nylasClient) {
         ctx.nylasClient = this.nylasClient;
+      }
+      // heldMessages is optional — only held-message skills need it
+      if (this.heldMessages) {
+        ctx.heldMessages = this.heldMessages;
       }
     }
 

@@ -1,0 +1,21 @@
+{
+  "name": "held-messages-process",
+  "description": "Process a held message: identify the sender (create/link contact and replay message), dismiss it, or block the sender.",
+  "version": "1.0.0",
+  "sensitivity": "elevated",
+  "infrastructure": true,
+  "inputs": {
+    "held_message_id": "string",
+    "action": "string",
+    "contact_name": "string?",
+    "contact_role": "string?",
+    "existing_contact_id": "string?"
+  },
+  "outputs": {
+    "result": "string",
+    "contact_id": "string?"
+  },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 30000
+}
