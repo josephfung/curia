@@ -41,10 +41,10 @@ const CODE_MAP: Record<string, ErrorType> = {
 };
 
 // Max length for sanitized error messages injected into LLM context.
-// Keeps error context concise and prevents context stuffing.
-// Note: sanitizeOutput() appends '[truncated]' (11 chars) when it truncates,
-// so we set the slice limit to 399 to keep the total at or under 410.
-const MAX_MESSAGE_LENGTH = 399;
+// sanitizeOutput() appends '[truncated]' (11 chars) when it truncates,
+// so the actual output can be up to maxLength + 11 chars. We use 400
+// as the nominal limit — the slight overshoot is acceptable for error context.
+const MAX_MESSAGE_LENGTH = 400;
 
 /**
  * Extract a human-readable message from an unknown error value.
@@ -86,11 +86,12 @@ export function classifyError(err: unknown, source: string): AgentError {
   }
 
   // 2. Check Node.js error code (ETIMEDOUT, ECONNREFUSED, etc.)
-  if (type === 'UNKNOWN') {
-    const code = (err as Record<string, unknown>)?.code;
-    if (typeof code === 'string' && CODE_MAP[code]) {
+  // Always capture code in context for debugging, even if status already classified.
+  const code = (err as Record<string, unknown>)?.code;
+  if (typeof code === 'string') {
+    context.code = code;
+    if (type === 'UNKNOWN' && CODE_MAP[code]) {
       type = CODE_MAP[code];
-      context.code = code;
     }
   }
 

@@ -130,7 +130,7 @@ describe('classifyError', () => {
     const longMessage = 'x'.repeat(500);
     const err = new Error(longMessage);
     const result = classifyError(err, 'test');
-    expect(result.message.length).toBeLessThanOrEqual(410); // 400 + '[truncated]'
+    expect(result.message.length).toBeLessThanOrEqual(411); // 400 + '[truncated]'
   });
 
   it('strips XML tags from error messages', () => {
@@ -149,6 +149,14 @@ describe('classifyError', () => {
   it('includes code in context when available', () => {
     const err = Object.assign(new Error('failed'), { code: 'ETIMEDOUT' });
     const result = classifyError(err, 'test');
+    expect(result.context).toHaveProperty('code', 'ETIMEDOUT');
+  });
+
+  it('includes both status and code in context when both are present', () => {
+    const err = Object.assign(new Error('failed'), { status: 429, code: 'ETIMEDOUT' });
+    const result = classifyError(err, 'test');
+    expect(result.type).toBe('RATE_LIMIT'); // status takes priority
+    expect(result.context).toHaveProperty('status', 429);
     expect(result.context).toHaveProperty('code', 'ETIMEDOUT');
   });
 

@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import type { ErrorType } from '../errors/types.js';
 
 // -- Base event shape --
 // Every event on the bus shares these fields; parentEventId forms the causal chain.
@@ -68,7 +69,7 @@ interface SkillResultPayload {
 interface AgentErrorPayload {
   agentId: string;
   conversationId: string;
-  errorType: import('../errors/types.js').ErrorType;
+  errorType: ErrorType;
   source: string;
   message: string;
   retryable: boolean;
