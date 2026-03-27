@@ -129,12 +129,16 @@ export class NylasClient {
 
     // The SDK's list() returns an AsyncListResponse which is both a Promise
     // and an async iterable. Awaiting it gives us the first page of results.
-    const response = await this.nylas.messages.list({
-      identifier: this.grantId,
-      queryParams,
-    });
-
-    return response.data.map((msg) => this.normalizeMessage(msg));
+    try {
+      const response = await this.nylas.messages.list({
+        identifier: this.grantId,
+        queryParams,
+      });
+      return response.data.map((msg) => this.normalizeMessage(msg));
+    } catch (err) {
+      this.log.error({ err, grantId: this.grantId, queryParams }, 'Nylas listMessages failed');
+      throw err;
+    }
   }
 
   /**
@@ -143,12 +147,16 @@ export class NylasClient {
   async getMessage(messageId: string): Promise<NylasMessage> {
     this.log.debug({ messageId }, 'fetching message');
 
-    const response = await this.nylas.messages.find({
-      identifier: this.grantId,
-      messageId,
-    });
-
-    return this.normalizeMessage(response.data);
+    try {
+      const response = await this.nylas.messages.find({
+        identifier: this.grantId,
+        messageId,
+      });
+      return this.normalizeMessage(response.data);
+    } catch (err) {
+      this.log.error({ err, grantId: this.grantId, messageId }, 'Nylas getMessage failed');
+      throw err;
+    }
   }
 
   /**
@@ -161,18 +169,25 @@ export class NylasClient {
       'sending message',
     );
 
-    const response = await this.nylas.messages.send({
-      identifier: this.grantId,
-      requestBody: {
-        to: options.to,
-        cc: options.cc,
-        subject: options.subject,
-        body: options.body,
-        replyToMessageId: options.replyToMessageId,
-      },
-    });
-
-    return this.normalizeMessage(response.data);
+    try {
+      const response = await this.nylas.messages.send({
+        identifier: this.grantId,
+        requestBody: {
+          to: options.to,
+          cc: options.cc,
+          subject: options.subject,
+          body: options.body,
+          replyToMessageId: options.replyToMessageId,
+        },
+      });
+      return this.normalizeMessage(response.data);
+    } catch (err) {
+      this.log.error(
+        { err, grantId: this.grantId, to: options.to, subject: options.subject, isReply: !!options.replyToMessageId },
+        'Nylas sendMessage failed',
+      );
+      throw err;
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -189,7 +204,7 @@ export class NylasClient {
       threadId: msg.threadId ?? '',
       subject: msg.subject ?? '',
       from: (msg.from ?? []).map((p) => ({ name: p.name, email: p.email })),
-      to: msg.to.map((p) => ({ name: p.name, email: p.email })),
+      to: (msg.to ?? []).map((p) => ({ name: p.name, email: p.email })),
       cc: (msg.cc ?? []).map((p) => ({ name: p.name, email: p.email })),
       bcc: (msg.bcc ?? []).map((p) => ({ name: p.name, email: p.email })),
       body: msg.body ?? '',
