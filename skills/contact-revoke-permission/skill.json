@@ -1,0 +1,19 @@
+{
+  "name": "contact-revoke-permission",
+  "description": "Remove a permission override for a contact, restoring their role's default behavior for that permission.",
+  "version": "1.0.0",
+  "sensitivity": "elevated",
+  "infrastructure": true,
+  "inputs": {
+    "contact_id": "string",
+    "permission": "string"
+  },
+  "outputs": {
+    "contact_id": "string",
+    "permission": "string",
+    "revoked": "boolean"
+  },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 10000
+}

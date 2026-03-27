@@ -1,0 +1,17 @@
+{
+  "name": "contact-unlink-identity",
+  "description": "Remove a channel identity from a contact. Use when the CEO says an email/phone is wrong or no longer valid for a contact.",
+  "version": "1.0.0",
+  "sensitivity": "normal",
+  "infrastructure": true,
+  "inputs": {
+    "contact_id": "string",
+    "identity_id": "string"
+  },
+  "outputs": {
+    "removed": "boolean"
+  },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 10000
+}

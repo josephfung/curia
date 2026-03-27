@@ -131,4 +131,7 @@ pinned_skills:
   - contact-list
   - email-send
   - email-reply
+  - contact-unlink-identity
+  - contact-grant-permission
+  - contact-revoke-permission
 allow_discovery: true
