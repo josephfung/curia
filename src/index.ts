@@ -44,6 +44,7 @@ import { EmailAdapter } from './channels/email/email-adapter.js';
 import { loadAuthConfig } from './contacts/config-loader.js';
 import { AuthorizationService } from './contacts/authorization.js';
 import { HeldMessageService } from './contacts/held-messages.js';
+import { DEFAULT_ERROR_BUDGET } from './errors/types.js';
 
 async function main(): Promise<void> {
   // 1. Config & logging — no dependencies, must come first.
@@ -247,6 +248,12 @@ async function main(): Promise<void> {
       executionLayer,
       pinnedSkills: agentPinnedSkills,
       skillToolDefs: agentToolDefs,
+      // Map YAML snake_case fields to AgentConfig camelCase, falling back to
+      // DEFAULT_ERROR_BUDGET values for any omitted fields.
+      errorBudget: agentConfig.error_budget ? {
+        maxTurns: agentConfig.error_budget.max_turns ?? DEFAULT_ERROR_BUDGET.maxTurns,
+        maxConsecutiveErrors: agentConfig.error_budget.max_errors ?? DEFAULT_ERROR_BUDGET.maxConsecutiveErrors,
+      } : undefined,
     });
     agent.register();
 

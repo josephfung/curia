@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { loadAgentConfig, loadAllAgentConfigs } from '../../../src/agents/loader.js';
 import * as path from 'node:path';
+import * as os from 'node:os';
+import * as fs from 'node:fs';
 
 const agentsDir = path.resolve(import.meta.dirname, '../../../agents');
 
@@ -29,5 +31,26 @@ describe('loadAgentConfig', () => {
     const configs = loadAllAgentConfigs(agentsDir);
     expect(configs.length).toBeGreaterThanOrEqual(1);
     expect(configs.find(c => c.name === 'coordinator')).toBeDefined();
+  });
+
+  it('accepts error_budget with max_turns and max_errors', () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'curia-test-'));
+    const yamlContent = `
+name: test-agent
+model:
+  provider: anthropic
+  model: claude-sonnet-4-20250514
+system_prompt: "Test agent"
+error_budget:
+  max_turns: 10
+  max_errors: 3
+`;
+    const filePath = path.join(tempDir, 'test.yaml');
+    fs.writeFileSync(filePath, yamlContent);
+
+    const config = loadAgentConfig(filePath);
+    expect(config.error_budget).toEqual({ max_turns: 10, max_errors: 3 });
+
+    fs.rmSync(tempDir, { recursive: true });
   });
 });
