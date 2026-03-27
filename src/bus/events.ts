@@ -63,6 +63,18 @@ interface SkillResultPayload {
   durationMs: number;
 }
 
+// Agent error payload — published by the agent runtime when an error occurs
+// that the user needs to know about (budget exceeded, unrecoverable failure, etc.)
+interface AgentErrorPayload {
+  agentId: string;
+  conversationId: string;
+  errorType: import('../errors/types.js').ErrorType;
+  source: string;
+  message: string;
+  retryable: boolean;
+  context: Record<string, unknown>;
+}
+
 // Contact event payloads — emitted by the dispatch layer during contact resolution (Contacts Phase A).
 
 interface ContactResolvedPayload {
@@ -152,6 +164,12 @@ export interface SkillResultEvent extends BaseEvent {
   payload: SkillResultPayload;
 }
 
+export interface AgentErrorEvent extends BaseEvent {
+  type: 'agent.error';
+  sourceLayer: 'agent';
+  payload: AgentErrorPayload;
+}
+
 // Contact events — emitted by the dispatch layer during the contact resolution step.
 // contact.resolved fires when a sender maps to a known contact; contact.unknown fires when no match is found.
 
@@ -195,6 +213,7 @@ export type BusEvent =
   | OutboundMessageEvent
   | SkillInvokeEvent
   | SkillResultEvent
+  | AgentErrorEvent          // Error recovery: structured error events for audit and user notification
   | MemoryStoreEvent      // Phase 6: knowledge graph write audit
   | MemoryQueryEvent      // Phase 6: knowledge graph read audit
   | ContactResolvedEvent  // Contacts Phase A: sender matched to a known contact
@@ -291,6 +310,21 @@ export function createSkillResult(
     timestamp: new Date(),
     type: 'skill.result',
     sourceLayer: 'execution',
+    payload: rest,
+    parentEventId,
+  };
+}
+
+export function createAgentError(
+  // parentEventId is required — error events must trace back to the task that triggered them.
+  payload: AgentErrorPayload & { parentEventId: string },
+): AgentErrorEvent {
+  const { parentEventId, ...rest } = payload;
+  return {
+    id: randomUUID(),
+    timestamp: new Date(),
+    type: 'agent.error',
+    sourceLayer: 'agent',
     payload: rest,
     parentEventId,
   };

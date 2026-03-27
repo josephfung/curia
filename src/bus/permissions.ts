@@ -5,20 +5,22 @@ import type { Layer, EventType } from './events.js';
 //          system layer gets full access so audit logger and monitoring can observe these events.
 // Contacts Phase A: dispatch layer publishes contact.resolved and contact.unknown after resolution;
 //                   system layer gets full access for audit logging.
+// Error Recovery: agent layer can publish agent.error; dispatch layer subscribes to notify users;
+//                 system layer gets full access for audit logging and monitoring.
 const publishAllowlist: Record<Layer, Set<EventType>> = {
   channel: new Set(['inbound.message']),
   dispatch: new Set(['agent.task', 'outbound.message', 'contact.resolved', 'contact.unknown', 'message.held']),
-  agent: new Set(['agent.response', 'skill.invoke', 'skill.result', 'memory.store', 'memory.query']),
+  agent: new Set(['agent.response', 'agent.error', 'skill.invoke', 'skill.result', 'memory.store', 'memory.query']),
   execution: new Set(['skill.result']),
-  system: new Set(['inbound.message', 'agent.task', 'agent.response', 'outbound.message', 'skill.invoke', 'skill.result', 'memory.store', 'memory.query', 'contact.resolved', 'contact.unknown', 'message.held']),
+  system: new Set(['inbound.message', 'agent.task', 'agent.response', 'agent.error', 'outbound.message', 'skill.invoke', 'skill.result', 'memory.store', 'memory.query', 'contact.resolved', 'contact.unknown', 'message.held']),
 };
 
 const subscribeAllowlist: Record<Layer, Set<EventType>> = {
   channel: new Set(['outbound.message', 'message.held']),
-  dispatch: new Set(['inbound.message', 'agent.response']),
+  dispatch: new Set(['inbound.message', 'agent.response', 'agent.error']),
   agent: new Set(['agent.task', 'skill.result']),
   execution: new Set(['skill.invoke']),
-  system: new Set(['inbound.message', 'agent.task', 'agent.response', 'outbound.message', 'skill.invoke', 'skill.result', 'memory.store', 'memory.query', 'contact.resolved', 'contact.unknown', 'message.held']),
+  system: new Set(['inbound.message', 'agent.task', 'agent.response', 'agent.error', 'outbound.message', 'skill.invoke', 'skill.result', 'memory.store', 'memory.query', 'contact.resolved', 'contact.unknown', 'message.held']),
 };
 
 export function canPublish(layer: Layer, eventType: EventType): boolean {
