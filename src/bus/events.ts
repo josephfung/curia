@@ -48,6 +48,19 @@ interface OutboundMessagePayload {
   content: string;
 }
 
+// OutboundBlockedPayload — emitted by the dispatch layer's content filter when an outbound
+// message is blocked before delivery. `findings` lists each rule that triggered and why,
+// providing an audit trail for security review and incident response.
+interface OutboundBlockedPayload {
+  blockId: string;
+  conversationId: string;
+  channelId: string;
+  content: string;         // the blocked content (stored for forensics)
+  recipientId: string;     // the intended external recipient that was protected
+  reason: string;          // human-readable summary of why the message was blocked
+  findings: Array<{ rule: string; detail: string }>;
+}
+
 interface SkillInvokePayload {
   agentId: string;
   conversationId: string;
@@ -151,6 +164,16 @@ export interface OutboundMessageEvent extends BaseEvent {
   payload: OutboundMessagePayload;
 }
 
+// OutboundBlockedEvent — published by the dispatch layer when the content filter
+// intercepts and blocks an outbound message. Channel adapters subscribe to this so
+// they can surface a failure signal to the user (e.g., "message could not be sent").
+// System layer subscribes for audit logging and security monitoring.
+export interface OutboundBlockedEvent extends BaseEvent {
+  type: 'outbound.blocked';
+  sourceLayer: 'dispatch';
+  payload: OutboundBlockedPayload;
+}
+
 export interface SkillInvokeEvent extends BaseEvent {
   type: 'skill.invoke';
   sourceLayer: 'agent';
@@ -219,7 +242,8 @@ export type BusEvent =
   | MemoryQueryEvent      // Phase 6: knowledge graph read audit
   | ContactResolvedEvent  // Contacts Phase A: sender matched to a known contact
   | ContactUnknownEvent   // Contacts Phase A: sender has no contact record
-  | MessageHeldEvent;     // Unknown sender policy: message held for CEO review
+  | MessageHeldEvent      // Unknown sender policy: message held for CEO review
+  | OutboundBlockedEvent; // Outbound content filter: message blocked before delivery (#38)
 
 // Convenience alias for use in handler maps / switch statements.
 export type EventType = BusEvent['type'];
@@ -280,6 +304,21 @@ export function createOutboundMessage(
     id: randomUUID(),
     timestamp: new Date(),
     type: 'outbound.message',
+    sourceLayer: 'dispatch',
+    payload: rest,
+    parentEventId,
+  };
+}
+
+export function createOutboundBlocked(
+  // parentEventId is required — every blocked event must trace back to the agent.response that was intercepted.
+  payload: OutboundBlockedPayload & { parentEventId: string },
+): OutboundBlockedEvent {
+  const { parentEventId, ...rest } = payload;
+  return {
+    id: randomUUID(),
+    timestamp: new Date(),
+    type: 'outbound.blocked',
     sourceLayer: 'dispatch',
     payload: rest,
     parentEventId,
