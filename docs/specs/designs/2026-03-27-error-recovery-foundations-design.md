@@ -220,6 +220,10 @@ This gives the LLM:
 
 The `<task_error>` block is a terminal leaf — no nested XML, no child tags.
 
+> **TODO:** Evaluate TOON (Token-Oriented Object Notation) as a more token-efficient
+> format for this and other structured LLM context blocks (sender context, authorization).
+> TOON benchmarks at ~40% fewer tokens than JSON for flat structures. See [#55](https://github.com/josephfung/curia/issues/55).
+
 ### LLM call errors (mid-loop)
 
 When `provider.chat()` fails during the tool-use loop and the runtime decides to retry, the error is injected as a system-content note in the messages array before the retry call. This gives the LLM context about the transient failure without polluting the tool_result flow:

@@ -46,6 +46,8 @@ When an error occurs during agent execution:
      <suggestion>Consider using a different mailbox or retrying later</suggestion>
    </task_error>
    ```
+   <!-- TODO: Evaluate TOON (Token-Oriented Object Notation) as a more token-efficient
+        alternative to XML for this structured block. See #55. -->
 3. **Resume, don't restart** — the LLM sees the full history including the error, and can make an informed decision: retry with different parameters, try an alternative skill, or report to the user.
 
 ### Progress Extraction
