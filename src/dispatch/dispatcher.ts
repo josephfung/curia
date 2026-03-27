@@ -1,10 +1,11 @@
 import type { EventBus } from '../bus/bus.js';
 import type { InboundMessageEvent, AgentResponseEvent, AgentErrorEvent } from '../bus/events.js';
-import { createAgentTask, createOutboundMessage, createContactResolved, createContactUnknown, createMessageHeld } from '../bus/events.js';
+import { createAgentTask, createOutboundMessage, createOutboundBlocked, createContactResolved, createContactUnknown, createMessageHeld } from '../bus/events.js';
 import type { Logger } from '../logger.js';
 import type { ContactResolver } from '../contacts/contact-resolver.js';
 import type { HeldMessageService } from '../contacts/held-messages.js';
 import type { InboundSenderContext, ChannelPolicyConfig } from '../contacts/types.js';
+import type { OutboundContentFilter } from './outbound-filter.js';
 
 export interface DispatcherConfig {
   bus: EventBus;
@@ -12,6 +13,10 @@ export interface DispatcherConfig {
   contactResolver?: ContactResolver;
   heldMessages?: HeldMessageService;
   channelPolicies?: Record<string, ChannelPolicyConfig>;
+  /** Outbound content filter for external channels. If not provided, no filtering is applied. */
+  outboundFilter?: OutboundContentFilter;
+  /** Set of channel IDs considered external-facing (filtered). Default: empty (no filtering). */
+  externalChannels?: Set<string>;
 }
 
 /**
@@ -30,6 +35,8 @@ export class Dispatcher {
   private contactResolver?: ContactResolver;
   private heldMessages?: HeldMessageService;
   private channelPolicies?: Record<string, ChannelPolicyConfig>;
+  private outboundFilter?: OutboundContentFilter;
+  private externalChannels: Set<string>;
   /**
    * Maps agent.task event ID → channel routing info.
    * When the agent publishes agent.response (with parentEventId pointing to the task),
@@ -37,8 +44,12 @@ export class Dispatcher {
    *
    * We key on the task event ID (not the inbound message ID) because the agent
    * runtime sets parentEventId on its response to the task event that triggered it.
+   *
+   * senderId is stored so the outbound filter can check for contact-data leakage
+   * (i.e., whether the response inadvertently reveals third-party email addresses
+   * to the specific recipient who sent the inbound message).
    */
-  private taskRouting = new Map<string, { channelId: string; conversationId: string }>();
+  private taskRouting = new Map<string, { channelId: string; conversationId: string; senderId: string }>();
 
   constructor(config: DispatcherConfig) {
     this.bus = config.bus;
@@ -46,6 +57,8 @@ export class Dispatcher {
     this.contactResolver = config.contactResolver;
     this.heldMessages = config.heldMessages;
     this.channelPolicies = config.channelPolicies;
+    this.outboundFilter = config.outboundFilter;
+    this.externalChannels = config.externalChannels ?? new Set();
   }
 
   register(): void {
@@ -234,10 +247,13 @@ export class Dispatcher {
     });
 
     // Store routing info keyed by the task event ID so we can look it up
-    // when the agent publishes its response (agent sets parentEventId = task.id)
+    // when the agent publishes its response (agent sets parentEventId = task.id).
+    // senderId is included so the outbound filter can pass it as recipientEmail
+    // for the contact-data-leak check.
     this.taskRouting.set(taskEvent.id, {
       channelId: payload.channelId,
       conversationId: payload.conversationId,
+      senderId: payload.senderId,
     });
 
     await this.bus.publish('dispatch', taskEvent);
@@ -255,7 +271,6 @@ export class Dispatcher {
   }
 
   private async handleAgentResponse(event: AgentResponseEvent): Promise<void> {
-    // Find the task this response belongs to via parentEventId
     const routing = event.parentEventId
       ? this.taskRouting.get(event.parentEventId)
       : undefined;
@@ -268,8 +283,42 @@ export class Dispatcher {
       return;
     }
 
-    // Clean up routing entry — one response per task
     this.taskRouting.delete(event.parentEventId!);
+
+    // Run outbound filter for external-facing channels.
+    // Internal channels (CLI, HTTP) skip filtering — they deliver to the CEO.
+    if (this.outboundFilter && this.externalChannels.has(routing.channelId)) {
+      const filterResult = await this.outboundFilter.check({
+        content: event.payload.content,
+        recipientEmail: routing.senderId,
+        conversationId: routing.conversationId,
+        channelId: routing.channelId,
+      });
+
+      if (!filterResult.passed) {
+        const reason = filterResult.findings
+          .map(f => `${f.rule}: ${f.detail}`)
+          .join('; ');
+
+        this.logger.warn(
+          { channelId: routing.channelId, conversationId: routing.conversationId, reason },
+          'Outbound content blocked by filter',
+        );
+
+        const blockedEvent = createOutboundBlocked({
+          blockId: `block_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+          conversationId: routing.conversationId,
+          channelId: routing.channelId,
+          content: event.payload.content,
+          recipientId: routing.senderId,
+          reason,
+          findings: filterResult.findings,
+          parentEventId: event.id,
+        });
+        await this.bus.publish('dispatch', blockedEvent);
+        return; // Do NOT publish outbound.message
+      }
+    }
 
     const outbound = createOutboundMessage({
       conversationId: routing.conversationId,
