@@ -114,6 +114,11 @@ export class AgentRuntime {
       let senderInfo = `Current sender: ${safeName}`;
       if (safeRole) senderInfo += ` (${safeRole})`;
       senderInfo += senderCtx.verified ? ' [verified]' : ' [unverified]';
+      // Include the channel and sender identifier so the coordinator knows
+      // HOW the message arrived and WHO sent it (e.g., their email address).
+      const channelId = taskEvent.payload.channelId;
+      const senderId = sanitizeOutput(taskEvent.payload.senderId);
+      senderInfo += `\nChannel: ${channelId} | Sender identifier: ${senderId}`;
       if (safeKnowledge) {
         senderInfo += `\n\nKnown context about ${safeName}:\n${safeKnowledge}`;
       }
