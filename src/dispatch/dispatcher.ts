@@ -17,6 +17,11 @@ export interface DispatcherConfig {
   outboundFilter?: OutboundContentFilter;
   /** Set of channel IDs considered external-facing (filtered). Default: empty (no filtering). */
   externalChannels?: Set<string>;
+  /** Configuration for CEO notification emails when outbound content is blocked. */
+  ceoNotification?: {
+    nylasClient: import('../channels/email/nylas-client.js').NylasClient;
+    ceoEmail: string;
+  };
 }
 
 /**
@@ -37,6 +42,7 @@ export class Dispatcher {
   private channelPolicies?: Record<string, ChannelPolicyConfig>;
   private outboundFilter?: OutboundContentFilter;
   private externalChannels: Set<string>;
+  private ceoNotification?: DispatcherConfig['ceoNotification'];
   /**
    * Maps agent.task event ID → channel routing info.
    * When the agent publishes agent.response (with parentEventId pointing to the task),
@@ -59,6 +65,7 @@ export class Dispatcher {
     this.channelPolicies = config.channelPolicies;
     this.outboundFilter = config.outboundFilter;
     this.externalChannels = config.externalChannels ?? new Set();
+    this.ceoNotification = config.ceoNotification;
   }
 
   register(): void {
@@ -316,6 +323,33 @@ export class Dispatcher {
           parentEventId: event.id,
         });
         await this.bus.publish('dispatch', blockedEvent);
+
+        // Send opaque notification email to the CEO.
+        // Contains only the block ID and recipient name — no sensitive content.
+        if (this.ceoNotification) {
+          try {
+            await this.ceoNotification.nylasClient.sendMessage({
+              to: [{ email: this.ceoNotification.ceoEmail }],
+              subject: 'Nathan Curia: Action needed — blocked outbound reply',
+              body: [
+                'An outbound email reply was blocked by the content filter.',
+                '',
+                `Intended recipient: ${routing.senderId}`,
+                `Block reference: ${blockedEvent.payload.blockId}`,
+                '',
+                'Please review this blocked message via CLI or web app using the reference above.',
+              ].join('\n'),
+            });
+          } catch (err) {
+            // Log but don't throw — the block event is already published.
+            // A failed notification is bad but not as bad as sending leaked content.
+            this.logger.error(
+              { err, blockId: blockedEvent.payload.blockId },
+              'Failed to send CEO notification for blocked outbound content',
+            );
+          }
+        }
+
         return; // Do NOT publish outbound.message
       }
     }
