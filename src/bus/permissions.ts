@@ -7,18 +7,18 @@ import type { Layer, EventType } from './events.js';
 //                   system layer gets full access for audit logging.
 const publishAllowlist: Record<Layer, Set<EventType>> = {
   channel: new Set(['inbound.message']),
-  dispatch: new Set(['agent.task', 'outbound.message', 'contact.resolved', 'contact.unknown']),
+  dispatch: new Set(['agent.task', 'outbound.message', 'contact.resolved', 'contact.unknown', 'message.held']),
   agent: new Set(['agent.response', 'skill.invoke', 'skill.result', 'memory.store', 'memory.query']),
   execution: new Set(['skill.result']),
-  system: new Set(['inbound.message', 'agent.task', 'agent.response', 'outbound.message', 'skill.invoke', 'skill.result', 'memory.store', 'memory.query', 'contact.resolved', 'contact.unknown']),
+  system: new Set(['inbound.message', 'agent.task', 'agent.response', 'outbound.message', 'skill.invoke', 'skill.result', 'memory.store', 'memory.query', 'contact.resolved', 'contact.unknown', 'message.held']),
 };
 
 const subscribeAllowlist: Record<Layer, Set<EventType>> = {
-  channel: new Set(['outbound.message']),
+  channel: new Set(['outbound.message', 'message.held']),
   dispatch: new Set(['inbound.message', 'agent.response']),
   agent: new Set(['agent.task', 'skill.result']),
   execution: new Set(['skill.invoke']),
-  system: new Set(['inbound.message', 'agent.task', 'agent.response', 'outbound.message', 'skill.invoke', 'skill.result', 'memory.store', 'memory.query', 'contact.resolved', 'contact.unknown']),
+  system: new Set(['inbound.message', 'agent.task', 'agent.response', 'outbound.message', 'skill.invoke', 'skill.result', 'memory.store', 'memory.query', 'contact.resolved', 'contact.unknown', 'message.held']),
 };
 
 export function canPublish(layer: Layer, eventType: EventType): boolean {
