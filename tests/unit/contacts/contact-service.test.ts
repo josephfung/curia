@@ -154,4 +154,84 @@ describe('ContactService', () => {
       expect(result!.identities).toHaveLength(2);
     });
   });
+
+  describe('contact status', () => {
+    it('defaults to confirmed when no status is provided', async () => {
+      const contact = await service.createContact({ displayName: 'Alice', source: 'test' });
+      expect(contact.status).toBe('confirmed');
+    });
+
+    it('creates a contact with provisional status', async () => {
+      const contact = await service.createContact({ displayName: 'Bob', status: 'provisional', source: 'test' });
+      expect(contact.status).toBe('provisional');
+
+      // Verify it persists on retrieval
+      const retrieved = await service.getContact(contact.id);
+      expect(retrieved!.status).toBe('provisional');
+    });
+
+    it('updates status via setStatus', async () => {
+      const contact = await service.createContact({ displayName: 'Carol', status: 'provisional', source: 'test' });
+      const updated = await service.setStatus(contact.id, 'confirmed');
+      expect(updated.status).toBe('confirmed');
+
+      const retrieved = await service.getContact(contact.id);
+      expect(retrieved!.status).toBe('confirmed');
+    });
+
+    it('setStatus throws for non-existent contact', async () => {
+      await expect(service.setStatus('non-existent', 'blocked')).rejects.toThrow('Contact not found');
+    });
+  });
+
+  describe('auth overrides', () => {
+    it('grants a permission override', async () => {
+      const contact = await service.createContact({ displayName: 'Dave', source: 'test' });
+      await service.grantPermission(contact.id, 'schedule_meeting', true);
+
+      const overrides = await service.getAuthOverrides(contact.id);
+      expect(overrides).toHaveLength(1);
+      expect(overrides[0]).toEqual({ permission: 'schedule_meeting', granted: true });
+    });
+
+    it('revokes a permission override', async () => {
+      const contact = await service.createContact({ displayName: 'Eve', source: 'test' });
+      await service.grantPermission(contact.id, 'view_calendar', true);
+      await service.revokePermission(contact.id, 'view_calendar');
+
+      const overrides = await service.getAuthOverrides(contact.id);
+      expect(overrides).toHaveLength(0);
+    });
+
+    it('upserts an override (grant then change to deny)', async () => {
+      const contact = await service.createContact({ displayName: 'Frank', source: 'test' });
+      await service.grantPermission(contact.id, 'send_email', true);
+      await service.grantPermission(contact.id, 'send_email', false);
+
+      const overrides = await service.getAuthOverrides(contact.id);
+      expect(overrides).toHaveLength(1);
+      expect(overrides[0]).toEqual({ permission: 'send_email', granted: false });
+    });
+
+    it('grantPermission throws for non-existent contact', async () => {
+      await expect(service.grantPermission('non-existent', 'foo', true)).rejects.toThrow('Contact not found');
+    });
+  });
+
+  describe('unlinkIdentity', () => {
+    it('removes a channel identity', async () => {
+      const contact = await service.createContact({ displayName: 'Grace', source: 'test' });
+      const identity = await service.linkIdentity({
+        contactId: contact.id,
+        channel: 'email',
+        channelIdentifier: 'grace@example.com',
+        source: 'ceo_stated',
+      });
+
+      await service.unlinkIdentity(identity.id);
+
+      const result = await service.getContactWithIdentities(contact.id);
+      expect(result!.identities).toHaveLength(0);
+    });
+  });
 });

@@ -73,6 +73,7 @@ export interface ResolvedSender {
   contactId: string;
   displayName: string;
   role: string | null;
+  status: ContactStatus;
   kgNodeId: string | null;
   verified: boolean;
 }
