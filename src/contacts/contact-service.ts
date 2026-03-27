@@ -337,7 +337,10 @@ class PostgresContactBackend implements ContactServiceBackend {
   }
 
   async findContactByName(name: string): Promise<Contact[]> {
-    // Case-insensitive exact match using lower()
+    // Substring match (case-insensitive) so partial names like "Joe" match "Joseph Brennan".
+    // Uses ILIKE with wildcards — the idx_contacts_display_name btree index won't help here,
+    // but the contacts table is small (hundreds, not millions) so a seq scan is fine.
+    // For exact match, the caller can filter the results further.
     const result = await this.pool.query<{
       id: string;
       kg_node_id: string | null;
@@ -349,8 +352,8 @@ class PostgresContactBackend implements ContactServiceBackend {
       updated_at: Date;
     }>(
       `SELECT id, kg_node_id, display_name, role, status, notes, created_at, updated_at
-       FROM contacts WHERE lower(display_name) = lower($1)`,
-      [name],
+       FROM contacts WHERE display_name ILIKE $1`,
+      [`%${name}%`],
     );
 
     return result.rows.map((row) => this.rowToContact(row));
@@ -601,10 +604,11 @@ class InMemoryContactBackend implements ContactServiceBackend {
   }
 
   async findContactByName(name: string): Promise<Contact[]> {
+    // Substring match (case-insensitive) to match the Postgres ILIKE behavior
     const lowerName = name.toLowerCase();
     const results: Contact[] = [];
     for (const contact of this.contacts.values()) {
-      if (contact.displayName.toLowerCase() === lowerName) {
+      if (contact.displayName.toLowerCase().includes(lowerName)) {
         results.push(contact);
       }
     }

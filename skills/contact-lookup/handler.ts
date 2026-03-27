@@ -49,10 +49,13 @@ export class ContactLookupHandler implements SkillHandler {
     try {
       if (by === 'name') {
         const contacts = await ctx.contactService.findContactByName(query);
+        // Enrich each contact with their channel identities so the coordinator
+        // can see email addresses, phone numbers, etc. without a second lookup.
+        const enriched = await Promise.all(contacts.map(c => enrichContact(ctx, c)));
         return {
           success: true,
           data: {
-            contacts: contacts.map(contactToSummary),
+            contacts: enriched,
             count: contacts.length,
           },
         };
@@ -60,10 +63,11 @@ export class ContactLookupHandler implements SkillHandler {
 
       if (by === 'role') {
         const contacts = await ctx.contactService.findContactByRole(query);
+        const enriched = await Promise.all(contacts.map(c => enrichContact(ctx, c)));
         return {
           success: true,
           data: {
-            contacts: contacts.map(contactToSummary),
+            contacts: enriched,
             count: contacts.length,
           },
         };
@@ -117,12 +121,39 @@ export class ContactLookupHandler implements SkillHandler {
   }
 }
 
+/** Enrich a contact with its channel identities */
+async function enrichContact(
+  ctx: SkillContext,
+  contact: { id: string; displayName: string; role: string | null; status: string; kgNodeId: string | null },
+) {
+  const summary = contactToSummary(contact);
+  try {
+    const data = await ctx.contactService!.getContactWithIdentities(contact.id);
+    if (data) {
+      return {
+        ...summary,
+        identities: data.identities.map(i => ({
+          id: i.id,
+          channel: i.channel,
+          identifier: i.channelIdentifier,
+          label: i.label,
+          verified: i.verified,
+        })),
+      };
+    }
+  } catch {
+    // Best effort — return without identities if lookup fails
+  }
+  return { ...summary, identities: [] };
+}
+
 /** Convert a Contact to a summary object for the skill output */
-function contactToSummary(contact: { id: string; displayName: string; role: string | null; kgNodeId: string | null }) {
+function contactToSummary(contact: { id: string; displayName: string; role: string | null; status: string; kgNodeId: string | null }) {
   return {
     contact_id: contact.id,
     display_name: contact.displayName,
     role: contact.role,
+    status: contact.status,
     kg_node_id: contact.kgNodeId,
   };
 }
