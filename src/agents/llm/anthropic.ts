@@ -13,6 +13,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import type { MessageParam, ToolUseBlock, TextBlock, ToolResultBlockParam } from '@anthropic-ai/sdk/resources/messages/messages.js';
 import type { LLMProvider, LLMResponse, LLMUsage, Message, ToolCall, ToolDefinition, ToolResult } from './provider.js';
 import type { Logger } from '../../logger.js';
+import { classifyError } from '../../errors/classify.js';
 
 export class AnthropicProvider implements LLMProvider {
   id = 'anthropic';
@@ -163,10 +164,10 @@ export class AnthropicProvider implements LLMProvider {
         usage,
       };
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Unknown Anthropic error';
       this.logger.error({ err, model }, 'Anthropic API call failed');
-      // Return error as a value so callers don't need try/catch.
-      return { type: 'error', error: message };
+      // Classify the error into a structured AgentError so the runtime
+      // can make informed retry and budget decisions.
+      return { type: 'error', error: classifyError(err, 'anthropic') };
     }
   }
 }

@@ -68,7 +68,7 @@ export function sanitizeOutput(
   // 2. Strip dangerous tag pairs WITH their content first (e.g., <system>...</system>)
   // This must happen before stripping orphan tags — if we strip tags first,
   // the paired-content regex has nothing to match and the injected content survives.
-  text = text.replace(/<(system|instruction|prompt|script)[\s>][\s\S]*?<\/\1>/gi, '');
+  text = text.replace(/<(system|instruction|prompt|role|script)[\s>][\s\S]*?<\/\1>/gi, '');
   // Then strip any remaining orphan dangerous tags (self-closing or unmatched)
   text = text.replace(DANGEROUS_TAG_PATTERN, '');
 

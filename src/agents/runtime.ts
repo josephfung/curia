@@ -1,11 +1,13 @@
-import type { LLMProvider, Message, ToolDefinition, ContentBlock, ToolUseContent, ToolResultContent, TextContent } from './llm/provider.js';
+import type { LLMProvider, LLMResponse, Message, ToolDefinition, ContentBlock, ToolUseContent, ToolResultContent, TextContent } from './llm/provider.js';
 import type { EventBus } from '../bus/bus.js';
-import { createAgentResponse, createSkillInvoke, createSkillResult, type AgentTaskEvent } from '../bus/events.js';
+import { createAgentResponse, createAgentError, createSkillInvoke, createSkillResult, type AgentTaskEvent } from '../bus/events.js';
 import type { Logger } from '../logger.js';
 import type { WorkingMemory } from '../memory/working-memory.js';
 import type { EntityMemory } from '../memory/entity-memory.js';
 import type { ExecutionLayer } from '../skills/execution.js';
 import { sanitizeOutput } from '../skills/sanitize.js';
+import { classifySkillError, formatTaskError } from '../errors/classify.js';
+import { DEFAULT_ERROR_BUDGET, type AgentError, type ErrorBudget } from '../errors/types.js';
 
 export interface AgentConfig {
   agentId: string;
@@ -23,11 +25,17 @@ export interface AgentConfig {
   pinnedSkills?: string[];
   /** Pre-built tool definitions for the LLM (from SkillRegistry.toToolDefinitions). */
   skillToolDefs?: ToolDefinition[];
+  /** Error budget config — turn and consecutive error limits per task.
+   * maxTurns is checked at the start of each tool-use iteration, so
+   * the effective number of tool-calling rounds is maxTurns - 1. */
+  errorBudget?: {
+    maxTurns: number;
+    maxConsecutiveErrors: number;
+  };
 }
 
-// Maximum tool-use iterations to prevent infinite loops.
-// If the LLM keeps requesting tools beyond this limit, we force a text response.
-const MAX_TOOL_ITERATIONS = 10;
+// LLM retry backoff schedule (milliseconds). Three attempts with exponential backoff.
+const RETRY_BACKOFF_MS = [1000, 5000, 15000] as const;
 
 /**
  * AgentRuntime is the execution engine for a single agent.
@@ -83,6 +91,16 @@ export class AgentRuntime {
   private async processTask(taskEvent: AgentTaskEvent): Promise<void> {
     const { agentId, systemPrompt, provider, bus, logger, memory, executionLayer, skillToolDefs } = this.config;
     const { content, conversationId } = taskEvent.payload;
+
+    // Initialize the error budget for this task.
+    // Config values override defaults; budget tracks runtime counters.
+    const budgetConfig = this.config.errorBudget;
+    const budget: ErrorBudget = {
+      maxTurns: budgetConfig?.maxTurns ?? DEFAULT_ERROR_BUDGET.maxTurns,
+      maxConsecutiveErrors: budgetConfig?.maxConsecutiveErrors ?? DEFAULT_ERROR_BUDGET.maxConsecutiveErrors,
+      turnsUsed: 0,
+      consecutiveErrors: 0,
+    };
 
     // Load conversation history from working memory (if configured)
     const history = memory
@@ -160,13 +178,23 @@ export class AgentRuntime {
     // assistant's tool_use content blocks and the user's tool_result blocks.
     // We build these as structured ContentBlock[] in the messages array so
     // the provider can pass them through to the API correctly.
-    let response = await provider.chat({ messages, tools: skillToolDefs });
-    let iterations = 0;
+    //
+    // Budget-driven loop: each LLM round-trip consumes one turn from the budget.
+    // The loop exits when: the LLM returns text, the budget is exhausted, or
+    // consecutive errors exceed the threshold.
+    let response = await this.chatWithRetry(provider, { messages, tools: skillToolDefs }, budget, taskEvent);
+    if (!response) return; // chatWithRetry already published error events
 
-    while (response.type === 'tool_use' && executionLayer && iterations < MAX_TOOL_ITERATIONS) {
-      iterations++;
+    while (response.type === 'tool_use' && executionLayer) {
+      // Check turn budget before processing this round of tool calls
+      budget.turnsUsed++;
+      if (budget.turnsUsed >= budget.maxTurns) {
+        await this.handleBudgetExceeded(budget, taskEvent, 'maxTurns');
+        return;
+      }
+
       logger.info(
-        { agentId, iteration: iterations, toolCalls: response.toolCalls.map(tc => tc.name) },
+        { agentId, turn: budget.turnsUsed, toolCalls: response.toolCalls.map(tc => tc.name) },
         'LLM requested tool calls',
       );
 
@@ -223,6 +251,8 @@ export class AgentRuntime {
         await bus.publish('agent', resultEvent);
 
         if (result.success) {
+          // Success: reset consecutive error counter
+          budget.consecutiveErrors = 0;
           const resultContent = typeof result.data === 'string' ? result.data : JSON.stringify(result.data);
           toolResultBlocks.push({
             type: 'tool_result',
@@ -230,16 +260,32 @@ export class AgentRuntime {
             content: resultContent,
           } as ToolResultContent);
         } else {
-          // Sanitize error messages before sending to LLM — skill errors
-          // can contain injection vectors from external sources
-          const sanitizedError = sanitizeOutput(result.error, { isError: true });
+          // Failure: classify the error and format as a structured <task_error> block
+          // so the LLM gets machine-readable error context instead of raw strings.
+          budget.consecutiveErrors++;
+          const agentErr = classifySkillError(toolCall.name, result.error);
+          const formattedError = formatTaskError(
+            toolCall.name,
+            agentErr.type,
+            agentErr.message,
+            budget.consecutiveErrors,
+            budget.maxConsecutiveErrors,
+          );
           toolResultBlocks.push({
             type: 'tool_result',
             tool_use_id: toolCall.id,
-            content: sanitizedError,
+            content: formattedError,
             is_error: true,
           } as ToolResultContent);
         }
+      }
+
+      // Check consecutive error budget after processing all tool calls in this turn
+      if (budget.consecutiveErrors >= budget.maxConsecutiveErrors) {
+        // Still append results so the LLM history is consistent, then bail
+        messages.push({ role: 'user', content: toolResultBlocks });
+        await this.handleBudgetExceeded(budget, taskEvent, 'maxConsecutiveErrors');
+        return;
       }
 
       // Append tool results as a user turn with structured content blocks.
@@ -248,24 +294,26 @@ export class AgentRuntime {
       messages.push({ role: 'user', content: toolResultBlocks });
 
       // Continue the loop — the full conversation history is now in messages
-      response = await provider.chat({ messages, tools: skillToolDefs });
+      response = await this.chatWithRetry(provider, { messages, tools: skillToolDefs }, budget, taskEvent);
+      if (!response) return; // chatWithRetry already published error events
     }
 
-    // Handle the final response (text or error)
+    // Handle the final response (text or tool_use without execution layer)
     let responseContent: string;
-    if (response.type === 'error') {
-      logger.error({ agentId, error: response.error }, 'LLM call failed');
-      responseContent = "I'm sorry, I was unable to process that request. Please try again.";
-    } else if (response.type === 'tool_use') {
-      // Reached max iterations — the LLM is stuck in a tool loop
-      logger.warn({ agentId, iterations: MAX_TOOL_ITERATIONS }, 'Tool-use loop hit max iterations');
+    if (response.type === 'tool_use') {
+      // No execution layer configured — the LLM wanted tools but we can't run them
+      logger.warn({ agentId }, 'LLM returned tool_use but no execution layer configured');
       responseContent = response.content ?? "I wasn't able to complete that request — I hit my tool-use limit. Please try rephrasing.";
-    } else {
+    } else if (response.type === 'text') {
       logger.info(
         { agentId, inputTokens: response.usage.inputTokens, outputTokens: response.usage.outputTokens },
         'Agent task completed',
       );
       responseContent = response.content;
+    } else {
+      // Shouldn't reach here — chatWithRetry handles errors — but be safe
+      logger.error({ agentId, error: response.error }, 'LLM call failed after retries');
+      responseContent = "I'm sorry, I was unable to process that request. Please try again.";
     }
 
     // Persist the assistant response
@@ -277,6 +325,154 @@ export class AgentRuntime {
       agentId,
       conversationId,
       content: responseContent,
+      parentEventId: taskEvent.id,
+    });
+    await bus.publish('agent', responseEvent);
+  }
+
+  /**
+   * Call the LLM provider with retry logic for transient failures.
+   *
+   * - Non-retryable errors: publish agent.error, send error response, return null
+   * - Retryable errors: backoff and retry up to 3 times, incrementing budget counters
+   * - AUTH_FAILURE counts double against the budget (it's a serious signal)
+   * - On success: reset consecutive error counter, return the response
+   * - If all retries exhausted: publish agent.error, send error response, return null
+   */
+  private async chatWithRetry(
+    provider: LLMProvider,
+    params: { messages: Message[]; tools?: ToolDefinition[] },
+    budget: ErrorBudget,
+    taskEvent: AgentTaskEvent,
+  ): Promise<LLMResponse | null> {
+    const { agentId, logger } = this.config;
+
+    const response = await provider.chat(params);
+    if (response.type !== 'error') {
+      // LLM call succeeded — reset consecutive error counter
+      budget.consecutiveErrors = 0;
+      return response;
+    }
+
+    const agentErr = response.error;
+
+    // Non-retryable errors: count against budget then bail immediately.
+    // AUTH_FAILURE counts double — it's a strong signal something is misconfigured.
+    if (!agentErr.retryable) {
+      const increment = agentErr.type === 'AUTH_FAILURE' ? 2 : 1;
+      budget.consecutiveErrors += increment;
+      budget.turnsUsed += increment;
+      logger.error({ agentId, errorType: agentErr.type, source: agentErr.source }, 'Non-retryable LLM error');
+      await this.publishAgentError(agentErr, taskEvent);
+      await this.sendErrorResponse(taskEvent);
+      return null;
+    }
+
+    // Retryable error — attempt backoff retries.
+    // Track the latest error so we publish the most recent failure, not the first.
+    logger.warn({ agentId, errorType: agentErr.type }, 'Retryable LLM error, starting retry sequence');
+    let latestErr = agentErr;
+
+    for (const backoffMs of RETRY_BACKOFF_MS) {
+      // Increment budget counters for the failed attempt.
+      budget.consecutiveErrors++;
+      budget.turnsUsed++;
+
+      // Check budget before waiting — if already exceeded, no point retrying
+      if (budget.consecutiveErrors >= budget.maxConsecutiveErrors) {
+        await this.handleBudgetExceeded(budget, taskEvent, 'maxConsecutiveErrors');
+        return null;
+      }
+
+      await new Promise(resolve => setTimeout(resolve, backoffMs));
+
+      const retryResponse = await provider.chat(params);
+      if (retryResponse.type !== 'error') {
+        // Retry succeeded — reset consecutive error counter
+        budget.consecutiveErrors = 0;
+        return retryResponse;
+      }
+
+      latestErr = retryResponse.error;
+
+      // If the retry returned a non-retryable error, stop retrying immediately
+      if (!latestErr.retryable) {
+        logger.error({ agentId, errorType: latestErr.type }, 'Retry returned non-retryable error');
+        await this.publishAgentError(latestErr, taskEvent);
+        await this.sendErrorResponse(taskEvent);
+        return null;
+      }
+
+      logger.warn(
+        { agentId, backoffMs, errorType: latestErr.type },
+        'LLM retry failed',
+      );
+    }
+
+    // All retries exhausted — publish the most recent error
+    logger.error({ agentId, retries: RETRY_BACKOFF_MS.length }, 'All LLM retries exhausted');
+    await this.publishAgentError(latestErr, taskEvent);
+    await this.sendErrorResponse(taskEvent);
+    return null;
+  }
+
+  /**
+   * Handle budget exhaustion: log, publish a BUDGET_EXCEEDED agent.error event,
+   * and send a user-facing error response.
+   */
+  private async handleBudgetExceeded(
+    budget: ErrorBudget,
+    taskEvent: AgentTaskEvent,
+    reason: 'maxTurns' | 'maxConsecutiveErrors',
+  ): Promise<void> {
+    const { agentId, logger } = this.config;
+    const message = reason === 'maxTurns'
+      ? `Task exceeded turn budget (${budget.turnsUsed}/${budget.maxTurns} turns used)`
+      : `Task exceeded consecutive error budget (${budget.consecutiveErrors}/${budget.maxConsecutiveErrors} consecutive errors)`;
+
+    logger.warn({ agentId, budget, reason }, message);
+
+    const agentErr: AgentError = {
+      type: 'BUDGET_EXCEEDED',
+      source: 'runtime',
+      message,
+      retryable: false,
+      context: { budget, reason },
+      timestamp: new Date(),
+    };
+    await this.publishAgentError(agentErr, taskEvent);
+    await this.sendErrorResponse(taskEvent);
+  }
+
+  /**
+   * Publish a structured agent.error event to the bus for audit and monitoring.
+   */
+  private async publishAgentError(agentErr: AgentError, taskEvent: AgentTaskEvent): Promise<void> {
+    const { agentId, bus } = this.config;
+    const { conversationId } = taskEvent.payload;
+    const errorEvent = createAgentError({
+      agentId,
+      conversationId,
+      errorType: agentErr.type,
+      source: agentErr.source,
+      message: agentErr.message,
+      retryable: agentErr.retryable,
+      context: agentErr.context,
+      parentEventId: taskEvent.id,
+    });
+    await bus.publish('agent', errorEvent);
+  }
+
+  /**
+   * Send a user-facing error response so the user isn't left waiting.
+   */
+  private async sendErrorResponse(taskEvent: AgentTaskEvent): Promise<void> {
+    const { agentId, bus } = this.config;
+    const { conversationId } = taskEvent.payload;
+    const responseEvent = createAgentResponse({
+      agentId,
+      conversationId,
+      content: "I'm sorry, I was unable to process that request. Please try again.",
       parentEventId: taskEvent.id,
     });
     await bus.publish('agent', responseEvent);

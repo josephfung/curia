@@ -60,4 +60,21 @@ describe('Bus Permissions', () => {
     expect(canPublish('channel', 'skill.invoke')).toBe(false);
     expect(canPublish('channel', 'skill.result')).toBe(false);
   });
+
+  it('agent layer can publish agent.error', () => {
+    expect(canPublish('agent', 'agent.error')).toBe(true);
+  });
+
+  it('dispatch layer can subscribe to agent.error', () => {
+    expect(canSubscribe('dispatch', 'agent.error')).toBe(true);
+  });
+
+  it('system layer can publish and subscribe to agent.error', () => {
+    expect(canPublish('system', 'agent.error')).toBe(true);
+    expect(canSubscribe('system', 'agent.error')).toBe(true);
+  });
+
+  it('channel layer cannot publish agent.error', () => {
+    expect(canPublish('channel', 'agent.error')).toBe(false);
+  });
 });
