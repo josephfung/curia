@@ -45,6 +45,7 @@ import { loadAuthConfig } from './contacts/config-loader.js';
 import { AuthorizationService } from './contacts/authorization.js';
 import { HeldMessageService } from './contacts/held-messages.js';
 import { DEFAULT_ERROR_BUDGET } from './errors/types.js';
+import { OutboundContentFilter } from './dispatch/outbound-filter.js';
 
 async function main(): Promise<void> {
   // 1. Config & logging — no dependencies, must come first.
@@ -268,6 +269,21 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
+  // Outbound content filter — extracts marker phrases from the coordinator's
+  // interpolated system prompt and uses them to detect prompt leakage in
+  // outbound emails. Markers are derived dynamically so they stay in sync
+  // as the prompt evolves.
+  const coordinatorConfig = agentConfigs.find(c => c.role === 'coordinator');
+  let outboundFilter: OutboundContentFilter | undefined;
+  if (coordinatorConfig) {
+    const systemPromptMarkers = extractSystemPromptMarkers(coordinatorConfig);
+    outboundFilter = new OutboundContentFilter({
+      systemPromptMarkers,
+      ceoEmail: config.nylasSelfEmail ?? '',
+    });
+    logger.info({ markerCount: systemPromptMarkers.length }, 'Outbound content filter initialized');
+  }
+
   // 7. Dispatcher — subscribes to inbound.message + agent.response.
   // Registered after the coordinator so agent.task already has a handler
   // when the dispatcher fans the first inbound message out.
@@ -277,6 +293,11 @@ async function main(): Promise<void> {
     contactResolver,
     heldMessages,
     channelPolicies: authConfig?.channelPolicies,
+    outboundFilter,
+    externalChannels: new Set(['email']),
+    ceoNotification: nylasClient && config.nylasSelfEmail
+      ? { nylasClient, ceoEmail: config.nylasSelfEmail }
+      : undefined,
   });
   dispatcher.register();
 
@@ -335,6 +356,32 @@ async function main(): Promise<void> {
   // Print welcome directly to stdout (logger writes to curia.log in dev mode)
   process.stdout.write('\nCuria is ready. Type a message, /quit to exit, or Ctrl+C.\n\n');
   cli.prompt();
+}
+
+/**
+ * Extract distinctive marker phrases from the coordinator config that would
+ * indicate system prompt leakage if they appeared in an outbound email.
+ * These are persona-specific strings that wouldn't occur in normal business writing.
+ */
+function extractSystemPromptMarkers(
+  config: import('./agents/loader.js').AgentYamlConfig,
+): string[] {
+  const markers: string[] = [];
+
+  // Full instruction phrases — distinctive enough to not appear in business email.
+  // We use the full instruction form ("You are X") rather than just the name/title
+  // to avoid false positives on email signatures.
+  if (config.persona?.display_name) {
+    markers.push(`You are ${config.persona.display_name}`);
+  }
+  if (config.persona?.display_name && config.persona?.title) {
+    markers.push(`${config.persona.display_name}, the ${config.persona.title}`);
+  }
+  if (config.persona?.tone) {
+    markers.push(config.persona.tone);
+  }
+
+  return markers;
 }
 
 // Pre-logger fallback — if main() throws during config loading (before the
