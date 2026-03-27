@@ -32,4 +32,19 @@ describe('loadAuthConfig', () => {
     expect(config.roles.unknown).toBeDefined();
     expect(config.roles.unknown.defaultPermissions).toEqual([]);
   });
+
+  it('loads unknown sender policies from YAML', () => {
+    const config = loadAuthConfig(CONFIG_DIR);
+    expect(config.channelPolicies).toBeDefined();
+    expect(config.channelPolicies.cli.unknownSender).toBe('allow');
+    expect(config.channelPolicies.email.unknownSender).toBe('hold_and_notify');
+    expect(config.channelPolicies.http.unknownSender).toBe('reject');
+  });
+
+  it('preserves trust levels alongside policies', () => {
+    const config = loadAuthConfig(CONFIG_DIR);
+    expect(config.channelPolicies.cli.trust).toBe('high');
+    expect(config.channelPolicies.email.trust).toBe('low');
+    expect(config.channelTrust.cli).toBe('high');
+  });
 });

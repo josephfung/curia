@@ -131,4 +131,31 @@ export interface AuthConfig {
   roles: Record<string, RolePermissions>;
   permissions: Record<string, PermissionDef>;
   channelTrust: Record<string, TrustLevel>;
+  channelPolicies: Record<string, ChannelPolicyConfig>;
+}
+
+// -- Unknown sender policy --
+
+export type UnknownSenderPolicy = 'allow' | 'hold_and_notify' | 'reject';
+
+export type HeldMessageStatus = 'pending' | 'processed' | 'discarded';
+
+export interface HeldMessage {
+  id: string;
+  channel: string;
+  senderId: string;
+  conversationId: string;
+  content: string;
+  subject: string | null;
+  metadata: Record<string, unknown>;
+  status: HeldMessageStatus;
+  /** Contact ID if the CEO identified the sender */
+  resolvedContactId: string | null;
+  createdAt: Date;
+  processedAt: Date | null;
+}
+
+export interface ChannelPolicyConfig {
+  trust: TrustLevel;
+  unknownSender: UnknownSenderPolicy;
 }

@@ -1,11 +1,23 @@
-# Channel trust levels.
-# high: can do anything
-# medium: can do medium and low sensitivity actions
-# low: can only do low sensitivity actions
+# Channel trust and unknown sender policies.
+# trust: determines max sensitivity of actions via this channel
+# unknown_sender: what to do when a message arrives from an unrecognized sender
+#   allow - process normally (CLI is always the CEO)
+#   hold_and_notify - hold the message silently, notify CEO
+#   reject - silently drop the message
 
 channels:
-  cli: high
-  signal: high
-  telegram: medium
-  http: medium
-  email: low
+  cli:
+    trust: high
+    unknown_sender: allow
+  signal:
+    trust: high
+    unknown_sender: hold_and_notify
+  telegram:
+    trust: medium
+    unknown_sender: hold_and_notify
+  http:
+    trust: medium
+    unknown_sender: reject
+  email:
+    trust: low
+    unknown_sender: hold_and_notify
