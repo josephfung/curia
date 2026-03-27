@@ -1,0 +1,21 @@
+{
+  "name": "email-send",
+  "description": "Send a new email. Provide comma-separated recipient email addresses, subject, and body. Emails are sent from Nathan Curia's email address.",
+  "version": "1.0.0",
+  "sensitivity": "elevated",
+  "infrastructure": true,
+  "inputs": {
+    "to": "string",
+    "cc": "string?",
+    "subject": "string",
+    "body": "string"
+  },
+  "outputs": {
+    "message_id": "string",
+    "to": "string",
+    "subject": "string"
+  },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 30000
+}

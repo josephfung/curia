@@ -39,6 +39,8 @@ import { ExecutionLayer } from './skills/execution.js';
 import { loadSkillsFromDirectory } from './skills/loader.js';
 import { ContactService } from './contacts/contact-service.js';
 import { ContactResolver } from './contacts/contact-resolver.js';
+import { NylasClient } from './channels/email/nylas-client.js';
+import { EmailAdapter } from './channels/email/email-adapter.js';
 
 async function main(): Promise<void> {
   // 1. Config & logging — no dependencies, must come first.
@@ -104,6 +106,30 @@ async function main(): Promise<void> {
   const contactResolver = new ContactResolver(contactService, entityMemory, logger);
   logger.info('Contact system initialized');
 
+  // Email channel — optional, requires NYLAS_API_KEY, NYLAS_GRANT_ID, and NYLAS_SELF_EMAIL.
+  let nylasClient: NylasClient | undefined;
+  let emailAdapter: EmailAdapter | undefined;
+  if (config.nylasApiKey && config.nylasGrantId) {
+    nylasClient = new NylasClient(config.nylasApiKey, config.nylasGrantId, logger);
+
+    if (!config.nylasSelfEmail) {
+      logger.warn('NYLAS_SELF_EMAIL not set — email adapter disabled (required to filter self-sent messages)');
+    } else {
+      emailAdapter = new EmailAdapter({
+        bus,
+        logger,
+        nylasClient,
+        contactService,
+        pollingIntervalMs: config.nylasPollingIntervalMs,
+        selfEmail: config.nylasSelfEmail,
+      });
+      await emailAdapter.start();
+      logger.info('Email channel adapter started');
+    }
+  } else {
+    logger.warn('NYLAS_API_KEY/NYLAS_GRANT_ID not set — email channel disabled');
+  }
+
   // Skill registry — loads all skills from the skills/ directory.
   // Skills are the framework's extension mechanism; agents invoke them
   // via the LLM's tool-use API through the execution layer.
@@ -124,7 +150,8 @@ async function main(): Promise<void> {
   const agentRegistry = new AgentRegistry();
 
   // Execution layer — now with bus and agent registry for infrastructure skills.
-  const executionLayer = new ExecutionLayer(skillRegistry, logger, { bus, agentRegistry, contactService });
+  // nylasClient is passed through so email skills (email-send, email-reply) can use it.
+  const executionLayer = new ExecutionLayer(skillRegistry, logger, { bus, agentRegistry, contactService, nylasClient });
 
   // Load all agent configs from the agents/ directory.
   // Fail hard on errors — consistent with skill loading and DB connection checks.
@@ -239,6 +266,13 @@ async function main(): Promise<void> {
   // Graceful shutdown — stop accepting new input first, then close connections.
   const shutdown = async () => {
     logger.info('Shutting down...');
+    if (emailAdapter) {
+      try {
+        await emailAdapter.stop();
+      } catch (err) {
+        logger.error({ err }, 'Error stopping email adapter during shutdown');
+      }
+    }
     try {
       await httpAdapter.stop();
     } catch (err) {

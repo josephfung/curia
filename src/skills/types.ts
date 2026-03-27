@@ -51,6 +51,8 @@ export interface SkillContext {
   agentRegistry?: import('../agents/agent-registry.js').AgentRegistry;
   /** Contact service — only available to infrastructure skills */
   contactService?: import('../contacts/contact-service.js').ContactService;
+  /** Nylas email client — only available to infrastructure skills */
+  nylasClient?: import('../channels/email/nylas-client.js').NylasClient;
 }
 
 /**
