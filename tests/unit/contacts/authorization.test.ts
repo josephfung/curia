@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { AuthorizationService } from '../../../src/contacts/authorization.js';
-import type { AuthConfig, ContactStatus } from '../../../src/contacts/types.js';
+import type { AuthConfig } from '../../../src/contacts/types.js';
 
 const testConfig: AuthConfig = {
   roles: {
