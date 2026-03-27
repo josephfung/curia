@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import type { EventBus } from '../bus/bus.js';
 import type { InboundMessageEvent, AgentResponseEvent, AgentErrorEvent } from '../bus/events.js';
 import { createAgentTask, createOutboundMessage, createOutboundBlocked, createContactResolved, createContactUnknown, createMessageHeld } from '../bus/events.js';
@@ -313,7 +314,7 @@ export class Dispatcher {
         );
 
         const blockedEvent = createOutboundBlocked({
-          blockId: `block_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+          blockId: `block_${randomUUID()}`,
           conversationId: routing.conversationId,
           channelId: routing.channelId,
           content: event.payload.content,
