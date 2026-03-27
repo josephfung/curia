@@ -73,7 +73,7 @@ export interface ToolResult {
 export type LLMResponse =
   | { type: 'text'; content: string; usage: LLMUsage }
   | { type: 'tool_use'; toolCalls: ToolCall[]; content?: string; usage: LLMUsage }
-  | { type: 'error'; error: string; usage?: LLMUsage };
+  | { type: 'error'; error: import('../../errors/types.js').AgentError; usage?: LLMUsage };
 
 export interface LLMProvider {
   // Human-readable identifier used in logs and metrics (e.g. 'anthropic', 'openai').
