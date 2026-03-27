@@ -1,0 +1,34 @@
+# Permission registry with sensitivity levels.
+# Sensitivity maps to channel trust: high-sensitivity actions need high-trust channels.
+
+permissions:
+  view_financial_reports:
+    description: "Access quarterly reports, P&L, budgets"
+    sensitivity: high
+  view_board_materials:
+    description: "Access board decks, minutes, resolutions"
+    sensitivity: high
+  see_personal_calendar:
+    description: "View personal/non-work calendar events"
+    sensitivity: medium
+  book_travel:
+    description: "Book flights, hotels, and transportation"
+    sensitivity: medium
+  schedule_meetings:
+    description: "Schedule or reschedule meetings on CEO's calendar"
+    sensitivity: low
+  request_action_items:
+    description: "Request action items from meetings or tasks"
+    sensitivity: low
+  request_meeting_notes:
+    description: "Request notes or minutes from meetings"
+    sensitivity: low
+  send_on_behalf:
+    description: "Send messages or emails as the CEO"
+    sensitivity: high
+  access_internal_docs:
+    description: "Access internal company documents"
+    sensitivity: medium
+  manage_personal_appointments:
+    description: "Create, modify, or cancel personal appointments"
+    sensitivity: medium

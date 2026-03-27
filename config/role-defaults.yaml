@@ -1,0 +1,81 @@
+# Role-based permission defaults.
+# Each role defines which permissions are granted and denied by default.
+# Per-contact overrides (in contact_auth_overrides table) take precedence.
+# Roles are open-ended — the CEO can create new roles at any time.
+# Unknown roles fall back to the 'unknown' entry.
+
+roles:
+  ceo:
+    description: "Chief Executive Officer — full access"
+    default_permissions:
+      - "*"
+    default_deny: []
+
+  cfo:
+    description: "Chief Financial Officer"
+    default_permissions:
+      - view_financial_reports
+      - view_board_materials
+      - request_action_items
+      - schedule_meetings
+    default_deny:
+      - send_on_behalf
+      - see_personal_calendar
+
+  board_member:
+    description: "Board of Directors member"
+    default_permissions:
+      - view_board_materials
+      - request_meeting_notes
+    default_deny:
+      - view_financial_reports
+      - access_internal_docs
+
+  direct_report:
+    description: "Direct report to CEO"
+    default_permissions:
+      - schedule_meetings
+      - request_action_items
+    default_deny:
+      - view_board_materials
+      - view_financial_reports
+
+  advisor:
+    description: "External advisor (legal, financial, strategic)"
+    default_permissions:
+      - schedule_meetings
+    default_deny:
+      - access_internal_docs
+      - send_on_behalf
+
+  investor:
+    description: "Investor or board observer"
+    default_permissions:
+      - view_board_materials
+      - request_meeting_notes
+    default_deny:
+      - view_financial_reports
+      - access_internal_docs
+
+  spouse:
+    description: "Spouse or life partner"
+    default_permissions:
+      - see_personal_calendar
+      - book_travel
+      - manage_personal_appointments
+    default_deny:
+      - view_financial_reports
+      - access_internal_docs
+
+  family_member:
+    description: "Family member"
+    default_permissions:
+      - see_personal_calendar
+    default_deny:
+      - "*"
+
+  unknown:
+    description: "Fallback for contacts with no assigned role"
+    default_permissions: []
+    default_deny:
+      - "*"
