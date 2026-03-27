@@ -189,17 +189,17 @@ describe('ContactService', () => {
   describe('auth overrides', () => {
     it('grants a permission override', async () => {
       const contact = await service.createContact({ displayName: 'Dave', source: 'test' });
-      await service.grantPermission(contact.id, 'schedule_meeting', true);
+      await service.grantPermission(contact.id, 'schedule_meetings', true);
 
       const overrides = await service.getAuthOverrides(contact.id);
       expect(overrides).toHaveLength(1);
-      expect(overrides[0]).toEqual({ permission: 'schedule_meeting', granted: true });
+      expect(overrides[0]).toEqual({ permission: 'schedule_meetings', granted: true });
     });
 
     it('revokes a permission override', async () => {
       const contact = await service.createContact({ displayName: 'Eve', source: 'test' });
-      await service.grantPermission(contact.id, 'view_calendar', true);
-      await service.revokePermission(contact.id, 'view_calendar');
+      await service.grantPermission(contact.id, 'see_personal_calendar', true);
+      await service.revokePermission(contact.id, 'see_personal_calendar');
 
       const overrides = await service.getAuthOverrides(contact.id);
       expect(overrides).toHaveLength(0);
@@ -207,12 +207,12 @@ describe('ContactService', () => {
 
     it('upserts an override (grant then change to deny)', async () => {
       const contact = await service.createContact({ displayName: 'Frank', source: 'test' });
-      await service.grantPermission(contact.id, 'send_email', true);
-      await service.grantPermission(contact.id, 'send_email', false);
+      await service.grantPermission(contact.id, 'send_on_behalf', true);
+      await service.grantPermission(contact.id, 'send_on_behalf', false);
 
       const overrides = await service.getAuthOverrides(contact.id);
       expect(overrides).toHaveLength(1);
-      expect(overrides[0]).toEqual({ permission: 'send_email', granted: false });
+      expect(overrides[0]).toEqual({ permission: 'send_on_behalf', granted: false });
     });
 
     it('grantPermission throws for non-existent contact', async () => {
@@ -233,6 +233,7 @@ describe('ContactService', () => {
       await service.unlinkIdentity(identity.id);
 
       const result = await service.getContactWithIdentities(contact.id);
+      expect(result).toBeDefined();
       expect(result!.identities).toHaveLength(0);
     });
   });

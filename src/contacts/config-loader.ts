@@ -38,9 +38,9 @@ export function loadAuthConfig(configDir: string): AuthConfig {
   const roles: Record<string, RolePermissions> = {};
   for (const [roleName, entry] of Object.entries(rolesTyped.roles)) {
     roles[roleName] = {
-      description: entry.description,
-      defaultPermissions: entry.default_permissions,
-      defaultDeny: entry.default_deny,
+      description: entry.description ?? roleName,
+      defaultPermissions: entry.default_permissions ?? [],
+      defaultDeny: entry.default_deny ?? [],
     };
   }
 

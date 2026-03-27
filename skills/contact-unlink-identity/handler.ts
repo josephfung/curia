@@ -18,6 +18,16 @@ export class ContactUnlinkIdentityHandler implements SkillHandler {
     }
 
     try {
+      // Verify the identity belongs to this contact before unlinking
+      const contactData = await ctx.contactService.getContactWithIdentities(contact_id);
+      if (!contactData) {
+        return { success: false, error: `Contact not found: ${contact_id}` };
+      }
+      const ownsIdentity = contactData.identities.some(i => i.id === identity_id);
+      if (!ownsIdentity) {
+        return { success: false, error: `Identity ${identity_id} does not belong to contact ${contact_id}` };
+      }
+
       const removed = await ctx.contactService.unlinkIdentity(identity_id);
       if (!removed) {
         return { success: false, error: `Identity not found: ${identity_id}` };

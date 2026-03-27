@@ -124,6 +124,11 @@ export class AuthorizationService {
     // Carry through wildcard sentinels if role has them.
     // These are used by callers to quickly identify "allow all" or "deny all" roles
     // without having to enumerate every permission in the config.
+    //
+    // The wildcard '*' in allowed indicates the role has blanket permission.
+    // Individual permissions may still appear in trustBlocked if the channel
+    // trust is insufficient — callers should check trustBlocked even when
+    // allowed contains '*'.
     if (roleAllowsAll && !allowed.includes('*')) {
       allowed.unshift('*');
     }
