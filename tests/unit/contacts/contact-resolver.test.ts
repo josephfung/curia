@@ -19,7 +19,7 @@ describe('ContactResolver', () => {
     const validator = new MemoryValidator(store, embeddingService);
     entityMemory = new EntityMemory(store, validator, embeddingService);
     contactService = ContactService.createInMemory(entityMemory);
-    resolver = new ContactResolver(contactService, entityMemory, createLogger('error'));
+    resolver = new ContactResolver(contactService, entityMemory, undefined, createLogger('error'));
   });
 
   it('resolves CLI channel as primary user (CEO)', async () => {

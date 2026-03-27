@@ -64,8 +64,13 @@ export class AuthorizationService {
     }
 
     // Look up role defaults. Unknown roles (including null) fall back to 'unknown'.
+    // If neither the role nor 'unknown' exists in config, use an empty defaults object.
     const roleName = input.role ?? 'unknown';
-    const roleDefaults = this.config.roles[roleName] ?? this.config.roles.unknown;
+    const roleDefaults = this.config.roles[roleName] ?? this.config.roles.unknown ?? {
+      description: 'fallback',
+      defaultPermissions: [],
+      defaultDeny: ['*'],
+    };
 
     // Build override map for O(1) lookup
     const overrideMap = new Map<string, boolean>();

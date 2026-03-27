@@ -77,7 +77,7 @@ export async function createHarness(): Promise<CuriaHarness> {
   // Contact system — provides identity resolution and contact management.
   // Always initialized (contacts work even without entity memory / KG).
   const contactService = ContactService.createWithPostgres(pool, entityMemory, logger);
-  const contactResolver = new ContactResolver(contactService, entityMemory, logger);
+  const contactResolver = new ContactResolver(contactService, entityMemory, undefined, logger);
 
   // Skill registry — loads all skills from the skills/ directory.
   // Resolve relative to this file's location, up to project root, into skills/.

@@ -103,7 +103,22 @@ async function main(): Promise<void> {
   // Contact system — provides identity resolution and contact management.
   // Always initialized (contacts work even without entity memory / KG).
   const contactService = ContactService.createWithPostgres(pool, entityMemory, logger);
-  const contactResolver = new ContactResolver(contactService, entityMemory, logger);
+
+  // Authorization config — load role defaults, permissions, and channel trust.
+  // These YAML files define the deterministic permission model.
+  const { loadAuthConfig } = await import('./contacts/config-loader.js');
+  const { AuthorizationService } = await import('./contacts/authorization.js');
+  let authService: InstanceType<typeof AuthorizationService> | undefined;
+  try {
+    const configDir = path.resolve(import.meta.dirname, '../config');
+    const authConfig = loadAuthConfig(configDir);
+    authService = new AuthorizationService(authConfig);
+    logger.info('Authorization config loaded');
+  } catch (err) {
+    logger.warn({ err }, 'Failed to load authorization config — authorization checks disabled');
+  }
+
+  const contactResolver = new ContactResolver(contactService, entityMemory, authService, logger);
   logger.info('Contact system initialized');
 
   // Email channel — optional, requires NYLAS_API_KEY, NYLAS_GRANT_ID, and NYLAS_SELF_EMAIL.
