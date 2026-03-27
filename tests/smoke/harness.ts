@@ -99,7 +99,7 @@ export async function createHarness(): Promise<CuriaHarness> {
 
   // Execution layer — with bus and agent registry for infrastructure skills.
   // nylasClient passed through so email skills work in tests that exercise them.
-  const executionLayer = new ExecutionLayer(skillRegistry, logger, { bus, agentRegistry, contactService, nylasClient });
+  const executionLayer = new ExecutionLayer(skillRegistry, logger, { bus, agentRegistry, contactService, nylasClient, heldMessages: undefined });
 
   // Load all agent configs from the agents/ directory.
   const agentsDir = path.resolve(import.meta.dirname, '../../agents');
@@ -154,7 +154,7 @@ export async function createHarness(): Promise<CuriaHarness> {
 
   // Dispatcher — subscribes to inbound.message + agent.response.
   // Registered after agents so agent.task already has handlers.
-  const dispatcher = new Dispatcher({ bus, logger, contactResolver });
+  const dispatcher = new Dispatcher({ bus, logger, contactResolver, heldMessages: undefined, channelPolicies: undefined });
   dispatcher.register();
 
   // -- No HTTP adapter, no CLI adapter, no SIGTERM handler --

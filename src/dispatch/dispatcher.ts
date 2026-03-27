@@ -1,14 +1,17 @@
 import type { EventBus } from '../bus/bus.js';
 import type { InboundMessageEvent, AgentResponseEvent } from '../bus/events.js';
-import { createAgentTask, createOutboundMessage, createContactResolved, createContactUnknown } from '../bus/events.js';
+import { createAgentTask, createOutboundMessage, createContactResolved, createContactUnknown, createMessageHeld } from '../bus/events.js';
 import type { Logger } from '../logger.js';
 import type { ContactResolver } from '../contacts/contact-resolver.js';
-import type { InboundSenderContext } from '../contacts/types.js';
+import type { HeldMessageService } from '../contacts/held-messages.js';
+import type { InboundSenderContext, ChannelPolicyConfig } from '../contacts/types.js';
 
 export interface DispatcherConfig {
   bus: EventBus;
   logger: Logger;
   contactResolver?: ContactResolver;
+  heldMessages?: HeldMessageService;
+  channelPolicies?: Record<string, ChannelPolicyConfig>;
 }
 
 /**
@@ -25,6 +28,8 @@ export class Dispatcher {
   private bus: EventBus;
   private logger: Logger;
   private contactResolver?: ContactResolver;
+  private heldMessages?: HeldMessageService;
+  private channelPolicies?: Record<string, ChannelPolicyConfig>;
   /**
    * Maps agent.task event ID → channel routing info.
    * When the agent publishes agent.response (with parentEventId pointing to the task),
@@ -39,6 +44,8 @@ export class Dispatcher {
     this.bus = config.bus;
     this.logger = config.logger;
     this.contactResolver = config.contactResolver;
+    this.heldMessages = config.heldMessages;
+    this.channelPolicies = config.channelPolicies;
   }
 
   register(): void {
@@ -88,11 +95,62 @@ export class Dispatcher {
             }));
           }
         } else {
+          // Unknown sender — publish audit event and check channel policy
           await this.bus.publish('dispatch', createContactUnknown({
             channel: senderContext.channel,
             senderId: senderContext.senderId,
             parentEventId: event.id,
           }));
+
+          const policy = this.channelPolicies?.[payload.channelId];
+
+          if (policy?.unknownSender === 'hold_and_notify' && this.heldMessages) {
+            try {
+              // Hold the message instead of routing to coordinator
+              const subject = (payload.metadata as Record<string, unknown> | undefined)?.subject as string | null ?? null;
+              const heldId = await this.heldMessages.hold({
+                channel: payload.channelId,
+                senderId: payload.senderId,
+                conversationId: payload.conversationId,
+                content: payload.content,
+                subject,
+                metadata: payload.metadata ?? {},
+              });
+
+              // Publish held event so CLI can notify and audit can log
+              await this.bus.publish('dispatch', createMessageHeld({
+                heldMessageId: heldId,
+                channel: payload.channelId,
+                senderId: payload.senderId,
+                subject,
+                parentEventId: event.id,
+              }));
+
+              this.logger.info(
+                { heldMessageId: heldId, channel: payload.channelId, senderId: payload.senderId },
+                'Message held from unknown sender',
+              );
+            } catch (holdErr) {
+              // Fail closed: if we can't hold the message, drop it rather than
+              // routing an unknown sender's message to the coordinator.
+              // This is a security boundary — prefer message loss over policy bypass.
+              this.logger.error(
+                { err: holdErr, channel: payload.channelId, senderId: payload.senderId },
+                'Failed to hold unknown sender message — dropping (fail-closed)',
+              );
+            }
+            return; // Always return — whether hold succeeded or failed
+          }
+
+          if (policy?.unknownSender === 'reject') {
+            this.logger.info(
+              { channel: payload.channelId, senderId: payload.senderId },
+              'Rejected message from unknown sender',
+            );
+            return; // Silently drop
+          }
+
+          // 'allow' policy or no policy configured — fall through to normal routing
         }
       } catch (err) {
         // Resolution failure must not drop the message — log and continue without

@@ -197,7 +197,7 @@ When an inbound message can't be matched to any contact, the system's response d
 | **Signal** | `high` | Hold silently, notify CEO |
 | **Telegram** | `medium` | Hold silently, notify CEO |
 | **HTTP API** | `medium` | Reject with 401 (unknown token) |
-| **Email** | `low` | Auto-reply: "Received, forwarding to [CEO name]" |
+| **Email** | `low` | Hold silently, notify CEO |
 
 Policy is configurable per channel in `config/default.yaml`:
 
@@ -218,6 +218,11 @@ Held messages are queued in working memory with a `held_for_identification` flag
 If the CEO identifies the sender, the held message is re-processed with full contact context. If the CEO says "I don't know them," the held message is discarded and the sender remains unresolved.
 
 **Rate limiting:** A maximum of 20 held messages per channel are queued at any time (configurable). When the cap is reached, the oldest held message is discarded. This prevents a flood of unknown-sender messages from consuming unbounded working memory.
+
+> **Open question:** Held message expiration is deferred. Messages are currently held
+> indefinitely until the CEO acts. A future discard/expiration process will need
+> judgment and oversight — not a simple TTL timer. The CEO may want to batch-review
+> old held messages, or have Nathan summarize and triage them.
 
 ---
 

@@ -7,7 +7,7 @@
 import { readFileSync } from 'node:fs';
 import * as path from 'node:path';
 import yaml from 'js-yaml';
-import type { AuthConfig, RolePermissions, PermissionDef, TrustLevel } from './types.js';
+import type { AuthConfig, RolePermissions, PermissionDef, TrustLevel, UnknownSenderPolicy, ChannelPolicyConfig } from './types.js';
 
 interface RawRoleEntry {
   description: string;
@@ -72,15 +72,36 @@ export function loadAuthConfig(configDir: string): AuthConfig {
   if (!trustRaw || typeof trustRaw !== 'object' || !('channels' in trustRaw)) {
     throw new Error("Missing or invalid 'channels' section in channel-trust.yaml");
   }
-  const trustTyped = trustRaw as { channels: Record<string, string> };
+  // Accept either flat strings (legacy) or objects with trust + unknown_sender fields
+  const trustTyped = trustRaw as { channels: Record<string, string | { trust: string; unknown_sender: string }> };
 
   const channelTrust: Record<string, TrustLevel> = {};
-  for (const [channel, level] of Object.entries(trustTyped.channels)) {
-    if (!['high', 'medium', 'low'].includes(level)) {
-      throw new Error(`Invalid trust level '${level}' for channel '${channel}'`);
+  const channelPolicies: Record<string, ChannelPolicyConfig> = {};
+
+  for (const [channel, config] of Object.entries(trustTyped.channels)) {
+    if (typeof config === 'string') {
+      // Backwards compat: plain string is just trust level
+      const trust = config as TrustLevel;
+      if (!['high', 'medium', 'low'].includes(trust)) {
+        throw new Error(`Invalid trust level '${trust}' for channel '${channel}'`);
+      }
+      channelTrust[channel] = trust;
+      // Default to 'allow' for legacy configs — silently holding messages would be
+      // a surprising behavior change for deployments using the old flat-string format.
+      channelPolicies[channel] = { trust, unknownSender: 'allow' };
+    } else {
+      const trust = (config as { trust: string }).trust as TrustLevel;
+      if (!['high', 'medium', 'low'].includes(trust)) {
+        throw new Error(`Invalid trust level '${trust}' for channel '${channel}'`);
+      }
+      const unknownSender = (config as { unknown_sender: string }).unknown_sender as UnknownSenderPolicy;
+      if (!['allow', 'hold_and_notify', 'reject'].includes(unknownSender)) {
+        throw new Error(`Invalid unknown_sender policy '${unknownSender}' for channel '${channel}'`);
+      }
+      channelTrust[channel] = trust;
+      channelPolicies[channel] = { trust, unknownSender };
     }
-    channelTrust[channel] = level as TrustLevel;
   }
 
-  return { roles, permissions, channelTrust };
+  return { roles, permissions, channelTrust, channelPolicies };
 }

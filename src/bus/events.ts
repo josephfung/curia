@@ -84,6 +84,13 @@ interface ContactUnknownPayload {
   channelTrustLevel?: 'low' | 'medium' | 'high';
 }
 
+interface MessageHeldPayload {
+  heldMessageId: string;
+  channel: string;
+  senderId: string;
+  subject: string | null;
+}
+
 // Memory event payloads — used for the knowledge graph audit trail (Phase 6).
 // `source` is a structured provenance string (e.g. "agent:coordinator/task:task-1/channel:cli").
 
@@ -160,6 +167,12 @@ export interface ContactUnknownEvent extends BaseEvent {
   payload: ContactUnknownPayload;
 }
 
+export interface MessageHeldEvent extends BaseEvent {
+  type: 'message.held';
+  sourceLayer: 'dispatch';
+  payload: MessageHeldPayload;
+}
+
 // Memory events — emitted by the agent layer whenever the knowledge graph is written to or queried.
 // These form the audit trail for memory operations (Phase 6).
 
@@ -185,7 +198,8 @@ export type BusEvent =
   | MemoryStoreEvent      // Phase 6: knowledge graph write audit
   | MemoryQueryEvent      // Phase 6: knowledge graph read audit
   | ContactResolvedEvent  // Contacts Phase A: sender matched to a known contact
-  | ContactUnknownEvent;  // Contacts Phase A: sender has no contact record
+  | ContactUnknownEvent   // Contacts Phase A: sender has no contact record
+  | MessageHeldEvent;     // Unknown sender policy: message held for CEO review
 
 // Convenience alias for use in handler maps / switch statements.
 export type EventType = BusEvent['type'];
@@ -336,6 +350,21 @@ export function createContactUnknown(
     id: randomUUID(),
     timestamp: new Date(),
     type: 'contact.unknown',
+    sourceLayer: 'dispatch',
+    payload: rest,
+    parentEventId,
+  };
+}
+
+export function createMessageHeld(
+  // parentEventId is required — held-message events must trace back to the inbound event.
+  payload: MessageHeldPayload & { parentEventId: string },
+): MessageHeldEvent {
+  const { parentEventId, ...rest } = payload;
+  return {
+    id: randomUUID(),
+    timestamp: new Date(),
+    type: 'message.held',
     sourceLayer: 'dispatch',
     payload: rest,
     parentEventId,
