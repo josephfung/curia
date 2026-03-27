@@ -32,6 +32,17 @@ export class HeldMessagesProcessHandler implements SkillHandler {
       return { success: false, error: 'Required services not available. Is infrastructure: true set?' };
     }
 
+    // Validate input lengths to prevent abuse / storage overflow
+    if (contact_name && contact_name.length > 200) {
+      return { success: false, error: 'contact_name must be 200 characters or fewer' };
+    }
+    if (contact_role && contact_role.length > 100) {
+      return { success: false, error: 'contact_role must be 100 characters or fewer' };
+    }
+    if (existing_contact_id && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(existing_contact_id)) {
+      return { success: false, error: 'existing_contact_id must be a valid UUID' };
+    }
+
     try {
       const heldMsg = await ctx.heldMessages.getById(held_message_id);
       if (!heldMsg) {
@@ -97,14 +108,12 @@ export class HeldMessagesProcessHandler implements SkillHandler {
         contactId = contact.id;
       }
 
-      // Mark as processed
-      await ctx.heldMessages.markProcessed(held_message_id, contactId);
-
       // Replay the held message through normal processing.
       // Re-publish as inbound.message so it goes through the full pipeline
       // (contact resolution -> authorization -> coordinator) with the now-known sender.
-      // Published as 'dispatch' layer because infrastructure skills are trusted
-      // to impersonate layers (same pattern as the delegate skill).
+      // Published as 'channel' layer because inbound.message can only be published
+      // by the channel layer (per bus permissions). A replayed message is re-entering
+      // the system as if from a channel.
       const replayEvent = createInboundMessage({
         conversationId: heldMsg.conversationId,
         channelId: heldMsg.channel,
@@ -112,7 +121,11 @@ export class HeldMessagesProcessHandler implements SkillHandler {
         content: heldMsg.content,
         metadata: heldMsg.metadata,
       });
-      await ctx.bus.publish('dispatch', replayEvent);
+      await ctx.bus.publish('channel', replayEvent);
+
+      // Only mark as processed after successful replay — if replay fails, the
+      // message stays pending so it can be retried rather than lost forever.
+      await ctx.heldMessages.markProcessed(held_message_id, contactId);
 
       ctx.log.info(
         { heldMessageId: held_message_id, contactId, action: 'identify' },

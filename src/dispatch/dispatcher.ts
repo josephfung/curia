@@ -105,31 +105,41 @@ export class Dispatcher {
           const policy = this.channelPolicies?.[payload.channelId];
 
           if (policy?.unknownSender === 'hold_and_notify' && this.heldMessages) {
-            // Hold the message instead of routing to coordinator
-            const subject = (payload.metadata as Record<string, unknown> | undefined)?.subject as string | null ?? null;
-            const heldId = await this.heldMessages.hold({
-              channel: payload.channelId,
-              senderId: payload.senderId,
-              conversationId: payload.conversationId,
-              content: payload.content,
-              subject,
-              metadata: payload.metadata ?? {},
-            });
+            try {
+              // Hold the message instead of routing to coordinator
+              const subject = (payload.metadata as Record<string, unknown> | undefined)?.subject as string | null ?? null;
+              const heldId = await this.heldMessages.hold({
+                channel: payload.channelId,
+                senderId: payload.senderId,
+                conversationId: payload.conversationId,
+                content: payload.content,
+                subject,
+                metadata: payload.metadata ?? {},
+              });
 
-            // Publish held event so CLI can notify and audit can log
-            await this.bus.publish('dispatch', createMessageHeld({
-              heldMessageId: heldId,
-              channel: payload.channelId,
-              senderId: payload.senderId,
-              subject,
-              parentEventId: event.id,
-            }));
+              // Publish held event so CLI can notify and audit can log
+              await this.bus.publish('dispatch', createMessageHeld({
+                heldMessageId: heldId,
+                channel: payload.channelId,
+                senderId: payload.senderId,
+                subject,
+                parentEventId: event.id,
+              }));
 
-            this.logger.info(
-              { heldMessageId: heldId, channel: payload.channelId, senderId: payload.senderId },
-              'Message held from unknown sender',
-            );
-            return; // Do NOT route to coordinator
+              this.logger.info(
+                { heldMessageId: heldId, channel: payload.channelId, senderId: payload.senderId },
+                'Message held from unknown sender',
+              );
+            } catch (holdErr) {
+              // Fail closed: if we can't hold the message, drop it rather than
+              // routing an unknown sender's message to the coordinator.
+              // This is a security boundary — prefer message loss over policy bypass.
+              this.logger.error(
+                { err: holdErr, channel: payload.channelId, senderId: payload.senderId },
+                'Failed to hold unknown sender message — dropping (fail-closed)',
+              );
+            }
+            return; // Always return — whether hold succeeded or failed
           }
 
           if (policy?.unknownSender === 'reject') {

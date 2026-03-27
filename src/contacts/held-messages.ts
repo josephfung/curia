@@ -42,10 +42,12 @@ interface HeldMessageBackend {
   listPending(channel?: string): Promise<HeldMessage[]>;
   /** Retrieve a message by its ID, or null if not found. */
   getById(id: string): Promise<HeldMessage | null>;
-  /** Transition a message to 'processed' and record the resolved contact. */
-  markProcessed(id: string, resolvedContactId: string, processedAt: Date): Promise<void>;
-  /** Transition a message to 'discarded'. */
-  discard(id: string): Promise<void>;
+  /** Transition a pending message to 'processed' and record the resolved contact.
+   *  Returns true if the update succeeded (message was pending), false otherwise. */
+  markProcessed(id: string, resolvedContactId: string, processedAt: Date): Promise<boolean>;
+  /** Transition a pending message to 'discarded'.
+   *  Returns true if the update succeeded (message was pending), false otherwise. */
+  discard(id: string): Promise<boolean>;
 }
 
 /**
@@ -130,16 +132,22 @@ export class HeldMessageService {
   /**
    * Mark a held message as processed after the CEO has identified the sender.
    * Records the resolved contact ID and timestamps the action.
+   *
+   * Only transitions messages with status 'pending' — returns false if the
+   * message was already processed/discarded (defense-in-depth against races).
    */
-  async markProcessed(id: string, resolvedContactId: string): Promise<void> {
-    await this.backend.markProcessed(id, resolvedContactId, new Date());
+  async markProcessed(id: string, resolvedContactId: string): Promise<boolean> {
+    return this.backend.markProcessed(id, resolvedContactId, new Date());
   }
 
   /**
    * Discard a held message (e.g. CEO determined it is spam or irrelevant).
+   *
+   * Only transitions messages with status 'pending' — returns false if the
+   * message was already processed/discarded.
    */
-  async discard(id: string): Promise<void> {
-    await this.backend.discard(id);
+  async discard(id: string): Promise<boolean> {
+    return this.backend.discard(id);
   }
 }
 
@@ -240,22 +248,27 @@ class PostgresHeldMessageBackend implements HeldMessageBackend {
     return this.rowToMessage(row);
   }
 
-  async markProcessed(id: string, resolvedContactId: string, processedAt: Date): Promise<void> {
+  async markProcessed(id: string, resolvedContactId: string, processedAt: Date): Promise<boolean> {
     this.logger.debug({ messageId: id, resolvedContactId }, 'held_messages: marking processed');
-    await this.pool.query(
+    // Atomic status guard: only transition pending → processed.
+    // Prevents double-processing if two requests race on the same message.
+    const result = await this.pool.query(
       `UPDATE held_messages
        SET status = 'processed', resolved_contact_id = $2, processed_at = $3
-       WHERE id = $1`,
+       WHERE id = $1 AND status = 'pending'`,
       [id, resolvedContactId, processedAt],
     );
+    return (result.rowCount ?? 0) > 0;
   }
 
-  async discard(id: string): Promise<void> {
+  async discard(id: string): Promise<boolean> {
     this.logger.debug({ messageId: id }, 'held_messages: discarding');
-    await this.pool.query(
-      `UPDATE held_messages SET status = 'discarded' WHERE id = $1`,
+    // Atomic status guard: only transition pending → discarded.
+    const result = await this.pool.query(
+      `UPDATE held_messages SET status = 'discarded' WHERE id = $1 AND status = 'pending'`,
       [id],
     );
+    return (result.rowCount ?? 0) > 0;
   }
 
   // -- Row mapping --
@@ -352,17 +365,23 @@ class InMemoryHeldMessageBackend implements HeldMessageBackend {
     return this.messages.get(id) ?? null;
   }
 
-  async markProcessed(id: string, resolvedContactId: string, processedAt: Date): Promise<void> {
+  async markProcessed(id: string, resolvedContactId: string, processedAt: Date): Promise<boolean> {
     const msg = this.messages.get(id);
-    if (msg) {
+    // Status guard: only transition pending → processed (matches Postgres backend behavior)
+    if (msg && msg.status === 'pending') {
       this.messages.set(id, { ...msg, status: 'processed', resolvedContactId, processedAt });
+      return true;
     }
+    return false;
   }
 
-  async discard(id: string): Promise<void> {
+  async discard(id: string): Promise<boolean> {
     const msg = this.messages.get(id);
-    if (msg) {
+    // Status guard: only transition pending → discarded (matches Postgres backend behavior)
+    if (msg && msg.status === 'pending') {
       this.messages.set(id, { ...msg, status: 'discarded' });
+      return true;
     }
+    return false;
   }
 }
