@@ -20,14 +20,15 @@ skills/
 
 ```json
 {
-  "name": "email-parser",
-  "description": "Parse emails from IMAP into structured data",
+  "name": "email-send",
+  "description": "Send an email via the Nylas API",
   "version": "1.0.0",
-  "sensitivity": "normal",
-  "inputs": { "source": "string", "filter": "object?" },
-  "outputs": { "emails": "ParsedEmail[]" },
-  "permissions": ["network:imap", "memory:read"],
-  "secrets": ["email_imap_password"],
+  "sensitivity": "elevated",
+  "infrastructure": true,
+  "inputs": { "to": "string", "subject": "string", "body": "string", "cc": "string?" },
+  "outputs": { "messageId": "string", "threadId": "string" },
+  "permissions": [],
+  "secrets": [],
   "timeout": 30000
 }
 ```
@@ -142,7 +143,7 @@ All skill results are sanitized before being included in the agent's LLM context
 
 Skills access secrets via `ctx.secret("name")`:
 
-- **Launch implementation:** Environment variables behind a scoped accessor. Secret names map to env var names (e.g., `ctx.secret("email_imap_password")` reads `EMAIL_IMAP_PASSWORD` from the environment).
+- **Launch implementation:** Environment variables behind a scoped accessor. Secret names map to env var names (e.g., `ctx.secret("telegram_bot_token")` reads `TELEGRAM_BOT_TOKEN` from the environment). Note: Email skills use infrastructure access via `ctx.nylasClient` rather than the secret accessor — the Nylas API key is configured at bootstrap, not per-skill.
 - The execution layer validates that the calling skill's manifest declares the requested secret in its `secrets` array
 - Agents/LLMs never see secret values — only skills access them internally
 - All secret access is audit-logged (which skill, when, from which task) but values are never logged

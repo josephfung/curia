@@ -41,7 +41,7 @@ When an error occurs during agent execution:
    <task_error>
      <tool>email-parser</tool>
      <error_type>TIMEOUT</error_type>
-     <message>IMAP connection timed out after 30s</message>
+     <message>Nylas API request timed out after 30s</message>
      <attempt>2 of 3</attempt>
      <suggestion>Consider using a different mailbox or retrying later</suggestion>
    </task_error>

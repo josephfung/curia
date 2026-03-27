@@ -54,12 +54,14 @@ interface OutboundMessage {
 ### CLI
 Interactive terminal for local dev and testing. Reads from stdin, writes to stdout. Simplest adapter — useful for testing agent logic without external services.
 
-### Email (IMAP + SMTP)
-- **Inbound:** Polls IMAP mailbox at configurable interval (default: 60s)
-- **Outbound:** Sends via SMTP
-- **Conversation ID:** derived from email thread (In-Reply-To / References headers)
+### Email (via Nylas API)
+- **Inbound:** Polls Nylas Messages API at configurable interval (default: 30s)
+- **Outbound:** Sends via Nylas Send API
+- **Conversation ID:** derived from Nylas thread ID (`email:<threadId>`)
+- **Participant extraction:** From/To/CC addresses are extracted and auto-create contacts
 - **Attachments:** parsed and passed through as `Attachment[]`
-- Secrets: `email_imap_host`, `email_imap_password`, `email_smtp_host`, `email_smtp_password`
+- Secrets: `NYLAS_API_KEY`, `NYLAS_GRANT_ID`, `NYLAS_SELF_EMAIL`
+- Nylas abstracts away provider differences (Gmail, Outlook, IMAP) and handles OAuth
 
 ### Signal (via signal-cli)
 - Uses signal-cli in JSON-RPC mode as a subprocess
@@ -96,7 +98,7 @@ No core code changes needed. The adapter registers with the bus as `layer: "chan
 
 - Adapters run with `layer: "channel"` bus permissions — they **cannot** publish agent/execution events
 - A compromised adapter can spam `inbound.message` but cannot invoke skills, access memory, or execute tasks directly
-- Each adapter handles its own platform authentication (bot tokens, IMAP credentials) via `ctx.secret()`
+- Each adapter handles its own platform authentication (bot tokens, Nylas API keys) via `ctx.secret()` or environment variables
 - Rate limiting is enforced at the dispatch layer, not per-adapter (centralized policy)
 
 ### Trust Levels
