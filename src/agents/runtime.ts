@@ -25,7 +25,9 @@ export interface AgentConfig {
   pinnedSkills?: string[];
   /** Pre-built tool definitions for the LLM (from SkillRegistry.toToolDefinitions). */
   skillToolDefs?: ToolDefinition[];
-  /** Error budget config — turn and consecutive error limits per task. */
+  /** Error budget config — turn and consecutive error limits per task.
+   * maxTurns is checked at the start of each tool-use iteration, so
+   * the effective number of tool-calling rounds is maxTurns - 1. */
   errorBudget?: {
     maxTurns: number;
     maxConsecutiveErrors: number;
@@ -266,8 +268,8 @@ export class AgentRuntime {
             toolCall.name,
             agentErr.type,
             agentErr.message,
-            budget.turnsUsed,
-            budget.maxTurns,
+            budget.consecutiveErrors,
+            budget.maxConsecutiveErrors,
           );
           toolResultBlocks.push({
             type: 'tool_result',
@@ -362,15 +364,21 @@ export class AgentRuntime {
       return null;
     }
 
-    // Retryable error — attempt backoff retries
+    // Retryable error — attempt backoff retries.
+    // Track the latest error so we publish the most recent failure, not the first.
     logger.warn({ agentId, errorType: agentErr.type }, 'Retryable LLM error, starting retry sequence');
+    let latestErr = agentErr;
 
     for (const backoffMs of RETRY_BACKOFF_MS) {
       // Increment budget counters for the failed attempt.
-      // Note: AUTH_FAILURE is non-retryable and bails above, so only
-      // transient errors (RATE_LIMIT, TIMEOUT, PROVIDER_ERROR) reach here.
       budget.consecutiveErrors++;
       budget.turnsUsed++;
+
+      // Check budget before waiting — if already exceeded, no point retrying
+      if (budget.consecutiveErrors >= budget.maxConsecutiveErrors) {
+        await this.handleBudgetExceeded(budget, taskEvent, 'maxConsecutiveErrors');
+        return null;
+      }
 
       await new Promise(resolve => setTimeout(resolve, backoffMs));
 
@@ -381,15 +389,25 @@ export class AgentRuntime {
         return retryResponse;
       }
 
+      latestErr = retryResponse.error;
+
+      // If the retry returned a non-retryable error, stop retrying immediately
+      if (!latestErr.retryable) {
+        logger.error({ agentId, errorType: latestErr.type }, 'Retry returned non-retryable error');
+        await this.publishAgentError(latestErr, taskEvent);
+        await this.sendErrorResponse(taskEvent);
+        return null;
+      }
+
       logger.warn(
-        { agentId, backoffMs, errorType: retryResponse.error.type },
+        { agentId, backoffMs, errorType: latestErr.type },
         'LLM retry failed',
       );
     }
 
-    // All retries exhausted
+    // All retries exhausted — publish the most recent error
     logger.error({ agentId, retries: RETRY_BACKOFF_MS.length }, 'All LLM retries exhausted');
-    await this.publishAgentError(agentErr, taskEvent);
+    await this.publishAgentError(latestErr, taskEvent);
     await this.sendErrorResponse(taskEvent);
     return null;
   }
