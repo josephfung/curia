@@ -18,7 +18,10 @@ export class ContactUnlinkIdentityHandler implements SkillHandler {
     }
 
     try {
-      await ctx.contactService.unlinkIdentity(identity_id);
+      const removed = await ctx.contactService.unlinkIdentity(identity_id);
+      if (!removed) {
+        return { success: false, error: `Identity not found: ${identity_id}` };
+      }
       ctx.log.info({ contactId: contact_id, identityId: identity_id }, 'Channel identity unlinked');
       return { success: true, data: { removed: true } };
     } catch (err) {

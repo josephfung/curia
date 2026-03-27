@@ -74,16 +74,29 @@ export class ContactResolver {
       }
     }
 
-    // Evaluate authorization if auth service is available
+    // Evaluate authorization if auth service is available.
+    // Isolated in its own try/catch: a DB failure here must not lose the identity
+    // resolution above. The coordinator still sees who the sender is — just without
+    // permission context (authorization=null).
     let authorization: AuthorizationResult | null = null;
-    if (this.authService && resolved.status) {
-      const overrides = await this.contactService.getAuthOverrides(resolved.contactId);
-      authorization = this.authService.evaluate({
-        role: resolved.role,
-        status: resolved.status,
-        channel,
-        overrides,
-      });
+    if (this.authService) {
+      try {
+        const overrides = await this.contactService.getAuthOverrides(resolved.contactId);
+        authorization = this.authService.evaluate({
+          role: resolved.role,
+          status: resolved.status ?? 'confirmed',
+          channel,
+          overrides,
+        });
+      } catch (err) {
+        // Authorization eval failure should not lose identity resolution.
+        // Log and continue with authorization=null — the coordinator still sees
+        // who the sender is, just without permission context.
+        this.logger.error(
+          { err, contactId: resolved.contactId },
+          'Authorization evaluation failed — proceeding without auth context',
+        );
+      }
     }
 
     this.logger.info(

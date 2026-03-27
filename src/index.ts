@@ -41,6 +41,8 @@ import { ContactService } from './contacts/contact-service.js';
 import { ContactResolver } from './contacts/contact-resolver.js';
 import { NylasClient } from './channels/email/nylas-client.js';
 import { EmailAdapter } from './channels/email/email-adapter.js';
+import { loadAuthConfig } from './contacts/config-loader.js';
+import { AuthorizationService } from './contacts/authorization.js';
 
 async function main(): Promise<void> {
   // 1. Config & logging — no dependencies, must come first.
@@ -106,16 +108,17 @@ async function main(): Promise<void> {
 
   // Authorization config — load role defaults, permissions, and channel trust.
   // These YAML files define the deterministic permission model.
-  const { loadAuthConfig } = await import('./contacts/config-loader.js');
-  const { AuthorizationService } = await import('./contacts/authorization.js');
-  let authService: InstanceType<typeof AuthorizationService> | undefined;
+  // Fatal on failure: authorization is a security boundary. Silent degradation
+  // would mean unreviewed senders get the wrong permissions. Fail loudly instead.
+  let authService: AuthorizationService | undefined;
   try {
     const configDir = path.resolve(import.meta.dirname, '../config');
     const authConfig = loadAuthConfig(configDir);
     authService = new AuthorizationService(authConfig);
     logger.info('Authorization config loaded');
   } catch (err) {
-    logger.warn({ err }, 'Failed to load authorization config — authorization checks disabled');
+    logger.fatal({ err }, 'Failed to load authorization config');
+    process.exit(1);
   }
 
   const contactResolver = new ContactResolver(contactService, entityMemory, authService, logger);

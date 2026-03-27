@@ -17,6 +17,15 @@ export class ContactGrantPermissionHandler implements SkillHandler {
     if (typeof granted !== 'boolean') {
       return { success: false, error: 'Missing required input: granted (boolean)' };
     }
+    // Validate permission name format. Config-aware validation (checking against known
+    // permission names) is deferred until the auth config is wired into ContactService.
+    // @TODO: validate permission against authConfig.permissions when that's available.
+    if (permission.length > 100) {
+      return { success: false, error: 'Permission name must be 100 characters or fewer' };
+    }
+    if (!/^[a-z][a-z0-9_]*$/.test(permission)) {
+      return { success: false, error: 'Permission name must be lowercase alphanumeric with underscores (e.g., view_financial_reports)' };
+    }
     if (!ctx.contactService) {
       return { success: false, error: 'Contact service not available. Is infrastructure: true set?' };
     }

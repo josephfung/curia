@@ -36,10 +36,10 @@ interface ContactServiceBackend {
   createIdentity(identity: ChannelIdentity): Promise<void>;
   getIdentitiesForContact(contactId: string): Promise<ChannelIdentity[]>;
   resolveByChannelIdentity(channel: string, channelIdentifier: string): Promise<ResolvedSender | null>;
-  unlinkIdentity(identityId: string): Promise<void>;
+  unlinkIdentity(identityId: string): Promise<boolean>;
   getAuthOverrides(contactId: string): Promise<Array<{ permission: string; granted: boolean }>>;
   createAuthOverride(override: AuthOverride): Promise<void>;
-  revokeAuthOverride(contactId: string, permission: string): Promise<void>;
+  revokeAuthOverride(contactId: string, permission: string): Promise<boolean>;
 }
 
 // -- Auto-verification sources --
@@ -253,9 +253,9 @@ export class ContactService {
     return updated;
   }
 
-  /** Remove a channel identity by its ID. */
-  async unlinkIdentity(identityId: string): Promise<void> {
-    await this.backend.unlinkIdentity(identityId);
+  /** Remove a channel identity by its ID. Returns true if found and removed, false if not found. */
+  async unlinkIdentity(identityId: string): Promise<boolean> {
+    return this.backend.unlinkIdentity(identityId);
   }
 
   /** Get active (non-revoked) auth overrides for a contact. */
@@ -287,9 +287,9 @@ export class ContactService {
     await this.backend.createAuthOverride(override);
   }
 
-  /** Soft-revoke an auth override for a specific contact+permission. */
-  async revokePermission(contactId: string, permission: string): Promise<void> {
-    await this.backend.revokeAuthOverride(contactId, permission);
+  /** Soft-revoke an auth override for a specific contact+permission. Returns true if an active override was found and revoked, false if nothing matched. */
+  async revokePermission(contactId: string, permission: string): Promise<boolean> {
+    return this.backend.revokeAuthOverride(contactId, permission);
   }
 }
 
@@ -479,12 +479,10 @@ class PostgresContactBackend implements ContactServiceBackend {
     };
   }
 
-  async unlinkIdentity(identityId: string): Promise<void> {
-    this.logger.debug({ identityId }, 'contacts: unlinking channel identity');
-    await this.pool.query(
-      `DELETE FROM contact_channel_identities WHERE id = $1`,
-      [identityId],
-    );
+  async unlinkIdentity(identityId: string): Promise<boolean> {
+    this.logger.debug({ identityId }, 'Unlinking channel identity');
+    const result = await this.pool.query('DELETE FROM contact_channel_identities WHERE id = $1', [identityId]);
+    return (result.rowCount ?? 0) > 0;
   }
 
   async getAuthOverrides(contactId: string): Promise<Array<{ permission: string; granted: boolean }>> {
@@ -522,13 +520,14 @@ class PostgresContactBackend implements ContactServiceBackend {
     );
   }
 
-  async revokeAuthOverride(contactId: string, permission: string): Promise<void> {
-    this.logger.debug({ contactId, permission }, 'contacts: revoking auth override');
-    await this.pool.query(
-      `UPDATE contact_auth_overrides SET revoked_at = NOW()
+  async revokeAuthOverride(contactId: string, permission: string): Promise<boolean> {
+    this.logger.debug({ contactId, permission }, 'Revoking auth override');
+    const result = await this.pool.query(
+      `UPDATE contact_auth_overrides SET revoked_at = now()
        WHERE contact_id = $1 AND permission = $2 AND revoked_at IS NULL`,
       [contactId, permission],
     );
+    return (result.rowCount ?? 0) > 0;
   }
 
   // -- Row mapping helpers --
@@ -675,8 +674,8 @@ class InMemoryContactBackend implements ContactServiceBackend {
     return null;
   }
 
-  async unlinkIdentity(identityId: string): Promise<void> {
-    this.identities.delete(identityId);
+  async unlinkIdentity(identityId: string): Promise<boolean> {
+    return this.identities.delete(identityId);
   }
 
   async getAuthOverrides(contactId: string): Promise<Array<{ permission: string; granted: boolean }>> {
@@ -704,12 +703,15 @@ class InMemoryContactBackend implements ContactServiceBackend {
     this.overrides.set(override.id, override);
   }
 
-  async revokeAuthOverride(contactId: string, permission: string): Promise<void> {
-    for (const override of this.overrides.values()) {
-      if (override.contactId === contactId && override.permission === permission && override.revokedAt === null) {
-        override.revokedAt = new Date();
-        break;
+  async revokeAuthOverride(contactId: string, permission: string): Promise<boolean> {
+    for (const [id, override] of this.overrides) {
+      if (override.contactId === contactId &&
+          override.permission === permission &&
+          override.revokedAt === null) {
+        this.overrides.set(id, { ...override, revokedAt: new Date() });
+        return true;
       }
     }
+    return false;
   }
 }
