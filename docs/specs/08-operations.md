@@ -31,7 +31,7 @@ The merged config is validated against a TypeScript-derived JSON Schema at start
 
 ## Onboarding (New Instance Setup)
 
-Setting up a new Curia deployment requires configuring channels, skills, and their secrets (API keys, OAuth tokens, IMAP passwords).
+Setting up a new Curia deployment requires configuring channels, skills, and their secrets (API keys, OAuth tokens, Nylas credentials).
 
 ### `curia setup` CLI
 
@@ -46,12 +46,12 @@ Coordinator persona:
   Display name [Curia]: Alex
   Tone [professional]: professional but warm
 
-Setting up email channel...
-  IMAP host: imap.gmail.com
-  IMAP username: joseph@example.com
-  IMAP password: ********
+Setting up email channel (via Nylas)...
+  Nylas API key: ********
+  Nylas grant ID: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+  Nathan's email address: nathan@yourdomain.com
   Testing connection... ✓ Connected (14 unread messages)
-  Stored as EMAIL_IMAP_PASSWORD.
+  Stored as NYLAS_API_KEY, NYLAS_GRANT_ID, NYLAS_SELF_EMAIL.
 
 Setting up Telegram channel...
   Bot token: ********
