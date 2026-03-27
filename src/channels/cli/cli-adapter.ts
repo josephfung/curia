@@ -1,7 +1,7 @@
 import * as readline from 'node:readline';
 import type { EventBus } from '../../bus/bus.js';
 import { createInboundMessage } from '../../bus/events.js';
-import type { OutboundMessageEvent } from '../../bus/events.js';
+import type { OutboundMessageEvent, MessageHeldEvent } from '../../bus/events.js';
 import type { Logger } from '../../logger.js';
 
 /**
@@ -35,6 +35,20 @@ export class CliAdapter {
         readline.clearLine(process.stdout, 0);
         readline.cursorTo(process.stdout, 0);
         process.stdout.write(`\n${outbound.payload.content}\n\n`);
+        this.rl?.prompt();
+      }
+    });
+
+    // Notify the CEO immediately when a message is held from an unknown sender.
+    this.bus.subscribe('message.held', 'channel', (event) => {
+      if (event.type === 'message.held') {
+        const held = event as MessageHeldEvent;
+        const { senderId, channel, subject } = held.payload;
+        const subjectLine = subject ? ` — "${subject}"` : '';
+        readline.clearLine(process.stdout, 0);
+        readline.cursorTo(process.stdout, 0);
+        process.stdout.write(`\n[Held] Unknown sender on ${channel}: ${senderId}${subjectLine}\n`);
+        process.stdout.write('  Say "review held messages" to see details.\n\n');
         this.rl?.prompt();
       }
     });
