@@ -302,12 +302,16 @@ export class AgentRuntime {
       // No execution layer configured — the LLM wanted tools but we can't run them
       logger.warn({ agentId }, 'LLM returned tool_use but no execution layer configured');
       responseContent = response.content ?? "I wasn't able to complete that request — I hit my tool-use limit. Please try rephrasing.";
-    } else {
+    } else if (response.type === 'text') {
       logger.info(
         { agentId, inputTokens: response.usage.inputTokens, outputTokens: response.usage.outputTokens },
         'Agent task completed',
       );
       responseContent = response.content;
+    } else {
+      // Shouldn't reach here — chatWithRetry handles errors — but be safe
+      logger.error({ agentId, error: response.error }, 'LLM call failed after retries');
+      responseContent = "I'm sorry, I was unable to process that request. Please try again.";
     }
 
     // Persist the assistant response
