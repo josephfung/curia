@@ -86,7 +86,9 @@ export function loadAuthConfig(configDir: string): AuthConfig {
         throw new Error(`Invalid trust level '${trust}' for channel '${channel}'`);
       }
       channelTrust[channel] = trust;
-      channelPolicies[channel] = { trust, unknownSender: 'hold_and_notify' };
+      // Default to 'allow' for legacy configs — silently holding messages would be
+      // a surprising behavior change for deployments using the old flat-string format.
+      channelPolicies[channel] = { trust, unknownSender: 'allow' };
     } else {
       const trust = (config as { trust: string }).trust as TrustLevel;
       if (!['high', 'medium', 'low'].includes(trust)) {
