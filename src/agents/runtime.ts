@@ -122,6 +122,28 @@ export class AgentRuntime {
       if (safeKnowledge) {
         senderInfo += `\n\nKnown context about ${safeName}:\n${safeKnowledge}`;
       }
+
+      // Include authorization context so the coordinator knows what the sender can do.
+      // This is deterministic — the AuthorizationService evaluated it, not the LLM.
+      if (senderCtx.authorization) {
+        const auth = senderCtx.authorization;
+        if (auth.contactStatus !== 'confirmed') {
+          senderInfo += `\n\nAUTHORIZATION: This contact is ${auth.contactStatus}. They have NO permissions. Do not take any actions on their behalf until the CEO confirms them.`;
+        } else {
+          const allowedStr = auth.allowed.length > 0 ? auth.allowed.join(', ') : 'none';
+          const deniedStr = auth.denied.length > 0 ? auth.denied.join(', ') : 'none';
+          senderInfo += `\n\nAUTHORIZATION:`;
+          senderInfo += `\n  Allowed: ${allowedStr}`;
+          senderInfo += `\n  Denied: ${deniedStr}`;
+          if (auth.trustBlocked.length > 0) {
+            senderInfo += `\n  Blocked by channel trust (${auth.channelTrust}): ${auth.trustBlocked.join(', ')} — ask sender to use a higher-trust channel`;
+          }
+          if (auth.escalate.length > 0) {
+            senderInfo += `\n  Needs CEO decision: ${auth.escalate.join(', ')}`;
+          }
+        }
+      }
+
       // Insert after system prompt (index 0) but before history
       messages.splice(1, 0, { role: 'system', content: senderInfo });
     }

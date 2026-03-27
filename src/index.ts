@@ -41,6 +41,8 @@ import { ContactService } from './contacts/contact-service.js';
 import { ContactResolver } from './contacts/contact-resolver.js';
 import { NylasClient } from './channels/email/nylas-client.js';
 import { EmailAdapter } from './channels/email/email-adapter.js';
+import { loadAuthConfig } from './contacts/config-loader.js';
+import { AuthorizationService } from './contacts/authorization.js';
 
 async function main(): Promise<void> {
   // 1. Config & logging — no dependencies, must come first.
@@ -103,7 +105,23 @@ async function main(): Promise<void> {
   // Contact system — provides identity resolution and contact management.
   // Always initialized (contacts work even without entity memory / KG).
   const contactService = ContactService.createWithPostgres(pool, entityMemory, logger);
-  const contactResolver = new ContactResolver(contactService, entityMemory, logger);
+
+  // Authorization config — load role defaults, permissions, and channel trust.
+  // These YAML files define the deterministic permission model.
+  // Fatal on failure: authorization is a security boundary. Silent degradation
+  // would mean unreviewed senders get the wrong permissions. Fail loudly instead.
+  let authService: AuthorizationService | undefined;
+  try {
+    const configDir = path.resolve(import.meta.dirname, '../config');
+    const authConfig = loadAuthConfig(configDir);
+    authService = new AuthorizationService(authConfig);
+    logger.info('Authorization config loaded');
+  } catch (err) {
+    logger.fatal({ err }, 'Failed to load authorization config');
+    process.exit(1);
+  }
+
+  const contactResolver = new ContactResolver(contactService, entityMemory, authService, logger);
   logger.info('Contact system initialized');
 
   // Email channel — optional, requires NYLAS_API_KEY, NYLAS_GRANT_ID, and NYLAS_SELF_EMAIL.

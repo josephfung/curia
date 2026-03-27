@@ -7,9 +7,10 @@
 // Resolution is deterministic — a simple indexed DB query, no LLM involved.
 
 import type { ContactService } from './contact-service.js';
+import type { AuthorizationService } from './authorization.js';
 import type { EntityMemory } from '../memory/entity-memory.js';
 import type { Logger } from '../logger.js';
-import type { InboundSenderContext } from './types.js';
+import type { AuthorizationResult, InboundSenderContext } from './types.js';
 
 /**
  * Resolves inbound message senders to known contacts.
@@ -20,6 +21,7 @@ export class ContactResolver {
   constructor(
     private contactService: ContactService,
     private entityMemory: EntityMemory | undefined,
+    private authService: AuthorizationService | undefined,
     private logger: Logger,
   ) {}
 
@@ -39,9 +41,11 @@ export class ContactResolver {
         contactId: 'primary-user',
         displayName: 'CEO',
         role: 'ceo',
+        status: 'confirmed' as const,
         verified: true,
         kgNodeId: null,
         knowledgeSummary: '',
+        authorization: null,
       };
     }
 
@@ -70,6 +74,31 @@ export class ContactResolver {
       }
     }
 
+    // Evaluate authorization if auth service is available.
+    // Isolated in its own try/catch: a DB failure here must not lose the identity
+    // resolution above. The coordinator still sees who the sender is — just without
+    // permission context (authorization=null).
+    let authorization: AuthorizationResult | null = null;
+    if (this.authService) {
+      try {
+        const overrides = await this.contactService.getAuthOverrides(resolved.contactId);
+        authorization = this.authService.evaluate({
+          role: resolved.role,
+          status: resolved.status ?? 'confirmed',
+          channel,
+          overrides,
+        });
+      } catch (err) {
+        // Authorization eval failure should not lose identity resolution.
+        // Log and continue with authorization=null — the coordinator still sees
+        // who the sender is, just without permission context.
+        this.logger.error(
+          { err, contactId: resolved.contactId },
+          'Authorization evaluation failed — proceeding without auth context',
+        );
+      }
+    }
+
     this.logger.info(
       { contactId: resolved.contactId, displayName: resolved.displayName, verified: resolved.verified },
       'Sender resolved to contact',
@@ -80,9 +109,11 @@ export class ContactResolver {
       contactId: resolved.contactId,
       displayName: resolved.displayName,
       role: resolved.role,
+      status: resolved.status ?? 'confirmed',
       verified: resolved.verified,
       kgNodeId: resolved.kgNodeId,
       knowledgeSummary,
+      authorization,
     };
   }
 }

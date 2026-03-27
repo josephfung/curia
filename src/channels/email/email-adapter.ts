@@ -225,6 +225,7 @@ export class EmailAdapter {
         const contact = await contactService.createContact({
           displayName: p.name || p.email,
           source: 'email_participant',
+          status: 'provisional',
         });
         await contactService.linkIdentity({
           contactId: contact.id,

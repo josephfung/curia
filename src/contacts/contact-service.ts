@@ -14,7 +14,9 @@ import type { DbPool } from '../db/connection.js';
 import type { Logger } from '../logger.js';
 import type { EntityMemory } from '../memory/entity-memory.js';
 import type {
+  AuthOverride,
   Contact,
+  ContactStatus,
   ChannelIdentity,
   CreateContactOptions,
   LinkIdentityOptions,
@@ -34,6 +36,10 @@ interface ContactServiceBackend {
   createIdentity(identity: ChannelIdentity): Promise<void>;
   getIdentitiesForContact(contactId: string): Promise<ChannelIdentity[]>;
   resolveByChannelIdentity(channel: string, channelIdentifier: string): Promise<ResolvedSender | null>;
+  unlinkIdentity(identityId: string): Promise<boolean>;
+  getAuthOverrides(contactId: string): Promise<Array<{ permission: string; granted: boolean }>>;
+  createAuthOverride(override: AuthOverride): Promise<void>;
+  revokeAuthOverride(contactId: string, permission: string): Promise<boolean>;
 }
 
 // -- Auto-verification sources --
@@ -99,6 +105,7 @@ export class ContactService {
       kgNodeId,
       displayName: options.displayName,
       role: options.role ?? null,
+      status: options.status ?? 'confirmed',
       notes: options.notes ?? null,
       createdAt: now,
       updatedAt: now,
@@ -228,6 +235,62 @@ export class ContactService {
     const identities = await this.backend.getIdentitiesForContact(id);
     return { contact, identities };
   }
+
+  /** Update a contact's status (confirmed, provisional, blocked). */
+  async setStatus(contactId: string, status: ContactStatus): Promise<Contact> {
+    const contact = await this.backend.getContact(contactId);
+    if (!contact) {
+      throw new Error(`Contact not found: ${contactId}`);
+    }
+
+    const updated: Contact = {
+      ...contact,
+      status,
+      updatedAt: new Date(),
+    };
+
+    await this.backend.updateContact(updated);
+    return updated;
+  }
+
+  /** Remove a channel identity by its ID. Returns true if found and removed, false if not found. */
+  async unlinkIdentity(identityId: string): Promise<boolean> {
+    return this.backend.unlinkIdentity(identityId);
+  }
+
+  /** Get active (non-revoked) auth overrides for a contact. */
+  async getAuthOverrides(contactId: string): Promise<Array<{ permission: string; granted: boolean }>> {
+    return this.backend.getAuthOverrides(contactId);
+  }
+
+  /**
+   * Grant or deny a specific permission for a contact.
+   * Uses upsert — if an active override already exists for this contact+permission,
+   * it gets replaced.
+   */
+  async grantPermission(contactId: string, permission: string, granted: boolean): Promise<void> {
+    const contact = await this.backend.getContact(contactId);
+    if (!contact) {
+      throw new Error(`Contact not found: ${contactId}`);
+    }
+
+    const override: AuthOverride = {
+      id: randomUUID(),
+      contactId,
+      permission,
+      granted,
+      grantedBy: 'ceo',
+      createdAt: new Date(),
+      revokedAt: null,
+    };
+
+    await this.backend.createAuthOverride(override);
+  }
+
+  /** Soft-revoke an auth override for a specific contact+permission. Returns true if an active override was found and revoked, false if nothing matched. */
+  async revokePermission(contactId: string, permission: string): Promise<boolean> {
+    return this.backend.revokeAuthOverride(contactId, permission);
+  }
 }
 
 // -- Postgres backend --
@@ -245,9 +308,9 @@ class PostgresContactBackend implements ContactServiceBackend {
   async createContact(contact: Contact): Promise<void> {
     this.logger.debug({ contactId: contact.id }, 'contacts: creating contact');
     await this.pool.query(
-      `INSERT INTO contacts (id, kg_node_id, display_name, role, notes, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-      [contact.id, contact.kgNodeId, contact.displayName, contact.role, contact.notes, contact.createdAt, contact.updatedAt],
+      `INSERT INTO contacts (id, kg_node_id, display_name, role, status, notes, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      [contact.id, contact.kgNodeId, contact.displayName, contact.role, contact.status, contact.notes, contact.createdAt, contact.updatedAt],
     );
   }
 
@@ -257,11 +320,12 @@ class PostgresContactBackend implements ContactServiceBackend {
       kg_node_id: string | null;
       display_name: string;
       role: string | null;
+      status: string;
       notes: string | null;
       created_at: Date;
       updated_at: Date;
     }>(
-      `SELECT id, kg_node_id, display_name, role, notes, created_at, updated_at
+      `SELECT id, kg_node_id, display_name, role, status, notes, created_at, updated_at
        FROM contacts WHERE id = $1`,
       [id],
     );
@@ -279,11 +343,12 @@ class PostgresContactBackend implements ContactServiceBackend {
       kg_node_id: string | null;
       display_name: string;
       role: string | null;
+      status: string;
       notes: string | null;
       created_at: Date;
       updated_at: Date;
     }>(
-      `SELECT id, kg_node_id, display_name, role, notes, created_at, updated_at
+      `SELECT id, kg_node_id, display_name, role, status, notes, created_at, updated_at
        FROM contacts WHERE lower(display_name) = lower($1)`,
       [name],
     );
@@ -297,11 +362,12 @@ class PostgresContactBackend implements ContactServiceBackend {
       kg_node_id: string | null;
       display_name: string;
       role: string | null;
+      status: string;
       notes: string | null;
       created_at: Date;
       updated_at: Date;
     }>(
-      `SELECT id, kg_node_id, display_name, role, notes, created_at, updated_at
+      `SELECT id, kg_node_id, display_name, role, status, notes, created_at, updated_at
        FROM contacts WHERE role = $1`,
       [role],
     );
@@ -315,11 +381,12 @@ class PostgresContactBackend implements ContactServiceBackend {
       kg_node_id: string | null;
       display_name: string;
       role: string | null;
+      status: string;
       notes: string | null;
       created_at: Date;
       updated_at: Date;
     }>(
-      `SELECT id, kg_node_id, display_name, role, notes, created_at, updated_at
+      `SELECT id, kg_node_id, display_name, role, status, notes, created_at, updated_at
        FROM contacts ORDER BY created_at ASC`,
     );
 
@@ -329,9 +396,9 @@ class PostgresContactBackend implements ContactServiceBackend {
   async updateContact(contact: Contact): Promise<void> {
     this.logger.debug({ contactId: contact.id }, 'contacts: updating contact');
     await this.pool.query(
-      `UPDATE contacts SET kg_node_id = $2, display_name = $3, role = $4, notes = $5, updated_at = $6
+      `UPDATE contacts SET kg_node_id = $2, display_name = $3, role = $4, status = $5, notes = $6, updated_at = $7
        WHERE id = $1`,
-      [contact.id, contact.kgNodeId, contact.displayName, contact.role, contact.notes, contact.updatedAt],
+      [contact.id, contact.kgNodeId, contact.displayName, contact.role, contact.status, contact.notes, contact.updatedAt],
     );
   }
 
@@ -388,10 +455,11 @@ class PostgresContactBackend implements ContactServiceBackend {
       id: string;
       display_name: string;
       role: string | null;
+      status: string;
       kg_node_id: string | null;
       verified: boolean;
     }>(
-      `SELECT c.id, c.display_name, c.role, c.kg_node_id, cci.verified
+      `SELECT c.id, c.display_name, c.role, c.status, c.kg_node_id, cci.verified
        FROM contact_channel_identities cci
        JOIN contacts c ON c.id = cci.contact_id
        WHERE cci.channel = $1 AND cci.channel_identifier = $2`,
@@ -405,9 +473,61 @@ class PostgresContactBackend implements ContactServiceBackend {
       contactId: row.id,
       displayName: row.display_name,
       role: row.role,
+      status: row.status as ContactStatus,
       kgNodeId: row.kg_node_id,
       verified: row.verified,
     };
+  }
+
+  async unlinkIdentity(identityId: string): Promise<boolean> {
+    this.logger.debug({ identityId }, 'Unlinking channel identity');
+    const result = await this.pool.query('DELETE FROM contact_channel_identities WHERE id = $1', [identityId]);
+    return (result.rowCount ?? 0) > 0;
+  }
+
+  async getAuthOverrides(contactId: string): Promise<Array<{ permission: string; granted: boolean }>> {
+    const result = await this.pool.query<{
+      permission: string;
+      granted: boolean;
+    }>(
+      `SELECT permission, granted FROM contact_auth_overrides
+       WHERE contact_id = $1 AND revoked_at IS NULL`,
+      [contactId],
+    );
+
+    return result.rows.map((row) => ({
+      permission: row.permission,
+      granted: row.granted,
+    }));
+  }
+
+  async createAuthOverride(override: AuthOverride): Promise<void> {
+    this.logger.debug(
+      { contactId: override.contactId, permission: override.permission, granted: override.granted },
+      'contacts: creating auth override',
+    );
+    // Upsert: if an active override exists for this contact+permission, update it.
+    // The UNIQUE(contact_id, permission) constraint on the table supports this.
+    await this.pool.query(
+      `INSERT INTO contact_auth_overrides (id, contact_id, permission, granted, granted_by, created_at, revoked_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       ON CONFLICT (contact_id, permission) DO UPDATE
+         SET granted = EXCLUDED.granted,
+             granted_by = EXCLUDED.granted_by,
+             created_at = EXCLUDED.created_at,
+             revoked_at = NULL`,
+      [override.id, override.contactId, override.permission, override.granted, override.grantedBy, override.createdAt, override.revokedAt],
+    );
+  }
+
+  async revokeAuthOverride(contactId: string, permission: string): Promise<boolean> {
+    this.logger.debug({ contactId, permission }, 'Revoking auth override');
+    const result = await this.pool.query(
+      `UPDATE contact_auth_overrides SET revoked_at = now()
+       WHERE contact_id = $1 AND permission = $2 AND revoked_at IS NULL`,
+      [contactId, permission],
+    );
+    return (result.rowCount ?? 0) > 0;
   }
 
   // -- Row mapping helpers --
@@ -417,6 +537,7 @@ class PostgresContactBackend implements ContactServiceBackend {
     kg_node_id: string | null;
     display_name: string;
     role: string | null;
+    status: string;
     notes: string | null;
     created_at: Date;
     updated_at: Date;
@@ -426,6 +547,7 @@ class PostgresContactBackend implements ContactServiceBackend {
       kgNodeId: row.kg_node_id,
       displayName: row.display_name,
       role: row.role,
+      status: row.status as ContactStatus,
       notes: row.notes,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
@@ -468,6 +590,7 @@ class PostgresContactBackend implements ContactServiceBackend {
 class InMemoryContactBackend implements ContactServiceBackend {
   private contacts = new Map<string, Contact>();
   private identities = new Map<string, ChannelIdentity>();
+  private overrides = new Map<string, AuthOverride>();
 
   async createContact(contact: Contact): Promise<void> {
     this.contacts.set(contact.id, contact);
@@ -541,6 +664,7 @@ class InMemoryContactBackend implements ContactServiceBackend {
             contactId: contact.id,
             displayName: contact.displayName,
             role: contact.role,
+            status: contact.status,
             kgNodeId: contact.kgNodeId,
             verified: identity.verified,
           };
@@ -548,5 +672,46 @@ class InMemoryContactBackend implements ContactServiceBackend {
       }
     }
     return null;
+  }
+
+  async unlinkIdentity(identityId: string): Promise<boolean> {
+    return this.identities.delete(identityId);
+  }
+
+  async getAuthOverrides(contactId: string): Promise<Array<{ permission: string; granted: boolean }>> {
+    const results: Array<{ permission: string; granted: boolean }> = [];
+    for (const override of this.overrides.values()) {
+      if (override.contactId === contactId && override.revokedAt === null) {
+        results.push({ permission: override.permission, granted: override.granted });
+      }
+    }
+    return results;
+  }
+
+  async createAuthOverride(override: AuthOverride): Promise<void> {
+    // Upsert: find and replace any existing active override for the same contact+permission
+    for (const [key, existing] of this.overrides.entries()) {
+      if (
+        existing.contactId === override.contactId &&
+        existing.permission === override.permission &&
+        existing.revokedAt === null
+      ) {
+        this.overrides.delete(key);
+        break;
+      }
+    }
+    this.overrides.set(override.id, override);
+  }
+
+  async revokeAuthOverride(contactId: string, permission: string): Promise<boolean> {
+    for (const [id, override] of this.overrides) {
+      if (override.contactId === contactId &&
+          override.permission === permission &&
+          override.revokedAt === null) {
+        this.overrides.set(id, { ...override, revokedAt: new Date() });
+        return true;
+      }
+    }
+    return false;
   }
 }

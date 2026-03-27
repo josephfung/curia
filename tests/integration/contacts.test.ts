@@ -34,7 +34,7 @@ describeIf('Contacts Integration', () => {
     const validator = new MemoryValidator(kgStore, embeddingService);
     entityMemory = new EntityMemory(kgStore, validator, embeddingService);
     contactService = ContactService.createWithPostgres(pool, entityMemory, logger);
-    resolver = new ContactResolver(contactService, entityMemory, logger);
+    resolver = new ContactResolver(contactService, entityMemory, undefined, logger);
 
     // Verify contacts tables exist — will throw if migrations haven't been applied
     await pool.query('SELECT 1 FROM contacts LIMIT 0');

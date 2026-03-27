@@ -1,0 +1,11 @@
+# Channel trust levels.
+# high: can do anything
+# medium: can do medium and low sensitivity actions
+# low: can only do low sensitivity actions
+
+channels:
+  cli: high
+  signal: high
+  telegram: medium
+  http: medium
+  email: low

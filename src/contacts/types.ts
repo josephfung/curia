@@ -5,6 +5,7 @@ export interface Contact {
   kgNodeId: string | null;
   displayName: string;
   role: string | null;
+  status: ContactStatus;
   notes: string | null;
   createdAt: Date;
   updatedAt: Date;
@@ -30,6 +31,12 @@ export type IdentitySource =
   | 'calendar_attendee'
   | 'self_claimed';
 
+// -- Contact status --
+// confirmed: CEO has verified this contact
+// provisional: system-created, awaiting CEO confirmation
+// blocked: CEO explicitly rejected/blocked this sender
+export type ContactStatus = 'confirmed' | 'provisional' | 'blocked';
+
 export interface AuthOverride {
   id: string;
   contactId: string;
@@ -44,6 +51,7 @@ export interface AuthOverride {
 export interface CreateContactOptions {
   displayName: string;
   role?: string;
+  status?: ContactStatus;
   notes?: string;
   /** If provided, links to this existing KG node. Otherwise auto-creates one. */
   kgNodeId?: string;
@@ -65,6 +73,7 @@ export interface ResolvedSender {
   contactId: string;
   displayName: string;
   role: string | null;
+  status: ContactStatus;
   kgNodeId: string | null;
   verified: boolean;
 }
@@ -75,10 +84,12 @@ export interface SenderContext {
   contactId: string;
   displayName: string;
   role: string | null;
+  status: ContactStatus;
   verified: boolean;
   kgNodeId: string | null;
   /** Facts from the KG about this person, formatted for prompt inclusion */
   knowledgeSummary: string;
+  authorization: AuthorizationResult | null;
 }
 
 export interface UnknownSenderContext {
@@ -88,3 +99,36 @@ export interface UnknownSenderContext {
 }
 
 export type InboundSenderContext = SenderContext | UnknownSenderContext;
+
+// -- Authorization types --
+
+export interface RolePermissions {
+  description: string;
+  defaultPermissions: string[];
+  defaultDeny: string[];
+}
+
+export interface PermissionDef {
+  description: string;
+  sensitivity: 'high' | 'medium' | 'low';
+}
+
+export type TrustLevel = 'high' | 'medium' | 'low';
+
+export interface AuthorizationResult {
+  allowed: string[];
+  denied: string[];
+  /** Permissions that require escalation (not in role defaults, needs CEO decision) */
+  escalate: string[];
+  /** Channel trust level for this message's originating channel */
+  channelTrust: TrustLevel;
+  /** Permissions blocked by insufficient channel trust (allowed by role but channel too low) */
+  trustBlocked: string[];
+  contactStatus: ContactStatus;
+}
+
+export interface AuthConfig {
+  roles: Record<string, RolePermissions>;
+  permissions: Record<string, PermissionDef>;
+  channelTrust: Record<string, TrustLevel>;
+}
