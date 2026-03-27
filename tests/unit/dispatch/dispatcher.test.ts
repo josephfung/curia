@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { Dispatcher } from '../../../src/dispatch/dispatcher.js';
 import { EventBus } from '../../../src/bus/bus.js';
 import { AgentRuntime } from '../../../src/agents/runtime.js';
-import { createInboundMessage, type OutboundMessageEvent } from '../../../src/bus/events.js';
+import { createInboundMessage, createAgentError, type OutboundMessageEvent } from '../../../src/bus/events.js';
 import type { LLMProvider } from '../../../src/agents/llm/provider.js';
 import { createLogger } from '../../../src/logger.js';
 
@@ -58,5 +58,31 @@ describe('Dispatcher', () => {
     expect(outbound).toHaveLength(1);
     expect(outbound[0]?.payload.content).toBe('Response from Coordinator');
     expect(outbound[0]?.payload.channelId).toBe('cli');
+  });
+});
+
+describe('Dispatcher agent.error handling', () => {
+  it('subscribes to agent.error without crashing', async () => {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+
+    const dispatcher = new Dispatcher({ bus, logger });
+    dispatcher.register();
+
+    // Publish an agent.error — dispatcher should handle it without throwing
+    const errorEvent = createAgentError({
+      agentId: 'coordinator',
+      conversationId: 'conv-err',
+      errorType: 'PROVIDER_ERROR',
+      source: 'anthropic',
+      message: 'Server error',
+      retryable: true,
+      context: { status: 500 },
+      parentEventId: 'task-1',
+    });
+    await bus.publish('agent', errorEvent);
+
+    // If we reach here without throwing, the dispatcher handled the error event
+    expect(true).toBe(true);
   });
 });

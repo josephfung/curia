@@ -1,5 +1,5 @@
 import type { EventBus } from '../bus/bus.js';
-import type { InboundMessageEvent, AgentResponseEvent } from '../bus/events.js';
+import type { InboundMessageEvent, AgentResponseEvent, AgentErrorEvent } from '../bus/events.js';
 import { createAgentTask, createOutboundMessage, createContactResolved, createContactUnknown, createMessageHeld } from '../bus/events.js';
 import type { Logger } from '../logger.js';
 import type { ContactResolver } from '../contacts/contact-resolver.js';
@@ -57,6 +57,11 @@ export class Dispatcher {
     // agent.response → outbound.message
     this.bus.subscribe('agent.response', 'dispatch', async (event) => {
       await this.handleAgentResponse(event as AgentResponseEvent);
+    });
+
+    // agent.error → log for awareness (the runtime also sends agent.response for user notification)
+    this.bus.subscribe('agent.error', 'dispatch', async (event) => {
+      await this.handleAgentError(event as AgentErrorEvent);
     });
 
     this.logger.info('Dispatcher registered');
@@ -236,6 +241,17 @@ export class Dispatcher {
     });
 
     await this.bus.publish('dispatch', taskEvent);
+  }
+
+  private async handleAgentError(event: AgentErrorEvent): Promise<void> {
+    // Log the error for dispatch-layer visibility.
+    // The runtime already sends an agent.response with a user-facing message,
+    // so we don't need to create a separate outbound.message here.
+    // The routing entry is NOT cleaned up — the agent.response handler does that.
+    this.logger.warn(
+      { agentId: event.payload.agentId, errorType: event.payload.errorType, source: event.payload.source },
+      'Agent error reported',
+    );
   }
 
   private async handleAgentResponse(event: AgentResponseEvent): Promise<void> {
