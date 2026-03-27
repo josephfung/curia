@@ -93,6 +93,62 @@ export class Dispatcher {
               channelIdentifier: payload.senderId,
               parentEventId: event.id,
             }));
+
+            // Provisional contacts are treated like unknown senders for policy purposes.
+            // They have a contact record (so the resolver finds them), but the CEO hasn't
+            // confirmed them yet. Apply the same hold/reject policy as unknown senders.
+            if (senderContext.status === 'provisional' || senderContext.status === 'blocked') {
+              const policy = this.channelPolicies?.[payload.channelId];
+
+              if (senderContext.status === 'blocked') {
+                this.logger.info(
+                  { channel: payload.channelId, senderId: payload.senderId, contactId: senderContext.contactId },
+                  'Blocked sender — dropping message',
+                );
+                return;
+              }
+
+              if (policy?.unknownSender === 'hold_and_notify' && this.heldMessages) {
+                try {
+                  const subject = (payload.metadata as Record<string, unknown> | undefined)?.subject as string | null ?? null;
+                  const heldId = await this.heldMessages.hold({
+                    channel: payload.channelId,
+                    senderId: payload.senderId,
+                    conversationId: payload.conversationId,
+                    content: payload.content,
+                    subject,
+                    metadata: payload.metadata ?? {},
+                  });
+
+                  await this.bus.publish('dispatch', createMessageHeld({
+                    heldMessageId: heldId,
+                    channel: payload.channelId,
+                    senderId: payload.senderId,
+                    subject,
+                    parentEventId: event.id,
+                  }));
+
+                  this.logger.info(
+                    { heldMessageId: heldId, channel: payload.channelId, senderId: payload.senderId, contactId: senderContext.contactId },
+                    'Message held from provisional sender',
+                  );
+                } catch (holdErr) {
+                  this.logger.error(
+                    { err: holdErr, channel: payload.channelId, senderId: payload.senderId },
+                    'Failed to hold provisional sender message — dropping (fail-closed)',
+                  );
+                }
+                return;
+              }
+
+              if (policy?.unknownSender === 'reject') {
+                this.logger.info(
+                  { channel: payload.channelId, senderId: payload.senderId },
+                  'Rejected message from provisional sender',
+                );
+                return;
+              }
+            }
           }
         } else {
           // Unknown sender — publish audit event and check channel policy
