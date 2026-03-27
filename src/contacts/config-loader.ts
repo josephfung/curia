@@ -29,10 +29,14 @@ export function loadAuthConfig(configDir: string): AuthConfig {
   // Role defaults
   const rolesRaw = yaml.load(
     readFileSync(path.join(configDir, 'role-defaults.yaml'), 'utf-8'),
-  ) as { roles: Record<string, RawRoleEntry> };
+  );
+  if (!rolesRaw || typeof rolesRaw !== 'object' || !('roles' in rolesRaw)) {
+    throw new Error("Missing or invalid 'roles' section in role-defaults.yaml");
+  }
+  const rolesTyped = rolesRaw as { roles: Record<string, RawRoleEntry> };
 
   const roles: Record<string, RolePermissions> = {};
-  for (const [roleName, entry] of Object.entries(rolesRaw.roles)) {
+  for (const [roleName, entry] of Object.entries(rolesTyped.roles)) {
     roles[roleName] = {
       description: entry.description,
       defaultPermissions: entry.default_permissions,
@@ -43,10 +47,14 @@ export function loadAuthConfig(configDir: string): AuthConfig {
   // Permissions registry
   const permsRaw = yaml.load(
     readFileSync(path.join(configDir, 'permissions.yaml'), 'utf-8'),
-  ) as { permissions: Record<string, RawPermissionEntry> };
+  );
+  if (!permsRaw || typeof permsRaw !== 'object' || !('permissions' in permsRaw)) {
+    throw new Error("Missing or invalid 'permissions' section in permissions.yaml");
+  }
+  const permsTyped = permsRaw as { permissions: Record<string, RawPermissionEntry> };
 
   const permissions: Record<string, PermissionDef> = {};
-  for (const [permName, entry] of Object.entries(permsRaw.permissions)) {
+  for (const [permName, entry] of Object.entries(permsTyped.permissions)) {
     const sensitivity = entry.sensitivity as TrustLevel;
     if (!['high', 'medium', 'low'].includes(sensitivity)) {
       throw new Error(`Invalid sensitivity '${sensitivity}' for permission '${permName}'`);
@@ -60,10 +68,14 @@ export function loadAuthConfig(configDir: string): AuthConfig {
   // Channel trust levels
   const trustRaw = yaml.load(
     readFileSync(path.join(configDir, 'channel-trust.yaml'), 'utf-8'),
-  ) as { channels: Record<string, string> };
+  );
+  if (!trustRaw || typeof trustRaw !== 'object' || !('channels' in trustRaw)) {
+    throw new Error("Missing or invalid 'channels' section in channel-trust.yaml");
+  }
+  const trustTyped = trustRaw as { channels: Record<string, string> };
 
   const channelTrust: Record<string, TrustLevel> = {};
-  for (const [channel, level] of Object.entries(trustRaw.channels)) {
+  for (const [channel, level] of Object.entries(trustTyped.channels)) {
     if (!['high', 'medium', 'low'].includes(level)) {
       throw new Error(`Invalid trust level '${level}' for channel '${channel}'`);
     }

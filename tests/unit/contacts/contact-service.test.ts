@@ -167,6 +167,7 @@ describe('ContactService', () => {
 
       // Verify it persists on retrieval
       const retrieved = await service.getContact(contact.id);
+      expect(retrieved).toBeDefined();
       expect(retrieved!.status).toBe('provisional');
     });
 
@@ -176,6 +177,7 @@ describe('ContactService', () => {
       expect(updated.status).toBe('confirmed');
 
       const retrieved = await service.getContact(contact.id);
+      expect(retrieved).toBeDefined();
       expect(retrieved!.status).toBe('confirmed');
     });
 
