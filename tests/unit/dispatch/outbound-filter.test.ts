@@ -218,6 +218,83 @@ describe('OutboundContentFilter', () => {
     });
   });
 
+  describe('false positive safety', () => {
+    it('allows normal email with a professional signature', async () => {
+      const filter = createTestFilter();
+      const result = await filter.check({
+        content: [
+          'Hi Alice,',
+          '',
+          'The Q3 board meeting is confirmed for Thursday at 2pm EST.',
+          'Please bring the updated financials and the slide deck.',
+          '',
+          'Best regards,',
+          'Nathan Curia',
+        ].join('\n'),
+        recipientEmail: 'alice@example.com',
+        conversationId: 'email:thread-1',
+        channelId: 'email',
+      });
+      // "Nathan Curia" alone is fine — only "You are Nathan Curia" triggers
+      expect(result.passed).toBe(true);
+    });
+
+    it('allows email discussing agents and tasks in a business context', async () => {
+      const filter = createTestFilter();
+      const result = await filter.check({
+        content: 'The real estate agent will handle the task of scheduling the property tour.',
+        recipientEmail: 'alice@example.com',
+        conversationId: 'email:thread-1',
+        channelId: 'email',
+      });
+      expect(result.passed).toBe(true);
+    });
+
+    it('allows email mentioning channels in a business context', async () => {
+      const filter = createTestFilter();
+      const result = await filter.check({
+        content: 'We should discuss this through the proper channels. The sales channel on Slack has the details.',
+        recipientEmail: 'alice@example.com',
+        conversationId: 'email:thread-1',
+        channelId: 'email',
+      });
+      expect(result.passed).toBe(true);
+    });
+
+    it('allows email with the recipient email address mentioned', async () => {
+      const filter = createTestFilter();
+      const result = await filter.check({
+        content: 'I have your email on file as alice@example.com. Please confirm this is correct.',
+        recipientEmail: 'alice@example.com',
+        conversationId: 'email:thread-1',
+        channelId: 'email',
+      });
+      expect(result.passed).toBe(true);
+    });
+
+    it('allows email with short hex strings (not tokens)', async () => {
+      const filter = createTestFilter();
+      const result = await filter.check({
+        content: 'The color code is #ff5733 and the order reference is ABC123.',
+        recipientEmail: 'alice@example.com',
+        conversationId: 'email:thread-1',
+        channelId: 'email',
+      });
+      expect(result.passed).toBe(true);
+    });
+
+    it('allows email discussing professional tone naturally', async () => {
+      const filter = createTestFilter();
+      const result = await filter.check({
+        content: 'The board presentation should be professional and polished.',
+        recipientEmail: 'alice@example.com',
+        conversationId: 'email:thread-1',
+        channelId: 'email',
+      });
+      expect(result.passed).toBe(true);
+    });
+  });
+
   describe('pipeline behavior', () => {
     it('reports stage="deterministic" when blocked by Stage 1', async () => {
       const filter = createTestFilter();
