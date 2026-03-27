@@ -356,8 +356,12 @@ export class AgentRuntime {
 
     const agentErr = response.error;
 
-    // Non-retryable errors: bail immediately
+    // Non-retryable errors: count against budget then bail immediately.
+    // AUTH_FAILURE counts double — it's a strong signal something is misconfigured.
     if (!agentErr.retryable) {
+      const increment = agentErr.type === 'AUTH_FAILURE' ? 2 : 1;
+      budget.consecutiveErrors += increment;
+      budget.turnsUsed += increment;
       logger.error({ agentId, errorType: agentErr.type, source: agentErr.source }, 'Non-retryable LLM error');
       await this.publishAgentError(agentErr, taskEvent);
       await this.sendErrorResponse(taskEvent);
