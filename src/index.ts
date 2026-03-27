@@ -43,6 +43,7 @@ import { NylasClient } from './channels/email/nylas-client.js';
 import { EmailAdapter } from './channels/email/email-adapter.js';
 import { loadAuthConfig } from './contacts/config-loader.js';
 import { AuthorizationService } from './contacts/authorization.js';
+import { HeldMessageService } from './contacts/held-messages.js';
 
 async function main(): Promise<void> {
   // 1. Config & logging — no dependencies, must come first.
@@ -111,9 +112,10 @@ async function main(): Promise<void> {
   // Fatal on failure: authorization is a security boundary. Silent degradation
   // would mean unreviewed senders get the wrong permissions. Fail loudly instead.
   let authService: AuthorizationService | undefined;
+  let authConfig: ReturnType<typeof loadAuthConfig> | undefined;
   try {
     const configDir = path.resolve(import.meta.dirname, '../config');
-    const authConfig = loadAuthConfig(configDir);
+    authConfig = loadAuthConfig(configDir);
     authService = new AuthorizationService(authConfig);
     logger.info('Authorization config loaded');
   } catch (err) {
@@ -123,6 +125,10 @@ async function main(): Promise<void> {
 
   const contactResolver = new ContactResolver(contactService, entityMemory, authService, logger);
   logger.info('Contact system initialized');
+
+  // Held messages — stores messages from unknown senders pending CEO review.
+  const heldMessages = HeldMessageService.createWithPostgres(pool, logger);
+  logger.info('Held message service initialized');
 
   // Email channel — optional, requires NYLAS_API_KEY, NYLAS_GRANT_ID, and NYLAS_SELF_EMAIL.
   let nylasClient: NylasClient | undefined;
@@ -169,7 +175,7 @@ async function main(): Promise<void> {
 
   // Execution layer — now with bus and agent registry for infrastructure skills.
   // nylasClient is passed through so email skills (email-send, email-reply) can use it.
-  const executionLayer = new ExecutionLayer(skillRegistry, logger, { bus, agentRegistry, contactService, nylasClient });
+  const executionLayer = new ExecutionLayer(skillRegistry, logger, { bus, agentRegistry, contactService, nylasClient, heldMessages });
 
   // Load all agent configs from the agents/ directory.
   // Fail hard on errors — consistent with skill loading and DB connection checks.
@@ -258,7 +264,13 @@ async function main(): Promise<void> {
   // 7. Dispatcher — subscribes to inbound.message + agent.response.
   // Registered after the coordinator so agent.task already has a handler
   // when the dispatcher fans the first inbound message out.
-  const dispatcher = new Dispatcher({ bus, logger, contactResolver });
+  const dispatcher = new Dispatcher({
+    bus,
+    logger,
+    contactResolver,
+    heldMessages,
+    channelPolicies: authConfig?.channelPolicies,
+  });
   dispatcher.register();
 
   // HTTP API channel — REST + SSE endpoints for external clients.
