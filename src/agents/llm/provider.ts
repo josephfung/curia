@@ -6,6 +6,8 @@
 //
 // Adding a new provider: implement LLMProvider, wire it in the DI layer.
 
+import type { AgentError } from '../../errors/types.js';
+
 /**
  * Content block types for multi-turn tool-use conversations.
  * The Anthropic API requires assistant turns to contain tool_use blocks
@@ -73,7 +75,7 @@ export interface ToolResult {
 export type LLMResponse =
   | { type: 'text'; content: string; usage: LLMUsage }
   | { type: 'tool_use'; toolCalls: ToolCall[]; content?: string; usage: LLMUsage }
-  | { type: 'error'; error: import('../../errors/types.js').AgentError; usage?: LLMUsage };
+  | { type: 'error'; error: AgentError; usage?: LLMUsage };
 
 export interface LLMProvider {
   // Human-readable identifier used in logs and metrics (e.g. 'anthropic', 'openai').

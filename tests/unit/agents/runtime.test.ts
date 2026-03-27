@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { AgentRuntime } from '../../../src/agents/runtime.js';
 import { EventBus } from '../../../src/bus/bus.js';
 import { createAgentTask, type AgentResponseEvent, type AgentErrorEvent } from '../../../src/bus/events.js';
@@ -689,5 +689,137 @@ describe('AgentRuntime structured error injection', () => {
     expect(errorContent).toContain('<tool>email-send</tool>');
     expect(errorContent).toContain('<error_type>SKILL_ERROR</error_type>');
     expect(errorContent).toContain('SMTP connection refused');
+  });
+});
+
+// -- Retry logic tests --
+
+function makeRetryableError(): AgentError {
+  return {
+    type: 'RATE_LIMIT',
+    source: 'mock',
+    message: 'rate limited',
+    retryable: true,
+    context: { status: 429 },
+    timestamp: new Date(),
+  };
+}
+
+describe('AgentRuntime chatWithRetry', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('retries retryable errors and succeeds on later attempt', async () => {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+
+    let callCount = 0;
+    const provider: LLMProvider = {
+      id: 'mock',
+      chat: vi.fn(async () => {
+        callCount++;
+        if (callCount <= 2) {
+          // First two calls fail with retryable error
+          return { type: 'error' as const, error: makeRetryableError() };
+        }
+        // Third call succeeds
+        return {
+          type: 'text' as const,
+          content: 'Success after retry!',
+          usage: { inputTokens: 50, outputTokens: 20 },
+        };
+      }),
+    };
+
+    bus.subscribe('agent.response', 'dispatch', () => {});
+
+    const agent = new AgentRuntime({
+      agentId: 'coordinator',
+      systemPrompt: 'You are an assistant.',
+      provider,
+      bus,
+      logger,
+    });
+    agent.register();
+
+    const task = createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'conv-retry-ok',
+      channelId: 'cli',
+      senderId: 'user',
+      content: 'Hello',
+      parentEventId: 'parent-retry-1',
+    });
+
+    // Start task processing (don't await yet — timers need advancing)
+    const taskPromise = bus.publish('dispatch', task);
+
+    // Advance past first backoff (1000ms)
+    await vi.advanceTimersByTimeAsync(1100);
+    // Advance past second backoff (5000ms)
+    await vi.advanceTimersByTimeAsync(5100);
+
+    await taskPromise;
+
+    // Provider called 3 times: initial + 2 retries
+    expect(provider.chat).toHaveBeenCalledTimes(3);
+  });
+
+  it('publishes agent.error after all retries exhausted', async () => {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+
+    // Provider always returns retryable error
+    const provider: LLMProvider = {
+      id: 'mock',
+      chat: vi.fn(async () => ({
+        type: 'error' as const,
+        error: makeRetryableError(),
+      })),
+    };
+
+    const agentErrors: AgentErrorEvent[] = [];
+    bus.subscribe('agent.error', 'system', (event) => {
+      agentErrors.push(event as AgentErrorEvent);
+    });
+    bus.subscribe('agent.response', 'dispatch', () => {});
+
+    const agent = new AgentRuntime({
+      agentId: 'coordinator',
+      systemPrompt: 'You are an assistant.',
+      provider,
+      bus,
+      logger,
+    });
+    agent.register();
+
+    const task = createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'conv-retry-exhaust',
+      channelId: 'cli',
+      senderId: 'user',
+      content: 'Hello',
+      parentEventId: 'parent-retry-2',
+    });
+
+    const taskPromise = bus.publish('dispatch', task);
+
+    // Advance past all 3 backoffs: 1s + 5s + 15s
+    await vi.advanceTimersByTimeAsync(1100);
+    await vi.advanceTimersByTimeAsync(5100);
+    await vi.advanceTimersByTimeAsync(15100);
+
+    await taskPromise;
+
+    // 1 initial + 3 retries = 4 calls
+    expect(provider.chat).toHaveBeenCalledTimes(4);
+    // Should have published agent.error
+    expect(agentErrors).toHaveLength(1);
+    expect(agentErrors[0]?.payload.errorType).toBe('RATE_LIMIT');
   });
 });

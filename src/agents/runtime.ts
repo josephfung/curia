@@ -366,14 +366,11 @@ export class AgentRuntime {
     logger.warn({ agentId, errorType: agentErr.type }, 'Retryable LLM error, starting retry sequence');
 
     for (const backoffMs of RETRY_BACKOFF_MS) {
-      // Increment budget counters for the failed attempt
+      // Increment budget counters for the failed attempt.
+      // Note: AUTH_FAILURE is non-retryable and bails above, so only
+      // transient errors (RATE_LIMIT, TIMEOUT, PROVIDER_ERROR) reach here.
       budget.consecutiveErrors++;
       budget.turnsUsed++;
-      // AUTH_FAILURE counts double — it's a serious signal that something is wrong
-      if (agentErr.type === 'AUTH_FAILURE') {
-        budget.consecutiveErrors++;
-        budget.turnsUsed++;
-      }
 
       await new Promise(resolve => setTimeout(resolve, backoffMs));
 
