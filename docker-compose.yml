@@ -1,14 +1,29 @@
 services:
   postgres:
-    image: pgvector/pgvector:pg16
+    build:
+      context: .
+      dockerfile: docker/postgres.Dockerfile
     ports:
       - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+      # pgAudit init script runs on first database creation only
+      - ./docker/postgres-init-pgaudit.sql:/docker-entrypoint-initdb.d/10-pgaudit.sql:ro
     environment:
       POSTGRES_DB: curia
       POSTGRES_USER: ${DB_USER:-curia}
       POSTGRES_PASSWORD: ${DB_PASSWORD:-curia_dev}
+    # Load pgAudit extension and configure session-level auditing.
+    # - shared_preload_libraries: required for pgAudit to function
+    # - pgaudit.log: log all write (INSERT/UPDATE/DELETE) and DDL statements
+    # - pgaudit.log_parameter: include bind parameter values in log output
+    # - pgaudit.log_relation: log each table separately in multi-table queries
+    command: >
+      postgres
+      -c shared_preload_libraries=pgaudit
+      -c pgaudit.log=write,ddl
+      -c pgaudit.log_parameter=on
+      -c pgaudit.log_relation=on
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-curia}"]
       interval: 5s
