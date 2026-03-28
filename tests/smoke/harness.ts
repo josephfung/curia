@@ -27,6 +27,8 @@ import { loadSkillsFromDirectory } from '../../src/skills/loader.js';
 import { ContactService } from '../../src/contacts/contact-service.js';
 import { ContactResolver } from '../../src/contacts/contact-resolver.js';
 import { NylasClient } from '../../src/channels/email/nylas-client.js';
+import { OutboundContentFilter } from '../../src/dispatch/outbound-filter.js';
+import { OutboundGateway } from '../../src/skills/outbound-gateway.js';
 import { createInboundMessage, type OutboundMessageEvent } from '../../src/bus/events.js';
 import type { Logger } from '../../src/logger.js';
 
@@ -90,16 +92,40 @@ export async function createHarness(): Promise<CuriaHarness> {
 
   // Nylas client — optional, same as src/index.ts. EmailAdapter is intentionally
   // skipped here: smoke tests should not start polling for real emails during runs.
-  // The nylasClient is still passed to ExecutionLayer so email skills can be invoked
-  // if a smoke test explicitly calls email-send or email-reply.
+  // The nylasClient is used to construct an OutboundGateway so email skills can be
+  // invoked if a smoke test explicitly calls email-send or email-reply.
   let nylasClient: NylasClient | undefined;
   if (config.nylasApiKey && config.nylasGrantId) {
     nylasClient = new NylasClient(config.nylasApiKey, config.nylasGrantId, logger);
   }
 
-  // Execution layer — with bus and agent registry for infrastructure skills.
-  // nylasClient passed through so email skills work in tests that exercise them.
-  const executionLayer = new ExecutionLayer(skillRegistry, logger, { bus, agentRegistry, contactService, nylasClient, heldMessages: undefined });
+  // Outbound gateway — wraps nylasClient with contact-blocked checks and content
+  // filtering. Constructed here (without Nylas credentials) using an empty content
+  // filter so smoke tests that don't exercise email sending don't crash.
+  // When Nylas credentials ARE present the gateway is fully functional.
+  //
+  // OutboundContentFilter with empty markers is safe for smoke testing:
+  // no real markers → the system-prompt-fragment rule simply never fires.
+  const contentFilter = new OutboundContentFilter({
+    systemPromptMarkers: [],
+    ceoEmail: config.nylasSelfEmail ?? '',
+  });
+  let outboundGateway: OutboundGateway | undefined;
+  if (nylasClient && config.nylasSelfEmail) {
+    outboundGateway = new OutboundGateway({
+      nylasClient,
+      contactService,
+      contentFilter,
+      bus,
+      ceoEmail: config.nylasSelfEmail,
+      logger,
+    });
+  }
+
+  // Execution layer — with bus, agent registry, and outbound gateway for
+  // infrastructure skills. outboundGateway passed through so email skills
+  // work in tests that exercise them.
+  const executionLayer = new ExecutionLayer(skillRegistry, logger, { bus, agentRegistry, contactService, outboundGateway, heldMessages: undefined });
 
   // Load all agent configs from the agents/ directory.
   const agentsDir = path.resolve(import.meta.dirname, '../../agents');

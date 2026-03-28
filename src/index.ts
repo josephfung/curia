@@ -46,6 +46,7 @@ import { AuthorizationService } from './contacts/authorization.js';
 import { HeldMessageService } from './contacts/held-messages.js';
 import { DEFAULT_ERROR_BUDGET } from './errors/types.js';
 import { OutboundContentFilter } from './dispatch/outbound-filter.js';
+import { OutboundGateway } from './skills/outbound-gateway.js';
 
 async function main(): Promise<void> {
   // 1. Config & logging — no dependencies, must come first.
@@ -133,25 +134,16 @@ async function main(): Promise<void> {
   logger.info('Held message service initialized');
 
   // Email channel — optional, requires NYLAS_API_KEY, NYLAS_GRANT_ID, and NYLAS_SELF_EMAIL.
+  // NylasClient is constructed here (needed by OutboundGateway), but EmailAdapter is
+  // started later after the gateway is fully wired (adapter needs the gateway, not raw client).
   let nylasClient: NylasClient | undefined;
   let emailAdapter: EmailAdapter | undefined;
   if (config.nylasApiKey && config.nylasGrantId) {
     nylasClient = new NylasClient(config.nylasApiKey, config.nylasGrantId, logger);
-
     if (!config.nylasSelfEmail) {
       logger.warn('NYLAS_SELF_EMAIL not set — email adapter disabled (required to filter self-sent messages)');
-    } else {
-      emailAdapter = new EmailAdapter({
-        bus,
-        logger,
-        nylasClient,
-        contactService,
-        pollingIntervalMs: config.nylasPollingIntervalMs,
-        selfEmail: config.nylasSelfEmail,
-      });
-      await emailAdapter.start();
-      logger.info('Email channel adapter started');
     }
+    // EmailAdapter is started further below, after OutboundGateway is constructed.
   } else {
     logger.warn('NYLAS_API_KEY/NYLAS_GRANT_ID not set — email channel disabled');
   }
@@ -175,10 +167,6 @@ async function main(): Promise<void> {
   // Agent registry — tracks all running agents for delegation and listing.
   const agentRegistry = new AgentRegistry();
 
-  // Execution layer — now with bus and agent registry for infrastructure skills.
-  // nylasClient is passed through so email skills (email-send, email-reply) can use it.
-  const executionLayer = new ExecutionLayer(skillRegistry, logger, { bus, agentRegistry, contactService, nylasClient, heldMessages });
-
   // Load all agent configs from the agents/ directory.
   // Fail hard on errors — consistent with skill loading and DB connection checks.
   const agentsDir = path.resolve(import.meta.dirname, '../agents');
@@ -190,6 +178,77 @@ async function main(): Promise<void> {
     logger.fatal({ err }, 'Failed to load agent configs');
     process.exit(1);
   }
+
+  // Outbound content filter — extracts distinctive marker phrases from the
+  // coordinator's persona config and uses them to detect prompt leakage in
+  // outbound emails. Markers are derived dynamically so they stay in sync
+  // as the persona evolves.
+  //
+  // @TODO: The current marker extraction only covers persona fields (display_name,
+  // title, tone). It does NOT extract markers from the full system prompt text,
+  // which contains many more distinctive instruction phrases. Extracting arbitrary
+  // sentences would risk false positives, so this gap is intentionally left for
+  // the Stage 2 LLM-as-judge to cover. When Stage 2 is implemented, revisit
+  // whether additional deterministic markers should be extracted from the prompt.
+  // Look up by name (not role) — agent YAML files use `name: coordinator` as the
+  // canonical identifier. Role is an optional field and may not match "coordinator"
+  // if the config uses a different role value (e.g., "chief-of-staff").
+  const coordinatorConfig = agentConfigs.find(c => c.name === 'coordinator');
+  let outboundFilter: OutboundContentFilter | undefined;
+  if (coordinatorConfig) {
+    const systemPromptMarkers = extractSystemPromptMarkers(coordinatorConfig);
+    const ceoEmail = config.nylasSelfEmail ?? '';
+    if (!ceoEmail) {
+      logger.warn('Outbound content filter initialized without CEO email — contact-data-leak rule may produce false positives');
+    }
+    if (systemPromptMarkers.length === 0) {
+      logger.warn('No system prompt markers extracted — system-prompt-fragment rule will not detect prompt leakage. Check that coordinator has persona.display_name and persona.tone configured.');
+    }
+    outboundFilter = new OutboundContentFilter({
+      systemPromptMarkers,
+      ceoEmail,
+    });
+    logger.info({ markerCount: systemPromptMarkers.length }, 'Outbound content filter initialized');
+  }
+
+  // Outbound gateway — single choke-point for all outbound external communication.
+  // Wraps nylasClient with blocked-contact checks and content filtering before
+  // any message leaves Curia. Only instantiated when nylasClient is available
+  // (i.e., Nylas credentials are configured). Skills receive it via SkillContext.
+  let outboundGateway: OutboundGateway | undefined;
+  if (nylasClient && outboundFilter && config.nylasSelfEmail) {
+    outboundGateway = new OutboundGateway({
+      nylasClient,
+      contactService,
+      contentFilter: outboundFilter,
+      bus,
+      ceoEmail: config.nylasSelfEmail,
+      logger,
+    });
+    logger.info('Outbound gateway initialized');
+  } else if (nylasClient) {
+    // nylasClient is available but outboundFilter or ceoEmail is missing — log a warning.
+    // Email skills will be unavailable because they check ctx.outboundGateway before sending.
+    logger.warn('Outbound gateway NOT initialized — missing outboundFilter or nylasSelfEmail. Email send/reply skills will be unavailable.');
+  }
+
+  // Construct the email adapter (but don't start it yet — it must not poll until
+  // the dispatcher is registered, otherwise inbound.message events have no subscriber
+  // and are permanently dropped because the adapter advances its high-water mark).
+  if (outboundGateway && config.nylasSelfEmail) {
+    emailAdapter = new EmailAdapter({
+      bus,
+      logger,
+      outboundGateway,
+      contactService,
+      pollingIntervalMs: config.nylasPollingIntervalMs,
+      selfEmail: config.nylasSelfEmail,
+    });
+  }
+
+  // Execution layer — now with bus, agent registry, and outbound gateway for
+  // infrastructure skills. outboundGateway gives email skills their send path.
+  const executionLayer = new ExecutionLayer(skillRegistry, logger, { bus, agentRegistry, contactService, outboundGateway, heldMessages });
 
   // Two-pass agent registration:
   // Pass 1: Register all agents in the registry so specialistSummary() is complete
@@ -269,54 +328,28 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  // Outbound content filter — extracts distinctive marker phrases from the
-  // coordinator's persona config and uses them to detect prompt leakage in
-  // outbound emails. Markers are derived dynamically so they stay in sync
-  // as the persona evolves.
-  //
-  // @TODO: The current marker extraction only covers persona fields (display_name,
-  // title, tone). It does NOT extract markers from the full system prompt text,
-  // which contains many more distinctive instruction phrases. Extracting arbitrary
-  // sentences would risk false positives, so this gap is intentionally left for
-  // the Stage 2 LLM-as-judge to cover. When Stage 2 is implemented, revisit
-  // whether additional deterministic markers should be extracted from the prompt.
-  // Look up by name (not role) — agent YAML files use `name: coordinator` as the
-  // canonical identifier. Role is an optional field and may not match "coordinator"
-  // if the config uses a different role value (e.g., "chief-of-staff").
-  const coordinatorConfig = agentConfigs.find(c => c.name === 'coordinator');
-  let outboundFilter: OutboundContentFilter | undefined;
-  if (coordinatorConfig) {
-    const systemPromptMarkers = extractSystemPromptMarkers(coordinatorConfig);
-    const ceoEmail = config.nylasSelfEmail ?? '';
-    if (!ceoEmail) {
-      logger.warn('Outbound content filter initialized without CEO email — contact-data-leak rule may produce false positives');
-    }
-    if (systemPromptMarkers.length === 0) {
-      logger.warn('No system prompt markers extracted — system-prompt-fragment rule will not detect prompt leakage. Check that coordinator has persona.display_name and persona.tone configured.');
-    }
-    outboundFilter = new OutboundContentFilter({
-      systemPromptMarkers,
-      ceoEmail,
-    });
-    logger.info({ markerCount: systemPromptMarkers.length }, 'Outbound content filter initialized');
-  }
-
   // 7. Dispatcher — subscribes to inbound.message + agent.response.
   // Registered after the coordinator so agent.task already has a handler
   // when the dispatcher fans the first inbound message out.
+  // Content filter, externalChannels, and ceoNotification are now handled by OutboundGateway.
+  // The Dispatcher only routes — it no longer contains any filter logic.
   const dispatcher = new Dispatcher({
     bus,
     logger,
     contactResolver,
     heldMessages,
     channelPolicies: authConfig?.channelPolicies,
-    outboundFilter,
-    externalChannels: new Set(['email']),
-    ceoNotification: nylasClient && config.nylasSelfEmail
-      ? { nylasClient, ceoEmail: config.nylasSelfEmail }
-      : undefined,
   });
   dispatcher.register();
+
+  // Start the email adapter AFTER the dispatcher is registered so inbound.message
+  // events always have a subscriber. Starting before registration would drop emails
+  // arriving during the startup window (the adapter advances its high-water mark
+  // on poll, so dropped messages are never retried).
+  if (emailAdapter) {
+    await emailAdapter.start();
+    logger.info('Email channel adapter started');
+  }
 
   // HTTP API channel — REST + SSE endpoints for external clients.
   // Runs alongside the CLI channel so both can be used simultaneously.

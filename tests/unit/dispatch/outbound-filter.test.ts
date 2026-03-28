@@ -226,13 +226,17 @@ describe('OutboundContentFilter', () => {
   });
 
   describe('LLM review stub', () => {
-    it('always passes (returns empty findings)', async () => {
+    it('always passes — content that clears Stage 1 also clears Stage 2 (stub)', async () => {
       const filter = createTestFilter();
-      const findings = await filter.runLlmReview({
+      // Content that passes all deterministic rules should also pass the LLM stub
+      const result = await filter.check({
         ...BASE_INPUT,
         content: 'Any content at all.',
       });
-      expect(findings).toEqual([]);
+      expect(result.passed).toBe(true);
+      expect(result.findings).toEqual([]);
+      // No stage field when passed — both stages cleared
+      expect(result.stage).toBeUndefined();
     });
   });
 

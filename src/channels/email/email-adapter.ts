@@ -6,7 +6,7 @@
 
 import type { EventBus } from '../../bus/bus.js';
 import type { Logger } from '../../logger.js';
-import type { NylasClient } from './nylas-client.js';
+import type { OutboundGateway } from '../../skills/outbound-gateway.js';
 import type { ContactService } from '../../contacts/contact-service.js';
 import { convertNylasMessage } from './message-converter.js';
 import { createInboundMessage, type OutboundMessageEvent } from '../../bus/events.js';
@@ -15,7 +15,7 @@ import { sanitizeOutput } from '../../skills/sanitize.js';
 export interface EmailAdapterConfig {
   bus: EventBus;
   logger: Logger;
-  nylasClient: NylasClient;
+  outboundGateway: OutboundGateway;
   contactService: ContactService;
   pollingIntervalMs: number;
   /** Nathan Curia's own email address — used to filter out self-sent messages */
@@ -80,7 +80,7 @@ export class EmailAdapter {
     // doesn't silently drop already-fetched messages.
     let messages;
     try {
-      messages = await this.config.nylasClient.listMessages({
+      messages = await this.config.outboundGateway.listEmailMessages({
         receivedAfter: this.lastSeenTimestamp,
         unread: true,
         limit: 25,
@@ -158,7 +158,7 @@ export class EmailAdapter {
    * most recent inbound message in that thread and reply to it.
    */
   private async sendOutboundReply(outbound: OutboundMessageEvent): Promise<void> {
-    const { nylasClient, logger } = this.config;
+    const { outboundGateway, logger } = this.config;
     const conversationId = outbound.payload.conversationId;
 
     if (!conversationId.startsWith('email:')) {
@@ -167,11 +167,11 @@ export class EmailAdapter {
     }
     const threadId = conversationId.slice('email:'.length);
 
-    // Find the original message in this thread so we can reply to it.
-    // Pass threadId directly to Nylas so the API filters server-side —
-    // much cheaper than fetching 50 messages and scanning locally.
     try {
-      const messages = await nylasClient.listMessages({ limit: 1, threadId });
+      // Find the original message in this thread so we can reply to it.
+      // Pass threadId directly to Nylas so the API filters server-side —
+      // much cheaper than fetching 50 messages and scanning locally.
+      const messages = await outboundGateway.listEmailMessages({ limit: 1, threadId });
       const threadMessage = messages[0];
       if (!threadMessage) {
         logger.warn({ threadId }, 'Cannot find message to reply to in thread');
@@ -187,14 +187,22 @@ export class EmailAdapter {
       // Strip any existing "Re:" prefix before prepending our own to avoid
       // "Re: Re: Re: ..." chains when replying to already-replied threads.
       const baseSubject = threadMessage.subject.replace(/^Re:\s*/i, '');
-      await nylasClient.sendMessage({
-        to: [{ email: fromEmail }],
+
+      // Route through the gateway so the blocked-contact check and content filter
+      // run on every outbound reply, not just those originating from skills.
+      const result = await outboundGateway.send({
+        channel: 'email',
+        to: fromEmail,
         subject: `Re: ${baseSubject}`,
         body: outbound.payload.content,
         replyToMessageId: threadMessage.id,
       });
 
-      logger.info({ to: fromEmail, threadId }, 'Email reply sent');
+      if (result.success) {
+        logger.info({ to: fromEmail, threadId }, 'Email reply sent via gateway');
+      } else {
+        logger.warn({ to: fromEmail, threadId, reason: result.blockedReason }, 'Email reply blocked by gateway');
+      }
     } catch (err) {
       logger.error({ err, threadId }, 'Failed to send email reply');
     }

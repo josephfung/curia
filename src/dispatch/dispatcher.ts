@@ -1,12 +1,10 @@
-import { randomUUID } from 'node:crypto';
 import type { EventBus } from '../bus/bus.js';
 import type { InboundMessageEvent, AgentResponseEvent, AgentErrorEvent } from '../bus/events.js';
-import { createAgentTask, createOutboundMessage, createOutboundBlocked, createContactResolved, createContactUnknown, createMessageHeld } from '../bus/events.js';
+import { createAgentTask, createOutboundMessage, createContactResolved, createContactUnknown, createMessageHeld } from '../bus/events.js';
 import type { Logger } from '../logger.js';
 import type { ContactResolver } from '../contacts/contact-resolver.js';
 import type { HeldMessageService } from '../contacts/held-messages.js';
 import type { InboundSenderContext, ChannelPolicyConfig } from '../contacts/types.js';
-import type { OutboundContentFilter } from './outbound-filter.js';
 
 export interface DispatcherConfig {
   bus: EventBus;
@@ -14,15 +12,6 @@ export interface DispatcherConfig {
   contactResolver?: ContactResolver;
   heldMessages?: HeldMessageService;
   channelPolicies?: Record<string, ChannelPolicyConfig>;
-  /** Outbound content filter for external channels. If not provided, no filtering is applied. */
-  outboundFilter?: OutboundContentFilter;
-  /** Set of channel IDs considered external-facing (filtered). Default: empty (no filtering). */
-  externalChannels?: Set<string>;
-  /** Configuration for CEO notification emails when outbound content is blocked. */
-  ceoNotification?: {
-    nylasClient: import('../channels/email/nylas-client.js').NylasClient;
-    ceoEmail: string;
-  };
 }
 
 /**
@@ -41,9 +30,6 @@ export class Dispatcher {
   private contactResolver?: ContactResolver;
   private heldMessages?: HeldMessageService;
   private channelPolicies?: Record<string, ChannelPolicyConfig>;
-  private outboundFilter?: OutboundContentFilter;
-  private externalChannels: Set<string>;
-  private ceoNotification?: DispatcherConfig['ceoNotification'];
   /**
    * Maps agent.task event ID → channel routing info.
    * When the agent publishes agent.response (with parentEventId pointing to the task),
@@ -51,10 +37,6 @@ export class Dispatcher {
    *
    * We key on the task event ID (not the inbound message ID) because the agent
    * runtime sets parentEventId on its response to the task event that triggered it.
-   *
-   * senderId is stored so the outbound filter can check for contact-data leakage
-   * (i.e., whether the response inadvertently reveals third-party email addresses
-   * to the specific recipient who sent the inbound message).
    */
   private taskRouting = new Map<string, { channelId: string; conversationId: string; senderId: string }>();
 
@@ -64,20 +46,6 @@ export class Dispatcher {
     this.contactResolver = config.contactResolver;
     this.heldMessages = config.heldMessages;
     this.channelPolicies = config.channelPolicies;
-    this.outboundFilter = config.outboundFilter;
-    this.externalChannels = config.externalChannels ?? new Set();
-    this.ceoNotification = config.ceoNotification;
-
-    // Warn about misconfiguration that would silently disable security features.
-    if (this.externalChannels.size > 0 && !this.outboundFilter) {
-      this.logger.warn('External channels configured but no outbound filter provided — outbound content will NOT be filtered');
-    }
-    if (this.outboundFilter && this.externalChannels.size === 0) {
-      this.logger.warn('Outbound filter configured but no external channels set — filter will never activate');
-    }
-    if (this.externalChannels.size > 0 && this.outboundFilter && !this.ceoNotification) {
-      this.logger.warn('Outbound filter active but CEO notification not configured — blocked messages will only appear in audit logs');
-    }
   }
 
   register(): void {
@@ -267,8 +235,6 @@ export class Dispatcher {
 
     // Store routing info keyed by the task event ID so we can look it up
     // when the agent publishes its response (agent sets parentEventId = task.id).
-    // senderId is included so the outbound filter can pass it as recipientEmail
-    // for the contact-data-leak check.
     this.taskRouting.set(taskEvent.id, {
       channelId: payload.channelId,
       conversationId: payload.conversationId,
@@ -304,114 +270,9 @@ export class Dispatcher {
 
     this.taskRouting.delete(event.parentEventId!);
 
-    // Run outbound filter for external-facing channels.
-    // Internal channels (CLI, HTTP) skip filtering — they deliver to the CEO.
-    if (this.outboundFilter && this.externalChannels.has(routing.channelId)) {
-      // Fail-closed: if the filter itself throws, block the message rather than
-      // letting potentially sensitive content through. This is a security boundary
-      // — failing open would defeat the purpose of the filter.
-      let filterResult;
-      try {
-        filterResult = await this.outboundFilter.check({
-          content: event.payload.content,
-          recipientEmail: routing.senderId,
-          conversationId: routing.conversationId,
-          channelId: routing.channelId,
-        });
-      } catch (filterErr) {
-        this.logger.error(
-          { err: filterErr, channelId: routing.channelId, conversationId: routing.conversationId },
-          'Outbound content filter crashed — blocking message (fail-closed)',
-        );
-        filterResult = {
-          passed: false,
-          findings: [{ rule: 'filter-error', detail: `Filter threw: ${filterErr instanceof Error ? filterErr.message : String(filterErr)}` }],
-        };
-      }
-
-      if (!filterResult.passed) {
-        const reason = filterResult.findings
-          .map(f => `${f.rule}: ${f.detail}`)
-          .join('; ');
-
-        // Log only rule names in the warn log to avoid writing matched markers
-        // or email addresses (which may be sensitive) to the application log.
-        // The full reason with detail goes into the outbound.blocked event payload,
-        // which is written to the audit log — the appropriate place for forensic detail.
-        const ruleNames = filterResult.findings.map(f => f.rule).join(', ');
-        this.logger.warn(
-          { channelId: routing.channelId, conversationId: routing.conversationId, rules: ruleNames, findingCount: filterResult.findings.length },
-          'Outbound content blocked by filter',
-        );
-
-        const blockedEvent = createOutboundBlocked({
-          blockId: `block_${randomUUID()}`,
-          conversationId: routing.conversationId,
-          channelId: routing.channelId,
-          content: event.payload.content,
-          recipientId: routing.senderId,
-          reason,
-          findings: filterResult.findings,
-          parentEventId: event.id,
-        });
-        // Wrap publish in try-catch: if the audit event fails to publish, we still
-        // enforce the block and send the CEO notification. The block decision is
-        // already made — event publication failure should not re-open the gate.
-        try {
-          await this.bus.publish('dispatch', blockedEvent);
-        } catch (publishErr) {
-          this.logger.error(
-            { err: publishErr, blockId: blockedEvent.payload.blockId },
-            'Failed to publish outbound.blocked event — block is still enforced',
-          );
-        }
-
-        // Send opaque notification email to the CEO.
-        // Contains only the block ID and recipient identifier — no sensitive content.
-        //
-        // SPEC DEVIATION: This calls nylasClient.sendMessage() directly instead of
-        // publishing an outbound.message event through the bus → filter → email-adapter
-        // pipeline. The spec says "there is no bypass mechanism" for the filter, but
-        // routing through the bus creates a circular dependency (Dispatcher subscribes
-        // to agent.response, not its own notifications).
-        //
-        // This is acceptable ONLY because the notification is a fixed template with no
-        // dynamic content beyond an opaque block ID and a sender email address — it
-        // cannot leak system prompt or internal context by construction.
-        //
-        // @TODO: Build an `outbound.notification` event type that the email adapter
-        // subscribes to independently. This would route notifications through the
-        // filter pipeline without re-entering the Dispatcher's response handler.
-        // This is a HARD REQUIREMENT before adding any additional direct-send paths.
-        // Do NOT add a second bypass — build the notification event type instead.
-        if (this.ceoNotification) {
-          try {
-            await this.ceoNotification.nylasClient.sendMessage({
-              to: [{ email: this.ceoNotification.ceoEmail }],
-              subject: 'Action needed — blocked outbound reply',
-              body: [
-                'An outbound email reply was blocked by the content filter.',
-                '',
-                `Intended recipient: ${routing.senderId}`,
-                `Block reference: ${blockedEvent.payload.blockId}`,
-                '',
-                'Please review this blocked message via CLI or web app using the reference above.',
-              ].join('\n'),
-            });
-          } catch (err) {
-            // Log but don't throw — the block event is already published.
-            // A failed notification is bad but not as bad as sending leaked content.
-            this.logger.error(
-              { err, blockId: blockedEvent.payload.blockId },
-              'Failed to send CEO notification for blocked outbound content',
-            );
-          }
-        }
-
-        return; // Do NOT publish outbound.message
-      }
-    }
-
+    // Publish outbound.message to the bus — the email adapter will pick it up
+    // and route it through OutboundGateway (blocked-contact check + content filter).
+    // No filter logic lives here anymore; it all runs inside the gateway.
     const outbound = createOutboundMessage({
       conversationId: routing.conversationId,
       channelId: routing.channelId,

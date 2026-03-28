@@ -51,8 +51,10 @@ export interface SkillContext {
   agentRegistry?: import('../agents/agent-registry.js').AgentRegistry;
   /** Contact service — only available to infrastructure skills */
   contactService?: import('../contacts/contact-service.js').ContactService;
-  /** Nylas email client — only available to infrastructure skills */
-  nylasClient?: import('../channels/email/nylas-client.js').NylasClient;
+  /** Outbound gateway — only available to infrastructure skills. All external
+   *  communication (email, future Signal/Telegram) goes through the gateway,
+   *  which enforces contact blocked checks and content filtering. */
+  outboundGateway?: import('./outbound-gateway.js').OutboundGateway;
   /** Held message service for infrastructure skills that manage held messages */
   heldMessages?: import('../contacts/held-messages.js').HeldMessageService;
 }
