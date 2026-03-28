@@ -59,6 +59,16 @@ describe('ContactService', () => {
       expect(contact.displayName).toBe('Unknown');
     });
 
+    it('uses fallbackDisplayName when primary name sanitizes to empty', async () => {
+      const contact = await service.createContact({
+        displayName: ':::;;;',
+        fallbackDisplayName: 'user@example.com',
+        source: 'email_participant',
+      });
+      // @ is stripped by allowlist, rest survives
+      expect(contact.displayName).toBe('userexample.com');
+    });
+
     it('links to existing KG node when kgNodeId provided', async () => {
       const entity = await entityMemory.createEntity({
         type: 'person',

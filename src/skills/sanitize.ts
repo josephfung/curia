@@ -147,11 +147,26 @@ export function sanitizeDisplayName(
   // Collapse whitespace runs and trim
   name = name.replace(WHITESPACE_COLLAPSE, ' ').trim();
 
-  // Truncate to length limit
+  // Truncate to length limit.
+  // Note: slice() counts UTF-16 code units, which could theoretically split a
+  // surrogate pair for supplementary-plane characters. Accepted limitation given
+  // the generous 200-char limit makes this edge case vanishingly unlikely for
+  // real human names.
   if (name.length > DISPLAY_NAME_MAX_LENGTH) {
     name = name.slice(0, DISPLAY_NAME_MAX_LENGTH).trim();
   }
 
-  // If nothing meaningful remains, use the fallback
-  return name.length > 0 ? name : fallback;
+  // If nothing meaningful remains, sanitize and use the fallback.
+  // The fallback may come from an external source (e.g., an email address)
+  // so it must go through the same pipeline to prevent bypass.
+  if (name.length > 0) return name;
+
+  const safeFallback = fallback
+    .replace(DISPLAY_NAME_ALLOWED, '')
+    .replace(WHITESPACE_COLLAPSE, ' ')
+    .trim();
+  if (safeFallback.length > DISPLAY_NAME_MAX_LENGTH) {
+    return safeFallback.slice(0, DISPLAY_NAME_MAX_LENGTH).trim();
+  }
+  return safeFallback.length > 0 ? safeFallback : 'Unknown';
 }

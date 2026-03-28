@@ -50,6 +50,12 @@ export interface AuthOverride {
 /** Options for creating a new contact */
 export interface CreateContactOptions {
   displayName: string;
+  /**
+   * Fallback display name if the primary name sanitizes to empty.
+   * Useful when the name comes from an external source (e.g., email participant)
+   * and the email address is a reasonable fallback. Also sanitized before use.
+   */
+  fallbackDisplayName?: string;
   role?: string;
   status?: ContactStatus;
   notes?: string;

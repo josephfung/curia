@@ -10,7 +10,7 @@ import type { OutboundGateway } from '../../skills/outbound-gateway.js';
 import type { ContactService } from '../../contacts/contact-service.js';
 import { convertNylasMessage } from './message-converter.js';
 import { createInboundMessage, type OutboundMessageEvent } from '../../bus/events.js';
-import { sanitizeOutput, sanitizeDisplayName } from '../../skills/sanitize.js';
+import { sanitizeOutput } from '../../skills/sanitize.js';
 
 export interface EmailAdapterConfig {
   bus: EventBus;
@@ -230,11 +230,12 @@ export class EmailAdapter {
         if (existing) continue;
 
         // Create a new contact and link the email identity to it.
-        // Sanitize the display name before storage — email participant names come
-        // directly from the sender's mail client and can contain arbitrary content
-        // including prompt injection attempts. See issue #39.
+        // Display name sanitization happens inside createContact() (see issue #39).
+        // We pass the email as fallbackDisplayName so that if the participant name
+        // sanitizes to empty (e.g., pure injection text), the email is used instead.
         const contact = await contactService.createContact({
-          displayName: sanitizeDisplayName(p.name || p.email, p.email),
+          displayName: p.name || p.email,
+          fallbackDisplayName: p.email,
           source: 'email_participant',
           status: 'provisional',
         });

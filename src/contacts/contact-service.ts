@@ -92,7 +92,10 @@ export class ContactService {
     // Defense-in-depth: sanitize display names at storage time to prevent
     // stored prompt injection. External sources (email participants, CRM imports)
     // may contain arbitrary content in the name field. See issue #39.
-    const safeName = sanitizeDisplayName(options.displayName);
+    const safeName = sanitizeDisplayName(
+      options.displayName,
+      options.fallbackDisplayName,
+    );
 
     // Auto-create a KG person node if we have entityMemory and no explicit kgNodeId
     let kgNodeId: string | null = options.kgNodeId ?? null;
