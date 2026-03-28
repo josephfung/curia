@@ -129,4 +129,92 @@ describe('ExecutionLayer', () => {
       expect(result.data as string).toContain('real data');
     }
   });
+
+  describe('elevated skill caller verification', () => {
+    it('allows elevated skill when caller has ceo role', async () => {
+      const handler: SkillHandler = {
+        execute: async () => ({ success: true, data: 'ok' }),
+      };
+      registry.register(makeManifest({ name: 'elevated-skill', sensitivity: 'elevated' }), handler);
+
+      const result = await execution.invoke('elevated-skill', {}, {
+        contactId: 'primary-user',
+        role: 'ceo',
+        channel: 'email',
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it('allows elevated skill when caller channel is cli', async () => {
+      const handler: SkillHandler = {
+        execute: async () => ({ success: true, data: 'ok' }),
+      };
+      registry.register(makeManifest({ name: 'elevated-skill', sensitivity: 'elevated' }), handler);
+
+      const result = await execution.invoke('elevated-skill', {}, {
+        contactId: 'primary-user',
+        role: 'ceo',
+        channel: 'cli',
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it('rejects elevated skill when caller is not ceo and not cli', async () => {
+      const handler: SkillHandler = {
+        execute: async () => ({ success: true, data: 'should not reach' }),
+      };
+      registry.register(makeManifest({ name: 'elevated-skill', sensitivity: 'elevated' }), handler);
+
+      const result = await execution.invoke('elevated-skill', {}, {
+        contactId: 'contact-123',
+        role: 'cfo',
+        channel: 'email',
+      });
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error).toContain('elevated privileges');
+        expect(result.error).toContain('cfo');
+        expect(result.error).toContain('email');
+      }
+    });
+
+    it('rejects elevated skill when no caller context (fail-closed)', async () => {
+      const handler: SkillHandler = {
+        execute: async () => ({ success: true, data: 'should not reach' }),
+      };
+      registry.register(makeManifest({ name: 'elevated-skill', sensitivity: 'elevated' }), handler);
+
+      const result = await execution.invoke('elevated-skill', {});
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error).toContain('elevated privileges');
+        expect(result.error).toContain('no caller context');
+      }
+    });
+
+    it('allows normal skill without caller context', async () => {
+      const handler: SkillHandler = {
+        execute: async () => ({ success: true, data: 'ok' }),
+      };
+      registry.register(makeManifest({ name: 'normal-skill', sensitivity: 'normal' }), handler);
+
+      const result = await execution.invoke('normal-skill', {});
+      expect(result.success).toBe(true);
+    });
+
+    it('passes caller through to SkillContext', async () => {
+      let receivedCaller: unknown;
+      const handler: SkillHandler = {
+        execute: async (ctx: SkillContext) => {
+          receivedCaller = ctx.caller;
+          return { success: true, data: 'ok' };
+        },
+      };
+      registry.register(makeManifest({ name: 'elevated-skill', sensitivity: 'elevated' }), handler);
+
+      const caller = { contactId: 'primary-user', role: 'ceo' as const, channel: 'cli' };
+      await execution.invoke('elevated-skill', {}, caller);
+      expect(receivedCaller).toEqual(caller);
+    });
+  });
 });

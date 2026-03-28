@@ -12,7 +12,7 @@
 // publish/subscribe including layer impersonation. Only framework-internal
 // skills like 'delegate' should use this — it is a privileged escape hatch.
 
-import type { SkillResult, SkillContext } from './types.js';
+import type { SkillResult, SkillContext, CallerContext } from './types.js';
 import type { SkillRegistry } from './registry.js';
 import { sanitizeOutput } from './sanitize.js';
 import type { Logger } from '../logger.js';
@@ -56,6 +56,7 @@ export class ExecutionLayer {
   async invoke(
     skillName: string,
     input: Record<string, unknown>,
+    caller?: CallerContext,
   ): Promise<SkillResult> {
     const skill = this.registry.get(skillName);
 
@@ -64,6 +65,24 @@ export class ExecutionLayer {
     }
 
     const { manifest, handler } = skill;
+
+    // Elevated-skill gate: enforce caller verification before building context.
+    // Fail-closed — if caller context is missing, elevated skills are blocked.
+    if (manifest.sensitivity === 'elevated') {
+      if (!caller) {
+        return {
+          success: false,
+          error: `Skill '${skillName}' requires elevated privileges — no caller context provided (fail-closed)`,
+        };
+      }
+      if (caller.role !== 'ceo' && caller.channel !== 'cli') {
+        return {
+          success: false,
+          error: `Skill '${skillName}' requires elevated privileges — caller role '${caller.role}' on channel '${caller.channel}' is not authorized`,
+        };
+      }
+    }
+
     const skillLogger = this.logger.child({ skill: skillName });
 
     // Build the sandboxed context — secret access is restricted to
@@ -84,6 +103,7 @@ export class ExecutionLayer {
         return value;
       },
       log: skillLogger,
+      caller,
     };
 
     // Infrastructure skills get bus and agent registry access.
