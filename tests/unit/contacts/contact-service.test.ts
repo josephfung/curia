@@ -189,7 +189,7 @@ describe('ContactService', () => {
   describe('auth overrides', () => {
     it('grants a permission override', async () => {
       const contact = await service.createContact({ displayName: 'Dave', source: 'test' });
-      await service.grantPermission(contact.id, 'schedule_meetings', true);
+      await service.grantPermission(contact.id, 'schedule_meetings', true, 'primary-user');
 
       const overrides = await service.getAuthOverrides(contact.id);
       expect(overrides).toHaveLength(1);
@@ -198,7 +198,7 @@ describe('ContactService', () => {
 
     it('revokes a permission override', async () => {
       const contact = await service.createContact({ displayName: 'Eve', source: 'test' });
-      await service.grantPermission(contact.id, 'see_personal_calendar', true);
+      await service.grantPermission(contact.id, 'see_personal_calendar', true, 'primary-user');
       await service.revokePermission(contact.id, 'see_personal_calendar');
 
       const overrides = await service.getAuthOverrides(contact.id);
@@ -207,8 +207,8 @@ describe('ContactService', () => {
 
     it('upserts an override (grant then change to deny)', async () => {
       const contact = await service.createContact({ displayName: 'Frank', source: 'test' });
-      await service.grantPermission(contact.id, 'send_on_behalf', true);
-      await service.grantPermission(contact.id, 'send_on_behalf', false);
+      await service.grantPermission(contact.id, 'send_on_behalf', true, 'primary-user');
+      await service.grantPermission(contact.id, 'send_on_behalf', false, 'primary-user');
 
       const overrides = await service.getAuthOverrides(contact.id);
       expect(overrides).toHaveLength(1);
@@ -216,7 +216,7 @@ describe('ContactService', () => {
     });
 
     it('grantPermission throws for non-existent contact', async () => {
-      await expect(service.grantPermission('non-existent', 'foo', true)).rejects.toThrow('Contact not found');
+      await expect(service.grantPermission('non-existent', 'foo', true, 'primary-user')).rejects.toThrow('Contact not found');
     });
   });
 
