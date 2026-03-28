@@ -235,8 +235,6 @@ export class Dispatcher {
 
     // Store routing info keyed by the task event ID so we can look it up
     // when the agent publishes its response (agent sets parentEventId = task.id).
-    // senderId is included so the outbound filter can pass it as recipientEmail
-    // for the contact-data-leak check.
     this.taskRouting.set(taskEvent.id, {
       channelId: payload.channelId,
       conversationId: payload.conversationId,
