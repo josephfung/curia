@@ -31,7 +31,9 @@ export class ContactGrantPermissionHandler implements SkillHandler {
     }
 
     try {
-      await ctx.contactService.grantPermission(contact_id, permission, granted);
+      // caller is guaranteed defined for elevated skills — the execution layer
+      // rejects elevated invocations without caller context (fail-closed gate).
+      await ctx.contactService.grantPermission(contact_id, permission, granted, ctx.caller!.contactId);
       const action = granted ? 'granted' : 'denied';
       ctx.log.info({ contactId: contact_id, permission, granted }, `Permission ${action}`);
       return { success: true, data: { contact_id, permission, granted } };
