@@ -67,6 +67,17 @@ export class Dispatcher {
     this.outboundFilter = config.outboundFilter;
     this.externalChannels = config.externalChannels ?? new Set();
     this.ceoNotification = config.ceoNotification;
+
+    // Warn about misconfiguration that would silently disable security features.
+    if (this.externalChannels.size > 0 && !this.outboundFilter) {
+      this.logger.warn('External channels configured but no outbound filter provided — outbound content will NOT be filtered');
+    }
+    if (this.outboundFilter && this.externalChannels.size === 0) {
+      this.logger.warn('Outbound filter configured but no external channels set — filter will never activate');
+    }
+    if (this.externalChannels.size > 0 && this.outboundFilter && !this.ceoNotification) {
+      this.logger.warn('Outbound filter active but CEO notification not configured — blocked messages will only appear in audit logs');
+    }
   }
 
   register(): void {
@@ -296,12 +307,27 @@ export class Dispatcher {
     // Run outbound filter for external-facing channels.
     // Internal channels (CLI, HTTP) skip filtering — they deliver to the CEO.
     if (this.outboundFilter && this.externalChannels.has(routing.channelId)) {
-      const filterResult = await this.outboundFilter.check({
-        content: event.payload.content,
-        recipientEmail: routing.senderId,
-        conversationId: routing.conversationId,
-        channelId: routing.channelId,
-      });
+      // Fail-closed: if the filter itself throws, block the message rather than
+      // letting potentially sensitive content through. This is a security boundary
+      // — failing open would defeat the purpose of the filter.
+      let filterResult;
+      try {
+        filterResult = await this.outboundFilter.check({
+          content: event.payload.content,
+          recipientEmail: routing.senderId,
+          conversationId: routing.conversationId,
+          channelId: routing.channelId,
+        });
+      } catch (filterErr) {
+        this.logger.error(
+          { err: filterErr, channelId: routing.channelId, conversationId: routing.conversationId },
+          'Outbound content filter crashed — blocking message (fail-closed)',
+        );
+        filterResult = {
+          passed: false,
+          findings: [{ rule: 'filter-error', detail: `Filter threw: ${filterErr instanceof Error ? filterErr.message : String(filterErr)}` }],
+        };
+      }
 
       if (!filterResult.passed) {
         const reason = filterResult.findings

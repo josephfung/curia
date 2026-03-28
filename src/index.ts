@@ -288,6 +288,9 @@ async function main(): Promise<void> {
     if (!ceoEmail) {
       logger.warn('Outbound content filter initialized without CEO email — contact-data-leak rule may produce false positives');
     }
+    if (systemPromptMarkers.length === 0) {
+      logger.warn('No system prompt markers extracted — system-prompt-fragment rule will not detect prompt leakage. Check that coordinator has persona.display_name and persona.tone configured.');
+    }
     outboundFilter = new OutboundContentFilter({
       systemPromptMarkers,
       ceoEmail,
