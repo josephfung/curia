@@ -13,6 +13,7 @@ import { randomUUID } from 'node:crypto';
 import type { DbPool } from '../db/connection.js';
 import type { Logger } from '../logger.js';
 import type { EntityMemory } from '../memory/entity-memory.js';
+import { sanitizeDisplayName } from '../skills/sanitize.js';
 import type {
   AuthOverride,
   Contact,
@@ -65,6 +66,7 @@ export class ContactService {
   private constructor(
     private backend: ContactServiceBackend,
     private entityMemory: EntityMemory | undefined,
+    private logger?: Logger,
   ) {}
 
   /** Create a Postgres-backed instance for production use */
@@ -73,7 +75,7 @@ export class ContactService {
     entityMemory: EntityMemory | undefined,
     logger: Logger,
   ): ContactService {
-    return new ContactService(new PostgresContactBackend(pool, logger), entityMemory);
+    return new ContactService(new PostgresContactBackend(pool, logger), entityMemory, logger);
   }
 
   /** Create an in-memory instance for testing */
@@ -88,12 +90,34 @@ export class ContactService {
   async createContact(options: CreateContactOptions): Promise<Contact> {
     const now = new Date();
 
+    // Defense-in-depth: sanitize display names at storage time to prevent
+    // stored prompt injection. External sources (email participants, CRM imports)
+    // may contain arbitrary content in the name field. See issue #39.
+    const safeName = sanitizeDisplayName(
+      options.displayName,
+      options.fallbackDisplayName,
+    );
+
+    // Log when sanitization modifies a display name — important for debugging
+    // "why is this contact named X?" questions and for audit-trailing blocked
+    // prompt injection attempts.
+    if (safeName !== options.displayName && this.logger) {
+      // Truncate and strip newlines from the raw value before logging to prevent
+      // log injection (a crafted name with embedded newlines + JSON could forge
+      // synthetic log entries in line-oriented log viewers).
+      const safeOriginal = options.displayName.slice(0, 500).replace(/[\r\n]/g, '\\n');
+      this.logger.warn(
+        { original: safeOriginal, sanitized: safeName, source: options.source },
+        'Display name was modified by sanitization',
+      );
+    }
+
     // Auto-create a KG person node if we have entityMemory and no explicit kgNodeId
     let kgNodeId: string | null = options.kgNodeId ?? null;
     if (!kgNodeId && this.entityMemory) {
       const entity = await this.entityMemory.createEntity({
         type: 'person',
-        label: options.displayName,
+        label: safeName,
         properties: options.role ? { role: options.role } : {},
         source: options.source,
       });
@@ -103,7 +127,7 @@ export class ContactService {
     const contact: Contact = {
       id: randomUUID(),
       kgNodeId,
-      displayName: options.displayName,
+      displayName: safeName,
       role: options.role ?? null,
       status: options.status ?? 'confirmed',
       notes: options.notes ?? null,

@@ -229,9 +229,13 @@ export class EmailAdapter {
         const existing = await contactService.resolveByChannelIdentity('email', p.email);
         if (existing) continue;
 
-        // Create a new contact and link the email identity to it
+        // Create a new contact and link the email identity to it.
+        // Display name sanitization happens inside createContact() (see issue #39).
+        // We pass the email as fallbackDisplayName so that if the participant name
+        // sanitizes to empty (e.g., pure injection text), the email is used instead.
         const contact = await contactService.createContact({
           displayName: p.name || p.email,
+          fallbackDisplayName: p.email,
           source: 'email_participant',
           status: 'provisional',
         });
