@@ -326,7 +326,23 @@ export class Dispatcher {
         await this.bus.publish('dispatch', blockedEvent);
 
         // Send opaque notification email to the CEO.
-        // Contains only the block ID and recipient name — no sensitive content.
+        // Contains only the block ID and recipient identifier — no sensitive content.
+        //
+        // SPEC DEVIATION: This calls nylasClient.sendMessage() directly instead of
+        // publishing an outbound.message event through the bus → filter → email-adapter
+        // pipeline. The spec says "there is no bypass mechanism" for the filter, but
+        // routing through the bus creates a circular dependency (Dispatcher subscribes
+        // to agent.response, not its own notifications).
+        //
+        // This is acceptable ONLY because the notification is a fixed template with no
+        // dynamic content beyond an opaque block ID and a sender email address — it
+        // cannot leak system prompt or internal context by construction.
+        //
+        // @TODO: Build an `outbound.notification` event type that the email adapter
+        // subscribes to independently. This would route notifications through the
+        // filter pipeline without re-entering the Dispatcher's response handler.
+        // This is a HARD REQUIREMENT before adding any additional direct-send paths.
+        // Do NOT add a second bypass — build the notification event type instead.
         if (this.ceoNotification) {
           try {
             await this.ceoNotification.nylasClient.sendMessage({
