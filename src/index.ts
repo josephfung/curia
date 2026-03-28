@@ -45,6 +45,7 @@ import { loadAuthConfig } from './contacts/config-loader.js';
 import { AuthorizationService } from './contacts/authorization.js';
 import { HeldMessageService } from './contacts/held-messages.js';
 import { DEFAULT_ERROR_BUDGET } from './errors/types.js';
+import { OutboundContentFilter } from './dispatch/outbound-filter.js';
 
 async function main(): Promise<void> {
   // 1. Config & logging — no dependencies, must come first.
@@ -268,6 +269,38 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
+  // Outbound content filter — extracts distinctive marker phrases from the
+  // coordinator's persona config and uses them to detect prompt leakage in
+  // outbound emails. Markers are derived dynamically so they stay in sync
+  // as the persona evolves.
+  //
+  // @TODO: The current marker extraction only covers persona fields (display_name,
+  // title, tone). It does NOT extract markers from the full system prompt text,
+  // which contains many more distinctive instruction phrases. Extracting arbitrary
+  // sentences would risk false positives, so this gap is intentionally left for
+  // the Stage 2 LLM-as-judge to cover. When Stage 2 is implemented, revisit
+  // whether additional deterministic markers should be extracted from the prompt.
+  // Look up by name (not role) — agent YAML files use `name: coordinator` as the
+  // canonical identifier. Role is an optional field and may not match "coordinator"
+  // if the config uses a different role value (e.g., "chief-of-staff").
+  const coordinatorConfig = agentConfigs.find(c => c.name === 'coordinator');
+  let outboundFilter: OutboundContentFilter | undefined;
+  if (coordinatorConfig) {
+    const systemPromptMarkers = extractSystemPromptMarkers(coordinatorConfig);
+    const ceoEmail = config.nylasSelfEmail ?? '';
+    if (!ceoEmail) {
+      logger.warn('Outbound content filter initialized without CEO email — contact-data-leak rule may produce false positives');
+    }
+    if (systemPromptMarkers.length === 0) {
+      logger.warn('No system prompt markers extracted — system-prompt-fragment rule will not detect prompt leakage. Check that coordinator has persona.display_name and persona.tone configured.');
+    }
+    outboundFilter = new OutboundContentFilter({
+      systemPromptMarkers,
+      ceoEmail,
+    });
+    logger.info({ markerCount: systemPromptMarkers.length }, 'Outbound content filter initialized');
+  }
+
   // 7. Dispatcher — subscribes to inbound.message + agent.response.
   // Registered after the coordinator so agent.task already has a handler
   // when the dispatcher fans the first inbound message out.
@@ -277,6 +310,11 @@ async function main(): Promise<void> {
     contactResolver,
     heldMessages,
     channelPolicies: authConfig?.channelPolicies,
+    outboundFilter,
+    externalChannels: new Set(['email']),
+    ceoNotification: nylasClient && config.nylasSelfEmail
+      ? { nylasClient, ceoEmail: config.nylasSelfEmail }
+      : undefined,
   });
   dispatcher.register();
 
@@ -335,6 +373,32 @@ async function main(): Promise<void> {
   // Print welcome directly to stdout (logger writes to curia.log in dev mode)
   process.stdout.write('\nCuria is ready. Type a message, /quit to exit, or Ctrl+C.\n\n');
   cli.prompt();
+}
+
+/**
+ * Extract distinctive marker phrases from the coordinator config that would
+ * indicate system prompt leakage if they appeared in an outbound email.
+ * These are persona-specific strings that wouldn't occur in normal business writing.
+ */
+function extractSystemPromptMarkers(
+  config: import('./agents/loader.js').AgentYamlConfig,
+): string[] {
+  const markers: string[] = [];
+
+  // Full instruction phrases — distinctive enough to not appear in business email.
+  // We use the full instruction form ("You are X") rather than just the name/title
+  // to avoid false positives on email signatures.
+  if (config.persona?.display_name) {
+    markers.push(`You are ${config.persona.display_name}`);
+  }
+  if (config.persona?.display_name && config.persona?.title) {
+    markers.push(`${config.persona.display_name}, the ${config.persona.title}`);
+  }
+  if (config.persona?.tone) {
+    markers.push(config.persona.tone);
+  }
+
+  return markers;
 }
 
 // Pre-logger fallback — if main() throws during config loading (before the
