@@ -10,6 +10,11 @@ set -e
 docker-entrypoint.sh "$@" &
 PG_PID=$!
 
+# This script is PID 1 in the container, so docker stop sends SIGTERM here,
+# not to Postgres. Forward termination signals to ensure clean DB shutdown.
+trap 'kill -TERM "$PG_PID"' TERM INT
+trap 'kill -QUIT "$PG_PID"' QUIT
+
 # Wait for Postgres to be ready (up to 30s)
 for i in $(seq 1 30); do
   if pg_isready -U "${POSTGRES_USER:-curia}" -q 2>/dev/null; then
