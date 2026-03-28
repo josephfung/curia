@@ -102,8 +102,12 @@ export class ContactService {
     // "why is this contact named X?" questions and for audit-trailing blocked
     // prompt injection attempts.
     if (safeName !== options.displayName && this.logger) {
+      // Truncate and strip newlines from the raw value before logging to prevent
+      // log injection (a crafted name with embedded newlines + JSON could forge
+      // synthetic log entries in line-oriented log viewers).
+      const safeOriginal = options.displayName.slice(0, 500).replace(/[\r\n]/g, '\\n');
       this.logger.warn(
-        { original: options.displayName, sanitized: safeName, source: options.source },
+        { original: safeOriginal, sanitized: safeName, source: options.source },
         'Display name was modified by sanitization',
       );
     }

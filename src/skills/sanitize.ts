@@ -69,7 +69,11 @@ export function sanitizeOutput(
   // This must happen before stripping orphan tags — if we strip tags first,
   // the paired-content regex has nothing to match and the injected content survives.
   text = text.replace(/<(system|instruction|prompt|role|script)[\s>][\s\S]*?<\/\1>/gi, '');
-  // Then strip any remaining orphan dangerous tags (self-closing or unmatched)
+  // Then strip any remaining orphan dangerous tags (self-closing or unmatched).
+  // Reset lastIndex on the shared global regex — .replace() does this internally,
+  // but explicit reset guards against subtle bugs if this regex is ever used with
+  // test() elsewhere, and matches the pattern used in sanitizeDisplayName.
+  DANGEROUS_TAG_PATTERN.lastIndex = 0;
   text = text.replace(DANGEROUS_TAG_PATTERN, '');
 
   // 3. Redact known secret patterns
@@ -123,53 +127,61 @@ const DISPLAY_NAME_ALLOWED = /[^\p{L}\p{N}\s'\-.,()]/gu;
 const WHITESPACE_COLLAPSE = /\s+/g;
 
 /**
- * Sanitize a display name for safe storage and later prompt inclusion.
+ * Internal helper: applies the full display-name sanitization pipeline to a
+ * string. Used for both the primary name and the fallback to guarantee they
+ * go through the exact same steps.
  *
- * 1. Strip dangerous XML/HTML tags (reuses the same patterns as sanitizeOutput)
- * 2. Remove characters outside the name allowlist
- * 3. Collapse whitespace and trim
- * 4. Truncate to DISPLAY_NAME_MAX_LENGTH
- * 5. If the result is empty, return the fallback (or 'Unknown')
+ * Steps:
+ * 1. Strip dangerous XML/HTML tag pairs with content
+ * 2. Strip orphan dangerous tags
+ * 3. Remove characters outside the name allowlist
+ * 4. Collapse whitespace and trim
+ * 5. Truncate to DISPLAY_NAME_MAX_LENGTH
  */
-export function sanitizeDisplayName(
-  raw: string,
-  fallback = 'Unknown',
-): string {
-  let name = raw;
+function applyDisplayNamePipeline(value: string): string {
+  let result = value;
 
   // Strip dangerous tag pairs with content, then orphan tags.
   // Reset lastIndex on the shared global regex for safety — consistent with
   // how sanitizeOutput handles SECRET_PATTERNS above.
-  name = name.replace(/<(system|instruction|prompt|role|script)[\s>][\s\S]*?<\/\1>/gi, '');
+  result = result.replace(/<(system|instruction|prompt|role|script)[\s>][\s\S]*?<\/\1>/gi, '');
   DANGEROUS_TAG_PATTERN.lastIndex = 0;
-  name = name.replace(DANGEROUS_TAG_PATTERN, '');
+  result = result.replace(DANGEROUS_TAG_PATTERN, '');
 
   // Remove non-allowlisted characters (strips colons, semicolons, angle brackets, etc.)
-  name = name.replace(DISPLAY_NAME_ALLOWED, '');
+  result = result.replace(DISPLAY_NAME_ALLOWED, '');
 
   // Collapse whitespace runs and trim
-  name = name.replace(WHITESPACE_COLLAPSE, ' ').trim();
+  result = result.replace(WHITESPACE_COLLAPSE, ' ').trim();
 
   // Truncate to length limit.
   // Note: slice() counts UTF-16 code units, which could theoretically split a
   // surrogate pair for supplementary-plane characters. Accepted limitation given
   // the generous 200-char limit makes this edge case vanishingly unlikely for
   // real human names.
-  if (name.length > DISPLAY_NAME_MAX_LENGTH) {
-    name = name.slice(0, DISPLAY_NAME_MAX_LENGTH).trim();
+  if (result.length > DISPLAY_NAME_MAX_LENGTH) {
+    result = result.slice(0, DISPLAY_NAME_MAX_LENGTH).trim();
   }
 
-  // If nothing meaningful remains, sanitize and use the fallback.
-  // The fallback may come from an external source (e.g., an email address)
-  // so it must go through the same pipeline to prevent bypass.
+  return result;
+}
+
+/**
+ * Sanitize a display name for safe storage and later prompt inclusion.
+ *
+ * Both the primary name and the fallback go through the same pipeline
+ * (tag stripping, allowlist filtering, whitespace collapse, truncation).
+ * If both sanitize to empty, returns 'Unknown' as a hard-coded final fallback.
+ */
+export function sanitizeDisplayName(
+  raw: string,
+  fallback = 'Unknown',
+): string {
+  const name = applyDisplayNamePipeline(raw);
   if (name.length > 0) return name;
 
-  const safeFallback = fallback
-    .replace(DISPLAY_NAME_ALLOWED, '')
-    .replace(WHITESPACE_COLLAPSE, ' ')
-    .trim();
-  if (safeFallback.length > DISPLAY_NAME_MAX_LENGTH) {
-    return safeFallback.slice(0, DISPLAY_NAME_MAX_LENGTH).trim();
-  }
+  // Fallback goes through the same pipeline — it may come from an external
+  // source (e.g., an email address) and must not bypass sanitization.
+  const safeFallback = applyDisplayNamePipeline(fallback);
   return safeFallback.length > 0 ? safeFallback : 'Unknown';
 }
