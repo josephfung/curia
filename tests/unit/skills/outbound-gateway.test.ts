@@ -196,7 +196,8 @@ describe('OutboundGateway', () => {
       await gateway.send(baseRequest);
 
       expect(mocks.bus.publish).toHaveBeenCalledOnce();
-      const publishedEvent = (mocks.bus.publish as ReturnType<typeof vi.fn>).mock.calls[0][0] as BusEvent;
+      // bus.publish(layer, event) — event is the second argument (index 1)
+      const publishedEvent = (mocks.bus.publish as ReturnType<typeof vi.fn>).mock.calls[0][1] as BusEvent;
       expect(publishedEvent.type).toBe('outbound.blocked');
       // The payload must contain the channel and recipient for downstream consumers
       if (publishedEvent.type === 'outbound.blocked') {

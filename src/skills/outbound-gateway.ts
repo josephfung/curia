@@ -154,7 +154,7 @@ export class OutboundGateway {
       // Wrapped in try-catch — a bus publish failure must never unblock the message;
       // the send is already blocked regardless of whether the audit event lands.
       try {
-        await this.bus.publish(
+        await this.bus.publish('dispatch',
           createOutboundBlocked({
             blockId,
             conversationId: '',
