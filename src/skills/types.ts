@@ -34,6 +34,20 @@ export interface SkillManifest {
 }
 
 /**
+ * Minimal caller identity passed through the execution layer.
+ * Used for elevated-skill gate checks and audit fields (e.g., grantedBy).
+ * Intentionally lean — no KG facts, no authorization result.
+ */
+export interface CallerContext {
+  /** 'primary-user' for CLI, actual contact ID otherwise */
+  contactId: string;
+  /** 'ceo', 'cfo', null, etc. */
+  role: string | null;
+  /** Originating channel: 'cli', 'email', 'signal', etc. */
+  channel: string;
+}
+
+/**
  * The sandboxed context passed to every skill invocation.
  * Skills cannot access the bus, database, or filesystem directly —
  * they receive inputs through ctx.input and return outputs via SkillResult.
@@ -57,6 +71,10 @@ export interface SkillContext {
   outboundGateway?: import('./outbound-gateway.js').OutboundGateway;
   /** Held message service for infrastructure skills that manage held messages */
   heldMessages?: import('../contacts/held-messages.js').HeldMessageService;
+  /** Caller identity — populated from the task event's sender context.
+   *  Guaranteed to be defined for elevated skills (execution layer rejects without it).
+   *  Available but optional for normal skills. */
+  caller?: CallerContext;
 }
 
 /**
