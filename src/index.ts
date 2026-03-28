@@ -269,17 +269,28 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  // Outbound content filter — extracts marker phrases from the coordinator's
-  // interpolated system prompt and uses them to detect prompt leakage in
+  // Outbound content filter — extracts distinctive marker phrases from the
+  // coordinator's persona config and uses them to detect prompt leakage in
   // outbound emails. Markers are derived dynamically so they stay in sync
-  // as the prompt evolves.
+  // as the persona evolves.
+  //
+  // @TODO: The current marker extraction only covers persona fields (display_name,
+  // title, tone). It does NOT extract markers from the full system prompt text,
+  // which contains many more distinctive instruction phrases. Extracting arbitrary
+  // sentences would risk false positives, so this gap is intentionally left for
+  // the Stage 2 LLM-as-judge to cover. When Stage 2 is implemented, revisit
+  // whether additional deterministic markers should be extracted from the prompt.
   const coordinatorConfig = agentConfigs.find(c => c.role === 'coordinator');
   let outboundFilter: OutboundContentFilter | undefined;
   if (coordinatorConfig) {
     const systemPromptMarkers = extractSystemPromptMarkers(coordinatorConfig);
+    const ceoEmail = config.nylasSelfEmail ?? '';
+    if (!ceoEmail) {
+      logger.warn('Outbound content filter initialized without CEO email — contact-data-leak rule may produce false positives');
+    }
     outboundFilter = new OutboundContentFilter({
       systemPromptMarkers,
-      ceoEmail: config.nylasSelfEmail ?? '',
+      ceoEmail,
     });
     logger.info({ markerCount: systemPromptMarkers.length }, 'Outbound content filter initialized');
   }
