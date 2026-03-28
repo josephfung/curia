@@ -66,6 +66,7 @@ export class ContactService {
   private constructor(
     private backend: ContactServiceBackend,
     private entityMemory: EntityMemory | undefined,
+    private logger?: Logger,
   ) {}
 
   /** Create a Postgres-backed instance for production use */
@@ -74,7 +75,7 @@ export class ContactService {
     entityMemory: EntityMemory | undefined,
     logger: Logger,
   ): ContactService {
-    return new ContactService(new PostgresContactBackend(pool, logger), entityMemory);
+    return new ContactService(new PostgresContactBackend(pool, logger), entityMemory, logger);
   }
 
   /** Create an in-memory instance for testing */
@@ -96,6 +97,16 @@ export class ContactService {
       options.displayName,
       options.fallbackDisplayName,
     );
+
+    // Log when sanitization modifies a display name — important for debugging
+    // "why is this contact named X?" questions and for audit-trailing blocked
+    // prompt injection attempts.
+    if (safeName !== options.displayName && this.logger) {
+      this.logger.warn(
+        { original: options.displayName, sanitized: safeName, source: options.source },
+        'Display name was modified by sanitization',
+      );
+    }
 
     // Auto-create a KG person node if we have entityMemory and no explicit kgNodeId
     let kgNodeId: string | null = options.kgNodeId ?? null;

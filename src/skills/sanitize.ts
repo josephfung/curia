@@ -137,8 +137,11 @@ export function sanitizeDisplayName(
 ): string {
   let name = raw;
 
-  // Strip dangerous tag pairs with content, then orphan tags
+  // Strip dangerous tag pairs with content, then orphan tags.
+  // Reset lastIndex on the shared global regex for safety — consistent with
+  // how sanitizeOutput handles SECRET_PATTERNS above.
   name = name.replace(/<(system|instruction|prompt|role|script)[\s>][\s\S]*?<\/\1>/gi, '');
+  DANGEROUS_TAG_PATTERN.lastIndex = 0;
   name = name.replace(DANGEROUS_TAG_PATTERN, '');
 
   // Remove non-allowlisted characters (strips colons, semicolons, angle brackets, etc.)
