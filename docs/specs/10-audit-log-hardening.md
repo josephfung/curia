@@ -30,7 +30,7 @@ ALTER TABLE audit_log
   ADD COLUMN target_id      TEXT,            -- identifier of the target resource
   ADD COLUMN initiator_type TEXT,            -- 'human' | 'agent' | 'system' | 'scheduler'
   ADD COLUMN initiator_id   TEXT,            -- specific actor (sender email, agent name, 'scheduler')
-  ADD COLUMN prev_hash      TEXT;            -- SHA-256 hash chain link (see Tamper Evidence)
+  ADD COLUMN entry_hash     TEXT;            -- SHA-256 hash of this record + previous hash (see Tamper Evidence)
 
 CREATE INDEX idx_audit_action ON audit_log (action);
 CREATE INDEX idx_audit_outcome ON audit_log (outcome) WHERE outcome IS NOT NULL;
@@ -57,6 +57,8 @@ The audit logger extracts structured fields from each event payload before INSER
 | `contact.resolved` | `resolve` | `success` | `contact` / contactId | `system` / `dispatch` |
 | `contact.unknown` | `resolve` | `failure` | `contact` / senderId | `system` / `dispatch` |
 | `message.held` | `hold` | `pending` | `message` / heldMessageId | `system` / `dispatch` |
+
+**Design note on `outbound.message` initiator:** The initiator is attributed to `system/dispatch` because the dispatch layer performs the send. To find the upstream agent that composed the response, follow the `parent_event_id` chain back to the `agent.response` event. This keeps the extraction logic simple (no parent lookups) while the causal chain preserves full attribution for deeper queries.
 
 This extraction happens in the audit logger, not in the event factories. The event factories remain unchanged — they produce domain events, not audit records. The audit logger is the translation layer.
 
@@ -120,6 +122,16 @@ interface LlmCallPayload {
 
 The `llm.call` event is published by the agent runtime after every LLM API call completes. Its `parentEventId` references the `agent.task` event that triggered it. Multiple `llm.call` events can trace to the same task (multi-turn tool-use loops produce one per LLM round-trip).
 
+### Bus Layer Permissions for New Event Types
+
+These new event types require updates to the layer permissions table in [spec 06](06-audit-and-security.md):
+
+| Event Type | Publishing Layer | Rationale |
+|---|---|---|
+| `llm.call` | `agent` | The agent runtime makes LLM calls; add to agent's publish allowlist |
+| `human.decision` | `dispatch` | Approval gates are enforced at the dispatch layer |
+| `config.change` | `system` | Bootstrap orchestrator runs at system level (already has ALL permissions) |
+
 ### Prompt & Response Archive
 
 Full prompts and responses are stored in a separate table, not in the audit log payload. This keeps audit log rows small (fast scans) while preserving full replay capability.
@@ -166,7 +178,7 @@ interface MemoryQueryPayload {
 }
 ```
 
-This creates a traceable link: `agent.response` ← (parentEventId chain) ← `llm.call` ← `memory.query` with `resultIds`. Given a response, you can reconstruct exactly which knowledge graph entities informed it.
+This creates a traceable link from any response back to its data sources. Memory queries and LLM calls are siblings under the same `agent.task` parent (memory is queried to assemble context *before* the LLM call). The chain is: `agent.task` → `memory.query` (with `resultIds`) + `llm.call` → `agent.response`. In tool-use loops, the LLM can also trigger additional memory queries mid-conversation, producing nested `llm.call` → `memory.query` → `llm.call` chains. Either way, given a response you can reconstruct exactly which knowledge graph entities informed it by collecting all `memory.query` events that share the same `agent.task` parent.
 
 ### Skill Data Access Logging
 
@@ -204,12 +216,12 @@ entry_hash = SHA-256(canonical_json({
   payload, conversation_id, task_id, parent_event_id,
   action, outcome, target_type, target_id,
   initiator_type, initiator_id
-}) + prev_hash)
+}) + previous_entry_hash)
 ```
 
-- The first entry uses a fixed genesis constant: `SHA-256("curia-audit-genesis-v1")`
+- The first entry chains from a fixed genesis constant: `SHA-256("curia-audit-genesis-v1")`
 - `canonical_json` sorts keys alphabetically and uses deterministic formatting (no whitespace) to prevent false positive tampering alerts from JSON key-ordering variations
-- The `prev_hash` column stores the hash of the *current* record (not the previous one) — this is the value the *next* record will chain from
+- The `entry_hash` column stores the computed hash of the current record. To chain, the audit logger reads the most recent `entry_hash` value before computing the new one. This means each record's hash incorporates the entire history of the chain — modifying any past record invalidates every hash after it
 
 **Implementation:** ~30 lines in the audit logger using Node.js native `crypto.createHash('sha256')`. Zero external dependencies.
 
@@ -284,7 +296,7 @@ interface ConfigChangePayload {
 }
 ```
 
-Full before/after config values are stored in the `llm_call_archive` table (reused for large payloads) with the `audit_event_id` as key. This provides full diff capability without bloating the audit log.
+Full before/after config values are stored in the audit log's JSONB `payload` column directly. Agent YAML files are typically a few KB — well within reason for JSONB, and small enough that a separate archive table isn't warranted. The payload includes `previousConfig` and `currentConfig` fields alongside the `ConfigChangePayload` fields above.
 
 **Detection:** At startup, the bootstrap orchestrator hashes each agent/skill/channel config file and compares against the last `config.change` event for that `configId`. If the hash differs, a new event is emitted. This is lightweight (SHA-256 of YAML files) and requires no file-watching infrastructure.
 
@@ -294,7 +306,7 @@ Full before/after config values are stored in the `llm_call_archive` table (reus
 
 *Required by EU AI Act Article 19 (6-month minimum), SOC 2 (12-month observation period).*
 
-The existing data retention strategy (spec 08) defers retention infrastructure until `audit_log` exceeds 1 GB (~3 years). This spec formalizes tiered retention for compliance:
+This section supersedes the retention strategy in [spec 08](08-operations.md). The implementation trigger remains as described there (`audit_log` exceeding 1 GB, estimated ~2029), but the tier definitions below establish the target policy for when that trigger fires:
 
 | Tier | Data | Hot (Postgres, indexed) | Warm (Postgres, partitioned) | Cold (compressed JSONL on disk) |
 |---|---|---|---|---|
@@ -367,7 +379,7 @@ This spec is designed to be implemented incrementally. Each phase is independent
 
 ### Phase B: Tamper Evidence + Source Attribution
 
-6. Migration: add `prev_hash` column to `audit_log`
+6. Migration: add `entry_hash` column to `audit_log`
 7. Hash chain computation in `AuditLogger.log()` (~30 lines)
 8. `curia audit verify` CLI command
 9. Extend `MemoryQueryPayload` with `resultIds` and `resultScores`
@@ -400,7 +412,7 @@ This spec is designed to be implemented incrementally. Each phase is independent
 - [ ] LLM providers emit `llm.call` events with provenance fields
 - [ ] `llm_call_archive` table created and populated
 - [ ] Redaction applied to prompt/response archive writes
-- [ ] `prev_hash` column added and hash chain computed on every write
+- [ ] `entry_hash` column added and hash chain computed on every write
 - [ ] `curia audit verify` CLI command implemented and tested
 - [ ] `MemoryQueryPayload` extended with `resultIds` / `resultScores`
 - [ ] `sourcesAccessed` convention documented and adopted in existing skills
