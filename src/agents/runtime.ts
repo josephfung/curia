@@ -186,6 +186,14 @@ export class AgentRuntime {
     let response = await this.chatWithRetry(provider, { messages, tools: skillToolDefs }, budget, taskEvent);
     if (!response) return; // chatWithRetry already published error events
 
+    // Extract caller context once — it doesn't change between tool-use rounds.
+    // Unresolved senders produce undefined, which triggers the execution layer's
+    // fail-closed gate on elevated skills — unknown senders can't modify permissions.
+    const callerSenderCtx = taskEvent.payload.senderContext;
+    const caller: CallerContext | undefined = (callerSenderCtx && callerSenderCtx.resolved)
+      ? { contactId: callerSenderCtx.contactId, role: callerSenderCtx.role, channel: taskEvent.payload.channelId }
+      : undefined;
+
     while (response.type === 'tool_use' && executionLayer) {
       // Check turn budget before processing this round of tool calls
       budget.turnsUsed++;
@@ -215,14 +223,6 @@ export class AgentRuntime {
         } as ToolUseContent);
       }
       messages.push({ role: 'assistant', content: assistantBlocks });
-
-      // Extract caller context from the task event's sender context.
-      // Unresolved senders produce undefined, which triggers the execution layer's
-      // fail-closed gate on elevated skills — unknown senders can't modify permissions.
-      const senderCtx = taskEvent.payload.senderContext;
-      const caller: CallerContext | undefined = (senderCtx && senderCtx.resolved)
-        ? { contactId: senderCtx.contactId, role: senderCtx.role, channel: taskEvent.payload.channelId }
-        : undefined;
 
       // Execute each tool call through the execution layer.
       // Publish skill.invoke and skill.result bus events for audit coverage.

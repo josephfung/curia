@@ -161,6 +161,23 @@ describe('ExecutionLayer', () => {
       expect(result.success).toBe(true);
     });
 
+    it('allows elevated skill for any caller on cli channel (trusted local operator)', async () => {
+      const handler: SkillHandler = {
+        execute: async () => ({ success: true, data: 'ok' }),
+      };
+      registry.register(makeManifest({ name: 'elevated-skill', sensitivity: 'elevated' }), handler);
+
+      // CLI channel bypasses role check unconditionally — any caller on CLI is
+      // the local operator. This is safe because channelId is set by the channel
+      // adapter, not by user input. The bus permissions layer prevents spoofing.
+      const result = await execution.invoke('elevated-skill', {}, {
+        contactId: 'contact-not-primary',
+        role: 'advisor',
+        channel: 'cli',
+      });
+      expect(result.success).toBe(true);
+    });
+
     it('rejects elevated skill when caller is not ceo and not cli', async () => {
       const handler: SkillHandler = {
         execute: async () => ({ success: true, data: 'should not reach' }),
