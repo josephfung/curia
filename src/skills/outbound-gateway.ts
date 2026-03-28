@@ -11,11 +11,13 @@
 // whenever the DB hiccups, which is worse than a rare false negative on the
 // blocked-contact check.
 
+import { randomUUID } from 'node:crypto';
 import type { NylasClient, NylasMessage, ListMessagesOptions, SendEmailOptions } from '../channels/email/nylas-client.js';
 import type { ContactService } from '../contacts/contact-service.js';
 import type { OutboundContentFilter } from '../dispatch/outbound-filter.js';
 import type { EventBus } from '../bus/bus.js';
 import type { Logger } from '../logger.js';
+import { createOutboundBlocked } from '../bus/events.js';
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -106,8 +108,92 @@ export class OutboundGateway {
     }
 
     // ------------------------------------------------------------------
-    // Step 2: Content filter (added in Task 2)
+    // Step 2: Content filter
     // ------------------------------------------------------------------
+    // Fail-closed: if the filter throws for any reason, treat the message
+    // as blocked. A crashing filter is a security anomaly — we'd rather
+    // miss a send than let potentially dangerous content through an
+    // unchecked pipeline.
+    let filterPassed = false;
+    let filterFindings: Array<{ rule: string; detail: string }> = [];
+
+    try {
+      const filterResult = await this.contentFilter.check({
+        content: request.body,
+        recipientEmail: request.to,
+        conversationId: '',
+        channelId: request.channel,
+      });
+      filterPassed = filterResult.passed;
+      filterFindings = filterResult.findings;
+    } catch (err) {
+      // Filter crash — treat as blocked with a synthetic finding
+      this.log.warn(
+        { err, channel: request.channel, to: request.to },
+        'outbound-gateway: content filter threw — treating as blocked (fail-closed)',
+      );
+      filterPassed = false;
+      filterFindings = [{ rule: 'filter-error', detail: 'Content filter threw an unexpected error' }];
+    }
+
+    if (!filterPassed) {
+      // Build a human-readable reason from just the rule names (not the full detail
+      // which may contain sensitive data fragments that triggered the rule).
+      const ruleNames = filterFindings.map((f) => f.rule).join('; ');
+      this.log.warn(
+        { channel: request.channel, to: request.to, rules: ruleNames },
+        'outbound-gateway: outbound message blocked by content filter',
+      );
+
+      const blockId = `block_${randomUUID()}`;
+      // Full reason string (with detail) goes into the bus event for forensics/audit,
+      // NOT into any user-facing or notification surface.
+      const fullReason = filterFindings.map((f) => `${f.rule}: ${f.detail}`).join('; ');
+
+      // Publish the blocked event for audit logging and downstream consumers.
+      // Wrapped in try-catch — a bus publish failure must never unblock the message;
+      // the send is already blocked regardless of whether the audit event lands.
+      try {
+        await this.bus.publish(
+          createOutboundBlocked({
+            blockId,
+            conversationId: '',
+            channelId: request.channel,
+            content: request.body,
+            recipientId: request.to,
+            reason: fullReason,
+            findings: filterFindings,
+            parentEventId: '',
+          }),
+        );
+      } catch (publishErr) {
+        this.log.warn(
+          { publishErr, blockId },
+          'outbound-gateway: failed to publish outbound.blocked event — message is still blocked',
+        );
+      }
+
+      // Notify the CEO directly via dispatchEmail (bypassing this.send() to avoid
+      // infinite recursion — the notification itself doesn't need filtering because
+      // it's a hardcoded template with no user-supplied content).
+      await this.dispatchEmail({
+        channel: 'email',
+        to: this.ceoEmail,
+        subject: 'Action needed — blocked outbound reply',
+        // Body intentionally contains only the block ID and the intended recipient —
+        // no message content, no rule details, no sensitive data.
+        body: [
+          'An outbound message was blocked by the content filter.',
+          '',
+          `Block ID: ${blockId}`,
+          `Intended recipient: ${request.to}`,
+          '',
+          'Please review the audit log for details.',
+        ].join('\n'),
+      });
+
+      return { success: false, blockedReason: 'Content blocked by filter' };
+    }
 
     // ------------------------------------------------------------------
     // Step 3: Channel dispatch

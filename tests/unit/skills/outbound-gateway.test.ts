@@ -5,6 +5,7 @@ import type { NylasClient } from '../../../src/channels/email/nylas-client.js';
 import type { ContactService } from '../../../src/contacts/contact-service.js';
 import type { OutboundContentFilter } from '../../../src/dispatch/outbound-filter.js';
 import type { EventBus } from '../../../src/bus/bus.js';
+import type { BusEvent } from '../../../src/bus/events.js';
 
 /**
  * Build fresh vi.fn() mocks for each test. Using beforeEach + createMocks()
@@ -145,5 +146,176 @@ describe('OutboundGateway', () => {
     expect(result.success).toBe(true);
     expect(result.messageId).toBe('msg-123');
     expect(mocks.nylasClient.sendMessage).toHaveBeenCalledOnce();
+  });
+
+  describe('content filter', () => {
+    it('blocks when filter rejects and does not call nylasClient for the original message', async () => {
+      // The filter returns a blocked result — the gateway must stop here
+      // and not proceed to Nylas dispatch for the original message.
+      (mocks.contentFilter.check as ReturnType<typeof vi.fn>).mockResolvedValue({
+        passed: false,
+        findings: [{ rule: 'secret-pattern', detail: 'API key detected' }],
+        stage: 'deterministic',
+      });
+
+      const gateway = new OutboundGateway({
+        nylasClient: mocks.nylasClient,
+        contactService: mocks.contactService,
+        contentFilter: mocks.contentFilter,
+        bus: mocks.bus,
+        ceoEmail: 'ceo@example.com',
+        logger: mocks.logger,
+      });
+
+      const result = await gateway.send(baseRequest);
+
+      expect(result.success).toBe(false);
+      // nylasClient.sendMessage may be called once for the CEO notification, but
+      // NOT for the original blocked message. We verify the result is blocked.
+      expect(result.blockedReason).toBe('Content blocked by filter');
+    });
+
+    it('publishes outbound.blocked event to the bus when filter rejects', async () => {
+      // The blocked event must reach the bus so audit logging and channel adapters
+      // can react to the interception.
+      (mocks.contentFilter.check as ReturnType<typeof vi.fn>).mockResolvedValue({
+        passed: false,
+        findings: [{ rule: 'internal-structure', detail: 'Internal field leaked' }],
+        stage: 'deterministic',
+      });
+
+      const gateway = new OutboundGateway({
+        nylasClient: mocks.nylasClient,
+        contactService: mocks.contactService,
+        contentFilter: mocks.contentFilter,
+        bus: mocks.bus,
+        ceoEmail: 'ceo@example.com',
+        logger: mocks.logger,
+      });
+
+      await gateway.send(baseRequest);
+
+      expect(mocks.bus.publish).toHaveBeenCalledOnce();
+      const publishedEvent = (mocks.bus.publish as ReturnType<typeof vi.fn>).mock.calls[0][0] as BusEvent;
+      expect(publishedEvent.type).toBe('outbound.blocked');
+      // The payload must contain the channel and recipient for downstream consumers
+      if (publishedEvent.type === 'outbound.blocked') {
+        expect(publishedEvent.payload.channelId).toBe('email');
+        expect(publishedEvent.payload.recipientId).toBe('recipient@example.com');
+      }
+    });
+
+    it('sends CEO notification via nylasClient when filter rejects', async () => {
+      // The CEO notification is the human-in-the-loop safety signal. It must
+      // be sent directly (not through the filter pipeline) to avoid recursion.
+      (mocks.contentFilter.check as ReturnType<typeof vi.fn>).mockResolvedValue({
+        passed: false,
+        findings: [{ rule: 'secret-pattern', detail: 'API key detected' }],
+        stage: 'deterministic',
+      });
+
+      const gateway = new OutboundGateway({
+        nylasClient: mocks.nylasClient,
+        contactService: mocks.contactService,
+        contentFilter: mocks.contentFilter,
+        bus: mocks.bus,
+        ceoEmail: 'ceo@example.com',
+        logger: mocks.logger,
+      });
+
+      await gateway.send(baseRequest);
+
+      // nylasClient.sendMessage should be called exactly once — for the CEO notification
+      expect(mocks.nylasClient.sendMessage).toHaveBeenCalledOnce();
+      const sendArgs = (mocks.nylasClient.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0][0];
+      expect(sendArgs.to).toEqual([{ email: 'ceo@example.com' }]);
+      expect(sendArgs.subject).toMatch(/blocked/i);
+    });
+
+    it('sends CEO notification body with no sensitive content but includes block ID', async () => {
+      // The notification must never echo the blocked body or rule details back to
+      // any inbox — it is purely a "something was blocked, check the logs" signal.
+      // The block ID ties the notification to the outbound.blocked event in the audit trail.
+      const sensitiveBody = 'My API key is sk-ant-abcdefghijklmnopqrst1234567890AB';
+      (mocks.contentFilter.check as ReturnType<typeof vi.fn>).mockResolvedValue({
+        passed: false,
+        findings: [{ rule: 'secret-pattern', detail: 'API key: sk-ant-abcdefghijklmnopqrst1234567890AB' }],
+        stage: 'deterministic',
+      });
+
+      const gateway = new OutboundGateway({
+        nylasClient: mocks.nylasClient,
+        contactService: mocks.contactService,
+        contentFilter: mocks.contentFilter,
+        bus: mocks.bus,
+        ceoEmail: 'ceo@example.com',
+        logger: mocks.logger,
+      });
+
+      await gateway.send({ ...baseRequest, body: sensitiveBody });
+
+      const sendArgs = (mocks.nylasClient.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0][0];
+      // Must NOT contain the blocked content
+      expect(sendArgs.body).not.toContain(sensitiveBody);
+      // Must NOT contain the detailed rule finding (could include key value)
+      expect(sendArgs.body).not.toContain('sk-ant-abcdefghijklmnopqrst1234567890AB');
+      // MUST contain the block ID so the CEO can cross-reference with logs
+      expect(sendArgs.body).toMatch(/block_[0-9a-f-]{36}/);
+    });
+
+    it('fails closed when filter crashes — blocks send and notifies CEO', async () => {
+      // If the content filter itself throws, we must treat it as blocked (fail-closed).
+      // A crashing filter is a security anomaly; we'd rather miss a send than let
+      // potentially dangerous content through an unchecked pipeline.
+      (mocks.contentFilter.check as ReturnType<typeof vi.fn>).mockRejectedValue(
+        new Error('Filter internal error'),
+      );
+
+      const gateway = new OutboundGateway({
+        nylasClient: mocks.nylasClient,
+        contactService: mocks.contactService,
+        contentFilter: mocks.contentFilter,
+        bus: mocks.bus,
+        ceoEmail: 'ceo@example.com',
+        logger: mocks.logger,
+      });
+
+      const result = await gateway.send(baseRequest);
+
+      // Filter crash must block the send
+      expect(result.success).toBe(false);
+      // CEO notification is sent even when the filter crashes
+      expect(mocks.nylasClient.sendMessage).toHaveBeenCalledOnce();
+    });
+
+    it('allows send when filter passes and calls check with correct params', async () => {
+      // Happy path: filter passes — the message should go out normally.
+      // We also verify the filter was invoked with the right shape so we know
+      // the gateway is actually doing the check and not accidentally skipping it.
+      (mocks.contentFilter.check as ReturnType<typeof vi.fn>).mockResolvedValue({
+        passed: true,
+        findings: [],
+      });
+
+      const gateway = new OutboundGateway({
+        nylasClient: mocks.nylasClient,
+        contactService: mocks.contactService,
+        contentFilter: mocks.contentFilter,
+        bus: mocks.bus,
+        ceoEmail: 'ceo@example.com',
+        logger: mocks.logger,
+      });
+
+      const result = await gateway.send(baseRequest);
+
+      expect(result.success).toBe(true);
+      expect(mocks.contentFilter.check).toHaveBeenCalledOnce();
+      expect(mocks.contentFilter.check).toHaveBeenCalledWith({
+        content: baseRequest.body,
+        recipientEmail: baseRequest.to,
+        conversationId: '',
+        channelId: baseRequest.channel,
+      });
+    });
   });
 });
