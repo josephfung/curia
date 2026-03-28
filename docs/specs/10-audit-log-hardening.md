@@ -62,6 +62,15 @@ The audit logger extracts structured fields from each event payload before INSER
 
 This extraction happens in the audit logger, not in the event factories. The event factories remain unchanged — they produce domain events, not audit records. The audit logger is the translation layer.
 
+### Extraction Failure Policy
+
+If a mapped payload field is missing or has an unexpected type, the audit logger:
+1. Sets the structured column to `'[EXTRACTION_FAILED]'` (not NULL — distinguishes extraction failures from pre-migration rows which are NULL)
+2. Logs a warning via pino with the event ID and the field that failed
+3. Still writes the audit row (never drops an event due to extraction failure — the JSONB payload is always the source of truth)
+
+For event types not in the extraction mapping table (e.g., future event types added before the mapping is updated), all structured columns are NULL. This is expected, not an error — but the audit logger logs a `debug`-level message noting the unmapped event type so it's discoverable.
+
 ### Action Taxonomy
 
 A controlled vocabulary for the `action` column. Inspired by CADF and FHIR AuditEvent's C/R/U/D/E model, extended for agent-specific actions:
@@ -146,7 +155,9 @@ CREATE TABLE llm_call_archive (
 );
 ```
 
-**Redaction:** The existing redaction layer processes prompts and responses before archive write. Secrets and PII patterns are stripped per the same rules used for audit log payloads.
+**Transaction atomicity:** The `audit_log` INSERT and `llm_call_archive` INSERT must be in the same database transaction. If either fails, both roll back. This prevents orphaned audit rows that reference a nonexistent archive record. The FK from `llm_call_archive.audit_event_id` to `audit_log.id` points from archive to audit (not the reverse), so when archive rows are purged at retention, no FK violation occurs — the audit_log row outlives the archive row.
+
+**Redaction:** The existing redaction layer processes prompts and responses before archive write. Secrets and PII patterns are stripped per the same rules used for audit log payloads. **If redaction fails** (malformed content, unexpected binary data), the archive write is skipped — never fall back to writing unredacted content. The `audit_log` row for the `llm.call` event is still written (it contains hashes, not raw content). A high-severity error is logged via pino with the event ID and redaction failure reason.
 
 **Retention:** The `llm_call_archive` is large (prompts and responses can be several KB each). Retention policy: 90 days hot (in Postgres), then archived to compressed JSONL on disk. The `audit_log` row (with hashes) is retained per the standard audit retention schedule.
 
@@ -171,10 +182,11 @@ interface MemoryQueryPayload {
   queryType: string;
   queryParams: Record<string, unknown>;
   resultCount: number;
-  // New: specific entity/node IDs returned by the query (for attribution)
-  resultIds: string[];            // KG node IDs, contact IDs, or working memory keys
-  // New: relevance scores for vector similarity queries (aids debugging hallucination)
-  resultScores?: number[];        // parallel array to resultIds, cosine similarity scores
+  // New: specific results returned by the query (for attribution)
+  results: Array<{
+    id: string;                   // KG node ID, contact ID, or working memory key
+    score?: number;               // cosine similarity score (for vector queries; omitted for exact lookups)
+  }>;
 }
 ```
 
@@ -196,7 +208,7 @@ interface SkillResultWithSources {
 }
 ```
 
-This is a convention, not a type enforcement — skills are responsible for populating it. The audit log captures whatever the skill returns. Skills that don't access external sources omit the field.
+This is a convention, not a type enforcement — skills are responsible for populating it. The audit log captures whatever the skill returns. Skills that don't access external sources omit the field. To prevent silent omission, skills whose manifests declare external data sources (via a `dataSources` field in `skill.json`) should be validated at test time: a lint/test checks that their results include `sourcesAccessed` when `success: true`.
 
 ---
 
@@ -222,6 +234,10 @@ entry_hash = SHA-256(canonical_json({
 - The first entry chains from a fixed genesis constant: `SHA-256("curia-audit-genesis-v1")`
 - `canonical_json` sorts keys alphabetically and uses deterministic formatting (no whitespace) to prevent false positive tampering alerts from JSON key-ordering variations
 - The `entry_hash` column stores the computed hash of the current record. To chain, the audit logger reads the most recent `entry_hash` value before computing the new one. This means each record's hash incorporates the entire history of the chain — modifying any past record invalidates every hash after it
+
+**Serialization:** All audit writes are serialized through a single writer (the `AuditLogger` instance). This is already the case — the bus's write-ahead hook calls `AuditLogger.log()` sequentially before delivering each event. The hash chain computation reads the previous `entry_hash` and writes the new one in the same INSERT. At current throughput (~425 events/day), serialization has negligible performance impact. If throughput ever becomes a concern, the INSERT can use an advisory lock or CTE to atomically read-then-write without external serialization.
+
+**Bootstrapping:** On startup, the audit logger queries `SELECT entry_hash FROM audit_log ORDER BY timestamp DESC LIMIT 1` to seed the chain. If the table is empty (fresh deployment), the genesis constant is used. This query runs once at boot, before the bus starts accepting events.
 
 **Implementation:** ~30 lines in the audit logger using Node.js native `crypto.createHash('sha256')`. Zero external dependencies.
 
@@ -298,7 +314,9 @@ interface ConfigChangePayload {
 
 Full before/after config values are stored in the audit log's JSONB `payload` column directly. Agent YAML files are typically a few KB — well within reason for JSONB, and small enough that a separate archive table isn't warranted. The payload includes `previousConfig` and `currentConfig` fields alongside the `ConfigChangePayload` fields above.
 
-**Detection:** At startup, the bootstrap orchestrator hashes each agent/skill/channel config file and compares against the last `config.change` event for that `configId`. If the hash differs, a new event is emitted. This is lightweight (SHA-256 of YAML files) and requires no file-watching infrastructure.
+**Detection:** At startup, the bootstrap orchestrator hashes each agent/skill/channel config file and compares against the last `config.change` event for that `configId`. If the hash differs, a new event is emitted. On first boot (no prior events for a `configId`), emit a `config.change` event with `previousHash: 'none'` to capture the initial config state.
+
+**Limitation:** This is startup-only detection. Config files modified on disk while the system is running are not detected until the next restart. If hot-reload is added in the future, the config watcher must also emit change events. This is lightweight (SHA-256 of YAML files) and requires no file-watching infrastructure.
 
 ---
 
@@ -382,7 +400,7 @@ This spec is designed to be implemented incrementally. Each phase is independent
 6. Migration: add `entry_hash` column to `audit_log`
 7. Hash chain computation in `AuditLogger.log()` (~30 lines)
 8. `curia audit verify` CLI command
-9. Extend `MemoryQueryPayload` with `resultIds` and `resultScores`
+9. Extend `MemoryQueryPayload` with `results` array (id + optional score)
 10. `sourcesAccessed` convention for skill results
 
 **Validates:** NIST 800-92 integrity, SOC 2 CC7.2 tamper detection, EU AI Act Article 12 reference data tracking.
@@ -414,10 +432,12 @@ This spec is designed to be implemented incrementally. Each phase is independent
 - [ ] Redaction applied to prompt/response archive writes
 - [ ] `entry_hash` column added and hash chain computed on every write
 - [ ] `curia audit verify` CLI command implemented and tested
-- [ ] `MemoryQueryPayload` extended with `resultIds` / `resultScores`
+- [ ] `MemoryQueryPayload` extended with `results` array (id + optional score)
 - [ ] `sourcesAccessed` convention documented and adopted in existing skills
 - [ ] `human.decision` event type added and emitted from approval gates
 - [ ] `config.change` event type added and emitted at startup
 - [ ] Retention tiers defined in `config/default.yaml`
 - [ ] All new event types covered by tests
 - [ ] Hash chain verification tested (insert, verify, detect tamper)
+- [ ] Monitoring query: detect `[EXTRACTION_FAILED]` values in structured columns
+- [ ] Monitoring query: detect `llm.call` audit rows with no corresponding `llm_call_archive` row (within hot retention window)
