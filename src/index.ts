@@ -280,7 +280,10 @@ async function main(): Promise<void> {
   // sentences would risk false positives, so this gap is intentionally left for
   // the Stage 2 LLM-as-judge to cover. When Stage 2 is implemented, revisit
   // whether additional deterministic markers should be extracted from the prompt.
-  const coordinatorConfig = agentConfigs.find(c => c.role === 'coordinator');
+  // Look up by name (not role) — agent YAML files use `name: coordinator` as the
+  // canonical identifier. Role is an optional field and may not match "coordinator"
+  // if the config uses a different role value (e.g., "chief-of-staff").
+  const coordinatorConfig = agentConfigs.find(c => c.name === 'coordinator');
   let outboundFilter: OutboundContentFilter | undefined;
   if (coordinatorConfig) {
     const systemPromptMarkers = extractSystemPromptMarkers(coordinatorConfig);

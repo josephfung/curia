@@ -62,19 +62,31 @@ const BUS_EVENT_TYPE_NAMES: string[] = [
 // These are checked only in "structured contexts" (quoted or colon-prefixed)
 // to avoid false positives on common English words.
 // E.g., "conversationId" should flag, but bare "agent" or "task" should not.
+// Both camelCase and snake_case variants are included so the filter catches
+// JSON leakage regardless of which serialization convention the agent uses.
 const INTERNAL_FIELD_NAMES: string[] = [
   'sourceLayer',
+  'source_layer',
   'systemPrompt',
   'system_prompt',
   'conversationId',
+  'conversation_id',
   'senderId',
+  'sender_id',
   'channelId',
+  'channel_id',
   'taskId',
+  'task_id',
   'agentId',
+  'agent_id',
   'parentEventId',
+  'parent_event_id',
   'eventType',
+  'event_type',
   'skillName',
+  'skill_name',
   'senderContext',
+  'sender_context',
 ];
 
 // Secret patterns — same as sanitize.ts but duplicated intentionally.
@@ -95,6 +107,18 @@ const SECRET_PATTERNS: RegExp[] = [
 // Matches any RFC 5321-ish email address in a string.
 const EMAIL_REGEX = /[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/g;
 
+/**
+ * Normalize text for security matching by stripping zero-width and invisible
+ * Unicode characters that could be used to evade pattern matching.
+ * An LLM under prompt injection could be instructed to insert invisible
+ * characters between words to break substring matching.
+ */
+function normalizeForMatching(text: string): string {
+  return text
+    .normalize('NFC')
+    .replace(/[\u200B-\u200D\uFEFF\u00AD\u034F\u2060-\u2064\u206A-\u206F]/g, '');
+}
+
 export class OutboundContentFilter {
   private config: OutboundContentFilterConfig;
 
@@ -113,12 +137,17 @@ export class OutboundContentFilter {
    * resources on content that is already deterministically blocked.
    */
   async check(input: FilterCheckInput): Promise<FilterResult> {
+    // Normalize first to strip invisible Unicode characters that an adversarial
+    // LLM could insert to break substring matching (e.g., zero-width spaces
+    // between letters). All deterministic checks run on the normalized copy.
+    const normalizedContent = normalizeForMatching(input.content);
+
     // Stage 1: deterministic rules
     const findings: FilterFinding[] = [
-      ...this.checkSystemPromptFragments(input.content),
-      ...this.checkInternalStructure(input.content),
-      ...this.checkSecretPatterns(input.content),
-      ...this.checkContactDataLeak(input.content, input.recipientEmail),
+      ...this.checkSystemPromptFragments(normalizedContent),
+      ...this.checkInternalStructure(normalizedContent),
+      ...this.checkSecretPatterns(normalizedContent),
+      ...this.checkContactDataLeak(normalizedContent, input.recipientEmail),
     ];
 
     if (findings.length > 0) {
@@ -126,7 +155,15 @@ export class OutboundContentFilter {
     }
 
     // Stage 2: LLM review (stub — always passes for now)
-    const llmFindings = await this.runLlmReview(input);
+    // Fail-closed: if the LLM review crashes, block the message rather than
+    // silently passing it. This is a security boundary.
+    let llmFindings: FilterFinding[] = [];
+    try {
+      llmFindings = await this.runLlmReview({ ...input, content: normalizedContent });
+    } catch {
+      // Fail-closed: if the LLM review crashes, block the message.
+      llmFindings = [{ rule: 'llm-review-error', detail: 'LLM review threw an error' }];
+    }
     if (llmFindings.length > 0) {
       return { passed: false, findings: llmFindings, stage: 'llm-review' };
     }
@@ -172,10 +209,13 @@ export class OutboundContentFilter {
    */
   private checkInternalStructure(content: string): FilterFinding[] {
     const findings: FilterFinding[] = [];
+    // Lowercase once for the bus event type sub-check; the BUS_EVENT_TYPE_NAMES
+    // are already lowercase so a single toLower on content is sufficient.
+    const lowerContent = content.toLowerCase();
 
     // Sub-check 1: bus event type names (dotted identifiers)
     for (const eventType of BUS_EVENT_TYPE_NAMES) {
-      if (content.includes(eventType)) {
+      if (lowerContent.includes(eventType)) {
         findings.push({
           rule: 'internal-structure',
           detail: `Content contains internal bus event type name: "${eventType}"`,

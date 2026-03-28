@@ -334,8 +334,13 @@ export class Dispatcher {
           .map(f => `${f.rule}: ${f.detail}`)
           .join('; ');
 
+        // Log only rule names in the warn log to avoid writing matched markers
+        // or email addresses (which may be sensitive) to the application log.
+        // The full reason with detail goes into the outbound.blocked event payload,
+        // which is written to the audit log — the appropriate place for forensic detail.
+        const ruleNames = filterResult.findings.map(f => f.rule).join(', ');
         this.logger.warn(
-          { channelId: routing.channelId, conversationId: routing.conversationId, reason },
+          { channelId: routing.channelId, conversationId: routing.conversationId, rules: ruleNames, findingCount: filterResult.findings.length },
           'Outbound content blocked by filter',
         );
 
@@ -349,7 +354,17 @@ export class Dispatcher {
           findings: filterResult.findings,
           parentEventId: event.id,
         });
-        await this.bus.publish('dispatch', blockedEvent);
+        // Wrap publish in try-catch: if the audit event fails to publish, we still
+        // enforce the block and send the CEO notification. The block decision is
+        // already made — event publication failure should not re-open the gate.
+        try {
+          await this.bus.publish('dispatch', blockedEvent);
+        } catch (publishErr) {
+          this.logger.error(
+            { err: publishErr, blockId: blockedEvent.payload.blockId },
+            'Failed to publish outbound.blocked event — block is still enforced',
+          );
+        }
 
         // Send opaque notification email to the CEO.
         // Contains only the block ID and recipient identifier — no sensitive content.
@@ -373,7 +388,7 @@ export class Dispatcher {
           try {
             await this.ceoNotification.nylasClient.sendMessage({
               to: [{ email: this.ceoNotification.ceoEmail }],
-              subject: 'Nathan Curia: Action needed — blocked outbound reply',
+              subject: 'Action needed — blocked outbound reply',
               body: [
                 'An outbound email reply was blocked by the content filter.',
                 '',

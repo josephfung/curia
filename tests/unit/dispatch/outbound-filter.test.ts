@@ -207,6 +207,24 @@ describe('OutboundContentFilter', () => {
     });
   });
 
+  describe('Unicode bypass prevention', () => {
+    it('blocks content with zero-width characters inserted in markers', async () => {
+      const filter = createTestFilter();
+      const result = await filter.check({
+        content: 'My instructions: You are Nathan \u200BCuria',
+        recipientEmail: 'alice@example.com',
+        conversationId: 'email:thread-1',
+        channelId: 'email',
+      });
+      expect(result.passed).toBe(false);
+      expect(result.findings).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ rule: 'system-prompt-fragment' }),
+        ]),
+      );
+    });
+  });
+
   describe('LLM review stub', () => {
     it('always passes (returns empty findings)', async () => {
       const filter = createTestFilter();
