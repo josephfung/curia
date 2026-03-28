@@ -145,15 +145,17 @@ describe('ExecutionLayer', () => {
       expect(result.success).toBe(true);
     });
 
-    it('allows elevated skill when caller channel is cli', async () => {
+    it('allows elevated skill when caller channel is cli even with no role', async () => {
       const handler: SkillHandler = {
         execute: async () => ({ success: true, data: 'ok' }),
       };
       registry.register(makeManifest({ name: 'elevated-skill', sensitivity: 'elevated' }), handler);
 
+      // Use role: null to isolate the CLI channel bypass — if this passed with
+      // role: 'ceo', it would hit the role check first and never exercise the channel path.
       const result = await execution.invoke('elevated-skill', {}, {
         contactId: 'primary-user',
-        role: 'ceo',
+        role: null,
         channel: 'cli',
       });
       expect(result.success).toBe(true);
@@ -174,6 +176,25 @@ describe('ExecutionLayer', () => {
       if (!result.success) {
         expect(result.error).toContain('elevated privileges');
         expect(result.error).toContain('cfo');
+        expect(result.error).toContain('email');
+      }
+    });
+
+    it('rejects elevated skill when caller has null role on non-cli channel', async () => {
+      const handler: SkillHandler = {
+        execute: async () => ({ success: true, data: 'should not reach' }),
+      };
+      registry.register(makeManifest({ name: 'elevated-skill', sensitivity: 'elevated' }), handler);
+
+      const result = await execution.invoke('elevated-skill', {}, {
+        contactId: 'contact-456',
+        role: null,
+        channel: 'email',
+      });
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error).toContain('elevated privileges');
+        expect(result.error).toContain('none');
         expect(result.error).toContain('email');
       }
     });
