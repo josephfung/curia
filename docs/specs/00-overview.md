@@ -17,6 +17,7 @@
 | 07 | [Scheduler](07-scheduler.md) | Job model, persistent tasks, burst execution |
 | 08 | [Operations](08-operations.md) | Config, deployment, health checks, logging, project structure |
 | 09 | [Contacts & Identity](09-contacts-and-identity.md) | Contact resolution, identity verification, authorization, channel identity linking |
+| 10 | [Audit Log Hardening](10-audit-log-hardening.md) | Structured audit fields, LLM provenance, tamper evidence, source attribution, HITL records |
 
 ---
 
