@@ -2,7 +2,7 @@
   "name": "contact-set-role",
   "description": "Set or change a contact's role (e.g., CFO, board member, advisor).",
   "version": "1.0.0",
-  "sensitivity": "normal",
+  "sensitivity": "elevated",
   "infrastructure": true,
   "inputs": {
     "contact_id": "string",
