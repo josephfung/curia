@@ -1,14 +1,30 @@
 services:
   postgres:
-    image: pgvector/pgvector:pg16
+    build:
+      context: .
+      dockerfile: docker/postgres.Dockerfile
     ports:
       - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+      # pgAudit init script runs on first database creation only
+      - ./docker/postgres-init-pgaudit.sql:/docker-entrypoint-initdb.d/10-pgaudit.sql:ro
     environment:
       POSTGRES_DB: curia
       POSTGRES_USER: ${DB_USER:-curia}
       POSTGRES_PASSWORD: ${DB_PASSWORD:-curia_dev}
+    # Load pgAudit and configure session-level auditing via command args.
+    # All pgAudit settings are here (not in the init script) so there's one
+    # place to look. The init script only handles CREATE EXTENSION and role setup.
+    # IMPORTANT: shared_preload_libraries is the critical line — without it, the
+    # other pgaudit.* settings are silently accepted but have no effect.
+    command: >
+      postgres
+      -c shared_preload_libraries=pgaudit
+      -c pgaudit.log=write,ddl
+      -c pgaudit.log_parameter=on
+      -c pgaudit.log_relation=on
+      -c pgaudit.role=pgaudit_role
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-curia}"]
       interval: 5s
