@@ -13,6 +13,7 @@ import { randomUUID } from 'node:crypto';
 import type { DbPool } from '../db/connection.js';
 import type { Logger } from '../logger.js';
 import type { EntityMemory } from '../memory/entity-memory.js';
+import { sanitizeDisplayName } from '../skills/sanitize.js';
 import type {
   AuthOverride,
   Contact,
@@ -88,12 +89,17 @@ export class ContactService {
   async createContact(options: CreateContactOptions): Promise<Contact> {
     const now = new Date();
 
+    // Defense-in-depth: sanitize display names at storage time to prevent
+    // stored prompt injection. External sources (email participants, CRM imports)
+    // may contain arbitrary content in the name field. See issue #39.
+    const safeName = sanitizeDisplayName(options.displayName);
+
     // Auto-create a KG person node if we have entityMemory and no explicit kgNodeId
     let kgNodeId: string | null = options.kgNodeId ?? null;
     if (!kgNodeId && this.entityMemory) {
       const entity = await this.entityMemory.createEntity({
         type: 'person',
-        label: options.displayName,
+        label: safeName,
         properties: options.role ? { role: options.role } : {},
         source: options.source,
       });
@@ -103,7 +109,7 @@ export class ContactService {
     const contact: Contact = {
       id: randomUUID(),
       kgNodeId,
-      displayName: options.displayName,
+      displayName: safeName,
       role: options.role ?? null,
       status: options.status ?? 'confirmed',
       notes: options.notes ?? null,
