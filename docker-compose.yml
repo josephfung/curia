@@ -16,6 +16,8 @@ services:
     # Load pgAudit and configure session-level auditing via command args.
     # All pgAudit settings are here (not in the init script) so there's one
     # place to look. The init script only handles CREATE EXTENSION and role setup.
+    # IMPORTANT: shared_preload_libraries is the critical line — without it, the
+    # other pgaudit.* settings are silently accepted but have no effect.
     command: >
       postgres
       -c shared_preload_libraries=pgaudit
