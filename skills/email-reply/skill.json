@@ -2,7 +2,7 @@
   "name": "email-reply",
   "description": "Reply to an existing email thread. Provide the Nylas message ID to reply to and the reply body. The reply will be threaded correctly and sent to the original sender.",
   "version": "1.0.0",
-  "sensitivity": "elevated",
+  "sensitivity": "normal",
   "infrastructure": true,
   "inputs": {
     "reply_to_message_id": "string",

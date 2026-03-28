@@ -5,6 +5,7 @@ import type { Logger } from '../logger.js';
 import type { WorkingMemory } from '../memory/working-memory.js';
 import type { EntityMemory } from '../memory/entity-memory.js';
 import type { ExecutionLayer } from '../skills/execution.js';
+import type { CallerContext } from '../skills/types.js';
 import { sanitizeOutput } from '../skills/sanitize.js';
 import { classifySkillError, formatTaskError } from '../errors/classify.js';
 import { DEFAULT_ERROR_BUDGET, type AgentError, type ErrorBudget } from '../errors/types.js';
@@ -185,6 +186,14 @@ export class AgentRuntime {
     let response = await this.chatWithRetry(provider, { messages, tools: skillToolDefs }, budget, taskEvent);
     if (!response) return; // chatWithRetry already published error events
 
+    // Extract caller context once — it doesn't change between tool-use rounds.
+    // Unresolved senders produce undefined, which triggers the execution layer's
+    // fail-closed gate on elevated skills — unknown senders can't modify permissions.
+    const callerSenderCtx = taskEvent.payload.senderContext;
+    const caller: CallerContext | undefined = (callerSenderCtx && callerSenderCtx.resolved)
+      ? { contactId: callerSenderCtx.contactId, role: callerSenderCtx.role, channel: taskEvent.payload.channelId }
+      : undefined;
+
     while (response.type === 'tool_use' && executionLayer) {
       // Check turn budget before processing this round of tool calls
       budget.turnsUsed++;
@@ -233,7 +242,7 @@ export class AgentRuntime {
         await bus.publish('agent', invokeEvent);
 
         const startTime = Date.now();
-        const result = await executionLayer.invoke(toolCall.name, toolCall.input);
+        const result = await executionLayer.invoke(toolCall.name, toolCall.input, caller);
         const durationMs = Date.now() - startTime;
 
         // Publish skill.result for audit trail

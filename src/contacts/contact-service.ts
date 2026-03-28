@@ -292,7 +292,7 @@ export class ContactService {
    * Uses upsert — if an active override already exists for this contact+permission,
    * it gets replaced.
    */
-  async grantPermission(contactId: string, permission: string, granted: boolean): Promise<void> {
+  async grantPermission(contactId: string, permission: string, granted: boolean, grantedBy: string): Promise<void> {
     const contact = await this.backend.getContact(contactId);
     if (!contact) {
       throw new Error(`Contact not found: ${contactId}`);
@@ -303,7 +303,7 @@ export class ContactService {
       contactId,
       permission,
       granted,
-      grantedBy: 'ceo',
+      grantedBy,
       createdAt: new Date(),
       revokedAt: null,
     };

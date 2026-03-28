@@ -30,8 +30,15 @@ export class ContactGrantPermissionHandler implements SkillHandler {
       return { success: false, error: 'Contact service not available. Is infrastructure: true set?' };
     }
 
+    // Defensive guard — the execution layer guarantees caller is defined for
+    // elevated skills, but guard explicitly so a broken invariant produces a
+    // clear error instead of a cryptic TypeError.
+    if (!ctx.caller) {
+      return { success: false, error: 'Caller context is required for this skill but was not provided' };
+    }
+
     try {
-      await ctx.contactService.grantPermission(contact_id, permission, granted);
+      await ctx.contactService.grantPermission(contact_id, permission, granted, ctx.caller.contactId);
       const action = granted ? 'granted' : 'denied';
       ctx.log.info({ contactId: contact_id, permission, granted }, `Permission ${action}`);
       return { success: true, data: { contact_id, permission, granted } };
