@@ -160,9 +160,10 @@ export class OutboundContentFilter {
     let llmFindings: FilterFinding[] = [];
     try {
       llmFindings = await this.runLlmReview({ ...input, content: normalizedContent });
-    } catch {
+    } catch (err) {
       // Fail-closed: if the LLM review crashes, block the message.
-      llmFindings = [{ rule: 'llm-review-error', detail: 'LLM review threw an error' }];
+      const message = err instanceof Error ? err.message : String(err);
+      llmFindings = [{ rule: 'llm-review-error', detail: `LLM review threw: ${message}` }];
     }
     if (llmFindings.length > 0) {
       return { passed: false, findings: llmFindings, stage: 'llm-review' };
@@ -320,7 +321,7 @@ export class OutboundContentFilter {
    * want outbound content (which may be sensitive) leaving the trust boundary
    * to reach an external API just for a safety check.
    */
-  async runLlmReview(_input: FilterCheckInput): Promise<FilterFinding[]> {
+  private async runLlmReview(_input: FilterCheckInput): Promise<FilterFinding[]> {
     // Stub: always passes. LLM review not yet implemented.
     return [];
   }
