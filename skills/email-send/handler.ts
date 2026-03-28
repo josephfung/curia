@@ -66,6 +66,12 @@ export class EmailSendHandler implements SkillHandler {
     if (toAddresses.length === 0) {
       return { success: false, error: 'to field contains no valid email addresses' };
     }
+    // Only a single To recipient is supported. Multiple addresses in the to field
+    // would silently drop all but the first while reporting success for all of them.
+    // Direct the caller to use cc for additional recipients instead.
+    if (toAddresses.length > 1) {
+      return { success: false, error: 'email-send supports a single To recipient. Use the cc field for additional recipients.' };
+    }
 
     if (cc && cc.length > MAX_TO_LENGTH) {
       return { success: false, error: `cc must be ${MAX_TO_LENGTH} characters or fewer` };

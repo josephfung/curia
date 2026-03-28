@@ -176,7 +176,8 @@ export class OutboundGateway {
       // Notify the CEO directly via dispatchEmail (bypassing this.send() to avoid
       // infinite recursion — the notification itself doesn't need filtering because
       // it's a hardcoded template with no user-supplied content).
-      await this.dispatchEmail({
+      // dispatchEmail already catches Nylas errors and returns them, so no try-catch needed.
+      const notifyResult = await this.dispatchEmail({
         channel: 'email',
         to: this.ceoEmail,
         subject: 'Action needed — blocked outbound reply',
@@ -191,6 +192,12 @@ export class OutboundGateway {
           'Please review the audit log for details.',
         ].join('\n'),
       });
+      if (!notifyResult.success) {
+        this.log.error(
+          { blockId, ceoEmail: this.ceoEmail, reason: notifyResult.blockedReason },
+          'Failed to send CEO notification for blocked outbound content',
+        );
+      }
 
       return { success: false, blockedReason: 'Content blocked by filter' };
     }
