@@ -241,7 +241,8 @@ describe('AgentRuntime tool-use loop', () => {
     });
     await bus.publish('dispatch', task);
 
-    expect(mockExecution.invoke).toHaveBeenCalledWith('web-fetch', { url: 'https://example.com' });
+    // caller is undefined because the task payload has no senderContext
+    expect(mockExecution.invoke).toHaveBeenCalledWith('web-fetch', { url: 'https://example.com' }, undefined);
     expect(responseContent).toContain('Call count: 2');
   });
 

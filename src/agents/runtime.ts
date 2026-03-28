@@ -5,6 +5,7 @@ import type { Logger } from '../logger.js';
 import type { WorkingMemory } from '../memory/working-memory.js';
 import type { EntityMemory } from '../memory/entity-memory.js';
 import type { ExecutionLayer } from '../skills/execution.js';
+import type { CallerContext } from '../skills/types.js';
 import { sanitizeOutput } from '../skills/sanitize.js';
 import { classifySkillError, formatTaskError } from '../errors/classify.js';
 import { DEFAULT_ERROR_BUDGET, type AgentError, type ErrorBudget } from '../errors/types.js';
@@ -215,6 +216,14 @@ export class AgentRuntime {
       }
       messages.push({ role: 'assistant', content: assistantBlocks });
 
+      // Extract caller context from the task event's sender context.
+      // Unresolved senders produce undefined, which triggers the execution layer's
+      // fail-closed gate on elevated skills — unknown senders can't modify permissions.
+      const senderCtx = taskEvent.payload.senderContext;
+      const caller: CallerContext | undefined = (senderCtx && senderCtx.resolved)
+        ? { contactId: senderCtx.contactId, role: senderCtx.role, channel: taskEvent.payload.channelId }
+        : undefined;
+
       // Execute each tool call through the execution layer.
       // Publish skill.invoke and skill.result bus events for audit coverage.
       const toolResultBlocks: ContentBlock[] = [];
@@ -233,7 +242,7 @@ export class AgentRuntime {
         await bus.publish('agent', invokeEvent);
 
         const startTime = Date.now();
-        const result = await executionLayer.invoke(toolCall.name, toolCall.input);
+        const result = await executionLayer.invoke(toolCall.name, toolCall.input, caller);
         const durationMs = Date.now() - startTime;
 
         // Publish skill.result for audit trail
