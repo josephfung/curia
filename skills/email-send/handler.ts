@@ -94,25 +94,31 @@ export class EmailSendHandler implements SkillHandler {
 
     ctx.log.info({ to: toAddresses, subject }, 'Sending email via gateway');
 
-    const result = await ctx.outboundGateway.send({
-      channel: 'email',
-      to: toAddresses[0]!,
-      subject,
-      body,
-      cc: ccAddresses,
-    });
-
-    if (!result.success) {
-      return { success: false, error: result.blockedReason ?? 'Email send failed' };
-    }
-
-    return {
-      success: true,
-      data: {
-        message_id: result.messageId,
-        to: toAddresses.join(', '),
+    try {
+      const result = await ctx.outboundGateway.send({
+        channel: 'email',
+        to: toAddresses[0]!,
         subject,
-      },
-    };
+        body,
+        cc: ccAddresses,
+      });
+
+      if (!result.success) {
+        return { success: false, error: result.blockedReason ?? 'Email send failed' };
+      }
+
+      return {
+        success: true,
+        data: {
+          message_id: result.messageId,
+          to: toAddresses.join(', '),
+          subject,
+        },
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      ctx.log.error({ err, to: toAddresses, subject }, 'Failed to send email');
+      return { success: false, error: `Failed to send email: ${message}` };
+    }
   }
 }

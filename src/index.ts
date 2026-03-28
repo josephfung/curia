@@ -232,9 +232,9 @@ async function main(): Promise<void> {
     logger.warn('Outbound gateway NOT initialized — missing outboundFilter or nylasSelfEmail. Email send/reply skills will be unavailable.');
   }
 
-  // Start the email adapter now that the outbound gateway is ready.
-  // The adapter uses outboundGateway (not nylasClient directly) for both inbound
-  // polling and outbound sending so all sends pass through the filter pipeline.
+  // Construct the email adapter (but don't start it yet — it must not poll until
+  // the dispatcher is registered, otherwise inbound.message events have no subscriber
+  // and are permanently dropped because the adapter advances its high-water mark).
   if (outboundGateway && config.nylasSelfEmail) {
     emailAdapter = new EmailAdapter({
       bus,
@@ -244,8 +244,6 @@ async function main(): Promise<void> {
       pollingIntervalMs: config.nylasPollingIntervalMs,
       selfEmail: config.nylasSelfEmail,
     });
-    await emailAdapter.start();
-    logger.info('Email channel adapter started');
   }
 
   // Execution layer — now with bus, agent registry, and outbound gateway for
@@ -343,6 +341,15 @@ async function main(): Promise<void> {
     channelPolicies: authConfig?.channelPolicies,
   });
   dispatcher.register();
+
+  // Start the email adapter AFTER the dispatcher is registered so inbound.message
+  // events always have a subscriber. Starting before registration would drop emails
+  // arriving during the startup window (the adapter advances its high-water mark
+  // on poll, so dropped messages are never retried).
+  if (emailAdapter) {
+    await emailAdapter.start();
+    logger.info('Email channel adapter started');
+  }
 
   // HTTP API channel — REST + SSE endpoints for external clients.
   // Runs alongside the CLI channel so both can be used simultaneously.
