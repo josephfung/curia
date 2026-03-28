@@ -134,25 +134,16 @@ async function main(): Promise<void> {
   logger.info('Held message service initialized');
 
   // Email channel — optional, requires NYLAS_API_KEY, NYLAS_GRANT_ID, and NYLAS_SELF_EMAIL.
+  // NylasClient is constructed here (needed by OutboundGateway), but EmailAdapter is
+  // started later after the gateway is fully wired (adapter needs the gateway, not raw client).
   let nylasClient: NylasClient | undefined;
   let emailAdapter: EmailAdapter | undefined;
   if (config.nylasApiKey && config.nylasGrantId) {
     nylasClient = new NylasClient(config.nylasApiKey, config.nylasGrantId, logger);
-
     if (!config.nylasSelfEmail) {
       logger.warn('NYLAS_SELF_EMAIL not set — email adapter disabled (required to filter self-sent messages)');
-    } else {
-      emailAdapter = new EmailAdapter({
-        bus,
-        logger,
-        nylasClient,
-        contactService,
-        pollingIntervalMs: config.nylasPollingIntervalMs,
-        selfEmail: config.nylasSelfEmail,
-      });
-      await emailAdapter.start();
-      logger.info('Email channel adapter started');
     }
+    // EmailAdapter is started further below, after OutboundGateway is constructed.
   } else {
     logger.warn('NYLAS_API_KEY/NYLAS_GRANT_ID not set — email channel disabled');
   }
@@ -241,6 +232,22 @@ async function main(): Promise<void> {
     logger.warn('Outbound gateway NOT initialized — missing outboundFilter or nylasSelfEmail. Email send/reply skills will be unavailable.');
   }
 
+  // Start the email adapter now that the outbound gateway is ready.
+  // The adapter uses outboundGateway (not nylasClient directly) for both inbound
+  // polling and outbound sending so all sends pass through the filter pipeline.
+  if (outboundGateway && config.nylasSelfEmail) {
+    emailAdapter = new EmailAdapter({
+      bus,
+      logger,
+      outboundGateway,
+      contactService,
+      pollingIntervalMs: config.nylasPollingIntervalMs,
+      selfEmail: config.nylasSelfEmail,
+    });
+    await emailAdapter.start();
+    logger.info('Email channel adapter started');
+  }
+
   // Execution layer — now with bus, agent registry, and outbound gateway for
   // infrastructure skills. outboundGateway gives email skills their send path.
   const executionLayer = new ExecutionLayer(skillRegistry, logger, { bus, agentRegistry, contactService, outboundGateway, heldMessages });
@@ -326,17 +333,14 @@ async function main(): Promise<void> {
   // 7. Dispatcher — subscribes to inbound.message + agent.response.
   // Registered after the coordinator so agent.task already has a handler
   // when the dispatcher fans the first inbound message out.
+  // Content filter, externalChannels, and ceoNotification are now handled by OutboundGateway.
+  // The Dispatcher only routes — it no longer contains any filter logic.
   const dispatcher = new Dispatcher({
     bus,
     logger,
     contactResolver,
     heldMessages,
     channelPolicies: authConfig?.channelPolicies,
-    outboundFilter,
-    externalChannels: new Set(['email']),
-    ceoNotification: nylasClient && config.nylasSelfEmail
-      ? { nylasClient, ceoEmail: config.nylasSelfEmail }
-      : undefined,
   });
   dispatcher.register();
 
