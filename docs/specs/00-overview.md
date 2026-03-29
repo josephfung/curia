@@ -46,7 +46,7 @@ The framework replaces the existing Zora dependency entirely (clean break). It l
 
 ## Architecture: Message Bus Pattern
 
-All communication flows through a central in-process message bus backed by Postgres for persistence. Each layer is a separate module that subscribes to and publishes typed messages. The bus enforces which event types each layer can publish.
+All communication flows through a central in-process message bus backed by Postgres for persistence. There are five layers: four domain layers (Channel, Dispatch, Agent, Execution) with hard security boundaries, plus a System layer for trusted cross-cutting infrastructure. Each layer is a separate module that subscribes to and publishes typed messages. The bus enforces which event types each layer can publish.
 
 ```
 ┌─────────────────────────────────────────────────────┐
@@ -80,15 +80,17 @@ All communication flows through a central in-process message bus backed by Postg
 │  Publishes: skill.result                             │
 └─────────────────────────────────────────────────────┘
 
-Cross-cutting subscribers (see ALL events):
+Cross-cutting (System Layer — full pub/sub access):
   - Audit Logger → appends every event to audit_log table
   - Memory Engine → handles memory.store/query events
-  - Scheduler → handles schedule.create/trigger events
+  - Scheduler → handles schedule.create/trigger events, fires agent.task on cron
 ```
 
 ### Bus Security Enforcement
 
 The bus validates publisher authorization at registration time. A module registered as `layer: "channel"` can only publish event types in the channel allowlist (`inbound.message`, `inbound.event`). Attempting to publish `skill.invoke` throws an error. This is the hard security boundary — it's architectural, not policy.
+
+The exception is the **System layer**, which has full publish and subscribe access to all event types. This is reserved for trusted infrastructure components (audit logger, memory engine, scheduler) that need cross-cutting access to operate.
 
 ### Event Routing (complete message flow)
 

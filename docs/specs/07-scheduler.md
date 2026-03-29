@@ -4,6 +4,14 @@
 
 Built into the main process, backed by Postgres. Handles both user-defined recurring jobs (cron) and agent-created one-shot or recurring tasks.
 
+**Layer:** System (same as audit logger — full pub/sub access)
+
+**Bus events:** `schedule.created`, `schedule.fired`, `schedule.suspended`
+
+**Shared service:** `SchedulerService` handles all job CRUD — consumed by scheduler loop, agent skills, and HTTP API routes.
+
+**Suspension notifications:** Routed through the coordinator as synthetic `agent.task` events — no dedicated notification subsystem.
+
 ---
 
 ## Job Model
