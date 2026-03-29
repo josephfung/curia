@@ -69,11 +69,14 @@ describe('Scheduler', () => {
     bus = mockBus();
     logger = mockLogger();
     schedulerService = mockSchedulerService();
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     scheduler = new Scheduler({
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       pool: pool as any,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       bus: bus as any,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       logger: logger as any,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       schedulerService: schedulerService as any,
     });
   });
