@@ -160,11 +160,17 @@ export class Scheduler {
    * into the agent.task content so the agent has context about the ongoing task.
    */
   private async fireJob(job: JobRow): Promise<void> {
-    // Mark job as running so it won't be picked up again.
-    await this.pool.query(
-      `UPDATE scheduled_jobs SET status = $1 WHERE id = $2`,
+    // Atomically claim the job by setting status to 'running' only if it's still
+    // in a claimable state. The rowCount check prevents double-firing if another
+    // scheduler instance (or overlapping poll) claimed the same job.
+    const claimResult = await this.pool.query(
+      `UPDATE scheduled_jobs SET status = $1 WHERE id = $2 AND status IN ('pending', 'failed')`,
       ['running', job.id],
     );
+    if (claimResult.rowCount === 0) {
+      this.logger.debug({ jobId: job.id }, 'Job already claimed; skipping fire');
+      return;
+    }
 
     // Build the agent.task content, injecting persistent task context if available.
     let content = JSON.stringify(job.taskPayload);

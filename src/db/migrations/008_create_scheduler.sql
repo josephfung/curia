@@ -16,7 +16,11 @@ CREATE TABLE scheduled_jobs (
   created_by            TEXT NOT NULL,
   created_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
 
-  CONSTRAINT cron_or_run_at CHECK (cron_expr IS NOT NULL OR run_at IS NOT NULL)
+  CONSTRAINT cron_xor_run_at CHECK (
+    (cron_expr IS NOT NULL AND run_at IS NULL)
+    OR
+    (cron_expr IS NULL AND run_at IS NOT NULL)
+  )
 );
 
 -- Partial index: the scheduler loop only queries pending/failed jobs by next_run_at.

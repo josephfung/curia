@@ -101,11 +101,20 @@ export async function jobRoutes(
       task_payload?: Record<string, unknown>;
     };
 
+    // When not unsuspending, require at least one updatable field so we don't
+    // report a successful update when nothing actually changes in the database.
+    const hasUpdateFields =
+      body.cron_expr !== undefined ||
+      body.run_at !== undefined ||
+      body.task_payload !== undefined;
+
     try {
       // If the caller is setting status back to 'pending', treat it as an unsuspend.
       // The unsuspendJob method handles validation (must currently be suspended).
       if (body.status === 'pending') {
         await schedulerService.unsuspendJob(id);
+      } else if (!hasUpdateFields) {
+        return reply.status(400).send({ error: 'At least one of cron_expr, run_at, or task_payload must be provided' });
       } else {
         await schedulerService.updateJob(id, {
           cronExpr: body.cron_expr,
