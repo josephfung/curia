@@ -164,4 +164,7 @@ pinned_skills:
   - contact-revoke-permission
   - held-messages-list
   - held-messages-process
+  - scheduler-create
+  - scheduler-list
+  - scheduler-cancel
 allow_discovery: true

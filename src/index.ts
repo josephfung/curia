@@ -47,6 +47,8 @@ import { HeldMessageService } from './contacts/held-messages.js';
 import { DEFAULT_ERROR_BUDGET } from './errors/types.js';
 import { OutboundContentFilter } from './dispatch/outbound-filter.js';
 import { OutboundGateway } from './skills/outbound-gateway.js';
+import { SchedulerService } from './scheduler/scheduler-service.js';
+import { Scheduler } from './scheduler/scheduler.js';
 
 async function main(): Promise<void> {
   // 1. Config & logging — no dependencies, must come first.
@@ -246,9 +248,15 @@ async function main(): Promise<void> {
     });
   }
 
+  // Scheduler — Postgres-backed job scheduler for cron and one-shot tasks.
+  // SchedulerService is the shared service; Scheduler is the polling loop.
+  // Constructed early so it can be passed to ExecutionLayer and HttpAdapter.
+  const schedulerService = new SchedulerService(pool, bus, logger);
+  const scheduler = new Scheduler({ pool, bus, logger, schedulerService });
+
   // Execution layer — now with bus, agent registry, and outbound gateway for
   // infrastructure skills. outboundGateway gives email skills their send path.
-  const executionLayer = new ExecutionLayer(skillRegistry, logger, { bus, agentRegistry, contactService, outboundGateway, heldMessages });
+  const executionLayer = new ExecutionLayer(skillRegistry, logger, { bus, agentRegistry, contactService, outboundGateway, heldMessages, schedulerService });
 
   // Two-pass agent registration:
   // Pass 1: Register all agents in the registry so specialistSummary() is complete
@@ -328,6 +336,12 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
+  // Load declarative schedules from agent YAML configs and start the scheduler loop.
+  // Runs after agent registration so all agents are known when jobs are upserted.
+  await scheduler.loadDeclarativeJobs(agentConfigs);
+  scheduler.start();
+  logger.info('Scheduler started');
+
   // 7. Dispatcher — subscribes to inbound.message + agent.response.
   // Registered after the coordinator so agent.task already has a handler
   // when the dispatcher fans the first inbound message out.
@@ -362,6 +376,7 @@ async function main(): Promise<void> {
     apiToken: config.apiToken,
     agentNames: agentConfigs.map(c => c.name),
     skillNames: skillRegistry.list().map(s => s.manifest.name),
+    schedulerService,
   });
 
   try {
@@ -385,6 +400,11 @@ async function main(): Promise<void> {
       await httpAdapter.stop();
     } catch (err) {
       logger.error({ err }, 'Error stopping HTTP API during shutdown');
+    }
+    try {
+      scheduler.stop();
+    } catch (err) {
+      logger.error({ err }, 'Error stopping scheduler during shutdown');
     }
     try {
       await pool.end();

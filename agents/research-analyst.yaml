@@ -18,6 +18,9 @@ system_prompt: |
   and presented by the team coordinator — write for a busy executive audience.
 pinned_skills:
   - web-fetch
+  - scheduler-create
+  - scheduler-list
+  - scheduler-cancel
 allow_discovery: false
 memory:
   scopes: [research]

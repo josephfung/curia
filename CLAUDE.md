@@ -6,12 +6,13 @@ Curia is a multi-agent AI platform for executives. Architecture specs are in `do
 
 ## Architecture
 
-Four hard-separated layers connected by a message bus. Every component declares its layer at startup; the bus enforces which event types each layer can publish/subscribe to.
+Five layers connected by a message bus. Four domain layers have hard security boundaries; the fifth (System) is for trusted cross-cutting infrastructure.
 
 - **Channel Layer** — translates platform messages (Telegram, Email, etc.) into normalized bus events
 - **Dispatch Layer** — routes messages to agents, enforces policy, translates responses back
 - **Agent Layer** — LLM-powered agents with isolated memory scopes
 - **Execution Layer** — runs skills (local or MCP), validates permissions, sanitizes outputs
+- **System Layer** — trusted infrastructure with full pub/sub access (audit logger, scheduler)
 
 Cross-cutting: Audit Logger, Memory Engine, Scheduler.
 
