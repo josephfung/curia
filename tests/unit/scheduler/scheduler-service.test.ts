@@ -142,7 +142,7 @@ describe('SchedulerService', () => {
 
   describe('cancelJob', () => {
     it('updates the job status to cancelled', async () => {
-      pool.query.mockResolvedValueOnce({ rows: [] });
+      pool.query.mockResolvedValue({ rows: [] });
 
       await svc.cancelJob('job-cancel');
 
@@ -151,20 +151,50 @@ describe('SchedulerService', () => {
       expect(params).toContain('cancelled');
       expect(params).toContain('job-cancel');
     });
+
+    it('also cancels the linked agent_task', async () => {
+      pool.query.mockResolvedValue({ rows: [] });
+
+      await svc.cancelJob('job-cancel');
+
+      // Second query should update agent_tasks
+      expect(pool.query).toHaveBeenCalledTimes(2);
+      const [sql2] = pool.query.mock.calls[1] as [string, unknown[]];
+      expect(sql2).toContain('agent_tasks');
+      expect(sql2).toContain('cancelled');
+    });
   });
 
   // -- unsuspendJob --
 
   describe('unsuspendJob', () => {
-    it('resets failures and sets status back to pending', async () => {
+    it('fetches the job, recalculates next_run_at, and resets status', async () => {
+      // First query: fetch the suspended job
+      pool.query.mockResolvedValueOnce({
+        rows: [{ cron_expr: '0 9 * * 1', run_at: null }],
+      });
+      // Second query: the UPDATE
       pool.query.mockResolvedValueOnce({ rows: [] });
 
       await svc.unsuspendJob('job-unsuspend');
 
-      const [sql, params] = pool.query.mock.calls[0] as [string, unknown[]];
-      expect(params).toContain('pending');
-      expect(sql).toContain('consecutive_failures');
-      expect(params).toContain('job-unsuspend');
+      expect(pool.query).toHaveBeenCalledTimes(2);
+      // First call fetches the job
+      const [sql1] = pool.query.mock.calls[0] as [string, unknown[]];
+      expect(sql1).toContain('suspended');
+      // Second call updates with recalculated next_run_at
+      const [sql2, params2] = pool.query.mock.calls[1] as [string, unknown[]];
+      expect(sql2).toContain('next_run_at');
+      expect(sql2).toContain('pending');
+      expect(params2[0]).toBe('job-unsuspend');
+      // params2[1] should be a Date (the recalculated next_run_at)
+      expect(params2[1]).toBeInstanceOf(Date);
+    });
+
+    it('throws when job is not found or not suspended', async () => {
+      pool.query.mockResolvedValueOnce({ rows: [] });
+
+      await expect(svc.unsuspendJob('nonexistent')).rejects.toThrow('not found or not suspended');
     });
   });
 

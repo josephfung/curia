@@ -206,20 +206,46 @@ export class SchedulerService {
   }
 
   async cancelJob(jobId: string): Promise<void> {
-    const sql = `UPDATE scheduled_jobs SET status = $1 WHERE id = $2`;
-    await this.pool.query(sql, ['cancelled', jobId]);
+    await this.pool.query(
+      `UPDATE scheduled_jobs SET status = $1 WHERE id = $2`,
+      ['cancelled', jobId],
+    );
+    // Also cancel linked agent_task if any
+    await this.pool.query(
+      `UPDATE agent_tasks SET status = 'cancelled', updated_at = now() WHERE scheduled_job_id = $1`,
+      [jobId],
+    );
     this.logger.info({ jobId }, 'Scheduled job cancelled');
   }
 
   async unsuspendJob(jobId: string): Promise<void> {
-    const sql = `
-      UPDATE scheduled_jobs
-         SET status = $1,
+    // Fetch the job to get cron_expr or run_at for recalculating next_run_at
+    const { rows } = await this.pool.query(
+      `SELECT cron_expr, run_at FROM scheduled_jobs WHERE id = $1 AND status = 'suspended'`,
+      [jobId],
+    );
+    if (rows.length === 0) {
+      throw new Error(`Job ${jobId} not found or not suspended`);
+    }
+
+    const { cron_expr, run_at } = rows[0] as { cron_expr: string | null; run_at: Date | null };
+    let nextRunAt: Date;
+    if (cron_expr) {
+      nextRunAt = this.nextRunFromCron(cron_expr);
+    } else {
+      // One-shot job: re-use original run_at (may be in the past — will fire immediately)
+      nextRunAt = new Date(run_at!);
+    }
+
+    await this.pool.query(
+      `UPDATE scheduled_jobs
+         SET status = 'pending',
              consecutive_failures = 0,
-             last_error = NULL
-       WHERE id = $2
-    `;
-    await this.pool.query(sql, ['pending', jobId]);
+             last_error = NULL,
+             next_run_at = $2
+       WHERE id = $1`,
+      [jobId, nextRunAt],
+    );
     this.logger.info({ jobId }, 'Scheduled job unsuspended');
   }
 
