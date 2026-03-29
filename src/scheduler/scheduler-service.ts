@@ -88,6 +88,21 @@ export class SchedulerService {
     return expr.next().toDate();
   }
 
+  /**
+   * Validate that a cron expression doesn't fire more often than the minimum interval.
+   * Prevents DoS via high-frequency cron jobs (e.g., every second or every minute).
+   */
+  validateCronFrequency(cronExpr: string): void {
+    const MIN_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
+    const expr = CronExpressionParser.parse(cronExpr);
+    const first = expr.next().toDate();
+    const second = expr.next().toDate();
+    const intervalMs = second.getTime() - first.getTime();
+    if (intervalMs < MIN_INTERVAL_MS) {
+      throw new Error(`Cron expression fires too frequently (every ${Math.round(intervalMs / 1000)}s). Minimum interval is 5 minutes.`);
+    }
+  }
+
   // -- CRUD --
 
   async createJob(params: CreateJobParams): Promise<CreateJobResult> {
@@ -95,6 +110,11 @@ export class SchedulerService {
 
     if (!cronExpr && !runAt) {
       throw new Error('Either cronExpr or runAt must be provided');
+    }
+
+    // Validate cron frequency to prevent DoS via high-frequency schedules.
+    if (cronExpr) {
+      this.validateCronFrequency(cronExpr);
     }
 
     // Calculate next_run_at: for cron jobs use the parser, for one-shot jobs use runAt directly.
@@ -258,6 +278,9 @@ export class SchedulerService {
     let paramIndex = 1;
 
     if (updates.cronExpr !== undefined) {
+      // Validate frequency before accepting the update.
+      this.validateCronFrequency(updates.cronExpr);
+
       setClauses.push(`cron_expr = $${paramIndex}`);
       params.push(updates.cronExpr);
       paramIndex++;
