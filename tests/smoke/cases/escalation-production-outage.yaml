@@ -1,0 +1,32 @@
+name: Urgent Escalation - Production Outage
+description: Agent should classify a production outage as critical urgency, suggest an escalation path, and recommend parallel actions
+tags:
+  - escalation
+  - urgency
+  - single-turn
+
+turns:
+  - role: user
+    content: |
+      Our production system is down and customers are affected.
+      The CTO is unreachable. What do I do?
+
+expected_behaviors:
+  - id: classify-critical
+    description: Classifies this as the highest urgency level requiring immediate action
+    weight: critical
+  - id: suggest-escalation-path
+    description: Suggests an escalation path (backup contacts, secondary engineering leadership, VP Eng)
+    weight: critical
+  - id: recommend-parallel-actions
+    description: Recommends parallel actions (customer communications, status page, incident channel)
+    weight: important
+  - id: offer-draft-comms
+    description: Offers to help draft urgent communications to affected parties
+    weight: nice-to-have
+
+failure_modes:
+  - Downplays the severity of a production outage
+  - Only suggests waiting for the CTO to become available
+  - Doesn't suggest any escalation path beyond the CTO
+  - Focuses on root cause investigation instead of immediate response

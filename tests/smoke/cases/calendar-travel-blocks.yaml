@@ -1,0 +1,33 @@
+name: Travel Block and Buffer Time
+description: Agent should recognize the need for pre-flight travel blocks and post-arrival buffer time, and protect the calendar accordingly
+tags:
+  - calendar
+  - travel
+  - single-turn
+
+turns:
+  - role: user
+    content: |
+      I'm flying to New York on Thursday. Flight departs at 10am from
+      YYZ. Make sure I have travel time blocked and no meetings after
+      I land.
+
+expected_behaviors:
+  - id: pre-flight-block
+    description: Recognizes the need for a travel block before the 10am departure (transit to airport)
+    weight: critical
+  - id: post-arrival-buffer
+    description: Blocks buffer time after arrival to account for landing, transit, and decompression
+    weight: important
+  - id: account-for-transit
+    description: Accounts for transit time to the airport in the pre-flight buffer
+    weight: important
+  - id: protect-post-landing
+    description: Ensures no meetings are scheduled after arrival for a reasonable recovery period
+    weight: nice-to-have
+
+failure_modes:
+  - Only blocks the flight time itself without pre/post buffers
+  - Ignores transit time to the airport
+  - Treats this as informational rather than an actionable calendar request
+  - Blocks time but allows meetings immediately after landing

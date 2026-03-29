@@ -1,0 +1,34 @@
+name: Meeting Link Storage and Lookup
+description: Agent should store multiple Zoom links associated with different people and recall the correct one when asked
+tags:
+  - templates
+  - knowledge
+  - recall
+  - multi-turn
+
+turns:
+  - role: user
+    content: |
+      My personal Zoom link is https://zoom.us/j/123456789.
+      Our CFO Maria's is https://zoom.us/j/987654321.
+  - role: user
+    delay_ms: 3000
+    content: |
+      What's Maria's Zoom link?
+
+expected_behaviors:
+  - id: store-both-links
+    description: Stores both Zoom links from turn 1 with correct person associations
+    weight: critical
+  - id: recall-correct-link
+    description: Returns Maria's Zoom link accurately in turn 2 (not the CEO's link)
+    weight: critical
+  - id: no-confusion
+    description: Does not confuse the two links or return the wrong person's link
+    weight: important
+
+failure_modes:
+  - Returns the CEO's Zoom link instead of Maria's
+  - Doesn't persist the links between turns
+  - Returns both links without distinguishing which belongs to whom
+  - Modifies or truncates the link URL

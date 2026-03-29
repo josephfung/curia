@@ -1,0 +1,31 @@
+name: Daily Morning Briefing
+description: Agent should attempt to produce a structured morning briefing covering today's schedule, notes, and items needing attention
+tags:
+  - briefing
+  - calendar
+  - single-turn
+
+turns:
+  - role: user
+    content: |
+      Give me my morning briefing for today.
+
+expected_behaviors:
+  - id: attempt-schedule
+    description: Attempts to pull or reference today's calendar schedule
+    weight: critical
+  - id: structured-output
+    description: Structures output with clear sections (schedule overview, notes, FYIs, reminders)
+    weight: important
+  - id: flag-prep-needs
+    description: Mentions if any meetings need prep materials or have missing context
+    weight: important
+  - id: include-reminders
+    description: Includes reminders for pending items or follow-ups
+    weight: nice-to-have
+
+failure_modes:
+  - Produces a generic response without attempting to reference calendar data
+  - Returns an unstructured wall of text
+  - Makes up a schedule instead of acknowledging missing calendar access
+  - Ignores the briefing format entirely and just asks what the user wants

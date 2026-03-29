@@ -1,0 +1,33 @@
+name: Pre-Meeting Prep Brief
+description: Agent should produce a structured meeting prep brief including contact lookup, context, and talking points
+tags:
+  - briefing
+  - meeting-prep
+  - contacts
+  - single-turn
+
+turns:
+  - role: user
+    content: |
+      I have a meeting with David Kim from Sequoia Capital in an hour.
+      Prep me.
+
+expected_behaviors:
+  - id: attempt-contact-lookup
+    description: Attempts to look up David Kim in the contact system
+    weight: critical
+  - id: structured-brief
+    description: Structures a pre-meeting brief with who, context, and suggested talking points
+    weight: important
+  - id: last-interaction
+    description: Attempts to provide context on last interaction or relationship history if available
+    weight: important
+  - id: ask-meeting-purpose
+    description: Asks for the meeting purpose if not obvious from available context
+    weight: important
+
+failure_modes:
+  - Provides no structure, just a generic "good luck in your meeting"
+  - Fabricates details about David Kim or Sequoia Capital from training data
+  - Doesn't attempt to check the contact system
+  - Skips talking points entirely

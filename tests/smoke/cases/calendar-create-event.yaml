@@ -1,0 +1,32 @@
+name: Create Event with Full Context
+description: Agent should capture all meeting details and create a properly formatted calendar event with attendee, time, timezone, duration, topic, and Zoom link
+tags:
+  - calendar
+  - scheduling
+  - single-turn
+
+turns:
+  - role: user
+    content: |
+      Set up a 30-minute call with Sarah Chen next Tuesday at 2pm ET.
+      It's about the Q2 product roadmap review. Use my Zoom.
+
+expected_behaviors:
+  - id: acknowledge-request
+    description: Acknowledges the meeting creation request and confirms intent to create the event
+    weight: critical
+  - id: capture-all-details
+    description: Captures all provided details - attendee (Sarah Chen), date (next Tuesday), time (2pm), timezone (ET), duration (30 min), topic (Q2 product roadmap review)
+    weight: critical
+  - id: use-ceo-zoom
+    description: Mentions using the CEO's personal Zoom link for the meeting
+    weight: important
+  - id: confirm-specifics
+    description: Confirms back the specifics of what will be created before or after acting
+    weight: important
+
+failure_modes:
+  - Drops one or more details (wrong date, missing timezone, forgets duration)
+  - Ignores the Zoom link instruction
+  - Creates the event without confirming details with the user
+  - Treats this as informational rather than an actionable request

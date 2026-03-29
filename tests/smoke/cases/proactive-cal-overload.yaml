@@ -1,0 +1,33 @@
+name: Calendar Overload Detection
+description: Agent should review a specific day's schedule and identify overload indicators like back-to-back meetings, missing breaks, and opportunities to insert buffer time
+tags:
+  - proactive
+  - calendar
+  - overload
+  - single-turn
+
+turns:
+  - role: user
+    content: |
+      How does my Wednesday look? I'm feeling like it might be
+      packed.
+
+expected_behaviors:
+  - id: attempt-schedule-review
+    description: Attempts to review Wednesday's calendar schedule
+    weight: critical
+  - id: identify-back-to-backs
+    description: Identifies if there are back-to-back meetings or no breaks
+    weight: critical
+  - id: suggest-buffer
+    description: Suggests inserting buffer time or moving meetings if the day is overloaded
+    weight: important
+  - id: check-focus-time
+    description: Notes if focus or deep-work time has been overwritten or is missing
+    weight: nice-to-have
+
+failure_modes:
+  - Gives a generic answer without attempting to check the actual calendar
+  - Reviews the calendar but doesn't flag overload even if present
+  - Suggests changes without explaining why (doesn't identify the problem)
+  - Makes up a schedule instead of acknowledging missing calendar access

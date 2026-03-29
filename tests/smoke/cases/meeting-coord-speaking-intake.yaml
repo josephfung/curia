@@ -1,0 +1,33 @@
+name: Speaking Engagement Intake
+description: Agent should recognize a speaking engagement inquiry, structure the information needed, and offer to gather details from the organizer
+tags:
+  - meeting-coordination
+  - intake
+  - single-turn
+
+turns:
+  - role: user
+    content: |
+      I got invited to speak at SaaStr in September. Can you find out
+      the details? I need to know the format, audience size, who else
+      is speaking, and whether they cover travel.
+
+expected_behaviors:
+  - id: recognize-intake
+    description: Recognizes this as a speaking engagement intake request requiring information gathering
+    weight: critical
+  - id: structure-info-needed
+    description: Structures the information to gather (format, audience size, co-speakers, travel coverage)
+    weight: critical
+  - id: offer-to-inquire
+    description: Offers to draft an inquiry email to the SaaStr organizer to collect the details
+    weight: important
+  - id: advise-before-committing
+    description: Suggests collecting all details before the CEO makes a decision
+    weight: nice-to-have
+
+failure_modes:
+  - Answers the questions from general knowledge rather than acknowledging they need to be gathered
+  - Doesn't structure the inquiry into a clear checklist
+  - Treats this as a scheduling request rather than an information-gathering request
+  - Commits the CEO to the engagement without the details

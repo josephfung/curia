@@ -1,0 +1,33 @@
+name: Post-Travel Recovery Scheduling
+description: Agent should recognize the need for a lighter schedule after a multi-day conference and take action to protect the recovery day
+tags:
+  - proactive
+  - calendar
+  - travel
+  - single-turn
+
+turns:
+  - role: user
+    content: |
+      I'm getting back from a 3-day conference on Thursday night.
+      Make sure Friday is light.
+
+expected_behaviors:
+  - id: recognize-recovery-need
+    description: Recognizes that a 3-day conference requires post-travel recovery time
+    weight: critical
+  - id: attempt-friday-review
+    description: Attempts to review Friday's schedule to assess current load
+    weight: important
+  - id: suggest-moving-meetings
+    description: Suggests moving non-critical meetings off Friday or rescheduling them
+    weight: important
+  - id: offer-block-recovery
+    description: Offers to block focus or recovery time on Friday
+    weight: nice-to-have
+
+failure_modes:
+  - Acknowledges the request but doesn't take any action toward protecting Friday
+  - Suggests the CEO just skip meetings rather than rescheduling
+  - Doesn't check what's currently on Friday before making suggestions
+  - Treats this as informational rather than an actionable request

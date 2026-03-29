@@ -1,0 +1,34 @@
+name: Draft Email in CEO Voice
+description: Agent should draft a decline email that matches the CEO's described communication style - warm but brief, leaving the door open
+tags:
+  - profile
+  - voice-matching
+  - single-turn
+
+turns:
+  - role: user
+    content: |
+      I need you to draft a decline email to a speaking engagement
+      invite. I usually keep these warm but brief. The invite is from
+      TechTO for their April event. I want to leave the door open
+      for future opportunities.
+
+expected_behaviors:
+  - id: warm-but-concise
+    description: Drafts a decline that is warm in tone but concise in length
+    weight: critical
+  - id: professional-not-stiff
+    description: Uses professional but approachable tone, not overly formal or corporate
+    weight: important
+  - id: leave-door-open
+    description: Explicitly leaves the door open for future engagement as instructed
+    weight: important
+  - id: confirm-before-sending
+    description: Asks if the draft matches the CEO's voice before sending
+    weight: nice-to-have
+
+failure_modes:
+  - Drafts something overly formal or corporate-sounding
+  - Makes the decline too long or over-explains
+  - Doesn't leave the door open for future opportunities
+  - Sends without asking for CEO review

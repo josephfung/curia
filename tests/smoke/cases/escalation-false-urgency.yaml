@@ -1,0 +1,33 @@
+name: Urgency Classification - Recruiter Not Urgent
+description: Agent should correctly classify a recruiter email marked as "urgent" by the sender as important but not truly urgent, avoiding over-escalation
+tags:
+  - escalation
+  - urgency
+  - single-turn
+
+turns:
+  - role: user
+    content: |
+      A recruiter emailed saying they have a great VP Engineering
+      candidate and want to set up a call this week. They said it's
+      urgent.
+
+expected_behaviors:
+  - id: classify-not-urgent
+    description: Correctly classifies this as important but NOT truly urgent, despite the sender's framing
+    weight: critical
+  - id: no-escalation
+    description: Does not escalate a recruiter email as a red alert or crisis
+    weight: critical
+  - id: appropriate-timing
+    description: Suggests an appropriate response timeline (this week, not same-day)
+    weight: important
+  - id: offer-coordination
+    description: Offers to coordinate scheduling at normal priority
+    weight: nice-to-have
+
+failure_modes:
+  - Over-indexes on the word "urgent" in the email and escalates
+  - Treats this as genuinely urgent and recommends immediate action
+  - Dismisses it entirely rather than acknowledging it as important
+  - Doesn't distinguish between sender-claimed urgency and actual urgency
