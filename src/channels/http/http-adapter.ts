@@ -23,8 +23,10 @@ import type { Pool } from 'pg';
 import type { AgentRegistry } from '../../agents/agent-registry.js';
 import { validateBearerToken } from './auth.js';
 import { EventRouter } from './event-router.js';
+import type { SchedulerService } from '../../scheduler/scheduler-service.js';
 import { healthRoutes } from './routes/health.js';
 import { agentRoutes } from './routes/agents.js';
+import { jobRoutes } from './routes/jobs.js';
 import { messageRoutes } from './routes/messages.js';
 
 export interface HttpAdapterConfig {
@@ -36,6 +38,7 @@ export interface HttpAdapterConfig {
   apiToken: string | undefined;
   agentNames: string[];
   skillNames: string[];
+  schedulerService?: SchedulerService;
 }
 
 export class HttpAdapter {
@@ -77,6 +80,10 @@ export class HttpAdapter {
     await this.app.register(healthRoutes, { pool, logger, agentNames, skillNames });
     await this.app.register(agentRoutes, { agentRegistry });
     await this.app.register(messageRoutes, { bus, logger, eventRouter: this.eventRouter });
+
+    if (this.config.schedulerService) {
+      await this.app.register(jobRoutes, { schedulerService: this.config.schedulerService });
+    }
 
     // Start listening
     await this.app.listen({ port, host: '0.0.0.0' });
