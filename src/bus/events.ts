@@ -137,6 +137,30 @@ interface MemoryQueryPayload {
   resultCount: number;
 }
 
+// Schedule event payloads — emitted by the scheduler (system layer) for audit trail.
+
+interface ScheduleCreatedPayload {
+  jobId: string;
+  agentId: string;
+  cronExpr: string | null;
+  runAt: string | null;
+  taskPayload: Record<string, unknown>;
+  createdBy: string;
+}
+
+interface ScheduleFiredPayload {
+  jobId: string;
+  agentId: string;
+  agentTaskId: string | null;
+}
+
+interface ScheduleSuspendedPayload {
+  jobId: string;
+  agentId: string;
+  lastError: string;
+  consecutiveFailures: number;
+}
+
 // -- Discriminated union --
 // The `type` field is the discriminant; `sourceLayer` records which layer emitted the event.
 
@@ -230,6 +254,24 @@ export interface MemoryQueryEvent extends BaseEvent {
   payload: MemoryQueryPayload;
 }
 
+export interface ScheduleCreatedEvent extends BaseEvent {
+  type: 'schedule.created';
+  sourceLayer: 'system';
+  payload: ScheduleCreatedPayload;
+}
+
+export interface ScheduleFiredEvent extends BaseEvent {
+  type: 'schedule.fired';
+  sourceLayer: 'system';
+  payload: ScheduleFiredPayload;
+}
+
+export interface ScheduleSuspendedEvent extends BaseEvent {
+  type: 'schedule.suspended';
+  sourceLayer: 'system';
+  payload: ScheduleSuspendedPayload;
+}
+
 export type BusEvent =
   | InboundMessageEvent
   | AgentTaskEvent
@@ -243,7 +285,10 @@ export type BusEvent =
   | ContactResolvedEvent  // Contacts Phase A: sender matched to a known contact
   | ContactUnknownEvent   // Contacts Phase A: sender has no contact record
   | MessageHeldEvent      // Unknown sender policy: message held for CEO review
-  | OutboundBlockedEvent; // Outbound content filter: message blocked before delivery (#38)
+  | OutboundBlockedEvent  // Outbound content filter: message blocked before delivery (#38)
+  | ScheduleCreatedEvent   // Scheduler: job created
+  | ScheduleFiredEvent     // Scheduler: job fired
+  | ScheduleSuspendedEvent; // Scheduler: job auto-suspended
 
 // Convenience alias for use in handler maps / switch statements.
 export type EventType = BusEvent['type'];
@@ -440,6 +485,48 @@ export function createMessageHeld(
     timestamp: new Date(),
     type: 'message.held',
     sourceLayer: 'dispatch',
+    payload: rest,
+    parentEventId,
+  };
+}
+
+export function createScheduleCreated(
+  payload: ScheduleCreatedPayload & { parentEventId?: string },
+): ScheduleCreatedEvent {
+  const { parentEventId, ...rest } = payload;
+  return {
+    id: randomUUID(),
+    timestamp: new Date(),
+    type: 'schedule.created',
+    sourceLayer: 'system',
+    payload: rest,
+    parentEventId,
+  };
+}
+
+export function createScheduleFired(
+  payload: ScheduleFiredPayload & { parentEventId?: string },
+): ScheduleFiredEvent {
+  const { parentEventId, ...rest } = payload;
+  return {
+    id: randomUUID(),
+    timestamp: new Date(),
+    type: 'schedule.fired',
+    sourceLayer: 'system',
+    payload: rest,
+    parentEventId,
+  };
+}
+
+export function createScheduleSuspended(
+  payload: ScheduleSuspendedPayload & { parentEventId?: string },
+): ScheduleSuspendedEvent {
+  const { parentEventId, ...rest } = payload;
+  return {
+    id: randomUUID(),
+    timestamp: new Date(),
+    type: 'schedule.suspended',
+    sourceLayer: 'system',
     payload: rest,
     parentEventId,
   };
