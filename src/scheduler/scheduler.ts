@@ -98,7 +98,7 @@ export class Scheduler {
                at.progress
           FROM scheduled_jobs sj
           LEFT JOIN agent_tasks at ON at.scheduled_job_id = sj.id
-         WHERE sj.status = 'pending'
+         WHERE sj.status IN ('pending', 'failed')
            AND sj.next_run_at <= now()
          ORDER BY sj.next_run_at ASC
          FOR UPDATE OF sj SKIP LOCKED
@@ -209,35 +209,24 @@ export class Scheduler {
       const result = await this.schedulerService.completeJobRun(jobId, success, error);
 
       if (result.suspended) {
-        // Publish schedule.suspended for audit trail.
-        const suspendedEvent = createScheduleSuspended({
-          jobId,
-          agentId: '', // Will be filled from the job; fetch is not needed since we log the jobId.
-          lastError: error ?? 'Unknown error',
-          consecutiveFailures: 3, // At suspension threshold.
-          parentEventId,
-        });
-
-        // We need the agentId for the suspended event; look it up from the job.
-        // TODO: Consider caching the agentId in the pendingJobs map to avoid this query.
+        // Fetch the job to get the agentId and consecutiveFailures for the event.
         const job = await this.schedulerService.getJob(jobId);
         if (job) {
-          const event = createScheduleSuspended({
+          // Publish schedule.suspended for audit trail.
+          const suspendedEvent = createScheduleSuspended({
             jobId,
             agentId: job.agentId,
             lastError: error ?? 'Unknown error',
             consecutiveFailures: job.consecutiveFailures,
             parentEventId,
           });
-          await this.bus.publish('system', event);
-
-          // Suppress the unused suspendedEvent variable — we rebuilt it with the correct agentId.
-          void suspendedEvent;
+          await this.bus.publish('system', suspendedEvent);
 
           // Publish a synthetic agent.task to the coordinator so the user gets notified
           // about the suspension (e.g., "your scheduled job was suspended after 3 failures").
+          // Always routes to coordinator — it's the user-facing agent that can deliver notifications.
           const notifyEvent = createAgentTask({
-            agentId: job.agentId,
+            agentId: 'coordinator',
             conversationId: `scheduler:${jobId}`,
             channelId: 'scheduler',
             senderId: 'scheduler',
@@ -247,7 +236,7 @@ export class Scheduler {
               lastError: error ?? 'Unknown error',
               consecutiveFailures: job.consecutiveFailures,
             }),
-            parentEventId: event.id,
+            parentEventId: suspendedEvent.id,
           });
           await this.bus.publish('system', notifyEvent);
         }

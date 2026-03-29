@@ -382,7 +382,7 @@ export class SchedulerService {
     // Failure path: increment consecutive_failures and possibly auto-suspend.
     const newFailures = job.consecutive_failures + 1;
     const shouldSuspend = newFailures >= SUSPEND_THRESHOLD;
-    const newStatus = shouldSuspend ? 'suspended' : 'pending';
+    const newStatus = shouldSuspend ? 'suspended' : 'failed';
 
     const updateSql = `
       UPDATE scheduled_jobs
