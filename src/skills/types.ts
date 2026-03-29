@@ -71,6 +71,8 @@ export interface SkillContext {
   outboundGateway?: import('./outbound-gateway.js').OutboundGateway;
   /** Held message service for infrastructure skills that manage held messages */
   heldMessages?: import('../contacts/held-messages.js').HeldMessageService;
+  /** Scheduler service — only available to infrastructure skills */
+  schedulerService?: import('../scheduler/scheduler-service.js').SchedulerService;
   /** Caller identity — populated from the task event's sender context.
    *  Guaranteed to be defined for elevated skills (execution layer rejects without it).
    *  Available but optional for normal skills. */

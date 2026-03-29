@@ -21,6 +21,7 @@ import type { AgentRegistry } from '../agents/agent-registry.js';
 import type { ContactService } from '../contacts/contact-service.js';
 import type { OutboundGateway } from './outbound-gateway.js';
 import type { HeldMessageService } from '../contacts/held-messages.js';
+import type { SchedulerService } from '../scheduler/scheduler-service.js';
 
 export class ExecutionLayer {
   private registry: SkillRegistry;
@@ -30,8 +31,9 @@ export class ExecutionLayer {
   private contactService?: ContactService;
   private outboundGateway?: OutboundGateway;
   private heldMessages?: HeldMessageService;
+  private schedulerService?: SchedulerService;
 
-  constructor(registry: SkillRegistry, logger: Logger, options?: { bus?: EventBus; agentRegistry?: AgentRegistry; contactService?: ContactService; outboundGateway?: OutboundGateway; heldMessages?: HeldMessageService }) {
+  constructor(registry: SkillRegistry, logger: Logger, options?: { bus?: EventBus; agentRegistry?: AgentRegistry; contactService?: ContactService; outboundGateway?: OutboundGateway; heldMessages?: HeldMessageService; schedulerService?: SchedulerService }) {
     this.registry = registry;
     this.logger = logger;
     this.bus = options?.bus;
@@ -39,6 +41,7 @@ export class ExecutionLayer {
     this.contactService = options?.contactService;
     this.outboundGateway = options?.outboundGateway;
     this.heldMessages = options?.heldMessages;
+    this.schedulerService = options?.schedulerService;
   }
 
   /**
@@ -135,6 +138,10 @@ export class ExecutionLayer {
       // heldMessages is optional — only held-message skills need it
       if (this.heldMessages) {
         ctx.heldMessages = this.heldMessages;
+      }
+      // schedulerService is optional — only scheduler skills need it
+      if (this.schedulerService) {
+        ctx.schedulerService = this.schedulerService;
       }
     }
 

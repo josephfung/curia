@@ -1,0 +1,19 @@
+{
+  "name": "scheduler-create",
+  "description": "Create a scheduled job. Supports cron expressions for recurring jobs and ISO 8601 timestamps for one-shot jobs. Provide intent_anchor to create a persistent multi-burst task.",
+  "version": "1.0.0",
+  "sensitivity": "normal",
+  "infrastructure": true,
+  "inputs": {
+    "task": "string",
+    "cron_expr": "string?",
+    "run_at": "string?",
+    "agent_id": "string?",
+    "intent_anchor": "string?",
+    "error_budget": "object?"
+  },
+  "outputs": { "jobId": "string", "agentTaskId": "string?" },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 15000
+}
