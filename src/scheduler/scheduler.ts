@@ -48,7 +48,9 @@ export class Scheduler {
     this.bus.subscribe('agent.response', 'system', (event) => {
       const responseEvent = event as AgentResponseEvent;
       if (responseEvent.parentEventId) {
-        void this.handleCompletion(responseEvent.parentEventId, true);
+        this.handleCompletion(responseEvent.parentEventId, true).catch((err) => {
+          this.logger.error({ err, parentEventId: responseEvent.parentEventId }, 'Unhandled error in handleCompletion (success path)');
+        });
       }
     });
 
@@ -56,16 +58,20 @@ export class Scheduler {
     this.bus.subscribe('agent.error', 'system', (event) => {
       const errorEvent = event as AgentErrorEvent;
       if (errorEvent.parentEventId) {
-        void this.handleCompletion(
+        this.handleCompletion(
           errorEvent.parentEventId,
           false,
           errorEvent.payload.message,
-        );
+        ).catch((err) => {
+          this.logger.error({ err, parentEventId: errorEvent.parentEventId }, 'Unhandled error in handleCompletion (failure path)');
+        });
       }
     });
 
     this.intervalHandle = setInterval(() => {
-      void this.pollDueJobs();
+      this.pollDueJobs().catch((err) => {
+        this.logger.error({ err }, 'Unhandled error in pollDueJobs');
+      });
     }, POLL_INTERVAL_MS);
 
     this.logger.info({ intervalMs: POLL_INTERVAL_MS }, 'Scheduler started');
@@ -124,7 +130,19 @@ export class Scheduler {
           intentAnchor: row.intent_anchor ?? null,
           progress: row.progress ?? null,
         };
-        await this.fireJob(job);
+        try {
+          await this.fireJob(job);
+        } catch (err) {
+          this.logger.error({ err, jobId: job.id }, 'Failed to fire job — reverting to pending for retry');
+          // Revert the job to its prior status so it can be retried next poll.
+          // If this revert also fails, the job stays in 'running' — logged below.
+          await this.pool.query(
+            `UPDATE scheduled_jobs SET status = 'pending' WHERE id = $1 AND status = 'running'`,
+            [job.id],
+          ).catch((revertErr) => {
+            this.logger.error({ revertErr, jobId: job.id }, 'Failed to revert job status after fire failure — job may be stuck in running');
+          });
+        }
       }
 
       if (rows.length > 0) {

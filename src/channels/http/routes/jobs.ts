@@ -21,23 +21,33 @@ export async function jobRoutes(
   // -- GET /api/jobs — list jobs with optional filters --
 
   app.get('/api/jobs', async (request, reply) => {
-    const { status, agent_id } = request.query as { status?: string; agent_id?: string };
-    const jobs = await schedulerService.listJobs({
-      status: status || undefined,
-      agentId: agent_id || undefined,
-    });
-    return reply.send({ jobs });
+    try {
+      const { status, agent_id } = request.query as { status?: string; agent_id?: string };
+      const jobs = await schedulerService.listJobs({
+        status: status || undefined,
+        agentId: agent_id || undefined,
+      });
+      return reply.send({ jobs });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to list jobs';
+      return reply.status(500).send({ error: message });
+    }
   });
 
   // -- GET /api/jobs/:id — get a single job --
 
   app.get('/api/jobs/:id', async (request, reply) => {
-    const { id } = request.params as { id: string };
-    const job = await schedulerService.getJob(id);
-    if (!job) {
-      return reply.status(404).send({ error: 'Job not found' });
+    try {
+      const { id } = request.params as { id: string };
+      const job = await schedulerService.getJob(id);
+      if (!job) {
+        return reply.status(404).send({ error: 'Job not found' });
+      }
+      return reply.send({ job });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to get job';
+      return reply.status(500).send({ error: message });
     }
-    return reply.send({ job });
   });
 
   // -- POST /api/jobs — create a new job --
@@ -114,7 +124,12 @@ export async function jobRoutes(
 
   app.delete('/api/jobs/:id', async (request, reply) => {
     const { id } = request.params as { id: string };
-    await schedulerService.cancelJob(id);
-    return reply.send({ cancelled: true, jobId: id });
+    try {
+      await schedulerService.cancelJob(id);
+      return reply.send({ cancelled: true, jobId: id });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to cancel job';
+      return reply.status(500).send({ error: message });
+    }
   });
 }
