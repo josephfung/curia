@@ -1,0 +1,402 @@
+import { CronExpressionParser } from 'cron-parser';
+import type { Pool } from 'pg';
+import type { EventBus } from '../bus/bus.js';
+import type { Logger } from '../logger.js';
+import { createScheduleCreated } from '../bus/events.js';
+
+// -- Public types --
+
+export interface CreateJobParams {
+  agentId: string;
+  cronExpr?: string;
+  runAt?: Date;
+  taskPayload: Record<string, unknown>;
+  createdBy: string;
+  intentAnchor?: string;
+  errorBudget?: Record<string, unknown>;
+}
+
+export interface CreateJobResult {
+  jobId: string;
+  agentTaskId?: string;
+}
+
+/** Full job row with optional linked agent_task fields (from a LEFT JOIN). */
+export interface JobRow {
+  id: string;
+  agentId: string;
+  cronExpr: string | null;
+  runAt: string | null;
+  taskPayload: Record<string, unknown>;
+  status: string;
+  lastRunAt: string | null;
+  nextRunAt: string | null;
+  lastError: string | null;
+  consecutiveFailures: number;
+  createdBy: string;
+  createdAt: string;
+  // Linked agent_task fields (null when no task is linked)
+  agentTaskId: string | null;
+  intentAnchor: string | null;
+  progress: Record<string, unknown> | null;
+}
+
+export interface ListJobsFilters {
+  status?: string;
+  agentId?: string;
+}
+
+// -- Internal DB row shape (snake_case) --
+
+interface DbJobRow {
+  id: string;
+  agent_id: string;
+  cron_expr: string | null;
+  run_at: string | null;
+  task_payload: Record<string, unknown>;
+  status: string;
+  last_run_at: string | null;
+  next_run_at: string | null;
+  last_error: string | null;
+  consecutive_failures: number;
+  created_by: string;
+  created_at: string;
+  agent_task_id: string | null;
+  intent_anchor: string | null;
+  progress: Record<string, unknown> | null;
+}
+
+// Threshold for auto-suspending jobs after consecutive failures.
+const SUSPEND_THRESHOLD = 3;
+
+export class SchedulerService {
+  private pool: Pool;
+  private bus: EventBus;
+  private logger: Logger;
+
+  constructor(pool: Pool, bus: EventBus, logger: Logger) {
+    this.pool = pool;
+    this.bus = bus;
+    this.logger = logger;
+  }
+
+  // -- Cron helpers --
+
+  /** Parse a cron expression and return the next run time as a Date. */
+  nextRunFromCron(cronExpr: string): Date {
+    const expr = CronExpressionParser.parse(cronExpr);
+    return expr.next().toDate();
+  }
+
+  // -- CRUD --
+
+  async createJob(params: CreateJobParams): Promise<CreateJobResult> {
+    const { agentId, cronExpr, runAt, taskPayload, createdBy, intentAnchor, errorBudget } = params;
+
+    if (!cronExpr && !runAt) {
+      throw new Error('Either cronExpr or runAt must be provided');
+    }
+
+    // Calculate next_run_at: for cron jobs use the parser, for one-shot jobs use runAt directly.
+    const nextRunAt = cronExpr ? this.nextRunFromCron(cronExpr) : runAt!;
+
+    const insertSql = `
+      INSERT INTO scheduled_jobs (agent_id, cron_expr, run_at, task_payload, status, next_run_at, created_by)
+      VALUES ($1, $2, $3, $4, $5, $6, $7)
+      RETURNING id
+    `;
+    const insertParams = [
+      agentId,
+      cronExpr ?? null,
+      runAt ?? null,
+      JSON.stringify(taskPayload),
+      'pending',
+      nextRunAt,
+      createdBy,
+    ];
+
+    const { rows } = await this.pool.query(insertSql, insertParams);
+    const jobId = (rows[0] as { id: string }).id;
+
+    // If an intentAnchor is provided, create a linked agent_task for persistent state tracking.
+    let agentTaskId: string | undefined;
+    if (intentAnchor) {
+      const taskSql = `
+        INSERT INTO agent_tasks (agent_id, intent_anchor, status, error_budget, scheduled_job_id)
+        VALUES ($1, $2, $3, $4, $5)
+        RETURNING id
+      `;
+      const taskParams = [
+        agentId,
+        intentAnchor,
+        'active',
+        JSON.stringify(errorBudget ?? {}),
+        jobId,
+      ];
+      const taskResult = await this.pool.query(taskSql, taskParams);
+      agentTaskId = (taskResult.rows[0] as { id: string }).id;
+    }
+
+    // Publish schedule.created event for audit trail.
+    const event = createScheduleCreated({
+      jobId,
+      agentId,
+      cronExpr: cronExpr ?? null,
+      runAt: runAt?.toISOString() ?? null,
+      taskPayload,
+      createdBy,
+    });
+    await this.bus.publish('system', event);
+
+    this.logger.info({ jobId, agentId, cronExpr, agentTaskId }, 'Scheduled job created');
+
+    return { jobId, agentTaskId };
+  }
+
+  async getJob(jobId: string): Promise<JobRow | null> {
+    const sql = `
+      SELECT sj.*,
+             at.id AS agent_task_id,
+             at.intent_anchor,
+             at.progress
+        FROM scheduled_jobs sj
+        LEFT JOIN agent_tasks at ON at.scheduled_job_id = sj.id
+       WHERE sj.id = $1
+    `;
+    const { rows } = await this.pool.query(sql, [jobId]);
+    const row = rows[0] as DbJobRow | undefined;
+    if (!row) return null;
+    return mapJobRow(row);
+  }
+
+  async listJobs(filters?: ListJobsFilters): Promise<JobRow[]> {
+    const conditions: string[] = [];
+    const params: unknown[] = [];
+    let paramIndex = 1;
+
+    if (filters?.status) {
+      conditions.push(`sj.status = $${paramIndex}`);
+      params.push(filters.status);
+      paramIndex++;
+    }
+
+    if (filters?.agentId) {
+      conditions.push(`sj.agent_id = $${paramIndex}`);
+      params.push(filters.agentId);
+      paramIndex++;
+    }
+
+    // Suppress unused-variable warning — paramIndex is incremented to stay ready for future filters.
+    void paramIndex;
+
+    const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+
+    const sql = `
+      SELECT sj.*,
+             at.id AS agent_task_id,
+             at.intent_anchor,
+             at.progress
+        FROM scheduled_jobs sj
+        LEFT JOIN agent_tasks at ON at.scheduled_job_id = sj.id
+       ${whereClause}
+       ORDER BY sj.created_at DESC
+    `;
+    const { rows } = await this.pool.query(sql, params);
+    return (rows as DbJobRow[]).map(mapJobRow);
+  }
+
+  async cancelJob(jobId: string): Promise<void> {
+    const sql = `UPDATE scheduled_jobs SET status = $1 WHERE id = $2`;
+    await this.pool.query(sql, ['cancelled', jobId]);
+    this.logger.info({ jobId }, 'Scheduled job cancelled');
+  }
+
+  async unsuspendJob(jobId: string): Promise<void> {
+    const sql = `
+      UPDATE scheduled_jobs
+         SET status = $1,
+             consecutive_failures = 0,
+             last_error = NULL
+       WHERE id = $2
+    `;
+    await this.pool.query(sql, ['pending', jobId]);
+    this.logger.info({ jobId }, 'Scheduled job unsuspended');
+  }
+
+  async updateJob(
+    jobId: string,
+    updates: { cronExpr?: string; runAt?: Date; taskPayload?: Record<string, unknown> },
+  ): Promise<void> {
+    const setClauses: string[] = [];
+    const params: unknown[] = [];
+    let paramIndex = 1;
+
+    if (updates.cronExpr !== undefined) {
+      setClauses.push(`cron_expr = $${paramIndex}`);
+      params.push(updates.cronExpr);
+      paramIndex++;
+
+      // Recalculate next_run_at when the cron expression changes.
+      const nextRun = this.nextRunFromCron(updates.cronExpr);
+      setClauses.push(`next_run_at = $${paramIndex}`);
+      params.push(nextRun);
+      paramIndex++;
+    }
+
+    if (updates.runAt !== undefined) {
+      setClauses.push(`run_at = $${paramIndex}`);
+      params.push(updates.runAt);
+      paramIndex++;
+
+      setClauses.push(`next_run_at = $${paramIndex}`);
+      params.push(updates.runAt);
+      paramIndex++;
+    }
+
+    if (updates.taskPayload !== undefined) {
+      setClauses.push(`task_payload = $${paramIndex}`);
+      params.push(JSON.stringify(updates.taskPayload));
+      paramIndex++;
+    }
+
+    // Suppress unused-variable warning
+    void paramIndex;
+
+    if (setClauses.length === 0) return;
+
+    params.push(jobId);
+    const sql = `UPDATE scheduled_jobs SET ${setClauses.join(', ')} WHERE id = $${params.length}`;
+    await this.pool.query(sql, params);
+
+    this.logger.info({ jobId, updates: Object.keys(updates) }, 'Scheduled job updated');
+  }
+
+  /**
+   * Upsert a declarative job (system-created, idempotent on restart).
+   * Uses ON CONFLICT on the unique index for (agent_id, cron_expr, task_payload) WHERE created_by = 'system'.
+   */
+  async upsertDeclarativeJob(
+    agentId: string,
+    schedule: { cron: string; task: string },
+  ): Promise<string> {
+    const taskPayload = { task: schedule.task };
+    const nextRunAt = this.nextRunFromCron(schedule.cron);
+
+    const sql = `
+      INSERT INTO scheduled_jobs (agent_id, cron_expr, task_payload, status, next_run_at, created_by)
+      VALUES ($1, $2, $3, $4, $5, $6)
+      ON CONFLICT ON CONSTRAINT scheduled_jobs_declarative_uq
+      DO UPDATE SET next_run_at = $5
+      RETURNING id
+    `;
+    const params = [
+      agentId,
+      schedule.cron,
+      JSON.stringify(taskPayload),
+      'pending',
+      nextRunAt,
+      'system',
+    ];
+
+    const { rows } = await this.pool.query(sql, params);
+    return (rows[0] as { id: string }).id;
+  }
+
+  /**
+   * Complete a job run.
+   * - On success: if recurring (has cron_expr), advance next_run_at and reset failures;
+   *   if one-shot, mark as completed.
+   * - On failure: increment consecutive_failures. If it reaches SUSPEND_THRESHOLD, auto-suspend.
+   */
+  async completeJobRun(
+    jobId: string,
+    success: boolean,
+    error?: string,
+  ): Promise<{ suspended: boolean }> {
+    // Fetch the current job state to decide how to handle the completion.
+    const fetchSql = `SELECT id, cron_expr, status, consecutive_failures FROM scheduled_jobs WHERE id = $1`;
+    const { rows } = await this.pool.query(fetchSql, [jobId]);
+    const job = rows[0] as { id: string; cron_expr: string | null; status: string; consecutive_failures: number } | undefined;
+
+    if (!job) {
+      throw new Error(`Job not found: ${jobId}`);
+    }
+
+    if (success) {
+      if (job.cron_expr) {
+        // Recurring job: advance to next run, reset failure counter.
+        const nextRunAt = this.nextRunFromCron(job.cron_expr);
+        const updateSql = `
+          UPDATE scheduled_jobs
+             SET last_run_at = now(),
+                 next_run_at = $1,
+                 consecutive_failures = 0,
+                 last_error = NULL,
+                 status = $2
+           WHERE id = $3
+        `;
+        await this.pool.query(updateSql, [nextRunAt, 'pending', jobId]);
+      } else {
+        // One-shot job: mark as completed.
+        const updateSql = `
+          UPDATE scheduled_jobs
+             SET last_run_at = now(),
+                 status = $1,
+                 consecutive_failures = 0,
+                 last_error = NULL
+           WHERE id = $2
+        `;
+        await this.pool.query(updateSql, ['completed', jobId]);
+      }
+
+      this.logger.info({ jobId }, 'Job run completed successfully');
+      return { suspended: false };
+    }
+
+    // Failure path: increment consecutive_failures and possibly auto-suspend.
+    const newFailures = job.consecutive_failures + 1;
+    const shouldSuspend = newFailures >= SUSPEND_THRESHOLD;
+    const newStatus = shouldSuspend ? 'suspended' : 'pending';
+
+    const updateSql = `
+      UPDATE scheduled_jobs
+         SET last_run_at = now(),
+             consecutive_failures = $1,
+             last_error = $2,
+             status = $3
+       WHERE id = $4
+    `;
+    await this.pool.query(updateSql, [newFailures, error ?? null, newStatus, jobId]);
+
+    if (shouldSuspend) {
+      this.logger.warn({ jobId, consecutiveFailures: newFailures }, 'Job auto-suspended after consecutive failures');
+    } else {
+      this.logger.info({ jobId, consecutiveFailures: newFailures, error }, 'Job run failed');
+    }
+
+    return { suspended: shouldSuspend };
+  }
+}
+
+// -- Row mapping --
+
+/** Convert a snake_case DB row to the camelCase JobRow type. */
+function mapJobRow(row: DbJobRow): JobRow {
+  return {
+    id: row.id,
+    agentId: row.agent_id,
+    cronExpr: row.cron_expr,
+    runAt: row.run_at,
+    taskPayload: row.task_payload,
+    status: row.status,
+    lastRunAt: row.last_run_at,
+    nextRunAt: row.next_run_at,
+    lastError: row.last_error,
+    consecutiveFailures: row.consecutive_failures,
+    createdBy: row.created_by,
+    createdAt: row.created_at,
+    agentTaskId: row.agent_task_id,
+    intentAnchor: row.intent_anchor,
+    progress: row.progress,
+  };
+}
