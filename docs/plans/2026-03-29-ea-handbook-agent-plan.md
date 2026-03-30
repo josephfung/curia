@@ -25,6 +25,44 @@ Every section of the handbook was evaluated against three questions:
 3. **Where is Curia constrained or infeasible?** Tasks requiring physical presence,
    social nuance, or APIs that don't exist.
 
+### Design Principle: Skills Must Add Value Beyond the Bare LLM
+
+Curia's agents are powered by LLMs. An LLM can already write emails, summarize threads,
+classify urgency, and generate briefings. A skill that merely wraps what the LLM does
+natively is a **downgrade** — it replaces flexible, context-aware generation with rigid
+code that the LLM could outperform on its own.
+
+Every skill must pass this test: **"What does this skill do that the LLM cannot do
+(or should not be trusted to do) by itself?"**
+
+Skills add genuine value when they provide:
+
+- **API access** — the LLM cannot call Google Calendar, Nylas, or Slack without a tool.
+  These skills are always justified.
+- **Deterministic data storage/retrieval** — loyalty numbers, meeting links, and company
+  facts must be stored and recalled exactly, not paraphrased. The knowledge graph is the
+  right home for these, and skills are the right interface.
+- **Organizational policy & guardrails** — instead of rigid templates, skills should store
+  and retrieve *guidelines* (required elements, tone constraints, structural rules) that
+  the LLM follows when composing. The skill enforces consistency; the LLM provides
+  fluency and adaptation.
+- **Data aggregation & orchestration** — gathering data from multiple sources (calendar +
+  contacts + email) into a structured package is plumbing the LLM shouldn't be doing
+  turn-by-turn. Briefing skills justify their existence by assembling, not by writing.
+- **Scheduled/autonomous execution** — cron-triggered proactive checks can't rely on
+  a user prompt to initiate. Skills provide the entry point and structured evaluation.
+
+Skills that fail this test should be **removed or redesigned**:
+
+- A skill that does string interpolation on a template is a downgrade from the LLM
+  composing the same email natively. **Redesign**: store guidelines + example, return them
+  as instructions for the LLM to compose from.
+- A skill that "classifies urgency" by running hardcoded rules is worse than the LLM's
+  judgment. **Redesign**: the skill applies labels via API; the LLM decides the label.
+- A skill that "summarizes a thread" is literally what the LLM already does. **Remove**
+  as a standalone skill — the LLM does this in-context. Only justify it if it runs as a
+  background batch job where the LLM isn't already in the conversation.
+
 ---
 
 ## Proposed Agents
@@ -52,6 +90,9 @@ Meeting Setup & Defaults, In-Person Events, Focus Time, Travel time blocks
 **Dependencies:** Google Calendar API OAuth integration (server-side, not the Claude Code
 MCP)
 
+**Value justification:** Every skill here is an API bridge — the LLM cannot read or write
+calendar data without these tools. Pure infrastructure. No design risk.
+
 ---
 
 ### 2. Email Triage Agent — `core` (basic) / `paid` (advanced)
@@ -64,17 +105,41 @@ open source core. Advanced skills (`extract-actions`, `summarize-thread`) are pa
 
 | Skill | What it does |
 |---|---|
-| `email.classify` | Assign urgency (red/yellow/purple) and category (action/FYI/delegate) |
-| `email.extract-actions` | Pull out action items, deadlines, asks from email body |
-| `email.summarize-thread` | Produce 2-3 sentence summary of a long thread |
-| `email.label` | Apply triage labels to messages (maps to handbook's label system) |
+| Skill | What it does |
+|---|---|
+| `email.label` | Apply triage labels to messages via Nylas API (maps to handbook's label system) |
 | `email.surface-urgent` | Push urgent items to CEO via CLI notification or priority channel |
-| `email.archive-resolved` | Identify and archive threads that need no further action |
+| `email.archive-resolved` | Archive threads via Nylas API that need no further action |
+| `email.batch-triage` | Scheduled batch: fetch unprocessed emails, have the agent classify + label + surface in one pass |
 
 **Handbook coverage:** Email Inbox Management, Label System, Daily Inbox Triage Flow,
 End-of-Day Cleanup
 
 **Dependencies:** Email channel (built). Needs Nylas label/folder API support added.
+
+**Value justification & redesign notes:**
+
+- ~~`email.classify`~~ — **Removed as a standalone skill.** Classification (urgency,
+  category) is what the LLM does natively in-context. The agent's system prompt defines
+  the classification rules; the LLM applies them. No skill needed — the LLM just decides
+  and then calls `email.label` to apply its decision via the API.
+- ~~`email.extract-actions`~~ — **Removed as a standalone skill.** Action extraction is
+  native LLM capability. The agent does this in-context while reading the email. If
+  extracted actions need to be persisted, that's a knowledge graph write — not a separate
+  skill.
+- ~~`email.summarize-thread`~~ — **Removed as a standalone skill.** Thread summarization
+  is literally what the LLM does. Only justified as a batch job (e.g., nightly digest of
+  long threads), in which case it's part of `email.batch-triage`, not standalone.
+- `email.label` — **Justified.** API bridge to Nylas label/folder system. The LLM
+  decides the label; the skill applies it.
+- `email.surface-urgent` — **Justified.** Pushes notifications via bus events. Can't be
+  done without a tool.
+- `email.archive-resolved` — **Justified.** API bridge to Nylas archive. The LLM decides
+  what's resolved; the skill moves it.
+- `email.batch-triage` — **New.** Scheduler-triggered skill that fetches the inbox and
+  lets the agent process it in one pass. This is where the orchestration value lives —
+  not in individual classify/summarize skills, but in the pipeline that feeds email to
+  the agent and collects its decisions.
 
 ---
 
@@ -103,19 +168,42 @@ one-time batch scan of sent mail via Nylas.
 to the CEO's sent email archive, Curia can analyze hundreds of emails on day one to
 bootstrap tone, formality, sign-off style, and audience-specific variation.
 
+**Value justification & redesign notes:**
+
+- `profile.analyze-voice` — **Justified.** The value is in the *batch orchestration* +
+  *persistence*, not the analysis itself. The LLM does the analysis; the skill orchestrates
+  scanning hundreds of sent emails via Nylas and storing the resulting voice model in the
+  knowledge graph. This can't happen in a single conversation turn.
+- `profile.validate-draft` — **Justified, but skill should be retrieval-only.** The skill
+  retrieves the stored voice model from the KG and returns it. The LLM compares the draft
+  against the model. The skill should NOT try to do the comparison itself — that's
+  LLM-native work.
+- `profile.update-preferences` / `profile.get-preferences` — **Justified.** Deterministic
+  storage and retrieval. Same pattern as the knowledge skills.
+- ~~`profile.detect-patterns`~~ — **Needs scrutiny.** Pattern detection (response timing,
+  style by audience) is LLM analysis. The skill is only justified if it runs as a batch
+  job that *persists* the detected patterns. If it's on-demand, the LLM can detect
+  patterns in-context without a skill. **Redesign**: make this a scheduled batch job that
+  scans recent email/calendar data and stores observed patterns.
+- `profile.executive-snapshot` — **Justified.** Structured data retrieval from the KG.
+  The snapshot is a compiled, persistent artifact — not something the LLM re-derives
+  each time.
+
 ---
 
 ### 4. Briefing Agent — `paid`
 
-Generates structured briefings and prep documents. Template-driven but context-aware.
+Assembles structured data packages from multiple sources (calendar, contacts, email,
+knowledge graph) and lets the agent compose briefings from the assembled context. The
+skills are data pipelines, not text generators.
 
 | Skill | What it does |
 |---|---|
-| `briefing.daily` | Morning briefing: today's schedule, notes, FYIs, OOO teammates |
-| `briefing.weekly-look-ahead` | Week-ahead email: highlights, travel, reminders, open items |
-| `briefing.meeting-prep` | Pre-meeting brief: attendee bios, last interaction, context, talking points |
-| `briefing.travel-itinerary` | Compile full travel doc: flights, hotel, ground transport, dinner reservations, calendar links |
-| `briefing.board-prep` | Board meeting brief: attendees, agenda, materials checklist, prep/debrief blocks |
+| `briefing.gather-daily` | Aggregate today's calendar, pending action items, unread urgents, OOO contacts into a structured data package |
+| `briefing.gather-weekly` | Aggregate next 7 days of calendar, open threads, travel, reminders into a structured data package |
+| `briefing.gather-meeting-prep` | For a given meeting: fetch attendee contact records, last interaction from KG, meeting context, related documents |
+| `briefing.gather-travel` | For a given trip: compile flights, hotel, ground transport, dinner reservations, calendar links from KG + calendar |
+| `briefing.gather-board-prep` | For a board meeting: attendees, agenda, materials checklist, related KG context |
 
 **Handbook coverage:** Daily Briefing Template, Week Ahead Email, Meeting Prep,
 Travel Itinerary Template, Board Engagement prep, Look Ahead Always
@@ -123,6 +211,20 @@ Travel Itinerary Template, Board Engagement prep, Look Ahead Always
 **Dependencies:** Calendar Agent (#1), Contact system (built), Knowledge graph (built).
 Scheduler (spec 07) needed for automated daily/weekly delivery. Partially usable
 without Scheduler via on-demand requests.
+
+**Value justification & redesign notes:**
+
+The original skill names (`briefing.daily`, `briefing.weekly-look-ahead`, etc.) implied
+the *skill* generates the briefing text. That's a downgrade — the LLM writes better
+prose than any templated skill. **Renamed to `gather-*`** to make the job clear: each
+skill is a data aggregation pipeline that assembles context from multiple APIs and the
+knowledge graph, then returns structured data. The *agent* (LLM) writes the briefing
+using that data, adapting format, tone, and emphasis to what actually matters that day.
+
+This also means briefing *format preferences* (e.g., "I want bullet points, not
+paragraphs" or "always lead with the most important meeting") should be stored as
+guidelines in the KG, retrievable by the agent when composing. The skills gather data;
+the agent follows guidelines to compose.
 
 ---
 
@@ -146,6 +248,27 @@ actual calendar operations.
 CEO Time & Speaking Engagements, Meeting Prep Checklist
 
 **Dependencies:** Calendar Agent (#1), Email channel (built), Outbound content filter (built)
+
+**Value justification & redesign notes:**
+
+- `meeting.propose-times` — **Justified.** Queries calendar availability via API. The LLM
+  can't read the calendar without this.
+- `meeting.send-request` — **Partially justified, needs redesign.** The sending part
+  (email API) is justified. But the skill should NOT compose the email. It should
+  retrieve the meeting-request email policy/guidelines from the KG, return them to the
+  agent, and let the LLM compose. Then the agent calls `email-send`. This skill may
+  collapse into just the guidelines retrieval.
+- `meeting.reschedule` / `meeting.cancel` — **Same redesign.** The calendar mutation and
+  email sending are justified API calls. The email composition is LLM work guided by
+  policies retrieved from the KG.
+- ~~`meeting.intake-request`~~ — **Removed as standalone skill.** Parsing inbound requests
+  and extracting structured fields is native LLM capability. The agent does this
+  in-context when it receives the email.
+- `meeting.coordinate` — **Justified.** Multi-turn state management across email exchanges
+  is genuinely complex orchestration that benefits from a skill tracking the state machine
+  (proposed → awaiting response → counter-proposed → confirmed).
+- `meeting.confirm` — **Justified.** Sends confirmation email with Zoom link, creates
+  calendar event. API bridge work.
 
 ---
 
@@ -178,6 +301,26 @@ calendar operations"). The Proactive Calendar Agent is cron-triggered with an ev
 prompt ("review the calendar and flag problems"). Different invocation patterns and
 cognitive modes warrant separate agents.
 
+**Value justification & redesign notes:**
+
+Most of these skills (detect-overload, detect-back-to-backs, missing-context, etc.)
+are **evaluation tasks** the LLM can do natively if given the calendar data. The skills
+are justified not because the detection logic is hard, but because:
+
+1. They run on a **schedule** (cron-triggered, no user prompt)
+2. They **fetch data** the LLM can't access without API tools (calendar events for the
+   next N days)
+3. They **route findings** through the bus to notify the CEO
+
+The skills should focus on data fetching and routing, not on implementing detection rules
+in code. The agent's system prompt defines what "overload" or "back-to-back" means; the
+LLM evaluates the data. The skill fetches the calendar window and returns it to the agent.
+
+Consider consolidating: instead of 6 separate detection skills, a single
+`proactive-cal.fetch-week` skill that returns the next 7 days of calendar data, and
+the agent's prompt tells it what to look for. The weekly-report skill is justified as
+a separate data aggregation pipeline.
+
 ---
 
 ### 7. Escalation Agent — `core`
@@ -198,19 +341,64 @@ portions only)
 **Dependencies:** Email (built), CLI (built). Slack channel and SMS/Signal would
 dramatically increase value. Minimal viable version works with email + CLI.
 
+**Value justification & redesign notes:**
+
+- ~~`escalation.assess-urgency`~~ — **Removed as standalone skill.** Urgency assessment
+  is LLM-native. The agent's system prompt defines the red/orange criteria from the
+  handbook; the LLM evaluates the situation in-context.
+- `escalation.notify-ceo` — **Justified.** Multi-channel notification is an API/bus
+  operation. The skill sends via available channels with escalating intensity.
+- `escalation.notify-backup` — **Justified.** Routing to backup contacts requires KG
+  lookup + notification. API bridge.
+- `escalation.log-attempt` — **Justified, but may not need a separate skill.** The audit
+  logger already captures all bus events. This skill is only justified if escalation logs
+  need a different format or destination than the standard audit trail. Consider whether
+  the bus audit hook already covers this.
+
 ---
 
-## Coordinator Template Skills — `core`
+## Coordinator Skills — `core`
 
-Skills the Coordinator (already built) uses directly, not attached to a specialized agent:
+Skills the Coordinator (already built) uses directly, not attached to a specialized agent.
+Split into two categories: email policy skills and knowledge skills.
+
+### Email Policy Skills
+
+These skills store and retrieve **composing guidelines** — not rigid fill-in-the-blanks
+templates. The LLM composes the actual email; the skill provides the organizational
+policy, required structural elements, tone constraints, and an example email as reference.
+
+The output of a `generate` call is a structured policy object the LLM uses as
+instructions, not a finished email. This is better than both hardcoded templates (rigid,
+can't adapt) and bare LLM behavior (no organizational consistency).
 
 | Skill | What it does | Handbook coverage |
 |---|---|---|
-| `template.meeting-request` | Generate meeting request email from handbook template | Meeting Request template (p.53) |
-| `template.reschedule` | Generate rescheduling email | Rescheduling template (p.54) |
-| `template.cancel` | Generate cancellation email | Canceling template (p.55) |
-| `template.doc-request` | Generate pre-meeting materials request | Requesting Docs template (p.55) |
-| `template.linkedin-response` | Generate LinkedIn-style connection response | LinkedIn Connection Responses (p.52) |
+| `template.meeting-request` | Retrieve meeting-request email policy (required elements, tone, structure, example) | Meeting Request template (p.53) |
+| `template.reschedule` | Retrieve rescheduling email policy | Rescheduling template (p.54) |
+| `template.cancel` | Retrieve cancellation email policy | Canceling template (p.55) |
+| `template.doc-request` | Retrieve pre-meeting materials request policy | Requesting Docs template (p.55) |
+
+Each skill supports three actions:
+- **`generate`** — returns the policy (checks KG for user-customized version first,
+  falls back to built-in defaults). The policy includes: required structural elements,
+  tone/formality guidelines, constraints, and an example email.
+- **`save`** — stores a custom policy in the knowledge graph, overriding the defaults.
+  The CEO can tell the agent "from now on, meeting requests should always mention my
+  assistant's availability too" and the agent saves that as a policy update.
+- **`reset`** — removes the custom policy and reverts to built-in defaults.
+
+~~`template.linkedin-response`~~ — **Removed.** LinkedIn API is too restrictive for
+automated use (noted in the "Not Addressed" section). A template for something we can't
+send is dead weight.
+
+### Knowledge Skills
+
+Structured, deterministic storage and retrieval. These are justified because the data
+must be stored and recalled *exactly* — not paraphrased by an LLM.
+
+| Skill | What it does | Handbook coverage |
+|---|---|---|
 | `knowledge.company-overview` | Store/retrieve company legal name, address, officers, board | Company Overview & Contact Lists (p.19-21) |
 | `knowledge.meeting-links` | Store/retrieve personal Zoom/Teams links for leadership | Virtual Meeting Access (p.32-33) |
 | `knowledge.travel-preferences` | Store/retrieve travel prefs (seat, airline, loyalty, baggage) | Travel Booking Preferences (p.37-38) |
@@ -232,24 +420,23 @@ intelligent, learns and anticipates.
 | Agent / Skill Group | Skills | Rationale |
 |---|---|---|
 | **Calendar Agent** | All 9 skills | Table stakes. An EA system without calendar management isn't an EA system. This is what gets people to try Curia. |
-| **Email Triage Agent** (basic) | `email.classify`, `email.label`, `email.surface-urgent`, `email.archive-resolved` | Basic triage is necessary for the system to be useful with email. People need to see Curia actually do something with their inbox. |
-| **Coordinator Template Skills** | All 9 skills | Templates, knowledge storage, meeting links - these are the "getting started" experience. Low cost to give away, high cost if missing. |
-| **Escalation Agent** | All 4 skills | Safety feature. If Curia handles email and calendar, it must be able to escalate urgent situations. Gating this behind a paywall would erode trust. |
+| **Email Triage Agent** (basic) | `email.label`, `email.surface-urgent`, `email.archive-resolved`, `email.batch-triage` | API bridges for inbox management. Classification and summarization are LLM-native — no skill needed for those. |
+| **Coordinator Skills** | 4 email policy + 4 knowledge = 8 skills | Email policies provide organizational consistency; knowledge skills store exact data. The "getting started" experience. |
+| **Escalation Agent** | `escalation.notify-ceo`, `escalation.notify-backup` (+ audit via bus) | Safety feature. Urgency assessment is LLM-native; notification routing needs API tools. |
 
-A self-hosted Curia with these four groups can manage a calendar, triage email at a
-basic level, store company knowledge, use templates, and escalate urgent items. That's
-a functional, if basic, AI EA - enough to build a community, attract contributors, and
+A self-hosted Curia with these four groups can manage a calendar, triage email,
+store company knowledge, follow email policies, and escalate urgent items. That's
+a functional, if basic, AI EA — enough to build a community, attract contributors, and
 create a funnel.
 
 ### Paid SaaS Tier
 
 | Agent / Skill Group | Skills | Rationale |
 |---|---|---|
-| **Executive Profile Agent** | All 6 skills | Highest-value differentiator. Voice analysis, preference learning, draft validation - this is what makes Curia feel like *your* EA rather than a generic assistant. Hard to replicate well with self-hosting because it needs tuning and operational refinement. |
-| **Briefing Agent** | All 5 skills | Daily and weekly briefings create a habit. The CEO opens Curia's briefing every morning. Habit-forming features drive retention and make churn painful. |
-| **Meeting Coordinator** | All 7 skills | Multi-turn email coordination is operationally complex, high LLM cost (many turns per meeting), and high-value. This is where Curia saves the most time. |
-| **Proactive Calendar Agent** | All 7 skills | The "exceed human EA" agent. Proactive features are the clearest paid-tier differentiator - Curia doing things the CEO didn't ask for. Reactive is free. Proactive is premium. |
-| **Email Triage Agent** (advanced) | `email.extract-actions`, `email.summarize-thread` | Intelligence-heavy features that cost more LLM tokens and provide significantly more value than basic classification. |
+| **Executive Profile Agent** | 5 skills (analyze-voice, validate-draft, update/get-preferences, executive-snapshot) | Highest-value differentiator. Voice analysis, preference learning, draft validation — this is what makes Curia feel like *your* EA. Batch analysis + persistence are the value, not LLM-native tasks repackaged. |
+| **Briefing Agent** | 5 `gather-*` skills | Data aggregation pipelines. The LLM writes the briefing; the skills assemble the data from calendar + contacts + KG. Habit-forming daily/weekly delivery drives retention. |
+| **Meeting Coordinator** | 5 skills (propose-times, reschedule, cancel, coordinate, confirm) | Multi-turn email coordination is operationally complex. API bridges + state machine orchestration. High time-saving value. |
+| **Proactive Calendar Agent** | 2 skills (fetch-week, weekly-report) + agent prompt | The "exceed human EA" agent. Consolidated from 7 skills to 2 data-fetching skills — the LLM evaluates the data, the prompt defines what to look for. Proactive is premium. |
 
 ### Tier Comparison
 
@@ -294,32 +481,34 @@ when the paid tier is ready to ship.
 | Rank | Agent | Tier | Handbook Domains Covered | Effort | Dependencies | Notes |
 |---|---|---|---|---|---|---|
 | **1** | **Calendar Agent** (9 skills) | core | Calendar Mgmt, Meeting Setup, Focus Time, Travel Blocks, Board Scheduling, Calendar Hygiene | **Large** (2-3 weeks) | Google Calendar API OAuth | Unlocks agents #4, #5, #6. Build first. |
-| **2** | **Email Triage Agent** (6 skills) | core/paid | Email Inbox Mgmt, Label System, Daily Triage, Drafting | **Medium** (1-2 weeks) | Email channel (built), Nylas label API | 4 basic skills core, 2 advanced skills paid. |
-| **3** | **Executive Profile Agent** (6 skills) | paid | Exec Snapshot, Learning Preferences, Voice Matching, Drafting Quality | **Medium** (1-2 weeks) | Email channel (built), Knowledge graph (built) | Voice analysis is a force multiplier for all outbound skills. |
-| **4** | **Briefing Agent** (5 skills) | paid | Daily Briefing, Weekly Look-ahead, Meeting Prep, Travel Itinerary, Board Prep | **Medium** (1-2 weeks) | Calendar Agent (#1), Scheduler (spec 07) | High CEO-perceived value. Partially usable without Scheduler. |
-| **5** | **Meeting Coordinator** (7 skills) | paid | Meeting Requests, Rescheduling, Cancellation, CEO Time Requests, Speaking Engagements | **Large** (2-3 weeks) | Calendar Agent (#1), Email channel (built) | Multi-turn coordination is complex. High time-saving value. |
-| **6** | **Coordinator template skills** (9 skills) | core | Email templates, Company Knowledge, Meeting Links, Travel Prefs | **Small** (3-5 days) | Knowledge graph (built) | Low effort, fills gaps immediately. Build in parallel with anything. |
-| **7** | **Proactive Calendar Agent** (7 skills) | paid | Look Ahead, Focus Time, Calendar Hygiene, Back-to-back Detection | **Medium** (1-2 weeks) | Calendar Agent (#1), Scheduler (spec 07) | Highest "exceed human EA" potential. Blocked on Scheduler. |
-| **8** | **Escalation Agent** (4 skills) | core | Urgent Comms Plan (digital portions) | **Small-Medium** (1 week) | Needs Slack channel for real value | MVP with email+CLI is small. Full value needs more channels. |
+| **2** | **Email Triage Agent** (4 skills) | core | Email Inbox Mgmt, Label System, Daily Triage | **Medium** (1-2 weeks) | Email channel (built), Nylas label API | Classification/summarization are LLM-native — only API bridges here. |
+| **3** | **Executive Profile Agent** (5 skills) | paid | Exec Snapshot, Learning Preferences, Voice Matching, Drafting Quality | **Medium** (1-2 weeks) | Email channel (built), Knowledge graph (built) | Voice analysis is a force multiplier for all outbound skills. |
+| **4** | **Briefing Agent** (5 `gather-*` skills) | paid | Daily Briefing, Weekly Look-ahead, Meeting Prep, Travel Itinerary, Board Prep | **Medium** (1-2 weeks) | Calendar Agent (#1), Scheduler (spec 07) | Data aggregation pipelines. LLM composes; skills assemble. |
+| **5** | **Meeting Coordinator** (5 skills) | paid | Meeting Requests, Rescheduling, Cancellation, Speaking Engagements | **Large** (2-3 weeks) | Calendar Agent (#1), Email channel (built) | Multi-turn coordination is complex. Intake parsing is LLM-native. |
+| **6** | **Coordinator skills** (8 skills) | core | Email policies, Company Knowledge, Meeting Links, Travel Prefs | **Small** (3-5 days) | Knowledge graph (built) | Low effort, fills gaps immediately. Build in parallel with anything. |
+| **7** | **Proactive Calendar Agent** (2 skills + agent prompt) | paid | Look Ahead, Focus Time, Calendar Hygiene, Back-to-back Detection | **Small-Medium** (1 week) | Calendar Agent (#1), Scheduler (spec 07) | Consolidated: data-fetching skills + evaluative prompt. |
+| **8** | **Escalation Agent** (2 skills) | core | Urgent Comms Plan (digital portions) | **Small** (3-5 days) | Needs Slack channel for real value | Urgency assessment is LLM-native. Skills handle notification routing. |
 
 ---
 
 ## Recommended Build Phases
 
 ```
-Phase A (foundation):  Calendar Agent + Coordinator template skills
+Phase A (foundation):  Calendar Agent + Coordinator skills (email policies + knowledge)
 Phase B (intelligence): Email Triage Agent + Executive Profile Agent
 Phase C (automation):   Briefing Agent + Meeting Coordinator
 Phase D (proactive):    Proactive Calendar Agent + Escalation Agent
 ```
 
-Phase A unlocks everything downstream. The template skills are low-effort gap-fillers
-that can ship alongside Calendar Agent work. Phase B makes Curia "smart" about email
-and voice. Phase C is where Curia starts saving the CEO real time. Phase D is where it
-starts anticipating needs before being asked.
+Phase A unlocks everything downstream. The coordinator skills (email policies and
+knowledge storage) are low-effort, high-value foundations that can ship alongside
+Calendar Agent work. Phase B makes Curia "smart" about email and voice. Phase C is
+where Curia starts saving the CEO real time. Phase D is where it starts anticipating
+needs before being asked.
 
-**Totals: 7 agents + 1 skill group = 53 skills covering ~85% of the handbook's
-actionable domains.**
+**Totals: 7 agents + 1 skill group = ~38 skills covering ~85% of the handbook's
+actionable domains.** (Down from 53 in the original plan — 15 skills removed as
+LLM-native capabilities that don't benefit from being wrapped in a skill.)
 
 ---
 
