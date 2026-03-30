@@ -1,6 +1,6 @@
 {
   "name": "template-doc-request",
-  "description": "Generate a pre-meeting document/materials request email from a template. Supports three actions: 'generate' fills the template with provided variables (checks the knowledge graph for a user-customized template before falling back to the built-in default); 'save' stores a custom template in the knowledge graph; 'reset' removes the custom template and reverts to the built-in default.",
+  "description": "Retrieve email composing guidelines for pre-meeting document/materials requests. Returns structured policy (required elements, tone, structure, constraints, example) that you use as instructions when composing the email — do NOT send the policy itself to the recipient. Supports 'generate', 'save', and 'reset' actions.",
   "version": "1.0.0",
   "sensitivity": "normal",
   "infrastructure": true,
@@ -12,12 +12,13 @@
     "meeting_time": "string? (required for generate — when the meeting is scheduled)",
     "documents_requested": "string? (required for generate — comma-separated list of requested materials)",
     "deadline": "string? (optional for generate — when materials are needed by)",
-    "custom_template": "string? (required for save — the template body to store)"
+    "custom_policy": "string? (required for save — the policy to store)"
   },
   "outputs": {
-    "subject": "string?",
-    "body": "string?",
-    "template_source": "string? (default | custom)",
+    "guidelines": "object?",
+    "context": "object?",
+    "source": "string? (default | custom)",
+    "instructions": "string?",
     "saved": "boolean?",
     "reset": "boolean?"
   },

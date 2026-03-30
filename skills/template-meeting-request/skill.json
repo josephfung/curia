@@ -1,6 +1,6 @@
 {
   "name": "template-meeting-request",
-  "description": "Generate a meeting request email from a template. Supports three actions: 'generate' fills the template with provided variables and returns the email text (checks the knowledge graph for a user-customized template before falling back to the built-in default); 'save' stores a custom template in the knowledge graph; 'reset' removes the custom template and reverts to the built-in default.",
+  "description": "Retrieve email composing guidelines for meeting requests. Returns structured policy (required elements, tone, structure, constraints, example) that you use as instructions when composing the email — do NOT send the policy itself to the recipient. Supports three actions: 'generate' retrieves the policy (checks KG for customizations first); 'save' stores a custom policy in the knowledge graph; 'reset' reverts to the built-in default policy.",
   "version": "1.0.0",
   "sensitivity": "normal",
   "infrastructure": true,
@@ -12,12 +12,13 @@
     "meeting_purpose": "string? (optional for generate — reason for meeting)",
     "meeting_duration": "string? (optional for generate — e.g. '30 minutes', '1 hour')",
     "meeting_location": "string? (optional for generate — e.g. 'Zoom', 'in-person at HQ')",
-    "custom_template": "string? (required for save — the template body to store)"
+    "custom_policy": "string? (required for save — the policy to store, as JSON or plain-text guidelines)"
   },
   "outputs": {
-    "subject": "string?",
-    "body": "string?",
-    "template_source": "string? (default | custom)",
+    "guidelines": "object? (the email policy: required_elements, tone, structure, constraints, example)",
+    "context": "object? (the provided variables for the LLM to use when composing)",
+    "source": "string? (default | custom)",
+    "instructions": "string? (how to use the guidelines)",
     "saved": "boolean?",
     "reset": "boolean?"
   },

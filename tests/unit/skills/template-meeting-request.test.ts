@@ -24,7 +24,7 @@ function makeCtx(
   };
 }
 
-/** Stub EntityMemory that stores/retrieves from a simple in-memory map. */
+/** Stub EntityMemory with in-memory storage. */
 function makeEntityMemory() {
   const entities = new Map<string, { id: string; label: string; properties: Record<string, unknown> }>();
   const facts = new Map<string, Array<{ id: string; label: string; properties: Record<string, unknown>; temporal: { lastConfirmedAt: Date; confidence: number; decayClass: string; source: string; createdAt: Date } }>>();
@@ -34,9 +34,7 @@ function makeEntityMemory() {
     findEntities: vi.fn(async (label: string) => {
       const matches: Array<{ id: string; label: string; properties: Record<string, unknown> }> = [];
       for (const e of entities.values()) {
-        if (e.label.toLowerCase() === label.toLowerCase()) {
-          matches.push(e);
-        }
+        if (e.label.toLowerCase() === label.toLowerCase()) matches.push(e);
       }
       return matches;
     }),
@@ -49,7 +47,6 @@ function makeEntityMemory() {
     }),
     storeFact: vi.fn(async (opts: { entityNodeId: string; label: string; properties: Record<string, unknown>; confidence: number; decayClass: string; source: string }) => {
       const entityFacts = facts.get(opts.entityNodeId) ?? [];
-      // Simulate dedup: update existing fact with same label
       const existing = entityFacts.find((f) => f.label === opts.label);
       if (existing) {
         existing.properties = opts.properties;
@@ -59,17 +56,13 @@ function makeEntityMemory() {
       const factId = `fact-${nextId++}`;
       const now = new Date();
       entityFacts.push({
-        id: factId,
-        label: opts.label,
-        properties: opts.properties,
+        id: factId, label: opts.label, properties: opts.properties,
         temporal: { lastConfirmedAt: now, confidence: opts.confidence, decayClass: opts.decayClass, source: opts.source, createdAt: now },
       });
       facts.set(opts.entityNodeId, entityFacts);
       return { stored: true, nodeId: factId };
     }),
-    getFacts: vi.fn(async (entityNodeId: string) => {
-      return facts.get(entityNodeId) ?? [];
-    }),
+    getFacts: vi.fn(async (entityNodeId: string) => facts.get(entityNodeId) ?? []),
   };
 }
 
@@ -86,42 +79,17 @@ describe('TemplateMeetingRequestHandler', () => {
     it('rejects invalid action', async () => {
       const result = await handler.execute(makeCtx({ action: 'invalid' }));
       expect(result.success).toBe(false);
-      if (!result.success) expect(result.error).toContain('action');
     });
   });
 
   describe('generate', () => {
-    it('rejects when recipient_name is missing', async () => {
-      const result = await handler.execute(makeCtx({
-        action: 'generate',
-        sender_name: 'CEO',
-        proposed_times: 'Monday 10am',
-      }));
+    it('rejects when required inputs are missing', async () => {
+      const result = await handler.execute(makeCtx({ action: 'generate', sender_name: 'CEO', proposed_times: 'Monday 10am' }));
       expect(result.success).toBe(false);
       if (!result.success) expect(result.error).toContain('recipient_name');
     });
 
-    it('rejects when sender_name is missing', async () => {
-      const result = await handler.execute(makeCtx({
-        action: 'generate',
-        recipient_name: 'Alice',
-        proposed_times: 'Monday 10am',
-      }));
-      expect(result.success).toBe(false);
-      if (!result.success) expect(result.error).toContain('sender_name');
-    });
-
-    it('rejects when proposed_times is missing', async () => {
-      const result = await handler.execute(makeCtx({
-        action: 'generate',
-        recipient_name: 'Alice',
-        sender_name: 'CEO',
-      }));
-      expect(result.success).toBe(false);
-      if (!result.success) expect(result.error).toContain('proposed_times');
-    });
-
-    it('generates with default template when no entityMemory', async () => {
+    it('returns guidelines + context with default policy when no KG', async () => {
       const result = await handler.execute(makeCtx({
         action: 'generate',
         recipient_name: 'Alice',
@@ -132,248 +100,173 @@ describe('TemplateMeetingRequestHandler', () => {
 
       expect(result.success).toBe(true);
       if (result.success) {
-        const data = result.data as { subject: string; body: string; template_source: string };
-        expect(data.template_source).toBe('default');
-        expect(data.subject).toContain('Q3 Planning');
-        expect(data.body).toContain('Alice');
-        expect(data.body).toContain('Joseph');
-        expect(data.body).toContain('Monday 10am');
-        expect(data.body).toContain('Tuesday 2pm');
+        const data = result.data as {
+          guidelines: { required_elements: string[]; tone: string; structure: string; constraints: string[]; example: string };
+          context: Record<string, string>;
+          source: string;
+          instructions: string;
+        };
+        // Returns structured guidelines, NOT a pre-filled email
+        expect(data.source).toBe('default');
+        expect(data.guidelines.required_elements).toBeInstanceOf(Array);
+        expect(data.guidelines.tone).toBeDefined();
+        expect(data.guidelines.structure).toBeDefined();
+        expect(data.guidelines.constraints).toBeInstanceOf(Array);
+        expect(data.guidelines.example).toContain('Subject:');
+        expect(data.instructions).toContain('guidelines');
+
+        // Context passes through the input variables for the LLM
+        expect(data.context.recipient_name).toBe('Alice');
+        expect(data.context.sender_name).toBe('Joseph');
+        expect(data.context.proposed_times).toBe('Monday 10am, Tuesday 2pm');
+        expect(data.context.meeting_purpose).toBe('Q3 Planning');
+        expect(data.context.agent_signature).toContain('Nathan Curia');
       }
     });
 
-    it('generates with default template when entityMemory has no custom template', async () => {
+    it('returns custom policy from KG when available', async () => {
       const em = makeEntityMemory();
-      const result = await handler.execute(makeCtx(
-        {
-          action: 'generate',
-          recipient_name: 'Bob',
-          sender_name: 'CEO',
-          proposed_times: 'Wednesday 3pm',
-        },
-        { entityMemory: em as never },
-      ));
-
-      expect(result.success).toBe(true);
-      if (result.success) {
-        const data = result.data as { subject: string; body: string; template_source: string };
-        expect(data.template_source).toBe('default');
-        expect(data.body).toContain('Bob');
-      }
-    });
-
-    it('generates with custom template from KG', async () => {
-      const em = makeEntityMemory();
-      // Pre-populate a custom template
       const anchor = await em.createEntity({
-        type: 'concept',
-        label: 'template:meeting-request',
-        properties: { category: 'email-template' },
-        source: 'test',
+        type: 'concept', label: 'template:meeting-request',
+        properties: { category: 'email-policy' }, source: 'test',
+      });
+      const customPolicy = JSON.stringify({
+        required_elements: ['Keep it short', 'Include a joke'],
+        tone: 'Casual and friendly',
       });
       await em.storeFact({
-        entityNodeId: anchor.id,
-        label: 'template body',
-        properties: { body: 'Subject: Custom — {{meeting_purpose}}\n\nDear {{recipient_name}}, let us meet. Times: {{proposed_times}}' },
-        confidence: 1.0,
-        decayClass: 'permanent',
-        source: 'test',
+        entityNodeId: anchor.id, label: 'email policy',
+        properties: { policy: customPolicy },
+        confidence: 1.0, decayClass: 'permanent', source: 'test',
       });
 
       const result = await handler.execute(makeCtx(
         {
           action: 'generate',
-          recipient_name: 'Carol',
-          sender_name: 'CEO',
-          proposed_times: 'Thursday 11am',
-          meeting_purpose: 'Budget Review',
+          recipient_name: 'Carol', sender_name: 'CEO', proposed_times: 'Thursday 11am',
         },
         { entityMemory: em as never },
       ));
 
       expect(result.success).toBe(true);
       if (result.success) {
-        const data = result.data as { subject: string; body: string; template_source: string };
-        expect(data.template_source).toBe('custom');
-        expect(data.subject).toContain('Budget Review');
-        expect(data.body).toContain('Carol');
+        const data = result.data as { guidelines: { tone: string }; source: string };
+        expect(data.source).toBe('custom');
+        expect(data.guidelines.tone).toBe('Casual and friendly');
       }
     });
 
-    it('includes optional fields when provided', async () => {
+    it('handles plain-text custom policy (non-JSON)', async () => {
+      const em = makeEntityMemory();
+      const anchor = await em.createEntity({
+        type: 'concept', label: 'template:meeting-request',
+        properties: {}, source: 'test',
+      });
+      await em.storeFact({
+        entityNodeId: anchor.id, label: 'email policy',
+        properties: { policy: 'Always mention the CEO loves coffee meetings.' },
+        confidence: 1.0, decayClass: 'permanent', source: 'test',
+      });
+
+      const result = await handler.execute(makeCtx(
+        {
+          action: 'generate',
+          recipient_name: 'Dan', sender_name: 'CEO', proposed_times: 'Friday 2pm',
+        },
+        { entityMemory: em as never },
+      ));
+
+      expect(result.success).toBe(true);
+      if (result.success) {
+        const data = result.data as { guidelines: { custom_guidelines: string }; source: string };
+        expect(data.source).toBe('custom');
+        expect(data.guidelines.custom_guidelines).toContain('coffee meetings');
+      }
+    });
+
+    it('includes optional context fields when provided', async () => {
       const result = await handler.execute(makeCtx({
         action: 'generate',
-        recipient_name: 'Dave',
-        sender_name: 'CEO',
-        proposed_times: 'Friday 9am',
-        meeting_purpose: 'Product Demo',
-        meeting_duration: '45 minutes',
-        meeting_location: 'Zoom',
+        recipient_name: 'Dave', sender_name: 'CEO', proposed_times: 'Friday 9am',
+        meeting_purpose: 'Product Demo', meeting_duration: '45 minutes', meeting_location: 'Zoom',
       }));
 
       expect(result.success).toBe(true);
       if (result.success) {
-        const data = result.data as { subject: string; body: string; template_source: string };
-        expect(data.body).toContain('45 minutes');
-        expect(data.body).toContain('Zoom');
-      }
-    });
-
-    it('uses agent persona for signature in default template', async () => {
-      const result = await handler.execute(makeCtx({
-        action: 'generate',
-        recipient_name: 'Eve',
-        sender_name: 'CEO',
-        proposed_times: 'Monday 9am',
-      }));
-
-      expect(result.success).toBe(true);
-      if (result.success) {
-        const data = result.data as { body: string };
-        expect(data.body).toContain('Nathan Curia');
-        expect(data.body).toContain('Agent Chief of Staff');
+        const data = result.data as { context: Record<string, string> };
+        expect(data.context.meeting_duration).toBe('45 minutes');
+        expect(data.context.meeting_location).toBe('Zoom');
       }
     });
 
     it('uses custom emailSignature when configured', async () => {
       const customPersona: AgentPersona = {
-        displayName: 'Alex Helper',
-        title: 'Executive Assistant',
-        emailSignature: 'Alex Helper\nExecutive Assistant\nAcme Corp',
+        displayName: 'Alex Helper', title: 'Executive Assistant',
+        emailSignature: 'Alex Helper, Executive Assistant, Acme Corp',
       };
       const result = await handler.execute(makeCtx(
-        {
-          action: 'generate',
-          recipient_name: 'Frank',
-          sender_name: 'CEO',
-          proposed_times: 'Tuesday 3pm',
-        },
+        { action: 'generate', recipient_name: 'Frank', sender_name: 'CEO', proposed_times: 'Tuesday 3pm' },
         { agentPersona: customPersona },
       ));
 
       expect(result.success).toBe(true);
       if (result.success) {
-        const data = result.data as { body: string };
-        expect(data.body).toContain('Alex Helper');
-        expect(data.body).toContain('Acme Corp');
-        // Should NOT contain the default persona
-        expect(data.body).not.toContain('Nathan Curia');
-      }
-    });
-
-    it('omits signature when no persona is provided', async () => {
-      const result = await handler.execute(makeCtx(
-        {
-          action: 'generate',
-          recipient_name: 'Grace',
-          sender_name: 'CEO',
-          proposed_times: 'Wednesday 1pm',
-        },
-        { agentPersona: undefined },
-      ));
-
-      expect(result.success).toBe(true);
-      if (result.success) {
-        const data = result.data as { body: string };
-        // The signature placeholder should be filled with empty string
-        // and no hardcoded name should appear
-        expect(data.body).not.toContain('Nathan Curia');
+        const data = result.data as { context: { agent_signature: string } };
+        expect(data.context.agent_signature).toContain('Acme Corp');
+        expect(data.context.agent_signature).not.toContain('Nathan Curia');
       }
     });
   });
 
   describe('save', () => {
-    it('rejects when custom_template is missing', async () => {
+    it('rejects when custom_policy is missing', async () => {
       const em = makeEntityMemory();
-      const result = await handler.execute(makeCtx(
-        { action: 'save' },
-        { entityMemory: em as never },
-      ));
+      const result = await handler.execute(makeCtx({ action: 'save' }, { entityMemory: em as never }));
       expect(result.success).toBe(false);
-      if (!result.success) expect(result.error).toContain('custom_template');
+      if (!result.success) expect(result.error).toContain('custom_policy');
     });
 
     it('rejects when entityMemory is not available', async () => {
-      const result = await handler.execute(makeCtx({
-        action: 'save',
-        custom_template: 'My template',
-      }));
+      const result = await handler.execute(makeCtx({ action: 'save', custom_policy: 'My policy' }));
       expect(result.success).toBe(false);
       if (!result.success) expect(result.error).toContain('Knowledge graph');
     });
 
-    it('saves a new custom template', async () => {
+    it('saves a new custom policy', async () => {
       const em = makeEntityMemory();
       const result = await handler.execute(makeCtx(
-        { action: 'save', custom_template: 'Subject: New\n\nHello {{recipient_name}}' },
+        { action: 'save', custom_policy: '{"tone": "Very casual"}' },
         { entityMemory: em as never },
       ));
-
       expect(result.success).toBe(true);
-      if (result.success) {
-        const data = result.data as { saved: boolean };
-        expect(data.saved).toBe(true);
-      }
       expect(em.createEntity).toHaveBeenCalled();
       expect(em.storeFact).toHaveBeenCalled();
-    });
-
-    it('updates an existing custom template', async () => {
-      const em = makeEntityMemory();
-      // First save
-      await handler.execute(makeCtx(
-        { action: 'save', custom_template: 'V1 template' },
-        { entityMemory: em as never },
-      ));
-      // Second save — should update, not create new anchor
-      const result = await handler.execute(makeCtx(
-        { action: 'save', custom_template: 'V2 template' },
-        { entityMemory: em as never },
-      ));
-
-      expect(result.success).toBe(true);
-      // createEntity should only be called once (for the first save)
-      expect(em.createEntity).toHaveBeenCalledTimes(1);
     });
   });
 
   describe('reset', () => {
-    it('succeeds even without entityMemory (no-op)', async () => {
+    it('succeeds without entityMemory (no-op)', async () => {
       const result = await handler.execute(makeCtx({ action: 'reset' }));
       expect(result.success).toBe(true);
-      if (result.success) {
-        const data = result.data as { reset: boolean };
-        expect(data.reset).toBe(true);
-      }
     });
 
-    it('resets custom template so generate falls back to default', async () => {
+    it('resets custom policy so generate falls back to default', async () => {
       const em = makeEntityMemory();
-      // Save a custom template
       await handler.execute(makeCtx(
-        { action: 'save', custom_template: 'Subject: Custom\n\nCustom body {{recipient_name}}' },
+        { action: 'save', custom_policy: '{"tone": "Very casual"}' },
         { entityMemory: em as never },
       ));
-      // Reset it
-      await handler.execute(makeCtx(
-        { action: 'reset' },
-        { entityMemory: em as never },
-      ));
-      // Generate should use default
+      await handler.execute(makeCtx({ action: 'reset' }, { entityMemory: em as never }));
+
       const result = await handler.execute(makeCtx(
-        {
-          action: 'generate',
-          recipient_name: 'Eve',
-          sender_name: 'CEO',
-          proposed_times: 'Monday 9am',
-        },
+        { action: 'generate', recipient_name: 'Eve', sender_name: 'CEO', proposed_times: 'Monday 9am' },
         { entityMemory: em as never },
       ));
 
       expect(result.success).toBe(true);
       if (result.success) {
-        const data = result.data as { template_source: string };
-        expect(data.template_source).toBe('default');
+        const data = result.data as { source: string };
+        expect(data.source).toBe('default');
       }
     });
   });

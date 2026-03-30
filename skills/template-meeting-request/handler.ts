@@ -1,60 +1,74 @@
 // handler.ts — template-meeting-request skill implementation.
 //
-// Generates meeting request emails from a template. The built-in default
-// template is used unless the user has stored a custom version in the
-// knowledge graph. Users can save, retrieve, and reset custom templates.
+// Returns email composing guidelines for meeting requests — NOT a pre-filled
+// email. The LLM uses these guidelines (required elements, tone, structure,
+// example) to compose the actual email, combining organizational consistency
+// with natural language fluency.
+//
+// This is better than both rigid templates (can't adapt) and bare LLM behavior
+// (no organizational consistency). The skill enforces policy; the LLM provides
+// fluency.
 //
 // KG storage model:
 //   - Anchor node: type=concept, label="template:meeting-request"
-//   - Template body stored in the anchor node's properties.body field
-//   - decayClass=permanent (templates don't decay)
+//   - Custom policy stored as a fact node with label="email policy"
+//   - decayClass=permanent (policies don't decay)
 
 import type { SkillHandler, SkillContext, SkillResult, AgentPersona } from '../../src/skills/types.js';
 
 /** Build the email signature from the agent persona, or a safe fallback. */
 function resolveSignature(persona?: AgentPersona): string {
   if (persona?.emailSignature) return persona.emailSignature;
-  if (persona) return `${persona.displayName}\n${persona.title}`;
+  if (persona) return `${persona.displayName}, ${persona.title}`;
   return '';
 }
 
 const TEMPLATE_LABEL = 'template:meeting-request';
 
-const DEFAULT_TEMPLATE = `Subject: Meeting Request — {{meeting_purpose}}
-
-Hi {{recipient_name}},
-
-I'm reaching out on behalf of {{sender_name}} to schedule a meeting{{purpose_clause}}.
-
-{{sender_name}} is available at the following times:
-
-{{proposed_times}}
-
-{{duration_line}}{{location_line}}Please let me know which time works best for you, or suggest an alternative if none of these work.
-
-Looking forward to connecting.
-
-Best regards,
-{{agent_signature}}`;
-
 const MAX_INPUT_LENGTH = 5000;
 
 /**
- * Fill template placeholders with provided variables.
- * Placeholders use {{variable_name}} syntax.
- * Strips any unfilled placeholders after substitution so they don't leak
- * into generated emails as raw {{...}} text.
+ * Built-in default policy for meeting request emails. Stored as structured
+ * guidelines so the LLM knows what to include, how to structure it, and
+ * what tone to use — then composes naturally.
  */
-function fillTemplate(template: string, vars: Record<string, string>): string {
-  let result = template;
-  for (const [key, value] of Object.entries(vars)) {
-    result = result.replaceAll(`{{${key}}}`, value);
-  }
-  // Strip any remaining unfilled placeholders (from custom templates with
-  // different variable names, or optional fields not provided)
-  result = result.replace(/\{\{[^}]+\}\}/g, '');
-  return result;
-}
+const DEFAULT_POLICY = {
+  required_elements: [
+    'Greeting addressing the recipient by name',
+    'State who is requesting the meeting (the sender) and the purpose',
+    'List proposed times as bullet points (at least 2-3 options)',
+    'Include meeting duration if provided',
+    'Include meeting location/format if provided (Zoom, in-person, etc.)',
+    'Offer flexibility — invite the recipient to suggest alternatives if none of the times work',
+    'Professional sign-off with the agent signature',
+  ],
+  tone: 'Professional, warm, and concise. Not stiff or overly formal.',
+  structure: 'Greeting → purpose → proposed times → logistics → flexibility offer → sign-off',
+  constraints: [
+    'Keep the body to 4-6 sentences plus the time list',
+    'Do not use exclamation marks',
+    'Subject line should include the meeting purpose',
+    'Times should be formatted as a bulleted list, not inline',
+  ],
+  example: `Subject: Meeting Request — Q3 Planning
+
+Hi Alice,
+
+I'm reaching out on behalf of Joseph to schedule a meeting to discuss Q3 Planning.
+
+Joseph is available at the following times:
+
+  • Monday, April 7 at 10:00 AM ET
+  • Tuesday, April 8 at 2:00 PM ET
+  • Wednesday, April 9 at 11:00 AM ET
+
+The meeting would be approximately 45 minutes via Zoom.
+
+Please let me know which time works best for you, or suggest an alternative if none of these are convenient.
+
+Best regards,
+Nathan Curia, Agent Chief of Staff`,
+};
 
 export class TemplateMeetingRequestHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {
@@ -65,10 +79,10 @@ export class TemplateMeetingRequestHandler implements SkillHandler {
     }
 
     if (action === 'save') {
-      return this.saveTemplate(ctx);
+      return this.savePolicy(ctx);
     }
     if (action === 'reset') {
-      return this.resetTemplate(ctx);
+      return this.resetPolicy(ctx);
     }
     return this.generate(ctx);
   }
@@ -105,127 +119,96 @@ export class TemplateMeetingRequestHandler implements SkillHandler {
       return { success: false, error: `proposed_times must be ${MAX_INPUT_LENGTH} characters or fewer` };
     }
 
-    // Look up custom template from KG, fall back to built-in default
-    const { template, source } = await this.resolveTemplate(ctx);
+    // Look up custom policy from KG, fall back to built-in default
+    const { policy, source } = await this.resolvePolicy(ctx);
 
-    // Build conditional clause fragments so the template reads naturally
-    // whether optional fields are provided or not.
-    const purposeClause = meeting_purpose ? ` to discuss ${meeting_purpose}` : '';
-    const durationLine = meeting_duration ? `Duration: ${meeting_duration}\n` : '';
-    const locationLine = meeting_location ? `Location: ${meeting_location}\n\n` : '\n';
-
-    // Format proposed times as a bulleted list
-    const formattedTimes = proposed_times
-      .split(',')
-      .map((t) => `  • ${t.trim()}`)
-      .join('\n');
-
-    const filled = fillTemplate(template, {
+    // Build the context object the LLM will use to compose the email
+    const context: Record<string, string> = {
       recipient_name,
       sender_name,
-      proposed_times: formattedTimes,
-      meeting_purpose: meeting_purpose ?? 'Meeting',
-      purpose_clause: purposeClause,
-      duration_line: durationLine,
-      location_line: locationLine,
+      proposed_times,
       agent_signature: resolveSignature(ctx.agentPersona),
-    });
+    };
+    if (meeting_purpose) context.meeting_purpose = meeting_purpose;
+    if (meeting_duration) context.meeting_duration = meeting_duration;
+    if (meeting_location) context.meeting_location = meeting_location;
 
-    // Split subject from body (first line is the subject)
-    const lines = filled.split('\n');
-    const subjectLine = lines[0] ?? '';
-    const subject = subjectLine.replace(/^Subject:\s*/i, '').trim();
-    // Skip the blank line after the subject
-    const body = lines.slice(2).join('\n').trim();
-
-    ctx.log.info({ recipient_name, source }, 'Generated meeting request email');
+    ctx.log.info({ recipient_name, source }, 'Retrieved meeting request email policy');
     return {
       success: true,
-      data: { subject, body, template_source: source },
+      data: {
+        guidelines: policy,
+        context,
+        source,
+        instructions: 'Use the guidelines to compose a meeting request email. The guidelines define required elements, tone, structure, and constraints. The example shows the expected quality and format. Adapt naturally to the provided context — do not copy the example verbatim.',
+      },
     };
   }
 
-  private async saveTemplate(ctx: SkillContext): Promise<SkillResult> {
-    const { custom_template } = ctx.input as { custom_template?: string };
-    if (!custom_template || typeof custom_template !== 'string') {
-      return { success: false, error: 'Missing required input: custom_template' };
+  private async savePolicy(ctx: SkillContext): Promise<SkillResult> {
+    const { custom_policy } = ctx.input as { custom_policy?: string };
+    if (!custom_policy || typeof custom_policy !== 'string') {
+      return { success: false, error: 'Missing required input: custom_policy (a JSON string describing the email policy, or plain-text guidelines)' };
     }
-    if (custom_template.length > 10000) {
-      return { success: false, error: 'custom_template must be 10000 characters or fewer' };
+    if (custom_policy.length > 10000) {
+      return { success: false, error: 'custom_policy must be 10000 characters or fewer' };
     }
 
     if (!ctx.entityMemory) {
-      return { success: false, error: 'Knowledge graph not available — cannot save custom template' };
+      return { success: false, error: 'Knowledge graph not available — cannot save custom policy' };
     }
 
     try {
-      // Check if a custom template node already exists
       const existing = await ctx.entityMemory.findEntities(TEMPLATE_LABEL);
       if (existing.length > 0) {
-        // Update the existing node's body — storeFact would create a child fact,
-        // but we want to update the anchor node's properties directly.
-        // Use search + create pattern: delete old, create new (KG doesn't expose
-        // direct property updates on entity nodes through EntityMemory).
-        // Actually, we store the template as a fact on the anchor node so we can
-        // use storeFact's dedup/update logic.
         await ctx.entityMemory.storeFact({
           entityNodeId: existing[0]!.id,
-          label: 'template body',
-          properties: { body: custom_template },
+          label: 'email policy',
+          properties: { policy: custom_policy },
           confidence: 1.0,
           decayClass: 'permanent',
           source: 'skill:template-meeting-request',
         });
       } else {
-        // Create the anchor concept node, then store the template as a fact
         const anchor = await ctx.entityMemory.createEntity({
           type: 'concept',
           label: TEMPLATE_LABEL,
-          properties: { category: 'email-template', templateName: 'meeting-request' },
+          properties: { category: 'email-policy', templateName: 'meeting-request' },
           source: 'skill:template-meeting-request',
         });
         await ctx.entityMemory.storeFact({
           entityNodeId: anchor.id,
-          label: 'template body',
-          properties: { body: custom_template },
+          label: 'email policy',
+          properties: { policy: custom_policy },
           confidence: 1.0,
           decayClass: 'permanent',
           source: 'skill:template-meeting-request',
         });
       }
 
-      ctx.log.info('Saved custom meeting request template to knowledge graph');
+      ctx.log.info('Saved custom meeting request email policy to knowledge graph');
       return { success: true, data: { saved: true } };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      ctx.log.error({ err }, 'Failed to save custom template');
-      return { success: false, error: `Failed to save template: ${message}` };
+      ctx.log.error({ err }, 'Failed to save custom policy');
+      return { success: false, error: `Failed to save policy: ${message}` };
     }
   }
 
-  private async resetTemplate(ctx: SkillContext): Promise<SkillResult> {
+  private async resetPolicy(ctx: SkillContext): Promise<SkillResult> {
     if (!ctx.entityMemory) {
-      // No KG means no custom template could exist — reset is a no-op
       return { success: true, data: { reset: true } };
     }
 
     try {
       const existing = await ctx.entityMemory.findEntities(TEMPLATE_LABEL);
       if (existing.length > 0) {
-        // Remove all fact nodes linked to the anchor, then the anchor itself.
-        // getFacts returns fact nodes; we need the KG store to delete them.
-        // Since EntityMemory doesn't expose deleteNode, we clear by removing
-        // the facts. The anchor node remains but with no template body fact,
-        // so resolveTemplate will fall back to the default.
         const facts = await ctx.entityMemory.getFacts(existing[0]!.id);
-        // We can't delete nodes through EntityMemory — but we can store a
-        // "cleared" marker so resolveTemplate knows to use the default.
-        // Simpler: just store a fact with body="" to signal "use default".
         if (facts.length > 0) {
           await ctx.entityMemory.storeFact({
             entityNodeId: existing[0]!.id,
-            label: 'template body',
-            properties: { body: '', cleared: true },
+            label: 'email policy',
+            properties: { policy: '', cleared: true },
             confidence: 1.0,
             decayClass: 'permanent',
             source: 'skill:template-meeting-request',
@@ -233,50 +216,59 @@ export class TemplateMeetingRequestHandler implements SkillHandler {
         }
       }
 
-      ctx.log.info('Reset meeting request template to default');
+      ctx.log.info('Reset meeting request email policy to default');
       return { success: true, data: { reset: true } };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      ctx.log.error({ err }, 'Failed to reset template');
-      return { success: false, error: `Failed to reset template: ${message}` };
+      ctx.log.error({ err }, 'Failed to reset policy');
+      return { success: false, error: `Failed to reset policy: ${message}` };
     }
   }
 
   /**
-   * Look up a custom template from the knowledge graph.
-   * Returns the custom template if found and non-empty, otherwise the built-in default.
+   * Look up a custom email policy from the knowledge graph.
+   * Returns the custom policy if found, otherwise the built-in default.
+   * Custom policies can be plain text guidelines or structured JSON.
    */
-  private async resolveTemplate(ctx: SkillContext): Promise<{ template: string; source: 'default' | 'custom' }> {
+  private async resolvePolicy(ctx: SkillContext): Promise<{ policy: unknown; source: 'default' | 'custom' }> {
     if (!ctx.entityMemory) {
-      return { template: DEFAULT_TEMPLATE, source: 'default' };
+      return { policy: DEFAULT_POLICY, source: 'default' };
     }
 
     try {
       const nodes = await ctx.entityMemory.findEntities(TEMPLATE_LABEL);
       if (nodes.length === 0) {
-        return { template: DEFAULT_TEMPLATE, source: 'default' };
+        return { policy: DEFAULT_POLICY, source: 'default' };
       }
 
       const facts = await ctx.entityMemory.getFacts(nodes[0]!.id);
-      // Find the most recent template body fact (by lastConfirmedAt)
-      const templateFact = facts
-        .filter((f) => f.label === 'template body')
+      const policyFact = facts
+        .filter((f) => f.label === 'email policy')
         .sort((a, b) => b.temporal.lastConfirmedAt.getTime() - a.temporal.lastConfirmedAt.getTime())[0];
 
-      if (!templateFact) {
-        return { template: DEFAULT_TEMPLATE, source: 'default' };
+      if (!policyFact) {
+        return { policy: DEFAULT_POLICY, source: 'default' };
       }
 
-      const body = templateFact.properties.body;
-      if (typeof body === 'string' && body.length > 0 && !templateFact.properties.cleared) {
-        return { template: body, source: 'custom' };
+      const rawPolicy = policyFact.properties.policy;
+      if (typeof rawPolicy === 'string' && rawPolicy.length > 0 && !policyFact.properties.cleared) {
+        // Try to parse as JSON; if it fails, treat as plain-text guidelines
+        try {
+          const parsed = JSON.parse(rawPolicy) as unknown;
+          return { policy: parsed, source: 'custom' };
+        } catch {
+          // Plain text guidelines — wrap in a structure for the LLM
+          return {
+            policy: { custom_guidelines: rawPolicy, note: 'These are custom guidelines that override the default policy. Follow them when composing the email.' },
+            source: 'custom',
+          };
+        }
       }
 
-      return { template: DEFAULT_TEMPLATE, source: 'default' };
+      return { policy: DEFAULT_POLICY, source: 'default' };
     } catch (err) {
-      // KG lookup failure is non-fatal — fall back to default
-      ctx.log.warn({ err }, 'Failed to look up custom template, using default');
-      return { template: DEFAULT_TEMPLATE, source: 'default' };
+      ctx.log.warn({ err }, 'Failed to look up custom policy, using default');
+      return { policy: DEFAULT_POLICY, source: 'default' };
     }
   }
 }

@@ -1,23 +1,24 @@
 {
   "name": "template-cancel",
-  "description": "Generate a meeting cancellation email from a template. Supports three actions: 'generate' fills the template with provided variables (checks the knowledge graph for a user-customized template before falling back to the built-in default); 'save' stores a custom template in the knowledge graph; 'reset' removes the custom template and reverts to the built-in default.",
+  "description": "Retrieve email composing guidelines for meeting cancellations. Returns structured policy (required elements, tone, structure, constraints, example) that you use as instructions when composing the email — do NOT send the policy itself to the recipient. Supports 'generate', 'save', and 'reset' actions.",
   "version": "1.0.0",
   "sensitivity": "normal",
   "infrastructure": true,
   "inputs": {
     "action": "string (generate | save | reset)",
     "recipient_name": "string? (required for generate)",
-    "sender_name": "string? (required for generate — the person on whose behalf you're canceling)",
-    "meeting_subject": "string? (required for generate — what the meeting was about)",
-    "meeting_time": "string? (required for generate — the scheduled meeting time)",
+    "sender_name": "string? (required for generate — the person canceling)",
+    "meeting_subject": "string? (required for generate — the meeting topic)",
+    "meeting_time": "string? (required for generate — the scheduled time)",
     "reason": "string? (optional for generate — brief reason for cancellation)",
-    "offer_reschedule": "boolean? (optional for generate — whether to offer to reschedule, defaults to true)",
-    "custom_template": "string? (required for save — the template body to store)"
+    "offer_reschedule": "boolean? (optional for generate — whether to offer rescheduling, defaults to true)",
+    "custom_policy": "string? (required for save — the policy to store)"
   },
   "outputs": {
-    "subject": "string?",
-    "body": "string?",
-    "template_source": "string? (default | custom)",
+    "guidelines": "object?",
+    "context": "object?",
+    "source": "string? (default | custom)",
+    "instructions": "string?",
     "saved": "boolean?",
     "reset": "boolean?"
   },

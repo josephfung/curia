@@ -1,6 +1,6 @@
 {
   "name": "template-reschedule",
-  "description": "Generate a meeting rescheduling email from a template. Supports three actions: 'generate' fills the template with provided variables (checks the knowledge graph for a user-customized template before falling back to the built-in default); 'save' stores a custom template in the knowledge graph; 'reset' removes the custom template and reverts to the built-in default.",
+  "description": "Retrieve email composing guidelines for meeting rescheduling. Returns structured policy (required elements, tone, structure, constraints, example) that you use as instructions when composing the email — do NOT send the policy itself to the recipient. Supports three actions: 'generate' retrieves the policy; 'save' stores a custom policy in the knowledge graph; 'reset' reverts to the built-in default.",
   "version": "1.0.0",
   "sensitivity": "normal",
   "infrastructure": true,
@@ -12,12 +12,13 @@
     "proposed_times": "string? (required for generate — comma-separated new proposed times)",
     "meeting_subject": "string? (optional for generate — what the meeting was about)",
     "reason": "string? (optional for generate — brief reason for rescheduling)",
-    "custom_template": "string? (required for save — the template body to store)"
+    "custom_policy": "string? (required for save — the policy to store)"
   },
   "outputs": {
-    "subject": "string?",
-    "body": "string?",
-    "template_source": "string? (default | custom)",
+    "guidelines": "object?",
+    "context": "object?",
+    "source": "string? (default | custom)",
+    "instructions": "string?",
     "saved": "boolean?",
     "reset": "boolean?"
   },
