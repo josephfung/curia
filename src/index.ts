@@ -4,6 +4,7 @@
  * Initializes all services in dependency order:
  * 1. Config + logging (no dependencies)
  * 2. Database connection (needs config)
+ * 2b. Migrations (needs DB connection — runs automatically on startup)
  * 3. Audit logger (needs DB)
  * 4. Message bus (needs logger, audit hook)
  * 5. LLM provider (needs config)
@@ -17,6 +18,7 @@
  */
 
 import * as path from 'node:path';
+import { runner } from 'node-pg-migrate';
 import { loadConfig } from './config.js';
 import { createLogger } from './logger.js';
 import { HttpAdapter } from './channels/http/http-adapter.js';
@@ -70,8 +72,28 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  // TODO: Run node-pg-migrate programmatically on startup so the schema is
-  // always current when the process starts (no manual migration step required).
+  // Run pending migrations so the schema is always current when the process starts.
+  // Uses node-pg-migrate's programmatic runner with the same DATABASE_URL.
+  // This is safe for single-process deployments; node-pg-migrate acquires an
+  // advisory lock to prevent concurrent migration runs.
+  try {
+    const migrationsDir = path.resolve(import.meta.dirname, 'db/migrations');
+    const applied = await runner({
+      databaseUrl: config.databaseUrl,
+      dir: migrationsDir,
+      migrationsTable: 'pgmigrations',
+      direction: 'up',
+      log: (msg: string) => logger.debug({ migration: true }, msg),
+    });
+    if (applied.length > 0) {
+      logger.info({ count: applied.length, migrations: applied.map(m => m.name) }, 'Database migrations applied');
+    } else {
+      logger.debug('Database schema up to date');
+    }
+  } catch (err) {
+    logger.fatal({ err }, 'Database migration failed');
+    process.exit(1);
+  }
 
   // 3. Audit logger — must be ready before the bus starts accepting events.
   // The bus's write-ahead hook calls auditLogger.log() synchronously before
