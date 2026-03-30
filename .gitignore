@@ -34,3 +34,6 @@ pgdata/
 # Smoke test outputs (timestamped, not committed)
 tests/smoke/results/*.json
 tests/smoke/reports/*.html
+
+# Claude Code skill venvs
+.claude/skills/**/references/.venv/

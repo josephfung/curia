@@ -48,43 +48,7 @@ The framework replaces the existing Zora dependency entirely (clean break). It l
 
 All communication flows through a central in-process message bus backed by Postgres for persistence. There are five layers: four domain layers (Channel, Dispatch, Agent, Execution) with hard security boundaries, plus a System layer for trusted cross-cutting infrastructure. Each layer is a separate module that subscribes to and publishes typed messages. The bus enforces which event types each layer can publish.
 
-```
-┌─────────────────────────────────────────────────────┐
-│                    Channel Layer                     │
-│  (Signal, Telegram, Email, CLI, HTTP API)            │
-│  Can ONLY publish: inbound.message, inbound.event    │
-│  Can ONLY subscribe: outbound.message, outbound.event│
-└──────────────────────┬──────────────────────────────┘
-                       │ message bus
-┌──────────────────────▼──────────────────────────────┐
-│                   Dispatch Layer                     │
-│  Routes inbound messages → correct agent             │
-│  Routes agent.response → outbound.message            │
-│  Enforces policy (rate limits, permissions, blocks)  │
-│  Publishes: agent.task, outbound.message             │
-│  Subscribes: inbound.message, agent.response         │
-└──────────────────────┬──────────────────────────────┘
-                       │ message bus
-┌──────────────────────▼──────────────────────────────┐
-│                    Agent Layer                       │
-│  Executes tasks using LLM + skills                   │
-│  Publishes: skill.invoke, memory.store, memory.query │
-│  Publishes: agent.discuss, agent.response            │
-│  Subscribes: agent.task, skill.result, agent.discuss │
-└──────────────────────┬──────────────────────────────┘
-                       │ message bus
-┌──────────────────────▼──────────────────────────────┐
-│                  Execution Layer                     │
-│  Skills, tool runners, MCP clients                   │
-│  Subscribes: skill.invoke                            │
-│  Publishes: skill.result                             │
-└─────────────────────────────────────────────────────┘
-
-Cross-cutting (System Layer — full pub/sub access):
-  - Audit Logger → appends every event to audit_log table
-  - Memory Engine → handles memory.store/query events
-  - Scheduler → handles schedule.create/trigger events, fires agent.task on cron
-```
+![Curia Architecture — 5 layers with event types](../assets/architecture-detailed.png)
 
 ### Bus Security Enforcement
 

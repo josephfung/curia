@@ -63,12 +63,13 @@ chore: update pgvector to 0.8.0
 
 ## Architecture
 
-Curia uses a message bus architecture with four hard-separated layers. Before proposing changes, understand which layer your change affects:
+Curia uses a message bus architecture with five layers — four domain layers with hard security boundaries, plus a System layer for trusted cross-cutting infrastructure. Before proposing changes, understand which layer your change affects:
 
 - **Channel Layer** — input/output adapters (Signal, Telegram, Email, etc.)
 - **Dispatch Layer** — routing, policy enforcement
 - **Agent Layer** — LLM-powered agent execution
 - **Execution Layer** — skill invocation, MCP clients
+- **System Layer** — trusted infrastructure with full pub/sub access (audit logger, memory engine, scheduler)
 
 Each layer has strict bus permissions. See [architecture overview](docs/specs/00-overview.md) for details.
 

@@ -65,40 +65,11 @@ Think of it as a digital executive office: specialized agents sit at their desks
 
 ## Architecture
 
-Four hard-separated layers connected by a message bus. No layer can call another directly. Every event is audited.
+Five layers connected by a message bus — four domain layers with hard security boundaries, plus a System layer for trusted cross-cutting infrastructure. No layer can call another directly. Every event is audited.
 
-```
-┌─────────────────────────────────────────────────────┐
-│                    Channel Layer                     │
-│         Signal  Telegram  Email  CLI  HTTP API       │
-│                                                      │
-│  Translates platform messages into normalized events │
-│  CANNOT invoke tools, access memory, or execute code │
-└──────────────────────┬──────────────────────────────┘
-                       │
-┌──────────────────────▼──────────────────────────────┐
-│                   Dispatch Layer                     │
-│                                                      │
-│  Routes messages to the right agent                  │
-│  Enforces rate limits, permissions, and policy       │
-│  Translates agent responses back to channels         │
-└──────────────────────┬──────────────────────────────┘
-                       │
-┌──────────────────────▼──────────────────────────────┐
-│                    Agent Layer                       │
-│                                                      │
-│  LLM-powered agents with isolated memory scopes     │
-│  Can request tool use — cannot execute directly      │
-│  Collaborate via the Bullpen (threaded discussions)  │
-└──────────────────────┬──────────────────────────────┘
-                       │
-┌──────────────────────▼──────────────────────────────┐
-│                  Execution Layer                     │
-│                                                      │
-│  Runs skills (local or MCP), validates permissions   │
-│  Sanitizes all outputs before returning to agents    │
-└─────────────────────────────────────────────────────┘
-```
+<p align="center">
+  <img src="docs/assets/architecture-overview.png" alt="Curia Architecture — 5 layers connected by message bus" width="800" />
+</p>
 
 The message bus enforces these boundaries at registration time. A channel adapter registered as `layer: "channel"` that attempts to publish a `skill.invoke` event gets an error — not a warning, not a log entry, an error. The architecture prevents misuse; it doesn't just discourage it.
 
