@@ -77,7 +77,9 @@ async function main(): Promise<void> {
   // This is safe for single-process deployments; node-pg-migrate acquires an
   // advisory lock to prevent concurrent migration runs.
   try {
-    const migrationsDir = path.resolve(import.meta.dirname, 'db/migrations');
+    // Resolve from the project root (one level up from src/ or dist/) so the
+    // path works both in dev (tsx src/index.ts) and production (node dist/index.js).
+    const migrationsDir = path.resolve(import.meta.dirname, '..', 'src', 'db', 'migrations');
     const applied = await runner({
       databaseUrl: config.databaseUrl,
       dir: migrationsDir,
