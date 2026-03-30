@@ -1,0 +1,29 @@
+{
+  "name": "template-cancel",
+  "description": "Retrieve email composing guidelines for meeting cancellations. Returns structured policy that you use as instructions when composing the email — do NOT send the policy itself to the recipient. Supports four actions: 'generate' retrieves the policy (with any refinements); 'update' accepts a natural-language refinement; 'save' replaces the entire policy; 'reset' reverts to defaults and clears refinements.",
+  "version": "1.0.0",
+  "sensitivity": "normal",
+  "infrastructure": true,
+  "inputs": {
+    "action": "string (generate | update | save | reset)",
+    "refinement": "string? (required for update — a natural-language adjustment to the policy)",
+    "recipient_name": "string? (required for generate)",
+    "sender_name": "string? (required for generate — the person canceling)",
+    "meeting_subject": "string? (required for generate — the meeting topic)",
+    "meeting_time": "string? (required for generate — the scheduled time)",
+    "reason": "string? (optional for generate — brief reason for cancellation)",
+    "offer_reschedule": "boolean? (optional for generate — whether to offer rescheduling, defaults to true)",
+    "custom_policy": "string? (required for save — the policy to store)"
+  },
+  "outputs": {
+    "guidelines": "object?",
+    "context": "object?",
+    "source": "string? (default | custom)",
+    "instructions": "string?",
+    "saved": "boolean?",
+    "reset": "boolean?"
+  },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 30000
+}

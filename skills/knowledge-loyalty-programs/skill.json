@@ -1,0 +1,22 @@
+{
+  "name": "knowledge-loyalty-programs",
+  "description": "Store or retrieve loyalty program information (airline frequent flyer numbers, hotel rewards numbers, etc.) in the knowledge graph. Use 'store' to save a loyalty program membership. Use 'retrieve' to look up all stored loyalty programs.",
+  "version": "1.0.0",
+  "sensitivity": "normal",
+  "infrastructure": true,
+  "inputs": {
+    "action": "string (store | retrieve)",
+    "program_name": "string? (required for store — e.g. 'Air Canada Aeroplan', 'Marriott Bonvoy', 'United MileagePlus')",
+    "member_number": "string? (required for store — the membership/loyalty number)",
+    "tier": "string? (optional for store — status tier e.g. 'Gold', 'Platinum')",
+    "notes": "string? (optional for store — additional notes)"
+  },
+  "outputs": {
+    "stored": "boolean?",
+    "program_name": "string?",
+    "programs": "array? (for retrieve — list of {program_name, member_number, tier, notes} objects)"
+  },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 30000
+}

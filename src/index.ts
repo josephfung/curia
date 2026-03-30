@@ -51,6 +51,7 @@ import { OutboundContentFilter } from './dispatch/outbound-filter.js';
 import { OutboundGateway } from './skills/outbound-gateway.js';
 import { SchedulerService } from './scheduler/scheduler-service.js';
 import { Scheduler } from './scheduler/scheduler.js';
+import type { AgentPersona } from './skills/types.js';
 
 async function main(): Promise<void> {
   // 1. Config & logging — no dependencies, must come first.
@@ -220,6 +221,23 @@ async function main(): Promise<void> {
   // canonical identifier. Role is an optional field and may not match "coordinator"
   // if the config uses a different role value (e.g., "chief-of-staff").
   const coordinatorConfig = agentConfigs.find(c => c.name === 'coordinator');
+
+  // Extract agent persona from the coordinator config. This is the single source
+  // of truth for the agent's identity — used by the system prompt (via YAML
+  // interpolation) and by skills (via SkillContext.agentPersona) so templates
+  // and outbound-facing code never hardcode the agent's name or title.
+  let agentPersona: AgentPersona | undefined;
+  if (coordinatorConfig?.persona) {
+    agentPersona = {
+      displayName: coordinatorConfig.persona.display_name ?? 'Curia',
+      title: coordinatorConfig.persona.title ?? 'Agent Chief of Staff',
+      emailSignature: coordinatorConfig.persona.email_signature ?? undefined,
+    };
+    logger.info({ displayName: agentPersona.displayName, title: agentPersona.title }, 'Agent persona extracted from coordinator config');
+  } else {
+    logger.warn('No coordinator persona found — skills will not have agent identity context');
+  }
+
   let outboundFilter: OutboundContentFilter | undefined;
   if (coordinatorConfig) {
     const systemPromptMarkers = extractSystemPromptMarkers(coordinatorConfig);
@@ -280,7 +298,7 @@ async function main(): Promise<void> {
 
   // Execution layer — now with bus, agent registry, and outbound gateway for
   // infrastructure skills. outboundGateway gives email skills their send path.
-  const executionLayer = new ExecutionLayer(skillRegistry, logger, { bus, agentRegistry, contactService, outboundGateway, heldMessages, schedulerService });
+  const executionLayer = new ExecutionLayer(skillRegistry, logger, { bus, agentRegistry, contactService, outboundGateway, heldMessages, schedulerService, entityMemory, agentPersona });
 
   // Two-pass agent registration:
   // Pass 1: Register all agents in the registry so specialistSummary() is complete

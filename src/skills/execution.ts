@@ -12,7 +12,7 @@
 // publish/subscribe including layer impersonation. Only framework-internal
 // skills like 'delegate' should use this — it is a privileged escape hatch.
 
-import type { SkillResult, SkillContext, CallerContext } from './types.js';
+import type { SkillResult, SkillContext, CallerContext, AgentPersona } from './types.js';
 import type { SkillRegistry } from './registry.js';
 import { sanitizeOutput } from './sanitize.js';
 import type { Logger } from '../logger.js';
@@ -22,6 +22,7 @@ import type { ContactService } from '../contacts/contact-service.js';
 import type { OutboundGateway } from './outbound-gateway.js';
 import type { HeldMessageService } from '../contacts/held-messages.js';
 import type { SchedulerService } from '../scheduler/scheduler-service.js';
+import type { EntityMemory } from '../memory/entity-memory.js';
 
 export class ExecutionLayer {
   private registry: SkillRegistry;
@@ -32,8 +33,10 @@ export class ExecutionLayer {
   private outboundGateway?: OutboundGateway;
   private heldMessages?: HeldMessageService;
   private schedulerService?: SchedulerService;
+  private entityMemory?: EntityMemory;
+  private agentPersona?: AgentPersona;
 
-  constructor(registry: SkillRegistry, logger: Logger, options?: { bus?: EventBus; agentRegistry?: AgentRegistry; contactService?: ContactService; outboundGateway?: OutboundGateway; heldMessages?: HeldMessageService; schedulerService?: SchedulerService }) {
+  constructor(registry: SkillRegistry, logger: Logger, options?: { bus?: EventBus; agentRegistry?: AgentRegistry; contactService?: ContactService; outboundGateway?: OutboundGateway; heldMessages?: HeldMessageService; schedulerService?: SchedulerService; entityMemory?: EntityMemory; agentPersona?: AgentPersona }) {
     this.registry = registry;
     this.logger = logger;
     this.bus = options?.bus;
@@ -42,6 +45,8 @@ export class ExecutionLayer {
     this.outboundGateway = options?.outboundGateway;
     this.heldMessages = options?.heldMessages;
     this.schedulerService = options?.schedulerService;
+    this.entityMemory = options?.entityMemory;
+    this.agentPersona = options?.agentPersona;
   }
 
   /**
@@ -109,6 +114,7 @@ export class ExecutionLayer {
         return value;
       },
       log: skillLogger,
+      agentPersona: this.agentPersona,
       caller,
     };
 
@@ -142,6 +148,10 @@ export class ExecutionLayer {
       // schedulerService is optional — only scheduler skills need it
       if (this.schedulerService) {
         ctx.schedulerService = this.schedulerService;
+      }
+      // entityMemory is optional — only skills that read/write the knowledge graph need it
+      if (this.entityMemory) {
+        ctx.entityMemory = this.entityMemory;
       }
     }
 

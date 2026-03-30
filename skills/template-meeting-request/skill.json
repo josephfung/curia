@@ -1,0 +1,30 @@
+{
+  "name": "template-meeting-request",
+  "description": "Retrieve email composing guidelines for meeting requests. Returns structured policy (required elements, tone, structure, constraints, example) that you use as instructions when composing the email — do NOT send the policy itself to the recipient. Supports four actions: 'generate' retrieves the policy (checks KG for customizations and refinements); 'update' accepts a natural-language refinement (e.g. 'make these less formal', 'always mention my assistant') and stores it as an additive adjustment; 'save' replaces the entire policy; 'reset' reverts to defaults and clears all refinements.",
+  "version": "1.0.0",
+  "sensitivity": "normal",
+  "infrastructure": true,
+  "inputs": {
+    "action": "string (generate | update | save | reset)",
+    "refinement": "string? (required for update — a natural-language instruction like 'make these less formal' or 'always mention my assistant can help')",
+    "recipient_name": "string? (required for generate)",
+    "sender_name": "string? (required for generate — the name of the person requesting the meeting, typically the CEO)",
+    "proposed_times": "string? (required for generate — comma-separated proposed times)",
+    "meeting_purpose": "string? (optional for generate — reason for meeting)",
+    "meeting_duration": "string? (optional for generate — e.g. '30 minutes', '1 hour')",
+    "meeting_location": "string? (optional for generate — e.g. 'Zoom', 'in-person at HQ')",
+    "custom_policy": "string? (required for save — the policy to store, as JSON or plain-text guidelines)"
+  },
+  "outputs": {
+    "guidelines": "object? (the email policy: required_elements, tone, structure, constraints, example)",
+    "context": "object? (the provided variables for the LLM to use when composing)",
+    "source": "string? (default | custom | refined)",
+    "updated": "boolean?",
+    "instructions": "string? (how to use the guidelines)",
+    "saved": "boolean?",
+    "reset": "boolean?"
+  },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 30000
+}

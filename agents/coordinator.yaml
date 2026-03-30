@@ -167,4 +167,13 @@ pinned_skills:
   - scheduler-create
   - scheduler-list
   - scheduler-cancel
+  - template-meeting-request
+  - template-reschedule
+  - template-cancel
+  - template-doc-request
+  - knowledge-company-overview
+  - knowledge-meeting-links
+  - knowledge-travel-preferences
+  - knowledge-loyalty-programs
+  - context-for-email
 allow_discovery: true
