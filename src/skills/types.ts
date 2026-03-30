@@ -73,6 +73,10 @@ export interface SkillContext {
   heldMessages?: import('../contacts/held-messages.js').HeldMessageService;
   /** Scheduler service — only available to infrastructure skills */
   schedulerService?: import('../scheduler/scheduler-service.js').SchedulerService;
+  /** Entity memory (knowledge graph) — only available to infrastructure skills.
+   *  Provides semantic search, entity CRUD, and fact storage for skills that
+   *  need to read or write long-term knowledge (templates, preferences, etc.). */
+  entityMemory?: import('../memory/entity-memory.js').EntityMemory;
   /** Caller identity — populated from the task event's sender context.
    *  Guaranteed to be defined for elevated skills (execution layer rejects without it).
    *  Available but optional for normal skills. */

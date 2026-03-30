@@ -1,0 +1,27 @@
+{
+  "name": "template-meeting-request",
+  "description": "Generate a meeting request email from a template. Supports three actions: 'generate' fills the template with provided variables and returns the email text (checks the knowledge graph for a user-customized template before falling back to the built-in default); 'save' stores a custom template in the knowledge graph; 'reset' removes the custom template and reverts to the built-in default.",
+  "version": "1.0.0",
+  "sensitivity": "normal",
+  "infrastructure": true,
+  "inputs": {
+    "action": "string (generate | save | reset)",
+    "recipient_name": "string? (required for generate)",
+    "sender_name": "string? (required for generate — the name of the person requesting the meeting, typically the CEO)",
+    "proposed_times": "string? (required for generate — comma-separated proposed times)",
+    "meeting_purpose": "string? (optional for generate — reason for meeting)",
+    "meeting_duration": "string? (optional for generate — e.g. '30 minutes', '1 hour')",
+    "meeting_location": "string? (optional for generate — e.g. 'Zoom', 'in-person at HQ')",
+    "custom_template": "string? (required for save — the template body to store)"
+  },
+  "outputs": {
+    "subject": "string?",
+    "body": "string?",
+    "template_source": "string? (default | custom)",
+    "saved": "boolean?",
+    "reset": "boolean?"
+  },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 30000
+}

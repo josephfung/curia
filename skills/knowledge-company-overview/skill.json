@@ -1,0 +1,20 @@
+{
+  "name": "knowledge-company-overview",
+  "description": "Store or retrieve company overview information in the knowledge graph. Use 'store' to save details like legal name, address, officers, board members, or any other company-level facts. Use 'retrieve' to look up stored company information. Each fact is stored independently, so you can call 'store' multiple times to build up the company profile incrementally.",
+  "version": "1.0.0",
+  "sensitivity": "normal",
+  "infrastructure": true,
+  "inputs": {
+    "action": "string (store | retrieve)",
+    "field": "string? (required for store — the field name, e.g. 'legal_name', 'address', 'officers', 'board_members', 'ein', 'founding_date')",
+    "value": "string? (required for store — the value to store)"
+  },
+  "outputs": {
+    "stored": "boolean?",
+    "field": "string?",
+    "facts": "array? (for retrieve — list of {field, value} objects)"
+  },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 30000
+}

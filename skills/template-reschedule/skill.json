@@ -1,0 +1,27 @@
+{
+  "name": "template-reschedule",
+  "description": "Generate a meeting rescheduling email from a template. Supports three actions: 'generate' fills the template with provided variables (checks the knowledge graph for a user-customized template before falling back to the built-in default); 'save' stores a custom template in the knowledge graph; 'reset' removes the custom template and reverts to the built-in default.",
+  "version": "1.0.0",
+  "sensitivity": "normal",
+  "infrastructure": true,
+  "inputs": {
+    "action": "string (generate | save | reset)",
+    "recipient_name": "string? (required for generate)",
+    "sender_name": "string? (required for generate — the person on whose behalf you're rescheduling)",
+    "original_time": "string? (required for generate — the original meeting time)",
+    "proposed_times": "string? (required for generate — comma-separated new proposed times)",
+    "meeting_subject": "string? (optional for generate — what the meeting was about)",
+    "reason": "string? (optional for generate — brief reason for rescheduling)",
+    "custom_template": "string? (required for save — the template body to store)"
+  },
+  "outputs": {
+    "subject": "string?",
+    "body": "string?",
+    "template_source": "string? (default | custom)",
+    "saved": "boolean?",
+    "reset": "boolean?"
+  },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 30000
+}
