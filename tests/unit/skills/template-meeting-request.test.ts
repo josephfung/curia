@@ -244,10 +244,100 @@ describe('TemplateMeetingRequestHandler', () => {
     });
   });
 
+  describe('update (natural language refinement)', () => {
+    it('rejects when refinement is missing', async () => {
+      const em = makeEntityMemory();
+      const result = await handler.execute(makeCtx({ action: 'update' }, { entityMemory: em as never }));
+      expect(result.success).toBe(false);
+      if (!result.success) expect(result.error).toContain('refinement');
+    });
+
+    it('rejects when entityMemory is not available', async () => {
+      const result = await handler.execute(makeCtx({ action: 'update', refinement: 'make it casual' }));
+      expect(result.success).toBe(false);
+      if (!result.success) expect(result.error).toContain('Knowledge graph');
+    });
+
+    it('stores a refinement and returns it in generate', async () => {
+      const em = makeEntityMemory();
+      // Store a refinement
+      const updateResult = await handler.execute(makeCtx(
+        { action: 'update', refinement: 'Always mention that my assistant can help with scheduling' },
+        { entityMemory: em as never },
+      ));
+      expect(updateResult.success).toBe(true);
+      if (updateResult.success) {
+        const data = updateResult.data as { updated: boolean; refinement: string };
+        expect(data.updated).toBe(true);
+      }
+
+      // Generate should now include the refinement
+      const genResult = await handler.execute(makeCtx(
+        { action: 'generate', recipient_name: 'Alice', sender_name: 'CEO', proposed_times: 'Monday 9am' },
+        { entityMemory: em as never },
+      ));
+      expect(genResult.success).toBe(true);
+      if (genResult.success) {
+        const data = genResult.data as { guidelines: { refinements: string[] }; source: string };
+        expect(data.source).toBe('refined');
+        expect(data.guidelines.refinements).toContain('Always mention that my assistant can help with scheduling');
+      }
+    });
+
+    it('accumulates multiple refinements', async () => {
+      const em = makeEntityMemory();
+      await handler.execute(makeCtx(
+        { action: 'update', refinement: 'Make these less formal' },
+        { entityMemory: em as never },
+      ));
+      // Small delay so the timestamp-based label is unique (the real KG
+      // uses dedup by label similarity, not exact match, but our test stub
+      // deduplicates by exact label — same-millisecond timestamps collide).
+      await new Promise((r) => setTimeout(r, 2));
+      await handler.execute(makeCtx(
+        { action: 'update', refinement: 'Keep them under 3 sentences' },
+        { entityMemory: em as never },
+      ));
+
+      const result = await handler.execute(makeCtx(
+        { action: 'generate', recipient_name: 'Bob', sender_name: 'CEO', proposed_times: 'Tuesday 2pm' },
+        { entityMemory: em as never },
+      ));
+      expect(result.success).toBe(true);
+      if (result.success) {
+        const data = result.data as { guidelines: { refinements: string[] } };
+        expect(data.guidelines.refinements).toHaveLength(2);
+        expect(data.guidelines.refinements[0]).toContain('less formal');
+        expect(data.guidelines.refinements[1]).toContain('3 sentences');
+      }
+    });
+  });
+
   describe('reset', () => {
     it('succeeds without entityMemory (no-op)', async () => {
       const result = await handler.execute(makeCtx({ action: 'reset' }));
       expect(result.success).toBe(true);
+    });
+
+    it('resets refinements so generate returns default source', async () => {
+      const em = makeEntityMemory();
+      // Add a refinement
+      await handler.execute(makeCtx(
+        { action: 'update', refinement: 'Keep it short' },
+        { entityMemory: em as never },
+      ));
+      // Reset
+      await handler.execute(makeCtx({ action: 'reset' }, { entityMemory: em as never }));
+      // Generate should be default, not refined
+      const result = await handler.execute(makeCtx(
+        { action: 'generate', recipient_name: 'Frank', sender_name: 'CEO', proposed_times: 'Friday 3pm' },
+        { entityMemory: em as never },
+      ));
+      expect(result.success).toBe(true);
+      if (result.success) {
+        const data = result.data as { source: string };
+        expect(data.source).toBe('default');
+      }
     });
 
     it('resets custom policy so generate falls back to default', async () => {

@@ -1,11 +1,12 @@
 {
   "name": "template-reschedule",
-  "description": "Retrieve email composing guidelines for meeting rescheduling. Returns structured policy (required elements, tone, structure, constraints, example) that you use as instructions when composing the email — do NOT send the policy itself to the recipient. Supports three actions: 'generate' retrieves the policy; 'save' stores a custom policy in the knowledge graph; 'reset' reverts to the built-in default.",
+  "description": "Retrieve email composing guidelines for meeting rescheduling. Returns structured policy that you use as instructions when composing the email — do NOT send the policy itself to the recipient. Supports four actions: 'generate' retrieves the policy (with any refinements); 'update' accepts a natural-language refinement; 'save' replaces the entire policy; 'reset' reverts to defaults and clears refinements.",
   "version": "1.0.0",
   "sensitivity": "normal",
   "infrastructure": true,
   "inputs": {
-    "action": "string (generate | save | reset)",
+    "action": "string (generate | update | save | reset)",
+    "refinement": "string? (required for update — a natural-language adjustment to the policy)",
     "recipient_name": "string? (required for generate)",
     "sender_name": "string? (required for generate — the person on whose behalf you're rescheduling)",
     "original_time": "string? (required for generate — the original meeting time)",

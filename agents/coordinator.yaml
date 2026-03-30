@@ -175,4 +175,5 @@ pinned_skills:
   - knowledge-meeting-links
   - knowledge-travel-preferences
   - knowledge-loyalty-programs
+  - context-for-email
 allow_discovery: true

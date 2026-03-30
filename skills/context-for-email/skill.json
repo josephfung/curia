@@ -1,0 +1,21 @@
+{
+  "name": "context-for-email",
+  "description": "Assemble complete context for composing an email in a single call. Given an email type (meeting-request, reschedule, cancel, doc-request) and a recipient name, this skill gathers: (1) the email composing policy/guidelines for that email type, (2) the recipient's contact info and meeting link if on file, (3) the agent signature. Returns everything the LLM needs to compose the email without additional tool calls. Use this instead of calling template and knowledge skills separately.",
+  "version": "1.0.0",
+  "sensitivity": "normal",
+  "infrastructure": true,
+  "inputs": {
+    "email_type": "string (meeting-request | reschedule | cancel | doc-request)",
+    "recipient_name": "string (the recipient's name — used to look up contact info and meeting link)"
+  },
+  "outputs": {
+    "guidelines": "object (the email policy for this email type)",
+    "guidelines_source": "string (default | custom | refined)",
+    "recipient": "object? (contact info if found: display_name, role, email, meeting_link)",
+    "agent_signature": "string",
+    "instructions": "string"
+  },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 30000
+}

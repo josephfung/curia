@@ -1,11 +1,12 @@
 {
   "name": "template-doc-request",
-  "description": "Retrieve email composing guidelines for pre-meeting document/materials requests. Returns structured policy (required elements, tone, structure, constraints, example) that you use as instructions when composing the email — do NOT send the policy itself to the recipient. Supports 'generate', 'save', and 'reset' actions.",
+  "description": "Retrieve email composing guidelines for pre-meeting document/materials requests. Returns structured policy that you use as instructions when composing the email — do NOT send the policy itself to the recipient. Supports four actions: 'generate' retrieves the policy (with any refinements); 'update' accepts a natural-language refinement; 'save' replaces the entire policy; 'reset' reverts to defaults and clears refinements.",
   "version": "1.0.0",
   "sensitivity": "normal",
   "infrastructure": true,
   "inputs": {
-    "action": "string (generate | save | reset)",
+    "action": "string (generate | update | save | reset)",
+    "refinement": "string? (required for update — a natural-language adjustment to the policy)",
     "recipient_name": "string? (required for generate)",
     "sender_name": "string? (required for generate — the person requesting the documents)",
     "meeting_subject": "string? (required for generate — the meeting topic)",
