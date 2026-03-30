@@ -78,8 +78,10 @@ export class KnowledgeCompanyOverviewHandler implements SkillHandler {
         };
       }
 
-      const factNodes = await ctx.entityMemory!.getFacts(nodes[0]!.id);
-      const facts = factNodes.map((f) => ({
+      // Aggregate facts across all matching anchor nodes. A race condition in
+      // findOrCreateAnchor can produce duplicates; querying all ensures no data is lost.
+      const allFacts = await Promise.all(nodes.map((n) => ctx.entityMemory!.getFacts(n.id)));
+      const facts = allFacts.flat().map((f) => ({
         field: f.properties.field ?? f.label,
         value: f.properties.value,
         last_updated: f.temporal.lastConfirmedAt.toISOString(),

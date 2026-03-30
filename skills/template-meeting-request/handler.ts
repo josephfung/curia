@@ -31,15 +31,22 @@ Best regards,
 Nathan Curia
 Agent Chief of Staff`;
 
+const MAX_INPUT_LENGTH = 5000;
+
 /**
  * Fill template placeholders with provided variables.
  * Placeholders use {{variable_name}} syntax.
+ * Strips any unfilled placeholders after substitution so they don't leak
+ * into generated emails as raw {{...}} text.
  */
 function fillTemplate(template: string, vars: Record<string, string>): string {
   let result = template;
   for (const [key, value] of Object.entries(vars)) {
     result = result.replaceAll(`{{${key}}}`, value);
   }
+  // Strip any remaining unfilled placeholders (from custom templates with
+  // different variable names, or optional fields not provided)
+  result = result.replace(/\{\{[^}]+\}\}/g, '');
   return result;
 }
 
@@ -79,6 +86,17 @@ export class TemplateMeetingRequestHandler implements SkillHandler {
     }
     if (!proposed_times || typeof proposed_times !== 'string') {
       return { success: false, error: 'Missing required input: proposed_times' };
+    }
+
+    // Length caps prevent oversized inputs from producing enormous output
+    if (recipient_name.length > MAX_INPUT_LENGTH) {
+      return { success: false, error: `recipient_name must be ${MAX_INPUT_LENGTH} characters or fewer` };
+    }
+    if (sender_name.length > MAX_INPUT_LENGTH) {
+      return { success: false, error: `sender_name must be ${MAX_INPUT_LENGTH} characters or fewer` };
+    }
+    if (proposed_times.length > MAX_INPUT_LENGTH) {
+      return { success: false, error: `proposed_times must be ${MAX_INPUT_LENGTH} characters or fewer` };
     }
 
     // Look up custom template from KG, fall back to built-in default

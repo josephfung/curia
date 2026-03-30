@@ -30,11 +30,14 @@ Best regards,
 Nathan Curia
 Agent Chief of Staff`;
 
+const MAX_INPUT_LENGTH = 5000;
+
 function fillTemplate(template: string, vars: Record<string, string>): string {
   let result = template;
   for (const [key, value] of Object.entries(vars)) {
     result = result.replaceAll(`{{${key}}}`, value);
   }
+  result = result.replace(/\{\{[^}]+\}\}/g, '');
   return result;
 }
 
@@ -77,6 +80,19 @@ export class TemplateRescheduleHandler implements SkillHandler {
     }
     if (!proposed_times || typeof proposed_times !== 'string') {
       return { success: false, error: 'Missing required input: proposed_times' };
+    }
+
+    if (recipient_name.length > MAX_INPUT_LENGTH) {
+      return { success: false, error: `recipient_name must be ${MAX_INPUT_LENGTH} characters or fewer` };
+    }
+    if (sender_name.length > MAX_INPUT_LENGTH) {
+      return { success: false, error: `sender_name must be ${MAX_INPUT_LENGTH} characters or fewer` };
+    }
+    if (original_time.length > MAX_INPUT_LENGTH) {
+      return { success: false, error: `original_time must be ${MAX_INPUT_LENGTH} characters or fewer` };
+    }
+    if (proposed_times.length > MAX_INPUT_LENGTH) {
+      return { success: false, error: `proposed_times must be ${MAX_INPUT_LENGTH} characters or fewer` };
     }
 
     const { template, source } = await this.resolveTemplate(ctx);

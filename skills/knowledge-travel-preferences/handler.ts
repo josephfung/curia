@@ -78,8 +78,8 @@ export class KnowledgeTravelPreferencesHandler implements SkillHandler {
         };
       }
 
-      const factNodes = await ctx.entityMemory!.getFacts(nodes[0]!.id);
-      const preferences = factNodes.map((f) => ({
+      const allFacts = await Promise.all(nodes.map((n) => ctx.entityMemory!.getFacts(n.id)));
+      const preferences = allFacts.flat().map((f) => ({
         field: f.properties.field ?? f.label,
         value: f.properties.value,
         last_updated: f.temporal.lastConfirmedAt.toISOString(),

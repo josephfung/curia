@@ -60,9 +60,10 @@ export class KnowledgeMeetingLinksHandler implements SkillHandler {
     try {
       const anchor = await this.findOrCreateAnchor(ctx);
 
-      // Label includes person and platform so dedup detects updates to the
-      // same person's link on the same platform.
-      const factLabel = `${person_name} ${platform} link`;
+      // Label includes person and platform (lowercased) so dedup detects
+      // updates to the same person's link on the same platform regardless
+      // of casing (e.g., "Zoom" vs "zoom" won't create duplicates).
+      const factLabel = `${person_name} ${platform.toLowerCase()} link`;
       await ctx.entityMemory!.storeFact({
         entityNodeId: anchor.id,
         label: factLabel,
@@ -93,8 +94,8 @@ export class KnowledgeMeetingLinksHandler implements SkillHandler {
         };
       }
 
-      const factNodes = await ctx.entityMemory!.getFacts(nodes[0]!.id);
-      let links = factNodes.map((f) => ({
+      const allFacts = await Promise.all(nodes.map((n) => ctx.entityMemory!.getFacts(n.id)));
+      let links = allFacts.flat().map((f) => ({
         person_name: f.properties.person_name as string,
         platform: f.properties.platform as string,
         link: f.properties.link as string,

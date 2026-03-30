@@ -31,11 +31,14 @@ Best regards,
 Nathan Curia
 Agent Chief of Staff`;
 
+const MAX_INPUT_LENGTH = 5000;
+
 function fillTemplate(template: string, vars: Record<string, string>): string {
   let result = template;
   for (const [key, value] of Object.entries(vars)) {
     result = result.replaceAll(`{{${key}}}`, value);
   }
+  result = result.replace(/\{\{[^}]+\}\}/g, '');
   return result;
 }
 
@@ -81,6 +84,22 @@ export class TemplateDocRequestHandler implements SkillHandler {
     }
     if (!documents_requested || typeof documents_requested !== 'string') {
       return { success: false, error: 'Missing required input: documents_requested' };
+    }
+
+    if (recipient_name.length > MAX_INPUT_LENGTH) {
+      return { success: false, error: `recipient_name must be ${MAX_INPUT_LENGTH} characters or fewer` };
+    }
+    if (sender_name.length > MAX_INPUT_LENGTH) {
+      return { success: false, error: `sender_name must be ${MAX_INPUT_LENGTH} characters or fewer` };
+    }
+    if (meeting_subject.length > MAX_INPUT_LENGTH) {
+      return { success: false, error: `meeting_subject must be ${MAX_INPUT_LENGTH} characters or fewer` };
+    }
+    if (meeting_time.length > MAX_INPUT_LENGTH) {
+      return { success: false, error: `meeting_time must be ${MAX_INPUT_LENGTH} characters or fewer` };
+    }
+    if (documents_requested.length > MAX_INPUT_LENGTH) {
+      return { success: false, error: `documents_requested must be ${MAX_INPUT_LENGTH} characters or fewer` };
     }
 
     const { template, source } = await this.resolveTemplate(ctx);

@@ -95,8 +95,8 @@ export class KnowledgeLoyaltyProgramsHandler implements SkillHandler {
         };
       }
 
-      const factNodes = await ctx.entityMemory!.getFacts(nodes[0]!.id);
-      const programs = factNodes.map((f) => ({
+      const allFacts = await Promise.all(nodes.map((n) => ctx.entityMemory!.getFacts(n.id)));
+      const programs = allFacts.flat().map((f) => ({
         program_name: f.properties.program_name ?? f.label,
         member_number: f.properties.member_number,
         tier: f.properties.tier ?? null,
