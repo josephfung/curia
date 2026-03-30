@@ -63,6 +63,60 @@ Skills that fail this test should be **removed or redesigned**:
   as a standalone skill — the LLM does this in-context. Only justify it if it runs as a
   background batch job where the LLM isn't already in the conversation.
 
+### Design Principle: Future-Proof for LLM Upgrades
+
+Skills should be designed so that improvements in the underlying LLM automatically
+improve the system — without code changes. This means:
+
+**Skills provide data, context, and constraints — never intelligence.**
+
+1. **Richer context → better output.** As LLMs become better at utilizing large contexts,
+   skills that assemble more relevant context (contact history, preferences, past
+   interactions, audience-specific patterns) will produce proportionally better results.
+   Design skills to gather and surface *more* context than the current LLM can fully
+   exploit — the next model will use it.
+
+2. **Better instruction following → policies become more valuable.** Structured guidelines
+   (required elements, tone, constraints) work better with each model generation. Invest
+   in policy richness — audience-level variants, conditional rules, voice model
+   integration — because the LLM's ability to follow them faithfully will only improve.
+
+3. **Better multi-step reasoning → composable primitives.** As LLMs improve at tool
+   orchestration, small, composable skills become more powerful than monolithic ones.
+   Design skills as primitives that the LLM chains together, not as pre-wired workflows
+   the LLM merely triggers.
+
+4. **Never embed intelligence in skill code.** If the skill contains `if/else` logic that
+   makes a judgment call (classifying, prioritizing, summarizing, deciding), that logic
+   will be *worse* than the LLM at the time of writing and will fall further behind as
+   models improve. Move judgments to the agent's prompt; keep skills as data plumbing.
+
+5. **Design for feedback loops.** Static skills improve only when a developer ships a code
+   change. Skills that accept natural-language refinement ("make these more casual",
+   "always include my assistant's availability") improve continuously from user
+   interaction. Every skill that stores policy or preferences should support incremental
+   refinement, not just wholesale replacement.
+
+These principles apply to all future agent and skill development, not just the skills
+in this plan.
+
+### Design Principle: Skills Must Compose
+
+A skill that operates in isolation forces the LLM to orchestrate multiple tool calls to
+assemble context. This wastes turns, burns tokens, and creates fragile multi-step
+sequences where any failure breaks the chain.
+
+**Context assembly skills** bridge this gap. Given a task context (e.g., "I'm writing a
+meeting request to Alice"), a context assembly skill gathers everything relevant in a
+single call: email policy + contact info + meeting link + audience preferences + last
+interaction. The LLM gets complete context in one response, composes in the next.
+
+Rules for composability:
+- Knowledge skills should be callable by other skills (via shared EntityMemory access)
+- Context assembly skills should aggregate across knowledge skills, contacts, and KG
+- No skill should require the output of another skill as a *string* input — use shared
+  backing stores (KG, contact service) instead
+
 ---
 
 ## Proposed Agents
@@ -403,6 +457,74 @@ must be stored and recalled *exactly* — not paraphrased by an LLM.
 | `knowledge.meeting-links` | Store/retrieve personal Zoom/Teams links for leadership | Virtual Meeting Access (p.32-33) |
 | `knowledge.travel-preferences` | Store/retrieve travel prefs (seat, airline, loyalty, baggage) | Travel Booking Preferences (p.37-38) |
 | `knowledge.loyalty-programs` | Store/retrieve airline/hotel loyalty numbers | Travel Booking Info (p.38-39) |
+
+### Context Assembly Skill
+
+A single skill that bridges the gap between siloed knowledge and the LLM's need for
+complete context in one call.
+
+| Skill | What it does | Handbook coverage |
+|---|---|---|
+| `context.for-email` | Given an email type and recipient, assemble: email policy + contact info + meeting link (if on file) + audience preferences + last interaction from KG. Returns everything the LLM needs to compose in one call. | Cross-cutting: supports all email-generating tasks |
+
+This skill exists because the alternative — the LLM making 4-5 sequential tool calls
+to gather context — is fragile, token-expensive, and gets worse as the number of
+knowledge sources grows. The skill does the plumbing; the LLM does the thinking.
+
+### Known Gaps and Planned Improvements
+
+**These are known limitations of the current Coordinator Skills implementation.** They
+are documented here so future development addresses them intentionally rather than
+rediscovering them.
+
+#### Email Policy Skills
+
+1. **Policies are static without a feedback loop.** Once set, they don't evolve from
+   usage. The CEO rewrites 20 meeting request emails to be shorter — the system
+   learns nothing. **Mitigation (implemented):** The `update` action accepts
+   natural-language refinements ("make these less formal", "always mention my
+   assistant can help with scheduling") and merges them into the existing policy.
+   The skill uses the LLM to interpret the refinement and update the structured policy.
+
+2. **Policies are audience-blind.** One policy for every recipient. Board chairs,
+   engineering partners, and vendors all get emails shaped by the same guidelines.
+   **Future:** Support audience-tagged policy variants. The policy resolution checks
+   for audience-level overrides (by role, relationship type, or specific contact)
+   before falling back to the general policy. Requires the contact system to carry
+   audience metadata.
+
+3. **Example emails are frozen fiction.** They don't reflect the CEO's actual voice.
+   **Future:** When the Executive Profile Agent ships, the template skills should pull
+   the CEO's voice model into the guidelines automatically. Example emails should be
+   *regenerated from the voice model*, not static strings. This is a dependency on
+   the Profile Agent — design the policy structure to accept a `voice_model_id` field
+   now so the integration is mechanical later.
+
+4. **No version history.** After updating a policy 5 times, there's no way to see what
+   it looked like before or roll back a bad change. **Future:** Store policy versions
+   as separate fact nodes with timestamps, and add a `history` action that returns
+   past versions. Low priority but useful for trust-building ("show me what changed").
+
+#### Knowledge Skills
+
+5. **They're a flat key-value store.** The knowledge graph supports semantic search,
+   relationship traversal, and cross-entity connections. The knowledge skills use none
+   of this — they store facts by exact label and retrieve by exact label.
+   **Future:** Add semantic search to the retrieve action so "airline preferences" finds
+   "preferred_airline" and "frequent_flyer" without exact label matches.
+
+6. **No freshness tracking.** Meeting links get rotated, loyalty tiers change, company
+   officers turn over. There's no mechanism to flag stale data or prompt
+   re-confirmation. **Future:** Use the temporal metadata (lastConfirmedAt) to surface
+   "this was last confirmed 6 months ago — is it still current?" warnings when facts
+   are retrieved. The decay classes are already in the data model; the skills just
+   don't read them yet.
+
+7. **No cross-referencing.** Travel preferences, loyalty programs, meeting links, and
+   company info live in separate anchor nodes with no edges between them.
+   **Mitigation (implemented):** The `context.for-email` assembly skill bridges this
+   gap for email composition. **Future:** Extend the pattern to other task types
+   (travel planning, meeting prep, board engagement).
 
 ---
 
