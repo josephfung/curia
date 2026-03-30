@@ -29,7 +29,7 @@ Every section of the handbook was evaluated against three questions:
 
 ## Proposed Agents
 
-### 1. Calendar Agent
+### 1. Calendar Agent — `core`
 
 Owns all Google Calendar operations. Reads and writes events, enforces formatting
 conventions, manages color coding, timezone handling.
@@ -54,10 +54,13 @@ MCP)
 
 ---
 
-### 2. Email Triage Agent
+### 2. Email Triage Agent — `core` (basic) / `paid` (advanced)
 
 Processes inbound email, classifies by urgency/type, extracts action items, applies
 labels, surfaces what needs CEO attention. Works on top of the existing email channel.
+
+Basic skills (`classify`, `label`, `surface-urgent`, `archive-resolved`) are in the
+open source core. Advanced skills (`extract-actions`, `summarize-thread`) are paid tier.
 
 | Skill | What it does |
 |---|---|
@@ -75,7 +78,7 @@ End-of-Day Cleanup
 
 ---
 
-### 3. Executive Profile Agent
+### 3. Executive Profile Agent — `paid`
 
 Learns and maintains the CEO's communication style, preferences, and patterns. The
 institutional knowledge engine. Can bootstrap voice/tone analysis from day one by
@@ -102,7 +105,7 @@ bootstrap tone, formality, sign-off style, and audience-specific variation.
 
 ---
 
-### 4. Briefing Agent
+### 4. Briefing Agent — `paid`
 
 Generates structured briefings and prep documents. Template-driven but context-aware.
 
@@ -123,7 +126,7 @@ without Scheduler via on-demand requests.
 
 ---
 
-### 5. Meeting Coordinator
+### 5. Meeting Coordinator — `paid`
 
 Handles the back-and-forth of setting up meetings with people. Proposes times, sends
 emails, manages rescheduling and cancellation. Delegates to Calendar Agent for the
@@ -146,7 +149,7 @@ CEO Time & Speaking Engagements, Meeting Prep Checklist
 
 ---
 
-### 6. Proactive Calendar Agent
+### 6. Proactive Calendar Agent — `paid`
 
 Scheduler-triggered agent that reviews the CEO's upcoming calendar and flags issues
 before they become problems. The "see around corners" agent. When it identifies
@@ -177,7 +180,7 @@ cognitive modes warrant separate agents.
 
 ---
 
-### 7. Escalation Agent
+### 7. Escalation Agent — `core`
 
 Implements the handbook's urgent communication protocol across available digital
 channels.
@@ -197,7 +200,7 @@ dramatically increase value. Minimal viable version works with email + CLI.
 
 ---
 
-## Coordinator Template Skills
+## Coordinator Template Skills — `core`
 
 Skills the Coordinator (already built) uses directly, not attached to a specialized agent:
 
@@ -215,18 +218,89 @@ Skills the Coordinator (already built) uses directly, not attached to a speciali
 
 ---
 
+## Distribution Tiers: Open Source Core vs. Paid SaaS
+
+Curia follows an open-core model: a genuinely useful open source core that drives
+adoption and community, with a paid SaaS tier that adds intelligence, personalization,
+and proactive capabilities.
+
+**Guiding principle:** Open source = reactive, functional EA. Paid = proactive,
+intelligent, learns and anticipates.
+
+### Open Source Core
+
+| Agent / Skill Group | Skills | Rationale |
+|---|---|---|
+| **Calendar Agent** | All 9 skills | Table stakes. An EA system without calendar management isn't an EA system. This is what gets people to try Curia. |
+| **Email Triage Agent** (basic) | `email.classify`, `email.label`, `email.surface-urgent`, `email.archive-resolved` | Basic triage is necessary for the system to be useful with email. People need to see Curia actually do something with their inbox. |
+| **Coordinator Template Skills** | All 9 skills | Templates, knowledge storage, meeting links - these are the "getting started" experience. Low cost to give away, high cost if missing. |
+| **Escalation Agent** | All 4 skills | Safety feature. If Curia handles email and calendar, it must be able to escalate urgent situations. Gating this behind a paywall would erode trust. |
+
+A self-hosted Curia with these four groups can manage a calendar, triage email at a
+basic level, store company knowledge, use templates, and escalate urgent items. That's
+a functional, if basic, AI EA - enough to build a community, attract contributors, and
+create a funnel.
+
+### Paid SaaS Tier
+
+| Agent / Skill Group | Skills | Rationale |
+|---|---|---|
+| **Executive Profile Agent** | All 6 skills | Highest-value differentiator. Voice analysis, preference learning, draft validation - this is what makes Curia feel like *your* EA rather than a generic assistant. Hard to replicate well with self-hosting because it needs tuning and operational refinement. |
+| **Briefing Agent** | All 5 skills | Daily and weekly briefings create a habit. The CEO opens Curia's briefing every morning. Habit-forming features drive retention and make churn painful. |
+| **Meeting Coordinator** | All 7 skills | Multi-turn email coordination is operationally complex, high LLM cost (many turns per meeting), and high-value. This is where Curia saves the most time. |
+| **Proactive Calendar Agent** | All 7 skills | The "exceed human EA" agent. Proactive features are the clearest paid-tier differentiator - Curia doing things the CEO didn't ask for. Reactive is free. Proactive is premium. |
+| **Email Triage Agent** (advanced) | `email.extract-actions`, `email.summarize-thread` | Intelligence-heavy features that cost more LLM tokens and provide significantly more value than basic classification. |
+
+### Tier Comparison
+
+| Factor | Open Source Core | Paid SaaS |
+|---|---|---|
+| Cognitive mode | Reactive (user asks, system does) | Proactive (system anticipates, suggests, acts) |
+| LLM cost | Lower (classification, CRUD) | Higher (multi-turn coordination, voice analysis, summarization) |
+| Stickiness | Useful but replaceable | Habit-forming, personalized, hard to leave |
+| Adoption role | Gets people in the door, builds community | Converts users to customers, drives revenue |
+| Self-host difficulty | Straightforward | Needs tuning, operational refinement, higher infra cost |
+
+### Deployment Architecture Implications
+
+The paid SaaS agents and skills must live in a **separate private repository**, not in the
+open source `curia` repo. During SaaS deployment, the paid repo's agents and skills are
+folded into the build alongside the open source core.
+
+This has direct implications for the operations/deployment plan (spec 08):
+
+- **Agent discovery:** The bootstrap process (`src/index.ts`) already loads agents from
+  `agents/*.yaml` and skills from `skills/*/skill.json`. The SaaS deploy pipeline must
+  merge agent/skill directories from both repos before boot.
+- **Feature gating:** The Email Triage Agent spans both tiers (4 basic skills in core,
+  2 advanced in paid). The skill manifest or agent config needs a mechanism to
+  declare tier requirements so the loader can skip paid skills in the open source build.
+- **Config separation:** Paid agent YAML configs reference paid skills. If those skills
+  aren't present (open source deploy), the agent must either not load or gracefully
+  degrade.
+- **CI/CD:** The SaaS repo needs its own CI that tests against the core repo at a pinned
+  version, ensuring paid agents remain compatible with the core framework.
+- **Licensing:** The core repo uses an open source license. The paid repo is proprietary.
+  No paid code should ever leak into the core repo, even as imports or type references.
+
+This deployment split should be designed as part of the Docker/Terraform work in spec 08.
+Until then, all agents and skills can be developed in the core repo and extracted later
+when the paid tier is ready to ship.
+
+---
+
 ## Stack Ranking: Coverage vs. Effort
 
-| Rank | Agent | Handbook Domains Covered | Effort | Dependencies | Notes |
-|---|---|---|---|---|---|
-| **1** | **Calendar Agent** (9 skills) | Calendar Mgmt, Meeting Setup, Focus Time, Travel Blocks, Board Scheduling, Calendar Hygiene | **Large** (2-3 weeks) | Google Calendar API OAuth | Unlocks agents #4, #5, #6. Build first. |
-| **2** | **Email Triage Agent** (6 skills) | Email Inbox Mgmt, Label System, Daily Triage, Drafting | **Medium** (1-2 weeks) | Email channel (built), Nylas label API | Adds intelligence to existing channel. High daily-use value. |
-| **3** | **Executive Profile Agent** (6 skills) | Exec Snapshot, Learning Preferences, Voice Matching, Drafting Quality | **Medium** (1-2 weeks) | Email channel (built), Knowledge graph (built) | Voice analysis is a force multiplier for all outbound skills. |
-| **4** | **Briefing Agent** (5 skills) | Daily Briefing, Weekly Look-ahead, Meeting Prep, Travel Itinerary, Board Prep | **Medium** (1-2 weeks) | Calendar Agent (#1), Scheduler (spec 07) | High CEO-perceived value. Partially usable without Scheduler. |
-| **5** | **Meeting Coordinator** (7 skills) | Meeting Requests, Rescheduling, Cancellation, CEO Time Requests, Speaking Engagements | **Large** (2-3 weeks) | Calendar Agent (#1), Email channel (built) | Multi-turn coordination is complex. High time-saving value. |
-| **6** | **Coordinator template skills** (9 skills) | Email templates, Company Knowledge, Meeting Links, Travel Prefs | **Small** (3-5 days) | Knowledge graph (built) | Low effort, fills gaps immediately. Build in parallel with anything. |
-| **7** | **Proactive Calendar Agent** (7 skills) | Look Ahead, Focus Time, Calendar Hygiene, Back-to-back Detection | **Medium** (1-2 weeks) | Calendar Agent (#1), Scheduler (spec 07) | Highest "exceed human EA" potential. Blocked on Scheduler. |
-| **8** | **Escalation Agent** (4 skills) | Urgent Comms Plan (digital portions) | **Small-Medium** (1 week) | Needs Slack channel for real value | MVP with email+CLI is small. Full value needs more channels. |
+| Rank | Agent | Tier | Handbook Domains Covered | Effort | Dependencies | Notes |
+|---|---|---|---|---|---|---|
+| **1** | **Calendar Agent** (9 skills) | core | Calendar Mgmt, Meeting Setup, Focus Time, Travel Blocks, Board Scheduling, Calendar Hygiene | **Large** (2-3 weeks) | Google Calendar API OAuth | Unlocks agents #4, #5, #6. Build first. |
+| **2** | **Email Triage Agent** (6 skills) | core/paid | Email Inbox Mgmt, Label System, Daily Triage, Drafting | **Medium** (1-2 weeks) | Email channel (built), Nylas label API | 4 basic skills core, 2 advanced skills paid. |
+| **3** | **Executive Profile Agent** (6 skills) | paid | Exec Snapshot, Learning Preferences, Voice Matching, Drafting Quality | **Medium** (1-2 weeks) | Email channel (built), Knowledge graph (built) | Voice analysis is a force multiplier for all outbound skills. |
+| **4** | **Briefing Agent** (5 skills) | paid | Daily Briefing, Weekly Look-ahead, Meeting Prep, Travel Itinerary, Board Prep | **Medium** (1-2 weeks) | Calendar Agent (#1), Scheduler (spec 07) | High CEO-perceived value. Partially usable without Scheduler. |
+| **5** | **Meeting Coordinator** (7 skills) | paid | Meeting Requests, Rescheduling, Cancellation, CEO Time Requests, Speaking Engagements | **Large** (2-3 weeks) | Calendar Agent (#1), Email channel (built) | Multi-turn coordination is complex. High time-saving value. |
+| **6** | **Coordinator template skills** (9 skills) | core | Email templates, Company Knowledge, Meeting Links, Travel Prefs | **Small** (3-5 days) | Knowledge graph (built) | Low effort, fills gaps immediately. Build in parallel with anything. |
+| **7** | **Proactive Calendar Agent** (7 skills) | paid | Look Ahead, Focus Time, Calendar Hygiene, Back-to-back Detection | **Medium** (1-2 weeks) | Calendar Agent (#1), Scheduler (spec 07) | Highest "exceed human EA" potential. Blocked on Scheduler. |
+| **8** | **Escalation Agent** (4 skills) | core | Urgent Comms Plan (digital portions) | **Small-Medium** (1 week) | Needs Slack channel for real value | MVP with email+CLI is small. Full value needs more channels. |
 
 ---
 
