@@ -9,7 +9,14 @@
 //   - Template body stored in the anchor node's properties.body field
 //   - decayClass=permanent (templates don't decay)
 
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { SkillHandler, SkillContext, SkillResult, AgentPersona } from '../../src/skills/types.js';
+
+/** Build the email signature from the agent persona, or a safe fallback. */
+function resolveSignature(persona?: AgentPersona): string {
+  if (persona?.emailSignature) return persona.emailSignature;
+  if (persona) return `${persona.displayName}\n${persona.title}`;
+  return '';
+}
 
 const TEMPLATE_LABEL = 'template:meeting-request';
 
@@ -28,8 +35,7 @@ I'm reaching out on behalf of {{sender_name}} to schedule a meeting{{purpose_cla
 Looking forward to connecting.
 
 Best regards,
-Nathan Curia
-Agent Chief of Staff`;
+{{agent_signature}}`;
 
 const MAX_INPUT_LENGTH = 5000;
 
@@ -122,6 +128,7 @@ export class TemplateMeetingRequestHandler implements SkillHandler {
       purpose_clause: purposeClause,
       duration_line: durationLine,
       location_line: locationLine,
+      agent_signature: resolveSignature(ctx.agentPersona),
     });
 
     // Split subject from body (first line is the subject)

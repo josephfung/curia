@@ -48,6 +48,21 @@ export interface CallerContext {
 }
 
 /**
+ * The agent persona — display name, title, and optional email signature.
+ * Sourced from the coordinator's persona config in agents/coordinator.yaml.
+ * Available to all skills (not gated behind infrastructure) so templates
+ * and outbound-facing skills can reference the agent's identity without
+ * hardcoding it.
+ */
+export interface AgentPersona {
+  displayName: string;
+  title: string;
+  /** Full email signature block. If not set, skills should construct a
+   *  default from displayName + title. */
+  emailSignature?: string;
+}
+
+/**
  * The sandboxed context passed to every skill invocation.
  * Skills cannot access the bus, database, or filesystem directly —
  * they receive inputs through ctx.input and return outputs via SkillResult.
@@ -77,6 +92,10 @@ export interface SkillContext {
    *  Provides semantic search, entity CRUD, and fact storage for skills that
    *  need to read or write long-term knowledge (templates, preferences, etc.). */
   entityMemory?: import('../memory/entity-memory.js').EntityMemory;
+  /** Agent persona — display name, title, and email signature from the
+   *  coordinator's persona config. Available to all skills (not infrastructure-gated)
+   *  so templates can reference the agent's identity without hardcoding it. */
+  agentPersona?: AgentPersona;
   /** Caller identity — populated from the task event's sender context.
    *  Guaranteed to be defined for elevated skills (execution layer rejects without it).
    *  Available but optional for normal skills. */

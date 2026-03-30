@@ -1,10 +1,15 @@
 import { describe, it, expect, vi } from 'vitest';
 import { TemplateMeetingRequestHandler } from '../../../skills/template-meeting-request/handler.js';
-import type { SkillContext } from '../../../src/skills/types.js';
+import type { SkillContext, AgentPersona } from '../../../src/skills/types.js';
 
 import pino from 'pino';
 
 const logger = pino({ level: 'silent' });
+
+const TEST_PERSONA: AgentPersona = {
+  displayName: 'Nathan Curia',
+  title: 'Agent Chief of Staff',
+};
 
 function makeCtx(
   input: Record<string, unknown>,
@@ -14,6 +19,7 @@ function makeCtx(
     input,
     secret: () => { throw new Error('no secrets'); },
     log: logger,
+    agentPersona: TEST_PERSONA,
     ...overrides,
   };
 }
@@ -210,6 +216,68 @@ describe('TemplateMeetingRequestHandler', () => {
         const data = result.data as { subject: string; body: string; template_source: string };
         expect(data.body).toContain('45 minutes');
         expect(data.body).toContain('Zoom');
+      }
+    });
+
+    it('uses agent persona for signature in default template', async () => {
+      const result = await handler.execute(makeCtx({
+        action: 'generate',
+        recipient_name: 'Eve',
+        sender_name: 'CEO',
+        proposed_times: 'Monday 9am',
+      }));
+
+      expect(result.success).toBe(true);
+      if (result.success) {
+        const data = result.data as { body: string };
+        expect(data.body).toContain('Nathan Curia');
+        expect(data.body).toContain('Agent Chief of Staff');
+      }
+    });
+
+    it('uses custom emailSignature when configured', async () => {
+      const customPersona: AgentPersona = {
+        displayName: 'Alex Helper',
+        title: 'Executive Assistant',
+        emailSignature: 'Alex Helper\nExecutive Assistant\nAcme Corp',
+      };
+      const result = await handler.execute(makeCtx(
+        {
+          action: 'generate',
+          recipient_name: 'Frank',
+          sender_name: 'CEO',
+          proposed_times: 'Tuesday 3pm',
+        },
+        { agentPersona: customPersona },
+      ));
+
+      expect(result.success).toBe(true);
+      if (result.success) {
+        const data = result.data as { body: string };
+        expect(data.body).toContain('Alex Helper');
+        expect(data.body).toContain('Acme Corp');
+        // Should NOT contain the default persona
+        expect(data.body).not.toContain('Nathan Curia');
+      }
+    });
+
+    it('omits signature when no persona is provided', async () => {
+      const result = await handler.execute(makeCtx(
+        {
+          action: 'generate',
+          recipient_name: 'Grace',
+          sender_name: 'CEO',
+          proposed_times: 'Wednesday 1pm',
+        },
+        { agentPersona: undefined },
+      ));
+
+      expect(result.success).toBe(true);
+      if (result.success) {
+        const data = result.data as { body: string };
+        // The signature placeholder should be filled with empty string
+        // and no hardcoded name should appear
+        expect(data.body).not.toContain('Nathan Curia');
       }
     });
   });

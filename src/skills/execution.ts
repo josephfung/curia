@@ -12,7 +12,7 @@
 // publish/subscribe including layer impersonation. Only framework-internal
 // skills like 'delegate' should use this — it is a privileged escape hatch.
 
-import type { SkillResult, SkillContext, CallerContext } from './types.js';
+import type { SkillResult, SkillContext, CallerContext, AgentPersona } from './types.js';
 import type { SkillRegistry } from './registry.js';
 import { sanitizeOutput } from './sanitize.js';
 import type { Logger } from '../logger.js';
@@ -34,8 +34,9 @@ export class ExecutionLayer {
   private heldMessages?: HeldMessageService;
   private schedulerService?: SchedulerService;
   private entityMemory?: EntityMemory;
+  private agentPersona?: AgentPersona;
 
-  constructor(registry: SkillRegistry, logger: Logger, options?: { bus?: EventBus; agentRegistry?: AgentRegistry; contactService?: ContactService; outboundGateway?: OutboundGateway; heldMessages?: HeldMessageService; schedulerService?: SchedulerService; entityMemory?: EntityMemory }) {
+  constructor(registry: SkillRegistry, logger: Logger, options?: { bus?: EventBus; agentRegistry?: AgentRegistry; contactService?: ContactService; outboundGateway?: OutboundGateway; heldMessages?: HeldMessageService; schedulerService?: SchedulerService; entityMemory?: EntityMemory; agentPersona?: AgentPersona }) {
     this.registry = registry;
     this.logger = logger;
     this.bus = options?.bus;
@@ -45,6 +46,7 @@ export class ExecutionLayer {
     this.heldMessages = options?.heldMessages;
     this.schedulerService = options?.schedulerService;
     this.entityMemory = options?.entityMemory;
+    this.agentPersona = options?.agentPersona;
   }
 
   /**
@@ -112,6 +114,7 @@ export class ExecutionLayer {
         return value;
       },
       log: skillLogger,
+      agentPersona: this.agentPersona,
       caller,
     };
 

@@ -8,7 +8,13 @@
 //   - Template body stored as a fact node with label="template body"
 //   - decayClass=permanent (templates don't decay)
 
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { SkillHandler, SkillContext, SkillResult, AgentPersona } from '../../src/skills/types.js';
+
+function resolveSignature(persona?: AgentPersona): string {
+  if (persona?.emailSignature) return persona.emailSignature;
+  if (persona) return `${persona.displayName}\n${persona.title}`;
+  return '';
+}
 
 const TEMPLATE_LABEL = 'template:reschedule';
 
@@ -27,8 +33,7 @@ Would any of these work for you? If not, please suggest a time that's convenient
 Apologies for any inconvenience, and thank you for your flexibility.
 
 Best regards,
-Nathan Curia
-Agent Chief of Staff`;
+{{agent_signature}}`;
 
 const MAX_INPUT_LENGTH = 5000;
 
@@ -110,6 +115,7 @@ export class TemplateRescheduleHandler implements SkillHandler {
       proposed_times: formattedTimes,
       meeting_subject: meeting_subject ?? 'Our Meeting',
       reason_clause: reasonClause,
+      agent_signature: resolveSignature(ctx.agentPersona),
     });
 
     const lines = filled.split('\n');

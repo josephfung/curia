@@ -9,7 +9,13 @@
 //   - Template body stored as a fact node with label="template body"
 //   - decayClass=permanent (templates don't decay)
 
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { SkillHandler, SkillContext, SkillResult, AgentPersona } from '../../src/skills/types.js';
+
+function resolveSignature(persona?: AgentPersona): string {
+  if (persona?.emailSignature) return persona.emailSignature;
+  if (persona) return `${persona.displayName}\n${persona.title}`;
+  return '';
+}
 
 const TEMPLATE_LABEL = 'template:doc-request';
 
@@ -28,8 +34,7 @@ To help {{sender_name}} prepare, could you please share the following materials?
 Thank you in advance.
 
 Best regards,
-Nathan Curia
-Agent Chief of Staff`;
+{{agent_signature}}`;
 
 const MAX_INPUT_LENGTH = 5000;
 
@@ -120,6 +125,7 @@ export class TemplateDocRequestHandler implements SkillHandler {
       meeting_time,
       documents_requested: formattedDocs,
       deadline_clause: deadlineClause,
+      agent_signature: resolveSignature(ctx.agentPersona),
     });
 
     const lines = filled.split('\n');

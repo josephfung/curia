@@ -8,7 +8,13 @@
 //   - Template body stored as a fact node with label="template body"
 //   - decayClass=permanent (templates don't decay)
 
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { SkillHandler, SkillContext, SkillResult, AgentPersona } from '../../src/skills/types.js';
+
+function resolveSignature(persona?: AgentPersona): string {
+  if (persona?.emailSignature) return persona.emailSignature;
+  if (persona) return `${persona.displayName}\n${persona.title}`;
+  return '';
+}
 
 const TEMPLATE_LABEL = 'template:cancel';
 
@@ -23,8 +29,7 @@ Unfortunately, we need to cancel this meeting.{{reason_clause}}
 {{reschedule_clause}}Thank you for your understanding.
 
 Best regards,
-Nathan Curia
-Agent Chief of Staff`;
+{{agent_signature}}`;
 
 const MAX_INPUT_LENGTH = 5000;
 
@@ -107,6 +112,7 @@ export class TemplateCancelHandler implements SkillHandler {
       meeting_time,
       reason_clause: reasonClause,
       reschedule_clause: rescheduleClause,
+      agent_signature: resolveSignature(ctx.agentPersona),
     });
 
     const lines = filled.split('\n');
