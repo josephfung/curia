@@ -1,0 +1,36 @@
+name: Store and Recall Travel Preferences
+description: Agent should store explicit preferences in one turn and apply them without re-asking in a subsequent request
+tags:
+  - profile
+  - preferences
+  - multi-turn
+
+turns:
+  - role: user
+    content: |
+      Remember that I always want aisle seats on flights, and I'm
+      Aeroplan Elite. I never check bags on domestic trips.
+  - role: user
+    delay_ms: 3000
+    content: |
+      Book me a flight to Vancouver next week.
+
+expected_behaviors:
+  - id: acknowledge-preferences
+    description: Acknowledges and stores the preferences (aisle seat, Aeroplan Elite, carry-on domestic)
+    weight: critical
+  - id: apply-preferences
+    description: Applies the stored preferences when handling the flight request in turn 2 (aisle, Aeroplan, carry-on)
+    weight: critical
+  - id: no-re-asking
+    description: Does not re-ask for information already provided in turn 1
+    weight: important
+  - id: reference-naturally
+    description: References the stored preferences naturally in the response rather than robotically listing them
+    weight: nice-to-have
+
+failure_modes:
+  - Acknowledges preferences but doesn't apply them to the booking request
+  - Re-asks for seat preference or loyalty program in turn 2
+  - Stores some preferences but drops others (e.g., remembers aisle but forgets Aeroplan)
+  - Treats turn 1 as conversational and doesn't persist anything

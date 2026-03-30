@@ -1,0 +1,38 @@
+name: Store and Recall Company Info
+description: Agent should store structured company information and recall it accurately when asked, without re-asking for previously provided details
+tags:
+  - templates
+  - knowledge
+  - recall
+  - multi-turn
+
+turns:
+  - role: user
+    content: |
+      Our legal company name is Acme Innovations Inc. Head office
+      is 123 King St W, Toronto. Our CFO is Maria Santos.
+  - role: user
+    delay_ms: 3000
+    content: |
+      I need to fill out a vendor registration form. What's our
+      legal name and address?
+
+expected_behaviors:
+  - id: store-company-info
+    description: Stores the company information provided in turn 1 (legal name, address, CFO)
+    weight: critical
+  - id: recall-accurately
+    description: Recalls the exact legal name and address in turn 2 without errors
+    weight: critical
+  - id: no-re-asking
+    description: Does not re-ask for information already provided in turn 1
+    weight: important
+  - id: ready-to-use
+    description: Formats the information in a copy-pasteable way for the form
+    weight: nice-to-have
+
+failure_modes:
+  - Doesn't persist the information between turns
+  - Recalls the company name but gets the address wrong
+  - Re-asks for details that were already provided
+  - Provides the information but mixed with unrelated details

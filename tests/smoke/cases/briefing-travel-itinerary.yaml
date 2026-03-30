@@ -1,0 +1,35 @@
+name: Compile Travel Itinerary
+description: Agent should produce a structured, comprehensive travel itinerary from provided details, organized by section, and flag any missing information
+tags:
+  - briefing
+  - travel
+  - single-turn
+
+turns:
+  - role: user
+    content: |
+      I'm going to New York July 11-12 for an investor dinner and
+      media interview. Flight is WestJet WS234, departs YYZ 10:15am,
+      arrives JFK 11:05am. Seat 12C. Hotel is Marriott Downtown,
+      confirmation 29837482. Dinner at Le Bernardin at 7pm. Can you build
+      me a full travel itinerary doc?
+
+expected_behaviors:
+  - id: structured-itinerary
+    description: Produces a structured itinerary with all provided details included
+    weight: critical
+  - id: organized-sections
+    description: Organizes by logical sections (flights, hotel, ground transport, dining, notes)
+    weight: critical
+  - id: timezone-aware
+    description: Includes timezone-aware departure and arrival times
+    weight: important
+  - id: flag-missing-info
+    description: Flags missing information (return flight, ground transport to/from airport)
+    weight: important
+
+failure_modes:
+  - Drops details from the provided information (wrong flight number, missing confirmation)
+  - Produces an unstructured narrative instead of a scannable itinerary
+  - Doesn't notice the missing return flight
+  - Mixes up departure and arrival airports or times

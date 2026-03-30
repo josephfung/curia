@@ -1,0 +1,33 @@
+name: Find Available Time Across Timezone
+description: Agent should identify available calendar slots that work across timezones and avoid suggesting unreasonable hours for either party
+tags:
+  - calendar
+  - scheduling
+  - timezone
+  - single-turn
+
+turns:
+  - role: user
+    content: |
+      I need to find 45 minutes with someone in London next week.
+      What's open on my calendar that works for both timezones?
+
+expected_behaviors:
+  - id: recognize-availability-lookup
+    description: Recognizes this requires checking the CEO's calendar for available slots
+    weight: critical
+  - id: timezone-awareness
+    description: Accounts for the timezone difference between the CEO's timezone and London (GMT/BST)
+    weight: critical
+  - id: propose-reasonable-slots
+    description: Proposes slots that fall within reasonable business hours for both parties
+    weight: important
+  - id: avoid-unreasonable-hours
+    description: Does not suggest early morning or late evening slots for either side
+    weight: important
+
+failure_modes:
+  - Ignores the timezone component entirely
+  - Suggests times without checking calendar availability
+  - Proposes slots that are unreasonable for the London party (e.g., 6am GMT)
+  - Gets the timezone offset wrong

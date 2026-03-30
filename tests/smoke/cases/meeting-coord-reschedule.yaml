@@ -1,0 +1,36 @@
+name: Reschedule Board Chair Meeting
+description: Agent should handle rescheduling a high-stakes meeting (board chair) with appropriate sensitivity, apology, and new time proposals
+tags:
+  - meeting-coordination
+  - scheduling
+  - change-management
+  - single-turn
+
+turns:
+  - role: user
+    content: |
+      I need to reschedule my Thursday call with the board chair.
+      Something came up. Move it to next week and send my apologies.
+
+expected_behaviors:
+  - id: acknowledge-reschedule
+    description: Acknowledges the reschedule request and understands what needs to happen
+    weight: critical
+  - id: recognize-high-stakes
+    description: Recognizes this is a high-stakes contact (board chair) and treats it with appropriate care
+    weight: important
+  - id: draft-apologetic-email
+    description: Drafts an appropriately apologetic but professional reschedule email
+    weight: important
+  - id: propose-new-times
+    description: Proposes new time options for next week or asks the CEO for preferred times
+    weight: important
+  - id: mark-sensitivity
+    description: Treats or marks this interaction as sensitive given the board relationship
+    weight: nice-to-have
+
+failure_modes:
+  - Uses a generic casual tone inappropriate for a board chair
+  - Doesn't include an apology as instructed
+  - Reschedules without proposing new times
+  - Treats this the same as rescheduling a casual coffee chat

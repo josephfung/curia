@@ -1,0 +1,40 @@
+name: Summarize Long Email Thread
+description: Agent should ask for thread details, then produce a structured summary that identifies the core decision point and suggests next steps
+tags:
+  - email-triage
+  - summarization
+  - multi-turn
+
+turns:
+  - role: user
+    content: |
+      There's a long email thread between our legal team and Acme Corp
+      about the partnership agreement. It's 23 messages deep. Can you
+      summarize where things stand?
+  - role: user
+    delay_ms: 2000
+    content: |
+      The key issue seems to be IP ownership of jointly developed
+      features. Legal wants full ownership, Acme wants shared.
+      Last message was from their counsel suggesting a 60/40 split
+      with us getting the 60.
+
+expected_behaviors:
+  - id: ask-for-details
+    description: Asks for access to the thread or key details before attempting to summarize
+    weight: critical
+  - id: structured-summary
+    description: Produces a structured summary from the provided context
+    weight: important
+  - id: identify-decision-point
+    description: Identifies the core decision point (IP ownership terms and the 60/40 proposal)
+    weight: important
+  - id: suggest-next-steps
+    description: Suggests what the CEO needs to decide or do next
+    weight: nice-to-have
+
+failure_modes:
+  - Attempts to summarize without enough context and fabricates details
+  - Misses the core issue (IP ownership)
+  - Doesn't identify the 60/40 proposal as the current state of negotiation
+  - Provides a summary but no suggested next steps

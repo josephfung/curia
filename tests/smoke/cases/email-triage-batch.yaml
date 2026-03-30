@@ -1,0 +1,36 @@
+name: Triage Batch of Mixed Emails
+description: Agent should prioritize and categorize a batch of emails by urgency and action type, surfacing what needs CEO attention first
+tags:
+  - email-triage
+  - urgency
+  - multi-task
+  - single-turn
+
+turns:
+  - role: user
+    content: |
+      I've got 50 unread emails. Here's what's in there: a vendor
+      invoice, three meeting requests, a complaint from a customer
+      forwarded by our VP Sales, two newsletters, and a contract
+      renewal deadline for next Friday. Walk me through what needs
+      my attention first.
+
+expected_behaviors:
+  - id: prioritize-critical
+    description: Prioritizes the contract deadline and customer complaint as highest urgency items
+    weight: critical
+  - id: group-by-action
+    description: Groups items by action type (respond, delegate, FYI, archive)
+    weight: important
+  - id: identify-delegatable
+    description: Identifies meeting requests and vendor invoice as delegatable or lower priority
+    weight: important
+  - id: flag-archive
+    description: Flags newsletters as archive-worthy or low priority
+    weight: nice-to-have
+
+failure_modes:
+  - Treats all items as equal priority
+  - Misses the contract deadline urgency
+  - Puts newsletters ahead of the customer complaint
+  - Doesn't categorize by action type, just lists everything

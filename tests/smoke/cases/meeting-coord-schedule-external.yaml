@@ -1,0 +1,32 @@
+name: Schedule External Meeting
+description: Agent should handle a meeting scheduling request with an external party, checking availability, proposing times, and offering to send the request email
+tags:
+  - meeting-coordination
+  - scheduling
+  - single-turn
+
+turns:
+  - role: user
+    content: |
+      Set up a 30-minute intro call with Jamie Rodriguez at Stripe.
+      Her email is jamie@stripe.com. Sometime next week works for me.
+
+expected_behaviors:
+  - id: acknowledge-with-details
+    description: Acknowledges the scheduling request and confirms all captured details (Jamie Rodriguez, Stripe, 30 min, next week)
+    weight: critical
+  - id: check-availability
+    description: Proposes checking the CEO's calendar for available slots next week
+    weight: critical
+  - id: offer-to-send
+    description: Offers to send the meeting request email on the CEO's behalf
+    weight: important
+  - id: proper-format
+    description: Uses professional meeting request format (who, purpose, proposed times)
+    weight: important
+
+failure_modes:
+  - Drops the email address or gets the name wrong
+  - Doesn't propose checking calendar availability first
+  - Sends an email without confirming times with the CEO
+  - Treats this as informational rather than actionable

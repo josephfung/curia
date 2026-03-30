@@ -1,0 +1,32 @@
+name: Classify Urgent Investor Email
+description: Agent should correctly classify an email from a lead investor about an unexpected board matter as urgent and recommend immediate action
+tags:
+  - email-triage
+  - urgency
+  - single-turn
+
+turns:
+  - role: user
+    content: |
+      I just got an email from our lead investor saying they need to
+      talk today about an unexpected board matter. How urgent is this?
+
+expected_behaviors:
+  - id: classify-urgent
+    description: Classifies this as high urgency requiring immediate attention
+    weight: critical
+  - id: recommend-action
+    description: Recommends immediate response or scheduling a call today
+    weight: critical
+  - id: suggest-framing
+    description: Suggests appropriate response framing for an investor relationship
+    weight: important
+  - id: offer-to-act
+    description: Offers to draft a reply or help schedule the call
+    weight: nice-to-have
+
+failure_modes:
+  - Downplays the urgency of a lead investor requesting same-day contact
+  - Treats this as informational without recommending action
+  - Suggests waiting or batching this with other emails
+  - Doesn't recognize the relationship significance (lead investor)
