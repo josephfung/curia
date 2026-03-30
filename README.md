@@ -260,35 +260,39 @@ cd curia
 cp .env.example .env
 # Edit .env with your API keys and channel credentials
 
-# Run
-docker compose up
+# Install dependencies
+pnpm install
+
+# Start Postgres (pgvector + pgAudit)
+docker compose up -d
+
+# Run (auto-migrates on start)
+pnpm local
 ```
 
-The framework starts Postgres, runs migrations, connects to configured channels, and loads your agents. Talk to it via CLI immediately; other channels activate as configured.
+This starts Postgres via Docker, applies any pending migrations, then launches the Curia stack. Talk to it via CLI immediately; email and HTTP channels activate as configured in `.env`.
 
 ---
 
 ## Project Status
 
-| Component | Status |
-|---|---|
-| Architecture spec | Done |
-| Message bus with layer enforcement | Planned |
-| Audit logger (write-ahead, append-only) | Planned |
-| Agent runtime (YAML config + handler) | Planned |
-| LLM providers (Anthropic, OpenAI, Ollama) | Planned |
-| Knowledge graph + entity memory | Planned |
-| Working memory + Bullpen | Planned |
-| Scheduler (cron + persistent tasks) | Planned |
-| Error recovery (budgets, patterns, continuity) | Planned |
-| Channel: CLI | Planned |
-| Channel: Email (IMAP/SMTP) | Planned |
-| Channel: Telegram | Planned |
-| Channel: Signal | Planned |
-| Channel: HTTP API + SSE | Planned |
-| Skills system (local + MCP) | Planned |
-| Web dashboard | Future |
-| Voice/telephony channel | Future |
+| Spec | Area | Status |
+|---|---|---|
+| 00 | Architecture & message bus | ✅ Implemented |
+| 01 | Memory system (working memory + knowledge graph) | Partial — core implemented; Bullpen, context management, decay engine planned |
+| 02 | Agent system (config, delegation, registry) | ✅ Implemented |
+| 03 | Skills & execution layer | Partial — local skills implemented; MCP discovery planned |
+| 04 | Channels (CLI, HTTP, Email) | Partial — CLI, HTTP, Email done; Signal & Telegram planned |
+| 05 | Error recovery (budgets, patterns, continuity) | ✅ Implemented |
+| 06 | Audit & security | Partial — basic audit logging in place; redaction & hardening planned |
+| 07 | Scheduler (cron, one-shot, persistent tasks) | ✅ Implemented |
+| 08 | Operations (deployment, health, monitoring) | Planned |
+| 09 | Contacts & identity (auth, unknown sender policy) | ✅ Implemented |
+| 10 | Audit log hardening (hash-chain, HITL, provenance) | Planned |
+| — | Outbound safety (content filter, gateway, display name sanitization, caller verification) | Partial — deterministic rules done; LLM-as-judge planned |
+| — | Smoke test framework (14 chat-based cases, LLM-as-judge, HTML reports) | ✅ Implemented |
+| — | Web dashboard | Future |
+| — | Voice/telephony channel | Future |
 
 ---
 
@@ -303,14 +307,14 @@ The framework starts Postgres, runs migrations, connects to configured channels,
 - **[Audit & Security](docs/specs/06-audit-and-security.md)** — Audit log, security model, drift detection
 - **[Scheduler](docs/specs/07-scheduler.md)** — Jobs, persistent tasks, burst execution
 - **[Operations](docs/specs/08-operations.md)** — Config, deployment, health, monitoring
+- **[Contacts & Identity](docs/specs/09-contacts-and-identity.md)** — Contact service, authorization, unknown sender policy
+- **[Audit Log Hardening](docs/specs/10-audit-log-hardening.md)** — Hash-chain integrity, HITL records, LLM provenance
 
 ---
 
 ## Deployment
 
-Curia runs anywhere Docker runs:
-
-- **Local development** — `docker compose up` on your laptop
+- **Local development** — `docker compose up -d` for Postgres, then `pnpm local` (or `pnpm dev` for hot-reload)
 - **Single VPS** — One Hetzner/DigitalOcean/Linode instance with Docker + Caddy
 - **Multiple instances** — Separate VPS per user/org. No multi-tenant complexity.
 
