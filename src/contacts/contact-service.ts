@@ -169,6 +169,54 @@ export class ContactService {
     return this.backend.listContacts();
   }
 
+  /**
+   * Sanitize the display name before persisting any contact update.
+   * Defense-in-depth: catches names that were stored before the creation-time
+   * sanitization gate (PR #63), and ensures any future update path that
+   * routes through here cannot bypass sanitization. See issue #64 / #39.
+   */
+  private async updateStoredContact(contact: Contact): Promise<Contact> {
+    const safeName = sanitizeDisplayName(contact.displayName);
+    const updatedContact =
+      safeName === contact.displayName
+        ? contact
+        : {
+            ...contact,
+            displayName: safeName,
+          };
+
+    if (safeName !== contact.displayName && this.logger) {
+      const safeOriginal = contact.displayName.slice(0, 500).replace(/[\r\n]/g, '\\n');
+      this.logger.warn(
+        { contactId: contact.id, original: safeOriginal, sanitized: safeName },
+        'Display name was modified by sanitization during contact update',
+      );
+    }
+
+    await this.backend.updateContact(updatedContact);
+    return updatedContact;
+  }
+
+  /**
+   * Update a contact's display name with sanitization.
+   * This is the only sanctioned way to change a display name after creation —
+   * callers must go through this method so the sanitization gate is enforced.
+   */
+  async updateDisplayName(contactId: string, displayName: string): Promise<Contact> {
+    const contact = await this.backend.getContact(contactId);
+    if (!contact) {
+      throw new Error(`Contact not found: ${contactId}`);
+    }
+
+    const updated: Contact = {
+      ...contact,
+      displayName,
+      updatedAt: new Date(),
+    };
+
+    return this.updateStoredContact(updated);
+  }
+
   /** Update a contact's role and updatedAt timestamp. */
   async setRole(contactId: string, role: string): Promise<Contact> {
     const contact = await this.backend.getContact(contactId);
@@ -182,8 +230,7 @@ export class ContactService {
       updatedAt: new Date(),
     };
 
-    await this.backend.updateContact(updated);
-    return updated;
+    return this.updateStoredContact(updated);
   }
 
   /**
@@ -273,8 +320,7 @@ export class ContactService {
       updatedAt: new Date(),
     };
 
-    await this.backend.updateContact(updated);
-    return updated;
+    return this.updateStoredContact(updated);
   }
 
   /** Remove a channel identity by its ID. Returns true if found and removed, false if not found. */
