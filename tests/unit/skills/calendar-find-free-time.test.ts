@@ -71,9 +71,9 @@ describe('CalendarFindFreeTimeHandler', () => {
     };
 
     // With a range of 0-1000 and busy at 100-200, free windows are 0-100 (100s) and 200-1000 (800s)
-    // With duration filter of 300 seconds (5 minutes) minimum, only the 200-1000 window qualifies
+    // With duration filter of 5 minutes minimum (converted to 300 seconds), only the 200-1000 window qualifies
     const result = await handler.execute(makeCtx(
-      { calendarIds: ['cal-1'], timeMin: '1970-01-01T00:00:00Z', timeMax: '1970-01-01T00:16:40Z', duration: 300 },
+      { calendarIds: ['cal-1'], timeMin: '1970-01-01T00:00:00Z', timeMax: '1970-01-01T00:16:40Z', duration: 5 },
       { nylasCalendarClient: nylasCalendarClient as never },
     ));
 

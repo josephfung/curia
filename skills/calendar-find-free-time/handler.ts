@@ -2,12 +2,6 @@
 //
 // Finds free time windows across one or more calendars by inverting
 // the busy periods returned by the Nylas free/busy API.
-//
-// NOTE: the `duration` input is in seconds (not minutes). The skill.json
-// description says "minutes" for user-facing clarity (most humans think in
-// minutes), but the implementation treats the raw number as seconds so that
-// callers can be precise without floating-point conversion. Revisit if the
-// LLM consistently passes minute values — a unit conversion layer may be needed.
 
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
 
@@ -72,8 +66,8 @@ export class CalendarFindFreeTimeHandler implements SkillHandler {
         freeWindows.push({ start: cursor, end: rangeEnd });
       }
 
-      // Filter by minimum duration (duration is in seconds)
-      const minSeconds = typeof duration === 'number' ? duration : 0;
+      // Filter by minimum duration (duration input is in minutes, convert to seconds for comparison)
+      const minSeconds = typeof duration === 'number' ? duration * 60 : 0;
       const filtered = minSeconds > 0
         ? freeWindows.filter((w) => w.end - w.start >= minSeconds)
         : freeWindows;
