@@ -176,4 +176,11 @@ pinned_skills:
   - knowledge-travel-preferences
   - knowledge-loyalty-programs
   - context-for-email
+  - calendar-list-calendars
+  - calendar-list-events
+  - calendar-create-event
+  - calendar-update-event
+  - calendar-delete-event
+  - calendar-find-free-time
+  - calendar-check-conflicts
 allow_discovery: true
