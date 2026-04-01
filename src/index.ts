@@ -42,6 +42,7 @@ import { loadSkillsFromDirectory } from './skills/loader.js';
 import { ContactService } from './contacts/contact-service.js';
 import { ContactResolver } from './contacts/contact-resolver.js';
 import { NylasClient } from './channels/email/nylas-client.js';
+import { NylasCalendarClient } from './channels/calendar/nylas-calendar-client.js';
 import { EmailAdapter } from './channels/email/email-adapter.js';
 import { loadAuthConfig } from './contacts/config-loader.js';
 import { AuthorizationService } from './contacts/authorization.js';
@@ -175,6 +176,14 @@ async function main(): Promise<void> {
     logger.warn('NYLAS_API_KEY/NYLAS_GRANT_ID not set — email channel disabled');
   }
 
+  // Calendar client — uses the same Nylas credentials as email.
+  // Independent instance, no shared state with the email client.
+  let nylasCalendarClient: NylasCalendarClient | undefined;
+  if (config.nylasApiKey && config.nylasGrantId) {
+    nylasCalendarClient = new NylasCalendarClient(config.nylasApiKey, config.nylasGrantId, logger);
+    logger.info('Nylas calendar client initialized');
+  }
+
   // Skill registry — loads all skills from the skills/ directory.
   // Skills are the framework's extension mechanism; agents invoke them
   // via the LLM's tool-use API through the execution layer.
@@ -298,7 +307,7 @@ async function main(): Promise<void> {
 
   // Execution layer — now with bus, agent registry, and outbound gateway for
   // infrastructure skills. outboundGateway gives email skills their send path.
-  const executionLayer = new ExecutionLayer(skillRegistry, logger, { bus, agentRegistry, contactService, outboundGateway, heldMessages, schedulerService, entityMemory, agentPersona });
+  const executionLayer = new ExecutionLayer(skillRegistry, logger, { bus, agentRegistry, contactService, outboundGateway, heldMessages, schedulerService, entityMemory, agentPersona, nylasCalendarClient });
 
   // Two-pass agent registration:
   // Pass 1: Register all agents in the registry so specialistSummary() is complete

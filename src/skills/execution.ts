@@ -23,6 +23,7 @@ import type { OutboundGateway } from './outbound-gateway.js';
 import type { HeldMessageService } from '../contacts/held-messages.js';
 import type { SchedulerService } from '../scheduler/scheduler-service.js';
 import type { EntityMemory } from '../memory/entity-memory.js';
+import type { NylasCalendarClient } from '../channels/calendar/nylas-calendar-client.js';
 
 export class ExecutionLayer {
   private registry: SkillRegistry;
@@ -35,8 +36,9 @@ export class ExecutionLayer {
   private schedulerService?: SchedulerService;
   private entityMemory?: EntityMemory;
   private agentPersona?: AgentPersona;
+  private nylasCalendarClient?: NylasCalendarClient;
 
-  constructor(registry: SkillRegistry, logger: Logger, options?: { bus?: EventBus; agentRegistry?: AgentRegistry; contactService?: ContactService; outboundGateway?: OutboundGateway; heldMessages?: HeldMessageService; schedulerService?: SchedulerService; entityMemory?: EntityMemory; agentPersona?: AgentPersona }) {
+  constructor(registry: SkillRegistry, logger: Logger, options?: { bus?: EventBus; agentRegistry?: AgentRegistry; contactService?: ContactService; outboundGateway?: OutboundGateway; heldMessages?: HeldMessageService; schedulerService?: SchedulerService; entityMemory?: EntityMemory; agentPersona?: AgentPersona; nylasCalendarClient?: NylasCalendarClient }) {
     this.registry = registry;
     this.logger = logger;
     this.bus = options?.bus;
@@ -47,6 +49,7 @@ export class ExecutionLayer {
     this.schedulerService = options?.schedulerService;
     this.entityMemory = options?.entityMemory;
     this.agentPersona = options?.agentPersona;
+    this.nylasCalendarClient = options?.nylasCalendarClient;
   }
 
   /**
@@ -152,6 +155,10 @@ export class ExecutionLayer {
       // entityMemory is optional — only skills that read/write the knowledge graph need it
       if (this.entityMemory) {
         ctx.entityMemory = this.entityMemory;
+      }
+      // nylasCalendarClient is optional — only calendar skills need it
+      if (this.nylasCalendarClient) {
+        ctx.nylasCalendarClient = this.nylasCalendarClient;
       }
     }
 
