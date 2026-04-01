@@ -25,3 +25,11 @@ export interface CreateCalendarLinkOptions {
   readOnly?: boolean;
   timezone?: string;
 }
+
+/** Resolved registry entry for a Nylas calendar ID. Returned by resolveCalendar(). */
+export interface ResolvedCalendar {
+  contactId: string | null;
+  label: string;
+  isPrimary: boolean;
+  readOnly: boolean;
+}

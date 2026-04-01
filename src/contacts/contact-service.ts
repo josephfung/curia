@@ -24,7 +24,7 @@ import type {
   ResolvedSender,
   IdentitySource,
 } from './types.js';
-import type { ContactCalendar, CreateCalendarLinkOptions } from './calendar-types.js';
+import type { ContactCalendar, CreateCalendarLinkOptions, ResolvedCalendar } from './calendar-types.js';
 
 // -- Backend interface --
 
@@ -45,7 +45,7 @@ interface ContactServiceBackend {
   createCalendarLink(calendar: ContactCalendar): Promise<void>;
   deleteCalendarLink(nylasCalendarId: string): Promise<boolean>;
   getCalendarsForContact(contactId: string): Promise<ContactCalendar[]>;
-  resolveCalendar(nylasCalendarId: string): Promise<{ contactId: string | null; label: string; isPrimary: boolean; readOnly: boolean } | null>;
+  resolveCalendar(nylasCalendarId: string): Promise<ResolvedCalendar | null>;
   getPrimaryCalendar(contactId: string): Promise<ContactCalendar | null>;
 }
 
@@ -364,7 +364,7 @@ export class ContactService {
   }
 
   /** Resolve a Nylas calendar ID to its registry entry. Returns null if unregistered. */
-  async resolveCalendar(nylasCalendarId: string): Promise<{ contactId: string | null; label: string; isPrimary: boolean; readOnly: boolean } | null> {
+  async resolveCalendar(nylasCalendarId: string): Promise<ResolvedCalendar | null> {
     return this.backend.resolveCalendar(nylasCalendarId);
   }
 
@@ -651,7 +651,7 @@ class PostgresContactBackend implements ContactServiceBackend {
     return result.rows.map((row) => this.rowToCalendar(row));
   }
 
-  async resolveCalendar(nylasCalendarId: string): Promise<{ contactId: string | null; label: string; isPrimary: boolean; readOnly: boolean } | null> {
+  async resolveCalendar(nylasCalendarId: string): Promise<ResolvedCalendar | null> {
     const result = await this.pool.query<{
       contact_id: string | null;
       label: string;
@@ -942,7 +942,7 @@ class InMemoryContactBackend implements ContactServiceBackend {
     return results;
   }
 
-  async resolveCalendar(nylasCalendarId: string): Promise<{ contactId: string | null; label: string; isPrimary: boolean; readOnly: boolean } | null> {
+  async resolveCalendar(nylasCalendarId: string): Promise<ResolvedCalendar | null> {
     for (const cal of this.calendars.values()) {
       if (cal.nylasCalendarId === nylasCalendarId) {
         return {
