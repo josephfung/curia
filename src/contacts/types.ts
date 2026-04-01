@@ -165,3 +165,6 @@ export interface ChannelPolicyConfig {
   trust: TrustLevel;
   unknownSender: UnknownSenderPolicy;
 }
+
+// -- Calendar registry types --
+export type { ContactCalendar, CreateCalendarLinkOptions } from './calendar-types.js';
