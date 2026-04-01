@@ -22,15 +22,15 @@ export class CalendarDeleteEventHandler implements SkillHandler {
       return { success: false, error: 'Missing required input: eventId' };
     }
 
-    // Read-only check
-    if (ctx.contactService) {
-      const registry = await ctx.contactService.resolveCalendar(calendarId);
-      if (registry?.readOnly) {
-        return { success: false, error: 'Calendar is read-only' };
-      }
-    }
-
     try {
+      // Read-only check — moved inside try so DB errors from resolveCalendar are caught with skill-level context.
+      if (ctx.contactService) {
+        const registry = await ctx.contactService.resolveCalendar(calendarId);
+        if (registry?.readOnly) {
+          return { success: false, error: 'Calendar is read-only' };
+        }
+      }
+
       await ctx.nylasCalendarClient.deleteEvent(calendarId, eventId);
       ctx.log.info({ calendarId, eventId }, 'Deleted calendar event');
       return { success: true, data: { deleted: true } };

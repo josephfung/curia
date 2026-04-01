@@ -30,15 +30,15 @@ export class CalendarUpdateEventHandler implements SkillHandler {
       return { success: false, error: 'Missing required input: eventId' };
     }
 
-    // Read-only check
-    if (ctx.contactService) {
-      const registry = await ctx.contactService.resolveCalendar(calendarId);
-      if (registry?.readOnly) {
-        return { success: false, error: 'Calendar is read-only' };
-      }
-    }
-
     try {
+      // Read-only check — moved inside try so DB errors from resolveCalendar are caught with skill-level context.
+      if (ctx.contactService) {
+        const registry = await ctx.contactService.resolveCalendar(calendarId);
+        if (registry?.readOnly) {
+          return { success: false, error: 'Calendar is read-only' };
+        }
+      }
+
       const changes: Record<string, unknown> = {};
       if (title !== undefined) changes.title = title;
       if (start !== undefined) changes.start = start;
@@ -47,6 +47,11 @@ export class CalendarUpdateEventHandler implements SkillHandler {
       if (location !== undefined) changes.location = location;
       if (attendees !== undefined) changes.attendees = attendees;
       if (conferencing !== undefined) changes.conferencing = conferencing;
+
+      // Guard against silent no-ops — require at least one field to update.
+      if (Object.keys(changes).length === 0) {
+        return { success: false, error: 'No fields provided to update — at least one of title, start, end, description, location, attendees, or conferencing is required' };
+      }
 
       const event = await ctx.nylasCalendarClient.updateEvent(calendarId, eventId, changes);
       ctx.log.info({ calendarId, eventId }, 'Updated calendar event');

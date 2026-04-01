@@ -16,8 +16,11 @@ export class CalendarListCalendarsHandler implements SkillHandler {
       return { success: false, error: 'calendar-list-calendars requires infrastructure access (contactService)' };
     }
 
+    // Hoisted so the catch block can reference the partial result for log context.
+    let nylasCalendars: Awaited<ReturnType<typeof ctx.nylasCalendarClient.listCalendars>> | undefined;
+
     try {
-      const nylasCalendars = await ctx.nylasCalendarClient.listCalendars();
+      nylasCalendars = await ctx.nylasCalendarClient.listCalendars();
 
       const calendars = await Promise.all(
         nylasCalendars.map(async (cal) => {
@@ -49,7 +52,7 @@ export class CalendarListCalendarsHandler implements SkillHandler {
       return { success: true, data: { calendars } };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      ctx.log.error({ err }, 'Failed to list calendars');
+      ctx.log.error({ err, calendarCount: nylasCalendars?.length ?? 'unknown' }, 'Failed to list calendars');
       return { success: false, error: `Failed to list calendars: ${message}` };
     }
   }

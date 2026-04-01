@@ -37,16 +37,17 @@ export class CalendarCreateEventHandler implements SkillHandler {
       return { success: false, error: 'Missing required input: end' };
     }
 
-    // Read-only check: if the calendar is registered and marked read-only, refuse.
-    // Unregistered calendars (null) proceed — Nylas enforces its own permissions.
-    if (ctx.contactService) {
-      const registry = await ctx.contactService.resolveCalendar(calendarId);
-      if (registry?.readOnly) {
-        return { success: false, error: 'Calendar is read-only' };
-      }
-    }
-
     try {
+      // Read-only check: if the calendar is registered and marked read-only, refuse.
+      // Unregistered calendars (null) proceed — Nylas enforces its own permissions.
+      // Moved inside try so DB errors from resolveCalendar are caught with skill-level context.
+      if (ctx.contactService) {
+        const registry = await ctx.contactService.resolveCalendar(calendarId);
+        if (registry?.readOnly) {
+          return { success: false, error: 'Calendar is read-only' };
+        }
+      }
+
       const eventData: CreateEventInput = { title, start, end };
       if (description) eventData.description = description;
       if (location) eventData.location = location;

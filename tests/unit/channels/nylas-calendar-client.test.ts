@@ -151,11 +151,12 @@ describe('NylasCalendarClient', () => {
         '2026-04-02T00:00:00Z',
       );
 
+      // Nylas expects Unix timestamps (seconds), not ISO strings — assert the converted values.
       expect(sdk.calendars_free_busy.list).toHaveBeenCalledWith({
         identifier: 'grant-123',
         requestBody: {
-          start_time: '2026-04-01T00:00:00Z',
-          end_time: '2026-04-02T00:00:00Z',
+          start_time: Math.floor(new Date('2026-04-01T00:00:00Z').getTime() / 1000),
+          end_time: Math.floor(new Date('2026-04-02T00:00:00Z').getTime() / 1000),
           emails: ['cal-1', 'cal-2'],
         },
       });

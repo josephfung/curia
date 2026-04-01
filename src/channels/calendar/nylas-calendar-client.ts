@@ -323,8 +323,9 @@ export class NylasCalendarClient {
       const response = await this.nylas.calendars_free_busy.list({
         identifier: this.grantId,
         requestBody: {
-          start_time: timeMin,
-          end_time: timeMax,
+          // Nylas expects Unix timestamps (seconds), not ISO strings
+          start_time: Math.floor(new Date(timeMin).getTime() / 1000),
+          end_time: Math.floor(new Date(timeMax).getTime() / 1000),
           emails: calendarIds,
         },
       });
