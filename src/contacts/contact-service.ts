@@ -24,6 +24,7 @@ import type {
   ResolvedSender,
   IdentitySource,
 } from './types.js';
+import type { ContactCalendar, CreateCalendarLinkOptions, ResolvedCalendar } from './calendar-types.js';
 
 // -- Backend interface --
 
@@ -41,6 +42,11 @@ interface ContactServiceBackend {
   getAuthOverrides(contactId: string): Promise<Array<{ permission: string; granted: boolean }>>;
   createAuthOverride(override: AuthOverride): Promise<void>;
   revokeAuthOverride(contactId: string, permission: string): Promise<boolean>;
+  createCalendarLink(calendar: ContactCalendar): Promise<void>;
+  deleteCalendarLink(nylasCalendarId: string): Promise<boolean>;
+  getCalendarsForContact(contactId: string): Promise<ContactCalendar[]>;
+  resolveCalendar(nylasCalendarId: string): Promise<ResolvedCalendar | null>;
+  getPrimaryCalendar(contactId: string): Promise<ContactCalendar | null>;
 }
 
 // -- Auto-verification sources --
@@ -361,6 +367,57 @@ export class ContactService {
   async revokePermission(contactId: string, permission: string): Promise<boolean> {
     return this.backend.revokeAuthOverride(contactId, permission);
   }
+
+  /**
+   * Link a calendar to a contact (or null for org-wide calendars).
+   * Validates the contact exists (if contactId is non-null) and enforces
+   * uniqueness on nylas_calendar_id and at-most-one-primary-per-contact.
+   */
+  async linkCalendar(options: CreateCalendarLinkOptions): Promise<ContactCalendar> {
+    // Validate the contact exists if a contactId is provided
+    if (options.contactId !== null) {
+      const contact = await this.backend.getContact(options.contactId);
+      if (!contact) {
+        throw new Error(`Contact not found: ${options.contactId}`);
+      }
+    }
+
+    const now = new Date();
+    const calendar: ContactCalendar = {
+      id: randomUUID(),
+      nylasCalendarId: options.nylasCalendarId,
+      contactId: options.contactId,
+      label: options.label,
+      isPrimary: options.isPrimary ?? false,
+      readOnly: options.readOnly ?? false,
+      timezone: options.timezone ?? null,
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    await this.backend.createCalendarLink(calendar);
+    return calendar;
+  }
+
+  /** Remove a calendar association by its Nylas calendar ID. */
+  async unlinkCalendar(nylasCalendarId: string): Promise<boolean> {
+    return this.backend.deleteCalendarLink(nylasCalendarId);
+  }
+
+  /** Get all calendars linked to a contact. */
+  async getCalendarsForContact(contactId: string): Promise<ContactCalendar[]> {
+    return this.backend.getCalendarsForContact(contactId);
+  }
+
+  /** Resolve a Nylas calendar ID to its registry entry. Returns null if unregistered. */
+  async resolveCalendar(nylasCalendarId: string): Promise<ResolvedCalendar | null> {
+    return this.backend.resolveCalendar(nylasCalendarId);
+  }
+
+  /** Get the primary calendar for a contact. Returns null if no primary is set. */
+  async getPrimaryCalendar(contactId: string): Promise<ContactCalendar | null> {
+    return this.backend.getPrimaryCalendar(contactId);
+  }
 }
 
 // -- Postgres backend --
@@ -603,6 +660,85 @@ class PostgresContactBackend implements ContactServiceBackend {
     return (result.rowCount ?? 0) > 0;
   }
 
+  async createCalendarLink(calendar: ContactCalendar): Promise<void> {
+    this.logger.debug({ calendarId: calendar.id, nylasCalendarId: calendar.nylasCalendarId }, 'contacts: linking calendar');
+    await this.pool.query(
+      `INSERT INTO contact_calendars (id, nylas_calendar_id, contact_id, label, is_primary, read_only, timezone, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+      [calendar.id, calendar.nylasCalendarId, calendar.contactId, calendar.label, calendar.isPrimary, calendar.readOnly, calendar.timezone, calendar.createdAt, calendar.updatedAt],
+    );
+  }
+
+  async deleteCalendarLink(nylasCalendarId: string): Promise<boolean> {
+    this.logger.debug({ nylasCalendarId }, 'contacts: unlinking calendar');
+    const result = await this.pool.query(
+      'DELETE FROM contact_calendars WHERE nylas_calendar_id = $1',
+      [nylasCalendarId],
+    );
+    return (result.rowCount ?? 0) > 0;
+  }
+
+  async getCalendarsForContact(contactId: string): Promise<ContactCalendar[]> {
+    const result = await this.pool.query<{
+      id: string;
+      nylas_calendar_id: string;
+      contact_id: string | null;
+      label: string;
+      is_primary: boolean;
+      read_only: boolean;
+      timezone: string | null;
+      created_at: Date;
+      updated_at: Date;
+    }>(
+      `SELECT id, nylas_calendar_id, contact_id, label, is_primary, read_only, timezone, created_at, updated_at
+       FROM contact_calendars WHERE contact_id = $1 ORDER BY created_at ASC`,
+      [contactId],
+    );
+    return result.rows.map((row) => this.rowToCalendar(row));
+  }
+
+  async resolveCalendar(nylasCalendarId: string): Promise<ResolvedCalendar | null> {
+    const result = await this.pool.query<{
+      contact_id: string | null;
+      label: string;
+      is_primary: boolean;
+      read_only: boolean;
+    }>(
+      `SELECT contact_id, label, is_primary, read_only
+       FROM contact_calendars WHERE nylas_calendar_id = $1`,
+      [nylasCalendarId],
+    );
+    const row = result.rows[0];
+    if (!row) return null;
+    return {
+      contactId: row.contact_id,
+      label: row.label,
+      isPrimary: row.is_primary,
+      readOnly: row.read_only,
+    };
+  }
+
+  async getPrimaryCalendar(contactId: string): Promise<ContactCalendar | null> {
+    const result = await this.pool.query<{
+      id: string;
+      nylas_calendar_id: string;
+      contact_id: string | null;
+      label: string;
+      is_primary: boolean;
+      read_only: boolean;
+      timezone: string | null;
+      created_at: Date;
+      updated_at: Date;
+    }>(
+      `SELECT id, nylas_calendar_id, contact_id, label, is_primary, read_only, timezone, created_at, updated_at
+       FROM contact_calendars WHERE contact_id = $1 AND is_primary = true`,
+      [contactId],
+    );
+    const row = result.rows[0];
+    if (!row) return null;
+    return this.rowToCalendar(row);
+  }
+
   // -- Row mapping helpers --
 
   private rowToContact(row: {
@@ -652,6 +788,30 @@ class PostgresContactBackend implements ContactServiceBackend {
       updatedAt: row.updated_at,
     };
   }
+
+  private rowToCalendar(row: {
+    id: string;
+    nylas_calendar_id: string;
+    contact_id: string | null;
+    label: string;
+    is_primary: boolean;
+    read_only: boolean;
+    timezone: string | null;
+    created_at: Date;
+    updated_at: Date;
+  }): ContactCalendar {
+    return {
+      id: row.id,
+      nylasCalendarId: row.nylas_calendar_id,
+      contactId: row.contact_id,
+      label: row.label,
+      isPrimary: row.is_primary,
+      readOnly: row.read_only,
+      timezone: row.timezone,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
+  }
 }
 
 // -- In-memory backend --
@@ -664,6 +824,7 @@ class InMemoryContactBackend implements ContactServiceBackend {
   private contacts = new Map<string, Contact>();
   private identities = new Map<string, ChannelIdentity>();
   private overrides = new Map<string, AuthOverride>();
+  private calendars = new Map<string, ContactCalendar>();
 
   async createContact(contact: Contact): Promise<void> {
     this.contacts.set(contact.id, contact);
@@ -787,5 +948,66 @@ class InMemoryContactBackend implements ContactServiceBackend {
       }
     }
     return false;
+  }
+
+  async createCalendarLink(calendar: ContactCalendar): Promise<void> {
+    // Enforce UNIQUE(nylas_calendar_id)
+    for (const existing of this.calendars.values()) {
+      if (existing.nylasCalendarId === calendar.nylasCalendarId) {
+        throw new Error(`Calendar already registered: ${calendar.nylasCalendarId}`);
+      }
+    }
+    // Enforce at-most-one-primary per contact
+    if (calendar.isPrimary && calendar.contactId !== null) {
+      for (const existing of this.calendars.values()) {
+        if (existing.contactId === calendar.contactId && existing.isPrimary) {
+          throw new Error(`Contact ${calendar.contactId} already has a primary calendar`);
+        }
+      }
+    }
+    this.calendars.set(calendar.id, calendar);
+  }
+
+  async deleteCalendarLink(nylasCalendarId: string): Promise<boolean> {
+    for (const [id, cal] of this.calendars) {
+      if (cal.nylasCalendarId === nylasCalendarId) {
+        this.calendars.delete(id);
+        return true;
+      }
+    }
+    return false;
+  }
+
+  async getCalendarsForContact(contactId: string): Promise<ContactCalendar[]> {
+    const results: ContactCalendar[] = [];
+    for (const cal of this.calendars.values()) {
+      if (cal.contactId === contactId) {
+        results.push(cal);
+      }
+    }
+    return results;
+  }
+
+  async resolveCalendar(nylasCalendarId: string): Promise<ResolvedCalendar | null> {
+    for (const cal of this.calendars.values()) {
+      if (cal.nylasCalendarId === nylasCalendarId) {
+        return {
+          contactId: cal.contactId,
+          label: cal.label,
+          isPrimary: cal.isPrimary,
+          readOnly: cal.readOnly,
+        };
+      }
+    }
+    return null;
+  }
+
+  async getPrimaryCalendar(contactId: string): Promise<ContactCalendar | null> {
+    for (const cal of this.calendars.values()) {
+      if (cal.contactId === contactId && cal.isPrimary) {
+        return cal;
+      }
+    }
+    return null;
   }
 }

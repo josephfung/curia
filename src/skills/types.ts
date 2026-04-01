@@ -96,6 +96,10 @@ export interface SkillContext {
    *  coordinator's persona config. Available to all skills (not infrastructure-gated)
    *  so templates can reference the agent's identity without hardcoding it. */
   agentPersona?: AgentPersona;
+  /** Nylas calendar client — only available to infrastructure skills.
+   *  Provides CRUD operations on calendar events and free/busy queries
+   *  via the Nylas unified API (provider-agnostic). */
+  nylasCalendarClient?: import('../channels/calendar/nylas-calendar-client.js').NylasCalendarClient;
   /** Caller identity — populated from the task event's sender context.
    *  Guaranteed to be defined for elevated skills (execution layer rejects without it).
    *  Available but optional for normal skills. */

@@ -1,0 +1,26 @@
+{
+  "name": "calendar-update-event",
+  "description": "Modify an existing calendar event. Supports partial updates — only provide the fields that need changing (title, time, description, location, attendees, conferencing). Attendee changes trigger invitation updates.",
+  "version": "1.0.0",
+  "sensitivity": "normal",
+  "infrastructure": true,
+  "inputs": {
+    "calendarId": "string",
+    "eventId": "string",
+    "title": "string?",
+    "start": "string?",
+    "end": "string?",
+    "description": "string?",
+    "location": "string?",
+    "attendees": "array?",
+    "conferencing": "object?",
+    "colorId": "string?",
+    "reminders": "object?"
+  },
+  "outputs": {
+    "event": "object"
+  },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 30000
+}

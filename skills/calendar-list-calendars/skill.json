@@ -1,0 +1,14 @@
+{
+  "name": "calendar-list-calendars",
+  "description": "List all calendars visible to the agent (owned and shared), annotated with which contact each is registered to. Use this to discover new calendars or verify calendar assignments.",
+  "version": "1.0.0",
+  "sensitivity": "normal",
+  "infrastructure": true,
+  "inputs": {},
+  "outputs": {
+    "calendars": "array"
+  },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 15000
+}
