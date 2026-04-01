@@ -42,11 +42,11 @@ describe('CalendarCreateEventHandler', () => {
     expect(nylasCalendarClient.createEvent).not.toHaveBeenCalled();
   });
 
-  it('creates event successfully when calendar is writable', async () => {
+  it('creates event successfully when calendar is unregistered (null from resolveCalendar)', async () => {
     const createdEvent = { id: 'evt-new', title: 'Team Meeting', description: '', location: '', startTime: 1000, endTime: 2000, startDate: null, endDate: null, participants: [], conferencing: null, status: 'confirmed', calendarId: 'cal-1', busy: true };
     const nylasCalendarClient = { createEvent: vi.fn().mockResolvedValue(createdEvent) };
     const contactService = {
-      resolveCalendar: vi.fn().mockResolvedValue(null), // unregistered = proceed
+      resolveCalendar: vi.fn().mockResolvedValue(null), // unregistered calendar — proceeds without read-only check
     };
     const result = await handler.execute(makeCtx(
       { calendarId: 'cal-1', title: 'Team Meeting', start: '2026-04-01T09:00:00Z', end: '2026-04-01T10:00:00Z' },
@@ -57,6 +57,20 @@ describe('CalendarCreateEventHandler', () => {
       const data = result.data as { event: { id: string } };
       expect(data.event.id).toBe('evt-new');
     }
+  });
+
+  it('creates event successfully when calendar is registered and writable (readOnly: false)', async () => {
+    const createdEvent = { id: 'evt-new', title: 'Team Meeting', description: '', location: '', startTime: 1000, endTime: 2000, startDate: null, endDate: null, participants: [], conferencing: null, status: 'confirmed', calendarId: 'cal-1', busy: true };
+    const nylasCalendarClient = { createEvent: vi.fn().mockResolvedValue(createdEvent) };
+    const contactService = {
+      resolveCalendar: vi.fn().mockResolvedValue({ contactId: 'c1', label: 'Work', isPrimary: true, readOnly: false }),
+    };
+    const result = await handler.execute(makeCtx(
+      { calendarId: 'cal-1', title: 'Team Meeting', start: '2026-04-01T09:00:00Z', end: '2026-04-01T10:00:00Z' },
+      { nylasCalendarClient: nylasCalendarClient as never, contactService: contactService as never },
+    ));
+    expect(result.success).toBe(true);
+    expect(nylasCalendarClient.createEvent).toHaveBeenCalled();
   });
 
   it('creates event without contactService check when not provided', async () => {

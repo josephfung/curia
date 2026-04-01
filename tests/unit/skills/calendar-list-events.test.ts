@@ -28,8 +28,9 @@ describe('CalendarListEventsHandler', () => {
   const handler = new CalendarListEventsHandler();
 
   it('returns failure when nylasCalendarClient is not available', async () => {
-    const result = await handler.execute(makeCtx({ calendarId: 'cal-1', timeMin: 'a', timeMax: 'b' }));
+    const result = await handler.execute(makeCtx({ calendarId: 'cal-1', timeMin: '2026-04-01T00:00:00Z', timeMax: '2026-04-02T00:00:00Z' }));
     expect(result.success).toBe(false);
+    if (!result.success) expect(result.error).toContain('Calendar not configured');
   });
 
   it('returns failure when required inputs are missing', async () => {
@@ -58,6 +59,7 @@ describe('CalendarListEventsHandler', () => {
       expect(data.events).toHaveLength(3);
       expect(data.count).toBe(3);
     }
+    expect(nylasCalendarClient.listEvents).toHaveBeenCalledWith('cal-1', '2026-04-01T00:00:00Z', '2026-04-02T00:00:00Z', undefined);
   });
 
   it('filters by query (case-insensitive substring on title)', async () => {
@@ -66,7 +68,7 @@ describe('CalendarListEventsHandler', () => {
     };
 
     const result = await handler.execute(makeCtx(
-      { calendarId: 'cal-1', timeMin: 'a', timeMax: 'b', query: 'chiropractor' },
+      { calendarId: 'cal-1', timeMin: '2026-04-01T00:00:00Z', timeMax: '2026-04-02T00:00:00Z', query: 'chiropractor' },
       { nylasCalendarClient: nylasCalendarClient as never },
     ));
 
@@ -84,7 +86,7 @@ describe('CalendarListEventsHandler', () => {
     };
 
     const result = await handler.execute(makeCtx(
-      { calendarId: 'cal-1', timeMin: 'a', timeMax: 'b', query: 'daily sync' },
+      { calendarId: 'cal-1', timeMin: '2026-04-01T00:00:00Z', timeMax: '2026-04-02T00:00:00Z', query: 'daily sync' },
       { nylasCalendarClient: nylasCalendarClient as never },
     ));
 
@@ -102,7 +104,7 @@ describe('CalendarListEventsHandler', () => {
     };
 
     const result = await handler.execute(makeCtx(
-      { calendarId: 'cal-1', timeMin: 'a', timeMax: 'b', attendeeEmail: 'bob@co.com' },
+      { calendarId: 'cal-1', timeMin: '2026-04-01T00:00:00Z', timeMax: '2026-04-02T00:00:00Z', attendeeEmail: 'bob@co.com' },
       { nylasCalendarClient: nylasCalendarClient as never },
     ));
 
@@ -120,7 +122,7 @@ describe('CalendarListEventsHandler', () => {
     };
 
     const result = await handler.execute(makeCtx(
-      { calendarId: 'cal-1', timeMin: 'a', timeMax: 'b', maxResults: 2 },
+      { calendarId: 'cal-1', timeMin: '2026-04-01T00:00:00Z', timeMax: '2026-04-02T00:00:00Z', maxResults: 2 },
       { nylasCalendarClient: nylasCalendarClient as never },
     ));
 

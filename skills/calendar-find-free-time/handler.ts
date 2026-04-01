@@ -27,6 +27,15 @@ export class CalendarFindFreeTimeHandler implements SkillHandler {
     if (!timeMax || typeof timeMax !== 'string') {
       return { success: false, error: 'Missing required input: timeMax' };
     }
+    if (isNaN(new Date(timeMin).getTime())) {
+      return { success: false, error: 'Invalid input: timeMin is not a valid date' };
+    }
+    if (isNaN(new Date(timeMax).getTime())) {
+      return { success: false, error: 'Invalid input: timeMax is not a valid date' };
+    }
+    if (new Date(timeMax) <= new Date(timeMin)) {
+      return { success: false, error: 'Invalid input: timeMax must be after timeMin' };
+    }
 
     try {
       const freeBusyResults = await ctx.nylasCalendarClient.getFreeBusy(calendarIds, timeMin, timeMax);

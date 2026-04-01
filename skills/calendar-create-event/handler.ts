@@ -36,6 +36,18 @@ export class CalendarCreateEventHandler implements SkillHandler {
     if (!end || typeof end !== 'string') {
       return { success: false, error: 'Missing required input: end' };
     }
+    if (isNaN(new Date(start).getTime())) {
+      return { success: false, error: 'Invalid input: start is not a valid date' };
+    }
+    if (isNaN(new Date(end).getTime())) {
+      return { success: false, error: 'Invalid input: end is not a valid date' };
+    }
+    if (new Date(end) <= new Date(start)) {
+      return { success: false, error: 'Invalid input: end must be after start' };
+    }
+    if (attendees !== undefined && !Array.isArray(attendees)) {
+      return { success: false, error: 'Invalid input: attendees must be an array' };
+    }
 
     try {
       // Read-only check: if the calendar is registered and marked read-only, refuse.

@@ -43,17 +43,19 @@ export class CalendarCheckConflictsHandler implements SkillHandler {
       }> = [];
 
       for (const result of freeBusyResults) {
+        // Resolve contact name once per calendar result, not once per busy slot — avoids N+1 DB calls.
+        let contactName: string | null = null;
+        if (ctx.contactService) {
+          const registry = await ctx.contactService.resolveCalendar(result.email);
+          if (registry?.contactId) {
+            const contact = await ctx.contactService.getContact(registry.contactId);
+            contactName = contact?.displayName ?? null;
+          }
+        }
+
         for (const slot of result.timeSlots) {
           // Check overlap: busy slot overlaps the proposed range
           if (slot.startTime < proposedEndTs && slot.endTime > proposedStartTs) {
-            let contactName: string | null = null;
-            if (ctx.contactService) {
-              const registry = await ctx.contactService.resolveCalendar(result.email);
-              if (registry?.contactId) {
-                const contact = await ctx.contactService.getContact(registry.contactId);
-                contactName = contact?.displayName ?? null;
-              }
-            }
             conflicts.push({
               calendarId: result.email,
               contactName,

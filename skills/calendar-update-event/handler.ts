@@ -41,11 +41,20 @@ export class CalendarUpdateEventHandler implements SkillHandler {
 
       const changes: Record<string, unknown> = {};
       if (title !== undefined) changes.title = title;
-      if (start !== undefined) changes.start = start;
-      if (end !== undefined) changes.end = end;
+      if (start !== undefined) {
+        if (!start) return { success: false, error: 'Invalid input: start must be a non-empty string' };
+        changes.start = start;
+      }
+      if (end !== undefined) {
+        if (!end) return { success: false, error: 'Invalid input: end must be a non-empty string' };
+        changes.end = end;
+      }
       if (description !== undefined) changes.description = description;
       if (location !== undefined) changes.location = location;
-      if (attendees !== undefined) changes.attendees = attendees;
+      if (attendees !== undefined) {
+        if (!Array.isArray(attendees)) return { success: false, error: 'Invalid input: attendees must be an array' };
+        changes.attendees = attendees;
+      }
       if (conferencing !== undefined) changes.conferencing = conferencing;
 
       // Guard against silent no-ops — require at least one field to update.

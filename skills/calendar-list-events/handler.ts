@@ -33,7 +33,9 @@ export class CalendarListEventsHandler implements SkillHandler {
     }
 
     try {
-      let events = await ctx.nylasCalendarClient.listEvents(calendarId, timeMin, timeMax);
+      // Pass maxResults as the upstream fetch limit so callers asking for >200 events aren't silently capped.
+      const fetchLimit = typeof maxResults === 'number' && maxResults > 0 ? { limit: maxResults } : undefined;
+      let events = await ctx.nylasCalendarClient.listEvents(calendarId, timeMin, timeMax, fetchLimit);
 
       // Client-side filtering: query matches title or description (case-insensitive)
       if (query && typeof query === 'string') {

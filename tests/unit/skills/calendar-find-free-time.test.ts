@@ -56,7 +56,12 @@ describe('CalendarFindFreeTimeHandler', () => {
     expect(result.success).toBe(true);
     if (result.success) {
       const data = result.data as { freeWindows: Array<{ start: number; end: number }> };
-      expect(data.freeWindows.length).toBeGreaterThan(0);
+      // Range 0-1000, busy 200-400 and 700-900 → free windows: 0-200, 400-700, 900-1000
+      expect(data.freeWindows).toEqual([
+        { start: 0, end: 200 },
+        { start: 400, end: 700 },
+        { start: 900, end: 1000 },
+      ]);
     }
   });
 
@@ -80,11 +85,7 @@ describe('CalendarFindFreeTimeHandler', () => {
     expect(result.success).toBe(true);
     if (result.success) {
       const data = result.data as { freeWindows: Array<{ start: number; end: number }> };
-      expect(data.freeWindows).toHaveLength(1);
-      // The window should be at least 300 seconds long
-      for (const w of data.freeWindows) {
-        expect(w.end - w.start).toBeGreaterThanOrEqual(300);
-      }
+      expect(data.freeWindows).toEqual([{ start: 200, end: 1000 }]);
     }
   });
 });

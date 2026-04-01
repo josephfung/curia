@@ -297,14 +297,19 @@ export class NylasCalendarClient {
     }
   }
 
-  /** Delete an event. */
-  async deleteEvent(calendarId: string, eventId: string): Promise<void> {
-    this.log.debug({ calendarId, eventId }, 'Deleting event');
+  /** Delete an event. Pass notifyAttendees=false to suppress Nylas cancellation emails. */
+  async deleteEvent(calendarId: string, eventId: string, notifyAttendees?: boolean): Promise<void> {
+    this.log.debug({ calendarId, eventId, notifyAttendees }, 'Deleting event');
     try {
+      const queryParams: Record<string, unknown> = { calendar_id: calendarId };
+      // Nylas sends cancellation emails by default; only override when explicitly suppressed.
+      if (notifyAttendees === false) {
+        queryParams.notify_event_creator = false;
+      }
       await this.nylas.events.destroy({
         identifier: this.grantId,
         eventId,
-        queryParams: { calendar_id: calendarId },
+        queryParams,
       });
     } catch (err) {
       this.log.error({ err, calendarId, eventId }, 'Nylas deleteEvent failed');

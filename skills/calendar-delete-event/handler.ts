@@ -10,9 +10,10 @@ export class CalendarDeleteEventHandler implements SkillHandler {
       return { success: false, error: 'Calendar not configured — Nylas credentials missing' };
     }
 
-    const { calendarId, eventId } = ctx.input as {
+    const { calendarId, eventId, notifyAttendees } = ctx.input as {
       calendarId?: string;
       eventId?: string;
+      notifyAttendees?: boolean;
     };
 
     if (!calendarId || typeof calendarId !== 'string') {
@@ -31,7 +32,7 @@ export class CalendarDeleteEventHandler implements SkillHandler {
         }
       }
 
-      await ctx.nylasCalendarClient.deleteEvent(calendarId, eventId);
+      await ctx.nylasCalendarClient.deleteEvent(calendarId, eventId, notifyAttendees);
       ctx.log.info({ calendarId, eventId }, 'Deleted calendar event');
       return { success: true, data: { deleted: true } };
     } catch (err) {
