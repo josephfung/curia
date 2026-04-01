@@ -1,0 +1,22 @@
+{
+  "name": "calendar-list-events",
+  "description": "Fetch events from a calendar within a date range. Supports filtering by text query (title/description) and attendee email. Use for checking schedules, finding specific appointments, or reviewing upcoming events.",
+  "version": "1.0.0",
+  "sensitivity": "normal",
+  "infrastructure": true,
+  "inputs": {
+    "calendarId": "string",
+    "timeMin": "string",
+    "timeMax": "string",
+    "maxResults": "number?",
+    "query": "string?",
+    "attendeeEmail": "string?"
+  },
+  "outputs": {
+    "events": "array",
+    "count": "number"
+  },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 30000
+}
