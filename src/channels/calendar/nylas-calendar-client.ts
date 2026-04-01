@@ -193,7 +193,7 @@ export class NylasCalendarClient {
       const response = await this.nylas.calendars.list({
         identifier: this.grantId,
       });
-      return response.data.map((cal) => this.normalizeCalendar(cal));
+      return (response?.data ?? []).map((cal) => this.normalizeCalendar(cal));
     } catch (err) {
       this.log.error({ err }, 'Nylas listCalendars failed');
       throw err;
@@ -218,7 +218,7 @@ export class NylasCalendarClient {
           limit: opts?.limit ?? 200,
         },
       });
-      return response.data.map((evt) => this.normalizeEvent(evt));
+      return (response?.data ?? []).map((evt) => this.normalizeEvent(evt));
     } catch (err) {
       this.log.error({ err, calendarId }, 'Nylas listEvents failed');
       throw err;
@@ -329,7 +329,7 @@ export class NylasCalendarClient {
           emails: calendarIds,
         },
       });
-      return response.data.map((fb) => ({
+      return (response?.data ?? []).map((fb) => ({
         email: fb.email,
         timeSlots: (fb.time_slots ?? []).map((ts) => ({
           startTime: ts.start_time,
