@@ -210,6 +210,9 @@ export class NylasCalendarClient {
     this.log.debug({ calendarId, timeMin, timeMax }, 'Listing events');
     const startUnix = this.toUnixSeconds(timeMin, 'timeMin');
     const endUnix = this.toUnixSeconds(timeMax, 'timeMax');
+    if (endUnix <= startUnix) {
+      throw new Error(`Invalid time range: timeMax must be after timeMin (timeMin="${timeMin}", timeMax="${timeMax}")`);
+    }
     try {
       const response = await this.nylas.events.list({
         identifier: this.grantId,
@@ -232,6 +235,9 @@ export class NylasCalendarClient {
     this.log.debug({ calendarId, title: event.title }, 'Creating event');
     const startUnix = this.toUnixSeconds(event.start, 'start');
     const endUnix = this.toUnixSeconds(event.end, 'end');
+    if (endUnix <= startUnix) {
+      throw new Error(`Invalid time range: end must be after start (start="${event.start}", end="${event.end}")`);
+    }
     try {
       const requestBody: Record<string, unknown> = {
         title: event.title,
@@ -330,6 +336,9 @@ export class NylasCalendarClient {
     this.log.debug({ calendarIds, timeMin, timeMax }, 'Getting free/busy');
     const startUnix = this.toUnixSeconds(timeMin, 'timeMin');
     const endUnix = this.toUnixSeconds(timeMax, 'timeMax');
+    if (endUnix <= startUnix) {
+      throw new Error(`Invalid time range: timeMax must be after timeMin (timeMin="${timeMin}", timeMax="${timeMax}")`);
+    }
     try {
       const response = await this.nylas.calendars_free_busy.list({
         identifier: this.grantId,
