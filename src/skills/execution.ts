@@ -199,11 +199,15 @@ export class ExecutionLayer {
       if (this.nylasCalendarClient) {
         ctx.nylasCalendarClient = this.nylasCalendarClient;
       }
-      // entityContextAssembler — available to infrastructure skills for the
-      // entity-context skill and other advanced use cases
-      if (this.entityContextAssembler) {
-        ctx.entityContextAssembler = this.entityContextAssembler;
-      }
+    }
+
+    // entityContextAssembler — available to ALL skills (not just infrastructure).
+    // The assembler is a read-only DB pipeline; granting it unconditionally is no
+    // more privileged than contactService. Keeping it outside the infrastructure
+    // block means the entity-context skill does not need infrastructure: true,
+    // which would otherwise grant it full bus/registry access it doesn't need.
+    if (this.entityContextAssembler) {
+      ctx.entityContextAssembler = this.entityContextAssembler;
     }
 
     // Entity enrichment: if the manifest declares entity_enrichment, pre-assemble

@@ -76,7 +76,7 @@ export async function bootstrapAgentIdentity(
       `INSERT INTO contacts (kg_node_id, display_name, role, status, created_at, updated_at)
        VALUES ($1, $2, 'agent', 'confirmed', now(), now())
        ON CONFLICT (kg_node_id) WHERE kg_node_id IS NOT NULL
-       DO UPDATE SET updated_at = now()
+       DO UPDATE SET role = 'agent', updated_at = now()
        RETURNING id`,
       [kgNodeId, displayName],
     );

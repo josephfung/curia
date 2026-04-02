@@ -57,9 +57,10 @@ export class EntityContextHandler implements SkillHandler {
         },
       };
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      // Log the full error server-side but don't expose DB internals (table names,
+      // column names, SQL state codes) to the LLM via the skill result string.
       ctx.log.error({ err, ids }, 'entity-context: assembly failed');
-      return { success: false, error: `Failed to assemble entity context: ${message}` };
+      return { success: false, error: 'Failed to assemble entity context — see server logs for details' };
     }
   }
 }

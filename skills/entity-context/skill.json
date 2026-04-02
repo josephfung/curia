@@ -3,7 +3,6 @@
   "description": "Assemble rich context about one or more entities (people, orgs, events, etc.). Returns known facts, connected accounts, preferences, relationships, and other contextual information. Use contactIds for people; entityIds for any KG node. Omit both to get context for the caller. Use this when you need to know what resources (calendars, email accounts) an entity has, or to retrieve stored facts (timezone, preferences, identifiers).",
   "version": "1.0.0",
   "sensitivity": "normal",
-  "infrastructure": true,
   "inputs": {
     "entityIds": "string[]? (KG node IDs — use for non-person entities like orgs, events, places)",
     "contactIds": "string[]? (contact IDs — convenience alias for person entities, resolved via contacts table)",
