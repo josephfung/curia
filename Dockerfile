@@ -31,6 +31,12 @@ RUN corepack enable
 COPY package.json pnpm-lock.yaml ./
 RUN pnpm install --frozen-lockfile --prod
 
+# tsx is needed at runtime: skill handlers are .ts files loaded via dynamic
+# import(), and they use ESM .js extension mapping (e.g., import from './foo.js'
+# resolving to foo.ts). Node's --experimental-strip-types doesn't handle this;
+# tsx does, and it's already used for dev (pnpm dev).
+RUN pnpm add tsx
+
 # Copy compiled output from build stage
 COPY --from=build /app/dist ./dist
 
@@ -46,5 +52,7 @@ EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
   CMD curl -f http://localhost:3000/api/health || exit 1
 
-# --experimental-strip-types: skill handlers are .ts files loaded via dynamic import()
-CMD ["node", "--experimental-strip-types", "dist/index.js"]
+# tsx handles dynamic .ts skill imports with ESM .js→.ts extension resolution.
+# The compiled dist/index.js is the entrypoint, but it dynamically imports
+# raw .ts skill handlers at runtime.
+CMD ["pnpm", "exec", "tsx", "dist/index.js"]
