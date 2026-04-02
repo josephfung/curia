@@ -123,6 +123,9 @@ export class ExecutionLayer {
       log: skillLogger,
       agentPersona: this.agentPersona,
       caller,
+      // contactService is available to all skills — read-only contact lookups
+      // (calendars, display names, etc.) are not a privilege escalation.
+      contactService: this.contactService,
     };
 
     // Infrastructure skills get bus and agent registry access.
@@ -141,7 +144,6 @@ export class ExecutionLayer {
       }
       ctx.bus = this.bus;
       ctx.agentRegistry = this.agentRegistry;
-      ctx.contactService = this.contactService;
       // outboundGateway is optional — only skills that send external messages need it.
       // All outbound communication goes through the gateway, which enforces contact
       // blocked checks and content filtering before dispatch.
