@@ -78,8 +78,8 @@ describe('ExecutionLayer — entity_enrichment', () => {
     await execution.invoke('test-skill', { contacts: ['contact-1'] });
 
     expect(capturedCtx?.entityContext).toBeDefined();
-    expect(capturedCtx!.entityContext).toHaveLength(1);
-    expect(capturedCtx!.entityContext![0].entityId).toBe('node-1');
+    expect(capturedCtx?.entityContext).toHaveLength(1);
+    expect(capturedCtx?.entityContext?.[0]?.entityId).toBe('node-1');
     expect(vi.mocked(assembler.assembleMany)).toHaveBeenCalledWith(['contact-1'], { includeRelationships: true });
   });
 

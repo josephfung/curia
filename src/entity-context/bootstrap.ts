@@ -46,48 +46,53 @@ export async function bootstrapAgentIdentity(
   // We identify the agent by a special property: is_agent = true.
   // The partial unique index idx_kg_nodes_agent_singleton (migration 010) ensures
   // ON CONFLICT fires when a concurrent INSERT tries to create a second agent node.
-  const nodeResult = await pool.query<{ id: string }>(
-    `INSERT INTO kg_nodes (type, label, properties, confidence, decay_class, source, created_at, last_confirmed_at)
-     VALUES ('person', $1, $2, 1.0, 'permanent', 'bootstrap', now(), now())
-     ON CONFLICT ((properties->>'is_agent')) WHERE (properties->>'is_agent') = 'true'
-     DO UPDATE SET last_confirmed_at = now()
-     RETURNING id`,
-    [
-      displayName,
-      JSON.stringify({ is_agent: true }),
-    ],
-  );
-
-  if (!nodeResult.rows[0]) {
-    throw new Error(
-      `agent-bootstrap: INSERT ... ON CONFLICT returned no rows for displayName="${displayName}" — ` +
-      'check that migration 010 was applied (idx_kg_nodes_agent_singleton must exist)',
+  try {
+    const nodeResult = await pool.query<{ id: string }>(
+      `INSERT INTO kg_nodes (type, label, properties, confidence, decay_class, source, created_at, last_confirmed_at)
+       VALUES ('person', $1, $2, 1.0, 'permanent', 'bootstrap', now(), now())
+       ON CONFLICT ((properties->>'is_agent')) WHERE (properties->>'is_agent') = 'true'
+       DO UPDATE SET last_confirmed_at = now()
+       RETURNING id`,
+      [
+        displayName,
+        JSON.stringify({ is_agent: true }),
+      ],
     );
-  }
-  const kgNodeId = nodeResult.rows[0].id;
-  logger.debug({ kgNodeId, displayName }, 'agent-bootstrap: agent KG node ready');
 
-  // Step 2: Find or create the agent's contact record linked to the KG node.
-  // The partial unique index idx_contacts_kg_node_unique (migration 010) ensures
-  // ON CONFLICT fires when a concurrent INSERT tries to create a second contact for
-  // the same KG node.
-  const contactResult = await pool.query<{ id: string }>(
-    `INSERT INTO contacts (kg_node_id, display_name, role, status, created_at, updated_at)
-     VALUES ($1, $2, 'agent', 'confirmed', now(), now())
-     ON CONFLICT (kg_node_id) WHERE kg_node_id IS NOT NULL
-     DO UPDATE SET updated_at = now()
-     RETURNING id`,
-    [kgNodeId, displayName],
-  );
+    if (!nodeResult.rows[0]) {
+      throw new Error(
+        `agent-bootstrap: INSERT ... ON CONFLICT returned no rows for displayName="${displayName}" — ` +
+        'check that migration 010 was applied (idx_kg_nodes_agent_singleton must exist)',
+      );
+    }
+    const kgNodeId = nodeResult.rows[0].id;
+    logger.debug({ kgNodeId, displayName }, 'agent-bootstrap: agent KG node ready');
 
-  if (!contactResult.rows[0]) {
-    throw new Error(
-      `agent-bootstrap: INSERT ... ON CONFLICT returned no rows for kgNodeId="${kgNodeId}" — ` +
-      'check that migration 010 was applied (idx_contacts_kg_node_unique must exist)',
+    // Step 2: Find or create the agent's contact record linked to the KG node.
+    // The partial unique index idx_contacts_kg_node_unique (migration 010) ensures
+    // ON CONFLICT fires when a concurrent INSERT tries to create a second contact for
+    // the same KG node.
+    const contactResult = await pool.query<{ id: string }>(
+      `INSERT INTO contacts (kg_node_id, display_name, role, status, created_at, updated_at)
+       VALUES ($1, $2, 'agent', 'confirmed', now(), now())
+       ON CONFLICT (kg_node_id) WHERE kg_node_id IS NOT NULL
+       DO UPDATE SET updated_at = now()
+       RETURNING id`,
+      [kgNodeId, displayName],
     );
-  }
-  const contactId = contactResult.rows[0].id;
-  logger.info({ contactId, kgNodeId, displayName }, 'agent-bootstrap: agent identity ready');
 
-  return { kgNodeId, contactId };
+    if (!contactResult.rows[0]) {
+      throw new Error(
+        `agent-bootstrap: INSERT ... ON CONFLICT returned no rows for kgNodeId="${kgNodeId}" — ` +
+        'check that migration 010 was applied (idx_contacts_kg_node_unique must exist)',
+      );
+    }
+    const contactId = contactResult.rows[0].id;
+    logger.info({ contactId, kgNodeId, displayName }, 'agent-bootstrap: agent identity ready');
+
+    return { kgNodeId, contactId };
+  } catch (err) {
+    logger.error({ err, displayName }, 'agent-bootstrap: failed to bootstrap agent identity');
+    throw err;
+  }
 }

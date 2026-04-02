@@ -283,7 +283,7 @@ export class EntityContextAssembler {
     );
 
     return result.rows.map((row) => {
-      const props = row.properties as Record<string, unknown>;
+      const props = (row.properties ?? {}) as Record<string, unknown>;
       const factValue = props.value;
       // Log missing value field so operators can detect malformed fact writes
       if (factValue === undefined) {
