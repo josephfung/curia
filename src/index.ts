@@ -175,9 +175,11 @@ async function main(): Promise<void> {
     agentIdentityContactId = agentIdentity.contactId;
     logger.info({ contactId: agentIdentityContactId }, 'Agent self-identity ready');
   } catch (err) {
-    // Non-fatal: warn and continue. Entity enrichment for "your" references will
-    // degrade (return empty context) but won't crash the system.
-    logger.warn({ err }, 'Agent self-identity bootstrap failed — entity_enrichment default=agent will not resolve');
+    // Non-fatal: warn and continue. Three things degrade:
+    // 1. entity_enrichment default='agent' will return no results
+    // 2. The coordinator's ${agent_contact_id} prompt placeholder will be empty
+    // 3. Interactive entity-context lookups for "you"/"your" will fail to resolve
+    logger.warn({ err }, 'Agent self-identity bootstrap failed — entity_enrichment default=agent will not resolve; coordinator system prompt ${agent_contact_id} will be empty');
   }
 
   // Held messages — stores messages from unknown senders pending CEO review.

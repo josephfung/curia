@@ -16,6 +16,10 @@
 // skills operate on the same entity in a single conversation. Cache keys are
 // entity/contact IDs; invalidation is handled by clearCacheForEntity() which
 // callers (ContactService, EntityMemory) call after mutations.
+//
+// assembleMany() wraps each per-ID call in its own try/catch so that a DB error
+// on one entity doesn't abort the entire batch — failed IDs are logged and placed
+// in the `unresolved` array rather than propagating.
 
 import type { DbPool } from '../db/connection.js';
 import type { Logger } from '../logger.js';
@@ -36,20 +40,26 @@ interface CacheEntry {
 export class EntityContextAssembler {
   private cache = new Map<string, CacheEntry>();
 
+  // Reverse mapping: entityId -> Set of all cache keys that hold it.
+  // Used by clearCacheForEntity() to ensure stale entries can't be reached
+  // by either the original input ID or the resolved entity ID.
+  private entityToCacheKeys = new Map<string, Set<string>>();
+
   constructor(private pool: DbPool, private logger: Logger) {}
 
   /**
    * Resolve one or more IDs to EntityContext payloads.
    *
    * Resolution priority for each ID:
-   *   1. 'caller' / 'agent' — special aliases; callers must substitute the real
-   *      contactId before calling (the execution layer handles this).
-   *   2. Matches a contacts.id → look up kg_node_id, assemble from that KG node
-   *   3. Matches a kg_nodes.id directly → assemble from that KG node
-   *   4. No match → included in `unresolved` (not a hard error)
+   *   1. Matches a contacts.id → look up kg_node_id, assemble from that KG node
+   *   2. Matches a kg_nodes.id directly → assemble from that KG node
+   *   3. No match → included in `unresolved` (not a hard error)
+   *
+   * Each ID is assembled independently; a DB error on one ID logs a warning and
+   * adds the ID to `unresolved` without aborting the remaining IDs in the batch.
    *
    * @param ids   Array of contact IDs or KG node IDs to resolve.
-   * @param includeRelationships  If false, the relationships field is skipped (reduces payload size).
+   * @param includeRelationships  If false, the relationships field is skipped.
    */
   async assembleMany(
     ids: string[],
@@ -67,16 +77,19 @@ export class EntityContextAssembler {
         continue;
       }
 
-      const ctx = await this.assembleOne(id, includeRelationships);
-      if (ctx) {
-        // Cache under both the input ID and the resolved entity ID so subsequent
-        // lookups by either key hit the cache.
-        this.putInCache(id, ctx);
-        if (id !== ctx.entityId) {
-          this.putInCache(ctx.entityId, ctx);
+      try {
+        const ctx = await this.assembleOne(id, includeRelationships);
+        if (ctx) {
+          this.putInCache(id, ctx);
+          entities.push(ctx);
+        } else {
+          this.logger.debug({ entityId: id }, 'entity-context: ID could not be resolved to a KG node');
+          unresolved.push(id);
         }
-        entities.push(ctx);
-      } else {
+      } catch (err) {
+        // Per-ID failure is non-fatal for the batch — log with full context and
+        // treat as unresolved so the caller gets partial results instead of nothing.
+        this.logger.error({ err, entityId: id }, 'entity-context: assembleOne failed — treating as unresolved');
         unresolved.push(id);
       }
     }
@@ -86,56 +99,91 @@ export class EntityContextAssembler {
 
   /**
    * Resolve a single ID to an EntityContext. Returns undefined if not found.
+   * Throws on DB errors — callers should wrap in try/catch or use assembleMany().
    */
   async assembleOne(id: string, includeRelationships = true): Promise<EntityContext | undefined> {
-    // Step 1: Resolve the input ID to a KG node.
-    // Try contact ID first, then fall back to direct KG node ID.
-    let kgNodeId = await this.resolveKgNodeId(id);
-    if (!kgNodeId) return undefined;
+    try {
+      // Step 1: Resolve the input ID to a KG node.
+      // Try contact ID first, then fall back to direct KG node ID.
+      const kgNodeId = await this.resolveKgNodeId(id);
+      if (!kgNodeId) return undefined;
 
-    // Step 2: Load the KG node
-    const nodeRow = await this.getKgNode(kgNodeId);
-    if (!nodeRow) return undefined;
+      // Step 2: Load the KG node
+      const nodeRow = await this.getKgNode(kgNodeId);
+      if (!nodeRow) return undefined;
 
-    // Steps 3-6: Run assembly pipeline in parallel where safe
-    // Contact lookup + connected accounts depend on each other (need contactId),
-    // so contact lookup must complete before connected accounts.
-    // Facts and relationships are independent of contacts.
-    const [factsResult, contactRow] = await Promise.all([
-      this.getFacts(kgNodeId),
-      this.getContactByKgNodeId(kgNodeId),
-    ]);
+      // Steps 3-6: Run assembly pipeline in parallel where safe.
+      // Contact lookup + connected accounts depend on each other (need contactId),
+      // so contact lookup must complete before connected accounts.
+      // Facts and relationships are independent of contacts.
+      const [factsResult, contactRow] = await Promise.all([
+        this.getFacts(kgNodeId),
+        this.getContactByKgNodeId(kgNodeId),
+      ]);
 
-    // Connected accounts require the contact record's id
-    const connectedAccounts = contactRow
-      ? await this.getConnectedAccounts(contactRow.id)
-      : [];
+      // Connected accounts require the contact record's id
+      const connectedAccounts = contactRow
+        ? await this.getConnectedAccounts(contactRow.id)
+        : [];
 
-    const relationships = includeRelationships
-      ? await this.getRelationships(kgNodeId)
-      : [];
+      const relationships = includeRelationships
+        ? await this.getRelationships(kgNodeId)
+        : [];
 
-    const ctx: EntityContext = {
-      entityId: kgNodeId,
-      entityType: nodeRow.type,
-      label: nodeRow.label,
-      contact: contactRow
-        ? { contactId: contactRow.id, displayName: contactRow.display_name, role: contactRow.role }
-        : null,
-      facts: factsResult,
-      connectedAccounts,
-      relationships,
-    };
+      const ctx: EntityContext = {
+        entityId: kgNodeId,
+        entityType: nodeRow.type,
+        label: nodeRow.label,
+        contact: contactRow
+          ? { contactId: contactRow.id, displayName: contactRow.display_name, role: contactRow.role }
+          : null,
+        facts: factsResult,
+        connectedAccounts,
+        relationships,
+      };
 
-    return ctx;
+      return ctx;
+    } catch (err) {
+      // Re-throw with the entity ID stamped in the error for upstream diagnostic logs.
+      // assembleMany() catches this and logs `{ err, entityId: id }`.
+      this.logger.error({ err, entityId: id }, 'entity-context: pipeline failed');
+      throw err;
+    }
   }
 
   /**
    * Invalidate all cached entries for a given entity or contact ID.
    * Called by ContactService and EntityMemory after mutations.
+   *
+   * Clears all cache keys associated with the entity (both the input ID used to
+   * look it up and the resolved entity ID) to prevent stale hits via either path.
    */
   clearCacheForEntity(id: string): void {
-    this.cache.delete(id);
+    // Collect all keys that reference this entity (input ID and resolved entity ID)
+    const keysToDelete = new Set<string>([id]);
+
+    // If a cached entry under this ID exists, also collect its entityId
+    const entry = this.cache.get(id);
+    if (entry) {
+      keysToDelete.add(entry.context.entityId);
+    }
+
+    // Also collect any keys tracked under the entityId reverse map
+    const relatedKeys = this.entityToCacheKeys.get(id);
+    if (relatedKeys) {
+      for (const k of relatedKeys) keysToDelete.add(k);
+    }
+
+    // Delete all collected keys from both cache and reverse map
+    for (const key of keysToDelete) {
+      const e = this.cache.get(key);
+      if (e) {
+        // Clean up the reverse map for this entity
+        this.entityToCacheKeys.get(e.context.entityId)?.delete(key);
+      }
+      this.cache.delete(key);
+      this.entityToCacheKeys.delete(key);
+    }
   }
 
   // -- Private helpers --
@@ -145,13 +193,30 @@ export class EntityContextAssembler {
     if (!entry) return undefined;
     if (Date.now() > entry.expiresAt) {
       this.cache.delete(id);
+      this.entityToCacheKeys.get(entry.context.entityId)?.delete(id);
       return undefined;
     }
     return entry.context;
   }
 
-  private putInCache(id: string, ctx: EntityContext): void {
-    this.cache.set(id, { context: ctx, expiresAt: Date.now() + CACHE_TTL_MS });
+  private putInCache(inputId: string, ctx: EntityContext): void {
+    const expiresAt = Date.now() + CACHE_TTL_MS;
+
+    // Store under the input ID (may be a contact ID or KG node ID)
+    this.cache.set(inputId, { context: ctx, expiresAt });
+
+    // Also store under the resolved entity ID so subsequent lookups by KG node
+    // ID also hit the cache without a second DB round-trip
+    if (inputId !== ctx.entityId) {
+      this.cache.set(ctx.entityId, { context: ctx, expiresAt });
+    }
+
+    // Track both keys in the reverse map for accurate invalidation
+    if (!this.entityToCacheKeys.has(ctx.entityId)) {
+      this.entityToCacheKeys.set(ctx.entityId, new Set());
+    }
+    this.entityToCacheKeys.get(ctx.entityId)!.add(inputId);
+    this.entityToCacheKeys.get(ctx.entityId)!.add(ctx.entityId);
   }
 
   /**
@@ -217,15 +282,26 @@ export class EntityContextAssembler {
       [entityNodeId],
     );
 
-    return result.rows.map((row) => ({
-      label: row.label,
-      value: (row.properties as Record<string, unknown>).value ?? null,
-      category: String((row.properties as Record<string, unknown>).category ?? 'unknown'),
-      confidence: Number(row.confidence),
-      lastConfirmedAt: row.last_confirmed_at instanceof Date
-        ? row.last_confirmed_at.toISOString()
-        : String(row.last_confirmed_at),
-    }));
+    return result.rows.map((row) => {
+      const props = row.properties as Record<string, unknown>;
+      const factValue = props.value;
+      // Log missing value field so operators can detect malformed fact writes
+      if (factValue === undefined) {
+        this.logger.debug(
+          { label: row.label, entityNodeId },
+          'entity-context: fact node missing properties.value',
+        );
+      }
+      return {
+        label: row.label,
+        value: factValue ?? null,
+        category: String(props.category ?? 'unknown'),
+        confidence: Number(row.confidence),
+        lastConfirmedAt: row.last_confirmed_at instanceof Date
+          ? row.last_confirmed_at.toISOString()
+          : String(row.last_confirmed_at),
+      };
+    });
   }
 
   private async getContactByKgNodeId(kgNodeId: string): Promise<ContactRow | undefined> {

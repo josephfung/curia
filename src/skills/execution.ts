@@ -209,6 +209,14 @@ export class ExecutionLayer {
     // Entity enrichment: if the manifest declares entity_enrichment, pre-assemble
     // EntityContext before invoking the handler. This makes enrichment deterministic
     // and invisible to the LLM — it never sees raw calendar IDs or KG node IDs.
+    if (manifest.entity_enrichment && !this.entityContextAssembler) {
+      // A skill declared entity_enrichment but the assembler was not wired in —
+      // this is a configuration mistake, not a designed degradation path.
+      skillLogger.warn(
+        { skillName },
+        'entity_enrichment declared in manifest but EntityContextAssembler not configured — skipping pre-enrichment; ctx.entityContext will be undefined',
+      );
+    }
     if (manifest.entity_enrichment && this.entityContextAssembler) {
       const enrichment = manifest.entity_enrichment;
       const rawIds = input[enrichment.param];
