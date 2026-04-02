@@ -88,11 +88,16 @@ describe('NylasCalendarClient', () => {
         identifier: 'grant-123',
         queryParams: {
           calendar_id: 'cal-1',
-          start: '2026-04-01T00:00:00Z',
-          end: '2026-04-02T00:00:00Z',
+          start: Math.floor(new Date('2026-04-01T00:00:00Z').getTime() / 1000),
+          end: Math.floor(new Date('2026-04-02T00:00:00Z').getTime() / 1000),
           limit: 200,
         },
       });
+    });
+
+    it('throws on invalid date strings', async () => {
+      await expect(client.listEvents('cal-1', 'not-a-date', '2026-04-02T00:00:00Z'))
+        .rejects.toThrow(/Invalid timeMin timestamp/);
     });
   });
 

@@ -208,13 +208,18 @@ export class NylasCalendarClient {
     opts?: { limit?: number },
   ): Promise<NylasCalendarEvent[]> {
     this.log.debug({ calendarId, timeMin, timeMax }, 'Listing events');
+    const startUnix = this.toUnixSeconds(timeMin, 'timeMin');
+    const endUnix = this.toUnixSeconds(timeMax, 'timeMax');
+    if (endUnix <= startUnix) {
+      throw new Error(`Invalid time range: timeMax must be after timeMin (timeMin="${timeMin}", timeMax="${timeMax}")`);
+    }
     try {
       const response = await this.nylas.events.list({
         identifier: this.grantId,
         queryParams: {
           calendar_id: calendarId,
-          start: timeMin,
-          end: timeMax,
+          start: startUnix,
+          end: endUnix,
           limit: opts?.limit ?? 200,
         },
       });
@@ -228,12 +233,17 @@ export class NylasCalendarClient {
   /** Create a new event on a calendar. */
   async createEvent(calendarId: string, event: CreateEventInput): Promise<NylasCalendarEvent> {
     this.log.debug({ calendarId, title: event.title }, 'Creating event');
+    const startUnix = this.toUnixSeconds(event.start, 'start');
+    const endUnix = this.toUnixSeconds(event.end, 'end');
+    if (endUnix <= startUnix) {
+      throw new Error(`Invalid time range: end must be after start (start="${event.start}", end="${event.end}")`);
+    }
     try {
       const requestBody: Record<string, unknown> = {
         title: event.title,
         when: {
-          start_time: Math.floor(new Date(event.start).getTime() / 1000),
-          end_time: Math.floor(new Date(event.end).getTime() / 1000),
+          start_time: startUnix,
+          end_time: endUnix,
         },
       };
       if (event.description) requestBody.description = event.description;
@@ -272,8 +282,8 @@ export class NylasCalendarClient {
       if (changes.location !== undefined) requestBody.location = changes.location;
       if (changes.start !== undefined || changes.end !== undefined) {
         requestBody.when = {
-          ...(changes.start ? { start_time: Math.floor(new Date(changes.start).getTime() / 1000) } : {}),
-          ...(changes.end ? { end_time: Math.floor(new Date(changes.end).getTime() / 1000) } : {}),
+          ...(changes.start ? { start_time: this.toUnixSeconds(changes.start, 'start') } : {}),
+          ...(changes.end ? { end_time: this.toUnixSeconds(changes.end, 'end') } : {}),
         };
       }
       if (changes.attendees) {
@@ -324,13 +334,17 @@ export class NylasCalendarClient {
     timeMax: string,
   ): Promise<NylasFreeBusyResult[]> {
     this.log.debug({ calendarIds, timeMin, timeMax }, 'Getting free/busy');
+    const startUnix = this.toUnixSeconds(timeMin, 'timeMin');
+    const endUnix = this.toUnixSeconds(timeMax, 'timeMax');
+    if (endUnix <= startUnix) {
+      throw new Error(`Invalid time range: timeMax must be after timeMin (timeMin="${timeMin}", timeMax="${timeMax}")`);
+    }
     try {
       const response = await this.nylas.calendars_free_busy.list({
         identifier: this.grantId,
         requestBody: {
-          // Nylas expects Unix timestamps (seconds), not ISO strings
-          start_time: Math.floor(new Date(timeMin).getTime() / 1000),
-          end_time: Math.floor(new Date(timeMax).getTime() / 1000),
+          start_time: startUnix,
+          end_time: endUnix,
           emails: calendarIds,
         },
       });
@@ -346,6 +360,17 @@ export class NylasCalendarClient {
       this.log.error({ err, calendarIds }, 'Nylas getFreeBusy failed');
       throw err;
     }
+  }
+
+  // -- Helpers --
+
+  /** Convert an ISO 8601 string to Unix seconds, throwing on unparseable input. */
+  private toUnixSeconds(iso: string, label: string): number {
+    const unix = Math.floor(new Date(iso).getTime() / 1000);
+    if (Number.isNaN(unix)) {
+      throw new Error(`Invalid ${label} timestamp: "${iso}" — expected ISO 8601`);
+    }
+    return unix;
   }
 
   // -- Normalizers --
