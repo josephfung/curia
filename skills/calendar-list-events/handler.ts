@@ -1,7 +1,13 @@
 // skills/calendar-list-events/handler.ts
 //
-// Fetches events for a date range from a specific calendar, with optional
+// Fetches events for a date range from one or more calendars, with optional
 // client-side filtering by text query or attendee email.
+//
+// When calendarId is provided, queries that single calendar.
+// When omitted, resolves ALL calendars registered to the caller (via
+// contactService) and merges events across them — so "what's my agenda?"
+// works without the LLM needing to know specific calendar IDs.
+//
 // Nylas doesn't support server-side text search on event fields, so
 // the skill fetches all events in range and filters locally.
 
@@ -22,9 +28,6 @@ export class CalendarListEventsHandler implements SkillHandler {
       attendeeEmail?: string;
     };
 
-    if (!calendarId || typeof calendarId !== 'string') {
-      return { success: false, error: 'Missing required input: calendarId' };
-    }
     if (!timeMin || typeof timeMin !== 'string') {
       return { success: false, error: 'Missing required input: timeMin' };
     }
@@ -32,10 +35,36 @@ export class CalendarListEventsHandler implements SkillHandler {
       return { success: false, error: 'Missing required input: timeMax' };
     }
 
+    // Resolve which calendar(s) to query.
+    // If the caller provided a specific calendarId, use that.
+    // Otherwise, look up all calendars registered to the caller's contact.
+    let calendarIds: string[];
+
+    if (calendarId && typeof calendarId === 'string') {
+      calendarIds = [calendarId];
+    } else if (ctx.contactService && ctx.caller) {
+      const calendars = await ctx.contactService.getCalendarsForContact(ctx.caller.contactId);
+      if (calendars.length === 0) {
+        return { success: false, error: 'No calendars registered for this contact — register a calendar first' };
+      }
+      calendarIds = calendars.map((c) => c.nylasCalendarId);
+      ctx.log.info({ contactId: ctx.caller.contactId, calendarCount: calendarIds.length }, 'Resolved caller calendars');
+    } else {
+      return { success: false, error: 'Missing required input: calendarId (and unable to resolve caller calendars)' };
+    }
+
     try {
       // Pass maxResults as the upstream fetch limit so callers asking for >200 events aren't silently capped.
       const fetchLimit = typeof maxResults === 'number' && maxResults > 0 ? { limit: maxResults } : undefined;
-      let events = await ctx.nylasCalendarClient.listEvents(calendarId, timeMin, timeMax, fetchLimit);
+
+      // Fetch events from all resolved calendars in parallel, then merge.
+      const perCalendarResults = await Promise.all(
+        calendarIds.map((cid) => ctx.nylasCalendarClient!.listEvents(cid, timeMin, timeMax, fetchLimit)),
+      );
+      let events = perCalendarResults.flat();
+
+      // Sort merged events by start time so the agenda reads chronologically
+      events.sort((a, b) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime());
 
       // Client-side filtering: query matches title or description (case-insensitive)
       if (query && typeof query === 'string') {
@@ -60,11 +89,11 @@ export class CalendarListEventsHandler implements SkillHandler {
         events = events.slice(0, maxResults);
       }
 
-      ctx.log.info({ calendarId, count: events.length }, 'Listed events');
+      ctx.log.info({ calendarIds, count: events.length }, 'Listed events');
       return { success: true, data: { events, count: events.length } };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      ctx.log.error({ err, calendarId }, 'Failed to list events');
+      ctx.log.error({ err, calendarIds }, 'Failed to list events');
       return { success: false, error: `Failed to list events: ${message}` };
     }
   }
