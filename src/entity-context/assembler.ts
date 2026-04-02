@@ -202,21 +202,30 @@ export class EntityContextAssembler {
   private putInCache(inputId: string, ctx: EntityContext): void {
     const expiresAt = Date.now() + CACHE_TTL_MS;
 
-    // Store under the input ID (may be a contact ID or KG node ID)
-    this.cache.set(inputId, { context: ctx, expiresAt });
-
-    // Also store under the resolved entity ID so subsequent lookups by KG node
-    // ID also hit the cache without a second DB round-trip
-    if (inputId !== ctx.entityId) {
-      this.cache.set(ctx.entityId, { context: ctx, expiresAt });
+    // Collect all lookup keys for this entity: the input ID (may be a contact ID
+    // or KG node ID), the resolved KG node ID, and — crucially — the contact ID
+    // if the entity has one. Registering all three ensures that
+    // clearCacheForEntity() can invalidate the entry no matter which alias was
+    // used to prime the cache. Without the contact ID here, a lookup by KG node
+    // ID would leave no contact-ID → KG-node reverse map entry, so a subsequent
+    // clearCacheForEntity(contactId) call after a mutation would silently miss the
+    // stale KG node entry.
+    const allKeys = new Set([inputId, ctx.entityId]);
+    if (ctx.contact) {
+      allKeys.add(ctx.contact.contactId);
     }
 
-    // Track both keys in the reverse map for accurate invalidation
+    for (const key of allKeys) {
+      this.cache.set(key, { context: ctx, expiresAt });
+    }
+
+    // Register all keys in the reverse map so invalidation can sweep them all
     if (!this.entityToCacheKeys.has(ctx.entityId)) {
       this.entityToCacheKeys.set(ctx.entityId, new Set());
     }
-    this.entityToCacheKeys.get(ctx.entityId)!.add(inputId);
-    this.entityToCacheKeys.get(ctx.entityId)!.add(ctx.entityId);
+    for (const key of allKeys) {
+      this.entityToCacheKeys.get(ctx.entityId)!.add(key);
+    }
   }
 
   /**
