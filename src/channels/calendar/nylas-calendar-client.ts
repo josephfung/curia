@@ -208,14 +208,19 @@ export class NylasCalendarClient {
     opts?: { limit?: number },
   ): Promise<NylasCalendarEvent[]> {
     this.log.debug({ calendarId, timeMin, timeMax }, 'Listing events');
+    // Nylas expects Unix timestamps (seconds), not ISO strings
+    const startUnix = Math.floor(new Date(timeMin).getTime() / 1000);
+    const endUnix = Math.floor(new Date(timeMax).getTime() / 1000);
+    if (Number.isNaN(startUnix) || Number.isNaN(endUnix)) {
+      throw new Error(`Invalid time range: timeMin="${timeMin}", timeMax="${timeMax}" — expected ISO 8601 strings`);
+    }
     try {
       const response = await this.nylas.events.list({
         identifier: this.grantId,
         queryParams: {
           calendar_id: calendarId,
-          // Nylas expects Unix timestamps (seconds), not ISO strings
-          start: Math.floor(new Date(timeMin).getTime() / 1000),
-          end: Math.floor(new Date(timeMax).getTime() / 1000),
+          start: startUnix,
+          end: endUnix,
           limit: opts?.limit ?? 200,
         },
       });

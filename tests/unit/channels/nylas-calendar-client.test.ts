@@ -94,6 +94,11 @@ describe('NylasCalendarClient', () => {
         },
       });
     });
+
+    it('throws on invalid date strings', async () => {
+      await expect(client.listEvents('cal-1', 'not-a-date', '2026-04-02T00:00:00Z'))
+        .rejects.toThrow(/Invalid time range/);
+    });
   });
 
   describe('createEvent', () => {
