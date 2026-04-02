@@ -121,6 +121,7 @@ function interpolatePersona(
  * - ${available_specialists} — list of specialist agents from the agent registry
  * - ${current_date} — today's date in the configured timezone (YYYY-MM-DD, Day)
  * - ${timezone} — the configured IANA timezone name
+ * - ${agent_contact_id} — the agent's own contact ID (seeded at bootstrap)
  *
  * This runs at bootstrap time (after all agents are registered) and is separate
  * from persona interpolation which runs at config load time.
@@ -131,6 +132,7 @@ export function interpolateRuntimeContext(
     availableSpecialists?: string;
     currentDate?: string;
     timezone?: string;
+    agentContactId?: string;
   },
 ): string {
   return systemPrompt
@@ -145,5 +147,9 @@ export function interpolateRuntimeContext(
     .replace(
       /\$\{timezone\}/g,
       context.timezone ?? 'UTC',
+    )
+    .replace(
+      /\$\{agent_contact_id\}/g,
+      context.agentContactId ?? '',
     );
 }
