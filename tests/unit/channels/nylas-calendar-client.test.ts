@@ -88,8 +88,8 @@ describe('NylasCalendarClient', () => {
         identifier: 'grant-123',
         queryParams: {
           calendar_id: 'cal-1',
-          start: '2026-04-01T00:00:00Z',
-          end: '2026-04-02T00:00:00Z',
+          start: Math.floor(new Date('2026-04-01T00:00:00Z').getTime() / 1000),
+          end: Math.floor(new Date('2026-04-02T00:00:00Z').getTime() / 1000),
           limit: 200,
         },
       });

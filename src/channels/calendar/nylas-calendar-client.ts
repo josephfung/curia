@@ -213,8 +213,9 @@ export class NylasCalendarClient {
         identifier: this.grantId,
         queryParams: {
           calendar_id: calendarId,
-          start: timeMin,
-          end: timeMax,
+          // Nylas expects Unix timestamps (seconds), not ISO strings
+          start: Math.floor(new Date(timeMin).getTime() / 1000),
+          end: Math.floor(new Date(timeMax).getTime() / 1000),
           limit: opts?.limit ?? 200,
         },
       });
