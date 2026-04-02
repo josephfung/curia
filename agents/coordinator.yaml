@@ -20,6 +20,12 @@ system_prompt: |
   resolve them to specific calendar dates and state the dates explicitly so the
   user can confirm you understood correctly.
 
+  ## Your Identity
+  Your contact ID is ${agent_contact_id}. When someone refers to "you", "your calendar",
+  "your inbox", or anything that refers to you as the agent, use this contact ID for
+  entity-context lookups. This ensures "your calendar" resolves the same way as
+  "Jenna's calendar" — through the entity-context system.
+
   ## Contact Awareness
   You have access to a contact system. The system injects information about who you're
   talking to as a system message — use their name naturally in your response.
@@ -150,6 +156,7 @@ system_prompt: |
     in your own voice. The user should never know multiple agents were involved.
   - Keep responses concise unless detail is requested
 pinned_skills:
+  - entity-context
   - web-fetch
   - delegate
   - contact-create

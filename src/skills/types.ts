@@ -31,6 +31,19 @@ export interface SkillManifest {
    *  This grants unrestricted bus publish/subscribe including layer impersonation.
    *  Only for framework-internal skills like 'delegate' — external skills should never set this. */
   infrastructure?: boolean;
+  /** Declares that the execution layer should automatically assemble entity context
+   *  before invoking this skill's handler. The assembled EntityContext[] is injected
+   *  into ctx.entityContext so the handler doesn't need to call entity-context directly.
+   *
+   *  param:    the input key containing the list of contact/entity IDs to enrich.
+   *  default:  what to use when that input is not provided:
+   *              'caller' → ctx.caller.contactId
+   *              'agent'  → the seeded agent contactId (ctx.agentContactId)
+   */
+  entity_enrichment?: {
+    param: string;
+    default: 'caller' | 'agent';
+  };
 }
 
 /**
@@ -106,6 +119,17 @@ export interface SkillContext {
    *  Guaranteed to be defined for elevated skills (execution layer rejects without it).
    *  Available but optional for normal skills. */
   caller?: CallerContext;
+  /** Entity context assembler — available to infrastructure skills.
+   *  Used by the entity-context skill to assemble EntityContext payloads on demand.
+   *  Also used by the execution layer for entity_enrichment pre-enrichment. */
+  entityContextAssembler?: import('../entity-context/assembler.js').EntityContextAssembler;
+  /** Pre-assembled entity context — populated automatically by the execution layer
+   *  when the skill's manifest declares entity_enrichment. Skills that declare
+   *  entity_enrichment receive this instead of calling entity-context themselves. */
+  entityContext?: import('../entity-context/types.js').EntityContext[];
+  /** The agent's own contactId — used by entity_enrichment when default is 'agent'.
+   *  Seeded at bootstrap and injected by the execution layer. */
+  agentContactId?: string;
 }
 
 /**

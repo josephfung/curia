@@ -11,6 +11,11 @@
 // bus and agent registry access. This effectively grants unrestricted bus
 // publish/subscribe including layer impersonation. Only framework-internal
 // skills like 'delegate' should use this — it is a privileged escape hatch.
+//
+// Entity enrichment (manifest.entity_enrichment): when a skill declares this,
+// the execution layer assembles EntityContext for the declared input parameter
+// before invoking the handler. The handler receives ctx.entityContext[] and
+// never needs to call entity-context itself.
 
 import type { SkillResult, SkillContext, CallerContext, AgentPersona } from './types.js';
 import type { SkillRegistry } from './registry.js';
@@ -24,6 +29,7 @@ import type { HeldMessageService } from '../contacts/held-messages.js';
 import type { SchedulerService } from '../scheduler/scheduler-service.js';
 import type { EntityMemory } from '../memory/entity-memory.js';
 import type { NylasCalendarClient } from '../channels/calendar/nylas-calendar-client.js';
+import type { EntityContextAssembler } from '../entity-context/assembler.js';
 
 // Warn (but don't truncate) when a skill returns more than this many chars.
 // Helps operators spot skills that might blow out the LLM context window.
@@ -41,8 +47,23 @@ export class ExecutionLayer {
   private entityMemory?: EntityMemory;
   private agentPersona?: AgentPersona;
   private nylasCalendarClient?: NylasCalendarClient;
+  private entityContextAssembler?: EntityContextAssembler;
+  /** The agent's own contactId — injected into ctx.agentContactId for entity_enrichment default='agent' */
+  private agentContactId?: string;
 
-  constructor(registry: SkillRegistry, logger: Logger, options?: { bus?: EventBus; agentRegistry?: AgentRegistry; contactService?: ContactService; outboundGateway?: OutboundGateway; heldMessages?: HeldMessageService; schedulerService?: SchedulerService; entityMemory?: EntityMemory; agentPersona?: AgentPersona; nylasCalendarClient?: NylasCalendarClient }) {
+  constructor(registry: SkillRegistry, logger: Logger, options?: {
+    bus?: EventBus;
+    agentRegistry?: AgentRegistry;
+    contactService?: ContactService;
+    outboundGateway?: OutboundGateway;
+    heldMessages?: HeldMessageService;
+    schedulerService?: SchedulerService;
+    entityMemory?: EntityMemory;
+    agentPersona?: AgentPersona;
+    nylasCalendarClient?: NylasCalendarClient;
+    entityContextAssembler?: EntityContextAssembler;
+    agentContactId?: string;
+  }) {
     this.registry = registry;
     this.logger = logger;
     this.bus = options?.bus;
@@ -54,6 +75,16 @@ export class ExecutionLayer {
     this.entityMemory = options?.entityMemory;
     this.agentPersona = options?.agentPersona;
     this.nylasCalendarClient = options?.nylasCalendarClient;
+    this.entityContextAssembler = options?.entityContextAssembler;
+    this.agentContactId = options?.agentContactId;
+  }
+
+  /**
+   * Update the agent's own contactId after bootstrap has seeded it.
+   * Called from index.ts once the agent self-identity is resolved.
+   */
+  setAgentContactId(contactId: string): void {
+    this.agentContactId = contactId;
   }
 
   /**
@@ -62,9 +93,10 @@ export class ExecutionLayer {
    * Steps:
    * 1. Resolve the skill from the registry
    * 2. Build a sandboxed SkillContext with scoped secret access
-   * 3. Execute the handler with a timeout
-   * 4. Sanitize the output (strip injection vectors, redact secrets, truncate)
-   * 5. Return the result
+   * 3. If manifest declares entity_enrichment, pre-assemble EntityContext
+   * 4. Execute the handler with a timeout
+   * 5. Sanitize the output (strip injection vectors, redact secrets, truncate)
+   * 6. Return the result
    *
    * Never throws — always returns a SkillResult.
    */
@@ -123,6 +155,7 @@ export class ExecutionLayer {
       log: skillLogger,
       agentPersona: this.agentPersona,
       caller,
+      agentContactId: this.agentContactId,
       // contactService is available to all skills — read-only contact lookups
       // (calendars, display names, etc.) are not a privilege escalation.
       contactService: this.contactService,
@@ -165,6 +198,75 @@ export class ExecutionLayer {
       // nylasCalendarClient is optional — only calendar skills need it
       if (this.nylasCalendarClient) {
         ctx.nylasCalendarClient = this.nylasCalendarClient;
+      }
+    }
+
+    // entityContextAssembler — available to ALL skills (not just infrastructure).
+    // The assembler is a read-only DB pipeline; granting it unconditionally is no
+    // more privileged than contactService. Keeping it outside the infrastructure
+    // block means the entity-context skill does not need infrastructure: true,
+    // which would otherwise grant it full bus/registry access it doesn't need.
+    if (this.entityContextAssembler) {
+      ctx.entityContextAssembler = this.entityContextAssembler;
+    }
+
+    // Entity enrichment: if the manifest declares entity_enrichment, pre-assemble
+    // EntityContext before invoking the handler. This makes enrichment deterministic
+    // and invisible to the LLM — it never sees raw calendar IDs or KG node IDs.
+    if (manifest.entity_enrichment && !this.entityContextAssembler) {
+      // A skill declared entity_enrichment but the assembler was not wired in —
+      // this is a configuration mistake, not a designed degradation path.
+      skillLogger.warn(
+        { skillName },
+        'entity_enrichment declared in manifest but EntityContextAssembler not configured — skipping pre-enrichment; ctx.entityContext will be undefined',
+      );
+    }
+    if (manifest.entity_enrichment && this.entityContextAssembler) {
+      const enrichment = manifest.entity_enrichment;
+      const rawIds = input[enrichment.param];
+
+      // Resolve the IDs to enrich: explicit input > default (caller/agent)
+      let idsToEnrich: string[] = [];
+      if (Array.isArray(rawIds) && rawIds.length > 0) {
+        idsToEnrich = rawIds.filter((id): id is string => typeof id === 'string');
+      } else {
+        // Use the declared default
+        if (enrichment.default === 'caller' && caller?.contactId) {
+          idsToEnrich = [caller.contactId];
+        } else if (enrichment.default === 'agent' && this.agentContactId) {
+          idsToEnrich = [this.agentContactId];
+        } else {
+          // No IDs to enrich — log and continue without pre-enrichment
+          skillLogger.debug({ skillName, enrichmentDefault: enrichment.default }, 'entity_enrichment: no IDs to resolve, skipping pre-enrichment');
+        }
+      }
+
+      if (idsToEnrich.length > 0) {
+        try {
+          // Run assembleMany under the same timeout budget as the skill itself.
+          // Without this, a hung DB query in the assembler would block indefinitely
+          // because the invocation timeout race (further below) hasn't been set up yet.
+          let enrichmentTimer: NodeJS.Timeout | undefined;
+          const enrichmentResult = await Promise.race([
+            this.entityContextAssembler.assembleMany(idsToEnrich, { includeRelationships: true }),
+            new Promise<never>((_, reject) => {
+              enrichmentTimer = setTimeout(
+                () => reject(new Error(`entity_enrichment timed out after ${manifest.timeout}ms`)),
+                manifest.timeout,
+              );
+            }),
+          ]).finally(() => { clearTimeout(enrichmentTimer); });
+
+          if (enrichmentResult.unresolved.length > 0) {
+            skillLogger.warn({ skillName, unresolved: enrichmentResult.unresolved }, 'entity_enrichment: some IDs could not be resolved');
+          }
+          ctx.entityContext = enrichmentResult.entities;
+          skillLogger.debug({ skillName, enrichedCount: enrichmentResult.entities.length }, 'entity_enrichment: pre-enrichment complete');
+        } catch (err) {
+          // Non-fatal: log and continue without ctx.entityContext.
+          // The handler should check ctx.entityContext and handle its absence gracefully.
+          skillLogger.error({ err, skillName }, 'entity_enrichment: pre-enrichment failed, continuing without entity context');
+        }
       }
     }
 

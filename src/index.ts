@@ -52,6 +52,8 @@ import { OutboundContentFilter } from './dispatch/outbound-filter.js';
 import { OutboundGateway } from './skills/outbound-gateway.js';
 import { SchedulerService } from './scheduler/scheduler-service.js';
 import { Scheduler } from './scheduler/scheduler.js';
+import { EntityContextAssembler } from './entity-context/assembler.js';
+import { bootstrapAgentIdentity } from './entity-context/bootstrap.js';
 import type { AgentPersona } from './skills/types.js';
 
 async function main(): Promise<void> {
@@ -156,6 +158,29 @@ async function main(): Promise<void> {
 
   const contactResolver = new ContactResolver(contactService, entityMemory, authService, logger);
   logger.info('Contact system initialized');
+
+  // Entity context assembler — assembles EntityContext payloads from the KG, contacts,
+  // and connected accounts. Created here (after contact system) so it can query the DB
+  // for facts, calendars, and relationships. Passed to ExecutionLayer for pre-enrichment.
+  const entityContextAssembler = new EntityContextAssembler(pool, logger);
+
+  // Agent self-identity — seed Nathan's KG node and contact record at startup.
+  // Idempotent: safe to call every startup (uses INSERT ... ON CONFLICT).
+  // Fatal on failure: without a contactId, "your calendar" cannot be resolved
+  // and entity_enrichment default='agent' would silently produce no results.
+  let agentIdentityContactId: string | undefined;
+  const agentDisplayName = 'Nathan Curia'; // @TODO: read from coordinatorConfig.persona.display_name after agentConfigs are loaded
+  try {
+    const agentIdentity = await bootstrapAgentIdentity(agentDisplayName, pool, logger);
+    agentIdentityContactId = agentIdentity.contactId;
+    logger.info({ contactId: agentIdentityContactId }, 'Agent self-identity ready');
+  } catch (err) {
+    // Non-fatal: warn and continue. Three things degrade:
+    // 1. entity_enrichment default='agent' will return no results
+    // 2. The coordinator's ${agent_contact_id} prompt placeholder will be empty
+    // 3. Interactive entity-context lookups for "you"/"your" will fail to resolve
+    logger.warn({ err }, 'Agent self-identity bootstrap failed — entity_enrichment default=agent will not resolve; coordinator system prompt ${agent_contact_id} will be empty');
+  }
 
   // Held messages — stores messages from unknown senders pending CEO review.
   const heldMessages = HeldMessageService.createWithPostgres(pool, logger);
@@ -307,7 +332,9 @@ async function main(): Promise<void> {
 
   // Execution layer — now with bus, agent registry, and outbound gateway for
   // infrastructure skills. outboundGateway gives email skills their send path.
-  const executionLayer = new ExecutionLayer(skillRegistry, logger, { bus, agentRegistry, contactService, outboundGateway, heldMessages, schedulerService, entityMemory, agentPersona, nylasCalendarClient });
+  // entityContextAssembler enables entity_enrichment pre-enrichment and the
+  // entity-context skill. agentContactId enables entity_enrichment default='agent'.
+  const executionLayer = new ExecutionLayer(skillRegistry, logger, { bus, agentRegistry, contactService, outboundGateway, heldMessages, schedulerService, entityMemory, agentPersona, nylasCalendarClient, entityContextAssembler, agentContactId: agentIdentityContactId });
 
   // Two-pass agent registration:
   // Pass 1: Register all agents in the registry so specialistSummary() is complete
@@ -353,6 +380,7 @@ async function main(): Promise<void> {
         availableSpecialists: agentRegistry.specialistSummary(),
         currentDate,
         timezone: config.timezone,
+        agentContactId: agentIdentityContactId,
       });
     }
 

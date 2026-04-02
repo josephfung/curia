@@ -2,6 +2,12 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import yaml from 'js-yaml';
 
+// UUID v4 format: 8-4-4-4-12 hex groups separated by hyphens.
+// Used to validate agentContactId before system prompt interpolation —
+// guards against prompt injection if the ID source ever changes from
+// the current gen_random_uuid() call in bootstrap.ts.
+const UUID_FORMAT = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 /**
  * Shape of an agent YAML config file.
  * Fields match what's in agents/*.yaml.
@@ -121,6 +127,7 @@ function interpolatePersona(
  * - ${available_specialists} — list of specialist agents from the agent registry
  * - ${current_date} — today's date in the configured timezone (YYYY-MM-DD, Day)
  * - ${timezone} — the configured IANA timezone name
+ * - ${agent_contact_id} — the agent's own contact ID (seeded at bootstrap)
  *
  * This runs at bootstrap time (after all agents are registered) and is separate
  * from persona interpolation which runs at config load time.
@@ -131,6 +138,7 @@ export function interpolateRuntimeContext(
     availableSpecialists?: string;
     currentDate?: string;
     timezone?: string;
+    agentContactId?: string;
   },
 ): string {
   return systemPrompt
@@ -145,5 +153,14 @@ export function interpolateRuntimeContext(
     .replace(
       /\$\{timezone\}/g,
       context.timezone ?? 'UTC',
+    )
+    .replace(
+      /\$\{agent_contact_id\}/g,
+      // Validate UUID format before interpolation — defense-in-depth against
+      // prompt injection if the ID source ever changes from gen_random_uuid().
+      // The current bootstrap always produces a Postgres-generated UUID, but an
+      // explicit check here ensures a future change (env var, config, etc.) can't
+      // accidentally inject arbitrary text into the system prompt.
+      UUID_FORMAT.test(context.agentContactId ?? '') ? (context.agentContactId ?? '') : '',
     );
 }
