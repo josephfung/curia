@@ -78,7 +78,9 @@ export interface SkillContext {
   bus?: import('../bus/bus.js').EventBus;
   /** Agent registry — only available to infrastructure skills */
   agentRegistry?: import('../agents/agent-registry.js').AgentRegistry;
-  /** Contact service — only available to infrastructure skills */
+  /** Contact service — available to all skills for caller-scoped lookups
+   *  (e.g., resolving a caller's registered calendars, looking up contacts).
+   *  Populated whenever the ExecutionLayer has a contactService instance. */
   contactService?: import('../contacts/contact-service.js').ContactService;
   /** Outbound gateway — only available to infrastructure skills. All external
    *  communication (email, future Signal/Telegram) goes through the gateway,
