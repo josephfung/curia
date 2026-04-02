@@ -234,6 +234,61 @@ describe('CalendarListEventsHandler', () => {
     if (!result.success) expect(result.error).toContain('DB connection lost');
   });
 
+  it('returns partial results with warnings when one calendar fails', async () => {
+    const nylasCalendarClient = {
+      listEvents: vi.fn()
+        .mockResolvedValueOnce([mockEvents[0]])
+        .mockRejectedValueOnce(new Error('Not Found')),
+    };
+    const contactService = {
+      getCalendarsForContact: vi.fn().mockResolvedValue([
+        { nylasCalendarId: 'cal-work' },
+        { nylasCalendarId: 'cal-stale' },
+      ]),
+    };
+
+    const result = await handler.execute(makeCtx(
+      { timeMin: '2026-04-01T00:00:00Z', timeMax: '2026-04-02T00:00:00Z' },
+      {
+        nylasCalendarClient: nylasCalendarClient as never,
+        contactService: contactService as never,
+        caller: { contactId: 'primary-user', role: 'ceo', channel: 'cli' },
+      },
+    ));
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const data = result.data as { events: unknown[]; count: number; warnings?: string[] };
+      expect(data.events).toHaveLength(1);
+      expect(data.warnings).toBeDefined();
+      expect(data.warnings![0]).toContain('cal-stale');
+    }
+  });
+
+  it('returns failure when all calendars fail', async () => {
+    const nylasCalendarClient = {
+      listEvents: vi.fn().mockRejectedValue(new Error('Not Found')),
+    };
+    const contactService = {
+      getCalendarsForContact: vi.fn().mockResolvedValue([
+        { nylasCalendarId: 'cal-1' },
+        { nylasCalendarId: 'cal-2' },
+      ]),
+    };
+
+    const result = await handler.execute(makeCtx(
+      { timeMin: '2026-04-01T00:00:00Z', timeMax: '2026-04-02T00:00:00Z' },
+      {
+        nylasCalendarClient: nylasCalendarClient as never,
+        contactService: contactService as never,
+        caller: { contactId: 'primary-user', role: 'ceo', channel: 'cli' },
+      },
+    ));
+
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error).toContain('Failed to list events from any calendar');
+  });
+
   it('respects maxResults limit', async () => {
     const nylasCalendarClient = {
       listEvents: vi.fn().mockResolvedValue(mockEvents),

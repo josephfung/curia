@@ -15,7 +15,8 @@ import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/t
 
 export class CalendarListEventsHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {
-    if (!ctx.nylasCalendarClient) {
+    const calendarClient = ctx.nylasCalendarClient;
+    if (!calendarClient) {
       return { success: false, error: 'Calendar not configured — Nylas credentials missing' };
     }
 
@@ -58,10 +59,32 @@ export class CalendarListEventsHandler implements SkillHandler {
       const fetchLimit = typeof maxResults === 'number' && maxResults > 0 ? { limit: maxResults } : undefined;
 
       // Fetch events from all resolved calendars in parallel, then merge.
-      const perCalendarResults = await Promise.all(
-        calendarIds.map((cid) => ctx.nylasCalendarClient!.listEvents(cid, timeMin, timeMax, fetchLimit)),
+      // Use allSettled so one bad calendar (stale grant, revoked access) doesn't
+      // poison the entire result — return partial results and log failures.
+      const settled = await Promise.allSettled(
+        calendarIds.map((cid) => calendarClient.listEvents(cid, timeMin, timeMax, fetchLimit)),
       );
-      let events = perCalendarResults.flat();
+
+      const failedCalendarIds: string[] = [];
+      const successfulEvents: Array<typeof settled[0] extends PromiseFulfilledResult<infer T> ? T : never> = [];
+      for (let i = 0; i < settled.length; i++) {
+        const result = settled[i];
+        if (result.status === 'fulfilled') {
+          successfulEvents.push(result.value);
+        } else {
+          failedCalendarIds.push(calendarIds[i]);
+          ctx.log.error({ err: result.reason, calendarId: calendarIds[i] }, 'Failed to fetch events for calendar');
+        }
+      }
+
+      if (successfulEvents.length === 0) {
+        const message = failedCalendarIds.length > 0
+          ? `Failed to list events from any calendar (${failedCalendarIds.length} failed: ${failedCalendarIds.join(', ')})`
+          : 'No events found';
+        return { success: false, error: message };
+      }
+
+      let events = successfulEvents.flat();
 
       // Sort merged events by start time so the agenda reads chronologically
       events.sort((a, b) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime());
@@ -89,8 +112,13 @@ export class CalendarListEventsHandler implements SkillHandler {
         events = events.slice(0, maxResults);
       }
 
-      ctx.log.info({ calendarIds, count: events.length }, 'Listed events');
-      return { success: true, data: { events, count: events.length } };
+      ctx.log.info({ calendarIds, count: events.length, failedCalendarIds }, 'Listed events');
+      const data: Record<string, unknown> = { events, count: events.length };
+      // Surface partial failures so the LLM can inform the user
+      if (failedCalendarIds.length > 0) {
+        data.warnings = [`Failed to fetch events from ${failedCalendarIds.length} calendar(s): ${failedCalendarIds.join(', ')}`];
+      }
+      return { success: true, data };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       ctx.log.error({ err, calendarId }, 'Failed to list events');
