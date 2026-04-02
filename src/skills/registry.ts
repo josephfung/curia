@@ -67,10 +67,21 @@ export class SkillRegistry {
       const required: string[] = [];
 
       for (const [key, typeStr] of Object.entries(skill.manifest.inputs)) {
-        // Convention: "string?" means optional, "string" means required
-        const isOptional = typeStr.endsWith('?');
-        const baseType = isOptional ? typeStr.slice(0, -1) : typeStr;
-        properties[key] = { type: baseType };
+        // Skill manifests use a shorthand notation with parenthetical descriptions
+        // and trailing "?" for optionality. The "?" may appear before or after the
+        // parenthetical, so we strip the parenthetical first:
+        //   "string (generate | update | save | reset)" → type "string", desc "generate | update | save | reset"
+        //   "string? (required for generate)" → type "string", optional, desc "required for generate"
+        //   "boolean?" → type "boolean", optional, no desc
+        const parenMatch = typeStr.match(/^(.+?)\s*\((.+)\)$/);
+        // When the regex matches, groups [1] and [2] are always present
+        const typePart = parenMatch ? parenMatch[1]! : typeStr;
+        const description = parenMatch ? parenMatch[2]! : undefined;
+
+        const isOptional = typePart.endsWith('?');
+        const baseType = isOptional ? typePart.slice(0, -1) : typePart;
+
+        properties[key] = { type: baseType, ...(description ? { description } : {}) };
         if (!isOptional) {
           required.push(key);
         }

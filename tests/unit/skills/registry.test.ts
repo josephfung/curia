@@ -82,6 +82,47 @@ describe('SkillRegistry', () => {
     expect(tools[0].input_schema.properties).toHaveProperty('max_length');
   });
 
+  it('strips parenthetical descriptions from type strings and moves them to description', () => {
+    registry.register(makeManifest({
+      name: 'template-skill',
+      description: 'A template skill',
+      inputs: {
+        action: 'string (generate | update | save | reset)',
+        recipient_name: 'string? (required for generate)',
+        offer_reschedule: 'boolean? (optional for generate — whether to offer rescheduling)',
+      },
+    }), stubHandler);
+    const tools = registry.toToolDefinitions(['template-skill']);
+    const props = tools[0].input_schema.properties;
+
+    // Required field with parenthetical description
+    expect(props.action.type).toBe('string');
+    expect(props.action.description).toBe('generate | update | save | reset');
+
+    // Optional field with parenthetical description
+    expect(props.recipient_name.type).toBe('string');
+    expect(props.recipient_name.description).toBe('required for generate');
+
+    // Optional boolean with long parenthetical description
+    expect(props.offer_reschedule.type).toBe('boolean');
+    expect(props.offer_reschedule.description).toBe('optional for generate — whether to offer rescheduling');
+
+    // action is required, the other two are optional
+    expect(tools[0].input_schema.required).toEqual(['action']);
+  });
+
+  it('does not add description when type has no parenthetical', () => {
+    registry.register(makeManifest({
+      name: 'simple-skill',
+      description: 'Simple',
+      inputs: { url: 'string', count: 'number' },
+    }), stubHandler);
+    const tools = registry.toToolDefinitions(['simple-skill']);
+    const props = tools[0].input_schema.properties;
+    expect(props.url).toEqual({ type: 'string' });
+    expect(props.count).toEqual({ type: 'number' });
+  });
+
   it('toToolDefinitions ignores unknown skill names', () => {
     const tools = registry.toToolDefinitions(['nonexistent']);
     expect(tools).toHaveLength(0);
