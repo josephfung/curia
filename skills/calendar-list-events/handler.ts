@@ -35,25 +35,25 @@ export class CalendarListEventsHandler implements SkillHandler {
       return { success: false, error: 'Missing required input: timeMax' };
     }
 
-    // Resolve which calendar(s) to query.
-    // If the caller provided a specific calendarId, use that.
-    // Otherwise, look up all calendars registered to the caller's contact.
-    let calendarIds: string[];
-
-    if (calendarId && typeof calendarId === 'string') {
-      calendarIds = [calendarId];
-    } else if (ctx.contactService && ctx.caller) {
-      const calendars = await ctx.contactService.getCalendarsForContact(ctx.caller.contactId);
-      if (calendars.length === 0) {
-        return { success: false, error: 'No calendars registered for this contact — register a calendar first' };
-      }
-      calendarIds = calendars.map((c) => c.nylasCalendarId);
-      ctx.log.info({ contactId: ctx.caller.contactId, calendarCount: calendarIds.length }, 'Resolved caller calendars');
-    } else {
-      return { success: false, error: 'Missing required input: calendarId (and unable to resolve caller calendars)' };
-    }
-
     try {
+      // Resolve which calendar(s) to query.
+      // If the caller provided a specific calendarId, use that.
+      // Otherwise, look up all calendars registered to the caller's contact.
+      let calendarIds: string[];
+
+      if (calendarId && typeof calendarId === 'string') {
+        calendarIds = [calendarId];
+      } else if (ctx.contactService && ctx.caller) {
+        const calendars = await ctx.contactService.getCalendarsForContact(ctx.caller.contactId);
+        if (calendars.length === 0) {
+          return { success: false, error: 'No calendars registered for this contact — register a calendar first' };
+        }
+        calendarIds = calendars.map((c) => c.nylasCalendarId);
+        ctx.log.info({ contactId: ctx.caller.contactId, calendarCount: calendarIds.length }, 'Resolved caller calendars');
+      } else {
+        return { success: false, error: 'Missing required input: calendarId (and unable to resolve caller calendars)' };
+      }
+
       // Pass maxResults as the upstream fetch limit so callers asking for >200 events aren't silently capped.
       const fetchLimit = typeof maxResults === 'number' && maxResults > 0 ? { limit: maxResults } : undefined;
 
@@ -93,7 +93,7 @@ export class CalendarListEventsHandler implements SkillHandler {
       return { success: true, data: { events, count: events.length } };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      ctx.log.error({ err, calendarIds }, 'Failed to list events');
+      ctx.log.error({ err, calendarId }, 'Failed to list events');
       return { success: false, error: `Failed to list events: ${message}` };
     }
   }

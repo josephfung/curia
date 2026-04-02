@@ -116,6 +116,124 @@ describe('CalendarListEventsHandler', () => {
     }
   });
 
+  // -- Auto-resolve caller calendars (no calendarId provided) --
+
+  it('resolves caller calendars when calendarId is omitted', async () => {
+    const nylasCalendarClient = {
+      listEvents: vi.fn().mockResolvedValue([mockEvents[0]]),
+    };
+    const contactService = {
+      getCalendarsForContact: vi.fn().mockResolvedValue([
+        { nylasCalendarId: 'cal-work' },
+        { nylasCalendarId: 'cal-personal' },
+      ]),
+    };
+
+    const result = await handler.execute(makeCtx(
+      { timeMin: '2026-04-01T00:00:00Z', timeMax: '2026-04-02T00:00:00Z' },
+      {
+        nylasCalendarClient: nylasCalendarClient as never,
+        contactService: contactService as never,
+        caller: { contactId: 'primary-user', role: 'ceo', channel: 'cli' },
+      },
+    ));
+
+    expect(result.success).toBe(true);
+    // Should have queried both calendars
+    expect(nylasCalendarClient.listEvents).toHaveBeenCalledTimes(2);
+    expect(nylasCalendarClient.listEvents).toHaveBeenCalledWith('cal-work', '2026-04-01T00:00:00Z', '2026-04-02T00:00:00Z', undefined);
+    expect(nylasCalendarClient.listEvents).toHaveBeenCalledWith('cal-personal', '2026-04-01T00:00:00Z', '2026-04-02T00:00:00Z', undefined);
+    expect(contactService.getCalendarsForContact).toHaveBeenCalledWith('primary-user');
+  });
+
+  it('merges and sorts events from multiple calendars chronologically', async () => {
+    const workEvents = [
+      { ...mockEvents[1], id: 'work-1', startTime: '2026-04-01T14:00:00Z' },
+    ];
+    const personalEvents = [
+      { ...mockEvents[0], id: 'personal-1', startTime: '2026-04-01T09:00:00Z' },
+    ];
+    const nylasCalendarClient = {
+      listEvents: vi.fn()
+        .mockResolvedValueOnce(workEvents)
+        .mockResolvedValueOnce(personalEvents),
+    };
+    const contactService = {
+      getCalendarsForContact: vi.fn().mockResolvedValue([
+        { nylasCalendarId: 'cal-work' },
+        { nylasCalendarId: 'cal-personal' },
+      ]),
+    };
+
+    const result = await handler.execute(makeCtx(
+      { timeMin: '2026-04-01T00:00:00Z', timeMax: '2026-04-02T00:00:00Z' },
+      {
+        nylasCalendarClient: nylasCalendarClient as never,
+        contactService: contactService as never,
+        caller: { contactId: 'primary-user', role: 'ceo', channel: 'cli' },
+      },
+    ));
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const data = result.data as { events: Array<{ id: string }> };
+      expect(data.events).toHaveLength(2);
+      // personal-1 (09:00) should sort before work-1 (14:00)
+      expect(data.events[0].id).toBe('personal-1');
+      expect(data.events[1].id).toBe('work-1');
+    }
+  });
+
+  it('returns failure when no calendars are registered for caller', async () => {
+    const nylasCalendarClient = { listEvents: vi.fn() };
+    const contactService = {
+      getCalendarsForContact: vi.fn().mockResolvedValue([]),
+    };
+
+    const result = await handler.execute(makeCtx(
+      { timeMin: '2026-04-01T00:00:00Z', timeMax: '2026-04-02T00:00:00Z' },
+      {
+        nylasCalendarClient: nylasCalendarClient as never,
+        contactService: contactService as never,
+        caller: { contactId: 'primary-user', role: 'ceo', channel: 'cli' },
+      },
+    ));
+
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error).toContain('No calendars registered');
+  });
+
+  it('returns failure when no calendarId and no contactService', async () => {
+    const nylasCalendarClient = { listEvents: vi.fn() };
+
+    const result = await handler.execute(makeCtx(
+      { timeMin: '2026-04-01T00:00:00Z', timeMax: '2026-04-02T00:00:00Z' },
+      { nylasCalendarClient: nylasCalendarClient as never },
+    ));
+
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error).toContain('calendarId');
+  });
+
+  it('returns failure (not throws) when getCalendarsForContact rejects', async () => {
+    const nylasCalendarClient = { listEvents: vi.fn() };
+    const contactService = {
+      getCalendarsForContact: vi.fn().mockRejectedValue(new Error('DB connection lost')),
+    };
+
+    const result = await handler.execute(makeCtx(
+      { timeMin: '2026-04-01T00:00:00Z', timeMax: '2026-04-02T00:00:00Z' },
+      {
+        nylasCalendarClient: nylasCalendarClient as never,
+        contactService: contactService as never,
+        caller: { contactId: 'primary-user', role: 'ceo', channel: 'cli' },
+      },
+    ));
+
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error).toContain('DB connection lost');
+  });
+
   it('respects maxResults limit', async () => {
     const nylasCalendarClient = {
       listEvents: vi.fn().mockResolvedValue(mockEvents),
