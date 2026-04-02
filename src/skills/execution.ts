@@ -25,6 +25,10 @@ import type { SchedulerService } from '../scheduler/scheduler-service.js';
 import type { EntityMemory } from '../memory/entity-memory.js';
 import type { NylasCalendarClient } from '../channels/calendar/nylas-calendar-client.js';
 
+// Warn (but don't truncate) when a skill returns more than this many chars.
+// Helps operators spot skills that might blow out the LLM context window.
+const LARGE_OUTPUT_THRESHOLD = 50_000;
+
 export class ExecutionLayer {
   private registry: SkillRegistry;
   private logger: Logger;
@@ -181,11 +185,21 @@ export class ExecutionLayer {
         timeoutPromise,
       ]);
 
-      // Sanitize successful output before returning
+      // Sanitize successful output before returning.
+      // No default truncation — sanitizeOutput only strips dangerous tags and
+      // redacts secrets. We log a warning for large outputs so operators can
+      // spot skills that might blow out the LLM context window.
       if (result.success && typeof result.data === 'string') {
-        return { success: true, data: sanitizeOutput(result.data) };
+        const sanitized = sanitizeOutput(result.data);
+        if (sanitized.length > LARGE_OUTPUT_THRESHOLD) {
+          skillLogger.warn({ skillName, outputLength: sanitized.length }, 'Skill output exceeds large-output threshold');
+        }
+        return { success: true, data: sanitized };
       } else if (result.success && result.data !== null && result.data !== undefined) {
         const sanitized = sanitizeOutput(JSON.stringify(result.data));
+        if (sanitized.length > LARGE_OUTPUT_THRESHOLD) {
+          skillLogger.warn({ skillName, outputLength: sanitized.length }, 'Skill output exceeds large-output threshold');
+        }
         try {
           return { success: true, data: JSON.parse(sanitized) };
         } catch (parseErr) {

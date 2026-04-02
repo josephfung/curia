@@ -8,7 +8,7 @@
 // Lesson from Zora: tool outputs without sanitization are a prompt injection vector.
 
 export interface SanitizeOptions {
-  /** Max output length in characters. Default: 10000. */
+  /** Max output length in characters. Default: Infinity (no truncation). */
   maxLength?: number;
   /** If true, wraps the output in <tool_error> tags. */
   isError?: boolean;
@@ -42,14 +42,14 @@ const DANGEROUS_TAG_PATTERN = /<\/?(system|instruction|prompt|role|script|iframe
  * 1. Coerce non-strings to JSON
  * 2. Strip dangerous HTML/XML tag pairs + content, then orphan tags
  * 3. Redact secret patterns
- * 4. Truncate to length limit
+ * 4. Truncate to length limit (only if caller passes maxLength; no limit by default)
  * 5. Wrap errors in <tool_error> tags
  */
 export function sanitizeOutput(
   raw: string | unknown,
   options: SanitizeOptions = {},
 ): string {
-  const { maxLength = 10000, isError = false, extraRedactPatterns = [] } = options;
+  const { maxLength = Infinity, isError = false, extraRedactPatterns = [] } = options;
 
   // 1. Coerce non-strings to JSON so we always work with a string
   let text: string;

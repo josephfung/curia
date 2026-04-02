@@ -39,6 +39,12 @@ describe('sanitizeOutput', () => {
     expect(result).toBe(short);
   });
 
+  it('does not truncate by default (no maxLength)', () => {
+    const long = 'x'.repeat(50000);
+    const result = sanitizeOutput(long);
+    expect(result).toBe(long);
+  });
+
   it('redacts patterns matching common API key formats', () => {
     const input = 'key is sk-ant-api03-abcdefghijk1234567890 and more text';
     const result = sanitizeOutput(input);
