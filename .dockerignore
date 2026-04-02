@@ -10,4 +10,7 @@ tests
 coverage
 *.md
 !README.md
-docker/
+docker/*
+!docker/postgres.Dockerfile
+!docker/postgres-init-pgaudit.sql
+!docker/postgres-verify-pgaudit.sh

@@ -46,4 +46,5 @@ EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
   CMD curl -f http://localhost:3000/api/health || exit 1
 
-CMD ["node", "dist/index.js"]
+# --experimental-strip-types: skill handlers are .ts files loaded via dynamic import()
+CMD ["node", "--experimental-strip-types", "dist/index.js"]
