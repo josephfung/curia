@@ -70,8 +70,10 @@ export class EntityContextAssembler {
     const unresolved: string[] = [];
 
     for (const id of ids) {
-      // Check cache first (keyed by input ID to handle both contact and node ID hits)
-      const cached = this.getFromCache(id);
+      // Cache stores full payloads (with relationships) only. Skipping the cache for
+      // includeRelationships=false requests prevents a partial payload from being served
+      // to a later caller that wants the full payload (and vice versa).
+      const cached = includeRelationships ? this.getFromCache(id) : undefined;
       if (cached) {
         entities.push(cached);
         continue;
@@ -80,7 +82,9 @@ export class EntityContextAssembler {
       try {
         const ctx = await this.assembleOne(id, includeRelationships);
         if (ctx) {
-          this.putInCache(id, ctx);
+          if (includeRelationships) {
+            this.putInCache(id, ctx);
+          }
           entities.push(ctx);
         } else {
           this.logger.debug({ entityId: id }, 'entity-context: ID could not be resolved to a KG node');
@@ -200,7 +204,26 @@ export class EntityContextAssembler {
   }
 
   private putInCache(inputId: string, ctx: EntityContext): void {
-    const expiresAt = Date.now() + CACHE_TTL_MS;
+    const now = Date.now();
+    const expiresAt = now + CACHE_TTL_MS;
+
+    // Opportunistic GC: scan for expired entries on every write.
+    // Expired entries are only pruned on direct-key reads (getFromCache), so IDs that
+    // are never looked up again would otherwise accumulate indefinitely in long-lived
+    // processes. The scan is O(n) over the cache size; acceptable because the cache is
+    // bounded to the set of entities touched in a conversation (typically <100).
+    for (const [key, entry] of this.cache.entries()) {
+      if (now > entry.expiresAt) {
+        this.cache.delete(key);
+        const keys = this.entityToCacheKeys.get(entry.context.entityId);
+        if (keys) {
+          keys.delete(key);
+          if (keys.size === 0) {
+            this.entityToCacheKeys.delete(entry.context.entityId);
+          }
+        }
+      }
+    }
 
     // Collect all lookup keys for this entity: the input ID (may be a contact ID
     // or KG node ID), the resolved KG node ID, and — crucially — the contact ID

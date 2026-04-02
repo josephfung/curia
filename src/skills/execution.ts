@@ -243,12 +243,25 @@ export class ExecutionLayer {
 
       if (idsToEnrich.length > 0) {
         try {
-          const { entities, unresolved } = await this.entityContextAssembler.assembleMany(idsToEnrich, { includeRelationships: true });
-          if (unresolved.length > 0) {
-            skillLogger.warn({ skillName, unresolved }, 'entity_enrichment: some IDs could not be resolved');
+          // Run assembleMany under the same timeout budget as the skill itself.
+          // Without this, a hung DB query in the assembler would block indefinitely
+          // because the invocation timeout race (further below) hasn't been set up yet.
+          let enrichmentTimer: NodeJS.Timeout | undefined;
+          const enrichmentResult = await Promise.race([
+            this.entityContextAssembler.assembleMany(idsToEnrich, { includeRelationships: true }),
+            new Promise<never>((_, reject) => {
+              enrichmentTimer = setTimeout(
+                () => reject(new Error(`entity_enrichment timed out after ${manifest.timeout}ms`)),
+                manifest.timeout,
+              );
+            }),
+          ]).finally(() => { clearTimeout(enrichmentTimer); });
+
+          if (enrichmentResult.unresolved.length > 0) {
+            skillLogger.warn({ skillName, unresolved: enrichmentResult.unresolved }, 'entity_enrichment: some IDs could not be resolved');
           }
-          ctx.entityContext = entities;
-          skillLogger.debug({ skillName, enrichedCount: entities.length }, 'entity_enrichment: pre-enrichment complete');
+          ctx.entityContext = enrichmentResult.entities;
+          skillLogger.debug({ skillName, enrichedCount: enrichmentResult.entities.length }, 'entity_enrichment: pre-enrichment complete');
         } catch (err) {
           // Non-fatal: log and continue without ctx.entityContext.
           // The handler should check ctx.entityContext and handle its absence gracefully.

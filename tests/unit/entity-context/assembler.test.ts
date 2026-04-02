@@ -3,7 +3,7 @@
 // Unit tests for EntityContextAssembler.
 // Uses a mock DB pool — no real database required.
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import pino from 'pino';
 import { EntityContextAssembler } from '../../../src/entity-context/assembler.js';
 import type { DbPool } from '../../../src/db/connection.js';
@@ -28,7 +28,12 @@ function makeSequentialPool(responses: Array<{ rows: unknown[] }>): DbPool {
   const pool = makeMockPool();
   let callIndex = 0;
   vi.mocked(pool.query).mockImplementation(() => {
-    const res = responses[callIndex++] ?? { rows: [] };
+    const res = responses[callIndex++];
+    if (!res) {
+      // Throw so tests fail fast when the assembler issues more queries than expected.
+      // A silent empty-rows fallback would mask regressions where extra DB calls are added.
+      throw new Error(`Unexpected query call #${callIndex} — add a response to makeSequentialPool`);
+    }
     return Promise.resolve(res as ReturnType<DbPool['query']>);
   });
   return pool;

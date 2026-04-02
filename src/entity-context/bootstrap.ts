@@ -51,7 +51,7 @@ export async function bootstrapAgentIdentity(
       `INSERT INTO kg_nodes (type, label, properties, confidence, decay_class, source, created_at, last_confirmed_at)
        VALUES ('person', $1, $2, 1.0, 'permanent', 'bootstrap', now(), now())
        ON CONFLICT ((properties->>'is_agent')) WHERE (properties->>'is_agent') = 'true'
-       DO UPDATE SET last_confirmed_at = now()
+       DO UPDATE SET label = EXCLUDED.label, last_confirmed_at = now()
        RETURNING id`,
       [
         displayName,
