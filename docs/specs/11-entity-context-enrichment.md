@@ -129,7 +129,10 @@ interface EntityFact {
   label: string;
   /** Fact value — a string, number, or structured object */
   value: unknown;
-  /** Category for grouping: 'preference', 'identifier', 'location', 'biographical', etc. */
+  /** Category for grouping — freeform string, convention-driven.
+   *  Common values: 'preference', 'identifier', 'location', 'biographical',
+   *  'scheduling', 'faith', 'travel', 'financial'. Not an enum — new
+   *  categories emerge naturally as the KG grows. */
   category: string;
   /** Confidence score (0-1) from the KG */
   confidence: number;
@@ -402,6 +405,10 @@ contact_integrations   — Generic integrations (future)
 
 The entity-context assembly pipeline queries all connected-account tables for the entity and includes them in the `connectedAccounts` array. Each table has its own schema (calendars have timezone; email accounts have signatures; integrations have provider-specific metadata), but the entity-context payload normalizes them into a common `ConnectedAccount` shape.
 
+### Proactive Account Discovery
+
+When the assembly pipeline finds an entity with no connected accounts of a given type, it should proactively check available providers. For example, if a contact has no registered calendars but the system has a Nylas grant that covers their email domain, the pipeline checks Nylas for available calendars and suggests linking them. This surfaces as a `discoveredAccounts` field on the payload — not auto-linked (that requires explicit action), but visible so the LLM can prompt the user: "I found Jenna's calendar on Google — would you like me to connect it?"
+
 ### Why Not a Single `entity_resources` Table?
 
 Calendars, email accounts, and CRM connections have fundamentally different schemas, credentials, and lifecycle management. A single polymorphic table would require JSONB for everything, lose type safety, and make migrations painful. Separate tables with a shared query pattern (the entity-context assembly pipeline) gives us type safety per resource type with a unified read path.
@@ -427,7 +434,7 @@ Calendars, email accounts, and CRM connections have fundamentally different sche
 
 8. **Knowledge skills** — `knowledge-travel-preferences`, `knowledge-loyalty-programs`, etc. adopt entity-context instead of hard-coding caller assumptions
 9. **Email skills** — when email accounts are added to connected accounts, `email-send`/`email-reply` use entity-context to resolve sender accounts
-10. **Contact-lookup evolution** — consider extending `contact-lookup` to search all KG entity types (orgs, events, places), not just contacts. This gives the LLM a single tool for resolving "Competitor A" or "Dreamforce" to entity IDs.
+10. **`entity-lookup` skill** — a new broad-based search skill for resolving any KG entity (orgs, events, places, projects) to entity IDs. Separate from `contact-lookup`, which stays focused on people — contact resolution is identity-sensitive and mistakes there have real consequences (wrong person's calendar, wrong email). `entity-lookup` is more exploratory: fuzzy matching is acceptable, and results are used for context enrichment rather than identity verification.
 
 ---
 
@@ -452,33 +459,42 @@ Calendars, email accounts, and CRM connections have fundamentally different sche
 
 ---
 
-## Open Questions
+## Resolved Design Decisions
 
-1. **Fact categorization** — the `category` field on `EntityFact` (e.g., 'preference', 'identifier', 'location') needs a defined vocabulary. Should this be an enum in the KG schema, or freeform with convention?
+1. **Fact categorization: freeform with convention.** The `category` field is a plain string, not an enum. Common values (`preference`, `identifier`, `location`, `scheduling`, `faith`, etc.) emerge by convention. No schema enforcement — new categories appear naturally as the KG grows.
 
-2. **Connected account discovery** — when the entity-context pipeline finds a contact with no connected calendars, should it proactively check Nylas for available calendars? Or is that a separate "account linking" workflow?
+2. **Connected account discovery: proactive.** When the pipeline finds an entity with no connected accounts, it checks available providers (e.g., Nylas) and surfaces discoverable accounts in the payload. These are not auto-linked — the LLM prompts the user to confirm.
 
-3. **Entity search vs. contact-lookup** — should `contact-lookup` be extended to search all KG entity types, or should there be a separate `entity-search` skill? The former is simpler but muddies the "contacts" concept.
+3. **Entity search: separate `entity-lookup` skill.** `contact-lookup` stays focused on people — identity resolution is high-stakes and mistakes have real consequences. A new `entity-lookup` skill handles broad KG search (orgs, events, places, projects) where fuzzy matching is acceptable.
 
-4. **Multi-entity performance** — "Schedule a meeting for 10 people" means 10 entity-context lookups. The assembly pipeline should support batch queries (single DB round-trip) rather than N sequential lookups.
+4. **Batch performance: deferred.** Multi-entity lookups will use sequential queries initially. Batch optimization (single DB round-trip) can be added when performance data shows it's needed.
 
-5. **Partial enrichment** — should skills be able to declare which parts of the context they need (e.g., "only connected accounts, skip relationships")? This avoids fetching KG edges for skills that only need calendar IDs.
+5. **Partial enrichment: deferred.** All skills receive the full context payload. <!-- TODO: add partial enrichment (e.g., "only connected accounts, skip relationships") if profiling shows the full payload is wasteful for simple skills -->
 
 ---
 
 ## Implementation Checklist
 
+### Phase 1: Foundation
 - [ ] Agent self-identity: KG node + contact record for Nathan, bootstrap seeding
 - [ ] Agent contactId injection into coordinator system prompt
 - [ ] Entity-context assembly module (`src/entity-context/`)
+- [ ] Proactive account discovery in the assembly pipeline
 - [ ] `entity-context` skill (manifest + handler)
 - [ ] `ctx.entityContext` field on `SkillContext`
 - [ ] `entity_enrichment` manifest declaration support in execution layer
 - [ ] TTL cache for entity context payloads
 - [ ] Cache invalidation on contact/KG mutations
-- [ ] Calendar skills adoption (list-events, create-event, find-free-time, check-conflicts)
-- [ ] Remove `calendarId` from LLM-visible tool definitions
 - [ ] Unit tests: entity-context assembly for person, org, event entities
 - [ ] Unit tests: execution layer pre-enrichment
 - [ ] Unit tests: cache behavior (hit, miss, invalidation)
+
+### Phase 2: Calendar adoption
+- [ ] Calendar skills adoption (list-events, create-event, find-free-time, check-conflicts)
+- [ ] Remove `calendarId` from LLM-visible tool definitions
 - [ ] Integration test: end-to-end "What's on Jenna's calendar?" flow
+
+### Phase 3: Broader adoption
+- [ ] `entity-lookup` skill for broad KG entity search (orgs, events, places)
+- [ ] Knowledge skills adoption (travel-preferences, loyalty-programs, etc.)
+- [ ] Email skills adoption (when email connected accounts are added)
