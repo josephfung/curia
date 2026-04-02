@@ -1,0 +1,16 @@
+node_modules
+dist
+.env
+.env.*
+*.log
+.git
+.github
+docs
+tests
+coverage
+*.md
+!README.md
+docker/*
+!docker/postgres.Dockerfile
+!docker/postgres-init-pgaudit.sql
+!docker/postgres-verify-pgaudit.sh
