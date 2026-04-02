@@ -40,11 +40,13 @@ RUN pnpm add tsx
 # Copy compiled output from build stage
 COPY --from=build /app/dist ./dist
 
-# Copy runtime data files loaded at startup (agents, skills, config, migrations)
+# Copy runtime data files loaded at startup
+# Full src/ is needed because skill handlers import from src/ (e.g., bus/events.ts)
+# and tsx resolves these at runtime
 COPY agents/ ./agents/
 COPY skills/ ./skills/
 COPY config/ ./config/
-COPY src/db/migrations/ ./src/db/migrations/
+COPY src/ ./src/
 
 EXPOSE 3000
 
