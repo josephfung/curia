@@ -54,15 +54,14 @@ export class ContactResolver {
             authorization: null,
           };
         }
+        // DB call succeeded but no CEO contact row exists yet (fresh install before seeding).
+        // Skills that need a real UUID will return empty results — best we can do.
+        this.logger.warn({ channel }, 'contact-resolver: no CEO contact found in DB, using synthetic primary-user ID');
       } catch (err) {
-        // DB lookup failure must not break the CLI — fall through to the synthetic ID
+        // DB lookup failure must not break the CLI — fall through to the synthetic ID.
+        // Don't re-log "no CEO contact found" here; the issue is a DB error, not a missing row.
         this.logger.warn({ err }, 'contact-resolver: failed to look up CEO contact, falling back to synthetic ID');
       }
-
-      // No CEO contact in DB yet (e.g., fresh install before seeding) — use the synthetic ID.
-      // Skills that need a real UUID (calendar, entity-context) will return empty results,
-      // which is the best we can do without a real contact record.
-      this.logger.warn({ channel }, 'contact-resolver: no CEO contact found in DB, using synthetic primary-user ID');
       return {
         resolved: true,
         contactId: 'primary-user',
