@@ -99,11 +99,22 @@ describe('markdownToHtml', () => {
     expect(result).not.toMatch(/<b>/);
   });
 
-  it('converts horizontal rules', () => {
-    const result = markdownToHtml('Before\n\n---\n\nAfter');
-    expect(result).toContain('<hr>');
-    expect(result).toContain('<p>Before</p>');
-    expect(result).toContain('<p>After</p>');
+  it('converts horizontal rules (--- and ***)', () => {
+    expect(markdownToHtml('Before\n\n---\n\nAfter')).toContain('<hr>');
+    expect(markdownToHtml('Before\n\n***\n\nAfter')).toContain('<hr>');
+  });
+
+  it('does NOT convert mixed-character strings as horizontal rules', () => {
+    // "-*-" and "--*" are not valid HR markers
+    const result = markdownToHtml('-*-');
+    expect(result).not.toContain('<hr>');
+    expect(result).toContain('-*-');
+  });
+
+  it('does NOT convert underscores inside words to italic', () => {
+    const result = markdownToHtml('some_variable_name is not italic');
+    expect(result).not.toContain('<em>');
+    expect(result).toContain('some_variable_name');
   });
 
   it('returns a string with the outer wrapper div', () => {

@@ -30,8 +30,9 @@ export function markdownToHtml(markdown: string): string {
     const trimmed = block.trim();
     if (trimmed === '') return '';
 
-    // Horizontal rule: a line that is only dashes or asterisks (3+)
-    if (/^[-*]{3,}$/.test(trimmed)) {
+    // Horizontal rule: a line of only dashes OR only asterisks (3+, all same).
+    // We require homogeneous runs so mixed strings like "-*-" are not treated as HRs.
+    if (/^(-{3,}|\*{3,})$/.test(trimmed)) {
       return '<hr>';
     }
 
@@ -79,9 +80,11 @@ function applyInline(text: string): string {
   out = out.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
   out = out.replace(/__(.+?)__/g, '<strong>$1</strong>');
 
-  // Italic: *text* or _text_ (not preceded/followed by another * or _)
+  // Italic: *text* — not preceded/followed by another *
   out = out.replace(/(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)/g, '<em>$1</em>');
-  out = out.replace(/(?<!_)_(?!_)(.+?)(?<!_)_(?!_)/g, '<em>$1</em>');
+  // Italic: _text_ — requires word boundaries so underscores inside identifiers
+  // (e.g. some_variable_name) are not accidentally converted to <em> tags.
+  out = out.replace(/(?<!_)\b_(?!_)(.+?)(?<!_)_\b(?!_)/g, '<em>$1</em>');
 
   return out;
 }
