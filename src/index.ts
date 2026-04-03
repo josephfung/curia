@@ -532,17 +532,25 @@ async function main(): Promise<void> {
   };
 
   process.on('SIGTERM', () => void shutdown());
+  // Handle SIGINT unconditionally here rather than inside CliAdapter.start().
+  // Previously SIGINT was only caught when the CLI adapter was running; with
+  // the TTY guard above, non-TTY (Docker/production) deployments had no SIGINT
+  // handler and would terminate uncleanly without draining the DB pool, stopping
+  // the scheduler, or gracefully closing the HTTP server.
+  process.on('SIGINT', () => void shutdown());
 
-  // 8. CLI channel — the last thing to start, since opening readline
-  // immediately prompts for user input. Everything upstream must be
-  // fully wired before the user can type their first message.
-  // The onExit callback handles both /quit and Ctrl+C.
-  const cli = new CliAdapter(bus, logger, () => void shutdown());
-  cli.start();
-
-  // Print welcome directly to stdout (logger writes to curia.log in dev mode)
-  process.stdout.write('\nCuria is ready. Type a message, /quit to exit, or Ctrl+C.\n\n');
-  cli.prompt();
+  // 8. CLI channel — only started when stdin is an interactive TTY (i.e., local dev).
+  // In Docker / production, stdin is closed or a pipe: readline receives EOF
+  // immediately and would fire onExit, triggering shutdown before any work is done.
+  // Guarding on isTTY means the HTTP API and email channel handle all production
+  // input while the CLI remains available for local development sessions.
+  if (process.stdin.isTTY) {
+    const cli = new CliAdapter(bus, logger, () => void shutdown());
+    cli.start();
+    // Print welcome directly to stdout (logger writes to curia.log in dev mode)
+    process.stdout.write('\nCuria is ready. Type a message, /quit to exit, or Ctrl+C.\n\n');
+    cli.prompt();
+  }
 }
 
 /**

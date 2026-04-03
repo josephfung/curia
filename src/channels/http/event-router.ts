@@ -103,6 +103,24 @@ export class EventRouter {
       this.broadcastToSseClients(sseData, event.payload.conversationId);
     });
 
+    // message.held — broadcast to all SSE clients so dashboards and API consumers
+    // are notified when an unknown sender's message is held for CEO review.
+    // Previously this notification only reached the CLI adapter; with the CLI
+    // skipped in non-TTY (production) environments, the EventRouter must carry it.
+    bus.subscribe('message.held', 'channel', (event: BusEvent) => {
+      if (event.type !== 'message.held') return;
+      const sseData = JSON.stringify({
+        type: 'message.held',
+        held_message_id: event.payload.heldMessageId,
+        channel: event.payload.channel,
+        sender_id: event.payload.senderId,
+        subject: event.payload.subject,
+        timestamp: event.timestamp,
+      });
+      // Not filtered by conversationId — held-message notifications are system-wide
+      this.broadcastToSseClients(sseData);
+    });
+
     this.logger.info('HTTP event router subscriptions registered');
   }
 
@@ -141,22 +159,29 @@ export class EventRouter {
   }
 
   /**
-   * Send an SSE payload to all matching clients. Wraps each write in try/catch
+   * Send an SSE payload to matching clients. Wraps each write in try/catch
    * so a dead client (TCP reset between close event and write) doesn't abort
    * delivery to remaining clients in this dispatch cycle.
+   *
+   * When `conversationId` is provided, only clients with no filter OR whose
+   * filter matches are written to. When omitted, ALL clients receive the event
+   * (system-wide notifications like message.held).
    */
   private broadcastToSseClients(sseData: string, conversationId?: string): void {
     for (const client of this.sseClients) {
-      if (!client.conversationId || client.conversationId === conversationId) {
-        try {
-          client.res.write(`data: ${sseData}\n\n`);
-        } catch {
-          // Client connection is dead — remove it. The 'close' event handler
-          // will also fire eventually, but cleaning up here prevents repeated
-          // failed writes for subsequent events in this tick.
-          this.sseClients.delete(client);
-          this.logger.debug({ conversationId: client.conversationId }, 'Removed dead SSE client');
-        }
+      // Skip filtered clients unless the filter matches OR this is a system-wide broadcast
+      const shouldSend = conversationId === undefined
+        || !client.conversationId
+        || client.conversationId === conversationId;
+      if (!shouldSend) continue;
+      try {
+        client.res.write(`data: ${sseData}\n\n`);
+      } catch {
+        // Client connection is dead — remove it. The 'close' event handler
+        // will also fire eventually, but cleaning up here prevents repeated
+        // failed writes for subsequent events in this tick.
+        this.sseClients.delete(client);
+        this.logger.debug({ conversationId: client.conversationId }, 'Removed dead SSE client');
       }
     }
   }
