@@ -51,8 +51,9 @@ export class ContactSetRoleHandler implements SkillHandler {
     try {
       const updated = await ctx.contactService.setRole(contact_id, role);
 
+      // Log both the input ID and the service-returned ID so any discrepancy is visible
       ctx.log.info(
-        { contactId: updated.id, role: updated.role },
+        { inputContactId: contact_id, contactId: updated.id, role: updated.role },
         'Contact role updated',
       );
 
@@ -65,6 +66,15 @@ export class ContactSetRoleHandler implements SkillHandler {
         },
       };
     } catch (err) {
+      // ContactService.setRole() throws "Contact not found: <id>" as a normal
+      // control-flow case. Surface it as a distinct, actionable error so the
+      // agent knows to re-verify the UUID rather than retrying the same call.
+      if (err instanceof Error && err.message.startsWith('Contact not found:')) {
+        return {
+          success: false,
+          error: `No contact exists with id ${contact_id}. Use contact-lookup to verify the UUID, or contact-create to create a new contact.`,
+        };
+      }
       const message = err instanceof Error ? err.message : String(err);
       ctx.log.error({ err, contact_id, role }, 'Failed to set contact role');
       return { success: false, error: `Failed to set contact role: ${message}` };
