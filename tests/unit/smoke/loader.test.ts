@@ -1,8 +1,17 @@
-import { describe, it, expect } from 'vitest';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { describe, it, expect, afterEach } from 'vitest';
+import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadTestCases, loadTestCase } from '../../smoke/loader.js';
+
+// Track temp dirs created in this suite for cleanup
+const tempDirs: string[] = [];
+
+afterEach(() => {
+  for (const dir of tempDirs.splice(0)) {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 // Minimal valid YAML test case content
 function minimalYaml(name: string): string {
@@ -52,6 +61,7 @@ describe('Smoke test loader', () => {
 
   it('throws on duplicate test case names across files', () => {
     const dir = mkdtempSync(join(tmpdir(), 'curia-smoke-test-'));
+    tempDirs.push(dir);
     writeFileSync(join(dir, 'a.yaml'), minimalYaml('Duplicate Name'));
     writeFileSync(join(dir, 'b.yaml'), minimalYaml('Duplicate Name'));
 
@@ -60,6 +70,7 @@ describe('Smoke test loader', () => {
 
   it('does not throw when all test case names are unique', () => {
     const dir = mkdtempSync(join(tmpdir(), 'curia-smoke-test-'));
+    tempDirs.push(dir);
     writeFileSync(join(dir, 'a.yaml'), minimalYaml('Case A'));
     writeFileSync(join(dir, 'b.yaml'), minimalYaml('Case B'));
 
