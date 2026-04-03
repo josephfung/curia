@@ -18,6 +18,7 @@ import type { OutboundContentFilter } from '../dispatch/outbound-filter.js';
 import type { EventBus } from '../bus/bus.js';
 import type { Logger } from '../logger.js';
 import { createOutboundBlocked } from '../bus/events.js';
+import { markdownToHtml } from '../channels/email/markdown-to-html.js';
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -234,12 +235,17 @@ export class OutboundGateway {
    */
   private async dispatchEmail(request: OutboundSendRequest): Promise<OutboundSendResult> {
     try {
+      // Convert the LLM's markdown body to HTML so email clients render
+      // formatting correctly (bold, bullets, paragraphs) instead of showing
+      // raw **markers** with collapsed whitespace.
+      const htmlBody = markdownToHtml(request.body);
+
       const sendOptions: SendEmailOptions = {
         // NylasClient expects an array of { email } objects for addressing
         to: [{ email: request.to }],
         cc: request.cc?.map((email) => ({ email })),
         subject: request.subject ?? '',
-        body: request.body,
+        body: htmlBody,
         replyToMessageId: request.replyToMessageId,
       };
 
