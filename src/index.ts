@@ -54,6 +54,7 @@ import { SchedulerService } from './scheduler/scheduler-service.js';
 import { Scheduler } from './scheduler/scheduler.js';
 import { EntityContextAssembler } from './entity-context/assembler.js';
 import { bootstrapAgentIdentity } from './entity-context/bootstrap.js';
+import { bootstrapCeoContact } from './contacts/ceo-bootstrap.js';
 import type { AgentPersona } from './skills/types.js';
 
 async function main(): Promise<void> {
@@ -180,6 +181,43 @@ async function main(): Promise<void> {
     // 2. The coordinator's ${agent_contact_id} prompt placeholder will be empty
     // 3. Interactive entity-context lookups for "you"/"your" will fail to resolve
     logger.warn({ err }, 'Agent self-identity bootstrap failed — entity_enrichment default=agent will not resolve; coordinator system prompt ${agent_contact_id} will be empty');
+  }
+
+  // CEO contact bootstrap — ensures the CEO's primary email contact exists with
+  // status=confirmed and verified=true before the email adapter starts polling.
+  // Without this, the first inbound email from the CEO auto-creates them as
+  // provisional (the extractParticipants default), causing their messages to be held.
+  if (config.ceoPrimaryEmail) {
+    try {
+      await bootstrapCeoContact(config.ceoPrimaryEmail, 'CEO', pool, logger);
+    } catch (err) {
+      // Non-fatal: log and continue. Severity depends on whether the email adapter is active:
+      // - With email configured: the CEO's first message will be held if the contact doesn't
+      //   exist yet — escalate to error so it shows up in log aggregators.
+      // - Without email: no adapter polls, so the risk is deferred and a warn suffices.
+      // A unique constraint violation (23505) indicates inconsistent DB state (e.g. a
+      // channel identity row with no matching contact), not a transient failure — flag it
+      // separately so operators know to inspect contact_channel_identities directly.
+      const pgCode = (err as { code?: string }).code;
+      if (pgCode === '23505') {
+        logger.error(
+          { err, ceoPrimaryEmail: config.ceoPrimaryEmail },
+          'CEO contact bootstrap failed with unique constraint violation — possible inconsistent DB state. Inspect contact_channel_identities for orphaned rows.',
+        );
+      } else if (config.nylasApiKey && config.nylasGrantId) {
+        logger.error(
+          { err, ceoPrimaryEmail: config.ceoPrimaryEmail },
+          'CEO contact bootstrap failed with email adapter active — CEO emails WILL be held if contact does not exist',
+        );
+      } else {
+        logger.warn(
+          { err, ceoPrimaryEmail: config.ceoPrimaryEmail },
+          'CEO contact bootstrap failed — CEO emails may be held if contact is provisional',
+        );
+      }
+    }
+  } else {
+    logger.warn('CEO_PRIMARY_EMAIL not set — CEO contact bootstrap skipped. Set this to prevent CEO emails from being held on first contact.');
   }
 
   // Held messages — stores messages from unknown senders pending CEO review.
