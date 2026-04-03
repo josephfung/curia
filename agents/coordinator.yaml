@@ -187,6 +187,7 @@ pinned_skills:
   - knowledge-loyalty-programs
   - context-for-email
   - calendar-list-calendars
+  - calendar-register
   - calendar-list-events
   - calendar-create-event
   - calendar-update-event
