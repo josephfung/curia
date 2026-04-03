@@ -197,6 +197,9 @@ export function parseJudgeResponse(
     return scores;
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
+    // Always warn so the operator knows a parse failure occurred, even when
+    // fallbackBehaviors is absent (without this the caller receives [] silently).
+    process.stderr.write(`  [WARN] Failed to parse judge response: ${detail}\n`);
     if (!fallbackBehaviors) return [];
     return fallbackBehaviors.map(b => ({
       behaviorId: b.id,
@@ -227,11 +230,13 @@ export function computeWeightedScore(
     if (score) {
       earnedWeight += w * RATING_VALUES[score.rating];
     } else {
-      // Warn so operators know the 0 came from a missing score, not a genuine MISS.
-      // This most commonly happens when the judge reformats IDs (e.g. classify_urgent
-      // vs classify-urgent) and parseJudgeResponse's validation was bypassed or skipped.
+      // Backstop warn: no score entry for this behavior — counts as 0.
+      // parseJudgeResponse will have already identified the specific cause (ID mismatch,
+      // dropped behavior, etc.) when it was given the expected behaviors. This warning
+      // fires regardless, so the score impact is always surfaced even if parsing was called
+      // without fallbackBehaviors.
       process.stderr.write(
-        `  [WARN] No score returned for behavior '${b.id}' — judge may have reformatted the ID (counts as 0)\n`,
+        `  [WARN] No score entry for behavior '${b.id}' — counting as 0\n`,
       );
     }
   }

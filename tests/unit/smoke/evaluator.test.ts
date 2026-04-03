@@ -41,6 +41,15 @@ describe('Evaluator', () => {
       expect(scores.every(s => s.rating === 'MISS')).toBe(true);
     });
 
+    it('warns on parse failure even when fallbackBehaviors is absent', () => {
+      // Without this, a caller omitting fallbackBehaviors would silently receive []
+      // with no indication that the parse failed.
+      parseJudgeResponse('not valid json');
+
+      const output = stderrSpy.mock.calls.map(c => String(c[0])).join('');
+      expect(output).toContain('Failed to parse judge response');
+    });
+
     it('warns when judge returns an unexpected behavior ID', () => {
       const behaviors: ExpectedBehavior[] = [
         { id: 'classify-urgent', description: 'test', weight: 'critical' },
@@ -131,7 +140,7 @@ describe('Evaluator', () => {
       computeWeightedScore(behaviors, scores);
 
       const output = stderrSpy.mock.calls.map(c => String(c[0])).join('');
-      expect(output).toContain("No score returned for behavior 'b'");
+      expect(output).toContain("No score entry for behavior 'b'");
     });
 
     it('does not warn when all expected behaviors have scores', () => {
