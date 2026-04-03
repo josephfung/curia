@@ -10,6 +10,11 @@ export interface Config {
   nylasGrantId: string | undefined;
   nylasPollingIntervalMs: number;
   nylasSelfEmail: string;
+  // CEO's primary email address. When set, the startup bootstrap ensures this
+  // contact exists with status=confirmed and verified=true before any email arrives.
+  // Without this, the first inbound email from the CEO creates them as provisional,
+  // causing their messages to be held.
+  ceoPrimaryEmail: string | undefined;
 }
 
 export function loadConfig(): Config {
@@ -40,5 +45,6 @@ export function loadConfig(): Config {
     nylasGrantId: process.env.NYLAS_GRANT_ID,
     nylasPollingIntervalMs,
     nylasSelfEmail: process.env.NYLAS_SELF_EMAIL ?? '',
+    ceoPrimaryEmail: process.env.CEO_PRIMARY_EMAIL?.trim().toLowerCase() || undefined,
   };
 }
