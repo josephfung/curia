@@ -1,11 +1,11 @@
 {
   "name": "contact-set-role",
-  "description": "Set or change a contact's role (e.g., CFO, board member, advisor).",
+  "description": "Set or change a contact's role (e.g., CFO, board member, advisor). contact_id must be a UUID obtained from contact-lookup or contact-create — do not invent or infer IDs.",
   "version": "1.0.0",
   "sensitivity": "elevated",
   "infrastructure": true,
   "inputs": {
-    "contact_id": "string",
+    "contact_id": "string (UUID from contact-lookup or contact-create)",
     "role": "string"
   },
   "outputs": {

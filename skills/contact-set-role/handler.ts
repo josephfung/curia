@@ -22,6 +22,17 @@ export class ContactSetRoleHandler implements SkillHandler {
       return { success: false, error: 'Missing required input: role (string)' };
     }
 
+    // Validate contact_id is a UUID — the DB column is UUID type and will
+    // reject slug-style IDs like "contact_joseph_fung" with a cryptic 22P02 error.
+    // The agent must obtain the real UUID via contact-lookup or contact-create first.
+    const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!UUID_RE.test(contact_id)) {
+      return {
+        success: false,
+        error: 'contact_id must be a valid UUID. Use contact-lookup or contact-create to obtain the contact\'s UUID first.',
+      };
+    }
+
     // Input length limit — prevent oversized payloads reaching the DB
     if (role.length > 200) {
       return { success: false, error: 'Role must be 200 characters or fewer' };
