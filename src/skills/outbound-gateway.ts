@@ -18,6 +18,7 @@ import type { OutboundContentFilter } from '../dispatch/outbound-filter.js';
 import type { EventBus } from '../bus/bus.js';
 import type { Logger } from '../logger.js';
 import { createOutboundBlocked } from '../bus/events.js';
+import { markdownToHtml } from '../channels/email/markdown-to-html.js';
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -233,13 +234,18 @@ export class OutboundGateway {
    * SendEmailOptions the NylasClient expects.
    */
   private async dispatchEmail(request: OutboundSendRequest): Promise<OutboundSendResult> {
+    // markdownToHtml is a pure function (no I/O, no realistic throw path).
+    // Called outside the Nylas try-catch so that any future regression in the
+    // converter is not silently misattributed as "Nylas send failed" in logs.
+    const htmlBody = markdownToHtml(request.body);
+
     try {
       const sendOptions: SendEmailOptions = {
         // NylasClient expects an array of { email } objects for addressing
         to: [{ email: request.to }],
         cc: request.cc?.map((email) => ({ email })),
         subject: request.subject ?? '',
-        body: request.body,
+        body: htmlBody,
         replyToMessageId: request.replyToMessageId,
       };
 
