@@ -141,8 +141,9 @@ async function enrichContact(
         })),
       };
     }
-  } catch {
-    // Best effort — return without identities if lookup fails
+  } catch (err) {
+    // Best effort — return without identities if lookup fails, but log so it's detectable
+    ctx.log.warn({ err, contactId: contact.id }, 'Failed to enrich contact with identities');
   }
   return { ...summary, identities: [] };
 }
