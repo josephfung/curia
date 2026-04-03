@@ -159,22 +159,29 @@ export class EventRouter {
   }
 
   /**
-   * Send an SSE payload to all matching clients. Wraps each write in try/catch
+   * Send an SSE payload to matching clients. Wraps each write in try/catch
    * so a dead client (TCP reset between close event and write) doesn't abort
    * delivery to remaining clients in this dispatch cycle.
+   *
+   * When `conversationId` is provided, only clients with no filter OR whose
+   * filter matches are written to. When omitted, ALL clients receive the event
+   * (system-wide notifications like message.held).
    */
   private broadcastToSseClients(sseData: string, conversationId?: string): void {
     for (const client of this.sseClients) {
-      if (!client.conversationId || client.conversationId === conversationId) {
-        try {
-          client.res.write(`data: ${sseData}\n\n`);
-        } catch {
-          // Client connection is dead — remove it. The 'close' event handler
-          // will also fire eventually, but cleaning up here prevents repeated
-          // failed writes for subsequent events in this tick.
-          this.sseClients.delete(client);
-          this.logger.debug({ conversationId: client.conversationId }, 'Removed dead SSE client');
-        }
+      // Skip filtered clients unless the filter matches OR this is a system-wide broadcast
+      const shouldSend = conversationId === undefined
+        || !client.conversationId
+        || client.conversationId === conversationId;
+      if (!shouldSend) continue;
+      try {
+        client.res.write(`data: ${sseData}\n\n`);
+      } catch {
+        // Client connection is dead — remove it. The 'close' event handler
+        // will also fire eventually, but cleaning up here prevents repeated
+        // failed writes for subsequent events in this tick.
+        this.sseClients.delete(client);
+        this.logger.debug({ conversationId: client.conversationId }, 'Removed dead SSE client');
       }
     }
   }
