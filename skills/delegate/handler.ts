@@ -115,9 +115,19 @@ export class DelegateHandler implements SkillHandler {
     // Publish the task to the bus — the specialist will pick it up.
     // We publish as 'dispatch' layer because only dispatch can publish agent.task
     // per the permission model. Infrastructure skills are trusted to impersonate layers.
+    //
+    // IMPORTANT: await both concurrently via Promise.all rather than sequentially.
+    // The EventBus awaits subscriber handlers in sequence, so publish() does not resolve
+    // until the specialist's full processing chain completes (which can take 60–90s).
+    // If we awaited publish() first and then responsePromise, the 90s timeout could fire
+    // while responsePromise had no rejection handler yet — causing an unhandledRejection
+    // that crashes the process. Promise.all attaches handlers to both promises immediately,
+    // closing that window. See: https://github.com/josephfung/curia/issues/73
     try {
-      await ctx.bus.publish('dispatch', taskEvent);
-      const response = await responsePromise;
+      const [response] = await Promise.all([
+        responsePromise,
+        ctx.bus.publish('dispatch', taskEvent),
+      ]);
       ctx.log.info({ targetAgent: agent }, 'Specialist responded');
 
       return {
@@ -132,8 +142,7 @@ export class DelegateHandler implements SkillHandler {
       ctx.log.error({ err, targetAgent: agent }, 'Delegation failed');
       return { success: false, error: message };
     } finally {
-      // Always clean up the timeout — prevents unhandled rejection if publish()
-      // throws before responsePromise is awaited
+      // Always clean up the timeout on any exit path
       clearTimeout(timeoutHandle!);
     }
   }
