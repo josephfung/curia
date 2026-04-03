@@ -40,6 +40,17 @@ export class CalendarRegisterHandler implements SkillHandler {
     const resolvedContactId: string | null =
       typeof contact_id === 'string' ? contact_id : (ctx.caller?.contactId ?? null);
 
+    // Warn when neither contact_id nor caller context is present — the calendar
+    // will be registered as org-wide (null contact). This is valid for shared
+    // calendars (holidays, rooms) but is probably a routing bug if it happens
+    // during a CEO conversation.
+    if (resolvedContactId === null && typeof contact_id !== 'string') {
+      ctx.log.warn(
+        { nylasCalendarId: nylas_calendar_id },
+        'calendar-register: no contact_id and no caller — registering as org-wide (no contact association)',
+      );
+    }
+
     ctx.log.info(
       { nylasCalendarId: nylas_calendar_id, contactId: resolvedContactId, label, isPrimary: is_primary ?? false },
       'Registering calendar',
@@ -69,6 +80,31 @@ export class CalendarRegisterHandler implements SkillHandler {
         },
       };
     } catch (err) {
+      // Postgres unique_violation (code 23505): translate raw constraint names into
+      // human-readable messages so the LLM can give the CEO actionable feedback.
+      const pgCode = (err as { code?: string }).code;
+      if (pgCode === '23505') {
+        const constraint = (err as { constraint?: string }).constraint ?? '';
+        if (constraint.includes('primary')) {
+          ctx.log.warn(
+            { nylasCalendarId: nylas_calendar_id, contactId: resolvedContactId },
+            'calendar-register: contact already has a primary calendar',
+          );
+          return {
+            success: false,
+            error: `Contact ${resolvedContactId ?? '(none)'} already has a primary calendar. Set is_primary to false, or unregister the existing primary calendar first.`,
+          };
+        }
+        ctx.log.warn(
+          { nylasCalendarId: nylas_calendar_id, contactId: resolvedContactId },
+          'calendar-register: calendar already registered',
+        );
+        return {
+          success: false,
+          error: `Calendar ${nylas_calendar_id} is already registered. Use calendar-list-calendars to see its current mapping.`,
+        };
+      }
+
       const message = err instanceof Error ? err.message : String(err);
       ctx.log.error({ err, nylasCalendarId: nylas_calendar_id, contactId: resolvedContactId }, 'Failed to register calendar');
       return { success: false, error: `Failed to register calendar: ${message}` };

@@ -105,7 +105,7 @@ describe('CalendarRegisterHandler', () => {
         { nylas_calendar_id: 'cal-1', label: 'Personal', is_primary: true },
         {
           contactService: contactService as never,
-          caller: { contactId: 'caller-contact', channel: 'email', identifier: 'joseph@josephfung.ca' },
+          caller: { contactId: 'caller-contact', role: 'ceo', channel: 'email' },
         },
       ),
     );
@@ -143,10 +143,27 @@ describe('CalendarRegisterHandler', () => {
     );
   });
 
-  it('surfaces errors from linkCalendar (e.g. duplicate calendar)', async () => {
-    const contactService = {
-      linkCalendar: vi.fn().mockRejectedValue(new Error('duplicate key value violates unique constraint')),
-    };
+  it('returns failure when label exceeds 200 characters', async () => {
+    const contactService = { linkCalendar: vi.fn() };
+    const result = await handler.execute(
+      makeCtx(
+        { nylas_calendar_id: 'cal-1', label: 'x'.repeat(201) },
+        { contactService: contactService as never },
+      ),
+    );
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error).toContain('200 characters');
+    }
+  });
+
+  it('returns a readable error when the calendar is already registered (Postgres 23505)', async () => {
+    // Simulate the Postgres unique_violation error for the nylas_calendar_id constraint.
+    const pgError = Object.assign(new Error('duplicate key value violates unique constraint'), {
+      code: '23505',
+      constraint: 'contact_calendars_nylas_calendar_id_key',
+    });
+    const contactService = { linkCalendar: vi.fn().mockRejectedValue(pgError) };
 
     const result = await handler.execute(
       makeCtx(
@@ -157,14 +174,18 @@ describe('CalendarRegisterHandler', () => {
 
     expect(result.success).toBe(false);
     if (!result.success) {
-      expect(result.error).toContain('duplicate key');
+      expect(result.error).toContain('already registered');
+      expect(result.error).toContain('cal-1');
     }
   });
 
-  it('surfaces errors when contact already has a primary calendar', async () => {
-    const contactService = {
-      linkCalendar: vi.fn().mockRejectedValue(new Error('Contact contact-abc already has a primary calendar')),
-    };
+  it('returns a readable error when contact already has a primary calendar (Postgres 23505)', async () => {
+    // Simulate the partial unique index violation for is_primary = true.
+    const pgError = Object.assign(new Error('duplicate key value violates unique constraint'), {
+      code: '23505',
+      constraint: 'idx_contact_calendars_primary',
+    });
+    const contactService = { linkCalendar: vi.fn().mockRejectedValue(pgError) };
 
     const result = await handler.execute(
       makeCtx(
@@ -176,6 +197,25 @@ describe('CalendarRegisterHandler', () => {
     expect(result.success).toBe(false);
     if (!result.success) {
       expect(result.error).toContain('already has a primary calendar');
+      expect(result.error).toContain('contact-abc');
+    }
+  });
+
+  it('falls through to generic error for non-23505 failures', async () => {
+    const contactService = {
+      linkCalendar: vi.fn().mockRejectedValue(new Error('connection refused')),
+    };
+
+    const result = await handler.execute(
+      makeCtx(
+        { nylas_calendar_id: 'cal-1', label: 'Work' },
+        { contactService: contactService as never },
+      ),
+    );
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error).toContain('connection refused');
     }
   });
 });
