@@ -13,6 +13,13 @@ describe('markdownToHtml', () => {
     expect(result).toContain('<p>Second paragraph</p>');
   });
 
+  it('treats blank lines containing only spaces as paragraph separators', () => {
+    // LLMs sometimes emit blank lines with trailing spaces; these should still split blocks
+    const result = markdownToHtml('First paragraph\n   \nSecond paragraph');
+    expect(result).toContain('<p>First paragraph</p>');
+    expect(result).toContain('<p>Second paragraph</p>');
+  });
+
   it('converts single newlines to <br> within a paragraph', () => {
     const result = markdownToHtml('Line one\nLine two');
     expect(result).toContain('Line one<br>Line two');

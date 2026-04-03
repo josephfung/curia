@@ -23,8 +23,10 @@ export function markdownToHtml(markdown: string): string {
   // Normalise line endings
   const text = markdown.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
 
-  // Split into blocks separated by one or more blank lines
-  const rawBlocks = text.split(/\n{2,}/);
+  // Split into blocks separated by one or more blank lines. Use \n\s*\n so
+  // that lines containing only spaces or tabs (common in LLM output) also
+  // act as paragraph separators — not just completely empty lines.
+  const rawBlocks = text.split(/\n\s*\n+/);
 
   const htmlBlocks: string[] = rawBlocks.map((block) => {
     const trimmed = block.trim();
