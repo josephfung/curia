@@ -103,6 +103,24 @@ export class EventRouter {
       this.broadcastToSseClients(sseData, event.payload.conversationId);
     });
 
+    // message.held — broadcast to all SSE clients so dashboards and API consumers
+    // are notified when an unknown sender's message is held for CEO review.
+    // Previously this notification only reached the CLI adapter; with the CLI
+    // skipped in non-TTY (production) environments, the EventRouter must carry it.
+    bus.subscribe('message.held', 'channel', (event: BusEvent) => {
+      if (event.type !== 'message.held') return;
+      const sseData = JSON.stringify({
+        type: 'message.held',
+        held_message_id: event.payload.heldMessageId,
+        channel: event.payload.channel,
+        sender_id: event.payload.senderId,
+        subject: event.payload.subject,
+        timestamp: event.timestamp,
+      });
+      // Not filtered by conversationId — held-message notifications are system-wide
+      this.broadcastToSseClients(sseData);
+    });
+
     this.logger.info('HTTP event router subscriptions registered');
   }
 

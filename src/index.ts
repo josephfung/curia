@@ -494,6 +494,12 @@ async function main(): Promise<void> {
   };
 
   process.on('SIGTERM', () => void shutdown());
+  // Handle SIGINT unconditionally here rather than inside CliAdapter.start().
+  // Previously SIGINT was only caught when the CLI adapter was running; with
+  // the TTY guard above, non-TTY (Docker/production) deployments had no SIGINT
+  // handler and would terminate uncleanly without draining the DB pool, stopping
+  // the scheduler, or gracefully closing the HTTP server.
+  process.on('SIGINT', () => void shutdown());
 
   // 8. CLI channel — only started when stdin is an interactive TTY (i.e., local dev).
   // In Docker / production, stdin is closed or a pipe: readline receives EOF
