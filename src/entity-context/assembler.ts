@@ -256,32 +256,52 @@ export class EntityContextAssembler {
    * Tries contacts.id first, then kg_nodes.id directly.
    */
   private async resolveKgNodeId(id: string): Promise<string | undefined> {
-    // Try as a contact ID first
-    const contactResult = await this.pool.query<{ kg_node_id: string | null }>(
-      'SELECT kg_node_id FROM contacts WHERE id = $1',
-      [id],
-    );
-    if (contactResult.rows.length > 0) {
-      const row = contactResult.rows[0];
-      const kgNodeId = row?.kg_node_id;
-      // Contact found but has no linked KG node — return undefined (unresolved)
-      if (!kgNodeId) {
-        this.logger.debug({ contactId: id }, 'entity-context: contact has no linked KG node');
+    try {
+      // Try as a contact ID first
+      const contactResult = await this.pool.query<{ kg_node_id: string | null }>(
+        'SELECT kg_node_id FROM contacts WHERE id = $1',
+        [id],
+      );
+      if (contactResult.rows.length > 0) {
+        const row = contactResult.rows[0];
+        const kgNodeId = row?.kg_node_id;
+        // Contact found but has no linked KG node — return undefined (unresolved)
+        if (!kgNodeId) {
+          this.logger.debug({ contactId: id }, 'entity-context: contact has no linked KG node');
+          return undefined;
+        }
+        return kgNodeId;
+      }
+
+      // Try as a KG node ID directly
+      const nodeResult = await this.pool.query<{ id: string }>(
+        'SELECT id FROM kg_nodes WHERE id = $1',
+        [id],
+      );
+      if (nodeResult.rows.length > 0) {
+        return nodeResult.rows[0]?.id;
+      }
+
+      return undefined;
+    } catch (err) {
+      // PostgreSQL error 22P02 = invalid_text_representation: the ID is not a valid UUID.
+      // This happens when the LLM passes a hallucinated or synthetic string (e.g.
+      // 'joseph-fung-contact-id', 'primary-user') to a UUID column. Treat as unresolved
+      // rather than letting the error bubble up and surface to the caller.
+      if (
+        err !== null &&
+        typeof err === 'object' &&
+        'code' in err &&
+        (err as { code: string }).code === '22P02'
+      ) {
+        // Warn rather than debug: after the contact-resolver fix ships, this path should be
+        // unreachable in production. If it fires, something upstream is still leaking a
+        // synthetic/hallucinated ID and operators need a searchable signal to trace it.
+        this.logger.warn({ id }, 'entity-context: non-UUID id passed to resolveKgNodeId — treating as unresolved');
         return undefined;
       }
-      return kgNodeId;
+      throw err;
     }
-
-    // Try as a KG node ID directly
-    const nodeResult = await this.pool.query<{ id: string }>(
-      'SELECT id FROM kg_nodes WHERE id = $1',
-      [id],
-    );
-    if (nodeResult.rows.length > 0) {
-      return nodeResult.rows[0]?.id;
-    }
-
-    return undefined;
   }
 
   private async getKgNode(id: string): Promise<KgNodeRow | undefined> {

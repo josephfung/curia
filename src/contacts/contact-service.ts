@@ -498,7 +498,7 @@ class PostgresContactBackend implements ContactServiceBackend {
       updated_at: Date;
     }>(
       `SELECT id, kg_node_id, display_name, role, status, notes, created_at, updated_at
-       FROM contacts WHERE role = $1`,
+       FROM contacts WHERE role = $1 ORDER BY created_at ASC`,
       [role],
     );
 

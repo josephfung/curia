@@ -33,9 +33,42 @@ export class ContactResolver {
    * CLI and smoke-test channels always resolve as the primary user (CEO).
    */
   async resolve(channel: string, senderId: string): Promise<InboundSenderContext> {
-    // CLI and smoke-test are always the primary user — no resolution needed.
-    // kgNodeId is null here because synthetic IDs have no KG node.
+    // CLI and smoke-test are always the primary user (CEO).
+    // Look up the real CEO contact in the DB so downstream skills (calendar, entity-context)
+    // get a proper UUID — passing the synthetic 'primary-user' string to UUID columns causes
+    // PostgreSQL errors. Fall back to the synthetic ID only if no CEO contact exists yet.
     if (channel === 'cli' || channel === 'smoke-test') {
+      try {
+        const ceoContacts = await this.contactService.findContactByRole('ceo');
+        const ceo = ceoContacts[0];
+        if (ceo) {
+          return {
+            resolved: true,
+            contactId: ceo.id,
+            displayName: ceo.displayName,
+            role: 'ceo',
+            status: 'confirmed' as const,
+            verified: true,
+            kgNodeId: ceo.kgNodeId,
+            knowledgeSummary: '',
+            authorization: null,
+          };
+        }
+        // DB call succeeded but no CEO contact row exists yet (fresh install before seeding).
+        // Skills that need a real UUID will return empty results — best we can do.
+        this.logger.warn({ channel }, 'contact-resolver: no CEO contact found in DB, using synthetic primary-user ID');
+      } catch (err) {
+        // Only suppress errors that look like DB-layer errors (pg driver attaches a .code).
+        // Anything else (TypeError, programming bug in findContactByRole, etc.) should propagate
+        // so it is not silently misclassified as a transient DB blip.
+        const isDbError = err !== null && typeof err === 'object' && 'code' in err;
+        if (!isDbError) {
+          throw err;
+        }
+        // DB error: log at error level so Sentry captures it, then fall through to synthetic ID.
+        // The CLI continuing to work in degraded mode is acceptable; operators still need to know.
+        this.logger.error({ err }, 'contact-resolver: DB error looking up CEO contact — falling back to synthetic ID');
+      }
       return {
         resolved: true,
         contactId: 'primary-user',
