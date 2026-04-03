@@ -68,6 +68,17 @@ describe('Smoke test loader', () => {
     expect(() => loadTestCases(dir)).toThrow(/Duplicate test case name 'Duplicate Name'/);
   });
 
+  it('throws on case-insensitive duplicate names to match CLI --case filter semantics', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'curia-smoke-test-'));
+    tempDirs.push(dir);
+    // 'Invoice' and 'invoice' are distinct to a case-sensitive Set but both match
+    // `--case invoice` in the CLI, so we treat them as duplicates.
+    writeFileSync(join(dir, 'a.yaml'), minimalYaml('Invoice'));
+    writeFileSync(join(dir, 'b.yaml'), minimalYaml('invoice'));
+
+    expect(() => loadTestCases(dir)).toThrow(/Duplicate test case name/);
+  });
+
   it('does not throw when all test case names are unique', () => {
     const dir = mkdtempSync(join(tmpdir(), 'curia-smoke-test-'));
     tempDirs.push(dir);

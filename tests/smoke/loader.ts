@@ -83,14 +83,17 @@ export function loadTestCases(
 
   // Enforce unique names before applying tag filtering so duplicates are caught
   // regardless of which tags are in use.
+  // Normalize to lowercase so duplicate detection matches CLI --case filter semantics,
+  // which uses case-insensitive substring matching (see cli.ts line 34).
   const seen = new Set<string>();
   for (const tc of cases) {
-    if (seen.has(tc.name)) {
+    const normalizedName = tc.name.trim().toLowerCase();
+    if (seen.has(normalizedName)) {
       throw new Error(
         `Duplicate test case name '${tc.name}' found in ${dirPath} — each test case must have a unique name`,
       );
     }
-    seen.add(tc.name);
+    seen.add(normalizedName);
   }
 
   if (options?.tags && options.tags.length > 0) {
