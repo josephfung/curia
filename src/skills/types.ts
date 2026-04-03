@@ -172,7 +172,7 @@ export interface ToolDefinition {
   description: string;
   input_schema: {
     type: 'object';
-    properties: Record<string, { type: string; description?: string }>;
+    properties: Record<string, { type: string; description?: string } | { type: 'array'; items: { type: string }; description?: string }>;
     required: string[];
   };
 }
