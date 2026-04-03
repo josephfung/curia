@@ -33,9 +33,36 @@ export class ContactResolver {
    * CLI and smoke-test channels always resolve as the primary user (CEO).
    */
   async resolve(channel: string, senderId: string): Promise<InboundSenderContext> {
-    // CLI and smoke-test are always the primary user — no resolution needed.
-    // kgNodeId is null here because synthetic IDs have no KG node.
+    // CLI and smoke-test are always the primary user (CEO).
+    // Look up the real CEO contact in the DB so downstream skills (calendar, entity-context)
+    // get a proper UUID — passing the synthetic 'primary-user' string to UUID columns causes
+    // PostgreSQL errors. Fall back to the synthetic ID only if no CEO contact exists yet.
     if (channel === 'cli' || channel === 'smoke-test') {
+      try {
+        const ceoContacts = await this.contactService.findContactByRole('ceo');
+        const ceo = ceoContacts[0];
+        if (ceo) {
+          return {
+            resolved: true,
+            contactId: ceo.id,
+            displayName: ceo.displayName,
+            role: 'ceo',
+            status: 'confirmed' as const,
+            verified: true,
+            kgNodeId: ceo.kgNodeId,
+            knowledgeSummary: '',
+            authorization: null,
+          };
+        }
+      } catch (err) {
+        // DB lookup failure must not break the CLI — fall through to the synthetic ID
+        this.logger.warn({ err }, 'contact-resolver: failed to look up CEO contact, falling back to synthetic ID');
+      }
+
+      // No CEO contact in DB yet (e.g., fresh install before seeding) — use the synthetic ID.
+      // Skills that need a real UUID (calendar, entity-context) will return empty results,
+      // which is the best we can do without a real contact record.
+      this.logger.warn({ channel }, 'contact-resolver: no CEO contact found in DB, using synthetic primary-user ID');
       return {
         resolved: true,
         contactId: 'primary-user',
