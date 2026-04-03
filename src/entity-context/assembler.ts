@@ -294,7 +294,10 @@ export class EntityContextAssembler {
         'code' in err &&
         (err as { code: string }).code === '22P02'
       ) {
-        this.logger.debug({ id }, 'entity-context: non-UUID id passed to resolveKgNodeId — treating as unresolved');
+        // Warn rather than debug: after the contact-resolver fix ships, this path should be
+        // unreachable in production. If it fires, something upstream is still leaking a
+        // synthetic/hallucinated ID and operators need a searchable signal to trace it.
+        this.logger.warn({ id }, 'entity-context: non-UUID id passed to resolveKgNodeId — treating as unresolved');
         return undefined;
       }
       throw err;

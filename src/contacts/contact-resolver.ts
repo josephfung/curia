@@ -58,9 +58,16 @@ export class ContactResolver {
         // Skills that need a real UUID will return empty results — best we can do.
         this.logger.warn({ channel }, 'contact-resolver: no CEO contact found in DB, using synthetic primary-user ID');
       } catch (err) {
-        // DB lookup failure must not break the CLI — fall through to the synthetic ID.
-        // Don't re-log "no CEO contact found" here; the issue is a DB error, not a missing row.
-        this.logger.warn({ err }, 'contact-resolver: failed to look up CEO contact, falling back to synthetic ID');
+        // Only suppress errors that look like DB-layer errors (pg driver attaches a .code).
+        // Anything else (TypeError, programming bug in findContactByRole, etc.) should propagate
+        // so it is not silently misclassified as a transient DB blip.
+        const isDbError = err !== null && typeof err === 'object' && 'code' in err;
+        if (!isDbError) {
+          throw err;
+        }
+        // DB error: log at error level so Sentry captures it, then fall through to synthetic ID.
+        // The CLI continuing to work in degraded mode is acceptable; operators still need to know.
+        this.logger.error({ err }, 'contact-resolver: DB error looking up CEO contact — falling back to synthetic ID');
       }
       return {
         resolved: true,
