@@ -234,12 +234,12 @@ export class OutboundGateway {
    * SendEmailOptions the NylasClient expects.
    */
   private async dispatchEmail(request: OutboundSendRequest): Promise<OutboundSendResult> {
-    try {
-      // Convert the LLM's markdown body to HTML so email clients render
-      // formatting correctly (bold, bullets, paragraphs) instead of showing
-      // raw **markers** with collapsed whitespace.
-      const htmlBody = markdownToHtml(request.body);
+    // markdownToHtml is a pure function (no I/O, no realistic throw path).
+    // Called outside the Nylas try-catch so that any future regression in the
+    // converter is not silently misattributed as "Nylas send failed" in logs.
+    const htmlBody = markdownToHtml(request.body);
 
+    try {
       const sendOptions: SendEmailOptions = {
         // NylasClient expects an array of { email } objects for addressing
         to: [{ email: request.to }],
