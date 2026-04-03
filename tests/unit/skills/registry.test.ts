@@ -143,6 +143,16 @@ describe('SkillRegistry', () => {
     expect(tools[0].input_schema.required).toEqual(['ids']);
   });
 
+  it('throws on invalid array item type in skill manifest', () => {
+    registry.register(makeManifest({
+      name: 'bad-array-skill',
+      description: 'Bad manifest',
+      inputs: { ids: 'foo[]' },
+    }), stubHandler);
+    expect(() => registry.toToolDefinitions(['bad-array-skill']))
+      .toThrow(/invalid array item type 'foo'/);
+  });
+
   it('toToolDefinitions ignores unknown skill names', () => {
     const tools = registry.toToolDefinitions(['nonexistent']);
     expect(tools).toHaveLength(0);

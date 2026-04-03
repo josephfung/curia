@@ -82,9 +82,19 @@ export class SkillRegistry {
         const isOptional = typePart.endsWith('?');
         const baseType = isOptional ? typePart.slice(0, -1) : typePart;
 
-        // "string[]", "number[]", etc. → JSON Schema array type with items
+        // "string[]", "object[]", etc. → JSON Schema array type with items.
+        // itemType is validated against the JSON Schema primitive type allowlist so
+        // a manifest typo like "foo[]" fails loudly at startup rather than silently
+        // emitting an invalid schema that causes an opaque API error at call time.
         if (baseType.endsWith('[]')) {
           const itemType = baseType.slice(0, -2);
+          const VALID_ITEM_TYPES = new Set(['string', 'number', 'integer', 'boolean', 'object', 'null']);
+          if (!itemType || !VALID_ITEM_TYPES.has(itemType)) {
+            throw new Error(
+              `Skill '${name}' input '${key}': invalid array item type '${itemType}' in '${typeStr}'. ` +
+              `Expected one of: ${[...VALID_ITEM_TYPES].join(', ')}.`,
+            );
+          }
           properties[key] = { type: 'array', items: { type: itemType }, ...(description ? { description } : {}) };
         } else {
           properties[key] = { type: baseType, ...(description ? { description } : {}) };
