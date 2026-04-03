@@ -53,15 +53,17 @@ describe('NylasCalendarClient', () => {
     });
 
     it('returns normalized calendar objects', async () => {
+      // Mock data uses camelCase — the Nylas SDK v8 runs objKeysToCamelCase() on
+      // all API responses before returning them, so runtime objects are camelCase.
       (sdk.calendars.list as ReturnType<typeof vi.fn>).mockResolvedValue({
         data: [{
           id: 'cal-1',
           name: 'Joseph Work',
           description: 'Main calendar',
           timezone: 'America/Toronto',
-          is_primary: true,
-          read_only: false,
-          is_owned_by_user: false,
+          isPrimary: true,
+          readOnly: false,
+          isOwnedByUser: false,
         }],
       });
 
@@ -98,6 +100,65 @@ describe('NylasCalendarClient', () => {
     it('throws on invalid date strings', async () => {
       await expect(client.listEvents('cal-1', 'not-a-date', '2026-04-02T00:00:00Z'))
         .rejects.toThrow(/Invalid timeMin timestamp/);
+    });
+
+    it('returns normalized event objects with timestamps from SDK camelCase response', async () => {
+      // The Nylas SDK v8 transforms all response keys to camelCase before returning.
+      // startTime/endTime on 'when' come back camelCase, not start_time/end_time.
+      (sdk.events.list as ReturnType<typeof vi.fn>).mockResolvedValue({
+        data: [{
+          id: 'evt-abc',
+          title: 'Karen — Capacity Canada',
+          calendarId: 'cal-1',
+          status: 'confirmed',
+          busy: true,
+          when: {
+            startTime: 1744027500, // 2026-04-07T18:45:00Z
+            endTime: 1744029300,   // 2026-04-07T19:15:00Z
+            object: 'timespan',
+          },
+          participants: [{ email: 'karen@capacity.ca', name: 'Karen', status: 'yes' }],
+        }],
+      });
+
+      const events = await client.listEvents('cal-1', '2026-04-07T00:00:00Z', '2026-04-08T00:00:00Z');
+
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({
+        id: 'evt-abc',
+        title: 'Karen — Capacity Canada',
+        calendarId: 'cal-1',
+        startTime: 1744027500,
+        endTime: 1744029300,
+        startDate: null,
+        endDate: null,
+      });
+    });
+
+    it('returns normalized all-day event with startDate/endDate', async () => {
+      (sdk.events.list as ReturnType<typeof vi.fn>).mockResolvedValue({
+        data: [{
+          id: 'evt-allday',
+          title: 'Company Holiday',
+          calendarId: 'cal-1',
+          status: 'confirmed',
+          busy: false,
+          when: {
+            startDate: '2026-04-10',
+            endDate: '2026-04-10',
+            object: 'datespan',
+          },
+        }],
+      });
+
+      const events = await client.listEvents('cal-1', '2026-04-07T00:00:00Z', '2026-04-14T00:00:00Z');
+
+      expect(events[0]).toMatchObject({
+        startTime: null,
+        endTime: null,
+        startDate: '2026-04-10',
+        endDate: '2026-04-10',
+      });
     });
   });
 
@@ -164,6 +225,26 @@ describe('NylasCalendarClient', () => {
           end_time: Math.floor(new Date('2026-04-02T00:00:00Z').getTime() / 1000),
           emails: ['cal-1', 'cal-2'],
         },
+      });
+    });
+
+    it('returns normalized free-busy slots from camelCase SDK response', async () => {
+      // The Nylas SDK v8 camelCases the response — timeSlots, startTime, endTime.
+      (sdk.calendars_free_busy.list as ReturnType<typeof vi.fn>).mockResolvedValue({
+        data: [{
+          email: 'cal-1',
+          timeSlots: [
+            { startTime: 1744027500, endTime: 1744029300, status: 'busy' },
+          ],
+        }],
+      });
+
+      const result = await client.getFreeBusy(['cal-1'], '2026-04-01T00:00:00Z', '2026-04-02T00:00:00Z');
+
+      expect(result).toHaveLength(1);
+      expect(result[0]).toEqual({
+        email: 'cal-1',
+        timeSlots: [{ startTime: 1744027500, endTime: 1744029300, status: 'busy' }],
       });
     });
   });

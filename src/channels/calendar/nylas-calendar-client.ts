@@ -61,15 +61,19 @@ export interface NylasCalendarLike {
 }
 
 // -- Raw Nylas SDK types (subset we use) --
+//
+// The Nylas SDK v8 runs objKeysToCamelCase() on all API responses before returning
+// them, so runtime objects use camelCase — not the snake_case of the raw REST API.
+// These interfaces must match the *SDK output*, not the wire format.
 
 interface NylasRawCalendar {
   id: string;
   name?: string;
   description?: string;
   timezone?: string;
-  is_primary?: boolean;
-  read_only?: boolean;
-  is_owned_by_user?: boolean;
+  isPrimary?: boolean;
+  readOnly?: boolean;
+  isOwnedByUser?: boolean;
 }
 
 interface NylasRawEvent {
@@ -77,11 +81,17 @@ interface NylasRawEvent {
   title?: string;
   description?: string;
   location?: string;
+  // 'when' is a discriminated union (Timespan | Time | Date | Datespan).
+  // All field names are camelCase after the SDK's objKeysToCamelCase transform.
   when?: {
-    start_time?: number;
-    end_time?: number;
-    start_date?: string;
-    end_date?: string;
+    // Timespan — regular timed events
+    startTime?: number;
+    endTime?: number;
+    // Date — single all-day events
+    date?: string;
+    // Datespan — multi-day all-day events
+    startDate?: string;
+    endDate?: string;
     object?: string;
   };
   participants?: Array<{
@@ -91,16 +101,16 @@ interface NylasRawEvent {
   }>;
   conferencing?: Record<string, unknown>;
   status?: string;
-  calendar_id?: string;
+  calendarId?: string;
   busy?: boolean;
   metadata?: Record<string, string>;
 }
 
 interface NylasRawFreeBusy {
   email: string;
-  time_slots?: Array<{
-    start_time: number;
-    end_time: number;
+  timeSlots?: Array<{
+    startTime: number;
+    endTime: number;
     status: string;
   }>;
 }
@@ -350,9 +360,9 @@ export class NylasCalendarClient {
       });
       return (response?.data ?? []).map((fb) => ({
         email: fb.email,
-        timeSlots: (fb.time_slots ?? []).map((ts) => ({
-          startTime: ts.start_time,
-          endTime: ts.end_time,
+        timeSlots: (fb.timeSlots ?? []).map((ts) => ({
+          startTime: ts.startTime,
+          endTime: ts.endTime,
           status: ts.status,
         })),
       }));
@@ -381,9 +391,9 @@ export class NylasCalendarClient {
       name: cal.name ?? '',
       description: cal.description ?? '',
       timezone: cal.timezone ?? '',
-      isPrimary: cal.is_primary ?? false,
-      readOnly: cal.read_only ?? false,
-      isOwnedByUser: cal.is_owned_by_user ?? true,
+      isPrimary: cal.isPrimary ?? false,
+      readOnly: cal.readOnly ?? false,
+      isOwnedByUser: cal.isOwnedByUser ?? true,
     };
   }
 
@@ -393,10 +403,11 @@ export class NylasCalendarClient {
       title: evt.title ?? '',
       description: evt.description ?? '',
       location: evt.location ?? '',
-      startTime: evt.when?.start_time ?? null,
-      endTime: evt.when?.end_time ?? null,
-      startDate: evt.when?.start_date ?? null,
-      endDate: evt.when?.end_date ?? null,
+      startTime: evt.when?.startTime ?? null,
+      endTime: evt.when?.endTime ?? null,
+      // For single all-day events (Date type), expose the date as both startDate and endDate
+      startDate: evt.when?.startDate ?? evt.when?.date ?? null,
+      endDate: evt.when?.endDate ?? evt.when?.date ?? null,
       participants: (evt.participants ?? []).map((p) => ({
         email: p.email,
         name: p.name ?? '',
@@ -404,7 +415,7 @@ export class NylasCalendarClient {
       })),
       conferencing: evt.conferencing ?? null,
       status: evt.status ?? 'confirmed',
-      calendarId: evt.calendar_id ?? '',
+      calendarId: evt.calendarId ?? '',
       busy: evt.busy ?? true,
     };
   }
