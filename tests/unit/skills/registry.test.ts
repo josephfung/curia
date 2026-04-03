@@ -123,6 +123,36 @@ describe('SkillRegistry', () => {
     expect(props.count).toEqual({ type: 'number' });
   });
 
+  it('converts array type inputs to JSON Schema array with items', () => {
+    registry.register(makeManifest({
+      name: 'array-skill',
+      description: 'Takes arrays',
+      inputs: {
+        ids: 'string[]',
+        tags: 'string[]? (optional list of tags)',
+      },
+    }), stubHandler);
+    const tools = registry.toToolDefinitions(['array-skill']);
+    const props = tools[0].input_schema.properties;
+
+    // Required string array
+    expect(props.ids).toEqual({ type: 'array', items: { type: 'string' } });
+    // Optional string array with description
+    expect(props.tags).toEqual({ type: 'array', items: { type: 'string' }, description: 'optional list of tags' });
+    // ids is required, tags is not
+    expect(tools[0].input_schema.required).toEqual(['ids']);
+  });
+
+  it('throws on invalid array item type in skill manifest', () => {
+    registry.register(makeManifest({
+      name: 'bad-array-skill',
+      description: 'Bad manifest',
+      inputs: { ids: 'foo[]' },
+    }), stubHandler);
+    expect(() => registry.toToolDefinitions(['bad-array-skill']))
+      .toThrow(/invalid array item type 'foo'/);
+  });
+
   it('toToolDefinitions ignores unknown skill names', () => {
     const tools = registry.toToolDefinitions(['nonexistent']);
     expect(tools).toHaveLength(0);
