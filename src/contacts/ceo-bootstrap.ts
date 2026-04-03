@@ -82,6 +82,11 @@ export async function bootstrapCeoContact(
 
   // No existing record — create contact and link the email identity in a single
   // transaction so a partial failure cannot leave an orphaned contacts row.
+  //
+  // If two instances start simultaneously and both reach this point, one will win
+  // and the other will hit a 23505 unique constraint violation on channel_identifier.
+  // In that case we re-query for the winning row and return it as-is — the CEO contact
+  // exists and is correct, so this is an idempotent success, not an error.
   const contactId = randomUUID();
   const client = await pool.connect();
   try {
@@ -100,6 +105,20 @@ export async function bootstrapCeoContact(
     await client.query('COMMIT');
   } catch (err) {
     await client.query('ROLLBACK');
+    // 23505 = unique_violation: another instance won the race and already created the
+    // identity. Re-query for the winning row and treat as idempotent success.
+    const pgCode = (err as { code?: string }).code;
+    if (pgCode === '23505') {
+      const winner = await pool.query<{ contact_id: string }>(
+        `SELECT contact_id FROM contact_channel_identities
+         WHERE channel = 'email' AND channel_identifier = $1`,
+        [ceoPrimaryEmail],
+      );
+      if (winner.rows[0]) {
+        logger.info({ contactId: winner.rows[0].contact_id, email: ceoPrimaryEmail }, 'ceo-bootstrap: concurrent startup race resolved — existing CEO contact used');
+        return { contactId: winner.rows[0].contact_id, alreadyExisted: true };
+      }
+    }
     throw err;
   } finally {
     client.release();

@@ -45,6 +45,6 @@ export function loadConfig(): Config {
     nylasGrantId: process.env.NYLAS_GRANT_ID,
     nylasPollingIntervalMs,
     nylasSelfEmail: process.env.NYLAS_SELF_EMAIL ?? '',
-    ceoPrimaryEmail: process.env.CEO_PRIMARY_EMAIL?.trim() || undefined,
+    ceoPrimaryEmail: process.env.CEO_PRIMARY_EMAIL?.trim().toLowerCase() || undefined,
   };
 }
