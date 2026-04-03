@@ -150,6 +150,11 @@ Rate each behavior. Respond with JSON only.`;
  * Parse the judge's JSON response into BehaviorScore[].
  * Falls back to all-MISS (using fallbackBehaviors) if parsing fails.
  * If fallbackBehaviors is omitted and parsing fails, returns an empty array.
+ *
+ * When fallbackBehaviors is provided, also validates the returned IDs against
+ * the expected set and warns on any mismatch (extra or missing IDs). This
+ * catches cases where the judge reformats IDs (e.g. underscores vs hyphens)
+ * before they silently zero-score in computeWeightedScore.
  */
 export function parseJudgeResponse(
   raw: string,
@@ -160,13 +165,41 @@ export function parseJudgeResponse(
     if (!Array.isArray(parsed.scores)) throw new Error('Missing scores array');
 
     // Normalize any unrecognized rating values to MISS for safety
-    return parsed.scores.map(s => ({
+    const scores = parsed.scores.map(s => ({
       behaviorId: s.behaviorId,
       rating: (['PASS', 'PARTIAL', 'MISS'].includes(s.rating) ? s.rating : 'MISS') as BehaviorRating,
       justification: s.justification ?? '',
     }));
+
+    // Validate returned IDs against expected set when we have one.
+    // IDs the judge invented won't be matched by computeWeightedScore;
+    // IDs the judge dropped will silently score 0. Both are surfaced here.
+    if (fallbackBehaviors) {
+      const expectedIds = new Set(fallbackBehaviors.map(b => b.id));
+      const returnedIds = new Set(scores.map(s => s.behaviorId));
+
+      for (const id of returnedIds) {
+        if (!expectedIds.has(id)) {
+          process.stderr.write(
+            `  [WARN] Judge returned unexpected behavior ID '${id}' — not in expected set, will be ignored by scorer\n`,
+          );
+        }
+      }
+      for (const id of expectedIds) {
+        if (!returnedIds.has(id)) {
+          process.stderr.write(
+            `  [WARN] Judge did not return a score for expected behavior '${id}' — will score as 0\n`,
+          );
+        }
+      }
+    }
+
+    return scores;
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
+    // Always warn so the operator knows a parse failure occurred, even when
+    // fallbackBehaviors is absent (without this the caller receives [] silently).
+    process.stderr.write(`  [WARN] Failed to parse judge response: ${detail}\n`);
     if (!fallbackBehaviors) return [];
     return fallbackBehaviors.map(b => ({
       behaviorId: b.id,
@@ -196,8 +229,16 @@ export function computeWeightedScore(
     const score = scoreMap.get(b.id);
     if (score) {
       earnedWeight += w * RATING_VALUES[score.rating];
+    } else {
+      // Backstop warn: no score entry for this behavior — counts as 0.
+      // parseJudgeResponse will have already identified the specific cause (ID mismatch,
+      // dropped behavior, etc.) when it was given the expected behaviors. This warning
+      // fires regardless, so the score impact is always surfaced even if parsing was called
+      // without fallbackBehaviors.
+      process.stderr.write(
+        `  [WARN] No score entry for behavior '${b.id}' — counting as 0\n`,
+      );
     }
-    // If a behavior has no corresponding score entry, it counts as 0 earned weight
   }
 
   // Guard against degenerate empty-behaviors case

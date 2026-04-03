@@ -68,6 +68,8 @@ export function loadTestCase(filePath: string): TestCase {
  * Load all YAML test cases from a directory.
  * Files are sorted alphabetically for a stable, predictable load order.
  * Optionally filter to only cases that have at least one of the given tags.
+ * Throws if any two files share the same case name — duplicates would cause
+ * the --case CLI filter to match multiple cases silently.
  */
 export function loadTestCases(
   dirPath: string,
@@ -77,11 +79,26 @@ export function loadTestCases(
     .filter(f => f.endsWith('.yaml') || f.endsWith('.yml'))
     .sort();
 
-  let cases = files.map(f => loadTestCase(path.join(dirPath, f)));
+  const cases = files.map(f => loadTestCase(path.join(dirPath, f)));
+
+  // Enforce unique names before applying tag filtering so duplicates are caught
+  // regardless of which tags are in use.
+  // Normalize to lowercase so duplicate detection matches CLI --case filter semantics,
+  // which uses case-insensitive substring matching (see cli.ts line 34).
+  const seen = new Set<string>();
+  for (const tc of cases) {
+    const normalizedName = tc.name.trim().toLowerCase();
+    if (seen.has(normalizedName)) {
+      throw new Error(
+        `Duplicate test case name '${tc.name}' found in ${dirPath} — each test case must have a unique name`,
+      );
+    }
+    seen.add(normalizedName);
+  }
 
   if (options?.tags && options.tags.length > 0) {
     const filterTags = new Set(options.tags);
-    cases = cases.filter(tc => tc.tags.some(t => filterTags.has(t)));
+    return cases.filter(tc => tc.tags.some(t => filterTags.has(t)));
   }
 
   return cases;
