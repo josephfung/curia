@@ -60,8 +60,23 @@ export async function messageRoutes(
       content: body.content,
     });
 
+    // Publish failure: bus.publish() threw synchronously. Cancel our pending entry
+    // (which is still ours at this point — no other request has had a chance to
+    // supersede it) and bail early with a 500.
     try {
       await bus.publish('channel', inboundEvent);
+    } catch (publishErr) {
+      eventRouter.cancelPending(conversationId);
+      const message = publishErr instanceof Error ? publishErr.message : String(publishErr);
+      logger.error({ err: publishErr, conversationId }, 'HTTP message publish failed');
+      return reply.status(500).send({ error: message });
+    }
+
+    // Wait for the agent response. At this point the pending entry may have been
+    // superseded by a concurrent request with the same conversation_id — in that
+    // case our promise already rejected with "Superseded". We must NOT call
+    // cancelPending here because the entry now belongs to the newer request.
+    try {
       const content = await responsePromise;
 
       // TODO: agent_id is hardcoded — OutboundMessagePayload doesn't carry agentId.
@@ -73,14 +88,10 @@ export async function messageRoutes(
         agent_id: 'coordinator',
       });
     } catch (err) {
-      // Safety net: cancel the pending entry if the bus.publish() threw before
-      // the rejection event could clean it up. On the normal rejection path the
-      // EventRouter has already removed the entry, so this is a no-op there.
-      eventRouter.cancelPending(conversationId);
       const message = err instanceof Error ? err.message : String(err);
       logger.error({ err, conversationId }, 'HTTP message handling failed');
 
-      // Distinguish rejection (403), timeout (504), and internal failures (500).
+      // Distinguish rejection (403), timeout (504), superseded/internal failures (500).
       // Use instanceof rather than string matching so a wording change can't
       // silently break the status code.
       const isRejected = err instanceof MessageRejectedError;
