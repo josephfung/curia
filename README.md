@@ -312,7 +312,7 @@ This starts Postgres via Docker, applies any pending migrations, then launches t
 | 09 | Contacts & identity (auth, unknown sender policy) | ✅ Implemented |
 | 10 | Audit log hardening (hash-chain, HITL, provenance) | Planned |
 | 11 | Autonomy engine (global score, CEO controls, per-task prompt injection) | ✅ Implemented |
-| 12 | Autonomy engine (global score, CEO controls, per-task prompt injection) | Planned |
+| 12 | Autonomy engine (self-monitoring, measurement, and automatic tuning) | Planned |
 | — | Outbound safety (content filter, gateway, display name sanitization, caller verification) | Partial — deterministic rules done; LLM-as-judge planned |
 | — | Smoke test framework (14 chat-based cases, LLM-as-judge, HTML reports) | ✅ Implemented |
 | — | Web dashboard | Future |
