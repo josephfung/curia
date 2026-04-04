@@ -17,6 +17,8 @@
 
 import Fastify, { type FastifyInstance } from 'fastify';
 import cors from '@fastify/cors';
+import cookie from '@fastify/cookie';
+import rateLimit from '@fastify/rate-limit';
 import type { EventBus } from '../../bus/bus.js';
 import type { Logger } from '../../logger.js';
 import type { Pool } from 'pg';
@@ -28,6 +30,7 @@ import { healthRoutes } from './routes/health.js';
 import { agentRoutes } from './routes/agents.js';
 import { jobRoutes } from './routes/jobs.js';
 import { messageRoutes } from './routes/messages.js';
+import { knowledgeGraphRoutes } from './routes/kg.js';
 
 export interface HttpAdapterConfig {
   bus: EventBus;
@@ -36,6 +39,8 @@ export interface HttpAdapterConfig {
   agentRegistry: AgentRegistry;
   port: number;
   apiToken: string | undefined;
+  webAppBootstrapSecret: string | undefined;
+  appOrigin: string | undefined;
   agentNames: string[];
   skillNames: string[];
   schedulerService?: SchedulerService;
@@ -56,20 +61,55 @@ export class HttpAdapter {
   }
 
   async start(): Promise<void> {
-    const { bus, logger, pool, agentRegistry, port, apiToken, agentNames, skillNames } = this.config;
+    const {
+      bus,
+      logger,
+      pool,
+      agentRegistry,
+      port,
+      apiToken,
+      agentNames,
+      skillNames,
+      webAppBootstrapSecret,
+      appOrigin,
+    } = this.config;
 
     // Register shared bus subscriptions BEFORE starting the server.
     // One subscriber per event type, dispatches to HTTP clients via Maps/Sets.
     this.eventRouter.setupSubscriptions(bus);
 
-    // CORS — allow all origins in dev, restrict in production later
-    await this.app.register(cors, { origin: true });
+    // Cookie parsing — required for the KG session cookie auth flow.
+    await this.app.register(cookie);
+
+    // Rate limiting — global baseline, with tighter per-route overrides on auth endpoints.
+    // Prevents brute-force against the bootstrap secret and general DoS.
+    await this.app.register(rateLimit, {
+      max: 200,
+      timeWindow: '1 minute',
+    });
+
+    // CORS — restricted to APP_ORIGIN in production; disabled (no ACAO header) in dev.
+    // 'origin: false' means Fastify sends no Access-Control-Allow-Origin header,
+    // which is safe for same-origin browser requests on localhost.
+    await this.app.register(cors, {
+      origin: appOrigin ?? false,
+      credentials: true, // needed so the browser sends the session cookie cross-origin
+    });
 
     // Auth hook — runs before every request
     this.app.addHook('onRequest', async (request, reply) => {
       // Skip auth for health endpoint — it's used by load balancers and monitors.
       // Use routeOptions.url (the registered pattern) so query strings don't break the match.
-      if (request.routeOptions.url === '/api/health') return;
+      const routeUrl = request.routeOptions.url ?? '';
+      if (routeUrl === '/api/health') return;
+      // KG web app routes bypass bearer auth — the app shell, static assets, and
+      // /auth exchange need no token; /api/kg/* routes enforce their own session/secret.
+      if (
+        routeUrl === '/' ||
+        routeUrl === '/auth' ||
+        routeUrl.startsWith('/assets') ||
+        routeUrl.startsWith('/api/kg')
+      ) return;
 
       if (!validateBearerToken(request.headers.authorization, apiToken)) {
         return reply.status(401).send({ error: 'Unauthorized — provide a valid Bearer token' });
@@ -83,6 +123,21 @@ export class HttpAdapter {
 
     if (this.config.schedulerService) {
       await this.app.register(jobRoutes, { schedulerService: this.config.schedulerService });
+    }
+
+    // Only register KG routes when the secret is configured — if unset, the routes
+    // don't exist at all (404) rather than leaking a 503 that reveals the feature exists.
+    if (webAppBootstrapSecret) {
+      // secureCookies: true only when serving over HTTPS (i.e. APP_ORIGIN is https://).
+      // In local dev (no APP_ORIGIN), cookies are set without the Secure flag so they
+      // work on plain http://localhost.
+      const secureCookies = appOrigin?.startsWith('https://') ?? false;
+      await this.app.register(knowledgeGraphRoutes, {
+        pool,
+        logger,
+        webAppBootstrapSecret,
+        secureCookies,
+      });
     }
 
     // Start listening

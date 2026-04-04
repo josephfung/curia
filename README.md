@@ -294,6 +294,20 @@ pnpm local
 
 This starts Postgres via Docker, applies any pending migrations, then launches the Curia stack. Talk to it via CLI immediately; email and HTTP channels activate as configured in `.env`.
 
+
+### Knowledge Graph Web Explorer
+
+Curia now includes a built-in graph browser at `GET /kg` backed by Postgres `kg_nodes` + `kg_edges`.
+
+1. Set `WEB_APP_BOOTSTRAP_SECRET` in `.env`
+2. Start Curia (`pnpm local`)
+3. Open `http://localhost:3000/kg`, enter `WEB_APP_BOOTSTRAP_SECRET` in the UI, then search/browse.
+
+The explorer supports:
+- node search (`/api/kg/nodes`)
+- neighborhood traversal (`/api/kg/graph`)
+- interactive rendering via Cytoscape.js (open source, MIT), served locally by Curia
+
 ---
 
 ## Project Status

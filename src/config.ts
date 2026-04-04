@@ -5,6 +5,11 @@ export interface Config {
   logLevel: string;
   httpPort: number;
   apiToken: string | undefined;
+  webAppBootstrapSecret: string | undefined;
+  // Public origin of the app (e.g. "https://curia.example.com"). Used to restrict
+  // CORS to a single origin and to set the Secure flag on session cookies.
+  // Leave unset in local development — CORS is disabled and cookies are HTTP-only.
+  appOrigin: string | undefined;
   timezone: string;
   nylasApiKey: string | undefined;
   nylasGrantId: string | undefined;
@@ -40,6 +45,8 @@ export function loadConfig(): Config {
     logLevel: process.env.LOG_LEVEL ?? 'info',
     httpPort,
     apiToken: process.env.API_TOKEN,
+    webAppBootstrapSecret: process.env.WEB_APP_BOOTSTRAP_SECRET,
+    appOrigin: process.env.APP_ORIGIN || undefined,
     timezone: process.env.TIMEZONE ?? 'America/Toronto',
     nylasApiKey: process.env.NYLAS_API_KEY,
     nylasGrantId: process.env.NYLAS_GRANT_ID,
