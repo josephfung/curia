@@ -1,7 +1,7 @@
 # Capability Expansion: CEO Inbox & Web Search
 
 **Date:** 2026-04-03
-**Status:** Proposed
+**Status:** Updated — autonomy engine (spec 12) supersedes autonomy_phase
 
 ## Overview
 
@@ -19,23 +19,30 @@ Two new capabilities that unlock core EA work Nathan cannot currently do:
 
 - **Skills Must Add Value Beyond the Bare LLM** — skills are API bridges. No skill contains classification, summarization, or judgment logic. The LLM decides what to draft; the skill saves it to Drafts. The LLM decides what to search for; the skill fetches results.
 - **Future-Proof for LLM Upgrades** — synthesis always stays in Nathan's LLM, never in a pre-synthesis API (Perplexity rejected for this reason). As Claude gets smarter, Nathan's research quality improves automatically at zero cost.
-- **Phase-Gated Autonomy** — the CEO inbox integration is designed for three levels of autonomy. Only Phase 1 ships now. Phases 2 and 3 are config-flag additions, not architectural changes.
+- **Autonomy-Score-Aware** — all new skills declare `autonomy_floor` per spec 12 (autonomy engine). The global autonomy score governs which capabilities Nathan may exercise independently — no per-channel config flags. Skills that ship now are available at any score; higher-autonomy behaviors (archiving, sending as Joseph) activate as the score increases into the appropriate band.
 
 ---
 
 ## Capability 1: CEO Inbox
 
-### Autonomy Phases
+### Autonomy Band Mapping
 
-The inbox integration supports three phases of autonomy, each a superset of the last:
+CEO inbox capabilities map to autonomy bands (spec 12) rather than hard-coded phases.
+The global autonomy score governs what Nathan does independently vs. asks first — no
+separate `autonomy_phase` config field.
 
-| Phase | What Nathan does | Ships when |
+| Capability | autonomy_floor | Ships when |
 |---|---|---|
-| **1 — Monitor & Draft** | Reads inbox, drafts replies, saves to Joseph's Drafts folder. Daily digest notifies Joseph if drafts are pending. | Now |
-| **2 — Archive & File** | Archives threads, applies Gmail labels. Builds on Joseph's existing filters. | Later |
-| **3 — Autonomous Reply** | Replies as Joseph (or from nathancuria1@gmail.com) for threads Nathan can handle independently. | Later |
+| Read inbox, read messages, list drafts | `full` | Now — reads are always safe |
+| Draft replies, save to Joseph's Drafts folder | `spot-check` | Now — skill ships regardless of band; at lower bands Nathan confirms intent before saving |
+| Daily draft digest (scheduler job) | `full` | Now — read + notify, no external write |
+| Archive threads, apply Gmail labels | `spot-check` | When skills are built — Nathan proceeds at `spot-check`+, asks at lower bands |
+| Reply as Nathan (from nathancuria1@gmail.com) | `spot-check` | When `email-send` account param ships |
+| Reply as Joseph (from joseph@josephfung.ca) | `approval-required` | When `email-send` account param ships — sending on Joseph's behalf requires higher trust |
 
-A `autonomy_phase` config field in `config/default.yaml` controls which behaviors are active.
+The autonomy engine (spec 12) injects the current band's behavioral description into
+every coordinator task. Nathan self-governs accordingly without additional gating code
+until Phase 2 hard gates are wired in `OutboundGateway`.
 
 ### Architecture
 
@@ -57,6 +64,7 @@ Skills are **account-aware** rather than account-specific — an optional `accou
   "name": "email-list",
   "sensitivity": "normal",
   "infrastructure": true,
+  "autonomy_floor": "full",
   "inputs": {
     "account": "string? (nathan | joseph, default nathan)",
     "folder": "string? (INBOX | DRAFTS | SENT | TRASH | <provider folder id>, default INBOX)",
@@ -78,6 +86,7 @@ Skills are **account-aware** rather than account-specific — an optional `accou
   "name": "email-get",
   "sensitivity": "normal",
   "infrastructure": true,
+  "autonomy_floor": "full",
   "inputs": {
     "account": "string? (nathan | joseph, default nathan)",
     "messageId": "string"
@@ -94,6 +103,7 @@ Skills are **account-aware** rather than account-specific — an optional `accou
   "name": "email-draft-save",
   "sensitivity": "elevated",
   "infrastructure": true,
+  "autonomy_floor": "spot-check",
   "inputs": {
     "account": "string (nathan | joseph)",
     "to": "string",
@@ -107,7 +117,10 @@ Skills are **account-aware** rather than account-specific — an optional `accou
 }
 ```
 
-Elevated sensitivity ensures a human-approval gate the first time the coordinator uses this skill.
+Elevated sensitivity ensures a human-approval gate the first time the coordinator uses this
+skill. `autonomy_floor: "spot-check"` documents that saving a draft on someone's behalf is
+an outbound-effect action; at lower bands Nathan should surface the draft for review rather
+than saving it silently.
 
 **Scheduler job (Phase 1):**
 
@@ -117,21 +130,19 @@ No new infrastructure. The job is created by Nathan via `scheduler-create` with 
 
 This is set up during first-time onboarding via a CLI prompt like "keep an eye on my drafts and let me know at 5pm if there's anything waiting" — Nathan decides to create the job himself, exactly as if he'd been asked.
 
-**New skills (Phase 2, not shipped now):**
+**Future skills (not shipped now) — autonomy band triggers:**
 
-- `email-archive` — removes a message from `INBOX` by updating its folders via `UpdateMessageRequest`. Supports `account` param.
-- `email-label` — applies Gmail labels to a thread via `UpdateMessageRequest`. Supports `account` param.
-
-**New skills / modifications (Phase 3, not shipped now):**
-
-- `email-send` gains an `account` parameter. When `account: "joseph"`, routes through a new `email-ceo` OutboundGateway path that enforces `autonomyPhase ≥ 3`. Elevated sensitivity.
-- `email-reply` gains an `account` parameter with the same gating.
+- `email-archive` (`autonomy_floor: "spot-check"`) — removes a message from `INBOX` via `UpdateMessageRequest`. Supports `account` param. Nathan should proceed independently at `spot-check`+; at lower bands he surfaces the action and waits for explicit approval.
+- `email-label` (`autonomy_floor: "spot-check"`) — applies Gmail labels to a thread via `UpdateMessageRequest`. Supports `account` param. Same band guidance as `email-archive`.
+- `email-send` / `email-reply` gain an `account` parameter when the autonomous reply capability ships:
+  - `account: "nathan"` → `autonomy_floor: "spot-check"` — Nathan replying as himself is standard outbound
+  - `account: "joseph"` → `autonomy_floor: "approval-required"` — sending on the CEO's behalf requires higher trust; below this band the OutboundGateway hard-blocks the send and the coordinator saves a draft instead
 
 ### Outbound Gateway
 
-All writes to Joseph's account (draft saves, eventual sends) route through `OutboundGateway`. Phase 1 only writes drafts — no sends. The gateway's blocked-contact and content-filter checks still apply to drafts to prevent Nathan from drafting problematic content.
+All writes to Joseph's account (draft saves, eventual sends) route through `OutboundGateway`. Currently only draft saves are implemented — no sends. The gateway's blocked-contact and content-filter checks apply to drafts to prevent Nathan from drafting problematic content.
 
-A new autonomy gate is added to OutboundGateway for Phase 3: if `autonomyPhase < 3`, attempts by `email-send` with `account: "joseph"` are blocked and the coordinator is told to save a draft instead.
+**Future autonomy gate (when `email-send(account: "joseph")` ships):** OutboundGateway will check the current autonomy score against the skill's `autonomy_floor: "approval-required"` (score ≥ 70). Below that threshold, `email-send` with `account: "joseph"` is blocked at the gateway level and the coordinator is instructed to save a draft instead. This is a hard gate — it holds even if the LLM's injected autonomy guidance would otherwise permit the action.
 
 ### Contact System
 
@@ -152,7 +163,8 @@ channels:
   email-ceo:
     enabled: true
     pollingIntervalMs: 30000
-    autonomyPhase: 1       # 1 = monitor+draft, 2 = +archive, 3 = +send
+    # No autonomy_phase field — autonomy is governed globally by the autonomy engine (spec 12).
+    # Autonomy score is set via the set-autonomy skill and persisted in Postgres.
 ```
 
 ### Files to Create/Modify
@@ -164,10 +176,9 @@ channels:
 | Create | `skills/email-list/skill.json` + `handler.ts` + `handler.test.ts` |
 | Create | `skills/email-get/skill.json` + `handler.ts` + `handler.test.ts` |
 | Create | `skills/email-draft-save/skill.json` + `handler.ts` + `handler.test.ts` |
-| Modify | `config/default.yaml` — add `email-ceo` channel config and scheduler job |
+| Modify | `config/default.yaml` — add `email-ceo` channel config |
 | Modify | `agents/coordinator.yaml` — pin new skills, add persona guidance |
 | Modify | `src/index.ts` (or channel bootstrap) — register `email-ceo-adapter` |
-| Modify | `src/skills/outbound-gateway.ts` — autonomy phase gate (Phase 3 prep) |
 
 ---
 
@@ -203,6 +214,7 @@ Nathan decides which to use based on the task. The skill exposes both via an inp
   "name": "web-search",
   "description": "Search the web using Tavily. Returns structured results with title, URL, snippet, and (for advanced depth) extracted page content. Call multiple times with refined queries for complex research tasks.",
   "sensitivity": "normal",
+  "autonomy_floor": "full",
   "inputs": {
     "query": "string",
     "maxResults": "number? (default 5, max 20)",

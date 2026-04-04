@@ -209,6 +209,7 @@ Expected: all tests fail with "Cannot find module" or similar — the handler do
   "description": "Search the web using Tavily. Returns structured results with title, URL, snippet, and (for advanced depth) extracted page content. For simple lookups, one search is enough. For research tasks, call multiple times with different queries — each covering a different angle — before forming a conclusion.",
   "version": "1.0.0",
   "sensitivity": "normal",
+  "autonomy_floor": "full",
   "inputs": {
     "query": "string",
     "maxResults": "number?",
