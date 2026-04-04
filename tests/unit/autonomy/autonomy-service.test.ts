@@ -59,6 +59,16 @@ describe('AutonomyService', () => {
         AutonomyService.formatPromptBlock({ score, band, updatedAt: new Date(), updatedBy: 'ceo' });
       expect(make(95, 'full')).not.toBe(make(75, 'approval-required'));
     });
+
+    it('throws for an unknown band value', () => {
+      const config = {
+        score: 75,
+        band: 'invalid-band' as AutonomyBand,
+        updatedAt: new Date(),
+        updatedBy: 'ceo',
+      };
+      expect(() => AutonomyService.formatPromptBlock(config)).toThrow("Unknown autonomy band: 'invalid-band'");
+    });
   });
 
   // -- getConfig --

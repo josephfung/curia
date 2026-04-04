@@ -203,10 +203,12 @@ export class ExecutionLayer {
       if (this.nylasCalendarClient) {
         ctx.nylasCalendarClient = this.nylasCalendarClient;
       }
-      // autonomyService is optional — only infrastructure skills that manage the global autonomy score need it
-      if (this.autonomyService) {
-        ctx.autonomyService = this.autonomyService;
-      }
+    }
+
+    // autonomyService is scoped to the autonomy skills only — not granted to all infrastructure skills.
+    // Limiting access here reduces blast radius if any other infrastructure skill is ever compromised.
+    if (this.autonomyService && (manifest.name === 'get-autonomy' || manifest.name === 'set-autonomy')) {
+      ctx.autonomyService = this.autonomyService;
     }
 
     // entityContextAssembler — available to ALL skills (not just infrastructure).

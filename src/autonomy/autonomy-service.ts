@@ -94,6 +94,10 @@ export class AutonomyService {
   static formatPromptBlock(config: AutonomyConfig): string {
     const label = BAND_LABELS[config.band];
     const description = BAND_DESCRIPTIONS[config.band];
+    if (!label || !description) {
+      // Unknown band — fail safe rather than injecting 'undefined' into the system prompt.
+      throw new Error(`Unknown autonomy band: '${config.band}'`);
+    }
     return [
       '## Autonomy Level',
       '',

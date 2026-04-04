@@ -6,7 +6,7 @@
 CREATE TABLE autonomy_config (
   id          INTEGER PRIMARY KEY DEFAULT 1,
   score       INTEGER NOT NULL CHECK (score >= 0 AND score <= 100),
-  band        TEXT NOT NULL,
+  band        TEXT NOT NULL CHECK (band IN ('full', 'spot-check', 'approval-required', 'draft-only', 'restricted')),
   updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_by  TEXT NOT NULL,
   CONSTRAINT single_row CHECK (id = 1)
@@ -18,7 +18,7 @@ CREATE TABLE autonomy_history (
   id             BIGSERIAL PRIMARY KEY,
   score          INTEGER NOT NULL,
   previous_score INTEGER,
-  band           TEXT NOT NULL,
+  band           TEXT NOT NULL CHECK (band IN ('full', 'spot-check', 'approval-required', 'draft-only', 'restricted')),
   changed_by     TEXT NOT NULL,
   reason         TEXT,
   changed_at     TIMESTAMPTZ NOT NULL DEFAULT now()

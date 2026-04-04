@@ -23,10 +23,12 @@ export class SetAutonomyHandler implements SkillHandler {
     // Round to nearest integer — tolerate minor float imprecision from the LLM
     const intScore = Math.round(parsedScore);
 
-    // Prefer the caller's role as the audit identifier; fall back to contactId.
-    // CallerContext.role is string | null, so we guard against null explicitly.
-    const changedBy = ctx.caller?.role ?? ctx.caller?.contactId ?? 'system';
-    const reasonStr = typeof reason === 'string' && reason.trim() ? reason.trim() : undefined;
+    // Prefer contactId over role for the audit identifier — contactId is a unique, stable
+    // identifier while role is a broad category (multiple callers can share a role).
+    const changedBy = ctx.caller?.contactId ?? ctx.caller?.role ?? 'system';
+    const reasonStr = typeof reason === 'string' && reason.trim()
+      ? reason.trim().slice(0, 500)  // Cap at 500 chars to prevent context-stuffing
+      : undefined;
 
     try {
       // setScore returns previousScore atomically (captured inside the CTE), so we don't
