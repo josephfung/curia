@@ -1,0 +1,160 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { AutonomyService } from '../../../src/autonomy/autonomy-service.js';
+import type { AutonomyBand } from '../../../src/autonomy/autonomy-service.js';
+
+function mockPool() {
+  return { query: vi.fn() };
+}
+
+function mockLogger() {
+  return {
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    debug: vi.fn(),
+    child: vi.fn().mockReturnThis(),
+  };
+}
+
+describe('AutonomyService', () => {
+  // -- Static helpers --
+
+  describe('bandForScore', () => {
+    const cases: Array<[number, AutonomyBand]> = [
+      [100, 'full'],
+      [90, 'full'],
+      [89, 'spot-check'],
+      [80, 'spot-check'],
+      [79, 'approval-required'],
+      [70, 'approval-required'],
+      [69, 'draft-only'],
+      [60, 'draft-only'],
+      [59, 'restricted'],
+      [0, 'restricted'],
+    ];
+
+    it.each(cases)('score %i → band "%s"', (score, expected) => {
+      expect(AutonomyService.bandForScore(score)).toBe(expected);
+    });
+  });
+
+  describe('formatPromptBlock', () => {
+    it('includes score, band label, and description', () => {
+      const config = {
+        score: 75,
+        band: 'approval-required' as AutonomyBand,
+        updatedAt: new Date(),
+        updatedBy: 'ceo',
+      };
+      const block = AutonomyService.formatPromptBlock(config);
+      expect(block).toContain('## Autonomy Level');
+      expect(block).toContain('75');
+      expect(block).toContain('Approval Required');
+      // Should contain behavioral guidance for this band
+      expect(block).toContain('present your plan');
+    });
+
+    it('produces different text for different bands', () => {
+      const make = (score: number, band: AutonomyBand) =>
+        AutonomyService.formatPromptBlock({ score, band, updatedAt: new Date(), updatedBy: 'ceo' });
+      expect(make(95, 'full')).not.toBe(make(75, 'approval-required'));
+    });
+  });
+
+  // -- getConfig --
+
+  describe('getConfig', () => {
+    let pool: ReturnType<typeof mockPool>;
+    let logger: ReturnType<typeof mockLogger>;
+    let svc: AutonomyService;
+
+    beforeEach(() => {
+      pool = mockPool();
+      logger = mockLogger();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      svc = new AutonomyService(pool as any, logger as any);
+    });
+
+    it('returns the current config when a row exists', async () => {
+      const now = new Date();
+      pool.query.mockResolvedValueOnce({
+        rows: [{ score: 75, band: 'approval-required', updated_at: now, updated_by: 'ceo' }],
+      });
+
+      const config = await svc.getConfig();
+      expect(config).toEqual({ score: 75, band: 'approval-required', updatedAt: now, updatedBy: 'ceo' });
+    });
+
+    it('returns null when no row exists', async () => {
+      pool.query.mockResolvedValueOnce({ rows: [] });
+      expect(await svc.getConfig()).toBeNull();
+    });
+
+    it('returns null (not throw) when the DB call fails', async () => {
+      pool.query.mockRejectedValueOnce(new Error('relation does not exist'));
+      expect(await svc.getConfig()).toBeNull();
+      expect(logger.warn).toHaveBeenCalled();
+    });
+  });
+
+  // -- setScore --
+
+  describe('setScore', () => {
+    let pool: ReturnType<typeof mockPool>;
+    let svc: AutonomyService;
+
+    beforeEach(() => {
+      pool = mockPool();
+      const logger = mockLogger();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      svc = new AutonomyService(pool as any, logger as any);
+    });
+
+    it('throws for out-of-range scores', async () => {
+      await expect(svc.setScore(-1, 'ceo')).rejects.toThrow('Invalid autonomy score');
+      await expect(svc.setScore(101, 'ceo')).rejects.toThrow('Invalid autonomy score');
+    });
+
+    it('throws for non-integer scores', async () => {
+      await expect(svc.setScore(75.5, 'ceo')).rejects.toThrow('Invalid autonomy score');
+    });
+
+    it('upserts config and inserts history, then returns new config', async () => {
+      // getConfig() call (to read previous_score)
+      pool.query.mockResolvedValueOnce({ rows: [{ score: 70, band: 'approval-required', updated_at: new Date(), updated_by: 'ceo' }] });
+      // upsert autonomy_config
+      pool.query.mockResolvedValueOnce({ rows: [] });
+      // insert autonomy_history
+      pool.query.mockResolvedValueOnce({ rows: [] });
+
+      const result = await svc.setScore(80, 'ceo', 'good week');
+      expect(result.score).toBe(80);
+      expect(result.band).toBe('spot-check');
+      expect(result.updatedBy).toBe('ceo');
+
+      // upsert call
+      expect(pool.query).toHaveBeenCalledWith(
+        expect.stringContaining('INSERT INTO autonomy_config'),
+        [80, 'spot-check', 'ceo'],
+      );
+      // history call — includes previous_score and reason
+      expect(pool.query).toHaveBeenCalledWith(
+        expect.stringContaining('INSERT INTO autonomy_history'),
+        [80, 70, 'spot-check', 'ceo', 'good week'],
+      );
+    });
+
+    it('passes null previous_score on first write (no existing config)', async () => {
+      // getConfig returns null (no row yet)
+      pool.query.mockResolvedValueOnce({ rows: [] });
+      pool.query.mockResolvedValueOnce({ rows: [] }); // upsert
+      pool.query.mockResolvedValueOnce({ rows: [] }); // history
+
+      await svc.setScore(75, 'system');
+      expect(pool.query).toHaveBeenCalledWith(
+        expect.stringContaining('INSERT INTO autonomy_history'),
+        [75, null, 'approval-required', 'system', null],
+      );
+    });
+  });
+});
