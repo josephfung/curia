@@ -108,13 +108,22 @@ function createUiHtml(): string {
     const statusEl = document.getElementById('status');
     const resultsEl = document.getElementById('results');
     const searchInput = document.getElementById('search');
+    const searchBtn = document.getElementById('searchBtn');
     const secretInput = document.getElementById('secret');
     const saveSecretBtn = document.getElementById('saveSecret');
+    const graphEl = document.getElementById('graph');
+
+    // Guard against missing DOM elements — all are defined in the HTML above, but this
+    // catches template/script divergence early with a readable error instead of a
+    // cryptic null-dereference later.
+    if (!statusEl || !resultsEl || !searchInput || !searchBtn || !secretInput || !saveSecretBtn || !graphEl) {
+      throw new Error('KG Explorer: required DOM element missing — check template integrity.');
+    }
 
     secretInput.value = sessionStorage.getItem('web_app_bootstrap_secret') || '';
 
     const cy = cytoscape({
-      container: document.getElementById('graph'),
+      container: graphEl,
       elements: [],
       style: [
         { selector: 'node', style: { label: 'data(label)', 'background-color': '#3b82f6', color: '#f8fafc', 'text-valign': 'center', 'text-halign': 'center', 'font-size': 10, width: 30, height: 30 } },
@@ -144,16 +153,26 @@ function createUiHtml(): string {
     }
 
     function renderResults(nodes) {
-      resultsEl.innerHTML = '';
+      resultsEl.replaceChildren();
       if (nodes.length === 0) {
-        resultsEl.innerHTML = '<p class="meta">No matching nodes.</p>';
+        const empty = document.createElement('p');
+        empty.className = 'meta';
+        empty.textContent = 'No matching nodes.';
+        resultsEl.appendChild(empty);
         return;
       }
 
       nodes.forEach((node) => {
         const card = document.createElement('div');
         card.className = 'node-result';
-        card.innerHTML = '<strong>' + node.label + '</strong><div class="meta">' + node.type + ' · confidence ' + node.confidence.toFixed(2) + '</div>';
+        // Use textContent (not innerHTML) to prevent stored XSS — node labels and types
+        // come from the database and could contain HTML/JS payloads from imported sources.
+        const title = document.createElement('strong');
+        title.textContent = node.label;
+        const meta = document.createElement('div');
+        meta.className = 'meta';
+        meta.textContent = node.type + ' · confidence ' + node.confidence.toFixed(2);
+        card.append(title, meta);
         card.addEventListener('click', () => loadNeighborhood(node.id));
         resultsEl.appendChild(card);
       });
@@ -196,7 +215,7 @@ function createUiHtml(): string {
       setStatus('Secret stored in this browser session.');
     });
 
-    document.getElementById('searchBtn').addEventListener('click', search);
+    searchBtn.addEventListener('click', search);
     searchInput.addEventListener('keydown', (event) => { if (event.key === 'Enter') search(); });
     if (getSecret()) search();
   </script>
@@ -277,19 +296,31 @@ export async function knowledgeGraphRoutes(
     const depth = normalizeLimit(query.depth, 2, 4);
     const limit = normalizeLimit(query.limit, 100, 300);
 
+    // Reject malformed UUIDs before they reach SQL — Postgres would throw a cast error
+    // and surface as a 500 rather than a useful 400 for the caller.
+    const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+    if (nodeId && !UUID_RE.test(nodeId)) {
+      return reply.status(400).send({ error: 'Invalid node_id: must be a valid UUID.' });
+    }
+
     const nodeResult = nodeId
       ? await pool.query<KgNodeRow>(
+          // visited tracks the set of node IDs already expanded, preventing the same
+          // node from being re-expanded when reached at a different depth (which UNION
+          // alone can't prevent because depth is part of each row's identity).
           `WITH RECURSIVE traversal AS (
-             SELECT id, 0 AS depth
+             SELECT id, 0 AS depth, ARRAY[id] AS visited
              FROM kg_nodes
              WHERE id = $1::uuid
-             UNION
+             UNION ALL
              SELECT
                CASE WHEN e.source_node_id = t.id THEN e.target_node_id ELSE e.source_node_id END AS id,
-               t.depth + 1 AS depth
+               t.depth + 1,
+               t.visited || CASE WHEN e.source_node_id = t.id THEN e.target_node_id ELSE e.source_node_id END
              FROM traversal t
              JOIN kg_edges e ON e.source_node_id = t.id OR e.target_node_id = t.id
              WHERE t.depth < $2
+               AND NOT (CASE WHEN e.source_node_id = t.id THEN e.target_node_id ELSE e.source_node_id END = ANY(t.visited))
            )
            SELECT DISTINCT n.id, n.type, n.label, n.properties, n.confidence, n.decay_class, n.source, n.created_at, n.last_confirmed_at
            FROM traversal t
