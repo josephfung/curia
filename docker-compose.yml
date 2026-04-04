@@ -3,6 +3,7 @@ services:
     build:
       context: .
       dockerfile: docker/postgres.Dockerfile
+    restart: unless-stopped
     ports:
       - "5432:5432"
     volumes:
