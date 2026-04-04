@@ -14,6 +14,22 @@ import type { BusEvent } from '../../bus/events.js';
 import type { Logger } from '../../logger.js';
 import type { ServerResponse } from 'node:http';
 
+/**
+ * Thrown by the event router when the dispatcher rejects a message via the
+ * `unknown_sender: reject` policy. Typed separately from Error so the route
+ * handler can detect the rejection case and return 403 without brittle string
+ * matching on the error message.
+ */
+export class MessageRejectedError extends Error {
+  readonly reason: 'unknown_sender' | 'provisional_sender' | 'blocked_sender';
+
+  constructor(reason: 'unknown_sender' | 'provisional_sender' | 'blocked_sender') {
+    super(`Message rejected — sender not authorized (${reason})`);
+    this.name = 'MessageRejectedError';
+    this.reason = reason;
+  }
+}
+
 export interface PendingResponse {
   resolve: (content: string) => void;
   reject: (error: Error) => void;
@@ -119,6 +135,40 @@ export class EventRouter {
       });
       // Not filtered by conversationId — held-message notifications are system-wide
       this.broadcastToSseClients(sseData);
+    });
+
+    // message.rejected — immediately reject the pending POST promise so the caller
+    // gets a 403 instead of hanging until the 120-second timeout. This is the signal
+    // path between the dispatch layer (where reject policy fires) and the HTTP adapter
+    // (which has no other way to know the message was dropped).
+    bus.subscribe('message.rejected', 'channel', (event: BusEvent) => {
+      if (event.type !== 'message.rejected') return;
+
+      const convId = event.payload.conversationId;
+
+      // Only HTTP requests have pending POST promises to reject.
+      // Non-HTTP channels (email, etc.) produce rejection events for audit and SSE,
+      // but have no synchronous caller waiting on a promise.
+      if (event.payload.channelId === 'http') {
+        const pending = this.pendingResponses.get(convId);
+        if (pending) {
+          clearTimeout(pending.timeout);
+          this.pendingResponses.delete(convId);
+          pending.reject(new MessageRejectedError(event.payload.reason));
+        }
+      }
+
+      // Broadcast to SSE clients for all channels so dashboards have full visibility
+      // into rejection events regardless of which channel the message arrived on.
+      const sseData = JSON.stringify({
+        type: 'message.rejected',
+        conversation_id: convId,
+        channel_id: event.payload.channelId,
+        sender_id: event.payload.senderId,
+        reason: event.payload.reason,
+        timestamp: event.timestamp,
+      });
+      this.broadcastToSseClients(sseData, convId);
     });
 
     this.logger.info('HTTP event router subscriptions registered');
