@@ -122,12 +122,17 @@ export class WebSearchHandler implements SkillHandler {
 
     // Normalise and truncate — use raw_content when available (advanced depth),
     // fall back to the snippet content field.
-    const results: NormalisedResult[] = body.results.map((r) => ({
-      title: r.title,
-      url: r.url,
-      content: truncate(r.raw_content ?? r.content ?? ''),
-      score: r.score,
-    }));
+    // Use flatMap to skip null/malformed entries rather than throwing — a single
+    // bad result from Tavily should not discard all the valid ones.
+    const results: NormalisedResult[] = body.results.flatMap((r) => {
+      if (!r || typeof r.title !== 'string' || typeof r.url !== 'string' || typeof r.score !== 'number') {
+        ctx.log.warn({ r }, 'Skipping malformed Tavily result entry');
+        return [];
+      }
+      const content = typeof r.raw_content === 'string' ? r.raw_content
+        : (typeof r.content === 'string' ? r.content : '');
+      return [{ title: r.title, url: r.url, content: truncate(content), score: r.score }];
+    });
 
     ctx.log.info({ query, resultCount: results.length }, 'Web search complete');
 
