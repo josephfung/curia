@@ -233,6 +233,28 @@ schedule:
 
 **Dynamic scheduling** — agents can create their own scheduled jobs at runtime. "Remind me every Friday to review the expense report" just works.
 
+## Autonomy Engine
+
+Nathan operates at a configurable autonomy level — a single score from 0 to 100 that determines how independently he acts across all channels and skills.
+
+The score maps to one of five **autonomy bands**:
+
+| Band | Score | What it means |
+|---|---|---|
+| **Full** | 90–100 | Acts independently. Flags only genuinely novel or irreversible actions. |
+| **Spot-check** | 80–89 | Proceeds on routine tasks. Notes consequential actions for CEO visibility. |
+| **Approval Required** | 70–79 | Presents a plan and asks for confirmation before any consequential action. |
+| **Draft Only** | 60–69 | Prepares drafts and plans but does not send or act without explicit instruction. |
+| **Restricted** | < 60 | Advisory only. Takes no independent action whatsoever. |
+
+The current band is injected into Nathan's system prompt on every task, so his self-governance adjusts immediately when the score changes — no restart required.
+
+**CEO controls (via CLI or email):**
+- *"What is your current autonomy score?"* — Nathan reports his score, band, and recent change history
+- *"Set your autonomy score to 85"* — Nathan updates the score and confirms the change
+
+The score defaults to **75 (Approval Required)** on first deployment. Scores are stored in Postgres with a full change history. Future versions will adjust the score automatically based on performance metrics (task success rate, factual correction rate, follow-through).
+
 ---
 
 ## Multi-Provider LLM Support
@@ -289,6 +311,8 @@ This starts Postgres via Docker, applies any pending migrations, then launches t
 | 08 | Operations (deployment, health, monitoring) | Planned |
 | 09 | Contacts & identity (auth, unknown sender policy) | ✅ Implemented |
 | 10 | Audit log hardening (hash-chain, HITL, provenance) | Planned |
+| 11 | Autonomy engine (global score, CEO controls, per-task prompt injection) | ✅ Implemented |
+| 12 | Autonomy engine (global score, CEO controls, per-task prompt injection) | Planned |
 | — | Outbound safety (content filter, gateway, display name sanitization, caller verification) | Partial — deterministic rules done; LLM-as-judge planned |
 | — | Smoke test framework (14 chat-based cases, LLM-as-judge, HTML reports) | ✅ Implemented |
 | — | Web dashboard | Future |
