@@ -135,10 +135,14 @@ describe('WebSearchHandler', () => {
     await handler.execute(makeCtx({ query: 'test', searchDepth: 'advanced' }));
 
     expect(mockFetch).toHaveBeenCalledOnce();
-    const [url, options] = mockFetch.mock.calls[0] as [string, { body: string }];
+    const [url, options] = mockFetch.mock.calls[0] as [string, RequestInit];
     expect(url).toBe('https://api.tavily.com/search');
-    const body = JSON.parse(options.body) as { search_depth: string };
+
+    // Assert Authorization header is set correctly and api_key is NOT in the body
+    expect((options.headers as Record<string, string>)['Authorization']).toBe('Bearer tvly-test-key');
+    const body = JSON.parse(options.body as string) as Record<string, unknown>;
     expect(body.search_depth).toBe('advanced');
+    expect(body).not.toHaveProperty('api_key');
   });
 
   it('defaults to basic search_depth', async () => {
@@ -150,8 +154,12 @@ describe('WebSearchHandler', () => {
 
     await handler.execute(makeCtx({ query: 'test' }));
 
-    const [, options] = mockFetch.mock.calls[0] as [string, { body: string }];
-    const body = JSON.parse(options.body) as { search_depth: string };
+    const [, options] = mockFetch.mock.calls[0] as [string, RequestInit];
+
+    // Assert Authorization header is set correctly and api_key is NOT in the body
+    expect((options.headers as Record<string, string>)['Authorization']).toBe('Bearer tvly-test-key');
+    const body = JSON.parse(options.body as string) as Record<string, unknown>;
     expect(body.search_depth).toBe('basic');
+    expect(body).not.toHaveProperty('api_key');
   });
 });

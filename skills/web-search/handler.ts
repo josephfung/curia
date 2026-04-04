@@ -74,9 +74,13 @@ export class WebSearchHandler implements SkillHandler {
     try {
       response = await fetch(TAVILY_API_URL, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          // Send the API key in the Authorization header rather than the body
+          // so it isn't captured by proxy logs or debug-level body logging.
+          'Authorization': `Bearer ${apiKey}`,
+        },
         body: JSON.stringify({
-          api_key: apiKey,
           query: query.trim(),
           max_results: limit,
           search_depth: depth,
@@ -102,6 +106,7 @@ export class WebSearchHandler implements SkillHandler {
     try {
       body = await response.json() as TavilyResponse;
     } catch (err) {
+      ctx.log.error({ err, query }, 'Failed to parse Tavily JSON response');
       return { success: false, error: 'Failed to parse Tavily response as JSON' };
     }
 
