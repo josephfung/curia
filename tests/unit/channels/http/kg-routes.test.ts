@@ -90,4 +90,43 @@ describe('knowledgeGraphRoutes', () => {
 
     await app.close();
   });
+
+  it('returns 400 for a malformed node_id UUID', async () => {
+    const app = Fastify();
+    await app.register(knowledgeGraphRoutes, {
+      pool,
+      logger: createLogger(),
+      webAppBootstrapSecret: 'secret-1',
+    });
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/kg/graph?node_id=not-a-uuid',
+      headers: { 'x-web-bootstrap-secret': 'secret-1' },
+    });
+
+    // Should be rejected before touching the DB — pool.query must not be called.
+    expect(response.statusCode).toBe(400);
+    expect(response.json().error).toMatch(/Invalid node_id/);
+    expect(pool.query).not.toHaveBeenCalled();
+
+    await app.close();
+  });
+
+  it('returns 503 when the secret is not configured', async () => {
+    // This exercises the defensive assertSecret path. In normal operation the
+    // http-adapter does not register the routes when the secret is absent, but
+    // the guard is kept inside the route handler as a belt-and-suspenders check.
+    const app = Fastify();
+    await app.register(knowledgeGraphRoutes, {
+      pool,
+      logger: createLogger(),
+      webAppBootstrapSecret: undefined,
+    });
+
+    const response = await app.inject({ method: 'GET', url: '/api/kg/nodes' });
+    expect(response.statusCode).toBe(503);
+
+    await app.close();
+  });
 });

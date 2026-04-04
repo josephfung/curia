@@ -99,11 +99,15 @@ export class HttpAdapter {
       await this.app.register(jobRoutes, { schedulerService: this.config.schedulerService });
     }
 
-    await this.app.register(knowledgeGraphRoutes, {
-      pool,
-      logger,
-      webAppBootstrapSecret,
-    });
+    // Only register KG routes when the secret is configured — if unset, the routes
+    // don't exist at all (404) rather than leaking a 503 that reveals the feature exists.
+    if (webAppBootstrapSecret) {
+      await this.app.register(knowledgeGraphRoutes, {
+        pool,
+        logger,
+        webAppBootstrapSecret,
+      });
+    }
 
     // Start listening
     await this.app.listen({ port, host: '0.0.0.0' });
