@@ -148,6 +148,81 @@ describe('AgentRuntime', () => {
     );
   });
 
+  it('calls entityMemory.resetRateLimit() after task completes (success path)', async () => {
+    const provider = createMockProvider('Done!');
+    const resetRateLimit = vi.fn();
+    const mockEntityMemory = { resetRateLimit } as unknown as import('../../../src/memory/entity-memory.js').EntityMemory;
+
+    const runtime = new AgentRuntime({
+      agentId: 'coordinator',
+      systemPrompt: 'You are helpful.',
+      provider,
+      bus,
+      logger: createLogger('error'),
+      entityMemory: mockEntityMemory,
+    });
+    runtime.register();
+
+    const task = createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'conv-rl-1',
+      channelId: 'cli',
+      senderId: 'user',
+      content: 'Hello',
+      parentEventId: 'parent-rl-1',
+    });
+    await bus.publish('dispatch', task);
+
+    // resetRateLimit must be called exactly once with the task's source key
+    expect(resetRateLimit).toHaveBeenCalledTimes(1);
+    expect(resetRateLimit).toHaveBeenCalledWith(
+      `agent:coordinator/task:${task.id}/channel:cli`,
+    );
+  });
+
+  it('calls entityMemory.resetRateLimit() after task fails (error path)', async () => {
+    const nonRetryableError: AgentError = {
+      type: 'AUTH_FAILURE',
+      source: 'anthropic',
+      message: 'API failed',
+      retryable: false,
+      context: {},
+      timestamp: new Date(),
+    };
+    const failProvider: LLMProvider = {
+      id: 'mock',
+      chat: vi.fn().mockResolvedValue({ type: 'error' as const, error: nonRetryableError }),
+    };
+    const resetRateLimit = vi.fn();
+    const mockEntityMemory = { resetRateLimit } as unknown as import('../../../src/memory/entity-memory.js').EntityMemory;
+
+    const runtime = new AgentRuntime({
+      agentId: 'coordinator',
+      systemPrompt: 'You are helpful.',
+      provider: failProvider,
+      bus,
+      logger: createLogger('error'),
+      entityMemory: mockEntityMemory,
+    });
+    runtime.register();
+
+    const task = createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'conv-rl-2',
+      channelId: 'cli',
+      senderId: 'user',
+      content: 'Hello',
+      parentEventId: 'parent-rl-2',
+    });
+    await bus.publish('dispatch', task);
+
+    // resetRateLimit must be called even when the task errors out
+    expect(resetRateLimit).toHaveBeenCalledTimes(1);
+    expect(resetRateLimit).toHaveBeenCalledWith(
+      `agent:coordinator/task:${task.id}/channel:cli`,
+    );
+  });
+
   it('saves both user message and assistant response to memory', async () => {
     const provider = createMockProvider('Bot reply');
     const memory = WorkingMemory.createInMemory();
