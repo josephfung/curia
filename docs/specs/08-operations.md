@@ -49,7 +49,7 @@ Coordinator persona:
 Setting up email channel (via Nylas)...
   Nylas API key: ********
   Nylas grant ID: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
-  Curia's email address: nathan@yourdomain.com
+  Curia's email address: curia@yourdomain.com
   Testing connection... ✓ Connected (14 unread messages)
   Stored as NYLAS_API_KEY, NYLAS_GRANT_ID, NYLAS_SELF_EMAIL.
 

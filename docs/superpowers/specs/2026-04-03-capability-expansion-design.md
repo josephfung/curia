@@ -7,7 +7,7 @@
 
 Two new capabilities that unlock core EA work Curia cannot currently do:
 
-1. **CEO Inbox** — Curia monitors and acts on the CEO's Gmail (joseph@josephfung.ca). Currently Curia only has access to his own address (nathancuria1@gmail.com). Without inbox access, email triage, drafting replies on the CEO's behalf, and inbox filing are impossible.
+1. **CEO Inbox** — Curia monitors and acts on the CEO's Gmail (joseph@josephfung.ca). Currently Curia only has access to its own address (nathancuria1@gmail.com). Without inbox access, email triage, drafting replies on the CEO's behalf, and inbox filing are impossible.
 
 2. **Web Search** — Curia cannot look things up. This blocks simple queries ("find a restaurant near my meeting") and deep research tasks ("compare the geopolitical context of 1972 Apollo vs 2025 Artemis"). Web search is also a force-multiplier for inbox work — Curia can research context before drafting a reply.
 
@@ -115,7 +115,7 @@ A recurring job at 5pm weekdays: Curia calls `email-list(account: "joseph", fold
 
 No new infrastructure. The job is created by Curia via `scheduler-create` with a natural-language `task` string — the same way any recurring task is set up via chat. The scheduler fires it daily, the coordinator receives it as a normal prompt, and handles it with the skills it already has. The job persists in the Postgres-backed scheduler table across restarts.
 
-This is set up during first-time onboarding via a CLI prompt like "keep an eye on my drafts and let me know at 5pm if there's anything waiting" — Curia decides to create the job himself, exactly as if he'd been asked.
+This is set up during first-time onboarding via a CLI prompt like "keep an eye on my drafts and let me know at 5pm if there's anything waiting" — Curia decides to create the job itself, exactly as if it had been asked.
 
 **New skills (Phase 2, not shipped now):**
 
@@ -139,10 +139,10 @@ Participants extracted from the CEO's inbox threads are auto-created as `provisi
 
 ### Persona Guidance
 
-When Curia is drafting a reply for the CEO's Drafts folder, it is writing *in the CEO's voice*, not his own. The coordinator prompt is updated to clarify:
+When Curia is drafting a reply for the CEO's Drafts folder, it is writing *in the CEO's voice*, not its own. The coordinator prompt is updated to clarify:
 
 - When acting on `email-ceo` threads, Curia writes as the CEO — first person, the CEO's tone, no references to Curia as a person
-- When replying as himself (Phase 3, `channel_id: "email"`), Curia writes as Curia
+- When replying as itself (Phase 3, `channel_id: "email"`), Curia writes as Curia
 
 ### Configuration
 

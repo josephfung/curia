@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add a `web-search` skill backed by Tavily that lets Curia run multi-turn searches and synthesise results himself.
+**Goal:** Add a `web-search` skill backed by Tavily that lets Curia run multi-turn searches and synthesise results itself.
 
 **Architecture:** A single `SkillHandler` calls the Tavily HTTP API, normalises and truncates the results, and returns structured data. The existing `web-fetch` skill handles full-page reads; this skill handles search. Both compose naturally in the tool-use loop — Curia searches to find URLs, then fetches to read them. No pre-synthesis layer: the LLM does all reasoning.
 

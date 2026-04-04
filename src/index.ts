@@ -175,7 +175,7 @@ async function main(): Promise<void> {
   // Fatal on failure: without a contactId, "your calendar" cannot be resolved
   // and entity_enrichment default='agent' would silently produce no results.
   let agentIdentityContactId: string | undefined;
-  const agentDisplayName = 'Nathan Curia'; // @TODO: read from coordinatorConfig.persona.display_name after agentConfigs are loaded
+  const agentDisplayName = 'Curia'; // @TODO: read from coordinatorConfig.persona.display_name after agentConfigs are loaded
   try {
     const agentIdentity = await bootstrapAgentIdentity(agentDisplayName, pool, logger);
     agentIdentityContactId = agentIdentity.contactId;
