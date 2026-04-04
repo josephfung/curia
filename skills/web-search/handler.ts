@@ -79,13 +79,10 @@ export class WebSearchHandler implements SkillHandler {
     try {
       response = await fetch(TAVILY_API_URL, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          // Send the API key in the Authorization header rather than the body
-          // so it isn't captured by proxy logs or debug-level body logging.
-          'Authorization': `Bearer ${apiKey}`,
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          // Tavily v1 API authenticates via api_key in the request body.
+          api_key: apiKey,
           query: query.trim(),
           max_results: limit,
           search_depth: depth,

@@ -138,11 +138,10 @@ describe('WebSearchHandler', () => {
     const [url, options] = mockFetch.mock.calls[0] as [string, RequestInit];
     expect(url).toBe('https://api.tavily.com/search');
 
-    // Assert Authorization header is set correctly and api_key is NOT in the body
-    expect((options.headers as Record<string, string>)['Authorization']).toBe('Bearer tvly-test-key');
+    // Tavily v1 authenticates via api_key in the body, not Authorization header
     const body = JSON.parse(options.body as string) as Record<string, unknown>;
+    expect(body.api_key).toBe('tvly-test-key');
     expect(body.search_depth).toBe('advanced');
-    expect(body).not.toHaveProperty('api_key');
   });
 
   it('defaults to basic search_depth', async () => {
@@ -156,10 +155,8 @@ describe('WebSearchHandler', () => {
 
     const [, options] = mockFetch.mock.calls[0] as [string, RequestInit];
 
-    // Assert Authorization header is set correctly and api_key is NOT in the body
-    expect((options.headers as Record<string, string>)['Authorization']).toBe('Bearer tvly-test-key');
     const body = JSON.parse(options.body as string) as Record<string, unknown>;
+    expect(body.api_key).toBe('tvly-test-key');
     expect(body.search_depth).toBe('basic');
-    expect(body).not.toHaveProperty('api_key');
   });
 });
