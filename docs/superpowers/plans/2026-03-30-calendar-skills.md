@@ -795,7 +795,7 @@ describe('NylasCalendarClient', () => {
       expect(calendars).toHaveLength(1);
       expect(calendars[0]).toEqual({
         id: 'cal-1',
-        name: 'the CEO Work',
+        name: 'Jane Work',
         description: 'Main calendar',
         timezone: 'America/Toronto',
         isPrimary: true,
