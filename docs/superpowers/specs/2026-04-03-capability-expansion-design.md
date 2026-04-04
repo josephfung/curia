@@ -49,66 +49,77 @@ A `autonomy_phase` config field in `config/default.yaml` controls which behavior
 
 **New skills (Phase 1):**
 
-`email-ceo-list` — lists recent threads from Joseph's inbox.
+Skills are **account-aware** rather than account-specific — an optional `account: "nathan" | "joseph"` parameter determines which Nylas client is used. This mirrors the existing `email-send` pattern: `infrastructure: true`, credentials resolved by the handler via the injected Nylas client registry, never exposed to the LLM. One skill, two accounts, no parallel skill maintenance.
+
+`email-list` — lists recent inbox threads. Works for both accounts.
 ```json
 {
-  "name": "email-ceo-list",
+  "name": "email-list",
   "sensitivity": "normal",
-  "inputs": { "limit": "number? (default 20)", "unreadOnly": "boolean? (default false)" },
+  "infrastructure": true,
+  "inputs": {
+    "account": "string? (nathan | joseph, default nathan)",
+    "limit": "number? (default 20)",
+    "unreadOnly": "boolean? (default false)"
+  },
   "outputs": { "threads": "array" },
-  "permissions": ["network:nylas"],
-  "secrets": ["nylas_ceo_grant_id"]
+  "permissions": [],
+  "secrets": []
 }
 ```
 
-`email-ceo-draft-save` — writes a draft to Joseph's Gmail Drafts folder.
+`email-draft-save` — writes a draft to the specified account's Drafts folder.
 ```json
 {
-  "name": "email-ceo-draft-save",
+  "name": "email-draft-save",
   "sensitivity": "elevated",
+  "infrastructure": true,
   "inputs": {
+    "account": "string (nathan | joseph)",
     "to": "string",
     "subject": "string",
     "body": "string",
     "replyToThreadId": "string?"
   },
   "outputs": { "draftId": "string" },
-  "permissions": ["network:nylas"],
-  "secrets": ["nylas_ceo_grant_id"]
+  "permissions": [],
+  "secrets": []
 }
 ```
 
 Elevated sensitivity ensures a human-approval gate the first time the coordinator uses this skill.
 
-`email-ceo-draft-list` — lists drafts currently in Joseph's Drafts folder. Used by the scheduler job to check if notification is needed.
+`email-draft-list` — lists drafts in the specified account's Drafts folder. Used by the scheduler job.
 ```json
 {
-  "name": "email-ceo-draft-list",
+  "name": "email-draft-list",
   "sensitivity": "normal",
+  "infrastructure": true,
+  "inputs": { "account": "string? (nathan | joseph, default joseph)" },
   "outputs": { "drafts": "array", "count": "number" },
-  "permissions": ["network:nylas"],
-  "secrets": ["nylas_ceo_grant_id"]
+  "permissions": [],
+  "secrets": []
 }
 ```
 
 **Scheduler job (Phase 1):**
 
-A daily one-shot job at 5pm (configurable) checks `email-ceo-draft-list`. If `count > 0`, it sends a CLI notification listing draft subjects and recipients. Joseph can then open Gmail, review, and send or discard. The job is registered in `agents/coordinator.yaml` as a startup scheduled task, or seeded via the bootstrap.
+A daily one-shot job at 5pm (configurable) calls `email-draft-list` with `account: "joseph"`. If `count > 0`, it sends a CLI notification listing draft subjects and recipients. Joseph can then open Gmail, review, and send or discard. The job is registered in `agents/coordinator.yaml` as a startup scheduled task, or seeded via the bootstrap.
 
 **New skills (Phase 2, not shipped now):**
 
-- `email-ceo-archive` — archives a thread, optionally applies a label
-- `email-ceo-label` — applies one or more Gmail labels to a thread
+- `email-archive` — archives a thread. Supports `account` param.
+- `email-label` — applies Gmail labels to a thread. Supports `account` param.
 
 **New skills (Phase 3, not shipped now):**
 
-- `email-ceo-send` — sends from Joseph's address. Requires `autonomyPhase ≥ 3` gate in OutboundGateway. Elevated sensitivity.
+- `email-send` gains an `account` parameter. When `account: "joseph"`, routes through a new `email-ceo` OutboundGateway path that enforces `autonomyPhase ≥ 3`. Elevated sensitivity.
 
 ### Outbound Gateway
 
 All writes to Joseph's account (draft saves, eventual sends) route through `OutboundGateway`. Phase 1 only writes drafts — no sends. The gateway's blocked-contact and content-filter checks still apply to drafts to prevent Nathan from drafting problematic content.
 
-A new autonomy gate is added to OutboundGateway for Phase 3: if `autonomyPhase < 3`, attempts to call `email-ceo-send` are blocked and the coordinator is told to save a draft instead.
+A new autonomy gate is added to OutboundGateway for Phase 3: if `autonomyPhase < 3`, attempts by `email-send` with `account: "joseph"` are blocked and the coordinator is told to save a draft instead.
 
 ### Contact System
 
@@ -144,9 +155,9 @@ scheduler:
 |---|---|
 | Create | `src/channels/email-ceo/email-ceo-adapter.ts` |
 | Create | `src/channels/email-ceo/nylas-ceo-client.ts` |
-| Create | `skills/email-ceo-list/skill.json` + `handler.ts` + `handler.test.ts` |
-| Create | `skills/email-ceo-draft-save/skill.json` + `handler.ts` + `handler.test.ts` |
-| Create | `skills/email-ceo-draft-list/skill.json` + `handler.ts` + `handler.test.ts` |
+| Create | `skills/email-list/skill.json` + `handler.ts` + `handler.test.ts` |
+| Create | `skills/email-draft-save/skill.json` + `handler.ts` + `handler.test.ts` |
+| Create | `skills/email-draft-list/skill.json` + `handler.ts` + `handler.test.ts` |
 | Modify | `config/default.yaml` — add `email-ceo` channel config and scheduler job |
 | Modify | `agents/coordinator.yaml` — pin new skills, add persona guidance |
 | Modify | `src/index.ts` (or channel bootstrap) — register `email-ceo-adapter` |
@@ -226,7 +237,7 @@ System prompt addition (paraphrased — written in Nathan's voice per persona ru
 **Ship web search first.** It is a smaller lift (one skill, no channel setup), and it immediately makes Nathan smarter for inbox triage — he can research context before drafting a reply. Inbox work starts in a better position with web search already available.
 
 1. `feat/web-search` — `web-search` skill + coordinator pin
-2. `feat/ceo-inbox` — `email-ceo` adapter + Phase 1 skills + scheduler job
+2. `feat/ceo-inbox` — `email-ceo` adapter + `email-list` / `email-draft-save` / `email-draft-list` skills + scheduler job
 
 ---
 
