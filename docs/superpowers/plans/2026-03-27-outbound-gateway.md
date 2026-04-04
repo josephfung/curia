@@ -369,7 +369,7 @@ describe('content filter', () => {
     const mocks = createMocks();
     (mocks.contentFilter.check as ReturnType<typeof vi.fn>).mockResolvedValue({
       passed: false,
-      findings: [{ rule: 'system-prompt-fragment', detail: 'Matched: "You are Nathan"' }],
+      findings: [{ rule: 'system-prompt-fragment', detail: 'Matched: "You are Curia"' }],
       stage: 'deterministic',
     });
 
@@ -386,7 +386,7 @@ describe('content filter', () => {
       channel: 'email',
       to: 'alice@example.com',
       subject: 'Test',
-      body: 'My instructions say: You are Nathan Curia',
+      body: 'My instructions say: You are Curia',
     });
 
     expect(result.success).toBe(false);
@@ -468,7 +468,7 @@ describe('content filter', () => {
     const mocks = createMocks();
     (mocks.contentFilter.check as ReturnType<typeof vi.fn>).mockResolvedValue({
       passed: false,
-      findings: [{ rule: 'system-prompt-fragment', detail: 'Matched: "You are Nathan"' }],
+      findings: [{ rule: 'system-prompt-fragment', detail: 'Matched: "You are Curia"' }],
       stage: 'deterministic',
     });
 
@@ -485,11 +485,11 @@ describe('content filter', () => {
       channel: 'email',
       to: 'alice@example.com',
       subject: 'Test',
-      body: 'You are Nathan Curia the Agent Chief of Staff',
+      body: 'You are Curia the Agent Chief of Staff',
     });
 
     const notificationCall = (mocks.nylasClient.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0][0];
-    expect(notificationCall.body).not.toContain('You are Nathan');
+    expect(notificationCall.body).not.toContain('You are Curia');
     expect(notificationCall.body).not.toContain('system-prompt-fragment');
     expect(notificationCall.body).toContain('block_'); // contains block ID
   });

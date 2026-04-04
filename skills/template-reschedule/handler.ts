@@ -31,9 +31,9 @@ const DEFAULT_POLICY = {
 
 Hi Alice,
 
-I'm writing on behalf of Joseph regarding your meeting originally scheduled for Monday, April 7 at 10:00 AM. Unfortunately, a scheduling conflict has come up and we need to reschedule.
+I'm writing on behalf of the CEO regarding your meeting originally scheduled for Monday, April 7 at 10:00 AM. Unfortunately, a scheduling conflict has come up and we need to reschedule.
 
-Joseph is available at the following alternative times:
+The CEO is available at the following alternative times:
 
   • Wednesday, April 9 at 2:00 PM ET
   • Thursday, April 10 at 10:00 AM ET
@@ -44,7 +44,7 @@ Would any of these work for you? If not, please suggest a time that's convenient
 Apologies for the inconvenience, and thank you for your flexibility.
 
 Best regards,
-Nathan Curia, Agent Chief of Staff`,
+Curia, Agent Chief of Staff`,
 };
 
 export class TemplateRescheduleHandler implements SkillHandler {

@@ -11,7 +11,7 @@ Coordinator. Uses the existing Nylas integration (same credentials as email) to 
 Google Calendar, Microsoft 365/Outlook, and any other provider Nylas connects to.
 
 The CEO's calendar is accessed as a **shared calendar** — the CEO shares their calendar
-with Nathan Curia's Google account, and Nylas sees it as a shared calendar on Nathan's
+with Curia's Google account, and Nylas sees it as a shared calendar on Curia's
 grant. This means no separate OAuth flow for the CEO and zero code changes if the CEO
 switches providers.
 

@@ -31,9 +31,9 @@ const DEFAULT_POLICY = {
 
 Hi Sarah,
 
-I'm reaching out on behalf of Joseph ahead of your upcoming Board Meeting on Tuesday, April 15 at 9:00 AM.
+I'm reaching out on behalf of the CEO ahead of your upcoming Board Meeting on Tuesday, April 15 at 9:00 AM.
 
-To help Joseph prepare, could you please share the following materials?
+To help the CEO prepare, could you please share the following materials?
 
   • Q1 financial summary
   • Updated headcount projections
@@ -46,7 +46,7 @@ If you have any questions or need clarification on what's needed, please don't h
 Thank you in advance.
 
 Best regards,
-Nathan Curia, Agent Chief of Staff`,
+Curia, Agent Chief of Staff`,
 };
 
 export class TemplateDocRequestHandler implements SkillHandler {

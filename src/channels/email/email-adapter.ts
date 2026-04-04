@@ -18,7 +18,7 @@ export interface EmailAdapterConfig {
   outboundGateway: OutboundGateway;
   contactService: ContactService;
   pollingIntervalMs: number;
-  /** Nathan Curia's own email address — used to filter out self-sent messages */
+  /** Curia's own email address — used to filter out self-sent messages */
   selfEmail: string;
 }
 
@@ -101,7 +101,7 @@ export class EmailAdapter {
           this.lastSeenTimestamp = msg.date + 1;
         }
 
-        // Skip emails sent by Nathan Curia (self) — we only want inbound messages
+        // Skip emails sent by Curia (self) — we only want inbound messages
         // from external senders, not our own outgoing replies.
         // Case-insensitive to guard against inconsistent casing from mail servers.
         const fromEmail = msg.from[0]?.email;

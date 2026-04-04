@@ -2,7 +2,7 @@
 //
 // Agent self-identity bootstrap.
 //
-// Nathan Curia (the agent) is an entity like any other person — it has a KG node,
+// Curia (the agent) is an entity like any other person — it has a KG node,
 // a contact record, and connected accounts. This lets "your calendar" resolve the
 // same way as "Jenna's calendar" through the entity-context system.
 //
@@ -27,7 +27,7 @@ export interface AgentIdentity {
 }
 
 /**
- * Ensure Nathan's KG node and contact record exist, returning their IDs.
+ * Ensure Curia's KG node and contact record exist, returning their IDs.
  *
  * Idempotent: safe to call on every startup. The INSERT ... ON CONFLICT targets
  * the partial unique indexes from migration 010 so concurrent startups
