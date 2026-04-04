@@ -143,20 +143,23 @@ export class EventRouter {
     // (which has no other way to know the message was dropped).
     bus.subscribe('message.rejected', 'channel', (event: BusEvent) => {
       if (event.type !== 'message.rejected') return;
-      // Only handle rejections for the HTTP channel
-      if (event.payload.channelId !== 'http') return;
 
       const convId = event.payload.conversationId;
 
-      // Reject the pending POST if one is waiting — this unblocks the route handler
-      const pending = this.pendingResponses.get(convId);
-      if (pending) {
-        clearTimeout(pending.timeout);
-        this.pendingResponses.delete(convId);
-        pending.reject(new MessageRejectedError(event.payload.reason));
+      // Only HTTP requests have pending POST promises to reject.
+      // Non-HTTP channels (email, etc.) produce rejection events for audit and SSE,
+      // but have no synchronous caller waiting on a promise.
+      if (event.payload.channelId === 'http') {
+        const pending = this.pendingResponses.get(convId);
+        if (pending) {
+          clearTimeout(pending.timeout);
+          this.pendingResponses.delete(convId);
+          pending.reject(new MessageRejectedError(event.payload.reason));
+        }
       }
 
-      // Also broadcast to SSE clients so dashboards can react
+      // Broadcast to SSE clients for all channels so dashboards have full visibility
+      // into rejection events regardless of which channel the message arrived on.
       const sseData = JSON.stringify({
         type: 'message.rejected',
         conversation_id: convId,
