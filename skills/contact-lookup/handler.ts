@@ -114,9 +114,8 @@ export class ContactLookupHandler implements SkillHandler {
         },
       };
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
       ctx.log.error({ err, query, by }, 'Contact lookup failed');
-      return { success: false, error: `Contact lookup failed: ${message}` };
+      return { success: false, error: 'Contact lookup failed. See logs for details.' };
     }
   }
 }
