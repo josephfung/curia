@@ -201,7 +201,7 @@ describe('ContactService — calendar methods', () => {
     service = ContactService.createInMemory(entityMemory);
 
     ceoContact = await service.createContact({
-      displayName: 'Joseph Fung',
+      displayName: 'the CEO',
       role: 'ceo',
       source: 'test',
     });
@@ -781,7 +781,7 @@ describe('NylasCalendarClient', () => {
       (sdk.calendars.list as ReturnType<typeof vi.fn>).mockResolvedValue({
         data: [{
           id: 'cal-1',
-          name: 'Joseph Work',
+          name: 'the CEO Work',
           description: 'Main calendar',
           timezone: 'America/Toronto',
           is_primary: true,
@@ -795,7 +795,7 @@ describe('NylasCalendarClient', () => {
       expect(calendars).toHaveLength(1);
       expect(calendars[0]).toEqual({
         id: 'cal-1',
-        name: 'Joseph Work',
+        name: 'the CEO Work',
         description: 'Main calendar',
         timezone: 'America/Toronto',
         isPrimary: true,
@@ -1458,7 +1458,7 @@ describe('CalendarListCalendarsHandler', () => {
       resolveCalendar: vi.fn()
         .mockResolvedValueOnce({ contactId: 'contact-1', label: 'Work', isPrimary: true, readOnly: false })
         .mockResolvedValueOnce(null),
-      getContact: vi.fn().mockResolvedValue({ id: 'contact-1', displayName: 'Joseph Fung' }),
+      getContact: vi.fn().mockResolvedValue({ id: 'contact-1', displayName: 'the CEO' }),
     };
 
     const result = await handler.execute(makeCtx(
@@ -1471,7 +1471,7 @@ describe('CalendarListCalendarsHandler', () => {
       const data = result.data as { calendars: Array<{ id: string; registered: boolean; contactName?: string }> };
       expect(data.calendars).toHaveLength(2);
       expect(data.calendars[0].registered).toBe(true);
-      expect(data.calendars[0].contactName).toBe('Joseph Fung');
+      expect(data.calendars[0].contactName).toBe('the CEO');
       expect(data.calendars[1].registered).toBe(false);
     }
   });

@@ -23,7 +23,7 @@ persona:
   tone: professional but warm
   email_signature: |
     Alex
-    Office of Joseph Fung
+    Office of the CEO
 model:
   provider: anthropic
   model: claude-sonnet-4-20250514

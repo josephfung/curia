@@ -12,11 +12,11 @@ Skills and agents that operate on entities (people, organizations, offices, even
 | Request | Entities | Context needed |
 |---|---|---|
 | "What's on my calendar?" | Caller (CEO) | Connected calendars |
-| "What's on your calendar?" | Agent (Nathan) | Nathan's connected calendars |
+| "What's on your calendar?" | Agent (Curia) | Curia's connected calendars |
 | "What's on Jenna's calendar tomorrow?" | Jenna | Calendars, timezone, scheduling preferences |
 | "Schedule a meeting for me, Jenna, and Greg" | CEO, Jenna, Greg | All calendars, timezones, scheduling preferences, faith (for religious observances) |
 | "What's Competitor A's battlecard?" | Competitor A (org) | Known documents, URLs — or nothing (LLM searches) |
-| "Crawl my inbox" vs. "crawl your inbox" | CEO vs. Nathan | Connected email accounts |
+| "Crawl my inbox" vs. "crawl your inbox" | CEO vs. Curia | Connected email accounts |
 | "What's my Aeroplan number?" | CEO | Stored fact |
 | "What's the expense policy for Dreamforce?" | Dreamforce (event) | Known facts, related docs |
 | "What's HQ's address?" | HQ (office) | Location facts |
@@ -71,7 +71,7 @@ The entity-context system works with all KG node types. For entity types without
 
 ### Agent Self-Identity
 
-The agent (Nathan Curia) is an entity with a seeded contact record, just like any other person. This ensures "your calendar" resolves the same way as "Jenna's calendar."
+The agent (Curia) is an entity with a seeded contact record, just like any other person. This ensures "your calendar" resolves the same way as "Jenna's calendar."
 
 **At bootstrap:**
 1. Create (or verify) a KG `person` node for the agent with `properties.is_agent: true`
@@ -419,7 +419,7 @@ Calendars, email accounts, and CRM connections have fundamentally different sche
 
 ### Phase 1: Foundation (this spec)
 
-1. **Agent self-identity** — seed Nathan's contact record with `is_agent` flag, inject contactId into system prompt
+1. **Agent self-identity** — seed Curia's contact record with `is_agent` flag, inject contactId into system prompt
 2. **Entity-context assembly function** — shared TypeScript module that assembles the `EntityContext` payload from KG + contacts + connected accounts
 3. **`entity-context` skill** — wraps the assembly function as a callable skill for LLM-driven lookups
 4. **Execution layer `entity_enrichment`** — manifest declaration triggers automatic pre-enrichment
@@ -443,7 +443,7 @@ Calendars, email accounts, and CRM connections have fundamentally different sche
 | Spec | Integration Point |
 |---|---|
 | **01 — Memory System** | Entity context reads from the KG (nodes, edges, facts). The assembly pipeline is a read-only query pattern — it does not write to the KG. Fact categories in the payload map to the KG's `fact` node type. |
-| **02 — Agent System** | Agent self-identity (Nathan's contact record) is seeded at bootstrap. The agent's contactId is injected into the coordinator's system prompt. |
+| **02 — Agent System** | Agent self-identity (Curia's contact record) is seeded at bootstrap. The agent's contactId is injected into the coordinator's system prompt. |
 | **03 — Skills & Execution** | `entity_enrichment` manifest declaration is a new feature of the execution layer. `ctx.entityContext` is a new field on `SkillContext`. The `entity-context` skill is a new local skill. |
 | **09 — Contacts & Identity** | Contacts are the identity resolution layer for person entities. Entity-context reads from contacts but does not modify them. The agent's seeded contact record is a new bootstrap step. |
 
@@ -454,7 +454,7 @@ Calendars, email accounts, and CRM connections have fundamentally different sche
 - **Entity context is read-only.** The assembly pipeline queries the KG, contacts, and connected accounts but never writes. All mutations go through their respective services (ContactService, EntityMemory).
 - **No cross-entity leakage.** The entity-context payload includes only the requested entities. A skill asking for Jenna's context does not receive the CEO's connected accounts.
 - **Cached context respects mutations.** The TTL cache is invalidated on contact/KG writes. Stale context is a convenience issue (slightly outdated preferences), not a security issue (wrong person's data).
-- **Agent self-identity is seeded, not self-created.** Nathan's contact record is created during bootstrap by the orchestrator, not by the agent itself. The agent cannot modify its own identity.
+- **Agent self-identity is seeded, not self-created.** Curia's contact record is created during bootstrap by the orchestrator, not by the agent itself. The agent cannot modify its own identity.
 - **LLM sees entity IDs, not raw KG internals.** The payload exposes curated facts with labels, not raw JSONB properties or internal node IDs beyond what's needed for skill invocation.
 
 ---
@@ -476,7 +476,7 @@ Calendars, email accounts, and CRM connections have fundamentally different sche
 ## Implementation Checklist
 
 ### Phase 1: Foundation
-- [ ] Agent self-identity: KG node + contact record for Nathan, bootstrap seeding
+- [ ] Agent self-identity: KG node + contact record for Curia, bootstrap seeding
 - [ ] Agent contactId injection into coordinator system prompt
 - [ ] Entity-context assembly module (`src/entity-context/`)
 - [ ] Proactive account discovery in the assembly pipeline

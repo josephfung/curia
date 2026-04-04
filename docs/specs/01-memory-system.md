@@ -116,7 +116,7 @@ Before creating a new fact node, check for existing nodes with:
 - If duplicate found: update `last_confirmed_at` and merge properties instead of creating a new node
 
 ### Contradiction Detection
-Before writing a fact that updates an entity attribute (e.g., "Joseph lives in Toronto" when "Joseph lives in Kitchener" exists):
+Before writing a fact that updates an entity attribute (e.g., "the CEO lives in Toronto" when "the CEO lives in Kitchener" exists):
 - Check for existing facts on the same entity with the same attribute type
 - If contradicting fact exists with higher confidence: reject the write, log the conflict
 - If contradicting fact exists with lower confidence: update the existing fact, preserve the old value in `properties.previous_values` for audit

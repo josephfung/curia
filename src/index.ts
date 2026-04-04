@@ -170,7 +170,7 @@ async function main(): Promise<void> {
   // for facts, calendars, and relationships. Passed to ExecutionLayer for pre-enrichment.
   const entityContextAssembler = new EntityContextAssembler(pool, logger);
 
-  // Agent self-identity — seed Nathan's KG node and contact record at startup.
+  // Agent self-identity — seed Curia's KG node and contact record at startup.
   // Idempotent: safe to call every startup (uses INSERT ... ON CONFLICT).
   // Fatal on failure: without a contactId, "your calendar" cannot be resolved
   // and entity_enrichment default='agent' would silently produce no results.

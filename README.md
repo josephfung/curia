@@ -119,11 +119,11 @@ People, organizations, projects, decisions, events — stored as nodes and edges
 
 ### Entity Memory
 
-Configurable facts about the people and things in your world. "Joseph takes his coffee black." "Board meetings are quarterly, first Thursday." Facts carry confidence scores and source attribution — the system knows *why* it believes something and *how recently* that belief was confirmed.
+Configurable facts about the people and things in your world. "The CEO takes their coffee black." "Board meetings are quarterly, first Thursday." Facts carry confidence scores and source attribution — the system knows *why* it believes something and *how recently* that belief was confirmed.
 
 ### Temporal Awareness
 
-Not all facts age the same way. "Joseph was born in Toronto" is permanent. "Joseph lives in Kitchener" decays slowly. "Joseph's current project focus" decays fast. Every fact carries a decay class, so stale information loses confidence over time rather than being trusted forever.
+Not all facts age the same way. "The CEO was born in Toronto" is permanent. "The CEO lives in Kitchener" decays slowly. "The CEO's current project focus" decays fast. Every fact carries a decay class, so stale information loses confidence over time rather than being trusted forever.
 
 ### Semantic Search
 
@@ -235,7 +235,7 @@ schedule:
 
 ## Autonomy Engine
 
-Nathan operates at a configurable autonomy level — a single score from 0 to 100 that determines how independently he acts across all channels and skills.
+Curia operates at a configurable autonomy level — a single score from 0 to 100 that determines how independently it acts across all channels and skills.
 
 The score maps to one of five **autonomy bands**:
 
@@ -247,11 +247,11 @@ The score maps to one of five **autonomy bands**:
 | **Draft Only** | 60–69 | Prepares drafts and plans but does not send or act without explicit instruction. |
 | **Restricted** | < 60 | Advisory only. Takes no independent action whatsoever. |
 
-The current band is injected into Nathan's system prompt on every task, so his self-governance adjusts immediately when the score changes — no restart required.
+The current band is injected into Curia's system prompt on every task, so its self-governance adjusts immediately when the score changes — no restart required.
 
 **CEO controls (via CLI or email):**
-- *"What is your current autonomy score?"* — Nathan reports his score, band, and recent change history
-- *"Set your autonomy score to 85"* — Nathan updates the score and confirms the change
+- *"What is your current autonomy score?"* — Curia reports its score, band, and recent change history
+- *"Set your autonomy score to 85"* — Curia updates the score and confirms the change
 
 The score defaults to **75 (Approval Required)** on first deployment. Scores are stored in Postgres with a full change history. Future versions will adjust the score automatically based on performance metrics (task success rate, factual correction rate, follow-through).
 

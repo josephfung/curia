@@ -1,6 +1,6 @@
 // autonomy-service.ts — manages the global autonomy score for the Curia instance.
 //
-// The autonomy score (0–100) determines how independently Nathan operates.
+// The autonomy score (0–100) determines how independently Curia operates.
 // It maps to one of five bands, each with a behavioral description that is
 // injected into the coordinator's system prompt on every task.
 //
