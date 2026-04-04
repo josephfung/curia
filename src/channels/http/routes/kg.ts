@@ -1,3 +1,4 @@
+import { timingSafeEqual } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
@@ -54,7 +55,14 @@ function assertSecret(
   }
 
   const provided = request.headers['x-web-bootstrap-secret'];
-  if (typeof provided !== 'string' || provided !== configuredSecret) {
+  // Reject non-string values (e.g. Fastify coerces duplicate headers to string[]).
+  // Then use a timing-safe comparison to avoid leaking how many leading characters
+  // matched — same pattern as validateBearerToken() in auth.ts.
+  if (
+    typeof provided !== 'string' ||
+    provided.length !== configuredSecret.length ||
+    !timingSafeEqual(Buffer.from(provided), Buffer.from(configuredSecret))
+  ) {
     reply.status(401).send({
       error: 'Unauthorized. Provide WEB_APP_BOOTSTRAP_SECRET via the x-web-bootstrap-secret header.',
     });
@@ -610,7 +618,13 @@ export async function knowledgeGraphRoutes(
   const { pool, logger, webAppBootstrapSecret } = options;
 
   app.get('/', async (_request, reply) => {
-    reply.type('text/html; charset=utf-8').send(createUiHtml());
+    reply
+      .type('text/html; charset=utf-8')
+      // Prevent the page from being embedded in an iframe (clickjacking defence).
+      .header('X-Frame-Options', 'DENY')
+      // Stop browsers from MIME-sniffing the response away from text/html.
+      .header('X-Content-Type-Options', 'nosniff')
+      .send(createUiHtml());
   });
 
   app.get('/assets/cytoscape.min.js', async (_request, reply) => {
@@ -618,7 +632,12 @@ export async function knowledgeGraphRoutes(
       new URL('../../../../node_modules/cytoscape/dist/cytoscape.min.js', import.meta.url),
     );
     const source = await readFile(cytoscapePath, 'utf8');
-    reply.type('application/javascript; charset=utf-8').send(source);
+    // Long-lived cache — cytoscape is a pinned dependency; the version never
+    // changes without a code change, so immutable caching is safe here.
+    reply
+      .type('application/javascript; charset=utf-8')
+      .header('Cache-Control', 'public, max-age=31536000, immutable')
+      .send(source);
   });
 
   app.get('/api/kg/nodes', async (request, reply) => {
