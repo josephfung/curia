@@ -201,7 +201,7 @@ describe('ContactService — calendar methods', () => {
     service = ContactService.createInMemory(entityMemory);
 
     ceoContact = await service.createContact({
-      displayName: 'the CEO',
+      displayName: 'Jane Doe',
       role: 'ceo',
       source: 'test',
     });
@@ -1458,7 +1458,7 @@ describe('CalendarListCalendarsHandler', () => {
       resolveCalendar: vi.fn()
         .mockResolvedValueOnce({ contactId: 'contact-1', label: 'Work', isPrimary: true, readOnly: false })
         .mockResolvedValueOnce(null),
-      getContact: vi.fn().mockResolvedValue({ id: 'contact-1', displayName: 'the CEO' }),
+      getContact: vi.fn().mockResolvedValue({ id: 'contact-1', displayName: 'Jane Doe' }),
     };
 
     const result = await handler.execute(makeCtx(
@@ -1471,7 +1471,7 @@ describe('CalendarListCalendarsHandler', () => {
       const data = result.data as { calendars: Array<{ id: string; registered: boolean; contactName?: string }> };
       expect(data.calendars).toHaveLength(2);
       expect(data.calendars[0].registered).toBe(true);
-      expect(data.calendars[0].contactName).toBe('the CEO');
+      expect(data.calendars[0].contactName).toBe('Jane Doe');
       expect(data.calendars[1].registered).toBe(false);
     }
   });
