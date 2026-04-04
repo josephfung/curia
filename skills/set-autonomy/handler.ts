@@ -14,8 +14,12 @@ export class SetAutonomyHandler implements SkillHandler {
 
     const { score, reason } = ctx.input as { score?: unknown; reason?: unknown };
 
-    // Validate score input — the LLM may pass a float or string
-    const parsedScore = typeof score === 'number' ? score : Number(score);
+    // Validate score input — the LLM may pass a numeric string; reject other types
+    // explicitly (null, boolean, arrays all coerce to 0 via Number(), which would silently
+    // reset the score to Restricted without any validation error).
+    const parsedScore = typeof score === 'number'
+      ? score
+      : (typeof score === 'string' && score.trim() !== '' ? Number(score) : NaN);
     if (!Number.isFinite(parsedScore)) {
       return { success: false, error: `Invalid score: "${score}". Must be a number between 0 and 100.` };
     }

@@ -440,7 +440,8 @@ async function main(): Promise<void> {
       skillToolDefs: agentToolDefs,
       // Only the coordinator receives the autonomy service — it's the only agent
       // that needs per-task autonomy prompt injection and the autonomy skills.
-      autonomyService: agentConfig.role === 'coordinator' ? autonomyService : undefined,
+      // Use name (not role) — role is optional in agent YAML and may not be set.
+      autonomyService: agentConfig.name === 'coordinator' ? autonomyService : undefined,
       // Map YAML snake_case fields to AgentConfig camelCase, falling back to
       // DEFAULT_ERROR_BUDGET values for any omitted fields.
       errorBudget: agentConfig.error_budget ? {
