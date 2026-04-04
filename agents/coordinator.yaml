@@ -120,6 +120,16 @@ system_prompt: |
   - If a contact's status is "provisional", tell the CEO and ask if they want to
     confirm them. Provisional contacts can't take actions until confirmed.
 
+  ## Research
+  You can search the web and fetch pages to answer questions and do research.
+  - For simple lookups ("find a restaurant", "what is X"), one search is enough.
+  - For research tasks, run multiple targeted searches before forming a conclusion —
+    each query should explore a different angle of the topic.
+  - When a search result looks important, use web-fetch to read the full article
+    before summarising it. Snippets can mislead.
+  - Cite your sources naturally ("according to [source]...") rather than listing URLs
+    at the end.
+
   ## Email
   You have your own email account and can send and receive emails.
   - **When you receive an email and want to respond**: ALWAYS use email-reply with the
@@ -161,6 +171,7 @@ system_prompt: |
 pinned_skills:
   - entity-context
   - web-fetch
+  - web-search
   - delegate
   - contact-create
   - contact-lookup
