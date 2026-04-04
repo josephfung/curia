@@ -252,6 +252,79 @@ describe('AgentRuntime', () => {
     expect(history[0]).toEqual({ role: 'user', content: 'Hello' });
     expect(history[1]).toEqual({ role: 'assistant', content: 'Bot reply' });
   });
+
+  it('appends the autonomy block to the system prompt when autonomyService is provided', async () => {
+    const mockAutonomyService = {
+      getConfig: vi.fn().mockResolvedValue({
+        score: 75,
+        band: 'approval-required',
+        updatedAt: new Date(),
+        updatedBy: 'system',
+      }),
+    };
+
+    const provider = createMockProvider('OK');
+    const runtime = new AgentRuntime({
+      agentId: 'coordinator',
+      systemPrompt: 'Base prompt.',
+      provider,
+      bus,
+      logger: createLogger('error'),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      autonomyService: mockAutonomyService as any,
+    });
+    runtime.register();
+
+    const task = createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'conv-auto-1',
+      channelId: 'cli',
+      senderId: 'user',
+      content: 'Hello',
+      parentEventId: 'parent-auto-1',
+    });
+    await bus.publish('dispatch', task);
+
+    expect(mockAutonomyService.getConfig).toHaveBeenCalledOnce();
+    // The system message sent to the LLM should contain both the base prompt and the autonomy block
+    const callArgs = provider.chat.mock.calls[0]?.[0] as { messages: Array<{ role: string; content: string }> };
+    const systemMsg = callArgs?.messages?.[0];
+    expect(systemMsg?.role).toBe('system');
+    expect(systemMsg?.content).toContain('Base prompt.');
+    expect(systemMsg?.content).toContain('Autonomy Level');
+  });
+
+  it('uses base system prompt unchanged when autonomyService returns null', async () => {
+    const mockAutonomyService = {
+      getConfig: vi.fn().mockResolvedValue(null),
+    };
+
+    const provider = createMockProvider('OK');
+    const runtime = new AgentRuntime({
+      agentId: 'coordinator',
+      systemPrompt: 'Base prompt.',
+      provider,
+      bus,
+      logger: createLogger('error'),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      autonomyService: mockAutonomyService as any,
+    });
+    runtime.register();
+
+    const task = createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'conv-auto-2',
+      channelId: 'cli',
+      senderId: 'user',
+      content: 'Hello',
+      parentEventId: 'parent-auto-2',
+    });
+    await bus.publish('dispatch', task);
+
+    const callArgs = provider.chat.mock.calls[0]?.[0] as { messages: Array<{ role: string; content: string }> };
+    const systemMsg = callArgs?.messages?.[0];
+    expect(systemMsg?.content).toBe('Base prompt.');
+  });
 });
 
 // Helper: mock LLM that returns tool_use on first call, text on second
