@@ -119,12 +119,8 @@ describe('AutonomyService', () => {
       await expect(svc.setScore(75.5, 'ceo')).rejects.toThrow('Invalid autonomy score');
     });
 
-    it('upserts config and inserts history, then returns new config', async () => {
-      // getConfig() call (to read previous_score)
-      pool.query.mockResolvedValueOnce({ rows: [{ score: 70, band: 'approval-required', updated_at: new Date(), updated_by: 'ceo' }] });
-      // upsert autonomy_config
-      pool.query.mockResolvedValueOnce({ rows: [] });
-      // insert autonomy_history
+    it('upserts config and inserts history atomically, then returns new config', async () => {
+      // Single atomic CTE query
       pool.query.mockResolvedValueOnce({ rows: [] });
 
       const result = await svc.setScore(80, 'ceo', 'good week');
@@ -132,29 +128,32 @@ describe('AutonomyService', () => {
       expect(result.band).toBe('spot-check');
       expect(result.updatedBy).toBe('ceo');
 
-      // upsert call
+      expect(pool.query).toHaveBeenCalledTimes(1);
       expect(pool.query).toHaveBeenCalledWith(
         expect.stringContaining('INSERT INTO autonomy_config'),
-        [80, 'spot-check', 'ceo'],
+        [80, 'spot-check', 'ceo', 'good week'],
       );
-      // history call — includes previous_score and reason
       expect(pool.query).toHaveBeenCalledWith(
         expect.stringContaining('INSERT INTO autonomy_history'),
-        [80, 70, 'spot-check', 'ceo', 'good week'],
+        [80, 'spot-check', 'ceo', 'good week'],
       );
     });
 
-    it('passes null previous_score on first write (no existing config)', async () => {
-      // getConfig returns null (no row yet)
+    it('passes null reason when not provided', async () => {
       pool.query.mockResolvedValueOnce({ rows: [] });
-      pool.query.mockResolvedValueOnce({ rows: [] }); // upsert
-      pool.query.mockResolvedValueOnce({ rows: [] }); // history
-
       await svc.setScore(75, 'system');
       expect(pool.query).toHaveBeenCalledWith(
-        expect.stringContaining('INSERT INTO autonomy_history'),
-        [75, null, 'approval-required', 'system', null],
+        expect.any(String),
+        [75, 'approval-required', 'system', null],
       );
+    });
+
+    it('throws for NaN', async () => {
+      await expect(svc.setScore(NaN, 'ceo')).rejects.toThrow('Invalid autonomy score');
+    });
+
+    it('throws for Infinity', async () => {
+      await expect(svc.setScore(Infinity, 'ceo')).rejects.toThrow('Invalid autonomy score');
     });
   });
 });

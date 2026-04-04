@@ -141,26 +141,34 @@ export class AutonomyService {
 
     const band = AutonomyService.bandForScore(score);
 
-    // Read the current score before updating so history has previous_score.
-    const current = await this.getConfig();
-    const previousScore = current?.score ?? null;
-
-    // Upsert the live config row.
+    // Atomic: read previous score, upsert config, and write history in a single query.
+    // Uses a CTE with FOR UPDATE to prevent concurrent writes from recording a stale previous_score.
     await this.pool.query(
-      `INSERT INTO autonomy_config (id, score, band, updated_at, updated_by)
-       VALUES (1, $1, $2, now(), $3)
-       ON CONFLICT (id) DO UPDATE SET score = $1, band = $2, updated_at = now(), updated_by = $3`,
-      [score, band, changedBy],
+      `WITH locked AS (
+         SELECT score AS previous_score
+         FROM autonomy_config
+         WHERE id = 1
+         FOR UPDATE
+       ),
+       upserted AS (
+         INSERT INTO autonomy_config (id, score, band, updated_at, updated_by)
+         VALUES (1, $1, $2, now(), $3)
+         ON CONFLICT (id) DO UPDATE
+           SET score = EXCLUDED.score,
+               band = EXCLUDED.band,
+               updated_at = EXCLUDED.updated_at,
+               updated_by = EXCLUDED.updated_by
+       )
+       INSERT INTO autonomy_history (score, previous_score, band, changed_by, reason)
+       SELECT $1, locked.previous_score, $2, $3, $4
+       FROM locked
+       UNION ALL
+       SELECT $1, NULL, $2, $3, $4
+       WHERE NOT EXISTS (SELECT 1 FROM locked)`,
+      [score, band, changedBy, reason ?? null],
     );
 
-    // Append to the append-only audit trail.
-    await this.pool.query(
-      `INSERT INTO autonomy_history (score, previous_score, band, changed_by, reason)
-       VALUES ($1, $2, $3, $4, $5)`,
-      [score, previousScore, band, changedBy, reason ?? null],
-    );
-
-    this.logger.info({ score, band, changedBy, previousScore }, 'Autonomy score updated');
+    this.logger.info({ score, band, changedBy }, 'Autonomy score updated');
 
     return { score, band, updatedAt: new Date(), updatedBy: changedBy };
   }
