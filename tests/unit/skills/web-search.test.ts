@@ -118,7 +118,10 @@ describe('WebSearchHandler', () => {
     expect(result.success).toBe(true);
     if (result.success) {
       const data = result.data as { results: Array<{ content: string }> };
-      expect(data.results[0]!.content.length).toBeLessThanOrEqual(5000 + '[truncated]'.length);
+      const content = data.results[0]!.content;
+      expect(content.length).toBeGreaterThanOrEqual(5000);
+      expect(content.length).toBeLessThanOrEqual(5000 + '[truncated]'.length);
+      expect(content.endsWith('[truncated]')).toBe(true);
     }
   });
 
@@ -132,7 +135,8 @@ describe('WebSearchHandler', () => {
     await handler.execute(makeCtx({ query: 'test', searchDepth: 'advanced' }));
 
     expect(mockFetch).toHaveBeenCalledOnce();
-    const [, options] = mockFetch.mock.calls[0] as [string, { body: string }];
+    const [url, options] = mockFetch.mock.calls[0] as [string, { body: string }];
+    expect(url).toBe('https://api.tavily.com/search');
     const body = JSON.parse(options.body) as { search_depth: string };
     expect(body.search_depth).toBe('advanced');
   });
