@@ -6,7 +6,7 @@ Provide a secure browser-based UI for inspecting Curia's knowledge graph directl
 
 ## Visualization layer choice
 
-We selected **Cytoscape.js** as the visualization layer and wrapped it in Curia's Node/Fastify HTTP channel.
+We selected **Cytoscape.js** as the visualization layer and wrapped it in Curia's Node/Fastify HTTP channel, serving the asset locally from `node_modules`.
 
 Why Cytoscape.js:
 - Mature open-source project (MIT licensed, long maintenance history).
@@ -17,9 +17,9 @@ Why Cytoscape.js:
 ## Security model
 
 The web explorer is gated by `KG_UI_SECRET` from `.env`:
-- `GET /kg` requires `?secret=` or `x-kg-secret`.
-- `GET /api/kg/nodes` requires the same secret.
-- `GET /api/kg/graph` requires the same secret.
+- `GET /kg` serves the UI shell (no graph data).
+- `GET /api/kg/nodes` requires `x-kg-secret`.
+- `GET /api/kg/graph` requires `x-kg-secret`.
 
 If `KG_UI_SECRET` is missing, the feature is intentionally disabled.
 

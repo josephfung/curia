@@ -1,3 +1,5 @@
+import { readFile } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { Pool } from 'pg';
 import type { Logger } from '../../../logger.js';
@@ -39,16 +41,6 @@ function normalizeLimit(raw: string | undefined, fallback: number, max: number):
   return Math.max(1, Math.min(parsed, max));
 }
 
-function getSecretFromRequest(request: FastifyRequest): string | undefined {
-  const fromHeader = request.headers['x-kg-secret'];
-  if (typeof fromHeader === 'string' && fromHeader.length > 0) return fromHeader;
-
-  const query = request.query as { secret?: string } | undefined;
-  if (query?.secret && query.secret.length > 0) return query.secret;
-
-  return undefined;
-}
-
 function assertSecret(
   request: FastifyRequest,
   reply: FastifyReply,
@@ -61,10 +53,10 @@ function assertSecret(
     return false;
   }
 
-  const provided = getSecretFromRequest(request);
-  if (provided !== configuredSecret) {
+  const provided = request.headers['x-kg-secret'];
+  if (typeof provided !== 'string' || provided !== configuredSecret) {
     reply.status(401).send({
-      error: 'Unauthorized. Provide the configured secret via ?secret=... or x-kg-secret header.',
+      error: 'Unauthorized. Provide KG_UI_SECRET via the x-kg-secret header.',
     });
     return false;
   }
@@ -82,12 +74,12 @@ function createUiHtml(): string {
   <style>
     :root { color-scheme: dark; }
     body { margin: 0; font-family: Inter, system-ui, sans-serif; background: #111827; color: #f3f4f6; }
-    header { padding: 1rem; border-bottom: 1px solid #374151; display: flex; gap: .5rem; align-items: center; }
+    header { padding: 1rem; border-bottom: 1px solid #374151; display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; }
     input, button { border-radius: .5rem; border: 1px solid #4b5563; background: #1f2937; color: #f9fafb; padding: .5rem .75rem; }
     button { cursor: pointer; }
-    #layout { display: grid; grid-template-columns: 320px 1fr; min-height: calc(100vh - 70px); }
+    #layout { display: grid; grid-template-columns: 320px 1fr; min-height: calc(100vh - 78px); }
     #sidebar { border-right: 1px solid #374151; padding: 1rem; overflow: auto; }
-    #graph { width: 100%; height: calc(100vh - 70px); }
+    #graph { width: 100%; height: calc(100vh - 78px); }
     .node-result { padding: .6rem; border: 1px solid #374151; border-radius: .5rem; margin-bottom: .5rem; cursor: pointer; }
     .node-result:hover { border-color: #60a5fa; }
     .meta { color: #9ca3af; font-size: .85rem; }
@@ -97,7 +89,9 @@ function createUiHtml(): string {
 <body>
   <header>
     <strong>Knowledge Graph Explorer</strong>
-    <input id="search" placeholder="Search label or properties..." style="width: 420px" />
+    <input id="secret" type="password" placeholder="KG_UI_SECRET" style="width: 220px" />
+    <button id="saveSecret">Use Secret</button>
+    <input id="search" placeholder="Search label or properties..." style="width: 360px" />
     <button id="searchBtn">Search</button>
     <span id="status"></span>
   </header>
@@ -109,13 +103,15 @@ function createUiHtml(): string {
     <main><div id="graph"></div></main>
   </div>
 
-  <script src="https://unpkg.com/cytoscape@3.33.1/dist/cytoscape.min.js"></script>
+  <script src="/kg/assets/cytoscape.min.js"></script>
   <script>
-    const params = new URLSearchParams(window.location.search);
-    const secret = params.get('secret') || '';
     const statusEl = document.getElementById('status');
     const resultsEl = document.getElementById('results');
     const searchInput = document.getElementById('search');
+    const secretInput = document.getElementById('secret');
+    const saveSecretBtn = document.getElementById('saveSecret');
+
+    secretInput.value = sessionStorage.getItem('kg_ui_secret') || '';
 
     const cy = cytoscape({
       container: document.getElementById('graph'),
@@ -130,12 +126,17 @@ function createUiHtml(): string {
       layout: { name: 'cose', animate: false }
     });
 
+    function getSecret() {
+      return secretInput.value.trim();
+    }
+
     function setStatus(message, isError = false) {
       statusEl.textContent = message;
       statusEl.style.color = isError ? '#fca5a5' : '#93c5fd';
     }
 
     async function fetchJson(url) {
+      const secret = getSecret();
       const headers = secret ? { 'x-kg-secret': secret } : {};
       const response = await fetch(url, { headers });
       if (!response.ok) throw new Error(await response.text());
@@ -171,7 +172,7 @@ function createUiHtml(): string {
       try {
         setStatus('Searching...');
         const q = encodeURIComponent(searchInput.value.trim());
-        const data = await fetchJson('/api/kg/nodes?query=' + q + '&limit=100' + (secret ? '&secret=' + encodeURIComponent(secret) : ''));
+        const data = await fetchJson('/api/kg/nodes?query=' + q + '&limit=100');
         renderResults(data.nodes);
         setStatus('Found ' + data.nodes.length + ' nodes');
       } catch (error) {
@@ -182,7 +183,7 @@ function createUiHtml(): string {
     async function loadNeighborhood(nodeId) {
       try {
         setStatus('Loading neighborhood...');
-        const data = await fetchJson('/api/kg/graph?node_id=' + encodeURIComponent(nodeId) + '&depth=2' + (secret ? '&secret=' + encodeURIComponent(secret) : ''));
+        const data = await fetchJson('/api/kg/graph?node_id=' + encodeURIComponent(nodeId) + '&depth=2');
         renderGraph(data);
         setStatus('Loaded ' + data.nodes.length + ' nodes and ' + data.edges.length + ' edges');
       } catch (error) {
@@ -190,9 +191,14 @@ function createUiHtml(): string {
       }
     }
 
+    saveSecretBtn.addEventListener('click', () => {
+      sessionStorage.setItem('kg_ui_secret', getSecret());
+      setStatus('Secret stored in this browser session.');
+    });
+
     document.getElementById('searchBtn').addEventListener('click', search);
     searchInput.addEventListener('keydown', (event) => { if (event.key === 'Enter') search(); });
-    search();
+    if (getSecret()) search();
   </script>
 </body>
 </html>`;
@@ -204,9 +210,16 @@ export async function knowledgeGraphRoutes(
 ): Promise<void> {
   const { pool, logger, knowledgeGraphUiSecret } = options;
 
-  app.get('/kg', async (request, reply) => {
-    if (!assertSecret(request, reply, knowledgeGraphUiSecret)) return;
+  app.get('/kg', async (_request, reply) => {
     reply.type('text/html; charset=utf-8').send(createUiHtml());
+  });
+
+  app.get('/kg/assets/cytoscape.min.js', async (_request, reply) => {
+    const cytoscapePath = fileURLToPath(
+      new URL('../../../../node_modules/cytoscape/dist/cytoscape.min.js', import.meta.url),
+    );
+    const source = await readFile(cytoscapePath, 'utf8');
+    reply.type('application/javascript; charset=utf-8').send(source);
   });
 
   app.get('/api/kg/nodes', async (request, reply) => {
@@ -266,32 +279,32 @@ export async function knowledgeGraphRoutes(
 
     const nodeResult = nodeId
       ? await pool.query<KgNodeRow>(
-        `WITH RECURSIVE traversal AS (
-          SELECT id, 0 AS depth
-          FROM kg_nodes
-          WHERE id = $1::uuid
-          UNION
-          SELECT
-            CASE WHEN e.source_node_id = t.id THEN e.target_node_id ELSE e.source_node_id END AS id,
-            t.depth + 1 AS depth
-          FROM traversal t
-          JOIN kg_edges e ON e.source_node_id = t.id OR e.target_node_id = t.id
-          WHERE t.depth < $2
+          `WITH RECURSIVE traversal AS (
+             SELECT id, 0 AS depth
+             FROM kg_nodes
+             WHERE id = $1::uuid
+             UNION
+             SELECT
+               CASE WHEN e.source_node_id = t.id THEN e.target_node_id ELSE e.source_node_id END AS id,
+               t.depth + 1 AS depth
+             FROM traversal t
+             JOIN kg_edges e ON e.source_node_id = t.id OR e.target_node_id = t.id
+             WHERE t.depth < $2
+           )
+           SELECT DISTINCT n.id, n.type, n.label, n.properties, n.confidence, n.decay_class, n.source, n.created_at, n.last_confirmed_at
+           FROM traversal t
+           JOIN kg_nodes n ON n.id = t.id
+           ORDER BY n.last_confirmed_at DESC
+           LIMIT $3`,
+          [nodeId, depth, limit],
         )
-        SELECT DISTINCT n.id, n.type, n.label, n.properties, n.confidence, n.decay_class, n.source, n.created_at, n.last_confirmed_at
-        FROM traversal t
-        JOIN kg_nodes n ON n.id = t.id
-        ORDER BY n.last_confirmed_at DESC
-        LIMIT $3`,
-        [nodeId, depth, limit],
-      )
       : await pool.query<KgNodeRow>(
-        `SELECT id, type, label, properties, confidence, decay_class, source, created_at, last_confirmed_at
-         FROM kg_nodes
-         ORDER BY last_confirmed_at DESC
-         LIMIT $1`,
-        [limit],
-      );
+          `SELECT id, type, label, properties, confidence, decay_class, source, created_at, last_confirmed_at
+           FROM kg_nodes
+           ORDER BY last_confirmed_at DESC
+           LIMIT $1`,
+          [limit],
+        );
 
     if (nodeResult.rows.length === 0) {
       return reply.send({ nodes: [], edges: [] });
