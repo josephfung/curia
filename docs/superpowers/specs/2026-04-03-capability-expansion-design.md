@@ -51,7 +51,7 @@ A `autonomy_phase` config field in `config/default.yaml` controls which behavior
 
 Skills are **account-aware** rather than account-specific — an optional `account: "nathan" | "joseph"` parameter determines which Nylas client is used. This mirrors the existing `email-send` pattern: `infrastructure: true`, credentials resolved by the handler via the injected Nylas client registry, never exposed to the LLM. One skill, two accounts, no parallel skill maintenance.
 
-`email-list` — lists recent inbox threads. Works for both accounts.
+`email-list` — lists messages from any folder, for either account. The `folder` param maps to the Nylas `in` query parameter, which filters by folder ID. Nylas uses `INBOX`, `DRAFTS`, `SENT`, and `TRASH` as standard folder IDs across providers (Gmail and others). This means `email-list(account: "joseph", folder: "DRAFTS")` replaces what would have been a separate `email-draft-list` skill — no additional skill needed for listing drafts.
 ```json
 {
   "name": "email-list",
@@ -59,6 +59,7 @@ Skills are **account-aware** rather than account-specific — an optional `accou
   "infrastructure": true,
   "inputs": {
     "account": "string? (nathan | joseph, default nathan)",
+    "folder": "string? (INBOX | DRAFTS | SENT | TRASH | <provider folder id>, default INBOX)",
     "limit": "number? (default 20)",
     "unreadOnly": "boolean? (default false)"
   },
@@ -68,7 +69,7 @@ Skills are **account-aware** rather than account-specific — an optional `accou
 }
 ```
 
-`email-draft-save` — writes a draft to the specified account's Drafts folder.
+`email-draft-save` — creates a draft via the Nylas drafts API (`nylas.drafts.create()`). This is a separate Nylas resource from messages — not a message saved to a folder. The name reflects what actually happens at the API level: a draft object is created, which appears in Gmail's Drafts folder.
 ```json
 {
   "name": "email-draft-save",
@@ -79,7 +80,7 @@ Skills are **account-aware** rather than account-specific — an optional `accou
     "to": "string",
     "subject": "string",
     "body": "string",
-    "replyToThreadId": "string?"
+    "replyToMessageId": "string?"
   },
   "outputs": { "draftId": "string" },
   "permissions": [],
@@ -89,22 +90,9 @@ Skills are **account-aware** rather than account-specific — an optional `accou
 
 Elevated sensitivity ensures a human-approval gate the first time the coordinator uses this skill.
 
-`email-draft-list` — lists drafts in the specified account's Drafts folder. Used by the scheduler job.
-```json
-{
-  "name": "email-draft-list",
-  "sensitivity": "normal",
-  "infrastructure": true,
-  "inputs": { "account": "string? (nathan | joseph, default joseph)" },
-  "outputs": { "drafts": "array", "count": "number" },
-  "permissions": [],
-  "secrets": []
-}
-```
-
 **Scheduler job (Phase 1):**
 
-A daily one-shot job at 5pm (configurable) calls `email-draft-list` with `account: "joseph"`. If `count > 0`, it sends a CLI notification listing draft subjects and recipients. Joseph can then open Gmail, review, and send or discard. The job is registered in `agents/coordinator.yaml` as a startup scheduled task, or seeded via the bootstrap.
+A daily one-shot job at 5pm (configurable) calls `email-list` with `account: "joseph"` and `folder: "DRAFTS"`. If any drafts are returned, it sends a CLI notification listing subjects and recipients. Joseph can then open Gmail, review, and send or discard. The job is registered in `agents/coordinator.yaml` as a startup scheduled task, or seeded via the bootstrap.
 
 **New skills (Phase 2, not shipped now):**
 
@@ -157,7 +145,6 @@ scheduler:
 | Create | `src/channels/email-ceo/nylas-ceo-client.ts` |
 | Create | `skills/email-list/skill.json` + `handler.ts` + `handler.test.ts` |
 | Create | `skills/email-draft-save/skill.json` + `handler.ts` + `handler.test.ts` |
-| Create | `skills/email-draft-list/skill.json` + `handler.ts` + `handler.test.ts` |
 | Modify | `config/default.yaml` — add `email-ceo` channel config and scheduler job |
 | Modify | `agents/coordinator.yaml` — pin new skills, add persona guidance |
 | Modify | `src/index.ts` (or channel bootstrap) — register `email-ceo-adapter` |
@@ -237,7 +224,7 @@ System prompt addition (paraphrased — written in Nathan's voice per persona ru
 **Ship web search first.** It is a smaller lift (one skill, no channel setup), and it immediately makes Nathan smarter for inbox triage — he can research context before drafting a reply. Inbox work starts in a better position with web search already available.
 
 1. `feat/web-search` — `web-search` skill + coordinator pin
-2. `feat/ceo-inbox` — `email-ceo` adapter + `email-list` / `email-draft-save` / `email-draft-list` skills + scheduler job
+2. `feat/ceo-inbox` — `email-ceo` adapter + `email-list` / `email-draft-save` skills + scheduler job
 
 ---
 
