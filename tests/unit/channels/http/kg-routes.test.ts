@@ -30,6 +30,7 @@ describe('knowledgeGraphRoutes', () => {
       pool,
       logger: createLogger(),
       webAppBootstrapSecret: 'secret-1',
+      secureCookies: false,
     });
 
     const response = await app.inject({ method: 'GET', url: '/api/kg/nodes' });
@@ -60,6 +61,7 @@ describe('knowledgeGraphRoutes', () => {
       pool,
       logger: createLogger(),
       webAppBootstrapSecret: 'secret-1',
+      secureCookies: false,
     });
 
     const response = await app.inject({
@@ -82,6 +84,7 @@ describe('knowledgeGraphRoutes', () => {
       pool,
       logger: createLogger(),
       webAppBootstrapSecret: 'secret-1',
+      secureCookies: false,
     });
 
     const response = await app.inject({ method: 'GET', url: '/' });
@@ -97,6 +100,7 @@ describe('knowledgeGraphRoutes', () => {
       pool,
       logger: createLogger(),
       webAppBootstrapSecret: 'secret-1',
+      secureCookies: false,
     });
 
     const response = await app.inject({
@@ -122,6 +126,7 @@ describe('knowledgeGraphRoutes', () => {
       pool,
       logger: createLogger(),
       webAppBootstrapSecret: undefined,
+      secureCookies: false,
     });
 
     const response = await app.inject({ method: 'GET', url: '/api/kg/nodes' });

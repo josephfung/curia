@@ -501,6 +501,7 @@ async function main(): Promise<void> {
     port: config.httpPort,
     apiToken: config.apiToken,
     webAppBootstrapSecret: config.webAppBootstrapSecret,
+    appOrigin: config.appOrigin,
     agentNames: agentConfigs.map(c => c.name),
     skillNames: skillRegistry.list().map(s => s.manifest.name),
     schedulerService,

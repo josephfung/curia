@@ -1,4 +1,4 @@
-import { timingSafeEqual } from 'node:crypto';
+import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
@@ -9,7 +9,14 @@ export interface KnowledgeGraphRouteOptions {
   pool: Pool;
   logger: Logger;
   webAppBootstrapSecret: string | undefined;
+  // True when APP_ORIGIN is https:// — causes Set-Cookie to include the Secure flag.
+  // False in local dev so cookies work on http://localhost without browser rejection.
+  secureCookies: boolean;
 }
+
+// Session token → expiry timestamp (ms). Scoped to the route registration
+// lifetime (process lifetime for production). Single-tenant tool: memory is fine.
+type SessionStore = Map<string, number>;
 
 interface KgNodeRow {
   id: string;
@@ -46,6 +53,7 @@ function assertSecret(
   request: FastifyRequest,
   reply: FastifyReply,
   configuredSecret: string | undefined,
+  sessions: SessionStore,
 ): boolean {
   if (!configuredSecret) {
     reply.status(503).send({
@@ -54,17 +62,27 @@ function assertSecret(
     return false;
   }
 
+  // Primary path: browser session cookie set by POST /auth.
+  // @fastify/cookie augments FastifyRequest with .cookies at runtime.
+  const cookies = (request as unknown as { cookies?: Record<string, string | undefined> }).cookies;
+  const sessionToken = cookies?.['curia_session'];
+  if (sessionToken) {
+    const expiresAt = sessions.get(sessionToken);
+    if (expiresAt !== undefined && Date.now() < expiresAt) return true;
+    // Expired or unknown token — fall through to header check below.
+  }
+
+  // Fallback: direct header (programmatic API access via curl / scripts).
+  // Reject non-string values (Fastify coerces duplicate headers to string[]).
+  // Use timing-safe comparison to prevent character-by-character brute force.
   const provided = request.headers['x-web-bootstrap-secret'];
-  // Reject non-string values (e.g. Fastify coerces duplicate headers to string[]).
-  // Then use a timing-safe comparison to avoid leaking how many leading characters
-  // matched — same pattern as validateBearerToken() in auth.ts.
   if (
     typeof provided !== 'string' ||
     provided.length !== configuredSecret.length ||
     !timingSafeEqual(Buffer.from(provided), Buffer.from(configuredSecret))
   ) {
     reply.status(401).send({
-      error: 'Unauthorized. Provide WEB_APP_BOOTSTRAP_SECRET via the x-web-bootstrap-secret header.',
+      error: 'Unauthorized. Authenticate via POST /auth or provide the x-web-bootstrap-secret header.',
     });
     return false;
   }
@@ -410,15 +428,19 @@ function createUiHtml(): string {
     }
 
     // ── Auth ───────────────────────────────────────────────────────────
-    function getSecret() {
-      return sessionStorage.getItem('web_app_bootstrap_secret') || '';
-    }
+    // Session is maintained by an HttpOnly cookie set by POST /auth.
+    // The secret never lives in JS-land after the exchange.
 
     function showMain() {
       authWall.style.display = 'none';
       mainApp.style.display  = 'flex';
       initCytoscape();
       search(); // auto-load all nodes on entry
+    }
+
+    function showAuthError(msg) {
+      authError.textContent = msg || 'Invalid access key \u2014 please try again.';
+      authError.style.display = 'block';
     }
 
     authForm.addEventListener('submit', function(e) {
@@ -431,28 +453,45 @@ function createUiHtml(): string {
       btn.disabled = true;
       authError.style.display = 'none';
 
-      // Validate secret against the server before storing it — gives immediate
-      // feedback if the key is wrong rather than letting errors surface in the search.
-      fetch('/api/kg/nodes?limit=1', { headers: { 'x-web-bootstrap-secret': secret } })
+      // Exchange the secret for an HttpOnly session cookie via POST /auth.
+      // The secret travels in a JSON body (not a header or query string) and
+      // is never stored in JS-accessible storage.
+      fetch('/auth', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ secret: secret }),
+      })
         .then(function(res) {
           if (res.status === 401) {
-            authError.style.display = 'block';
+            showAuthError('Invalid access key \u2014 please try again.');
             btn.textContent = 'Enter';
             btn.disabled = false;
             return;
           }
-          sessionStorage.setItem('web_app_bootstrap_secret', secret);
+          if (res.status === 429) {
+            showAuthError('Too many attempts \u2014 please wait before trying again.');
+            btn.textContent = 'Enter';
+            btn.disabled = false;
+            return;
+          }
+          // Cookie is now set by the server. Clear the input so the secret
+          // doesn't linger in the DOM longer than necessary.
+          authInput.value = '';
           showMain();
         })
         .catch(function() {
-          // Network error — store and proceed; subsequent API calls will surface issues.
-          sessionStorage.setItem('web_app_bootstrap_secret', secret);
-          showMain();
+          // Network error — do not grant access. Show an error so the user can retry.
+          showAuthError('Could not reach server \u2014 please check your connection and try again.');
+          btn.textContent = 'Enter';
+          btn.disabled = false;
         });
     });
 
-    // Auto-unlock when a valid key is already stored in this session
-    if (getSecret()) showMain();
+    // On page load, probe the API to check whether a valid session cookie already
+    // exists (e.g. page refresh within a live session). If so, skip the auth wall.
+    fetch('/api/kg/nodes?limit=1')
+      .then(function(res) { if (res.ok) showMain(); })
+      .catch(function() { /* network error — stay on auth wall */ });
 
     // ── Cytoscape ──────────────────────────────────────────────────────
     function initCytoscape() {
@@ -534,9 +573,9 @@ function createUiHtml(): string {
     }
 
     function fetchJson(url) {
-      var secret = getSecret();
-      var headers = secret ? { 'x-web-bootstrap-secret': secret } : {};
-      return fetch(url, { headers: headers }).then(function(res) {
+      // No explicit auth header needed — the browser sends the HttpOnly session
+      // cookie automatically with every same-origin request.
+      return fetch(url).then(function(res) {
         if (!res.ok) return res.text().then(function(t) { throw new Error(t); });
         return res.json();
       });
@@ -615,7 +654,21 @@ export async function knowledgeGraphRoutes(
   app: FastifyInstance,
   options: KnowledgeGraphRouteOptions,
 ): Promise<void> {
-  const { pool, logger, webAppBootstrapSecret } = options;
+  const { pool, logger, webAppBootstrapSecret, secureCookies } = options;
+
+  // In-memory session store: token → expiry timestamp (ms).
+  // Single-tenant tool — no DB persistence needed; sessions reset on server restart.
+  const sessions: SessionStore = new Map();
+
+  // Prune expired sessions every minute so the Map doesn't grow unboundedly.
+  const pruneInterval = setInterval(() => {
+    const now = Date.now();
+    for (const [token, expiresAt] of sessions) {
+      if (now > expiresAt) sessions.delete(token);
+    }
+  }, 60_000);
+  // Unref so the interval doesn't prevent process exit during tests.
+  pruneInterval.unref();
 
   app.get('/', async (_request, reply) => {
     reply
@@ -625,6 +678,41 @@ export async function knowledgeGraphRoutes(
       // Stop browsers from MIME-sniffing the response away from text/html.
       .header('X-Content-Type-Options', 'nosniff')
       .send(createUiHtml());
+  });
+
+  // POST /auth — exchanges the bootstrap secret for an HttpOnly session cookie.
+  // Tighter rate limit than the global default: 10 attempts per 15 minutes per IP,
+  // preventing online brute-force against the secret.
+  app.post('/auth', {
+    config: { rateLimit: { max: 10, timeWindow: '15 minutes' } },
+  }, async (request, reply) => {
+    if (!webAppBootstrapSecret) {
+      return reply.status(503).send({ error: 'KG web UI is disabled.' });
+    }
+
+    const body = request.body as { secret?: unknown };
+    const provided = typeof body?.secret === 'string' ? body.secret : '';
+
+    if (
+      provided.length !== webAppBootstrapSecret.length ||
+      !timingSafeEqual(Buffer.from(provided), Buffer.from(webAppBootstrapSecret))
+    ) {
+      return reply.status(401).send({ error: 'Invalid access key.' });
+    }
+
+    // Issue a 256-bit random session token. The secret itself never goes in the cookie.
+    const token = randomBytes(32).toString('hex');
+    sessions.set(token, Date.now() + 24 * 60 * 60 * 1000); // expires in 24 hours
+
+    reply.setCookie('curia_session', token, {
+      httpOnly: true,
+      secure: secureCookies,  // true in prod (https://), false for http://localhost
+      sameSite: 'strict',
+      path: '/',
+      maxAge: 86400,          // 24 hours in seconds
+    });
+
+    return reply.status(200).send({ ok: true });
   });
 
   app.get('/assets/cytoscape.min.js', async (_request, reply) => {
@@ -641,7 +729,7 @@ export async function knowledgeGraphRoutes(
   });
 
   app.get('/api/kg/nodes', async (request, reply) => {
-    if (!assertSecret(request, reply, webAppBootstrapSecret)) return;
+    if (!assertSecret(request, reply, webAppBootstrapSecret, sessions)) return;
 
     const query = request.query as {
       query?: string;
@@ -683,7 +771,7 @@ export async function knowledgeGraphRoutes(
   });
 
   app.get('/api/kg/graph', async (request, reply) => {
-    if (!assertSecret(request, reply, webAppBootstrapSecret)) return;
+    if (!assertSecret(request, reply, webAppBootstrapSecret, sessions)) return;
 
     const query = request.query as {
       node_id?: string;

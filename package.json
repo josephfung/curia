@@ -23,7 +23,9 @@
   "license": "MIT",
   "dependencies": {
     "@anthropic-ai/sdk": "^0.81.0",
+    "@fastify/cookie": "^11.0.2",
     "@fastify/cors": "^11.2.0",
+    "@fastify/rate-limit": "^10.3.0",
     "cron-parser": "^5.5.0",
     "cytoscape": "^3.33.1",
     "fastify": "^5.8.4",
