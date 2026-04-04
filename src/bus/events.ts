@@ -117,6 +117,18 @@ interface MessageHeldPayload {
   subject: string | null;
 }
 
+// MessageRejectedPayload — emitted by the dispatch layer when a message is rejected
+// due to an unknown_sender: reject policy (or a blocked sender). The conversationId
+// is included so the HTTP adapter can immediately resolve the pending response
+// with an error rather than hanging until the 120-second timeout.
+interface MessageRejectedPayload {
+  conversationId: string;
+  channelId: string;
+  senderId: string;
+  /** Why the message was rejected — used by the HTTP adapter to select the status code. */
+  reason: 'unknown_sender' | 'provisional_sender' | 'blocked_sender';
+}
+
 // Memory event payloads — used for the knowledge graph audit trail (Phase 6).
 // `source` is a structured provenance string (e.g. "agent:coordinator/task:task-1/channel:cli").
 
@@ -239,6 +251,12 @@ export interface MessageHeldEvent extends BaseEvent {
   payload: MessageHeldPayload;
 }
 
+export interface MessageRejectedEvent extends BaseEvent {
+  type: 'message.rejected';
+  sourceLayer: 'dispatch';
+  payload: MessageRejectedPayload;
+}
+
 // Memory events — emitted by the agent layer whenever the knowledge graph is written to or queried.
 // These form the audit trail for memory operations (Phase 6).
 
@@ -285,6 +303,7 @@ export type BusEvent =
   | ContactResolvedEvent  // Contacts Phase A: sender matched to a known contact
   | ContactUnknownEvent   // Contacts Phase A: sender has no contact record
   | MessageHeldEvent      // Unknown sender policy: message held for CEO review
+  | MessageRejectedEvent  // Unknown sender policy: message rejected, signals HTTP adapter to return 403
   | OutboundBlockedEvent  // Outbound content filter: message blocked before delivery (#38)
   | ScheduleCreatedEvent   // Scheduler: job created
   | ScheduleFiredEvent     // Scheduler: job fired
@@ -484,6 +503,21 @@ export function createMessageHeld(
     id: randomUUID(),
     timestamp: new Date(),
     type: 'message.held',
+    sourceLayer: 'dispatch',
+    payload: rest,
+    parentEventId,
+  };
+}
+
+export function createMessageRejected(
+  // parentEventId is required — rejection events must trace back to the inbound event.
+  payload: MessageRejectedPayload & { parentEventId: string },
+): MessageRejectedEvent {
+  const { parentEventId, ...rest } = payload;
+  return {
+    id: randomUUID(),
+    timestamp: new Date(),
+    type: 'message.rejected',
     sourceLayer: 'dispatch',
     payload: rest,
     parentEventId,

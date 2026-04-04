@@ -1,6 +1,6 @@
 import type { EventBus } from '../bus/bus.js';
 import type { InboundMessageEvent, AgentResponseEvent, AgentErrorEvent } from '../bus/events.js';
-import { createAgentTask, createOutboundMessage, createContactResolved, createContactUnknown, createMessageHeld } from '../bus/events.js';
+import { createAgentTask, createOutboundMessage, createContactResolved, createContactUnknown, createMessageHeld, createMessageRejected } from '../bus/events.js';
 import type { Logger } from '../logger.js';
 import type { ContactResolver } from '../contacts/contact-resolver.js';
 import type { HeldMessageService } from '../contacts/held-messages.js';
@@ -110,6 +110,13 @@ export class Dispatcher {
                   { channel: payload.channelId, senderId: payload.senderId, contactId: senderContext.contactId },
                   'Blocked sender — dropping message',
                 );
+                await this.bus.publish('dispatch', createMessageRejected({
+                  conversationId: payload.conversationId,
+                  channelId: payload.channelId,
+                  senderId: payload.senderId,
+                  reason: 'blocked_sender',
+                  parentEventId: event.id,
+                }));
                 return;
               }
 
@@ -151,6 +158,13 @@ export class Dispatcher {
                   { channel: payload.channelId, senderId: payload.senderId },
                   'Rejected message from provisional sender',
                 );
+                await this.bus.publish('dispatch', createMessageRejected({
+                  conversationId: payload.conversationId,
+                  channelId: payload.channelId,
+                  senderId: payload.senderId,
+                  reason: 'provisional_sender',
+                  parentEventId: event.id,
+                }));
                 return;
               }
             }
@@ -208,7 +222,14 @@ export class Dispatcher {
               { channel: payload.channelId, senderId: payload.senderId },
               'Rejected message from unknown sender',
             );
-            return; // Silently drop
+            await this.bus.publish('dispatch', createMessageRejected({
+              conversationId: payload.conversationId,
+              channelId: payload.channelId,
+              senderId: payload.senderId,
+              reason: 'unknown_sender',
+              parentEventId: event.id,
+            }));
+            return;
           }
 
           // 'allow' policy or no policy configured — fall through to normal routing

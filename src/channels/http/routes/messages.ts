@@ -77,9 +77,11 @@ export async function messageRoutes(
       const message = err instanceof Error ? err.message : String(err);
       logger.error({ err, conversationId }, 'HTTP message handling failed');
 
-      // Distinguish timeout errors (504) from internal failures (500)
+      // Distinguish rejection (403), timeout (504), and internal failures (500)
+      const isRejected = message.includes('sender not authorized');
       const isTimeout = message.includes('timeout') || message.includes('Timeout');
-      return reply.status(isTimeout ? 504 : 500).send({ error: message });
+      const status = isRejected ? 403 : isTimeout ? 504 : 500;
+      return reply.status(status).send({ error: message });
     }
   });
 

@@ -121,6 +121,37 @@ export class EventRouter {
       this.broadcastToSseClients(sseData);
     });
 
+    // message.rejected — immediately reject the pending POST promise so the caller
+    // gets a 403 instead of hanging until the 120-second timeout. This is the signal
+    // path between the dispatch layer (where reject policy fires) and the HTTP adapter
+    // (which has no other way to know the message was dropped).
+    bus.subscribe('message.rejected', 'channel', (event: BusEvent) => {
+      if (event.type !== 'message.rejected') return;
+      // Only handle rejections for the HTTP channel
+      if (event.payload.channelId !== 'http') return;
+
+      const convId = event.payload.conversationId;
+
+      // Reject the pending POST if one is waiting — this unblocks the route handler
+      const pending = this.pendingResponses.get(convId);
+      if (pending) {
+        clearTimeout(pending.timeout);
+        this.pendingResponses.delete(convId);
+        pending.reject(new Error(`Message rejected — sender not authorized (${event.payload.reason})`));
+      }
+
+      // Also broadcast to SSE clients so dashboards can react
+      const sseData = JSON.stringify({
+        type: 'message.rejected',
+        conversation_id: convId,
+        channel_id: event.payload.channelId,
+        sender_id: event.payload.senderId,
+        reason: event.payload.reason,
+        timestamp: event.timestamp,
+      });
+      this.broadcastToSseClients(sseData, convId);
+    });
+
     this.logger.info('HTTP event router subscriptions registered');
   }
 
