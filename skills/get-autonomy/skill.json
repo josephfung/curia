@@ -1,0 +1,13 @@
+{
+  "name": "get-autonomy",
+  "description": "Report Nathan's current global autonomy score, band, and recent change history. Use this when the CEO asks about autonomy level, trust level, or how independently Nathan is operating.",
+  "version": "1.0.0",
+  "sensitivity": "normal",
+  "infrastructure": true,
+  "inputs": {},
+  "outputs": { "score": "number", "band": "string", "summary": "string" },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 10000,
+  "autonomy_floor": "full"
+}
