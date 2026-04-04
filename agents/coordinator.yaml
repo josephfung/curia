@@ -194,4 +194,6 @@ pinned_skills:
   - calendar-delete-event
   - calendar-find-free-time
   - calendar-check-conflicts
+  - get-autonomy
+  - set-autonomy
 allow_discovery: true

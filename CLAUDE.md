@@ -67,6 +67,23 @@ Cross-cutting: Audit Logger, Memory Engine, Scheduler.
 2. Declare permissions and secrets in the manifest
 3. Write `handler.test.ts`
 
+### Autonomy Awareness
+
+When adding a new skill, declare its autonomy floor in `skill.json` (this field is not enforced in Phase 1 but is required for Phase 2 gate wiring):
+
+```json
+"autonomy_floor": "spot-check"
+```
+
+Floors by capability class:
+- `"full"` — reads, retrieval, summarization (no external effect)
+- `"spot-check"` — outbound communications, internal state writes
+- `"approval-required"` — calendar writes, commitments on behalf of CEO
+- `"draft-only"` — financial actions, high-stakes operations
+- `"restricted"` — irreversible or destructive actions
+
+When adding a new agent, ensure it receives the autonomy block via the runtime injection mechanism (same pattern as date/timezone injection — pass `autonomyService` in `AgentRuntime` config if the agent needs autonomy awareness). See `docs/superpowers/specs/2026-04-03-autonomy-engine-design.md`.
+
 ### New Agent
 1. Create `agents/<name>.yaml` with required fields (name, description, model, system_prompt)
 2. Optionally add `handler: ./<name>.handler.ts` for custom logic

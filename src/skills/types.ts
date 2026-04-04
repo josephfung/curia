@@ -130,6 +130,9 @@ export interface SkillContext {
   /** The agent's own contactId — used by entity_enrichment when default is 'agent'.
    *  Seeded at bootstrap and injected by the execution layer. */
   agentContactId?: string;
+  /** Autonomy service — available to infrastructure skills that manage the global
+   *  autonomy score (get-autonomy, set-autonomy). Not available to normal skills. */
+  autonomyService?: import('../autonomy/autonomy-service.js').AutonomyService;
 }
 
 /**

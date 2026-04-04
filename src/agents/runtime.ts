@@ -9,6 +9,8 @@ import type { CallerContext } from '../skills/types.js';
 import { sanitizeOutput } from '../skills/sanitize.js';
 import { classifySkillError, formatTaskError } from '../errors/classify.js';
 import { DEFAULT_ERROR_BUDGET, type AgentError, type ErrorBudget } from '../errors/types.js';
+// Value import (not type-only) — we call AutonomyService.formatPromptBlock() as a static method.
+import { AutonomyService } from '../autonomy/autonomy-service.js';
 
 export interface AgentConfig {
   agentId: string;
@@ -26,6 +28,9 @@ export interface AgentConfig {
   pinnedSkills?: string[];
   /** Pre-built tool definitions for the LLM (from SkillRegistry.toToolDefinitions). */
   skillToolDefs?: ToolDefinition[];
+  /** Optional autonomy service — when provided, the autonomy block is injected
+   *  into the effective system prompt on every task. Only the coordinator receives this. */
+  autonomyService?: AutonomyService;
   /** Error budget config — turn and consecutive error limits per task.
    * maxTurns is checked at the start of each tool-use iteration, so
    * the effective number of tool-calling rounds is maxTurns - 1. */
@@ -110,8 +115,26 @@ export class AgentRuntime {
   }
 
   private async processTask(taskEvent: AgentTaskEvent): Promise<void> {
-    const { agentId, systemPrompt, provider, bus, logger, memory, executionLayer, skillToolDefs } = this.config;
+    const { agentId, systemPrompt, provider, bus, logger, memory, executionLayer, skillToolDefs, autonomyService } = this.config;
     const { content, conversationId } = taskEvent.payload;
+
+    // Load the current autonomy config and append its behavioral block to the
+    // system prompt. This runs per-task (not at startup) so a CEO score change
+    // mid-session takes effect on Nathan's next action without a restart.
+    let effectiveSystemPrompt = systemPrompt;
+    if (autonomyService) {
+      try {
+        const autonomyConfig = await autonomyService.getConfig();
+        if (autonomyConfig) {
+          effectiveSystemPrompt = systemPrompt + '\n\n' + AutonomyService.formatPromptBlock(autonomyConfig);
+        }
+      } catch (err) {
+        // An unexpected DB error loading the autonomy config should not abort the task entirely.
+        // Log at error level (operator signal) and proceed with the base system prompt.
+        logger.error({ err, agentId }, 'Failed to load autonomy config — proceeding with base system prompt');
+        // effectiveSystemPrompt remains as systemPrompt.
+      }
+    }
 
     // Initialize the error budget for this task.
     // Config values override defaults; budget tracks runtime counters.
@@ -130,7 +153,7 @@ export class AgentRuntime {
 
     // Assemble initial LLM context
     const messages: Message[] = [
-      { role: 'system', content: systemPrompt },
+      { role: 'system', content: effectiveSystemPrompt },
       ...history,
       { role: 'user', content },
     ];
