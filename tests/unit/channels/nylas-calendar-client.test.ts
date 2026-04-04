@@ -80,6 +80,25 @@ describe('NylasCalendarClient', () => {
         isOwnedByUser: false,
       });
     });
+
+    it('defaults isOwnedByUser to false when missing from SDK response', async () => {
+      // Safety-side default: absent isOwnedByUser must NOT grant write access.
+      (sdk.calendars.list as ReturnType<typeof vi.fn>).mockResolvedValue({
+        data: [{
+          id: 'cal-unknown',
+          name: 'Mystery Calendar',
+          description: '',
+          timezone: 'UTC',
+          isPrimary: false,
+          readOnly: false,
+          // isOwnedByUser intentionally absent
+        }],
+      });
+
+      const calendars = await client.listCalendars();
+
+      expect(calendars[0].isOwnedByUser).toBe(false);
+    });
   });
 
   describe('listEvents', () => {

@@ -386,6 +386,11 @@ export class NylasCalendarClient {
   // -- Normalizers --
 
   private normalizeCalendar(cal: NylasRawCalendar): NylasCalendar {
+    // Warn if isOwnedByUser is absent — default to false (safe side) to avoid
+    // granting write access to calendars the user may not own.
+    if (cal.isOwnedByUser === undefined) {
+      this.log.warn({ calendarId: cal.id }, 'normalizeCalendar: isOwnedByUser missing — defaulting to false');
+    }
     return {
       id: cal.id,
       name: cal.name ?? '',
@@ -393,7 +398,7 @@ export class NylasCalendarClient {
       timezone: cal.timezone ?? '',
       isPrimary: cal.isPrimary ?? false,
       readOnly: cal.readOnly ?? false,
-      isOwnedByUser: cal.isOwnedByUser ?? true,
+      isOwnedByUser: cal.isOwnedByUser ?? false,
     };
   }
 
