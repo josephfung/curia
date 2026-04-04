@@ -28,7 +28,8 @@ interface TavilyResult {
 }
 
 interface TavilyResponse {
-  results: TavilyResult[];
+  // results may be absent if the API returns a malformed body
+  results?: TavilyResult[];
 }
 
 interface NormalisedResult {
@@ -61,10 +62,14 @@ export class WebSearchHandler implements SkillHandler {
     let apiKey: string;
     try {
       apiKey = ctx.secret('tavily_api_key');
-    } catch {
+    } catch (err) {
+      ctx.log.error({ err }, 'Failed to resolve Tavily API key');
       return { success: false, error: 'Tavily API key not configured — set TAVILY_API_KEY in the environment' };
     }
 
+    if (searchDepth !== undefined && searchDepth !== 'basic' && searchDepth !== 'advanced') {
+      ctx.log.warn({ searchDepth }, 'Unrecognised searchDepth value — defaulting to basic');
+    }
     const depth = searchDepth === 'advanced' ? 'advanced' : 'basic';
     const limit = typeof maxResults === 'number' ? Math.min(maxResults, 20) : 5;
 
@@ -96,6 +101,7 @@ export class WebSearchHandler implements SkillHandler {
     }
 
     if (!response.ok) {
+      ctx.log.error({ query, status: response.status, statusText: response.statusText }, 'Tavily returned non-OK response');
       return {
         success: false,
         error: `Tavily returned HTTP ${response.status}: ${response.statusText || 'request failed'}`,
@@ -110,9 +116,16 @@ export class WebSearchHandler implements SkillHandler {
       return { success: false, error: 'Failed to parse Tavily response as JSON' };
     }
 
+    // Guard against malformed responses where results is missing or not an array.
+    // A silent ?? [] fallback would return success with zero results, masking API bugs.
+    if (!Array.isArray(body.results)) {
+      ctx.log.error({ query, body }, 'Unexpected Tavily response shape — results field is not an array');
+      return { success: false, error: 'Unexpected response from Tavily (results field missing or malformed)' };
+    }
+
     // Normalise and truncate — use raw_content when available (advanced depth),
     // fall back to the snippet content field.
-    const results: NormalisedResult[] = (body.results ?? []).map((r) => ({
+    const results: NormalisedResult[] = body.results.map((r) => ({
       title: r.title,
       url: r.url,
       content: truncate(r.raw_content ?? r.content ?? ''),
