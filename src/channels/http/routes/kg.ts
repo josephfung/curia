@@ -7,7 +7,7 @@ import type { Logger } from '../../../logger.js';
 export interface KnowledgeGraphRouteOptions {
   pool: Pool;
   logger: Logger;
-  knowledgeGraphUiSecret: string | undefined;
+  webAppBootstrapSecret: string | undefined;
 }
 
 interface KgNodeRow {
@@ -48,15 +48,15 @@ function assertSecret(
 ): boolean {
   if (!configuredSecret) {
     reply.status(503).send({
-      error: 'Knowledge graph web UI is disabled. Set KG_UI_SECRET in .env to enable it.',
+      error: 'Knowledge graph web UI is disabled. Set WEB_APP_BOOTSTRAP_SECRET in .env to enable it.',
     });
     return false;
   }
 
-  const provided = request.headers['x-kg-secret'];
+  const provided = request.headers['x-web-bootstrap-secret'];
   if (typeof provided !== 'string' || provided !== configuredSecret) {
     reply.status(401).send({
-      error: 'Unauthorized. Provide KG_UI_SECRET via the x-kg-secret header.',
+      error: 'Unauthorized. Provide WEB_APP_BOOTSTRAP_SECRET via the x-web-bootstrap-secret header.',
     });
     return false;
   }
@@ -89,7 +89,7 @@ function createUiHtml(): string {
 <body>
   <header>
     <strong>Knowledge Graph Explorer</strong>
-    <input id="secret" type="password" placeholder="KG_UI_SECRET" style="width: 220px" />
+    <input id="secret" type="password" placeholder="WEB_APP_BOOTSTRAP_SECRET" style="width: 220px" />
     <button id="saveSecret">Use Secret</button>
     <input id="search" placeholder="Search label or properties..." style="width: 360px" />
     <button id="searchBtn">Search</button>
@@ -111,7 +111,7 @@ function createUiHtml(): string {
     const secretInput = document.getElementById('secret');
     const saveSecretBtn = document.getElementById('saveSecret');
 
-    secretInput.value = sessionStorage.getItem('kg_ui_secret') || '';
+    secretInput.value = sessionStorage.getItem('web_app_bootstrap_secret') || '';
 
     const cy = cytoscape({
       container: document.getElementById('graph'),
@@ -137,7 +137,7 @@ function createUiHtml(): string {
 
     async function fetchJson(url) {
       const secret = getSecret();
-      const headers = secret ? { 'x-kg-secret': secret } : {};
+      const headers = secret ? { 'x-web-bootstrap-secret': secret } : {};
       const response = await fetch(url, { headers });
       if (!response.ok) throw new Error(await response.text());
       return response.json();
@@ -192,7 +192,7 @@ function createUiHtml(): string {
     }
 
     saveSecretBtn.addEventListener('click', () => {
-      sessionStorage.setItem('kg_ui_secret', getSecret());
+      sessionStorage.setItem('web_app_bootstrap_secret', getSecret());
       setStatus('Secret stored in this browser session.');
     });
 
@@ -208,7 +208,7 @@ export async function knowledgeGraphRoutes(
   app: FastifyInstance,
   options: KnowledgeGraphRouteOptions,
 ): Promise<void> {
-  const { pool, logger, knowledgeGraphUiSecret } = options;
+  const { pool, logger, webAppBootstrapSecret } = options;
 
   app.get('/kg', async (_request, reply) => {
     reply.type('text/html; charset=utf-8').send(createUiHtml());
@@ -223,7 +223,7 @@ export async function knowledgeGraphRoutes(
   });
 
   app.get('/api/kg/nodes', async (request, reply) => {
-    if (!assertSecret(request, reply, knowledgeGraphUiSecret)) return;
+    if (!assertSecret(request, reply, webAppBootstrapSecret)) return;
 
     const query = request.query as {
       query?: string;
@@ -265,7 +265,7 @@ export async function knowledgeGraphRoutes(
   });
 
   app.get('/api/kg/graph', async (request, reply) => {
-    if (!assertSecret(request, reply, knowledgeGraphUiSecret)) return;
+    if (!assertSecret(request, reply, webAppBootstrapSecret)) return;
 
     const query = request.query as {
       node_id?: string;

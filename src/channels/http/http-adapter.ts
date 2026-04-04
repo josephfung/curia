@@ -37,7 +37,7 @@ export interface HttpAdapterConfig {
   agentRegistry: AgentRegistry;
   port: number;
   apiToken: string | undefined;
-  knowledgeGraphUiSecret: string | undefined;
+  webAppBootstrapSecret: string | undefined;
   agentNames: string[];
   skillNames: string[];
   schedulerService?: SchedulerService;
@@ -67,7 +67,7 @@ export class HttpAdapter {
       apiToken,
       agentNames,
       skillNames,
-      knowledgeGraphUiSecret,
+      webAppBootstrapSecret,
     } = this.config;
 
     // Register shared bus subscriptions BEFORE starting the server.
@@ -102,7 +102,7 @@ export class HttpAdapter {
     await this.app.register(knowledgeGraphRoutes, {
       pool,
       logger,
-      knowledgeGraphUiSecret,
+      webAppBootstrapSecret,
     });
 
     // Start listening

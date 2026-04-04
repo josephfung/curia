@@ -24,12 +24,12 @@ describe('knowledgeGraphRoutes', () => {
     vi.clearAllMocks();
   });
 
-  it('rejects API requests without x-kg-secret', async () => {
+  it('rejects API requests without x-web-bootstrap-secret', async () => {
     const app = Fastify();
     await app.register(knowledgeGraphRoutes, {
       pool,
       logger: createLogger(),
-      knowledgeGraphUiSecret: 'secret-1',
+      webAppBootstrapSecret: 'secret-1',
     });
 
     const response = await app.inject({ method: 'GET', url: '/api/kg/nodes' });
@@ -59,13 +59,13 @@ describe('knowledgeGraphRoutes', () => {
     await app.register(knowledgeGraphRoutes, {
       pool,
       logger: createLogger(),
-      knowledgeGraphUiSecret: 'secret-1',
+      webAppBootstrapSecret: 'secret-1',
     });
 
     const response = await app.inject({
       method: 'GET',
       url: '/api/kg/nodes?query=ada',
-      headers: { 'x-kg-secret': 'secret-1' },
+      headers: { 'x-web-bootstrap-secret': 'secret-1' },
     });
 
     expect(response.statusCode).toBe(200);
@@ -81,7 +81,7 @@ describe('knowledgeGraphRoutes', () => {
     await app.register(knowledgeGraphRoutes, {
       pool,
       logger: createLogger(),
-      knowledgeGraphUiSecret: 'secret-1',
+      webAppBootstrapSecret: 'secret-1',
     });
 
     const response = await app.inject({ method: 'GET', url: '/kg' });

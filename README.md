@@ -299,9 +299,9 @@ This starts Postgres via Docker, applies any pending migrations, then launches t
 
 Curia now includes a built-in graph browser at `GET /kg` backed by Postgres `kg_nodes` + `kg_edges`.
 
-1. Set `KG_UI_SECRET` in `.env`
+1. Set `WEB_APP_BOOTSTRAP_SECRET` in `.env`
 2. Start Curia (`pnpm local`)
-3. Open `http://localhost:3000/kg`, enter `KG_UI_SECRET` in the UI, then search/browse.
+3. Open `http://localhost:3000/kg`, enter `WEB_APP_BOOTSTRAP_SECRET` in the UI, then search/browse.
 
 The explorer supports:
 - node search (`/api/kg/nodes`)

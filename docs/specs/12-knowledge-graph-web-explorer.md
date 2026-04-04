@@ -16,12 +16,12 @@ Why Cytoscape.js:
 
 ## Security model
 
-The web explorer is gated by `KG_UI_SECRET` from `.env`:
+The web explorer is gated by `WEB_APP_BOOTSTRAP_SECRET` from `.env`:
 - `GET /kg` serves the UI shell (no graph data).
-- `GET /api/kg/nodes` requires `x-kg-secret`.
-- `GET /api/kg/graph` requires `x-kg-secret`.
+- `GET /api/kg/nodes` requires `x-web-bootstrap-secret`.
+- `GET /api/kg/graph` requires `x-web-bootstrap-secret`.
 
-If `KG_UI_SECRET` is missing, the feature is intentionally disabled.
+If `WEB_APP_BOOTSTRAP_SECRET` is missing, the feature is intentionally disabled.
 
 ## API surface
 
