@@ -5,6 +5,7 @@ export interface Config {
   logLevel: string;
   httpPort: number;
   apiToken: string | undefined;
+  knowledgeGraphUiSecret: string | undefined;
   timezone: string;
   nylasApiKey: string | undefined;
   nylasGrantId: string | undefined;
@@ -40,6 +41,7 @@ export function loadConfig(): Config {
     logLevel: process.env.LOG_LEVEL ?? 'info',
     httpPort,
     apiToken: process.env.API_TOKEN,
+    knowledgeGraphUiSecret: process.env.KG_UI_SECRET,
     timezone: process.env.TIMEZONE ?? 'America/Toronto',
     nylasApiKey: process.env.NYLAS_API_KEY,
     nylasGrantId: process.env.NYLAS_GRANT_ID,

@@ -28,6 +28,7 @@ import { healthRoutes } from './routes/health.js';
 import { agentRoutes } from './routes/agents.js';
 import { jobRoutes } from './routes/jobs.js';
 import { messageRoutes } from './routes/messages.js';
+import { knowledgeGraphRoutes } from './routes/kg.js';
 
 export interface HttpAdapterConfig {
   bus: EventBus;
@@ -36,6 +37,7 @@ export interface HttpAdapterConfig {
   agentRegistry: AgentRegistry;
   port: number;
   apiToken: string | undefined;
+  knowledgeGraphUiSecret: string | undefined;
   agentNames: string[];
   skillNames: string[];
   schedulerService?: SchedulerService;
@@ -56,7 +58,17 @@ export class HttpAdapter {
   }
 
   async start(): Promise<void> {
-    const { bus, logger, pool, agentRegistry, port, apiToken, agentNames, skillNames } = this.config;
+    const {
+      bus,
+      logger,
+      pool,
+      agentRegistry,
+      port,
+      apiToken,
+      agentNames,
+      skillNames,
+      knowledgeGraphUiSecret,
+    } = this.config;
 
     // Register shared bus subscriptions BEFORE starting the server.
     // One subscriber per event type, dispatches to HTTP clients via Maps/Sets.
@@ -69,7 +81,9 @@ export class HttpAdapter {
     this.app.addHook('onRequest', async (request, reply) => {
       // Skip auth for health endpoint — it's used by load balancers and monitors.
       // Use routeOptions.url (the registered pattern) so query strings don't break the match.
-      if (request.routeOptions.url === '/api/health') return;
+      const routeUrl = request.routeOptions.url ?? '';
+      if (routeUrl === '/api/health') return;
+      if (routeUrl.startsWith('/kg') || routeUrl.startsWith('/api/kg')) return;
 
       if (!validateBearerToken(request.headers.authorization, apiToken)) {
         return reply.status(401).send({ error: 'Unauthorized — provide a valid Bearer token' });
@@ -84,6 +98,12 @@ export class HttpAdapter {
     if (this.config.schedulerService) {
       await this.app.register(jobRoutes, { schedulerService: this.config.schedulerService });
     }
+
+    await this.app.register(knowledgeGraphRoutes, {
+      pool,
+      logger,
+      knowledgeGraphUiSecret,
+    });
 
     // Start listening
     await this.app.listen({ port, host: '0.0.0.0' });

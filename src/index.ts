@@ -500,6 +500,7 @@ async function main(): Promise<void> {
     agentRegistry,
     port: config.httpPort,
     apiToken: config.apiToken,
+    knowledgeGraphUiSecret: config.knowledgeGraphUiSecret,
     agentNames: agentConfigs.map(c => c.name),
     skillNames: skillRegistry.list().map(s => s.manifest.name),
     schedulerService,
