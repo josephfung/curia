@@ -14,6 +14,22 @@ import type { BusEvent } from '../../bus/events.js';
 import type { Logger } from '../../logger.js';
 import type { ServerResponse } from 'node:http';
 
+/**
+ * Thrown by the event router when the dispatcher rejects a message via the
+ * `unknown_sender: reject` policy. Typed separately from Error so the route
+ * handler can detect the rejection case and return 403 without brittle string
+ * matching on the error message.
+ */
+export class MessageRejectedError extends Error {
+  readonly reason: 'unknown_sender' | 'provisional_sender' | 'blocked_sender';
+
+  constructor(reason: 'unknown_sender' | 'provisional_sender' | 'blocked_sender') {
+    super(`Message rejected — sender not authorized (${reason})`);
+    this.name = 'MessageRejectedError';
+    this.reason = reason;
+  }
+}
+
 export interface PendingResponse {
   resolve: (content: string) => void;
   reject: (error: Error) => void;
@@ -137,7 +153,7 @@ export class EventRouter {
       if (pending) {
         clearTimeout(pending.timeout);
         this.pendingResponses.delete(convId);
-        pending.reject(new Error(`Message rejected — sender not authorized (${event.payload.reason})`));
+        pending.reject(new MessageRejectedError(event.payload.reason));
       }
 
       // Also broadcast to SSE clients so dashboards can react

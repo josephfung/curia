@@ -13,6 +13,7 @@ import type { EventBus } from '../../../bus/bus.js';
 import { createInboundMessage } from '../../../bus/events.js';
 import type { Logger } from '../../../logger.js';
 import type { EventRouter } from '../event-router.js';
+import { MessageRejectedError } from '../event-router.js';
 
 export interface MessageRouteOptions {
   bus: EventBus;
@@ -72,13 +73,17 @@ export async function messageRoutes(
         agent_id: 'coordinator',
       });
     } catch (err) {
-      // Clean up the pending response if publish failed
+      // Safety net: cancel the pending entry if the bus.publish() threw before
+      // the rejection event could clean it up. On the normal rejection path the
+      // EventRouter has already removed the entry, so this is a no-op there.
       eventRouter.cancelPending(conversationId);
       const message = err instanceof Error ? err.message : String(err);
       logger.error({ err, conversationId }, 'HTTP message handling failed');
 
-      // Distinguish rejection (403), timeout (504), and internal failures (500)
-      const isRejected = message.includes('sender not authorized');
+      // Distinguish rejection (403), timeout (504), and internal failures (500).
+      // Use instanceof rather than string matching so a wording change can't
+      // silently break the status code.
+      const isRejected = err instanceof MessageRejectedError;
       const isTimeout = message.includes('timeout') || message.includes('Timeout');
       const status = isRejected ? 403 : isTimeout ? 504 : 500;
       return reply.status(status).send({ error: message });
