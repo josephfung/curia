@@ -90,10 +90,21 @@ describe('AutonomyService', () => {
       expect(await svc.getConfig()).toBeNull();
     });
 
-    it('returns null (not throw) when the DB call fails', async () => {
-      pool.query.mockRejectedValueOnce(new Error('relation does not exist'));
+    it('returns null (not throw) when the table is missing (pg code 42P01)', async () => {
+      // 42P01 is the expected pre-migration state — should degrade gracefully.
+      const missingTableErr = Object.assign(new Error('relation "autonomy_config" does not exist'), { code: '42P01' });
+      pool.query.mockRejectedValueOnce(missingTableErr);
       expect(await svc.getConfig()).toBeNull();
       expect(logger.warn).toHaveBeenCalled();
+      expect(logger.error).not.toHaveBeenCalled();
+    });
+
+    it('re-throws unexpected DB errors (not 42P01)', async () => {
+      // Connection failures, timeouts, etc. should surface to the caller.
+      const connectionErr = Object.assign(new Error('connection refused'), { code: '08006' });
+      pool.query.mockRejectedValueOnce(connectionErr);
+      await expect(svc.getConfig()).rejects.toThrow('connection refused');
+      expect(logger.error).toHaveBeenCalled();
     });
   });
 

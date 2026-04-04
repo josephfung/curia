@@ -123,9 +123,16 @@ export class AgentRuntime {
     // mid-session takes effect on Nathan's next action without a restart.
     let effectiveSystemPrompt = systemPrompt;
     if (autonomyService) {
-      const autonomyConfig = await autonomyService.getConfig();
-      if (autonomyConfig) {
-        effectiveSystemPrompt = systemPrompt + '\n\n' + AutonomyService.formatPromptBlock(autonomyConfig);
+      try {
+        const autonomyConfig = await autonomyService.getConfig();
+        if (autonomyConfig) {
+          effectiveSystemPrompt = systemPrompt + '\n\n' + AutonomyService.formatPromptBlock(autonomyConfig);
+        }
+      } catch (err) {
+        // An unexpected DB error loading the autonomy config should not abort the task entirely.
+        // Log at error level (operator signal) and proceed with the base system prompt.
+        logger.error({ err, agentId }, 'Failed to load autonomy config — proceeding with base system prompt');
+        // effectiveSystemPrompt remains as systemPrompt.
       }
     }
 

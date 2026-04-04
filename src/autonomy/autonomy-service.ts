@@ -123,10 +123,17 @@ export class AutonomyService {
         updatedBy: row.updated_by,
       };
     } catch (err) {
-      // Log but don't throw — a missing table (pre-migration) should degrade gracefully.
-      // The coordinator will just run without the autonomy block until the migration runs.
-      this.logger.warn({ err }, 'autonomy-service: failed to read autonomy_config — is migration 011 applied?');
-      return null;
+      // Only swallow missing-table errors (pg code 42P01) — the expected pre-migration state.
+      // All other errors (connection failure, query timeout, data corruption) are re-thrown
+      // so the caller can decide how to handle them. The coordinator's processTask() has its
+      // own catch that degrades gracefully rather than aborting the task.
+      const pgCode = (err as { code?: string }).code;
+      if (pgCode === '42P01') {
+        this.logger.warn({ err }, 'autonomy-service: autonomy_config table not found — is migration 011 applied?');
+        return null;
+      }
+      this.logger.error({ err }, 'autonomy-service: unexpected error reading autonomy_config');
+      throw err;
     }
   }
 
@@ -146,6 +153,8 @@ export class AutonomyService {
 
     // Atomic: read previous score, upsert config, and write history in a single query.
     // RETURNING previous_score gives us the atomically-captured old value for the response.
+    // @TODO Phase 2: If setScore is ever split into separate queries (e.g., for two-step
+    // update flows), wrap in explicit BEGIN/COMMIT to preserve atomicity guarantees.
     const result = await this.pool.query<{ previous_score: number | null }>(
       `WITH locked AS (
          SELECT score AS previous_score

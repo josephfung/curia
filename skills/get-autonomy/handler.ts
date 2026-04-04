@@ -12,13 +12,18 @@ export class GetAutonomyHandler implements SkillHandler {
     }
 
     try {
-      const [config, history] = await Promise.all([
-        ctx.autonomyService.getConfig(),
-        ctx.autonomyService.getHistory(3),
-      ]);
+      const config = await ctx.autonomyService.getConfig();
 
       if (!config) {
         return { success: false, error: 'Autonomy config not found — migration 011 may not have run.' };
+      }
+
+      // History is supplementary — a failure here should not block showing the current score.
+      let history: import('../../src/autonomy/autonomy-service.js').AutonomyHistoryEntry[] = [];
+      try {
+        history = await ctx.autonomyService.getHistory(3);
+      } catch (err) {
+        ctx.log.warn({ err }, 'get-autonomy: could not load history — showing current score only');
       }
 
       // Format the band label for human display
