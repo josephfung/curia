@@ -111,7 +111,11 @@ Elevated sensitivity ensures a human-approval gate the first time the coordinato
 
 **Scheduler job (Phase 1):**
 
-A daily one-shot job at 5pm (configurable) calls `email-list` with `account: "joseph"` and `folder: "DRAFTS"`. If any messages are returned, it sends a CLI notification listing subjects and recipients. Joseph can then open Gmail, review, and send or discard. The job is registered in `agents/coordinator.yaml` as a startup scheduled task, or seeded via the bootstrap.
+A recurring job at 5pm weekdays: Nathan calls `email-list(account: "joseph", folder: "DRAFTS")` and, if any drafts are present, sends a CLI notification summarising who they're addressed to and what they're about. Joseph can then open Gmail, review, and send or discard.
+
+No new infrastructure. The job is created by Nathan via `scheduler-create` with a natural-language `task` string — the same way any recurring task is set up via chat. The scheduler fires it daily, the coordinator receives it as a normal prompt, and handles it with the skills it already has. The job persists in the Postgres-backed scheduler table across restarts.
+
+This is set up during first-time onboarding via a CLI prompt like "keep an eye on my drafts and let me know at 5pm if there's anything waiting" — Nathan decides to create the job himself, exactly as if he'd been asked.
 
 **New skills (Phase 2, not shipped now):**
 
