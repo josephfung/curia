@@ -51,7 +51,7 @@ A `autonomy_phase` config field in `config/default.yaml` controls which behavior
 
 Skills are **account-aware** rather than account-specific — an optional `account: "nathan" | "joseph"` parameter determines which Nylas client is used. This mirrors the existing `email-send` pattern: `infrastructure: true`, credentials resolved by the handler via the injected Nylas client registry, never exposed to the LLM. One skill, two accounts, no parallel skill maintenance.
 
-`email-list` — lists messages from any folder, for either account. The `folder` param maps to the Nylas `in` query parameter, which filters by folder ID. Nylas uses `INBOX`, `DRAFTS`, `SENT`, and `TRASH` as standard folder IDs across providers (Gmail and others). This means `email-list(account: "joseph", folder: "DRAFTS")` replaces what would have been a separate `email-draft-list` skill — no additional skill needed for listing drafts.
+`email-list` — lists messages from any folder, for either account. The `folder` param maps to the Nylas `in` query parameter. Nylas uses `INBOX`, `DRAFTS`, `SENT`, and `TRASH` as standard folder IDs across providers. Additional filter params (`from`, `subject`, `searchQueryNative`) support triage queries like "find all emails from john@example.com about the Q1 report." This means `email-list(account: "joseph", folder: "DRAFTS")` also handles draft listing — no separate skill needed. Returns snippets (100 chars) per message, not full bodies — use `email-get` to read a specific message in full.
 ```json
 {
   "name": "email-list",
@@ -61,9 +61,28 @@ Skills are **account-aware** rather than account-specific — an optional `accou
     "account": "string? (nathan | joseph, default nathan)",
     "folder": "string? (INBOX | DRAFTS | SENT | TRASH | <provider folder id>, default INBOX)",
     "limit": "number? (default 20)",
-    "unreadOnly": "boolean? (default false)"
+    "unreadOnly": "boolean? (default false)",
+    "from": "string?",
+    "subject": "string?",
+    "searchQueryNative": "string? (Gmail/Outlook native query, e.g. 'from:john subject:Q1')"
   },
-  "outputs": { "threads": "array" },
+  "outputs": { "messages": "array of { id, threadId, subject, from, snippet, date, unread }" },
+  "permissions": [],
+  "secrets": []
+}
+```
+
+`email-get` — fetches the full body and metadata of a single message by ID. **Required prerequisite for drafting** — `email-list` returns only 100-character snippets, which is not enough context to write a meaningful reply. Nathan calls `email-list` to find the message, then `email-get` to read it before drafting.
+```json
+{
+  "name": "email-get",
+  "sensitivity": "normal",
+  "infrastructure": true,
+  "inputs": {
+    "account": "string? (nathan | joseph, default nathan)",
+    "messageId": "string"
+  },
+  "outputs": { "message": "object (id, threadId, subject, from, to, cc, body, date, unread, folders)" },
   "permissions": [],
   "secrets": []
 }
@@ -92,16 +111,17 @@ Elevated sensitivity ensures a human-approval gate the first time the coordinato
 
 **Scheduler job (Phase 1):**
 
-A daily one-shot job at 5pm (configurable) calls `email-list` with `account: "joseph"` and `folder: "DRAFTS"`. If any drafts are returned, it sends a CLI notification listing subjects and recipients. Joseph can then open Gmail, review, and send or discard. The job is registered in `agents/coordinator.yaml` as a startup scheduled task, or seeded via the bootstrap.
+A daily one-shot job at 5pm (configurable) calls `email-list` with `account: "joseph"` and `folder: "DRAFTS"`. If any messages are returned, it sends a CLI notification listing subjects and recipients. Joseph can then open Gmail, review, and send or discard. The job is registered in `agents/coordinator.yaml` as a startup scheduled task, or seeded via the bootstrap.
 
 **New skills (Phase 2, not shipped now):**
 
-- `email-archive` — archives a thread. Supports `account` param.
-- `email-label` — applies Gmail labels to a thread. Supports `account` param.
+- `email-archive` — removes a message from `INBOX` by updating its folders via `UpdateMessageRequest`. Supports `account` param.
+- `email-label` — applies Gmail labels to a thread via `UpdateMessageRequest`. Supports `account` param.
 
-**New skills (Phase 3, not shipped now):**
+**New skills / modifications (Phase 3, not shipped now):**
 
 - `email-send` gains an `account` parameter. When `account: "joseph"`, routes through a new `email-ceo` OutboundGateway path that enforces `autonomyPhase ≥ 3`. Elevated sensitivity.
+- `email-reply` gains an `account` parameter with the same gating.
 
 ### Outbound Gateway
 
@@ -144,6 +164,7 @@ scheduler:
 | Create | `src/channels/email-ceo/email-ceo-adapter.ts` |
 | Create | `src/channels/email-ceo/nylas-ceo-client.ts` |
 | Create | `skills/email-list/skill.json` + `handler.ts` + `handler.test.ts` |
+| Create | `skills/email-get/skill.json` + `handler.ts` + `handler.test.ts` |
 | Create | `skills/email-draft-save/skill.json` + `handler.ts` + `handler.test.ts` |
 | Modify | `config/default.yaml` — add `email-ceo` channel config and scheduler job |
 | Modify | `agents/coordinator.yaml` — pin new skills, add persona guidance |
@@ -224,7 +245,7 @@ System prompt addition (paraphrased — written in Nathan's voice per persona ru
 **Ship web search first.** It is a smaller lift (one skill, no channel setup), and it immediately makes Nathan smarter for inbox triage — he can research context before drafting a reply. Inbox work starts in a better position with web search already available.
 
 1. `feat/web-search` — `web-search` skill + coordinator pin
-2. `feat/ceo-inbox` — `email-ceo` adapter + `email-list` / `email-draft-save` skills + scheduler job
+2. `feat/ceo-inbox` — `email-ceo` adapter + `email-list` / `email-get` / `email-draft-save` skills + scheduler job
 
 ---
 
@@ -237,7 +258,7 @@ System prompt addition (paraphrased — written in Nathan's voice per persona ru
 
 ### CEO Inbox (Phase 1)
 - Sending a test email to joseph@josephfung.ca causes it to appear in Nathan's context within one polling interval
-- Nathan drafts a reply → it appears in Joseph's Gmail Drafts folder, not in Sent
+- Nathan calls `email-get` on a thread message then drafts a reply → it appears in Joseph's Gmail Drafts folder, not in Sent
 - No email is dispatched from Joseph's address in Phase 1 — OutboundGateway blocks it
 - Scheduler job fires at 5pm and sends a CLI notification listing pending draft subjects
 - Contact extracted from the test email thread appears as a provisional contact in the contact system
