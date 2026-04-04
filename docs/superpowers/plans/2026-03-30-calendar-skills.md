@@ -781,7 +781,7 @@ describe('NylasCalendarClient', () => {
       (sdk.calendars.list as ReturnType<typeof vi.fn>).mockResolvedValue({
         data: [{
           id: 'cal-1',
-          name: 'the CEO Work',
+          name: 'Jane Work',
           description: 'Main calendar',
           timezone: 'America/Toronto',
           is_primary: true,
