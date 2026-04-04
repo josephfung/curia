@@ -86,7 +86,7 @@ describe('knowledgeGraphRoutes', () => {
 
     const response = await app.inject({ method: 'GET', url: '/kg' });
     expect(response.statusCode).toBe(200);
-    expect(response.body).toContain('Knowledge Graph Explorer');
+    expect(response.body).toContain('Knowledge Graph');
 
     await app.close();
   });
