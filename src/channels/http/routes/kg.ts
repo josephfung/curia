@@ -374,7 +374,7 @@ function createUiHtml(): string {
     </main>
   </div>
 
-  <script src="/kg/assets/cytoscape.min.js"></script>
+  <script src="/assets/cytoscape.min.js"></script>
   <script>
     // ── State ──────────────────────────────────────────────────────────
     var cy = null;           // Cytoscape instance (lazy-initialised on first login)
@@ -609,11 +609,11 @@ export async function knowledgeGraphRoutes(
 ): Promise<void> {
   const { pool, logger, webAppBootstrapSecret } = options;
 
-  app.get('/kg', async (_request, reply) => {
+  app.get('/', async (_request, reply) => {
     reply.type('text/html; charset=utf-8').send(createUiHtml());
   });
 
-  app.get('/kg/assets/cytoscape.min.js', async (_request, reply) => {
+  app.get('/assets/cytoscape.min.js', async (_request, reply) => {
     const cytoscapePath = fileURLToPath(
       new URL('../../../../node_modules/cytoscape/dist/cytoscape.min.js', import.meta.url),
     );

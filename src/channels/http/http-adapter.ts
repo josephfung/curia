@@ -83,7 +83,9 @@ export class HttpAdapter {
       // Use routeOptions.url (the registered pattern) so query strings don't break the match.
       const routeUrl = request.routeOptions.url ?? '';
       if (routeUrl === '/api/health') return;
-      if (routeUrl.startsWith('/kg') || routeUrl.startsWith('/api/kg')) return;
+      // KG web app and its API — the app shell and assets need no bearer token,
+      // and the /api/kg/* routes enforce their own secret via assertSecret().
+      if (routeUrl === '/' || routeUrl.startsWith('/assets') || routeUrl.startsWith('/api/kg')) return;
 
       if (!validateBearerToken(request.headers.authorization, apiToken)) {
         return reply.status(401).send({ error: 'Unauthorized — provide a valid Bearer token' });
