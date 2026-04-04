@@ -94,7 +94,17 @@ export class AgentRuntime {
         const { agentId } = this.config;
         const { channelId } = taskEvent.payload;
         const sourceKey = `agent:${agentId}/task:${taskEvent.id}/channel:${channelId}`;
-        this.config.entityMemory.resetRateLimit(sourceKey);
+        // Guard against cleanup errors suppressing original exceptions.
+        // resetRateLimit() is synchronous and currently cannot throw, but wrapping
+        // defensively ensures future changes don't cause silent error replacement.
+        try {
+          this.config.entityMemory.resetRateLimit(sourceKey);
+        } catch (cleanupErr) {
+          this.config.logger.warn(
+            { err: cleanupErr, agentId, taskId: taskEvent.id },
+            'Failed to reset rate limit after task — writeCounts may grow until process restart',
+          );
+        }
       }
     }
   }
