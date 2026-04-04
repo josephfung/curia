@@ -29,10 +29,10 @@ export class SetAutonomyHandler implements SkillHandler {
     const reasonStr = typeof reason === 'string' && reason.trim() ? reason.trim() : undefined;
 
     try {
-      const previous = await ctx.autonomyService.getConfig();
-      const previousScore = previous?.score ?? null;
-
+      // setScore returns previousScore atomically (captured inside the CTE), so we don't
+      // need a separate getConfig() call that could race with a concurrent write.
       const updated = await ctx.autonomyService.setScore(intScore, changedBy, reasonStr);
+      const { previousScore } = updated;
 
       const bandLabels: Record<string, string> = {
         'full': 'Full',

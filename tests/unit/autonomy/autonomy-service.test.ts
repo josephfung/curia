@@ -120,13 +120,14 @@ describe('AutonomyService', () => {
     });
 
     it('upserts config and inserts history atomically, then returns new config', async () => {
-      // Single atomic CTE query
-      pool.query.mockResolvedValueOnce({ rows: [] });
+      // Single atomic CTE query — RETURNING previous_score gives us the old value
+      pool.query.mockResolvedValueOnce({ rows: [{ previous_score: 70 }] });
 
       const result = await svc.setScore(80, 'ceo', 'good week');
       expect(result.score).toBe(80);
       expect(result.band).toBe('spot-check');
       expect(result.updatedBy).toBe('ceo');
+      expect(result.previousScore).toBe(70);
 
       expect(pool.query).toHaveBeenCalledTimes(1);
       expect(pool.query).toHaveBeenCalledWith(
@@ -140,8 +141,9 @@ describe('AutonomyService', () => {
     });
 
     it('passes null reason when not provided', async () => {
-      pool.query.mockResolvedValueOnce({ rows: [] });
-      await svc.setScore(75, 'system');
+      pool.query.mockResolvedValueOnce({ rows: [{ previous_score: null }] });
+      const result = await svc.setScore(75, 'system');
+      expect(result.previousScore).toBeNull();
       expect(pool.query).toHaveBeenCalledWith(
         expect.any(String),
         [75, 'approval-required', 'system', null],

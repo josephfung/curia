@@ -133,8 +133,11 @@ export class AutonomyService {
   /**
    * Update the autonomy score. Upserts autonomy_config and appends to autonomy_history.
    * Throws if score is out of range [0, 100].
+   *
+   * Returns the new config plus the atomically-captured previousScore — the value
+   * actually written to autonomy_history, not a separate pre-read that could diverge.
    */
-  async setScore(score: number, changedBy: string, reason?: string): Promise<AutonomyConfig> {
+  async setScore(score: number, changedBy: string, reason?: string): Promise<AutonomyConfig & { previousScore: number | null }> {
     if (!Number.isInteger(score) || score < 0 || score > 100) {
       throw new Error(`Invalid autonomy score: ${score}. Must be an integer between 0 and 100.`);
     }
@@ -142,8 +145,8 @@ export class AutonomyService {
     const band = AutonomyService.bandForScore(score);
 
     // Atomic: read previous score, upsert config, and write history in a single query.
-    // Uses a CTE with FOR UPDATE to prevent concurrent writes from recording a stale previous_score.
-    await this.pool.query(
+    // RETURNING previous_score gives us the atomically-captured old value for the response.
+    const result = await this.pool.query<{ previous_score: number | null }>(
       `WITH locked AS (
          SELECT score AS previous_score
          FROM autonomy_config
@@ -164,13 +167,16 @@ export class AutonomyService {
        FROM locked
        UNION ALL
        SELECT $1, NULL, $2, $3, $4
-       WHERE NOT EXISTS (SELECT 1 FROM locked)`,
+       WHERE NOT EXISTS (SELECT 1 FROM locked)
+       RETURNING previous_score`,
       [score, band, changedBy, reason ?? null],
     );
 
-    this.logger.info({ score, band, changedBy }, 'Autonomy score updated');
+    const previousScore = result.rows[0]?.previous_score ?? null;
 
-    return { score, band, updatedAt: new Date(), updatedBy: changedBy };
+    this.logger.info({ score, band, changedBy, previousScore }, 'Autonomy score updated');
+
+    return { score, band, updatedAt: new Date(), updatedBy: changedBy, previousScore };
   }
 
   /** Return the most recent history entries, newest first. */
