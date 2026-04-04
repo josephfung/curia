@@ -1,0 +1,16 @@
+{
+  "name": "set-autonomy",
+  "description": "Update Nathan's global autonomy score (0–100). Requires CEO authorization. Lower scores require more approvals before Nathan acts; higher scores allow more independent action. Optionally provide a reason for the change.",
+  "version": "1.0.0",
+  "sensitivity": "elevated",
+  "infrastructure": true,
+  "inputs": {
+    "score": "number",
+    "reason": "string?"
+  },
+  "outputs": { "score": "number", "band": "string", "previous_score": "number" },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 10000,
+  "autonomy_floor": "full"
+}
