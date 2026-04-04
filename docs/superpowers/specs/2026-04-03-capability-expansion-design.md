@@ -153,12 +153,6 @@ channels:
     enabled: true
     pollingIntervalMs: 30000
     autonomyPhase: 1       # 1 = monitor+draft, 2 = +archive, 3 = +send
-
-scheduler:
-  jobs:
-    - name: ceo-draft-digest
-      schedule: "0 17 * * 1-5"   # 5pm weekdays
-      task: check-ceo-drafts-and-notify
 ```
 
 ### Files to Create/Modify
