@@ -17,6 +17,10 @@ export interface SkillManifest {
   version: string;
   /** "normal" = auto-approvable; "elevated" = requires human approval on first use */
   sensitivity: 'normal' | 'elevated';
+  /** Autonomy floor: the minimum autonomy band required to invoke this skill.
+   *  Used by Phase 2 gate wiring to enforce autonomy-aware skill access.
+   *  Optional — existing manifests that predate spec 12 don't have this field. */
+  autonomy_floor?: 'full' | 'spot-check' | 'approval-required' | 'draft-only' | 'restricted';
   /** JSON Schema-ish description of expected inputs */
   inputs: Record<string, string>;
   /** JSON Schema-ish description of outputs */

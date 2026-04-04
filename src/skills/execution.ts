@@ -148,7 +148,9 @@ export class ExecutionLayer {
         if (!declaredSecrets.has(name)) {
           throw new Error(`Secret '${name}' is not declared in the manifest for skill '${skillName}'`);
         }
-        const value = process.env[name];
+        // Env vars are uppercase by convention; manifest keys are lowercase.
+        // e.g. manifest "tavily_api_key" → reads process.env.TAVILY_API_KEY
+        const value = process.env[name.toUpperCase()];
         if (!value) {
           throw new Error(`Secret '${name}' is declared but not set in the environment`);
         }
