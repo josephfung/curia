@@ -141,6 +141,10 @@ async function enrichContact(
         })),
       };
     }
+    // getContactWithIdentities returned null — could be a stale ID, a referential
+    // integrity gap, or a contact that genuinely has no identities. Log so it's
+    // distinguishable from the error case or a normal empty-identities result.
+    ctx.log.debug({ contactId: contact.id }, 'getContactWithIdentities returned null — contact may have no identities registered');
   } catch (err) {
     // Best effort — return without identities if lookup fails, but log so it's detectable
     ctx.log.warn({ err, contactId: contact.id }, 'Failed to enrich contact with identities');
