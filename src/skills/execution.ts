@@ -30,6 +30,7 @@ import type { SchedulerService } from '../scheduler/scheduler-service.js';
 import type { EntityMemory } from '../memory/entity-memory.js';
 import type { NylasCalendarClient } from '../channels/calendar/nylas-calendar-client.js';
 import type { EntityContextAssembler } from '../entity-context/assembler.js';
+import type { AutonomyService } from '../autonomy/autonomy-service.js';
 
 // Warn (but don't truncate) when a skill returns more than this many chars.
 // Helps operators spot skills that might blow out the LLM context window.
@@ -48,6 +49,7 @@ export class ExecutionLayer {
   private agentPersona?: AgentPersona;
   private nylasCalendarClient?: NylasCalendarClient;
   private entityContextAssembler?: EntityContextAssembler;
+  private autonomyService?: AutonomyService;
   /** The agent's own contactId — injected into ctx.agentContactId for entity_enrichment default='agent' */
   private agentContactId?: string;
 
@@ -62,6 +64,7 @@ export class ExecutionLayer {
     agentPersona?: AgentPersona;
     nylasCalendarClient?: NylasCalendarClient;
     entityContextAssembler?: EntityContextAssembler;
+    autonomyService?: AutonomyService;
     agentContactId?: string;
   }) {
     this.registry = registry;
@@ -76,6 +79,7 @@ export class ExecutionLayer {
     this.agentPersona = options?.agentPersona;
     this.nylasCalendarClient = options?.nylasCalendarClient;
     this.entityContextAssembler = options?.entityContextAssembler;
+    this.autonomyService = options?.autonomyService;
     this.agentContactId = options?.agentContactId;
   }
 
@@ -198,6 +202,10 @@ export class ExecutionLayer {
       // nylasCalendarClient is optional — only calendar skills need it
       if (this.nylasCalendarClient) {
         ctx.nylasCalendarClient = this.nylasCalendarClient;
+      }
+      // autonomyService is optional — only infrastructure skills that manage the global autonomy score need it
+      if (this.autonomyService) {
+        ctx.autonomyService = this.autonomyService;
       }
     }
 
