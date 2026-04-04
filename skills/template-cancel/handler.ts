@@ -30,14 +30,14 @@ const DEFAULT_POLICY = {
 
 Hi Alice,
 
-I'm writing on behalf of Joseph regarding your meeting scheduled for Monday, April 7 at 10:00 AM (Q3 Planning).
+I'm writing on behalf of the CEO regarding your meeting scheduled for Monday, April 7 at 10:00 AM (Q3 Planning).
 
 Unfortunately, we need to cancel this meeting. If you'd like to reschedule, please let me know your availability and I'll find a time that works.
 
 Thank you for your understanding.
 
 Best regards,
-Nathan Curia, Agent Chief of Staff`,
+Curia, Agent Chief of Staff`,
 };
 
 export class TemplateCancelHandler implements SkillHandler {

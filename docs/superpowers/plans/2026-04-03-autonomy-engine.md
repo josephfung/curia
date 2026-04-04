@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Implement a global autonomy score (0–100) for the Nathan Curia instance — stored in Postgres, adjustable by the CEO via two CLI skills, and injected into the coordinator's system prompt on every task so Nathan self-governs accordingly.
+**Goal:** Implement a global autonomy score (0–100) for the Curia instance — stored in Postgres, adjustable by the CEO via two CLI skills, and injected into the coordinator's system prompt on every task so Curia self-governs accordingly.
 
 **Architecture:** New `AutonomyService` in `src/autonomy/` owns all DB access and the band→description map. `AgentRuntime` reads it per-task and appends the autonomy block to the effective system prompt. `ExecutionLayer` passes it through `SkillContext` so the two new skills (`get-autonomy`, `set-autonomy`) can read and write the score. `set-autonomy` is elevated (CEO-only via the existing CallerContext gate).
 
@@ -104,7 +104,7 @@ git commit -m "feat: add autonomy_config and autonomy_history tables (migration 
 ```typescript
 // autonomy-service.ts — manages the global autonomy score for the Curia instance.
 //
-// The autonomy score (0–100) determines how independently Nathan operates.
+// The autonomy score (0–100) determines how independently Curia operates.
 // It maps to one of five bands, each with a behavioral description that is
 // injected into the coordinator's system prompt on every task.
 //
@@ -633,7 +633,7 @@ Then, immediately after that destructure line and before `const budget = ...`, a
 ```typescript
     // Load the current autonomy config and append its behavioral block to the
     // system prompt. This runs per-task (not at startup) so a CEO score change
-    // mid-session takes effect on Nathan's next action without a restart.
+    // mid-session takes effect on Curia's next action without a restart.
     let effectiveSystemPrompt = systemPrompt;
     if (autonomyService) {
       const autonomyConfig = await autonomyService.getConfig();
@@ -859,7 +859,7 @@ pnpm local
 
 Type: `what is your current autonomy level?`
 
-Expected: Nathan describes his score and band (he'll have the autonomy block in context even without the skill, since the prompt injection is now active). Then Ctrl+C.
+Expected: Curia describes its score and band (it'll have the autonomy block in context even without the skill, since the prompt injection is now active). Then Ctrl+C.
 
 - [ ] **Step 7.7: Commit**
 
@@ -881,7 +881,7 @@ git commit -m "feat: wire AutonomyService into ExecutionLayer and coordinator Ag
 ```json
 {
   "name": "get-autonomy",
-  "description": "Report Nathan's current global autonomy score, band, and recent change history. Use this when the CEO asks about autonomy level, trust level, or how independently Nathan is operating.",
+  "description": "Report Curia's current global autonomy score, band, and recent change history. Use this when the CEO asks about autonomy level, trust level, or how independently Curia is operating.",
   "version": "1.0.0",
   "sensitivity": "normal",
   "infrastructure": true,
@@ -991,7 +991,7 @@ git commit -m "feat: get-autonomy skill — report current score, band, and hist
 ```json
 {
   "name": "set-autonomy",
-  "description": "Update Nathan's global autonomy score (0–100). Requires CEO authorization. Lower scores require more approvals before Nathan acts; higher scores allow more independent action. Optionally provide a reason for the change.",
+  "description": "Update Curia's global autonomy score (0–100). Requires CEO authorization. Lower scores require more approvals before Curia acts; higher scores allow more independent action. Optionally provide a reason for the change.",
   "version": "1.0.0",
   "sensitivity": "elevated",
   "infrastructure": true,
@@ -1114,11 +1114,11 @@ pnpm local
 
 Type: `what is your current autonomy score?`
 
-Expected: Nathan calls `get-autonomy` and reports the score (75, Approval Required) with history. Then Ctrl+C.
+Expected: Curia calls `get-autonomy` and reports the score (75, Approval Required) with history. Then Ctrl+C.
 
 Type: `set my autonomy score to 80` (in a new session or continuation)
 
-Expected: Nathan calls `set-autonomy` and confirms the update.
+Expected: Curia calls `set-autonomy` and confirms the update.
 
 - [ ] **Step 10.3: Commit**
 
@@ -1141,7 +1141,7 @@ Find the line `---` immediately after the Scheduling section ends (before `## Mu
 ```markdown
 ## Autonomy Engine
 
-Nathan operates at a configurable autonomy level — a single score from 0 to 100 that determines how independently he acts across all channels and skills.
+Curia operates at a configurable autonomy level — a single score from 0 to 100 that determines how independently it acts across all channels and skills.
 
 The score maps to one of five **autonomy bands**:
 
@@ -1153,11 +1153,11 @@ The score maps to one of five **autonomy bands**:
 | **Draft Only** | 60–69 | Prepares drafts and plans but does not send or act without explicit instruction. |
 | **Restricted** | < 60 | Advisory only. Takes no independent action whatsoever. |
 
-The current band is injected into Nathan's system prompt on every task, so his self-governance adjusts immediately when the score changes — no restart required.
+The current band is injected into Curia's system prompt on every task, so its self-governance adjusts immediately when the score changes — no restart required.
 
 **CEO controls (via CLI or email):**
-- *"What is your current autonomy score?"* — Nathan reports his score, band, and recent change history
-- *"Set your autonomy score to 85"* — Nathan updates the score and confirms the change
+- *"What is your current autonomy score?"* — Curia reports its score, band, and recent change history
+- *"Set your autonomy score to 85"* — Curia updates the score and confirms the change
 
 The score defaults to **75 (Approval Required)** on first deployment. Scores are stored in Postgres with a full change history. Future versions will adjust the score automatically based on performance metrics (task success rate, factual correction rate, follow-through).
 
@@ -1243,8 +1243,8 @@ pnpm local
 ```
 
 Run through the following sequence:
-1. *"What is your current autonomy level?"* → Nathan calls `get-autonomy` and reports 75 / Approval Required
-2. *"Set your autonomy score to 85 — you've been doing well."* → Nathan calls `set-autonomy`, confirms 75 → 85 / Spot-check
-3. *"What is your autonomy score now?"* → Nathan reports 85 / Spot-check with history showing the change
+1. *"What is your current autonomy level?"* → Curia calls `get-autonomy` and reports 75 / Approval Required
+2. *"Set your autonomy score to 85 — you've been doing well."* → Curia calls `set-autonomy`, confirms 75 → 85 / Spot-check
+3. *"What is your autonomy score now?"* → Curia reports 85 / Spot-check with history showing the change
 
 Then Ctrl+C.

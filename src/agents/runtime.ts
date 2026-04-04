@@ -120,7 +120,7 @@ export class AgentRuntime {
 
     // Load the current autonomy config and append its behavioral block to the
     // system prompt. This runs per-task (not at startup) so a CEO score change
-    // mid-session takes effect on Nathan's next action without a restart.
+    // mid-session takes effect on Curia's next action without a restart.
     let effectiveSystemPrompt = systemPrompt;
     if (autonomyService) {
       try {

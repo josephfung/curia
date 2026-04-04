@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add a `web-search` skill backed by Tavily that lets Nathan run multi-turn searches and synthesise results himself.
+**Goal:** Add a `web-search` skill backed by Tavily that lets Curia run multi-turn searches and synthesise results itself.
 
-**Architecture:** A single `SkillHandler` calls the Tavily HTTP API, normalises and truncates the results, and returns structured data. The existing `web-fetch` skill handles full-page reads; this skill handles search. Both compose naturally in the tool-use loop — Nathan searches to find URLs, then fetches to read them. No pre-synthesis layer: the LLM does all reasoning.
+**Architecture:** A single `SkillHandler` calls the Tavily HTTP API, normalises and truncates the results, and returns structured data. The existing `web-fetch` skill handles full-page reads; this skill handles search. Both compose naturally in the tool-use loop — Curia searches to find URLs, then fetches to read them. No pre-synthesis layer: the LLM does all reasoning.
 
 **Tech Stack:** Tavily REST API (`https://api.tavily.com/search`), Node `fetch`, Vitest.
 
@@ -237,7 +237,7 @@ Expected: all tests fail with "Cannot find module" or similar — the handler do
 // handler.ts — web-search skill implementation.
 //
 // Calls the Tavily search API and returns structured results for the LLM
-// to synthesise. All synthesis happens in Nathan's LLM — this skill is a
+// to synthesise. All synthesis happens in Curia's LLM — this skill is a
 // data bridge, not an answer generator.
 //
 // Two search depths:
@@ -448,7 +448,7 @@ Start the server and send this message from the CLI:
 Find me a ramen restaurant near King St and Spadina Ave in Toronto.
 ```
 
-Expected: Nathan responds with specific restaurant names, addresses, and hours. If he says he can't search, the skill isn't pinned correctly. If he gives results but no specific details, try `searchDepth: advanced`.
+Expected: Curia responds with specific restaurant names, addresses, and hours. If it says it can't search, the skill isn't pinned correctly. If it gives results but no specific details, try `searchDepth: advanced`.
 
 - [ ] **Step 3: Run a research test**
 
@@ -456,7 +456,7 @@ Expected: Nathan responds with specific restaurant names, addresses, and hours. 
 Help me understand the key differences between the geopolitical context surrounding the Apollo moon landings in 1969-1972 versus the Artemis program today. Focus on US-Russia/Soviet dynamics and the role of national prestige.
 ```
 
-Expected: Nathan runs 3-5 searches across different angles and synthesises a structured comparison with citations. If he runs only one search, the research guidance in the prompt needs tuning.
+Expected: Curia runs 3-5 searches across different angles and synthesises a structured comparison with citations. If it runs only one search, the research guidance in the prompt needs tuning.
 
 ---
 
@@ -466,4 +466,4 @@ Expected: Nathan runs 3-5 searches across different angles and synthesises a str
 - [ ] `npx vitest run` — full suite passes
 - [ ] Simple lookup works end-to-end (restaurant query)
 - [ ] Deep research query produces multi-search synthesis with citations
-- [ ] `web-search` appears in Nathan's tool use in logs during the smoke tests
+- [ ] `web-search` appears in Curia's tool use in logs during the smoke tests

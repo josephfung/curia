@@ -8,10 +8,10 @@
 
 ## Overview
 
-A single global autonomy score (0–100) for the Nathan Curia instance that governs how
-independently Nathan operates across all agents and skills. The score is CEO-controlled,
+A single global autonomy score (0–100) for the Curia instance that governs how
+independently Curia operates across all agents and skills. The score is CEO-controlled,
 Postgres-persisted, and injected into the coordinator's system prompt on every task so
-Nathan self-governs accordingly.
+Curia self-governs accordingly.
 
 Phase 1 establishes the score, CEO read/write access, and behavioral prompt injection.
 Phase 2 (future) will add automatic score adjustment driven by an action log.
@@ -27,8 +27,8 @@ auto-adjustment rules, relationship signals, and gating engine are documented in
 source spec (to be filed at `docs/specs/designs/office-ceo-agent-scoring-spec.md`) and deferred to Phase 2.
 
 **Why a single global score rather than per-agent or per-capability scoring?**
-Nathan is a single deployed instance — there is no meaningful distinction between "Nathan's
-email autonomy" and "Nathan's calendar autonomy" at this stage. A global score is
+Curia is a single deployed instance — there is no meaningful distinction between "Curia's
+email autonomy" and "Curia's calendar autonomy" at this stage. A global score is
 interpretable, adjustable, and directly tied to the CEO's lived trust in the system. Per-
 capability scoring can be layered on top in Phase 2 once the global baseline is established.
 
@@ -47,7 +47,7 @@ capability scoring can be layered on top in Phase 2 once the global baseline is 
 ### Band Behavioral Descriptions
 
 These descriptions are injected verbatim into the coordinator system prompt. They define
-Nathan's self-governance posture at each band.
+Curia's self-governance posture at each band.
 
 **Full (90–100)**
 > Act independently. No confirmation needed for standard operations. Flag only genuinely
@@ -97,7 +97,7 @@ The `band` label is derived from `score` at write time and stored for readabilit
 to recompute on every read.
 
 **Default starting value:** 75 (`approval-required`). This is a conservative starting point
-that requires Nathan to confirm consequential actions. The CEO adjusts from here as trust
+that requires Curia to confirm consequential actions. The CEO adjusts from here as trust
 is established.
 
 ### `autonomy_history` — append-only audit trail
@@ -129,7 +129,7 @@ Both skills are pinned to the coordinator agent only. They are not available to 
 - **Sensitivity:** normal
 - **Inputs:** none
 - **Behavior:** Queries `autonomy_config` for the current score and band, plus the last
-  3 rows from `autonomy_history`. Returns a human-readable summary Nathan relays to
+  3 rows from `autonomy_history`. Returns a human-readable summary Curia relays to
   the CEO.
 - **Example output:**
   ```
@@ -184,7 +184,7 @@ Your current autonomy score is {score} ({band-label}).
 ### Why per-task (not once at startup)
 
 The CEO may change the score mid-session. Loading per-task ensures a `set-autonomy` call
-takes effect on Nathan's next action without requiring a process restart. The cost is one
+takes effect on Curia's next action without requiring a process restart. The cost is one
 single-row Postgres read per task — negligible.
 
 ---

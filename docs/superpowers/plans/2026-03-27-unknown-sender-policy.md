@@ -1180,7 +1180,7 @@ Also add a note about the open question on held message expiration:
 > **Open question:** Held message expiration is deferred. Messages are currently held
 > indefinitely until the CEO acts. A future discard/expiration process will need
 > judgment and oversight — not a simple TTL timer. The CEO may want to batch-review
-> old held messages, or have Nathan summarize and triage them.
+> old held messages, or have Curia summarize and triage them.
 ```
 
 - [ ] **Step 2: Commit**

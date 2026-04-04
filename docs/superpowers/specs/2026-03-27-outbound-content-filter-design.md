@@ -149,7 +149,7 @@ CEO, not external parties.
 
 When `outbound.blocked` fires, the CEO receives a **short, opaque notification email**:
 
-- **Subject:** "Nathan Curia: Action needed — blocked outbound reply"
+- **Subject:** "Curia: Action needed — blocked outbound reply"
 - **Body:** A templated message containing:
   - The intended recipient's name
   - The unique block event ID (`blockId`)

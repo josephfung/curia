@@ -42,9 +42,9 @@ const DEFAULT_POLICY = {
 
 Hi Alice,
 
-I'm reaching out on behalf of Joseph to schedule a meeting to discuss Q3 Planning.
+I'm reaching out on behalf of the CEO to schedule a meeting to discuss Q3 Planning.
 
-Joseph is available at the following times:
+The CEO is available at the following times:
 
   • Monday, April 7 at 10:00 AM ET
   • Tuesday, April 8 at 2:00 PM ET
@@ -55,7 +55,7 @@ The meeting would be approximately 45 minutes via Zoom.
 Please let me know which time works best for you, or suggest an alternative if none of these are convenient.
 
 Best regards,
-Nathan Curia, Agent Chief of Staff`,
+Curia, Agent Chief of Staff`,
 };
 
 export class TemplateMeetingRequestHandler implements SkillHandler {

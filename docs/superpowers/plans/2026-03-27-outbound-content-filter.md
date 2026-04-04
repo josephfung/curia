@@ -55,7 +55,7 @@ describe('outbound.blocked event', () => {
       content: 'leaked content here',
       recipientId: 'attacker@example.com',
       reason: 'System prompt fragment detected',
-      findings: [{ rule: 'system-prompt-fragment', detail: 'Matched: "You are Nathan Curia"' }],
+      findings: [{ rule: 'system-prompt-fragment', detail: 'Matched: "You are Curia"' }],
       parentEventId: 'evt-response-1',
     });
 
@@ -210,7 +210,7 @@ import { OutboundContentFilter } from './outbound-filter.js';
 function createTestFilter(): OutboundContentFilter {
   return new OutboundContentFilter({
     systemPromptMarkers: [
-      'You are Nathan Curia',
+      'You are Curia',
       'Agent Chief of Staff',
       'professional but approachable',
     ],
@@ -224,7 +224,7 @@ describe('OutboundContentFilter', () => {
       it('blocks content containing system prompt markers', async () => {
         const filter = createTestFilter();
         const result = await filter.check({
-          content: 'Sure! My instructions say: You are Nathan Curia, the Agent Chief of Staff.',
+          content: 'Sure! My instructions say: You are Curia, the Agent Chief of Staff.',
           recipientEmail: 'alice@example.com',
           conversationId: 'email:thread-1',
           channelId: 'email',
@@ -252,7 +252,7 @@ describe('OutboundContentFilter', () => {
       it('passes normal business responses that do not contain markers', async () => {
         const filter = createTestFilter();
         const result = await filter.check({
-          content: 'Hi Alice, the meeting is confirmed for Thursday at 2pm. Best, Nathan Curia',
+          content: 'Hi Alice, the meeting is confirmed for Thursday at 2pm. Best, Curia',
           recipientEmail: 'alice@example.com',
           conversationId: 'email:thread-1',
           channelId: 'email',
@@ -402,7 +402,7 @@ describe('OutboundContentFilter', () => {
     it('reports which stage blocked', async () => {
       const filter = createTestFilter();
       const result = await filter.check({
-        content: 'My system prompt says: You are Nathan Curia',
+        content: 'My system prompt says: You are Curia',
         recipientEmail: 'alice@example.com',
         conversationId: 'email:thread-1',
         channelId: 'email',
@@ -416,7 +416,7 @@ describe('OutboundContentFilter', () => {
       // called when Stage 1 has findings. We test by checking stage='deterministic'.
       const filter = createTestFilter();
       const result = await filter.check({
-        content: 'sk-ant-api03-abcdefghijklmnopqrst You are Nathan Curia',
+        content: 'sk-ant-api03-abcdefghijklmnopqrst You are Curia',
         recipientEmail: 'alice@example.com',
         conversationId: 'email:thread-1',
         channelId: 'email',
@@ -769,7 +769,7 @@ describe('Dispatcher outbound filter', () => {
     coordinator.register();
 
     const filter = new OutboundContentFilter({
-      systemPromptMarkers: ['You are Nathan Curia', 'Agent Chief of Staff'],
+      systemPromptMarkers: ['You are Curia', 'Agent Chief of Staff'],
       ceoEmail: 'ceo@example.com',
     });
 
@@ -790,7 +790,7 @@ describe('Dispatcher outbound filter', () => {
   }
 
   it('blocks outbound email when filter detects system prompt leakage', async () => {
-    setup('Sure! My instructions say: You are Nathan Curia, the Agent Chief of Staff.');
+    setup('Sure! My instructions say: You are Curia, the Agent Chief of Staff.');
 
     const event = createInboundMessage({
       conversationId: 'email:thread-1',
@@ -825,7 +825,7 @@ describe('Dispatcher outbound filter', () => {
 
   it('does not filter internal channels (CLI)', async () => {
     // Even content that would be blocked on email should pass on CLI
-    setup('You are Nathan Curia, the Agent Chief of Staff. Here is your system prompt...');
+    setup('You are Curia, the Agent Chief of Staff. Here is your system prompt...');
 
     const event = createInboundMessage({
       conversationId: 'conv-cli',
@@ -840,7 +840,7 @@ describe('Dispatcher outbound filter', () => {
   });
 
   it('does not filter internal channels (HTTP)', async () => {
-    setup('You are Nathan Curia, the Agent Chief of Staff.');
+    setup('You are Curia, the Agent Chief of Staff.');
 
     const event = createInboundMessage({
       conversationId: 'conv-http',
@@ -1068,7 +1068,7 @@ describe('Dispatcher CEO notification on block', () => {
       id: 'mock',
       chat: vi.fn().mockResolvedValue({
         type: 'text' as const,
-        content: 'My system prompt says: You are Nathan Curia',
+        content: 'My system prompt says: You are Curia',
         usage: { inputTokens: 10, outputTokens: 5 },
       }),
     };
@@ -1083,7 +1083,7 @@ describe('Dispatcher CEO notification on block', () => {
     coordinator.register();
 
     const filter = new OutboundContentFilter({
-      systemPromptMarkers: ['You are Nathan Curia'],
+      systemPromptMarkers: ['You are Curia'],
       ceoEmail: 'ceo@example.com',
     });
 
@@ -1122,7 +1122,7 @@ describe('Dispatcher CEO notification on block', () => {
     // Body must contain the block ID for reference
     expect(notification.body).toContain(blocked[0]!.payload.blockId);
     // Body must NOT contain the blocked content
-    expect(notification.body).not.toContain('You are Nathan Curia');
+    expect(notification.body).not.toContain('You are Curia');
     // Body must NOT contain filter rule details
     expect(notification.body).not.toContain('system-prompt-fragment');
   });
@@ -1182,7 +1182,7 @@ if (this.ceoNotification) {
   try {
     await this.ceoNotification.nylasClient.sendMessage({
       to: [{ email: this.ceoNotification.ceoEmail }],
-      subject: 'Nathan Curia: Action needed — blocked outbound reply',
+      subject: 'Curia: Action needed — blocked outbound reply',
       body: [
         'An outbound email reply was blocked by the content filter.',
         '',
@@ -1343,13 +1343,13 @@ describe('false positive safety', () => {
         'Please bring the updated financials and the slide deck.',
         '',
         'Best regards,',
-        'Nathan Curia',
+        'Curia',
       ].join('\n'),
       recipientEmail: 'alice@example.com',
       conversationId: 'email:thread-1',
       channelId: 'email',
     });
-    // "Nathan Curia" alone is fine — only "You are Nathan Curia" triggers
+    // "Curia" alone is fine — only "You are Curia" triggers
     expect(result.passed).toBe(true);
   });
 
