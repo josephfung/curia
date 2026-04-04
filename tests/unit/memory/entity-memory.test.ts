@@ -261,6 +261,47 @@ describe('EntityMemory', () => {
     });
   });
 
+  describe('resetRateLimit', () => {
+    it('clears the write count for the given key so a new task gets a fresh slate', async () => {
+      const embeddingService = EmbeddingService.createForTesting();
+      const localStore = KnowledgeGraphStore.createInMemory(embeddingService);
+      const validator = new MemoryValidator(localStore, embeddingService);
+      const em = new EntityMemory(localStore, validator, embeddingService);
+
+      const entity = await em.createEntity({
+        type: 'person',
+        label: 'Test Subject',
+        properties: {},
+        source: 'test',
+      });
+
+      const sourceKey = 'agent:coordinator/task:test-task-1/channel:cli';
+      // Fill up the rate limit for this task key
+      for (let i = 0; i < 50; i++) {
+        validator.recordWrite(sourceKey);
+      }
+
+      // Verify it's blocked
+      const blocked = await em.storeFact({
+        entityNodeId: entity.id,
+        label: 'Should be blocked',
+        source: sourceKey,
+      });
+      expect(blocked.stored).toBe(false);
+
+      // Reset via EntityMemory (the production path)
+      em.resetRateLimit(sourceKey);
+
+      // Should now be allowed again
+      const allowed = await em.storeFact({
+        entityNodeId: entity.id,
+        label: 'Should be allowed after reset',
+        source: sourceKey,
+      });
+      expect(allowed.stored).toBe(true);
+    });
+  });
+
   describe('query - what do I know about X?', () => {
     it('returns entity with connected facts and relationships', async () => {
       const person = await entityMemory.createEntity({

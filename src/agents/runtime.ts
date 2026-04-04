@@ -86,6 +86,16 @@ export class AgentRuntime {
       } catch (publishErr) {
         this.config.logger.error({ err: publishErr }, 'Failed to publish error response');
       }
+    } finally {
+      // Clean up the rate limit entry for this task so the validator's writeCounts map
+      // doesn't grow unboundedly over many tasks in a long-running process.
+      // The key mirrors the source provenance string used by skills during this task.
+      if (this.config.entityMemory) {
+        const { agentId } = this.config;
+        const { channelId } = taskEvent.payload;
+        const sourceKey = `agent:${agentId}/task:${taskEvent.id}/channel:${channelId}`;
+        this.config.entityMemory.resetRateLimit(sourceKey);
+      }
     }
   }
 

@@ -210,6 +210,18 @@ export class EntityMemory {
   }
 
   /**
+   * Reset rate limit counters for a given agent+task key.
+   * Delegates to the validator so the runtime doesn't need a direct validator reference.
+   *
+   * Should be called by AgentRuntime after a task completes (success or error) to
+   * prevent unbounded growth of the validator's writeCounts map. Without this,
+   * each task's source key accumulates indefinitely in a long-running process.
+   */
+  resetRateLimit(agentTaskKey: string): void {
+    this.validator.resetRateLimit(agentTaskKey);
+  }
+
+  /**
    * Semantic search across all nodes in the knowledge graph.
    * Embeds the query string and finds the most similar nodes by cosine similarity.
    *
