@@ -34,7 +34,7 @@ separate `autonomy_phase` config field.
 | Capability | autonomy_floor | Ships when |
 |---|---|---|
 | Read inbox, read messages, list drafts | `full` | Now — reads are always safe |
-| Draft replies, save to Joseph's Drafts folder | `spot-check` | Now — skill ships regardless of band; at lower bands Nathan confirms intent before saving |
+| Draft replies, save to Joseph's Drafts folder | `full` | Now — no outbound effect; nothing leaves until Joseph manually sends from Gmail |
 | Daily draft digest (scheduler job) | `full` | Now — read + notify, no external write |
 | Archive threads, apply Gmail labels | `spot-check` | When skills are built — Nathan proceeds at `spot-check`+, asks at lower bands |
 | Reply as Nathan (from nathancuria1@gmail.com) | `spot-check` | When `email-send` account param ships |
@@ -103,7 +103,7 @@ Skills are **account-aware** rather than account-specific — an optional `accou
   "name": "email-draft-save",
   "sensitivity": "elevated",
   "infrastructure": true,
-  "autonomy_floor": "spot-check",
+  "autonomy_floor": "full",
   "inputs": {
     "account": "string (nathan | joseph)",
     "to": "string",
@@ -118,9 +118,8 @@ Skills are **account-aware** rather than account-specific — an optional `accou
 ```
 
 Elevated sensitivity ensures a human-approval gate the first time the coordinator uses this
-skill. `autonomy_floor: "spot-check"` documents that saving a draft on someone's behalf is
-an outbound-effect action; at lower bands Nathan should surface the draft for review rather
-than saving it silently.
+skill. `autonomy_floor: "full"` reflects that saving a draft has no outbound effect — nothing
+leaves until Joseph manually reviews and sends it from Gmail.
 
 **Scheduler job (Phase 1):**
 
