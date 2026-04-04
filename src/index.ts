@@ -55,6 +55,7 @@ import { Scheduler } from './scheduler/scheduler.js';
 import { EntityContextAssembler } from './entity-context/assembler.js';
 import { bootstrapAgentIdentity } from './entity-context/bootstrap.js';
 import { bootstrapCeoContact } from './contacts/ceo-bootstrap.js';
+import { AutonomyService } from './autonomy/autonomy-service.js';
 import type { AgentPersona } from './skills/types.js';
 
 async function main(): Promise<void> {
@@ -76,6 +77,10 @@ async function main(): Promise<void> {
     logger.fatal({ err }, 'Database connection failed');
     process.exit(1);
   }
+
+  // Autonomy service — manages the global autonomy score (0–100).
+  // Instantiated early (right after DB connect) so it's ready before agents start.
+  const autonomyService = new AutonomyService(pool, logger);
 
   // Run pending migrations so the schema is always current when the process starts.
   // Uses node-pg-migrate's programmatic runner with the same DATABASE_URL.
@@ -372,7 +377,7 @@ async function main(): Promise<void> {
   // infrastructure skills. outboundGateway gives email skills their send path.
   // entityContextAssembler enables entity_enrichment pre-enrichment and the
   // entity-context skill. agentContactId enables entity_enrichment default='agent'.
-  const executionLayer = new ExecutionLayer(skillRegistry, logger, { bus, agentRegistry, contactService, outboundGateway, heldMessages, schedulerService, entityMemory, agentPersona, nylasCalendarClient, entityContextAssembler, agentContactId: agentIdentityContactId });
+  const executionLayer = new ExecutionLayer(skillRegistry, logger, { bus, agentRegistry, contactService, outboundGateway, heldMessages, schedulerService, entityMemory, agentPersona, nylasCalendarClient, entityContextAssembler, agentContactId: agentIdentityContactId, autonomyService });
 
   // Two-pass agent registration:
   // Pass 1: Register all agents in the registry so specialistSummary() is complete
@@ -433,6 +438,9 @@ async function main(): Promise<void> {
       executionLayer,
       pinnedSkills: agentPinnedSkills,
       skillToolDefs: agentToolDefs,
+      // Only the coordinator receives the autonomy service — it's the only agent
+      // that needs per-task autonomy prompt injection and the autonomy skills.
+      autonomyService: agentConfig.role === 'coordinator' ? autonomyService : undefined,
       // Map YAML snake_case fields to AgentConfig camelCase, falling back to
       // DEFAULT_ERROR_BUDGET values for any omitted fields.
       errorBudget: agentConfig.error_budget ? {
