@@ -25,7 +25,7 @@ export class SetAutonomyHandler implements SkillHandler {
 
     // Prefer the caller's role as the audit identifier; fall back to contactId.
     // CallerContext.role is string | null, so we guard against null explicitly.
-    const changedBy = ctx.caller?.role ?? ctx.caller?.contactId ?? 'ceo';
+    const changedBy = ctx.caller?.role ?? ctx.caller?.contactId ?? 'system';
     const reasonStr = typeof reason === 'string' && reason.trim() ? reason.trim() : undefined;
 
     try {
