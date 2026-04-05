@@ -50,9 +50,6 @@ system_prompt: |
   Extract amounts, vendors, categories, and dates from receipts.
   Return structured data — never guess at missing fields.
 
-  # Variable interpolation — any persona field is available:
-  # ${persona.display_name}, ${persona.tone}, ${persona.title}
-
 # ------------------------------------------------------------------
 # Skills (optional but almost always needed)
 # ------------------------------------------------------------------
@@ -138,8 +135,8 @@ The optional `fallback` block specifies an alternate provider+model to use if th
 
 The LLM instructions for this agent. Written in plain text. Key points:
 
-- Interpolate persona fields via `${persona.display_name}` etc.
 - The runtime injects additional context automatically (current date/time, autonomy band, memory context) — you do not need to add boilerplate for these
+- The Coordinator's system prompt uses `${office_identity_block}` to receive the compiled identity (name, tone, constraints, etc.) from `OfficeIdentityService`. Specialist agents do not need this — identity is a Coordinator concern.
 - Write for a single-turn task frame. For persistent tasks, the `intent_anchor` is injected separately to prevent drift.
 
 ### `pinned_skills` (optional)

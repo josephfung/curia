@@ -12,15 +12,20 @@ describe('loadAgentConfig', () => {
     expect(config.name).toBe('coordinator');
     expect(config.role).toBe('coordinator');
     expect(config.model.provider).toBe('anthropic');
-    expect(config.system_prompt).toContain('executive assistant');
+    // The identity block token is present — system prompt is meaningful.
+    expect(config.system_prompt).toContain('${office_identity_block}');
   });
 
-  it('interpolates persona fields into system_prompt', () => {
+  it('uses office_identity_block token instead of persona fields', () => {
+    // Since the identity block migration (issue #139), the coordinator no longer has
+    // inline persona fields. Identity is injected at runtime via ${office_identity_block}.
     const config = loadAgentConfig(path.join(agentsDir, 'coordinator.yaml'));
-    expect(config.system_prompt).toContain('Curia');
+    // The runtime token is present — will be replaced at startup by OfficeIdentityService.
+    expect(config.system_prompt).toContain('${office_identity_block}');
+    // No legacy persona tokens remain in the YAML.
     expect(config.system_prompt).not.toContain('${persona.display_name}');
-    expect(config.system_prompt).toContain('professional but approachable');
     expect(config.system_prompt).not.toContain('${persona.tone}');
+    expect(config.system_prompt).not.toContain('${persona.title}');
   });
 
   it('throws on nonexistent file', () => {

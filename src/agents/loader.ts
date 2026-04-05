@@ -124,6 +124,7 @@ function interpolatePersona(
 /**
  * Interpolate runtime context placeholders in the system prompt.
  * Currently supports:
+ * - ${office_identity_block} — compiled identity block from OfficeIdentityService
  * - ${available_specialists} — list of specialist agents from the agent registry
  * - ${current_date} — today's date in the configured timezone (YYYY-MM-DD, Day)
  * - ${timezone} — the configured IANA timezone name
@@ -137,9 +138,18 @@ export function interpolateRuntimeContext(
   context: {
     availableSpecialists?: string;
     agentContactId?: string;
+    officeIdentityBlock?: string;
   },
 ): string {
   return systemPrompt
+    .replace(
+      /\$\{office_identity_block\}/g,
+      // The identity block is compiled by OfficeIdentityService.compileSystemPromptBlock().
+      // It must be injected before persona tokens so constraints always appear first.
+      // If the service is not yet initialized, leave the placeholder as-is so the
+      // misconfiguration is visible rather than silently producing an empty block.
+      context.officeIdentityBlock ?? '${office_identity_block}',
+    )
     .replace(
       /\$\{available_specialists\}/g,
       context.availableSpecialists ?? 'No specialists available yet.',

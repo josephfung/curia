@@ -31,6 +31,8 @@ import { agentRoutes } from './routes/agents.js';
 import { jobRoutes } from './routes/jobs.js';
 import { messageRoutes } from './routes/messages.js';
 import { knowledgeGraphRoutes } from './routes/kg.js';
+import { identityRoutes } from './routes/identity.js';
+import type { OfficeIdentityService } from '../../identity/service.js';
 
 export interface HttpAdapterConfig {
   bus: EventBus;
@@ -44,6 +46,7 @@ export interface HttpAdapterConfig {
   agentNames: string[];
   skillNames: string[];
   schedulerService?: SchedulerService;
+  identityService?: OfficeIdentityService;
 }
 
 export class HttpAdapter {
@@ -104,11 +107,13 @@ export class HttpAdapter {
       if (routeUrl === '/api/health') return;
       // KG web app routes bypass bearer auth — the app shell, static assets, and
       // /auth exchange need no token; /api/kg/* routes enforce their own session/secret.
+      // Identity routes bypass bearer auth — they enforce their own bootstrap secret auth.
       if (
         routeUrl === '/' ||
         routeUrl === '/auth' ||
         routeUrl.startsWith('/assets') ||
-        routeUrl.startsWith('/api/kg')
+        routeUrl.startsWith('/api/kg') ||
+        routeUrl.startsWith('/api/identity')
       ) return;
 
       if (!validateBearerToken(request.headers.authorization, apiToken)) {
@@ -123,6 +128,15 @@ export class HttpAdapter {
 
     if (this.config.schedulerService) {
       await this.app.register(jobRoutes, { schedulerService: this.config.schedulerService });
+    }
+
+    // Identity routes — only registered when the bootstrap secret is configured.
+    // Uses the same auth pattern as KG routes (x-web-bootstrap-secret header).
+    if (webAppBootstrapSecret && this.config.identityService) {
+      await this.app.register(identityRoutes, {
+        identityService: this.config.identityService,
+        webAppBootstrapSecret,
+      });
     }
 
     // Only register KG routes when the secret is configured — if unset, the routes
