@@ -574,7 +574,7 @@ function createUiHtml(): string {
     // in a new conversation, or when switching between past conversations.
     var chatConversationId = null;
     // Tracks whether the agent reply has been rendered for the current round-trip
-    // to prevent the SSE outbound.message and the POST response from both appending
+    // to prevent the SSE 'message' event and the POST response from both appending
     // the same text (whichever fires first wins; the other is a no-op).
     var chatReplyRendered = false;
     // In-session conversation list. Each entry: { id, label, messages: [] }
