@@ -100,8 +100,8 @@ function nameVariants(normalized: string): string[] {
     // Last-first variant
     variants.push([parts[parts.length - 1], ...parts.slice(0, -1)].join(' '));
     // Initial variant (first initial + rest)
-    if (parts[0].length > 0) {
-      variants.push([parts[0][0], ...parts.slice(1)].join(' '));
+    if (parts[0]!.length > 0) {
+      variants.push([parts[0]![0], ...parts.slice(1)].join(' '));
     }
   }
   return [...new Set(variants)]; // deduplicate
@@ -300,12 +300,12 @@ export class DedupService {
     for (const [key, contactIds] of channelIndex) {
       if (contactIds.length < 2) continue;
       // Parse the channel name for the reason string (e.g. "email" from "email:alice@acme.com")
-      const channelName = key.split(':')[0];
+      const channelName = key.split(':')[0]!;
       const identifierValue = key.slice(channelName.length + 1);
       for (let i = 0; i < contactIds.length; i++) {
         for (let j = i + 1; j < contactIds.length; j++) {
-          const aId = contactIds[i];
-          const bId = contactIds[j];
+          const aId = contactIds[i]!;
+          const bId = contactIds[j]!;
           const pairKey = aId < bId ? `${aId}:${bId}` : `${bId}:${aId}`;
           if (seen.has(pairKey)) continue;
           seen.add(pairKey);
@@ -334,8 +334,8 @@ export class DedupService {
     for (const group of blockMap.values()) {
       for (let i = 0; i < group.length; i++) {
         for (let j = i + 1; j < group.length; j++) {
-          const a = group[i];
-          const b = group[j];
+          const a = group[i]!;
+          const b = group[j]!;
           const pairKey = a.id < b.id ? `${a.id}:${b.id}` : `${b.id}:${a.id}`;
           if (seen.has(pairKey)) continue; // already added via channel overlap
           seen.add(pairKey);
