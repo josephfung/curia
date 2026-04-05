@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { ErrorType } from '../errors/types.js';
+import type { DedupConfidence } from '../contacts/types.js';
 
 // -- Base event shape --
 // Every event on the bus shares these fields; parentEventId forms the causal chain.
@@ -116,7 +117,7 @@ interface ContactUnknownPayload {
 interface ContactDuplicateDetectedPayload {
   newContactId: string;
   probableMatchId: string;
-  confidence: 'certain' | 'probable';
+  confidence: DedupConfidence;
   reason: string;
 }
 
@@ -124,7 +125,7 @@ interface ContactDuplicateDetectedPayload {
 interface ContactMergedPayload {
   primaryContactId: string;
   secondaryContactId: string;
-  mergedAt: string; // ISO 8601 timestamp
+  mergedAt: Date;
 }
 
 interface MessageHeldPayload {
