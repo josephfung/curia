@@ -268,6 +268,14 @@ async function main(): Promise<void> {
     logger.info('Browser service started');
   } catch (err) {
     logger.warn({ err }, 'Browser service failed to start — web-browser skill will be unavailable');
+    // Clean up any partially started resources (e.g., Xvfb spawned before Chromium launch failed).
+    // Without this, xvfbProcess stays alive for the duration of the app even though the
+    // browser service never came up. stop() is safe to call after a failed start().
+    if (browserService) {
+      await browserService.stop().catch((stopErr: unknown) => {
+        logger.error({ err: stopErr }, 'Error cleaning up partially started browser service');
+      });
+    }
     browserService = undefined;
   }
 

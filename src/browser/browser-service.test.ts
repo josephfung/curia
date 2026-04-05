@@ -56,7 +56,18 @@ describe('BrowserService (unit — mocked browser)', () => {
   let mockContext: ReturnType<typeof makeMockContext>;
   let mockBrowser: ReturnType<typeof makeMockBrowser>;
 
+  // Isolate unit tests from the host display environment.
+  // BrowserService.start() calls maybeStartXvfb() which spawns Xvfb on Linux
+  // when DISPLAY is unset — even when a fake browserFactory is injected. Setting
+  // DISPLAY here prevents that spawn so the unit suite works on bare Linux CI
+  // images that don't have Xvfb installed. We restore the original value (or
+  // delete it) in afterEach to avoid cross-test pollution.
+  let savedDisplay: string | undefined;
+
   beforeEach(async () => {
+    savedDisplay = process.env.DISPLAY;
+    process.env.DISPLAY = savedDisplay ?? ':99';
+
     mockPage = makeMockPage();
     mockContext = makeMockContext(mockPage);
     mockBrowser = makeMockBrowser(mockContext);
@@ -73,6 +84,11 @@ describe('BrowserService (unit — mocked browser)', () => {
 
   afterEach(async () => {
     await service.stop();
+    if (savedDisplay === undefined) {
+      delete process.env.DISPLAY;
+    } else {
+      process.env.DISPLAY = savedDisplay;
+    }
   });
 
   it('creates a new session when no session_id is provided', async () => {
@@ -133,7 +149,8 @@ describe('BrowserService (unit — mocked browser)', () => {
 
 // --- Integration tests (real browser) ---
 
-const runBrowserTests = !!process.env.RUN_BROWSER_TESTS;
+// Explicit '1' comparison — treats "0" and "false" as disabled, not truthy-coerced.
+const runBrowserTests = process.env.RUN_BROWSER_TESTS === '1';
 
 describe.skipIf(!runBrowserTests)('BrowserService (integration — real Chromium)', () => {
   let service: BrowserService;

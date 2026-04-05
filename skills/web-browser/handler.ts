@@ -82,7 +82,41 @@ export class WebBrowserHandler implements SkillHandler {
           if (!url || typeof url !== 'string') {
             return { success: false, error: 'navigate requires url (string)' };
           }
-          await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 20_000 });
+          // Validate URL before navigation to prevent SSRF.
+          // sensitivity: "elevated" gates who can invoke this skill, but once invoked
+          // the LLM controls the url parameter — we must block internal/private destinations
+          // here regardless of caller trust level.
+          let parsedUrl: URL;
+          try {
+            parsedUrl = new URL(url);
+          } catch {
+            return { success: false, error: `Invalid URL: "${url}"` };
+          }
+          if (!['http:', 'https:'].includes(parsedUrl.protocol)) {
+            return { success: false, error: `Only http: and https: are allowed, got: ${parsedUrl.protocol}` };
+          }
+          const hostname = parsedUrl.hostname.toLowerCase();
+          const isPrivate =
+            hostname === 'localhost' ||
+            hostname === '0.0.0.0' ||
+            hostname === '::1' ||
+            hostname === '[::1]' ||
+            // IPv4 private/loopback/link-local ranges
+            /^127\./.test(hostname) ||
+            /^10\./.test(hostname) ||
+            /^172\.(1[6-9]|2\d|3[01])\./.test(hostname) ||
+            /^192\.168\./.test(hostname) ||
+            /^169\.254\./.test(hostname) ||
+            // IPv6 link-local
+            hostname.startsWith('fe80:') ||
+            hostname.startsWith('[fe80:') ||
+            // Cloud metadata endpoints
+            hostname === '169.254.169.254' ||
+            hostname === 'metadata.google.internal';
+          if (isPrivate) {
+            return { success: false, error: `Blocked: navigation to private/internal addresses is not allowed (${hostname})` };
+          }
+          await page.goto(parsedUrl.toString(), { waitUntil: 'domcontentloaded', timeout: 20_000 });
           break;
         }
 
