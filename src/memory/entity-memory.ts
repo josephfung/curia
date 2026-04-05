@@ -255,11 +255,13 @@ export class EntityMemory {
     // Update primary node with the merged property set
     await this.store.updateNode(primaryId, { properties: mergedProperties });
 
-    // Move facts: query secondary's facts and re-store them on primary.
+    // Move facts: fetch secondary's facts and re-store them on primary.
+    // getFacts() is more efficient than query() here — it returns only fact nodes
+    // without resolving relationship edges, which we don't need for the merge.
     // storeFact() will handle deduplication — near-duplicate facts will merge
     // rather than create duplicates.
-    const secondaryResult = await this.query(secondaryId);
-    for (const factNode of secondaryResult.facts) {
+    const secondaryFacts = await this.getFacts(secondaryId);
+    for (const factNode of secondaryFacts) {
       // Fact content lives in the node label; extra attributes may be in properties.
       // We propagate the original source so provenance is preserved.
       await this.storeFact({

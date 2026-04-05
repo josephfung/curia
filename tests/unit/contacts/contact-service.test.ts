@@ -374,6 +374,37 @@ describe('EntityMemory.mergeEntities', () => {
     expect(merged!.properties['title']).toBeDefined();
   });
 
+  it('secondary properties override primary when secondary was updated more recently', async () => {
+    const primary = await entityMemory.createEntity({
+      type: 'person',
+      label: 'Old Primary',
+      properties: { city: 'Toronto', title: 'CFO' },
+      source: 'test',
+    });
+    const secondary = await entityMemory.createEntity({
+      type: 'person',
+      label: 'New Secondary',
+      properties: { city: 'New York', title: 'Chief Financial Officer' },
+      source: 'test',
+    });
+
+    // Make secondary's timestamp strictly newer than primary's.
+    // InMemoryBackend.getNode() returns the node object by reference (no copy),
+    // so mutating temporal.lastConfirmedAt here updates the stored node in-place.
+    // This is intentionally test-only; production code should never bypass the store API.
+    // @TODO: Once a store-level updateNode overload that accepts a full temporal object
+    // is added, switch this to use that API so the test isn't relying on reference identity.
+    const secondaryNode = await entityMemory.getEntity(secondary.id);
+    secondaryNode!.temporal.lastConfirmedAt = new Date(Date.now() + 10_000);
+
+    await entityMemory.mergeEntities(primary.id, secondary.id);
+
+    const merged = await entityMemory.getEntity(primary.id);
+    // Secondary was newer, so its city and title should win
+    expect(merged!.properties['city']).toBe('New York');
+    expect(merged!.properties['title']).toBe('Chief Financial Officer');
+  });
+
   it('does not affect the primary node when secondary has no properties', async () => {
     const primary = await entityMemory.createEntity({
       type: 'person',
