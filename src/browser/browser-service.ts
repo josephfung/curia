@@ -310,9 +310,12 @@ export class BrowserService {
     // successfully and then immediately exit with a non-zero code for runtime failures
     // like a locked display or missing extensions, which only fires 'close', not 'error'.
     await new Promise<void>((resolve, reject) => {
+      // Guard against this.xvfbProcess being set to null by stop() while we're
+      // still in the 500ms window or when the process dies after a later kill().
       const cleanup = () => {
-        this.xvfbProcess!.off('error', onError);
-        this.xvfbProcess!.off('close', onClose);
+        if (!this.xvfbProcess) return;
+        this.xvfbProcess.off('error', onError);
+        this.xvfbProcess.off('close', onClose);
       };
       const onError = (err: Error) => {
         cleanup();
@@ -324,8 +327,11 @@ export class BrowserService {
       };
       this.xvfbProcess!.once('error', onError);
       this.xvfbProcess!.once('close', onClose);
-      // If Xvfb is still running after 500ms, consider startup successful
-      setTimeout(resolve, 500);
+      // If Xvfb is still running after 500ms, consider startup successful.
+      // Call cleanup() before resolving so the listeners don't fire later when
+      // stop() calls xvfbProcess.kill() — at that point xvfbProcess is set to null
+      // synchronously before the async 'close' event fires.
+      setTimeout(() => { cleanup(); resolve(); }, 500);
     });
     this.logger.info('Xvfb started on DISPLAY=:99');
   }
