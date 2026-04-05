@@ -90,6 +90,9 @@ export class AutonomyService {
       case 'medium':   return 70;
       case 'high':     return 80;
       case 'critical': return 90;
+      // Defense in depth: SkillRegistry.register() should reject unknown labels at load
+      // time, but guard here in case this helper is called outside the registry path.
+      default: throw new Error(`Unknown action_risk label: "${String(risk)}"`);
     }
   }
 
