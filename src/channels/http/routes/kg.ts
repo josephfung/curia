@@ -567,6 +567,22 @@ function createUiHtml(): string {
     var memoryOpen = true;   // Memory nav section expanded by default
     var activeNavId = 'nav-kg';
 
+    // ── Chat state ─────────────────────────────────────────────────────
+    // Active EventSource for SSE — one per conversation, null when idle.
+    var chatStream = null;
+    // Active conversation UUID — set when the user sends their first message
+    // in a new conversation, or when switching between past conversations.
+    var chatConversationId = null;
+    // Tracks whether the agent reply has been rendered for the current round-trip
+    // to prevent the SSE outbound.message and the POST response from both appending
+    // the same text (whichever fires first wins; the other is a no-op).
+    var chatReplyRendered = false;
+    // In-session conversation list. Each entry: { id, label, messages: [] }
+    // where messages are { role: 'user'|'agent'|'status'|'error', text: string }.
+    var chatConversations = [];
+    // Index of the currently active conversation, or -1 if none.
+    var chatActiveConvIdx = -1;
+
     // ── Element refs ───────────────────────────────────────────────────
     var authWall      = document.getElementById('auth-wall');
     var mainApp       = document.getElementById('main-app');
@@ -580,10 +596,18 @@ function createUiHtml(): string {
     var memoryCaret   = document.getElementById('memory-chevron');
     var memorySubmenu = document.getElementById('memory-submenu');
 
+    // Chat DOM refs
+    var chatMessagesEl = document.getElementById('chat-messages');
+    var chatConvListEl = document.getElementById('chat-conv-list');
+    var chatForm       = document.getElementById('chat-form');
+    var chatTextarea   = document.getElementById('chat-textarea');
+    var chatSendBtn    = document.getElementById('chat-send-btn');
+
     // Catch template/script divergence early rather than producing cryptic null errors
     if (!authWall || !mainApp || !authForm || !authInput || !authError ||
         !statusEl || !resultsEl || !searchInput || !searchBtn ||
-        !memoryCaret || !memorySubmenu) {
+        !memoryCaret || !memorySubmenu ||
+        !chatMessagesEl || !chatConvListEl || !chatForm || !chatTextarea || !chatSendBtn) {
       throw new Error('Curia KG: required DOM element missing — check template integrity.');
     }
 
@@ -698,14 +722,23 @@ function createUiHtml(): string {
 
     // ── Navigation ─────────────────────────────────────────────────────
     function navigate(view, title, navId) {
-      var kgView = document.getElementById('view-kg');
-      var csView = document.getElementById('view-coming-soon');
+      var kgView   = document.getElementById('view-kg');
+      var chatView = document.getElementById('view-chat');
+      var csView   = document.getElementById('view-coming-soon');
 
-      kgView.style.display = view === 'kg'           ? 'flex' : 'none';
-      csView.style.display = view === 'coming-soon'  ? 'flex' : 'none';
+      kgView.style.display   = view === 'kg'           ? 'flex' : 'none';
+      chatView.style.display = view === 'chat'         ? 'flex' : 'none';
+      csView.style.display   = view === 'coming-soon'  ? 'flex' : 'none';
 
       if (view === 'coming-soon') {
         document.getElementById('coming-soon-title').textContent = title;
+      }
+
+      // Open the SSE stream lazily on first entry into the Chat view.
+      // If a conversation is already active, reuse its stream.
+      if (view === 'chat' && chatActiveConvIdx === -1 && chatConversations.length === 0) {
+        // No conversations yet — show empty state, ready for first message.
+        chatMessagesEl.replaceChildren();
       }
 
       // Update active highlight
