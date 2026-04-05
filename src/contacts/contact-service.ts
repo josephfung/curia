@@ -194,7 +194,10 @@ export class ContactService {
 
     // Fire-and-forget dedup check. Runs asynchronously — never blocks the create.
     // A failure here is logged and swallowed; it must not fail the contact creation.
-    if (this.dedupService && this.onDuplicateDetected) {
+    // Capture references before the closure so TypeScript narrowing is preserved
+    // and no non-null assertions (!!) are needed inside the async callback.
+    const { dedupService, onDuplicateDetected } = this;
+    if (dedupService && onDuplicateDetected) {
       setImmediate(async () => {
         try {
           const allContacts = await this.backend.listContacts();
@@ -204,7 +207,7 @@ export class ContactService {
             identitiesMap.set(c.id, await this.backend.getIdentitiesForContact(c.id));
           }
           const newIdentities = await this.backend.getIdentitiesForContact(contact.id);
-          const pairs = this.dedupService!.checkForDuplicates(
+          const pairs = dedupService.checkForDuplicates(
             contact,
             newIdentities,
             others,
@@ -213,7 +216,7 @@ export class ContactService {
           for (const pair of pairs) {
             const matchId = pair.contactB.id === contact.id ? pair.contactA.id : pair.contactB.id;
             try {
-              this.onDuplicateDetected!(contact.id, matchId, pair.confidence, pair.reason);
+              onDuplicateDetected(contact.id, matchId, pair.confidence, pair.reason);
             } catch (callbackErr) {
               this.logger?.warn({ callbackErr }, 'onDuplicateDetected callback threw (ignored)');
             }

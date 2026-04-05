@@ -141,7 +141,9 @@ function scoreContacts(
     if (aIds.has(key)) {
       return {
         score: 1.0,
-        reason: `Same ${bId.channel} identifier (${bId.channelIdentifier})`,
+        // Reason omits the actual identifier value — it would be an email address or phone
+        // number, which should not flow into bus events or LLM context.
+        reason: `Same ${bId.channel} identifier`,
       };
     }
   }
@@ -213,7 +215,7 @@ export class DedupService {
             contactB: { id: candidate.id, displayName: candidate.displayName, role: candidate.role, identities: candidateIds },
             score: 1.0,
             confidence: 'certain',
-            reason: `Same ${cId.channel} identifier (${cId.channelIdentifier})`,
+            reason: `Same ${cId.channel} identifier`,
           });
           break; // one overlap is enough — stop checking more identities for this candidate
         }
@@ -299,9 +301,10 @@ export class DedupService {
     // the old single-entry map only linked A↔B but missed the B↔C pair.
     for (const [key, contactIds] of channelIndex) {
       if (contactIds.length < 2) continue;
-      // Parse the channel name for the reason string (e.g. "email" from "email:alice@acme.com")
+      // Parse the channel name for the reason string (e.g. "email" from "email:alice@acme.com").
+      // The identifier value itself is not included in the reason — it would be an email address
+      // or phone number, which should not flow into bus events or LLM context.
       const channelName = key.split(':')[0]!;
-      const identifierValue = key.slice(channelName.length + 1);
       for (let i = 0; i < contactIds.length; i++) {
         for (let j = i + 1; j < contactIds.length; j++) {
           const aId = contactIds[i]!;
@@ -316,7 +319,7 @@ export class DedupService {
             contactB: { id: b.id, displayName: b.displayName, role: b.role, identities: identitiesMap.get(b.id) ?? [] },
             score: 1.0,
             confidence: 'certain',
-            reason: `Same ${channelName} identifier (${identifierValue})`,
+            reason: `Same ${channelName} identifier`,
           });
         }
       }
