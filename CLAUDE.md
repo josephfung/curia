@@ -84,7 +84,7 @@ Values by capability class:
 
 A raw number (0–100) may be used for precision. Numbers outside [0, 100] produce a validation error at skill load time.
 
-When adding a new agent, ensure it receives the autonomy block via the runtime injection mechanism (same pattern as date/timezone injection — pass `autonomyService` in `AgentRuntime` config if the agent needs autonomy awareness). See `docs/wip/2026-04-03-autonomy-engine-design.md`.
+When adding a new agent, ensure it receives the autonomy block via the runtime injection mechanism (same pattern as date/timezone injection — pass `autonomyService` in `AgentRuntime` config if the agent needs autonomy awareness). See `docs/specs/14-autonomy-engine.md`.
 
 ### New Agent
 1. Create `agents/<name>.yaml` with required fields (name, description, model, system_prompt)

@@ -327,9 +327,9 @@ The explorer supports:
 | 11 | Entity context enrichment (KG-backed sender/entity profiles) | Planned — spec drafted |
 | 12 | Knowledge graph web explorer | ✅ Implemented |
 | 13 | Office identity (persona, voice, runtime config) | Planned — spec drafted |
-| — | Autonomy engine (global score, CEO controls, per-task prompt injection) | ✅ Implemented |
+| 14 | Autonomy engine (global score, CEO controls, per-task prompt injection) | ✅ Implemented |
 | — | Autonomy engine (self-monitoring, measurement, and automatic tuning) | Planned |
-| — | Outbound safety (content filter, gateway, display name sanitization, caller verification) | Partial — deterministic rules done; LLM-as-judge planned |
+| 15 | Outbound safety (content filter, gateway, display name sanitization, caller verification) | Partial — deterministic rules done; LLM-as-judge planned |
 | — | Smoke test framework (14 chat-based cases, LLM-as-judge, HTML reports) | ✅ Implemented |
 | — | Web dashboard | Future |
 | — | Voice/telephony channel | Future |
@@ -352,6 +352,8 @@ The explorer supports:
 - **[Entity Context Enrichment](docs/specs/11-entity-context-enrichment.md)** — KG-backed sender profiles, enriched inbound messages
 - **[Knowledge Graph Web Explorer](docs/specs/12-knowledge-graph-web-explorer.md)** — Browser UI for inspecting the knowledge graph
 - **[Office Identity](docs/specs/13-office-identity.md)** — Persona config, voice, runtime identity updates
+- **[Autonomy Engine](docs/specs/14-autonomy-engine.md)** — Global score, bands, CEO controls, skill `action_risk` declaration
+- **[Outbound Safety](docs/specs/15-outbound-safety.md)** — Gateway, content filter, caller verification, display name sanitization
 
 ---
 
