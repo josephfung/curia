@@ -734,8 +734,8 @@ function createUiHtml(): string {
         document.getElementById('coming-soon-title').textContent = title;
       }
 
-      // Open the SSE stream lazily on first entry into the Chat view.
-      // If a conversation is already active, reuse its stream.
+      // On first entry into the Chat view with no conversations yet, ensure
+      // the thread panel is empty (defensive reset in case it has stale content).
       if (view === 'chat' && chatActiveConvIdx === -1 && chatConversations.length === 0) {
         // No conversations yet — show empty state, ready for first message.
         chatMessagesEl.replaceChildren();
