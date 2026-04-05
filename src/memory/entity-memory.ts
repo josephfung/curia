@@ -21,6 +21,10 @@ export interface CreateEntityOptions {
   label: string;
   properties: Record<string, unknown>;
   source: string;
+  // Optional confidence override; defaults to 0.7 (the store default).
+  // Pass a lower value (e.g. 0.6) when creating nodes from LLM extraction
+  // output, where the entity may be a first-time mention with no prior context.
+  confidence?: number;
 }
 
 export interface StoreFactResult {
@@ -73,6 +77,8 @@ export class EntityMemory {
       label: options.label,
       properties: options.properties,
       source: options.source,
+      // Thread through the optional confidence override
+      confidence: options.confidence,
     });
   }
 
