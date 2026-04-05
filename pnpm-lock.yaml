@@ -11,9 +11,6 @@ importers:
       '@anthropic-ai/sdk':
         specifier: ^0.81.0
         version: 0.81.0
-      '@cliqz/adblocker-playwright':
-        specifier: ^1.34.0
-        version: 1.34.0(playwright@1.59.1)
       '@fastify/cookie':
         specifier: ^11.0.2
         version: 11.0.2
@@ -23,6 +20,9 @@ importers:
       '@fastify/rate-limit':
         specifier: ^10.3.0
         version: 10.3.0
+      '@ghostery/adblocker-playwright':
+        specifier: ^2.14.1
+        version: 2.14.1(playwright@1.59.1)
       cron-parser:
         specifier: ^5.5.0
         version: 5.5.0
@@ -111,24 +111,6 @@ packages:
   '@babel/runtime@7.29.2':
     resolution: {integrity: sha512-JiDShH45zKHWyGe4ZNVRrCjBz8Nh9TMmZG1kh4QTK8hCBTWBi8Da+i7s1fJw7/lYpM4ccepSNfqzZ/QvABBi5g==}
     engines: {node: '>=6.9.0'}
-
-  '@cliqz/adblocker-content@1.34.0':
-    resolution: {integrity: sha512-5LcV8UZv49RWwtpom9ve4TxJIFKd+bjT59tS/2Z2c22Qxx5CW1ncO/T+ybzk31z422XplQfd0ZE6gMGGKs3EMg==}
-    deprecated: This project has been renamed to @ghostery/adblocker-content. Install using @ghostery/adblocker-content instead
-
-  '@cliqz/adblocker-extended-selectors@1.34.0':
-    resolution: {integrity: sha512-lNrgdUPpsBWHjrwXy2+Z5nX/Gy5YAvNwFMLqkeMdjzrybwPIalJJN2e+YtkS1I6mVmOMNppF5cv692OAVoI74g==}
-    deprecated: This project has been renamed to @ghostery/adblocker-extended-selectors. Install using @ghostery/adblocker-extended-selectors instead
-
-  '@cliqz/adblocker-playwright@1.34.0':
-    resolution: {integrity: sha512-YMedgiz9LR5VW6ocKoC1P3cSsj1T9Ibinp14beXxvpydMmneX+fQB0Hq4bqWvuuL3CNl7fENMgiCDDMTgMLqww==}
-    deprecated: This project has been renamed to @ghostery/adblocker-playwright. Install using @ghostery/adblocker-playwright instead
-    peerDependencies:
-      playwright: ^1.x
-
-  '@cliqz/adblocker@1.34.0':
-    resolution: {integrity: sha512-d7TeUl5t+TOMJe7/CRYtf+x6hbd8N25DtH7guQTIjjr3AFVortxiAIgNejGvVqy0by4eNByw+oVil15oqxz2Eg==}
-    deprecated: This project has been renamed to @ghostery/adblocker. Install using @ghostery/adblocker instead
 
   '@emnapi/core@1.9.1':
     resolution: {integrity: sha512-mukuNALVsoix/w1BJwFzwXBN/dHeejQtuVzcDsfOEsdpCumXb/E9j8w11h5S54tT1xhifGfbbSm/ICrObRb3KA==}
@@ -361,6 +343,23 @@ packages:
   '@fastify/rate-limit@10.3.0':
     resolution: {integrity: sha512-eIGkG9XKQs0nyynatApA3EVrojHOuq4l6fhB4eeCk4PIOeadvOJz9/4w3vGI44Go17uaXOWEcPkaD8kuKm7g6Q==}
 
+  '@ghostery/adblocker-content@2.14.1':
+    resolution: {integrity: sha512-hDE6RAL9xgQonJQiK1knOHy527PEwlAuvKaha4snE0XO6Vmtk0HThce1M2JFVRxGayWR3nTxoWbvEfGWXU7O/A==}
+
+  '@ghostery/adblocker-extended-selectors@2.14.1':
+    resolution: {integrity: sha512-3RARO2ukDrfwDqVEMD+HKZIwsM9QjjII+U1zqxhLXZ0dZRHjbtUHlZCsokqfjZ1JAa3ZVKcZrF0nZv5SA2LgyA==}
+
+  '@ghostery/adblocker-playwright@2.14.1':
+    resolution: {integrity: sha512-ODNTIVuhBslpehelujprYv4X2Iu0yXKTGk5TEy1aii5m4M0D884KU2htrcOg5GexQ0xoSf4guldsM899f1uEJA==}
+    peerDependencies:
+      playwright: ^1.x
+
+  '@ghostery/adblocker@2.14.1':
+    resolution: {integrity: sha512-/cQTMJRd4/7zpgFHWqe+9wqiRPGTy+BhqfkxplvejPgq8d6spBjC6bSJV61rVHJZw5F4KOO5ReKOvuguaKG28A==}
+
+  '@ghostery/url-parser@1.3.1':
+    resolution: {integrity: sha512-QKqGi+7aDQ4RcyHyCwgEk6B9vWnsBP4Q7htaN0zPJV3ATqTKEQDtSTb9c/AN586oJUDs24YXKcwFYwNweY/YjQ==}
+
   '@humanfs/core@0.19.1':
     resolution: {integrity: sha512-5DyQ4+1JEUzejeK1JGICcideyfUbGixgS9jNgex5nqkW+cY7WZhxBigmieN5Qnw9ZosSNVC9KQKyb+GUaGyKUA==}
     engines: {node: '>=18.18.0'}
@@ -410,23 +409,23 @@ packages:
   '@pinojs/redact@0.4.0':
     resolution: {integrity: sha512-k2ENnmBugE/rzQfEcdWHcCY+/FM3VLzH9cYEsbdsoqrvzAKRhUZeRNhAZvB8OitQJ1TBed3yqWtdjzS6wJKBwg==}
 
-  '@remusao/guess-url-type@1.3.0':
-    resolution: {integrity: sha512-SNSJGxH5ckvxb3EUHj4DqlAm/bxNxNv2kx/AESZva/9VfcBokwKNS+C4D1lQdWIDM1R3d3UG+xmVzlkNG8CPTQ==}
+  '@remusao/guess-url-type@2.1.0':
+    resolution: {integrity: sha512-zI3dlTUxpjvx2GCxp9nLOSK5yEIqDCpxlAVGwb2Y49RKkS72oeNaxxo+VWS5+XQ5+Mf8Zfp9ZXIlk+G5eoEN8A==}
 
-  '@remusao/small@1.3.0':
-    resolution: {integrity: sha512-bydAhJI+ywmg5xMUcbqoR8KahetcfkFywEZpsyFZ8EBofilvWxbXnMSe4vnjDI1Y+SWxnNhR4AL/2BAXkf4b8A==}
+  '@remusao/small@2.1.0':
+    resolution: {integrity: sha512-Y1kyjZp7JU7dXdyOdxHVNfoTr1XLZJTyQP36/esZUU/WRWq9XY0PV2HsE3CsIHuaTf4pvgWv2pvzvnZ//UHIJQ==}
 
-  '@remusao/smaz-compress@1.10.0':
-    resolution: {integrity: sha512-E/lC8OSU+3bQrUl64vlLyPzIxo7dxF2RvNBe9KzcM4ax43J/d+YMinmMztHyCIHqRbz7rBCtkp3c0KfeIbHmEg==}
+  '@remusao/smaz-compress@2.2.0':
+    resolution: {integrity: sha512-TXpTPgILRUYOt2rEe0+9PC12xULPvBqeMpmipzB9A7oM4fa9Ztvy9lLYzPTd7tiQEeoNa1pmxihpKfJtsxnM/w==}
 
-  '@remusao/smaz-decompress@1.10.0':
-    resolution: {integrity: sha512-aA5ImUH480Pcs5/cOgToKmFnzi7osSNG6ft+7DdmQTaQEEst3nLq3JLlBEk+gwidURymjbx6DYs60LHaZ415VQ==}
+  '@remusao/smaz-decompress@2.2.0':
+    resolution: {integrity: sha512-ERAPwxPaA0/yg4hkNU7T2S+lnp9jj1sApcQMtOyROvOQyo+Zuh6Hn/oRcXr8mmjlYzyRaC7E6r3mT1nrdHR6pg==}
 
-  '@remusao/smaz@1.10.0':
-    resolution: {integrity: sha512-GQzCxmmMpLkyZwcwNgz8TpuBEWl0RUQa8IcvKiYlPxuyYKqyqPkCr0hlHI15ckn3kDUPS68VmTVgyPnLNrdVmg==}
+  '@remusao/smaz@2.2.0':
+    resolution: {integrity: sha512-eSd3Qs0ELP/e7tU1SI5RWXcCn9KjDgvBY+KtWbL4i2QvvHhJOfdIt4v0AA3S5BbLWAr5dCEC7C4LUfogDm6q/Q==}
 
-  '@remusao/trie@1.5.0':
-    resolution: {integrity: sha512-UX+3utJKgwCsg6sUozjxd38gNMVRXrY4TNX9VvCdSrlZBS1nZjRPi98ON3QjRAdf6KCguJFyQARRsulTeqQiPg==}
+  '@remusao/trie@2.1.0':
+    resolution: {integrity: sha512-Er3Q8q0/2OcCJPQYJOPLmCuqO0wu7cav3SPtpjlxSbjFi1x+A1pZkkLD6c9q2rGEkGW/tkrRzfrhNMt8VQjzXg==}
 
   '@rolldown/binding-android-arm64@1.0.0-rc.11':
     resolution: {integrity: sha512-SJ+/g+xNnOh6NqYxD0V3uVN4W3VfnrGsC9/hoglicgTNfABFG9JjISvkkU0dNY84MNHLWyOgxP9v9Y9pX4S7+A==}
@@ -673,9 +672,6 @@ packages:
   '@types/chai@5.2.3':
     resolution: {integrity: sha512-Mw558oeA9fFbv65/y4mHtXDs9bPnFMZAL/jxdPFUpOHHIXX91mcgEHbS5Lahr+pwZFR8A7GQleRWeI6cGFC2UA==}
 
-  '@types/chrome@0.0.278':
-    resolution: {integrity: sha512-PDIJodOu7o54PpSOYLybPW/MDZBCjM1TKgf31I3Q/qaEbNpIH09rOM3tSEH3N7Q+FAqb1933LhF8ksUPYeQLNg==}
-
   '@types/deep-eql@4.0.2':
     resolution: {integrity: sha512-c9h9dVVMigMPc4bwTvC5dxqtqJZwQPePsWjPlpSOnojbor6pGqdk541lfA7AqFQr5pB1BRdq0juY9db81BwyFw==}
 
@@ -684,18 +680,6 @@ packages:
 
   '@types/estree@1.0.8':
     resolution: {integrity: sha512-dWHzHa2WqEXI/O1E9OjrocMTKJl2mSrEolh1Iomrv6U+JuNwaHXsXx9bLu5gG7BUWFIN0skIQJQ/L1rIex4X6w==}
-
-  '@types/filesystem@0.0.36':
-    resolution: {integrity: sha512-vPDXOZuannb9FZdxgHnqSwAG/jvdGM8Wq+6N4D/d80z+D4HWH+bItqsZaVRQykAn6WEVeEkLm2oQigyHtgb0RA==}
-
-  '@types/filewriter@0.0.33':
-    resolution: {integrity: sha512-xFU8ZXTw4gd358lb2jw25nxY9QAgqn2+bKKjKOYfNCzN4DKCFetK7sPtrlpg66Ywe3vWY9FNxprZawAh9wfJ3g==}
-
-  '@types/firefox-webext-browser@120.0.5':
-    resolution: {integrity: sha512-imn8ecga0HQWcOSvxy9i0lD+7vpHgkj1NVLvXS1lNHqHt03Z4QwazeEdoWe+C9JXpmVyKiRanb+z9D/w001tRg==}
-
-  '@types/har-format@1.2.16':
-    resolution: {integrity: sha512-fluxdy7ryD3MV6h8pTfTYpy/xQzCFC7m89nOH9y94cNqJ1mDIDPut7MnRHI3F6qRmh/cT2fUjG1MLdCNb4hE9A==}
 
   '@types/js-yaml@4.0.9':
     resolution: {integrity: sha512-k4MGaQl5TGo/iipqb2UDG2UwjXziSWkh0uysQelTlJpX1qGlpUZYm8PnO4DxG1qBomtJUdYJ6qR6xdIah10JLg==}
@@ -1710,11 +1694,11 @@ packages:
     resolution: {integrity: sha512-Bf+ILmBgretUrdJxzXM0SgXLZ3XfiaUuOj/IKQHuTXip+05Xn+uyEYdVg0kYDipTBcLrCVyUzAPz7QmArb0mmw==}
     engines: {node: '>=14.0.0'}
 
-  tldts-core@6.1.86:
-    resolution: {integrity: sha512-Je6p7pkk+KMzMv2XXKmAE3McmolOQFdxkKw0R8EYNr7sELW46JqnNeTX8ybPiQgvg1ymCoF8LXs5fzFaZvJPTA==}
+  tldts-core@7.0.28:
+    resolution: {integrity: sha512-7W5Efjhsc3chVdFhqtaU0KtK32J37Zcr9RKtID54nG+tIpcY79CQK/veYPODxtD/LJ4Lue66jvrQzIX2Z2/pUQ==}
 
-  tldts-experimental@6.1.86:
-    resolution: {integrity: sha512-X3N3+SrwSajvANDyIBFa6tf/nO0VoqaXvvINSnQkZMGbzNlD+9G7Xb24Mtk3ZBVZJRGY7UynAJJL8kRVt6Z46Q==}
+  tldts-experimental@7.0.28:
+    resolution: {integrity: sha512-z000DWdcayJ6TctJCb50BtJb89aeXw7WVUp5OREZZrkg56jEwLT18ySbSB28bJvEcNQ4D3JG5SLS/eSViGlRuA==}
 
   toad-cache@3.7.0:
     resolution: {integrity: sha512-/m8M+2BJUpoJdgAHoG+baCwBT+tf2VraSfkBgl0Y00qIWt41DJ8R5B8nsEw0I58YwF5IZH6z24/2TobDKnqSWw==}
@@ -1918,30 +1902,6 @@ snapshots:
 
   '@babel/runtime@7.29.2': {}
 
-  '@cliqz/adblocker-content@1.34.0':
-    dependencies:
-      '@cliqz/adblocker-extended-selectors': 1.34.0
-
-  '@cliqz/adblocker-extended-selectors@1.34.0': {}
-
-  '@cliqz/adblocker-playwright@1.34.0(playwright@1.59.1)':
-    dependencies:
-      '@cliqz/adblocker': 1.34.0
-      '@cliqz/adblocker-content': 1.34.0
-      playwright: 1.59.1
-      tldts-experimental: 6.1.86
-
-  '@cliqz/adblocker@1.34.0':
-    dependencies:
-      '@cliqz/adblocker-content': 1.34.0
-      '@cliqz/adblocker-extended-selectors': 1.34.0
-      '@remusao/guess-url-type': 1.3.0
-      '@remusao/small': 1.3.0
-      '@remusao/smaz': 1.10.0
-      '@types/chrome': 0.0.278
-      '@types/firefox-webext-browser': 120.0.5
-      tldts-experimental: 6.1.86
-
   '@emnapi/core@1.9.1':
     dependencies:
       '@emnapi/wasi-threads': 1.2.0
@@ -2109,6 +2069,33 @@ snapshots:
       fastify-plugin: 5.1.0
       toad-cache: 3.7.0
 
+  '@ghostery/adblocker-content@2.14.1':
+    dependencies:
+      '@ghostery/adblocker-extended-selectors': 2.14.1
+
+  '@ghostery/adblocker-extended-selectors@2.14.1': {}
+
+  '@ghostery/adblocker-playwright@2.14.1(playwright@1.59.1)':
+    dependencies:
+      '@ghostery/adblocker': 2.14.1
+      '@ghostery/adblocker-content': 2.14.1
+      playwright: 1.59.1
+      tldts-experimental: 7.0.28
+
+  '@ghostery/adblocker@2.14.1':
+    dependencies:
+      '@ghostery/adblocker-content': 2.14.1
+      '@ghostery/adblocker-extended-selectors': 2.14.1
+      '@ghostery/url-parser': 1.3.1
+      '@remusao/guess-url-type': 2.1.0
+      '@remusao/small': 2.1.0
+      '@remusao/smaz': 2.2.0
+      tldts-experimental: 7.0.28
+
+  '@ghostery/url-parser@1.3.1':
+    dependencies:
+      tldts-experimental: 7.0.28
+
   '@humanfs/core@0.19.1': {}
 
   '@humanfs/node@0.16.7':
@@ -2149,22 +2136,22 @@ snapshots:
 
   '@pinojs/redact@0.4.0': {}
 
-  '@remusao/guess-url-type@1.3.0': {}
+  '@remusao/guess-url-type@2.1.0': {}
 
-  '@remusao/small@1.3.0': {}
+  '@remusao/small@2.1.0': {}
 
-  '@remusao/smaz-compress@1.10.0':
+  '@remusao/smaz-compress@2.2.0':
     dependencies:
-      '@remusao/trie': 1.5.0
+      '@remusao/trie': 2.1.0
 
-  '@remusao/smaz-decompress@1.10.0': {}
+  '@remusao/smaz-decompress@2.2.0': {}
 
-  '@remusao/smaz@1.10.0':
+  '@remusao/smaz@2.2.0':
     dependencies:
-      '@remusao/smaz-compress': 1.10.0
-      '@remusao/smaz-decompress': 1.10.0
+      '@remusao/smaz-compress': 2.2.0
+      '@remusao/smaz-decompress': 2.2.0
 
-  '@remusao/trie@1.5.0': {}
+  '@remusao/trie@2.1.0': {}
 
   '@rolldown/binding-android-arm64@1.0.0-rc.11':
     optional: true
@@ -2305,26 +2292,11 @@ snapshots:
       '@types/deep-eql': 4.0.2
       assertion-error: 2.0.1
 
-  '@types/chrome@0.0.278':
-    dependencies:
-      '@types/filesystem': 0.0.36
-      '@types/har-format': 1.2.16
-
   '@types/deep-eql@4.0.2': {}
 
   '@types/esrecurse@4.3.1': {}
 
   '@types/estree@1.0.8': {}
-
-  '@types/filesystem@0.0.36':
-    dependencies:
-      '@types/filewriter': 0.0.33
-
-  '@types/filewriter@0.0.33': {}
-
-  '@types/firefox-webext-browser@120.0.5': {}
-
-  '@types/har-format@1.2.16': {}
 
   '@types/js-yaml@4.0.9': {}
 
@@ -3396,11 +3368,11 @@ snapshots:
 
   tinyrainbow@3.1.0: {}
 
-  tldts-core@6.1.86: {}
+  tldts-core@7.0.28: {}
 
-  tldts-experimental@6.1.86:
+  tldts-experimental@7.0.28:
     dependencies:
-      tldts-core: 6.1.86
+      tldts-core: 7.0.28
 
   toad-cache@3.7.0: {}
 
