@@ -3,6 +3,7 @@
   "description": "Remove a channel identity from a contact. Use when the CEO says an email/phone is wrong or no longer valid for a contact.",
   "version": "1.0.0",
   "sensitivity": "normal",
+  "action_risk": "low",
   "infrastructure": true,
   "inputs": {
     "contact_id": "string",

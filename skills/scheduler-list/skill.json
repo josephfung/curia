@@ -3,6 +3,7 @@
   "description": "List scheduled jobs. Optionally filter by status (pending, running, completed, failed, suspended, cancelled) or agent_id.",
   "version": "1.0.0",
   "sensitivity": "elevated",
+  "action_risk": "none",
   "infrastructure": true,
   "inputs": { "status": "string?", "agent_id": "string?" },
   "outputs": { "jobs": "array" },

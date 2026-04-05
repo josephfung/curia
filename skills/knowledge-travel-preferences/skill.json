@@ -3,6 +3,7 @@
   "description": "Store or retrieve travel preferences in the knowledge graph. Use 'store' to save preferences like preferred airline, seat preference, hotel chain, dietary restrictions, or any other travel-related preference. Use 'retrieve' to look up all stored travel preferences.",
   "version": "1.0.0",
   "sensitivity": "normal",
+  "action_risk": "none",
   "infrastructure": true,
   "inputs": {
     "action": "string (store | retrieve)",

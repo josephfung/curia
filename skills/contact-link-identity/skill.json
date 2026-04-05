@@ -3,6 +3,7 @@
   "description": "Add a channel identity (email, phone, Signal, Telegram) to an existing contact.",
   "version": "1.0.0",
   "sensitivity": "normal",
+  "action_risk": "low",
   "infrastructure": true,
   "inputs": {
     "contact_id": "string",

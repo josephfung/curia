@@ -3,6 +3,7 @@
   "description": "Register a Nylas calendar in the contact registry, linking it to a contact. Use this after calendar-list-calendars identifies an unregistered calendar and the CEO confirms which contact it belongs to. Defaults contact_id to the caller's own contact when omitted — the common case when the CEO is claiming their own calendar.",
   "version": "1.0.0",
   "sensitivity": "normal",
+  "action_risk": "low",
   "infrastructure": true,
   "inputs": {
     "nylas_calendar_id": "string",

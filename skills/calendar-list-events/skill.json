@@ -3,6 +3,7 @@
   "description": "Fetch events within a date range. Omit calendarId to automatically query all of the caller's registered calendars (preferred — do NOT look up calendar IDs manually). Only pass calendarId when the user explicitly asks about a specific calendar. Supports filtering by text query (title/description) and attendee email.",
   "version": "1.0.0",
   "sensitivity": "normal",
+  "action_risk": "none",
   "infrastructure": true,
   "inputs": {
     "calendarId": "string? (omit to auto-query all caller calendars — only pass when targeting a specific calendar)",

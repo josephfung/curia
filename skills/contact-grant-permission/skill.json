@@ -3,6 +3,7 @@
   "description": "Grant or deny a specific permission for a contact, overriding their role defaults. Use when the CEO says 'Let X do Y' or 'Don't let X do Y'.",
   "version": "1.0.0",
   "sensitivity": "elevated",
+  "action_risk": "low",
   "infrastructure": true,
   "inputs": {
     "contact_id": "string",

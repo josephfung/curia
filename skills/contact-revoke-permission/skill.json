@@ -3,6 +3,7 @@
   "description": "Remove a permission override for a contact, restoring their role's default behavior for that permission.",
   "version": "1.0.0",
   "sensitivity": "elevated",
+  "action_risk": "low",
   "infrastructure": true,
   "inputs": {
     "contact_id": "string",

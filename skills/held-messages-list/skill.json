@@ -3,6 +3,7 @@
   "description": "List messages held from unknown senders awaiting your review. Shows sender, channel, subject, and when it arrived.",
   "version": "1.0.0",
   "sensitivity": "normal",
+  "action_risk": "none",
   "infrastructure": true,
   "inputs": {
     "channel": "string?"

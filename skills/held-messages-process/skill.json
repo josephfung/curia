@@ -3,6 +3,7 @@
   "description": "Process a held message: identify the sender (create/link contact and replay message), dismiss it, or block the sender.",
   "version": "1.0.0",
   "sensitivity": "elevated",
+  "action_risk": "medium",
   "infrastructure": true,
   "inputs": {
     "held_message_id": "string",

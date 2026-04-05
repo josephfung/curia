@@ -3,6 +3,7 @@
   "description": "Fetch the content of a web page via HTTP GET. Returns the page body as text. Use this to look up information on the web.",
   "version": "1.0.0",
   "sensitivity": "normal",
+  "action_risk": "none",
   "inputs": {
     "url": "string",
     "max_length": "number?"

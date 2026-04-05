@@ -3,6 +3,7 @@
   "description": "Retrieve email composing guidelines for meeting rescheduling. Returns structured policy that you use as instructions when composing the email — do NOT send the policy itself to the recipient. Supports four actions: 'generate' retrieves the policy (with any refinements); 'update' accepts a natural-language refinement; 'save' replaces the entire policy; 'reset' reverts to defaults and clears refinements.",
   "version": "1.0.0",
   "sensitivity": "normal",
+  "action_risk": "none",
   "infrastructure": true,
   "inputs": {
     "action": "string (generate | update | save | reset)",
