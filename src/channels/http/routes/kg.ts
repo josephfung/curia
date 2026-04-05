@@ -916,6 +916,7 @@ function createUiHtml(): string {
       chatConversationId = null;
       chatActiveConvIdx = -1;
       chatReplyRendered = false;
+      chatSendBtn.disabled = false;
       chatMessagesEl.replaceChildren();
       // Re-render the conversation list to clear the active highlight.
       renderConvList();
@@ -953,6 +954,9 @@ function createUiHtml(): string {
       chatMessagesEl.scrollTop = chatMessagesEl.scrollHeight;
 
       // Reopen SSE for future messages in this conversation.
+      // @TODO: if a POST is in-flight for the previous conversation when the user
+      // switches, the reply will render into this new conversation's thread instead.
+      // Fix: track the active convId per-request and skip render if it doesn't match.
       openChatStream(chatConversationId);
       renderConvList();
     }
