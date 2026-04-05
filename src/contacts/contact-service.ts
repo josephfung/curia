@@ -572,20 +572,25 @@ export class ContactService {
       }
     }
 
-    await this.backend.reattachIdentities(secondaryId, primaryId);
-    await this.backend.reattachAuthOverrides(secondaryId, primaryId);
+    try {
+      await this.backend.reattachIdentities(secondaryId, primaryId);
+      await this.backend.reattachAuthOverrides(secondaryId, primaryId);
 
-    // Write the golden record fields onto the primary contact
-    const updatedPrimary: Contact = {
-      ...primary,
-      displayName: goldenRecord.displayName,
-      role: goldenRecord.role,
-      notes: goldenRecord.notes,
-      status: goldenRecord.status,
-      updatedAt: new Date(),
-    };
-    await this.backend.updateContact(updatedPrimary);
-    await this.backend.deleteContact(secondaryId);
+      // Write the golden record fields onto the primary contact
+      const updatedPrimary: Contact = {
+        ...primary,
+        displayName: goldenRecord.displayName,
+        role: goldenRecord.role,
+        notes: goldenRecord.notes,
+        status: goldenRecord.status,
+        updatedAt: new Date(),
+      };
+      await this.backend.updateContact(updatedPrimary);
+      await this.backend.deleteContact(secondaryId);
+    } catch (err) {
+      this.logger?.error({ err, primaryId, secondaryId }, 'Contact merge write failed — DB may be in partial state');
+      throw err;
+    }
 
     const mergedAt = new Date();
 
@@ -1340,5 +1345,14 @@ class InMemoryContactBackend implements ContactServiceBackend {
 
   async deleteContact(id: string): Promise<void> {
     this.contacts.delete(id);
+    // Cascade-delete related rows, matching Postgres ON DELETE CASCADE behavior.
+    // Without this, deleted contacts leave dangling identities/overrides in the in-memory
+    // store that can bleed into subsequent tests.
+    for (const [iid, identity] of this.identities) {
+      if (identity.contactId === id) this.identities.delete(iid);
+    }
+    for (const [oid, override] of this.overrides) {
+      if (override.contactId === id) this.overrides.delete(oid);
+    }
   }
 }

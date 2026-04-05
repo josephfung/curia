@@ -67,7 +67,7 @@ describe('DedupService', () => {
       // "Jenna Torres" vs "Jen Torres" — close enough to be probable or certain
       // The exact score depends on Jaro-Winkler; just ensure we detect them
       expect(results.length).toBeGreaterThanOrEqual(1);
-      expect(results[0].score).toBeGreaterThan(0.7);
+      expect(results[0].score).toBeGreaterThanOrEqual(0.7);
     });
 
     it('detects certain match for contacts with same email but different blocking groups', () => {

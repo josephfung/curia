@@ -245,33 +245,27 @@ describeIf('Contacts Integration', () => {
   });
 
   describe('findDuplicates', () => {
-    it('returns probable duplicate pair when contacts share an email', async () => {
+    it('returns certain duplicate pair for contacts with matching name variants', async () => {
       const dedupService = new DedupService();
       // Construct a fresh service with DedupService wired — the outer contactService
       // has no DedupService so findDuplicates() would always return [].
       const svc = ContactService.createWithPostgres(pool, entityMemory, logger, { dedupService });
 
+      // "Carol White" produces the initial variant "c white".
+      // "C. White" normalizes to "c white" — an exact match → certain (score 1.0).
+      // No shared channel identity needed; name similarity alone drives this result.
+      // (Linking the same email to two contacts would violate the unique constraint
+      // on contact_channel_identities, so channel-overlap dedup is tested at the
+      // DedupService unit level rather than here.)
       const a = await svc.createContact({
         displayName: 'Carol White',
         source: 'ceo_stated',
         status: 'confirmed',
       });
-      await svc.linkIdentity({
-        contactId: a.id,
-        channel: 'email',
-        channelIdentifier: 'carol.white@example.com',
-        source: 'ceo_stated',
-      });
       const b = await svc.createContact({
         displayName: 'C. White',
         source: 'email_participant',
         status: 'provisional',
-      });
-      await svc.linkIdentity({
-        contactId: b.id,
-        channel: 'email',
-        channelIdentifier: 'carol.white@example.com',
-        source: 'email_participant',
       });
 
       const pairs = await svc.findDuplicates();
@@ -281,7 +275,7 @@ describeIf('Contacts Integration', () => {
         (p.contactA.id === b.id && p.contactB.id === a.id)
       );
       expect(found).toBeDefined();
-      expect(found?.confidence).toBe('certain'); // shared email channel identifier → certain
+      expect(found?.confidence).toBe('certain'); // "c white" variant matches exactly → 1.0
     });
   });
 });

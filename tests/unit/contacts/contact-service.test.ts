@@ -594,7 +594,8 @@ describe('EntityMemory.mergeEntities', () => {
     // @TODO: Once a store-level updateNode overload that accepts a full temporal object
     // is added, switch this to use that API so the test isn't relying on reference identity.
     const secondaryNode = await entityMemory.getEntity(secondary.id);
-    secondaryNode!.temporal.lastConfirmedAt = new Date(Date.now() + 10_000);
+    if (!secondaryNode) throw new Error('Secondary entity not found in store');
+    secondaryNode.temporal.lastConfirmedAt = new Date(Date.now() + 10_000);
 
     await entityMemory.mergeEntities(primary.id, secondary.id);
 

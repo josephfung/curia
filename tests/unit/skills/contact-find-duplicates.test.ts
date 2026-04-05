@@ -83,6 +83,7 @@ describe('ContactFindDuplicatesHandler', () => {
     };
     const contactService = { findDuplicates: async () => [fakePair] };
     const result = await handler.execute(makeCtx({}, contactService));
+    expect(result.success).toBe(true);
     if (result.success) {
       const data = result.data as { pairs: Array<{ score: number }> };
       expect(data.pairs[0].score).toBe(0.95);

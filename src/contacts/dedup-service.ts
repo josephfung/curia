@@ -84,6 +84,10 @@ function jaroWinkler(s1: string, s2: string): number {
 function normalizeDisplayName(name: string): string {
   return name
     .toLowerCase()
+    // @TODO: Use a Unicode-aware character class (e.g. \p{L}\p{N}) so that
+    // non-ASCII letters (accented characters, CJK, Arabic, etc.) are preserved
+    // rather than stripped. The current ASCII-only approach can collapse real
+    // names to empty strings or produce false matches after normalization.
     .replace(/[^a-z0-9 ]/g, '')
     .replace(/\s+/g, ' ')
     .trim();
