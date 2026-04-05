@@ -13,14 +13,31 @@ export const NODE_TYPES = [
 export type NodeType = (typeof NODE_TYPES)[number];
 
 // -- Edge types from spec (01-memory-system.md line 72) --
+// Original 7 types preserved; 12 new relationship types added per issue #128.
 export const EDGE_TYPES = [
+  // Structural / generic (original)
   'works_on',
   'decided',
   'attended',
-  'relates_to',
+  'relates_to',    // generic fallback — use when no specific type fits
   'belongs_to',
   'authored',
   'mentioned_in',
+  // Personal relationships
+  'spouse',
+  'parent',
+  'child',
+  'sibling',
+  // Professional relationships
+  'reports_to',
+  'manages',
+  'collaborates_with',
+  'advises',
+  'represents',
+  // Organisational membership
+  'member_of',
+  'founded',
+  'invested_in',
 ] as const;
 export type EdgeType = (typeof EDGE_TYPES)[number];
 
