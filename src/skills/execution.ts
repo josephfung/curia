@@ -131,7 +131,9 @@ export class ExecutionLayer {
     // which new Date() on a UTC server interprets as UTC — wrong for Toronto.
     // normalizeTimestamp() interprets offset-less strings as Curia's local time.
     for (const [key, typeStr] of Object.entries(manifest.inputs)) {
-      const baseType = typeStr.replace(/\?$/, '').replace(/\s*\(.*\)$/, '').trim();
+      // Strip parenthetical description first, then optional marker.
+      // Order matters: "timestamp? (desc)" must become "timestamp", not "timestamp?".
+      const baseType = typeStr.replace(/\s*\(.*\)$/, '').replace(/\?$/, '').trim();
       if (baseType !== 'timestamp') continue;
       const raw = input[key];
       if (typeof raw !== 'string' || raw.trim() === '') continue;

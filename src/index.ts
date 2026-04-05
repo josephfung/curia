@@ -430,12 +430,13 @@ async function main(): Promise<void> {
       skillToolDefs: agentToolDefs,
       // Only the coordinator receives the autonomy service — it's the only agent
       // that needs per-task autonomy prompt injection and the autonomy skills.
-      // Use name (not role) — role is optional in agent YAML and may not be set.
-      autonomyService: agentConfig.name === 'coordinator' ? autonomyService : undefined,
+      // Use role (same predicate as interpolateRuntimeContext above) so both
+      // branches stay in sync if the coordinator YAML is ever reconfigured.
+      autonomyService: agentConfig.role === 'coordinator' ? autonomyService : undefined,
       // The coordinator gets per-turn time block injection so the date/timezone are
       // always current. Specialist agents don't need this — they work with
       // structured data, not user-facing time references.
-      timezone: agentConfig.name === 'coordinator' ? config.timezone : undefined,
+      timezone: agentConfig.role === 'coordinator' ? config.timezone : undefined,
       // Map YAML snake_case fields to AgentConfig camelCase, falling back to
       // DEFAULT_ERROR_BUDGET values for any omitted fields.
       errorBudget: agentConfig.error_budget ? {

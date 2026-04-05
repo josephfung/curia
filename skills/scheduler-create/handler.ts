@@ -46,7 +46,8 @@ export class SchedulerCreateHandler implements SkillHandler {
         errorBudget: error_budget,
         // Optional per-job timezone — overrides the service default for cron wall-clock interpretation.
         // run_at is already normalized to UTC by the execution layer, so timezone only affects cron jobs.
-        timezone,
+        // Normalize to undefined if blank so createJob() falls back to the service default.
+        timezone: typeof timezone === 'string' && timezone.trim() !== '' ? timezone.trim() : undefined,
       });
 
       ctx.log.info({ jobId: result.jobId, agentId }, 'Scheduled job created via skill');

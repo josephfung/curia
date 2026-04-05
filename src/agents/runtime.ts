@@ -144,14 +144,17 @@ export class AgentRuntime {
     // Append current date/time block — refreshed every turn so the coordinator
     // always has the correct date, even across midnight or DST transitions.
     // This mirrors the autonomy block pattern: appended per-task, not frozen at bootstrap.
-    if (this.config.timezone) {
+    // Trim the timezone to guard against leading/trailing whitespace in env vars or
+    // deployment secrets — Luxon treats "America/Toronto " (with space) as invalid.
+    const timezone = this.config.timezone?.trim();
+    if (timezone) {
       try {
-        effectiveSystemPrompt += '\n\n' + formatTimeContextBlock(this.config.timezone, new Date());
+        effectiveSystemPrompt += '\n\n' + formatTimeContextBlock(timezone, new Date());
       } catch (err) {
         // An invalid timezone config produces "Invalid DateTime" strings in the block — which
         // is worse than omitting the block entirely because it corrupts the agent's date reasoning.
         // Log at error (operator signal) and proceed without the time block.
-        logger.error({ err, agentId, timezone: this.config.timezone }, 'formatTimeContextBlock failed — time context not injected; check TIMEZONE config');
+        logger.error({ err, agentId, timezone }, 'formatTimeContextBlock failed — time context not injected; check TIMEZONE config');
       }
     }
 

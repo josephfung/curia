@@ -377,7 +377,8 @@ export class SchedulerService {
       INSERT INTO scheduled_jobs (agent_id, cron_expr, task_payload, status, next_run_at, created_by, timezone)
       VALUES ($1, $2, $3, $4, $5, $6, $7)
       ON CONFLICT ON CONSTRAINT scheduled_jobs_declarative_uq
-      DO UPDATE SET next_run_at = $5
+      DO UPDATE SET next_run_at = $5,
+                    timezone = $7
       RETURNING id
     `;
     const params = [

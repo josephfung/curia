@@ -49,8 +49,11 @@ export function normalizeTimestamp(iso: string, defaultZone: string): string {
   const trimmed = iso.trim();
 
   // Detect whether the string carries an explicit offset.
-  // Matches: trailing Z, ±HH:MM (with colon), or ±HHMM (without colon)
-  const hasOffset = /Z$|[+-]\d{2}:\d{2}$|[+-]\d{4}$/.test(trimmed);
+  // Matches: trailing Z/z, ±HH:MM, ±HHMM, or bare ±HH — but only when a time
+  // component is present (requires T/t) to avoid false matches on date-only strings.
+  const hasOffset =
+    /[zZ]$/.test(trimmed) ||
+    (/[+-]\d{2}(?::?\d{2})?$/.test(trimmed) && /[Tt]/.test(trimmed));
 
   if (hasOffset) {
     // Already offset-aware — parse normally and re-emit as UTC.

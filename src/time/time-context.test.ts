@@ -1,5 +1,12 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { Settings } from 'luxon';
 import { formatCurrentDate, formatTimeContextBlock } from './time-context.js';
+
+// Pin locale so day/month names in assertions are deterministic across environments.
+// Luxon formatting uses the process default locale unless explicitly overridden.
+const originalLocale = Settings.defaultLocale;
+beforeAll(() => { Settings.defaultLocale = 'en-US'; });
+afterAll(() => { Settings.defaultLocale = originalLocale; });
 
 describe('formatCurrentDate', () => {
   it('formats a known date in Toronto (EDT, UTC-4)', () => {
