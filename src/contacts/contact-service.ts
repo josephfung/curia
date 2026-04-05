@@ -21,6 +21,8 @@ import type {
   ChannelIdentity,
   ContactServiceOptions,
   CreateContactOptions,
+  DedupConfidence,
+  DuplicatePair,
   LinkIdentityOptions,
   MergeGoldenRecord,
   MergeProposal,
@@ -28,6 +30,7 @@ import type {
   ResolvedSender,
   IdentitySource,
 } from './types.js';
+import type { DedupService } from './dedup-service.js';
 import type { ContactCalendar, CreateCalendarLinkOptions, ResolvedCalendar } from './calendar-types.js';
 
 // -- Backend interface --
@@ -91,6 +94,13 @@ const AUTO_VERIFIED_SOURCES: ReadonlySet<IdentitySource> = new Set([
  */
 export class ContactService {
   private onContactMerged?: (primaryId: string, secondaryId: string, mergedAt: Date) => void;
+  private dedupService?: DedupService;
+  private onDuplicateDetected?: (
+    newContactId: string,
+    matchContactId: string,
+    confidence: DedupConfidence,
+    reason: string,
+  ) => void;
 
   private constructor(
     private backend: ContactServiceBackend,
@@ -99,6 +109,8 @@ export class ContactService {
     options?: ContactServiceOptions,
   ) {
     this.onContactMerged = options?.onContactMerged;
+    this.dedupService = options?.dedupService;
+    this.onDuplicateDetected = options?.onDuplicateDetected;
   }
 
   /** Create a Postgres-backed instance for production use */
@@ -179,6 +191,39 @@ export class ContactService {
       // is added. Tracked by: https://github.com/curia-ai/curia/issues/TBD
       throw err;
     }
+
+    // Fire-and-forget dedup check. Runs asynchronously — never blocks the create.
+    // A failure here is logged and swallowed; it must not fail the contact creation.
+    if (this.dedupService && this.onDuplicateDetected) {
+      setImmediate(async () => {
+        try {
+          const allContacts = await this.backend.listContacts();
+          const others = allContacts.filter((c) => c.id !== contact.id);
+          const identitiesMap = new Map<string, ChannelIdentity[]>();
+          for (const c of others) {
+            identitiesMap.set(c.id, await this.backend.getIdentitiesForContact(c.id));
+          }
+          const newIdentities = await this.backend.getIdentitiesForContact(contact.id);
+          const pairs = this.dedupService!.checkForDuplicates(
+            contact,
+            newIdentities,
+            others,
+            identitiesMap,
+          );
+          for (const pair of pairs) {
+            const matchId = pair.contactB.id === contact.id ? pair.contactA.id : pair.contactB.id;
+            try {
+              this.onDuplicateDetected!(contact.id, matchId, pair.confidence, pair.reason);
+            } catch (callbackErr) {
+              this.logger?.warn({ callbackErr }, 'onDuplicateDetected callback threw (ignored)');
+            }
+          }
+        } catch (err) {
+          this.logger?.warn({ err, contactId: contact.id }, 'Dedup check failed (non-fatal)');
+        }
+      });
+    }
+
     return contact;
   }
 
@@ -200,6 +245,27 @@ export class ContactService {
   /** List all contacts. */
   async listContacts(): Promise<Contact[]> {
     return this.backend.listContacts();
+  }
+
+  /**
+   * Scan all contacts for probable duplicates.
+   *
+   * Fetches all contacts and their identities, then delegates to DedupService
+   * for scoring. Returns empty list if no DedupService is wired.
+   *
+   * @param minConfidence - filter threshold (default: 'probable')
+   */
+  async findDuplicates(minConfidence: DedupConfidence = 'probable'): Promise<DuplicatePair[]> {
+    if (!this.dedupService) {
+      this.logger?.warn('findDuplicates() called but no DedupService wired — returning empty');
+      return [];
+    }
+    const contacts = await this.backend.listContacts();
+    const identitiesMap = new Map<string, ChannelIdentity[]>();
+    for (const c of contacts) {
+      identitiesMap.set(c.id, await this.backend.getIdentitiesForContact(c.id));
+    }
+    return this.dedupService.findAllDuplicates(contacts, identitiesMap, minConfidence);
   }
 
   /**

@@ -2,6 +2,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { ContactService } from '../../../src/contacts/contact-service.js';
 import type { Contact } from '../../../src/contacts/types.js';
+import { DedupService } from '../../../src/contacts/dedup-service.js';
 import { KnowledgeGraphStore } from '../../../src/memory/knowledge-graph.js';
 import { EmbeddingService } from '../../../src/memory/embedding.js';
 import { EntityMemory } from '../../../src/memory/entity-memory.js';
@@ -449,6 +450,93 @@ describe('ContactService', () => {
       const proposal = await service.mergeContacts(primary.id, secondary.id, true);
       expect(proposal.goldenRecord.notes).toContain('Primary note');
       expect(proposal.goldenRecord.notes).toContain('Secondary note');
+    });
+  });
+  describe('dedup hook (onDuplicateDetected)', () => {
+    it('calls onDuplicateDetected when a certain duplicate is created', async () => {
+      const notifications: Array<{ matchId: string; confidence: string }> = [];
+      const dedupService = new DedupService();
+      const hookedService = ContactService.createInMemory(entityMemory, {
+        dedupService,
+        onDuplicateDetected: (newId, matchId, confidence) => {
+          notifications.push({ matchId, confidence });
+        },
+      });
+
+      const existing = await hookedService.createContact({
+        displayName: 'Jenna Torres',
+        source: 'ceo_stated',
+      });
+      await hookedService.linkIdentity({
+        contactId: existing.id,
+        channel: 'email',
+        channelIdentifier: 'jenna@acme.com',
+        source: 'ceo_stated',
+      });
+
+      // Create a second contact with the same name — should trigger dedup
+      await hookedService.createContact({
+        displayName: 'Jenna Torres',
+        source: 'email_participant',
+      });
+
+      // Give the fire-and-forget a tick to complete
+      await new Promise((r) => setImmediate(r));
+
+      // The hook should have been called (same name = certain match)
+      expect(notifications.length).toBeGreaterThanOrEqual(1);
+    });
+
+    it('does not fail createContact() even if onDuplicateDetected throws', async () => {
+      const dedupService = new DedupService();
+      const hookedService = ContactService.createInMemory(entityMemory, {
+        dedupService,
+        onDuplicateDetected: () => { throw new Error('callback error'); },
+      });
+      // Create two contacts — the hook throws, but create should succeed
+      await hookedService.createContact({ displayName: 'Alice', source: 'test' });
+      const second = await hookedService.createContact({ displayName: 'Alice', source: 'test' });
+      await new Promise((r) => setImmediate(r));
+      expect(second.id).toBeDefined(); // create succeeded despite callback error
+    });
+  });
+
+  describe('findDuplicates', () => {
+    it('returns empty when there are no contacts', async () => {
+      const dedupService = new DedupService();
+      const svc = ContactService.createInMemory(entityMemory, { dedupService });
+      const pairs = await svc.findDuplicates();
+      expect(pairs).toHaveLength(0);
+    });
+
+    it('finds a duplicate pair by identical display name', async () => {
+      const dedupService = new DedupService();
+      const svc = ContactService.createInMemory(entityMemory, { dedupService });
+
+      // Two separate contacts with the same display name — triggers a probable/certain
+      // match based on Jaro-Winkler scoring. This is the primary dedup signal when
+      // channel identities differ (the in-memory backend enforces uniqueness on
+      // channel:identifier pairs, so same-email setup requires a real DB).
+      const a = await svc.createContact({ displayName: 'Bob Jones', source: 'ceo_stated' });
+      await svc.linkIdentity({
+        contactId: a.id,
+        channel: 'email',
+        channelIdentifier: 'bob@acme.com',
+        source: 'ceo_stated',
+      });
+      const b = await svc.createContact({ displayName: 'Bob Jones', source: 'email_participant' });
+      await svc.linkIdentity({
+        contactId: b.id,
+        channel: 'email',
+        channelIdentifier: 'bob.jones@acme.com',
+        source: 'email_participant',
+      });
+
+      const pairs = await svc.findDuplicates();
+      expect(pairs.some(p =>
+        (p.contactA.id === a.id && p.contactB.id === b.id) ||
+        (p.contactA.id === b.id && p.contactB.id === a.id)
+      )).toBe(true);
     });
   });
 });
