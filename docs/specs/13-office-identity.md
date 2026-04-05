@@ -278,7 +278,7 @@ system_prompt: |
 
 The identity cache in `OfficeIdentityService` is in-memory. Reload is triggered by:
 
-1. **File watcher** — `chokidar` watches `config/office-identity.yaml`; any change calls `reload()`, which reads from DB (where the new version was already written)
+1. **File watcher** — `chokidar` watches `config/office-identity.yaml`; on change it parses the file, writes a new DB version (`changed_by: 'file_load'`), then calls `reload()` (which reads from DB). The write-then-reload sequence ensures the DB is always the authoritative source and the file watcher never silently loses a change.
 2. **API endpoint** — `POST /api/identity/reload` for programmatic reload (used by the wizard after saving)
 3. **Startup** — `OfficeIdentityService` is initialized before the coordinator boots
 
