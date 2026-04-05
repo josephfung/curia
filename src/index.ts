@@ -255,7 +255,7 @@ async function main(): Promise<void> {
   // Skill registry — loads all skills from the skills/ directory.
   // Skills are the framework's extension mechanism; agents invoke them
   // via the LLM's tool-use API through the execution layer.
-  const skillRegistry = new SkillRegistry();
+  const skillRegistry = new SkillRegistry(config.timezone);
   const skillsDir = path.resolve(import.meta.dirname, '../skills');
   try {
     const skillCount = await loadSkillsFromDirectory(skillsDir, skillRegistry, logger);
@@ -370,14 +370,14 @@ async function main(): Promise<void> {
   // Scheduler — Postgres-backed job scheduler for cron and one-shot tasks.
   // SchedulerService is the shared service; Scheduler is the polling loop.
   // Constructed early so it can be passed to ExecutionLayer and HttpAdapter.
-  const schedulerService = new SchedulerService(pool, bus, logger);
+  const schedulerService = new SchedulerService(pool, bus, logger, config.timezone);
   const scheduler = new Scheduler({ pool, bus, logger, schedulerService });
 
   // Execution layer — now with bus, agent registry, and outbound gateway for
   // infrastructure skills. outboundGateway gives email skills their send path.
   // entityContextAssembler enables entity_enrichment pre-enrichment and the
   // entity-context skill. agentContactId enables entity_enrichment default='agent'.
-  const executionLayer = new ExecutionLayer(skillRegistry, logger, { bus, agentRegistry, contactService, outboundGateway, heldMessages, schedulerService, entityMemory, agentPersona, nylasCalendarClient, entityContextAssembler, agentContactId: agentIdentityContactId, autonomyService });
+  const executionLayer = new ExecutionLayer(skillRegistry, logger, { bus, agentRegistry, contactService, outboundGateway, heldMessages, schedulerService, entityMemory, agentPersona, nylasCalendarClient, entityContextAssembler, agentContactId: agentIdentityContactId, autonomyService, timezone: config.timezone });
 
   // Two-pass agent registration:
   // Pass 1: Register all agents in the registry so specialistSummary() is complete
@@ -405,24 +405,14 @@ async function main(): Promise<void> {
     const agentPinnedSkills = agentConfig.pinned_skills ?? [];
     const agentToolDefs = skillRegistry.toToolDefinitions(agentPinnedSkills);
 
-    // For the coordinator, interpolate runtime context (specialist list, date, timezone).
+    // For the coordinator, interpolate runtime context (specialist list, agent contact ID).
+    // Date and timezone are no longer baked in here — they are appended fresh on every
+    // task turn via AgentRuntime using formatTimeContextBlock() so they never go stale.
     // This runs in pass 2 so all specialists are already in the registry.
-    // Date is formatted as "YYYY-MM-DD, DayName" in the configured timezone
-    // so agents can resolve relative references like "next Friday".
     let systemPrompt = agentConfig.system_prompt;
     if (agentConfig.role === 'coordinator') {
-      const now = new Date();
-      const currentDate = now.toLocaleDateString('en-CA', {
-        timeZone: config.timezone,
-        year: 'numeric',
-        month: '2-digit',
-        day: '2-digit',
-        weekday: 'long',
-      });
       systemPrompt = interpolateRuntimeContext(systemPrompt, {
         availableSpecialists: agentRegistry.specialistSummary(),
-        currentDate,
-        timezone: config.timezone,
         agentContactId: agentIdentityContactId,
       });
     }
@@ -440,8 +430,13 @@ async function main(): Promise<void> {
       skillToolDefs: agentToolDefs,
       // Only the coordinator receives the autonomy service — it's the only agent
       // that needs per-task autonomy prompt injection and the autonomy skills.
-      // Use name (not role) — role is optional in agent YAML and may not be set.
-      autonomyService: agentConfig.name === 'coordinator' ? autonomyService : undefined,
+      // Use role (same predicate as interpolateRuntimeContext above) so both
+      // branches stay in sync if the coordinator YAML is ever reconfigured.
+      autonomyService: agentConfig.role === 'coordinator' ? autonomyService : undefined,
+      // The coordinator gets per-turn time block injection so the date/timezone are
+      // always current. Specialist agents don't need this — they work with
+      // structured data, not user-facing time references.
+      timezone: agentConfig.role === 'coordinator' ? config.timezone : undefined,
       // Map YAML snake_case fields to AgentConfig camelCase, falling back to
       // DEFAULT_ERROR_BUDGET values for any omitted fields.
       errorBudget: agentConfig.error_budget ? {

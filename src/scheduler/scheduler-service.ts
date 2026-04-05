@@ -1,4 +1,5 @@
 import { CronExpressionParser } from 'cron-parser';
+import { DateTime } from 'luxon';
 import type { Pool } from 'pg';
 import type { EventBus } from '../bus/bus.js';
 import type { Logger } from '../logger.js';
@@ -14,6 +15,8 @@ export interface CreateJobParams {
   createdBy: string;
   intentAnchor?: string;
   errorBudget?: Record<string, unknown>;
+  /** IANA timezone for cron wall-clock interpretation. Defaults to the service's timezone. */
+  timezone?: string;
 }
 
 export interface CreateJobResult {
@@ -35,6 +38,8 @@ export interface JobRow {
   consecutiveFailures: number;
   createdBy: string;
   createdAt: string;
+  /** IANA timezone used for cron wall-clock interpretation. */
+  timezone: string;
   // Linked agent_task fields (null when no task is linked)
   agentTaskId: string | null;
   intentAnchor: string | null;
@@ -61,6 +66,7 @@ interface DbJobRow {
   consecutive_failures: number;
   created_by: string;
   created_at: string;
+  timezone: string;
   agent_task_id: string | null;
   intent_anchor: string | null;
   progress: Record<string, unknown> | null;
@@ -73,18 +79,36 @@ export class SchedulerService {
   private pool: Pool;
   private bus: EventBus;
   private logger: Logger;
+  /** Default IANA timezone for cron expression parsing when a job has no per-job timezone. */
+  private timezone: string;
 
-  constructor(pool: Pool, bus: EventBus, logger: Logger) {
+  constructor(pool: Pool, bus: EventBus, logger: Logger, timezone = 'UTC') {
+    // Validate the timezone at construction time — an invalid zone name causes
+    // cron-parser to throw opaque errors at runtime, and declarative jobs would
+    // silently fail to load at startup with no clear root cause.
+    const testDt = DateTime.local().setZone(timezone);
+    if (!testDt.isValid) {
+      throw new Error(`SchedulerService: invalid timezone "${timezone}" — check the TIMEZONE environment variable`);
+    }
     this.pool = pool;
     this.bus = bus;
     this.logger = logger;
+    this.timezone = timezone;
   }
 
   // -- Cron helpers --
 
-  /** Parse a cron expression and return the next run time as a Date. */
-  nextRunFromCron(cronExpr: string): Date {
-    const expr = CronExpressionParser.parse(cronExpr);
+  /**
+   * Parse a cron expression and return the next run time as a Date.
+   *
+   * @param cronExpr  Standard 5-field cron expression
+   * @param timezone  IANA timezone to use for wall-clock interpretation.
+   *                  Defaults to the service's configured timezone so that
+   *                  "0 8 * * *" fires at 8am local time, not 8am UTC.
+   */
+  nextRunFromCron(cronExpr: string, timezone?: string): Date {
+    const tz = timezone ?? this.timezone;
+    const expr = CronExpressionParser.parse(cronExpr, { tz });
     return expr.next().toDate();
   }
 
@@ -92,9 +116,10 @@ export class SchedulerService {
    * Validate that a cron expression doesn't fire more often than the minimum interval.
    * Prevents DoS via high-frequency cron jobs (e.g., every second or every minute).
    */
-  validateCronFrequency(cronExpr: string): void {
+  validateCronFrequency(cronExpr: string, timezone?: string): void {
     const MIN_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
-    const expr = CronExpressionParser.parse(cronExpr);
+    const tz = timezone ?? this.timezone;
+    const expr = CronExpressionParser.parse(cronExpr, { tz });
     const first = expr.next().toDate();
     const second = expr.next().toDate();
     const intervalMs = second.getTime() - first.getTime();
@@ -107,6 +132,17 @@ export class SchedulerService {
 
   async createJob(params: CreateJobParams): Promise<CreateJobResult> {
     const { agentId, cronExpr, runAt, taskPayload, createdBy, intentAnchor, errorBudget } = params;
+    // Per-job timezone: use caller's override, fall back to service default.
+    // Validate LLM-supplied overrides — cron-parser accepts some invalid zone strings
+    // (e.g. "UTC+99") without throwing, which would silently schedule jobs at wrong times.
+    const rawJobTimezone = params.timezone ?? this.timezone;
+    if (params.timezone !== undefined) {
+      const tzCheck = DateTime.local().setZone(rawJobTimezone);
+      if (!tzCheck.isValid) {
+        throw new Error(`Invalid timezone "${rawJobTimezone}" — must be a valid IANA timezone name (e.g. "America/Toronto")`);
+      }
+    }
+    const jobTimezone = rawJobTimezone;
 
     if (!cronExpr && !runAt) {
       throw new Error('Either cronExpr or runAt must be provided');
@@ -114,15 +150,16 @@ export class SchedulerService {
 
     // Validate cron frequency to prevent DoS via high-frequency schedules.
     if (cronExpr) {
-      this.validateCronFrequency(cronExpr);
+      this.validateCronFrequency(cronExpr, jobTimezone);
     }
 
-    // Calculate next_run_at: for cron jobs use the parser, for one-shot jobs use runAt directly.
-    const nextRunAt = cronExpr ? this.nextRunFromCron(cronExpr) : runAt!;
+    // Calculate next_run_at: for cron jobs use the parser (respecting per-job timezone),
+    // for one-shot jobs use runAt directly (already UTC from timestamp normalization).
+    const nextRunAt = cronExpr ? this.nextRunFromCron(cronExpr, jobTimezone) : runAt!;
 
     const insertSql = `
-      INSERT INTO scheduled_jobs (agent_id, cron_expr, run_at, task_payload, status, next_run_at, created_by)
-      VALUES ($1, $2, $3, $4, $5, $6, $7)
+      INSERT INTO scheduled_jobs (agent_id, cron_expr, run_at, task_payload, status, next_run_at, created_by, timezone)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
       RETURNING id
     `;
     const insertParams = [
@@ -133,6 +170,7 @@ export class SchedulerService {
       'pending',
       nextRunAt,
       createdBy,
+      jobTimezone,
     ];
 
     const { rows } = await this.pool.query(insertSql, insertParams);
@@ -241,17 +279,18 @@ export class SchedulerService {
   async unsuspendJob(jobId: string): Promise<void> {
     // Fetch the job to get cron_expr or run_at for recalculating next_run_at
     const { rows } = await this.pool.query(
-      `SELECT cron_expr, run_at FROM scheduled_jobs WHERE id = $1 AND status = 'suspended'`,
+      `SELECT cron_expr, run_at, timezone FROM scheduled_jobs WHERE id = $1 AND status = 'suspended'`,
       [jobId],
     );
     if (rows.length === 0) {
       throw new Error(`Job ${jobId} not found or not suspended`);
     }
 
-    const { cron_expr, run_at } = rows[0] as { cron_expr: string | null; run_at: Date | null };
+    const { cron_expr, run_at, timezone: jobTimezone } = rows[0] as { cron_expr: string | null; run_at: Date | null; timezone: string };
     let nextRunAt: Date;
     if (cron_expr) {
-      nextRunAt = this.nextRunFromCron(cron_expr);
+      // Use the per-job timezone so the next run fires at the correct wall-clock time.
+      nextRunAt = this.nextRunFromCron(cron_expr, jobTimezone);
     } else {
       // One-shot job: re-use original run_at (may be in the past — will fire immediately)
       nextRunAt = new Date(run_at!);
@@ -331,11 +370,15 @@ export class SchedulerService {
     const taskPayload = { task: schedule.task };
     const nextRunAt = this.nextRunFromCron(schedule.cron);
 
+    // Include timezone so completeJobRun() re-advances next_run_at in the same zone.
+    // Without this, the DB column would default to 'UTC' while next_run_at was computed
+    // using this.timezone — causing every post-completion firing to be offset by the UTC delta.
     const sql = `
-      INSERT INTO scheduled_jobs (agent_id, cron_expr, task_payload, status, next_run_at, created_by)
-      VALUES ($1, $2, $3, $4, $5, $6)
+      INSERT INTO scheduled_jobs (agent_id, cron_expr, task_payload, status, next_run_at, created_by, timezone)
+      VALUES ($1, $2, $3, $4, $5, $6, $7)
       ON CONFLICT ON CONSTRAINT scheduled_jobs_declarative_uq
-      DO UPDATE SET next_run_at = $5
+      DO UPDATE SET next_run_at = $5,
+                    timezone = $7
       RETURNING id
     `;
     const params = [
@@ -345,6 +388,7 @@ export class SchedulerService {
       'pending',
       nextRunAt,
       'system',
+      this.timezone,
     ];
 
     const { rows } = await this.pool.query(sql, params);
@@ -363,9 +407,14 @@ export class SchedulerService {
     error?: string,
   ): Promise<{ suspended: boolean }> {
     // Fetch the current job state to decide how to handle the completion.
-    const fetchSql = `SELECT id, cron_expr, status, consecutive_failures FROM scheduled_jobs WHERE id = $1`;
+    // Include timezone so nextRunFromCron() uses the per-job zone, not the system default.
+    // NOTE: this query requires migration 012 (adds the timezone column). If it has not been
+    // applied, pg will throw "column timezone does not exist", handleCompletion() will catch it
+    // and log an error, and the job will be left permanently in 'running' state with no recovery.
+    // Always run migrations before deploying code that depends on them.
+    const fetchSql = `SELECT id, cron_expr, status, consecutive_failures, timezone FROM scheduled_jobs WHERE id = $1`;
     const { rows } = await this.pool.query(fetchSql, [jobId]);
-    const job = rows[0] as { id: string; cron_expr: string | null; status: string; consecutive_failures: number } | undefined;
+    const job = rows[0] as { id: string; cron_expr: string | null; status: string; consecutive_failures: number; timezone: string } | undefined;
 
     if (!job) {
       throw new Error(`Job not found: ${jobId}`);
@@ -373,8 +422,8 @@ export class SchedulerService {
 
     if (success) {
       if (job.cron_expr) {
-        // Recurring job: advance to next run, reset failure counter.
-        const nextRunAt = this.nextRunFromCron(job.cron_expr);
+        // Recurring job: advance to next run using the per-job timezone, reset failure counter.
+        const nextRunAt = this.nextRunFromCron(job.cron_expr, job.timezone);
         const updateSql = `
           UPDATE scheduled_jobs
              SET last_run_at = now(),
@@ -444,6 +493,7 @@ function mapJobRow(row: DbJobRow): JobRow {
     consecutiveFailures: row.consecutive_failures,
     createdBy: row.created_by,
     createdAt: row.created_at,
+    timezone: row.timezone,
     agentTaskId: row.agent_task_id,
     intentAnchor: row.intent_anchor,
     progress: row.progress,

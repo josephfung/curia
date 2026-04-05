@@ -6,8 +6,8 @@
   "infrastructure": true,
   "inputs": {
     "calendarId": "string? (omit to auto-query all caller calendars — only pass when targeting a specific calendar)",
-    "timeMin": "string",
-    "timeMax": "string",
+    "timeMin": "timestamp (start of range, inclusive)",
+    "timeMax": "timestamp (end of range, exclusive)",
     "maxResults": "number?",
     "query": "string?",
     "attendeeEmail": "string?"

@@ -7,8 +7,8 @@
   "inputs": {
     "calendarId": "string",
     "title": "string",
-    "start": "string",
-    "end": "string",
+    "start": "timestamp (event start time)",
+    "end": "timestamp (event end time)",
     "description": "string?",
     "location": "string?",
     "attendees": "object[]?",

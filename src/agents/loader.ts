@@ -136,8 +136,6 @@ export function interpolateRuntimeContext(
   systemPrompt: string,
   context: {
     availableSpecialists?: string;
-    currentDate?: string;
-    timezone?: string;
     agentContactId?: string;
   },
 ): string {
@@ -145,14 +143,6 @@ export function interpolateRuntimeContext(
     .replace(
       /\$\{available_specialists\}/g,
       context.availableSpecialists ?? 'No specialists available yet.',
-    )
-    .replace(
-      /\$\{current_date\}/g,
-      context.currentDate ?? new Date().toISOString().split('T')[0] ?? '',
-    )
-    .replace(
-      /\$\{timezone\}/g,
-      context.timezone ?? 'UTC',
     )
     .replace(
       /\$\{agent_contact_id\}/g,

@@ -18,6 +18,7 @@
 // never needs to call entity-context itself.
 
 import type { SkillResult, SkillContext, CallerContext, AgentPersona } from './types.js';
+import { normalizeTimestamp } from '../time/timestamp.js';
 import type { SkillRegistry } from './registry.js';
 import { sanitizeOutput } from './sanitize.js';
 import type { Logger } from '../logger.js';
@@ -52,6 +53,8 @@ export class ExecutionLayer {
   private autonomyService?: AutonomyService;
   /** The agent's own contactId — injected into ctx.agentContactId for entity_enrichment default='agent' */
   private agentContactId?: string;
+  /** IANA timezone name used for normalizing offset-less timestamp inputs from the LLM. */
+  private timezone: string;
 
   constructor(registry: SkillRegistry, logger: Logger, options?: {
     bus?: EventBus;
@@ -66,6 +69,7 @@ export class ExecutionLayer {
     entityContextAssembler?: EntityContextAssembler;
     autonomyService?: AutonomyService;
     agentContactId?: string;
+    timezone?: string;
   }) {
     this.registry = registry;
     this.logger = logger;
@@ -81,6 +85,7 @@ export class ExecutionLayer {
     this.entityContextAssembler = options?.entityContextAssembler;
     this.autonomyService = options?.autonomyService;
     this.agentContactId = options?.agentContactId;
+    this.timezone = options?.timezone ?? 'UTC';
   }
 
   /**
@@ -117,6 +122,36 @@ export class ExecutionLayer {
 
     const { manifest, handler } = skill;
 
+    // Declare skillLogger here (before the normalization loop) so it is in scope
+    // for both the normalization error path and the rest of the method.
+    const skillLogger = this.logger.child({ skill: skillName });
+
+    // Normalize timestamp inputs to UTC Z-suffix before invoking the handler.
+    // The LLM often emits offset-less ISO strings (e.g. "2026-04-06T08:00:00")
+    // which new Date() on a UTC server interprets as UTC — wrong for Toronto.
+    // normalizeTimestamp() interprets offset-less strings as Curia's local time.
+    for (const [key, typeStr] of Object.entries(manifest.inputs)) {
+      // Strip parenthetical description first, then optional marker.
+      // Order matters: "timestamp? (desc)" must become "timestamp", not "timestamp?".
+      const baseType = typeStr.replace(/\s*\(.*\)$/, '').replace(/\?$/, '').trim();
+      if (baseType !== 'timestamp') continue;
+      const raw = input[key];
+      if (typeof raw !== 'string' || raw.trim() === '') continue;
+      try {
+        input[key] = normalizeTimestamp(raw, this.timezone);
+      } catch (err) {
+        // Hard fail — passing a non-normalized timestamp to a calendar/scheduler handler
+        // would silently create events at the wrong time (the server runs UTC, so an
+        // offset-less string passed to new Date() is interpreted as UTC, not local time).
+        // Return a skill error so the LLM can re-emit the value with an explicit offset.
+        skillLogger.error({ err, key, raw }, 'timestamp normalization failed; refusing to invoke handler with unnormalized value');
+        return {
+          success: false,
+          error: `Input '${key}' could not be parsed as a valid datetime: "${raw}". Please provide an ISO 8601 string with a UTC offset (e.g. "2026-04-06T08:00:00-04:00").`,
+        };
+      }
+    }
+
     // Elevated-skill gate: enforce caller verification before building context.
     // Fail-closed — if caller context is missing, elevated skills are blocked.
     // CLI channel bypasses role check (trusted local operator; role may be null at startup).
@@ -136,8 +171,6 @@ export class ExecutionLayer {
         };
       }
     }
-
-    const skillLogger = this.logger.child({ skill: skillName });
 
     // Build the sandboxed context — secret access is restricted to
     // only the secrets declared in the skill's manifest

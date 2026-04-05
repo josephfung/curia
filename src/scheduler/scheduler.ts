@@ -126,6 +126,7 @@ export class Scheduler {
           consecutiveFailures: row.consecutive_failures,
           createdBy: row.created_by,
           createdAt: row.created_at,
+          timezone: row.timezone as string,
           agentTaskId: row.agent_task_id ?? null,
           intentAnchor: row.intent_anchor ?? null,
           progress: row.progress ?? null,

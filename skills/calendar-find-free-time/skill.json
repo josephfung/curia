@@ -6,8 +6,8 @@
   "infrastructure": true,
   "inputs": {
     "calendarIds": "array",
-    "timeMin": "string",
-    "timeMax": "string",
+    "timeMin": "timestamp (start of search window, inclusive)",
+    "timeMax": "timestamp (end of search window, exclusive)",
     "duration": "number?"
   },
   "outputs": {

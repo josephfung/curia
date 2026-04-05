@@ -6,8 +6,8 @@
   "infrastructure": true,
   "inputs": {
     "calendarIds": "array",
-    "proposedStart": "string",
-    "proposedEnd": "string"
+    "proposedStart": "timestamp (start of proposed slot)",
+    "proposedEnd": "timestamp (end of proposed slot)"
   },
   "outputs": {
     "conflicts": "array",
