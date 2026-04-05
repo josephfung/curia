@@ -201,7 +201,12 @@ export class OfficeIdentityService {
          RETURNING id`,
         [nextVersion, JSON.stringify(config), changedBy, note ?? null],
       );
-      const newVersionId = insertResult.rows[0]!.id;
+      // INSERT ... RETURNING always yields exactly one row on success, but an explicit
+      // check is clearer than a non-null assertion and makes the failure mode obvious.
+      if (!insertResult.rows[0]) {
+        throw new Error('Failed to persist office identity version: INSERT returned no rows');
+      }
+      const newVersionId = insertResult.rows[0].id;
 
       // Upsert the current pointer to point at the new version.
       await client.query(
