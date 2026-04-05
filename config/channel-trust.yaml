@@ -9,6 +9,13 @@ channels:
   cli:
     trust: high
     unknown_sender: allow
+  # 'web' is the KG web app (authenticated via the bootstrap secret, which is CEO-only).
+  # contact-resolver.ts short-circuits this channel to the CEO contact, so unknown_sender
+  # is defence-in-depth only. Trust is 'high' because the bootstrap secret is equivalent
+  # to the CEO's CLI session — same principal, same authority.
+  web:
+    trust: high
+    unknown_sender: allow
   signal:
     trust: high
     unknown_sender: hold_and_notify
