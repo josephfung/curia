@@ -68,6 +68,10 @@ export class BrowserService {
    * Must be called before any session operations.
    */
   async start(): Promise<void> {
+    if (this.browser !== null) {
+      throw new Error('BrowserService.start() called while already running — call stop() first');
+    }
+
     await this.maybeStartXvfb();
     this.browser = await this.browserFactory();
 
@@ -166,22 +170,27 @@ export class BrowserService {
 
     // Create new isolated context + page
     const context = await this.browser.newContext({
-      // Viewport that looks like a real laptop browser
       viewport: { width: 1280, height: 720 },
-      // Use a common, real browser user agent string
       userAgent: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
     });
 
-    // Apply ad blocker to this context if initialized.
-    // Wrapped in try/catch so tests that inject minimal mock page objects
-    // (which may lack adblocker-required APIs like .once()) don't fail here.
-    const page = await context.newPage();
-    if (this.blocker) {
-      try {
-        await this.blocker.enableBlockingInPage(page);
-      } catch (err) {
-        this.logger.warn({ err }, 'Ad blocker could not be applied to page — continuing without it');
+    let page;
+    try {
+      // Apply ad blocker to this context if initialized
+      page = await context.newPage();
+      if (this.blocker) {
+        try {
+          await this.blocker.enableBlockingInPage(page);
+        } catch (err) {
+          this.logger.warn({ err }, 'Ad blocker failed to attach to page — continuing without ad blocking for this session');
+        }
       }
+    } catch (err) {
+      // If page creation fails, close the context to prevent a resource leak.
+      // Without this, the BrowserContext would never be closed since it's not
+      // yet in this.sessions and stop() only closes sessions in the map.
+      await context.close().catch(() => {});
+      throw err;
     }
     const newSessionId = randomUUID();
     const session = new BrowserSession(context, page);
@@ -217,12 +226,16 @@ export class BrowserService {
    * Exposed publicly for testing.
    */
   async sweep(): Promise<void> {
-    for (const [sessionId, session] of this.sessions.entries()) {
-      if (session.isExpired(this.sessionTtlMs)) {
-        this.logger.debug({ sessionId }, 'Sweeping expired session');
-        await session.close().catch(err => this.logger.error({ err, sessionId }, 'Error closing expired session during sweep'));
-        this.sessions.delete(sessionId);
-      }
+    // Snapshot expired entries before any await to prevent concurrent sweep calls
+    // from closing the same sessions twice. Delete from the map before awaiting
+    // close() so a concurrent getOrCreateSession() can't return a session that's
+    // already been closed.
+    const expired = [...this.sessions.entries()].filter(([, s]) => s.isExpired(this.sessionTtlMs));
+    for (const [sessionId, session] of expired) {
+      if (!this.sessions.has(sessionId)) continue; // already closed by a concurrent call
+      this.sessions.delete(sessionId);
+      this.logger.debug({ sessionId }, 'Sweeping expired session');
+      await session.close().catch(err => this.logger.error({ err, sessionId }, 'Error closing expired session during sweep'));
     }
   }
 
