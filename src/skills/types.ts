@@ -35,10 +35,10 @@ export interface SkillManifest {
   /** "normal" = auto-approvable; "elevated" = requires human approval on first use */
   sensitivity: 'normal' | 'elevated';
   /** Action risk: the minimum autonomy score required to invoke this skill without
-   *  explicit CEO approval. Used by Phase 2 gate wiring to enforce autonomy-aware
-   *  skill access. Optional — existing manifests that predate spec 12 don't have
-   *  this field. See ActionRisk for the named label → score mapping. */
-  action_risk?: ActionRisk;
+   *  explicit CEO approval. Required on all new manifests — Phase 2 will enforce this
+   *  at load time (SkillRegistry.register will reject manifests that omit it).
+   *  See ActionRisk for the named label → score mapping. */
+  action_risk: ActionRisk;
   /** JSON Schema-ish description of expected inputs */
   inputs: Record<string, string>;
   /** JSON Schema-ish description of outputs */
