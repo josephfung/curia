@@ -69,7 +69,7 @@ Cross-cutting: Audit Logger, Memory Engine, Scheduler.
 
 ### Autonomy Awareness
 
-When adding a new skill, declare its action risk in `skill.json` (this field is not enforced in Phase 1 but is required for Phase 2 gate wiring):
+When adding a new skill, declare its action risk in `skill.json`. This field is **required** — Phase 2 will reject manifests that omit it at startup:
 
 ```json
 "action_risk": "medium"

@@ -14,7 +14,8 @@ Postgres-persisted, and injected into the coordinator's system prompt on every t
 Curia self-governs accordingly.
 
 Phase 1 establishes the score, CEO read/write access, and behavioral prompt injection.
-Phase 2 (future) will add automatic score adjustment driven by an action log.
+Phase 2 (future) will wire hard gates in the execution and outbound layers driven by the live score and each skill's declared `action_risk`.
+Phase 3 (future) will add automatic score adjustment driven by an action log.
 
 ---
 
@@ -23,14 +24,15 @@ Phase 2 (future) will add automatic score adjustment driven by an action log.
 The autonomy framework is derived from Gorick Ng's Competence / Commitment / Compatibility
 model. A composite score maps to one of five autonomy bands, each with explicit behavioral
 guidance. This spec covers the Phase 1 foundation only — the full scoring formula,
-auto-adjustment rules, relationship signals, and gating engine are documented in the
-source spec (to be filed at `docs/specs/designs/office-ceo-agent-scoring-spec.md`) and deferred to Phase 2.
+auto-adjustment rules, and relationship signals are documented in the source spec
+(to be filed at `docs/specs/designs/office-ceo-agent-scoring-spec.md`) and deferred to Phase 3.
+The gating engine is Phase 2.
 
 **Why a single global score rather than per-agent or per-capability scoring?**
 Curia is a single deployed instance — there is no meaningful distinction between "Curia's
 email autonomy" and "Curia's calendar autonomy" at this stage. A global score is
 interpretable, adjustable, and directly tied to the CEO's lived trust in the system. Per-
-capability scoring can be layered on top in Phase 2 once the global baseline is established.
+capability scoring can be layered on top in Phase 2 or later once the global baseline is established.
 
 ---
 
@@ -85,7 +87,7 @@ CREATE TABLE autonomy_config (
   score       INTEGER NOT NULL CHECK (score >= 0 AND score <= 100),
   band        TEXT NOT NULL,        -- derived label stored for query convenience
   updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_by  TEXT NOT NULL,        -- 'ceo' or 'system' (Phase 2+)
+  updated_by  TEXT NOT NULL,        -- 'ceo' or 'system' (Phase 3+)
   CONSTRAINT single_row CHECK (id = 1)
 );
 ```
@@ -115,7 +117,7 @@ CREATE TABLE autonomy_history (
 ```
 
 Every write to `autonomy_config` appends a row here. This table is never updated or
-deleted. It is the foundation Phase 2's auto-adjustment will write to when recording
+deleted. It is the foundation Phase 3's auto-adjustment will write to when recording
 score changes from the action log.
 
 ---
@@ -216,9 +218,9 @@ A raw number (0–100) may be used for precision (e.g. `75` for a skill that sho
 just above approval-required but below spot-check). Numbers outside [0, 100] produce a
 validation error at skill load time.
 
-This field is **not enforced by the execution layer in Phase 1** — it is documentation for
-the developer and for Phase 2's gate wiring. When the execution layer is extended to enforce
-action risk, the field will already be present.
+This field is **required** in all skill manifests. It is not enforced at runtime in Phase 1,
+but Phase 2 will gate skill execution against it. The field must be present and valid at
+skill load time — `SkillRegistry.register` will reject manifests that omit it (Phase 2).
 
 ### Action risk guidelines by capability class
 
@@ -242,10 +244,9 @@ When adding a new agent:
 
 ---
 
-## Intended Future Hard Gates (Phase 2)
+## Phase 2: Hard Gates (Future)
 
-These gates are deferred to Phase 2 but documented here as the intended target. When
-wiring, these are the first candidates:
+These gates are deferred to Phase 2. When wiring, these are the first candidates:
 
 | Condition | Gate |
 |---|---|
@@ -258,9 +259,9 @@ autonomy check there in Phase 2 requires no architectural change.
 
 ---
 
-## Phase 2: Auto-Adjustment (Future)
+## Phase 3: Auto-Adjustment (Future)
 
-Phase 2 will implement automatic score adjustment based on an action log. The formula from
+Phase 3 will implement automatic score adjustment based on an action log. The formula from
 the source spec:
 
 ```
@@ -276,10 +277,10 @@ Key constraints from the spec:
 - Autonomy cannot increase if factual error rate is high or overconfidence penalty is active
 - All automatic adjustments write to `autonomy_history` with `changed_by: "system"`
 
-The `autonomy_history` table designed in Phase 1 is the exact foundation Phase 2 writes to.
+The `autonomy_history` table designed in Phase 1 is the exact foundation Phase 3 writes to.
 
-The full Phase 2 schema (action log, relationship signals, confidence model) is in the
-source spec. Phase 2 gets its own design doc when the time comes.
+The full Phase 3 schema (action log, relationship signals, confidence model) is in the
+source spec. Phase 3 gets its own design doc when the time comes.
 
 ---
 

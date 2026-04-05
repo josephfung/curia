@@ -13,7 +13,7 @@ CREATE TABLE autonomy_config (
 );
 
 -- Append-only audit trail — never updated or deleted.
--- Phase 2 auto-adjustment will also write here (changed_by = 'system').
+-- Phase 3 auto-adjustment will also write here (changed_by = 'system').
 CREATE TABLE autonomy_history (
   id             BIGSERIAL PRIMARY KEY,
   score          INTEGER NOT NULL,

@@ -91,9 +91,9 @@ Use `"elevated"` for skills with serious external effects: sending emails, makin
 
 The elevated check is per-call, not per-agent-pair — there is no stored approval table. Every invocation of an elevated skill is checked against the caller context on the fly.
 
-#### `action_risk` (strongly recommended)
+#### `action_risk` (required)
 
-Declares the risk level of this skill's primary action. Used by the **autonomy engine** in Phase 2 to gate skill execution against the global autonomy score. The field is optional in the schema (manifests that predate spec 12 don't have it), but all new skills should declare it now so the gating system is correctly labeled when it goes live.
+Declares the risk level of this skill's primary action. Used by the **autonomy engine** in Phase 2 to gate skill execution against the global autonomy score. All skills must declare this field — manifests without it will be rejected at startup once Phase 2 gating is wired, and it is required now so skills are correctly labeled when that goes live.
 
 | Value | Min autonomy score | Capability class |
 |---|---|---|
@@ -105,9 +105,9 @@ Declares the risk level of this skill's primary action. Used by the **autonomy e
 
 A raw integer (0–100) may be used for precision when the named levels are too coarse. Values outside `[0, 100]` produce a validation error at skill load time.
 
-**Phase 1 status:** `action_risk` is declared now but not yet enforced at runtime — the gating engine is Phase 2. Declaring it now ensures all skills are correctly labeled when gating goes live.
+**Phase 1 status:** `action_risk` is declared and validated at load time but not yet enforced at runtime — the hard gate is Phase 2 work.
 
-**How Phase 2 gating will work:** When an agent calls a skill, the execution layer will compare the skill's minimum required autonomy score against the live global score from `autonomy_config`. If the score is too low, the skill call is held and the CEO is notified for approval. The autonomy score is CEO-controlled and adjusted via the `set-autonomy` skill. See `docs/superpowers/specs/2026-04-03-autonomy-engine-design.md` for the full design.
+**How Phase 2 gating will work:** When an agent calls a skill, the execution layer compares the skill's minimum required autonomy score against the live global score from `autonomy_config`. If the score is too low, the invocation returns an advisory failure (no throw, same `{ success: false, error }` shape as any other failure) and an audit event is emitted. The autonomy score is CEO-controlled via the `set-autonomy` skill. See `docs/superpowers/specs/2026-04-03-autonomy-engine-design.md` for the full design.
 
 #### `infrastructure` (optional, default: `false`)
 
@@ -441,4 +441,4 @@ When the risk is between two levels, use the higher one. It's easier to lower au
 - [Skills & Execution Spec](../specs/03-skills-and-execution.md) — full execution layer design
 - [Adding an Agent](adding-an-agent.md) — wire your new skill into an agent
 - [Audit & Security](../specs/06-audit-and-security.md) — what gets logged
-- [Autonomy Engine Design](../superpowers/specs/2026-04-03-autonomy-engine-design.md) — how `action_risk` will gate execution in Phase 2
+- [Autonomy Engine Design](../superpowers/specs/2026-04-03-autonomy-engine-design.md) — how `action_risk` gates execution (Phase 2 hard gates, Phase 3 auto-adjustment)

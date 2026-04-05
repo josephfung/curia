@@ -54,7 +54,7 @@ CREATE TABLE autonomy_config (
 );
 
 -- Append-only audit trail — never updated or deleted.
--- Phase 2 auto-adjustment will also write here (changed_by = 'system').
+-- Phase 3 auto-adjustment will also write here (changed_by = 'system').
 CREATE TABLE autonomy_history (
   id             BIGSERIAL PRIMARY KEY,
   score          INTEGER NOT NULL,
@@ -109,7 +109,8 @@ git commit -m "feat: add autonomy_config and autonomy_history tables (migration 
 // injected into the coordinator's system prompt on every task.
 //
 // Phase 1: CEO-controlled via get-autonomy / set-autonomy skills.
-// Phase 2: Automatic adjustment based on action log data (future).
+// Phase 2: Hard gates in the execution layer driven by action_risk vs. live score (future).
+// Phase 3: Automatic adjustment based on action log data (future).
 
 import type { Pool } from 'pg';
 import type { Logger } from '../logger.js';
