@@ -19,8 +19,8 @@ Secrets are never stored in config files. Reference them via environment variabl
 
 ```yaml
 channels:
-  telegram:
-    bot_token: ${TELEGRAM_BOT_TOKEN}
+  signal:
+    phone_number: ${SIGNAL_PHONE_NUMBER}
 ```
 
 ### Config Validation
@@ -53,18 +53,12 @@ Setting up email channel (via Nylas)...
   Testing connection... ✓ Connected (14 unread messages)
   Stored as NYLAS_API_KEY, NYLAS_GRANT_ID, NYLAS_SELF_EMAIL.
 
-Setting up Telegram channel...
-  Bot token: ********
-  Testing connection... ✓ Bot @alex_curia_bot is active
-  Stored as TELEGRAM_BOT_TOKEN.
-
 Setting up Google Calendar skill...
   This requires OAuth. Opening browser...
   ✓ Authorized. Token stored as GOOGLE_OAUTH_REFRESH_TOKEN.
 
 Summary:
   ✓ Email channel ready
-  ✓ Telegram channel ready
   ✗ Signal channel not configured (skipped)
   ✓ Google Calendar skill ready
 
@@ -142,7 +136,7 @@ volumes:
   "uptime_seconds": 86400,
   "database": { "connected": true, "latency_ms": 2 },
   "channels": {
-    "telegram": "connected",
+    "signal": "connected",
     "email": "connected",
     "cli": "disabled"
   },
@@ -245,7 +239,6 @@ curia/
 │   │   ├── cli/
 │   │   ├── email/
 │   │   ├── signal/
-│   │   ├── telegram/
 │   │   └── http-api/
 │   ├── dispatch/               # Routing, policy enforcement
 │   │   ├── router.ts

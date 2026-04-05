@@ -217,7 +217,7 @@ All three limits are enforced at task runtime. When any limit is hit, the task i
 
 The autonomy engine injects a global score (0–100) into the Coordinator's system prompt on every task, governing how independently it acts. Specialist agents generally don't need this — the Coordinator handles autonomy gating and only delegates when it decides to proceed.
 
-If your specialist agent needs to make autonomy-gated decisions independently (rare), pass `autonomyService` in its `AgentRuntime` config. See `docs/superpowers/specs/2026-04-03-autonomy-engine-design.md` for the full design.
+If your specialist agent needs to make autonomy-gated decisions independently (rare), pass `autonomyService` in its `AgentRuntime` config. See `docs/specs/14-autonomy-engine.md` for the full spec.
 
 ---
 

@@ -19,9 +19,6 @@ channels:
   signal:
     trust: high
     unknown_sender: hold_and_notify
-  telegram:
-    trust: medium
-    unknown_sender: hold_and_notify
   http:
     trust: medium
     unknown_sender: reject

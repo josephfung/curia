@@ -47,7 +47,7 @@ Think of it as a digital executive office: specialized agents sit at their desks
 - **Tracks expenses** from receipts and bank notifications, categorized and summarized
 - **Researches topics** across multiple sessions, building on previous findings
 - **Manages your calendar** with context about attendees and past interactions
-- **Responds on your behalf** across Signal, Telegram, and email — with your voice and your boundaries
+- **Responds on your behalf** across Signal and email — with your voice and your boundaries
 - **Remembers everything that matters** — who people are, what was decided, what's still pending — in a knowledge graph that gets smarter over time
 
 ### What Makes It Different
@@ -59,7 +59,7 @@ Think of it as a digital executive office: specialized agents sit at their desks
 | **Memory** | Conversation history (lost on restart) | Knowledge graph + entity memory + temporal awareness (survives restarts, ages gracefully) |
 | **Error handling** | Retry and hope | Error budgets, state continuity, pattern detection — agents resume, not restart |
 | **Agent communication** | Agents work in isolation | The Bullpen — structured, auditable, threaded inter-agent discussions |
-| **Multi-channel** | Single chat interface | Email, Signal, Telegram, CLI, HTTP API — same agent, any channel |
+| **Multi-channel** | Single chat interface | Email, Signal, CLI, HTTP API — same agent, any channel |
 
 ---
 
@@ -83,7 +83,7 @@ Security isn't a feature of Curia. It's the reason it exists.
 
 ### 1. Hard Layer Separation
 
-Every component declares its layer at startup. The bus enforces which event types each layer can publish or subscribe to. A compromised Telegram adapter can spam inbound messages — but it cannot invoke a skill, write to memory, or execute code. The boundary is architectural, not policy.
+Every component declares its layer at startup. The bus enforces which event types each layer can publish or subscribe to. A compromised email adapter can spam inbound messages — but it cannot invoke a skill, write to memory, or execute code. The boundary is architectural, not policy.
 
 ### 2. Append-Only Audit Trail
 
@@ -208,7 +208,6 @@ Talk to your agents wherever you are:
 |---|---|
 | **Email** | IMAP polling + SMTP. Agents read your inbox, extract action items, reply on your behalf. |
 | **Signal** | Via signal-cli. End-to-end encrypted messaging with your agents. |
-| **Telegram** | Bot API. Quick commands and conversations on the go. |
 | **CLI** | Interactive terminal for local development and testing. |
 | **HTTP API** | REST + SSE for web dashboards, mobile apps, and programmatic access. |
 
@@ -318,16 +317,19 @@ The explorer supports:
 | 01 | Memory system (working memory + knowledge graph) | Partial — core implemented; Bullpen, context management, decay engine planned |
 | 02 | Agent system (config, delegation, registry) | ✅ Implemented |
 | 03 | Skills & execution layer | Partial — local skills implemented; MCP discovery planned |
-| 04 | Channels (CLI, HTTP, Email) | Partial — CLI, HTTP, Email done; Signal & Telegram planned |
+| 04 | Channels (CLI, HTTP, Email) | Partial — CLI, HTTP, Email done; Signal planned |
 | 05 | Error recovery (budgets, patterns, continuity) | ✅ Implemented |
 | 06 | Audit & security | Partial — basic audit logging in place; redaction & hardening planned |
 | 07 | Scheduler (cron, one-shot, persistent tasks) | ✅ Implemented |
 | 08 | Operations (deployment, health, monitoring) | Planned |
 | 09 | Contacts & identity (auth, unknown sender policy) | ✅ Implemented |
 | 10 | Audit log hardening (hash-chain, HITL, provenance) | Planned |
-| 11 | Autonomy engine (global score, CEO controls, per-task prompt injection) | ✅ Implemented |
-| 12 | Autonomy engine (self-monitoring, measurement, and automatic tuning) | Planned |
-| — | Outbound safety (content filter, gateway, display name sanitization, caller verification) | Partial — deterministic rules done; LLM-as-judge planned |
+| 11 | Entity context enrichment (KG-backed sender/entity profiles) | Planned — spec drafted |
+| 12 | Knowledge graph web explorer | ✅ Implemented |
+| 13 | Office identity (persona, voice, runtime config) | Planned — spec drafted |
+| 14 | Autonomy engine (global score, CEO controls, per-task prompt injection) | ✅ Implemented |
+| — | Autonomy engine (self-monitoring, measurement, and automatic tuning) | Planned |
+| 15 | Outbound safety (content filter, gateway, display name sanitization, caller verification) | Partial — deterministic rules done; LLM-as-judge planned |
 | — | Smoke test framework (14 chat-based cases, LLM-as-judge, HTML reports) | ✅ Implemented |
 | — | Web dashboard | Future |
 | — | Voice/telephony channel | Future |
@@ -347,6 +349,11 @@ The explorer supports:
 - **[Operations](docs/specs/08-operations.md)** — Config, deployment, health, monitoring
 - **[Contacts & Identity](docs/specs/09-contacts-and-identity.md)** — Contact service, authorization, unknown sender policy
 - **[Audit Log Hardening](docs/specs/10-audit-log-hardening.md)** — Hash-chain integrity, HITL records, LLM provenance
+- **[Entity Context Enrichment](docs/specs/11-entity-context-enrichment.md)** — KG-backed sender profiles, enriched inbound messages
+- **[Knowledge Graph Web Explorer](docs/specs/12-knowledge-graph-web-explorer.md)** — Browser UI for inspecting the knowledge graph
+- **[Office Identity](docs/specs/13-office-identity.md)** — Persona config, voice, runtime identity updates
+- **[Autonomy Engine](docs/specs/14-autonomy-engine.md)** — Global score, bands, CEO controls, skill `action_risk` declaration
+- **[Outbound Safety](docs/specs/15-outbound-safety.md)** — Gateway, content filter, caller verification, display name sanitization
 
 ---
 

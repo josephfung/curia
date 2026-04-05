@@ -1,4 +1,4 @@
-# Knowledge Graph Web Explorer
+# 12 — Knowledge Graph Web Explorer
 
 ## Goal
 

@@ -107,7 +107,7 @@ A raw integer (0–100) may be used for precision when the named levels are too 
 
 **Phase 1 status:** `action_risk` is declared and validated at load time but not yet enforced at runtime — the hard gate is Phase 2 work.
 
-**How Phase 2 gating will work:** When an agent calls a skill, the execution layer compares the skill's minimum required autonomy score against the live global score from `autonomy_config`. If the score is too low, the invocation returns an advisory failure (no throw, same `{ success: false, error }` shape as any other failure) and an audit event is emitted. The autonomy score is CEO-controlled via the `set-autonomy` skill. See `docs/superpowers/specs/2026-04-03-autonomy-engine-design.md` for the full design.
+**How Phase 2 gating will work:** When an agent calls a skill, the execution layer compares the skill's minimum required autonomy score against the live global score from `autonomy_config`. If the score is too low, the invocation returns an advisory failure (no throw, same `{ success: false, error }` shape as any other failure) and an audit event is emitted. The autonomy score is CEO-controlled via the `set-autonomy` skill. See `docs/specs/14-autonomy-engine.md` for the full spec.
 
 #### `infrastructure` (optional, default: `false`)
 
@@ -441,4 +441,4 @@ When the risk is between two levels, use the higher one. It's easier to lower au
 - [Skills & Execution Spec](../specs/03-skills-and-execution.md) — full execution layer design
 - [Adding an Agent](adding-an-agent.md) — wire your new skill into an agent
 - [Audit & Security](../specs/06-audit-and-security.md) — what gets logged
-- [Autonomy Engine Design](../superpowers/specs/2026-04-03-autonomy-engine-design.md) — how `action_risk` gates execution (Phase 2 hard gates, Phase 3 auto-adjustment)
+- [Autonomy Engine](../specs/14-autonomy-engine.md) — how `action_risk` gates execution (Phase 2 hard gates, Phase 3 auto-adjustment)

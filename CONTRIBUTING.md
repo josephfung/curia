@@ -34,7 +34,7 @@ Use conventional prefixes:
 Follow [Conventional Commits](https://www.conventionalcommits.org/):
 
 ```
-feat: add Telegram channel adapter
+feat: add Signal channel adapter
 fix: prevent infinite retry loop in scheduler
 chore: update pgvector to 0.8.0
 ```
@@ -65,7 +65,7 @@ chore: update pgvector to 0.8.0
 
 Curia uses a message bus architecture with five layers — four domain layers with hard security boundaries, plus a System layer for trusted cross-cutting infrastructure. Before proposing changes, understand which layer your change affects:
 
-- **Channel Layer** — input/output adapters (Signal, Telegram, Email, etc.)
+- **Channel Layer** — input/output adapters (Signal, Email, etc.)
 - **Dispatch Layer** — routing, policy enforcement
 - **Agent Layer** — LLM-powered agent execution
 - **Execution Layer** — skill invocation, MCP clients
