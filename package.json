@@ -30,6 +30,7 @@
     "cytoscape": "^3.33.1",
     "fastify": "^5.8.4",
     "js-yaml": "^4.1.1",
+    "luxon": "^3.7.2",
     "node-pg-migrate": "^8.0.4",
     "nylas": "^8.0.5",
     "pg": "^8.20.0",
@@ -39,6 +40,7 @@
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@types/js-yaml": "^4.0.9",
+    "@types/luxon": "^3.7.1",
     "@types/node": "^25.5.0",
     "@types/pg": "^8.20.0",
     "@typescript-eslint/eslint-plugin": "^8.57.2",
