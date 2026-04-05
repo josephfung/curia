@@ -6,7 +6,7 @@
 
 **Architecture:** A `BrowserService` (instantiated in `src/index.ts`, injected via `SkillContext`) holds a single warm Playwright browser and a `Map<sessionId, BrowserSession>` with TTL-based cleanup. The `web-browser` skill handler dispatches primitive actions (navigate, click, type, etc.) through this service. The LLM drives navigation logic via its tool-use loop; the skill provides the browser hands.
 
-**Tech Stack:** Playwright (Chromium), `@cliqz/adblocker-playwright`, Node 22+, TypeScript ESM, Vitest
+**Tech Stack:** Playwright (Chromium), `@ghostery/adblocker-playwright`, Node 22+, TypeScript ESM, Vitest
 
 ---
 
@@ -39,7 +39,7 @@
 
 ```bash
 cd /path/to/curia  # your worktree
-pnpm add playwright @cliqz/adblocker-playwright
+pnpm add playwright @ghostery/adblocker-playwright
 ```
 
 - [ ] **Step 2: Install the Chromium browser binary**
@@ -409,7 +409,7 @@ import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
 import { chromium, type Browser } from 'playwright';
-import { PlaywrightBlocker } from '@cliqz/adblocker-playwright';
+import { PlaywrightBlocker } from '@ghostery/adblocker-playwright';
 import type { Logger } from '../logger.js';
 import { BrowserSession } from './browser-session.js';
 import type { SessionId } from './types.js';
