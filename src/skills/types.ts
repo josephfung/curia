@@ -137,6 +137,10 @@ export interface SkillContext {
   /** Autonomy service — available to infrastructure skills that manage the global
    *  autonomy score (get-autonomy, set-autonomy). Not available to normal skills. */
   autonomyService?: import('../autonomy/autonomy-service.js').AutonomyService;
+  /** Browser service — available to all skills (not infrastructure-gated).
+   *  Provides a warm Playwright Chromium instance with session management.
+   *  Skills use this to interact with JS-rendered pages and web forms. */
+  browserService?: import('../browser/browser-service.js').BrowserService;
 }
 
 /**
