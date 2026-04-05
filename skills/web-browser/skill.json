@@ -1,0 +1,25 @@
+{
+  "name": "web-browser",
+  "description": "Control a real web browser to interact with JS-rendered pages, fill forms, navigate multi-step flows, and interact with sites that have no API. Use this instead of web-fetch when a page requires JavaScript, login, or user interaction. Each call performs one action and returns the updated page state. Pass session_id back on subsequent calls to maintain browser context across actions. Actions: navigate (url required), click (selector required), type (selector+text required), select (selector+value required), get_content, screenshot, close_session.",
+  "version": "1.0.0",
+  "sensitivity": "elevated",
+  "autonomy_floor": "spot-check",
+  "inputs": {
+    "action": "string",
+    "url": "string?",
+    "selector": "string?",
+    "text": "string?",
+    "value": "string?",
+    "session_id": "string?",
+    "screenshot": "boolean?"
+  },
+  "outputs": {
+    "content": "string",
+    "session_id": "string",
+    "url": "string",
+    "screenshot_base64": "string?"
+  },
+  "permissions": ["network:https"],
+  "secrets": [],
+  "timeout": 30000
+}

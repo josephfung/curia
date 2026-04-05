@@ -26,6 +26,7 @@
     "@fastify/cookie": "^11.0.2",
     "@fastify/cors": "^11.2.0",
     "@fastify/rate-limit": "^10.3.0",
+    "@ghostery/adblocker-playwright": "^2.14.1",
     "cron-parser": "^5.5.0",
     "cytoscape": "^3.33.1",
     "fastify": "^5.8.4",
@@ -35,7 +36,8 @@
     "nylas": "^8.0.5",
     "pg": "^8.20.0",
     "pgvector": "^0.2.1",
-    "pino": "^10.3.1"
+    "pino": "^10.3.1",
+    "playwright": "^1.59.1"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

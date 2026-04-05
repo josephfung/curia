@@ -2,6 +2,12 @@ channels:
   cli:
     enabled: true
 
+browser:
+  # How long a browser session stays alive after its last action (ms).
+  sessionTtlMs: 600000   # 10 minutes
+  # How often the session sweep runs to close expired sessions (ms).
+  sweepIntervalMs: 120000  # 2 minutes
+
 agents:
   coordinator:
     config_path: agents/coordinator.yaml

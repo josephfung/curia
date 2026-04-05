@@ -32,6 +32,7 @@ import type { EntityMemory } from '../memory/entity-memory.js';
 import type { NylasCalendarClient } from '../channels/calendar/nylas-calendar-client.js';
 import type { EntityContextAssembler } from '../entity-context/assembler.js';
 import type { AutonomyService } from '../autonomy/autonomy-service.js';
+import type { BrowserService } from '../browser/browser-service.js';
 
 // Warn (but don't truncate) when a skill returns more than this many chars.
 // Helps operators spot skills that might blow out the LLM context window.
@@ -51,6 +52,7 @@ export class ExecutionLayer {
   private nylasCalendarClient?: NylasCalendarClient;
   private entityContextAssembler?: EntityContextAssembler;
   private autonomyService?: AutonomyService;
+  private browserService?: BrowserService;
   /** The agent's own contactId — injected into ctx.agentContactId for entity_enrichment default='agent' */
   private agentContactId?: string;
   /** IANA timezone name used for normalizing offset-less timestamp inputs from the LLM. */
@@ -68,6 +70,7 @@ export class ExecutionLayer {
     nylasCalendarClient?: NylasCalendarClient;
     entityContextAssembler?: EntityContextAssembler;
     autonomyService?: AutonomyService;
+    browserService?: BrowserService;
     agentContactId?: string;
     timezone?: string;
   }) {
@@ -84,6 +87,7 @@ export class ExecutionLayer {
     this.nylasCalendarClient = options?.nylasCalendarClient;
     this.entityContextAssembler = options?.entityContextAssembler;
     this.autonomyService = options?.autonomyService;
+    this.browserService = options?.browserService;
     this.agentContactId = options?.agentContactId;
     this.timezone = options?.timezone ?? 'UTC';
   }
@@ -244,6 +248,14 @@ export class ExecutionLayer {
     // Limiting access here reduces blast radius if any other infrastructure skill is ever compromised.
     if (this.autonomyService && (manifest.name === 'get-autonomy' || manifest.name === 'set-autonomy')) {
       ctx.autonomyService = this.autonomyService;
+    }
+
+    // browserService is scoped to the web-browser skill only — not granted to all skills.
+    // A real browser can navigate to internal network addresses, exfiltrate page content,
+    // and fill forms. Limiting access here prevents any other skill (even if compromised
+    // or buggy) from invoking browser capabilities it never declared.
+    if (this.browserService && manifest.name === 'web-browser') {
+      ctx.browserService = this.browserService;
     }
 
     // entityContextAssembler — available to ALL skills (not just infrastructure).

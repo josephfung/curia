@@ -105,7 +105,7 @@ src/index.ts (bootstrap)
   └─ new BrowserService()
        ├─ spawns Xvfb :99 (if no DISPLAY set)
        ├─ launches Playwright Chromium (headless: false, DISPLAY=:99)
-       ├─ initialises @cliqz/adblocker-playwright (downloads/caches filter lists)
+       ├─ initialises @ghostery/adblocker-playwright (downloads/caches filter lists)
        └─ holds Map<sessionId, BrowserSession>
 
 ExecutionLayer
@@ -204,7 +204,7 @@ launching Chromium. On graceful shutdown, Xvfb is killed after the browser close
 
 ### Ad blocking
 
-`@cliqz/adblocker-playwright` is initialised once at `BrowserService.start()` — it
+`@ghostery/adblocker-playwright` is initialised once at `BrowserService.start()` — it
 downloads and caches EasyList/EasyPrivacy filter lists. Each new `BrowserContext` gets the
 blocker applied via `adBlocker.addEventListeners(page)` at context creation time. This
 reduces page load time, DOM noise, and token cost from the cleaned content output.
