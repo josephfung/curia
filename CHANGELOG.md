@@ -13,6 +13,24 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Added
+- **Contact deduplication** — `DedupService` scores contact pairs using Jaro-Winkler name
+  similarity, exact channel identifier overlap (auto-certain), and 3-char name-prefix blocking;
+  thresholds: ≥ 0.9 = `certain`, 0.7–0.9 = `probable`
+- **On-creation dedup hook** — `createContact()` fires a fire-and-forget background check and
+  publishes `contact.duplicate_detected` on the bus when a probable or certain match is found
+- **Contact merge** — `ContactService.mergeContacts()` computes a golden record (most-recent-wins
+  for scalars, concat for notes, most-restrictive for status, union for identities/overrides) and
+  consolidates all data onto the primary contact; `EntityMemory.mergeEntities()` merges the
+  corresponding KG nodes (Phase 1: scalar properties + facts; edge re-pointing deferred to Phase 2)
+- **`contact-find-duplicates` skill** — read-only full-contact-list scan; `action_risk: "none"`;
+  optional `min_confidence` filter (`certain` | `probable`)
+- **`contact-merge` skill** — elevated caller required; `dry_run` defaults to `true`; returns a
+  `MergeProposal` for review before committing; `action_risk: "low"`
+- **Bus events** — `contact.duplicate_detected` and `contact.merged` published by the dispatch
+  layer; reason strings are privacy-safe (no PII / identifier values)
+- Coordinator workflow guidance for dedup review and weekly scan; both new skills pinned
+
 ---
 
 ## [0.5.0] — 2026-04-05
