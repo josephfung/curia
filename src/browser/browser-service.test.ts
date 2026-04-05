@@ -162,4 +162,32 @@ describe.skipIf(!runBrowserTests)('BrowserService (integration — real Chromium
     // Same page instance — same URL
     expect(second.session.page.url()).toBe('https://example.com/');
   });
+
+  it('full flow: navigate → get cleaned content → close_session', async () => {
+    const { sessionId, session } = await service.getOrCreateSession(undefined);
+
+    // Navigate to a known, stable page
+    await session.page.goto('https://example.com', { waitUntil: 'domcontentloaded' });
+
+    // Run the same DOM-cleaning evaluate() that the handler uses.
+    // Clone the body before stripping so we don't permanently mutate the live DOM —
+    // this mirrors the fix applied to getCleanedContent() in the handler.
+    const content = await session.page.evaluate(() => {
+      const root = document.body?.cloneNode(true) as HTMLBodyElement | null;
+      if (!root) return '';
+      const noiseSelectors = ['script', 'style', 'noscript', 'svg', 'iframe', 'template'];
+      for (const sel of noiseSelectors) {
+        root.querySelectorAll(sel).forEach(el => el.remove());
+      }
+      return (root.innerText ?? root.textContent ?? '').trim();
+    });
+
+    // example.com is a real, stable page with known content
+    expect(content).toContain('Example Domain');
+    expect(content).not.toContain('<script>');
+
+    // Explicitly close and confirm the session is gone
+    await service.closeSession(sessionId);
+    expect(service.getSession(sessionId)).toBeUndefined();
+  });
 });
