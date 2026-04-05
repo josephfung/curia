@@ -64,9 +64,23 @@ describe('DedupService', () => {
       const a = makeContact({ id: 'a', displayName: 'Jenna Torres' });
       const b = makeContact({ id: 'b', displayName: 'Jen Torres' });
       const results = svc.checkForDuplicates(a, [], [b], new Map());
-      // Score should be above 0.7 but may be below 0.9 — just ensure it's detected
-      expect(results.length).toBeGreaterThanOrEqual(0); // detection depends on threshold
-      // The important thing: very similar names should score > 0.7
+      // "Jenna Torres" vs "Jen Torres" — close enough to be probable or certain
+      // The exact score depends on Jaro-Winkler; just ensure we detect them
+      expect(results.length).toBeGreaterThanOrEqual(1);
+      expect(results[0].score).toBeGreaterThan(0.7);
+    });
+
+    it('detects certain match for contacts with same email but different blocking groups', () => {
+      const a = makeContact({ id: 'a', displayName: 'Alice Smith' });
+      const b = makeContact({ id: 'b', displayName: 'Robert Jones' }); // "rob" block, not "ali"
+      const aIdentities = [makeIdentity('a', 'email', 'shared@acme.com')];
+      const bIdentities = [makeIdentity('b', 'email', 'shared@acme.com')];
+      const identitiesMap = new Map([['b', bIdentities]]);
+
+      const results = svc.checkForDuplicates(a, aIdentities, [b], identitiesMap);
+      expect(results).toHaveLength(1);
+      expect(results[0].confidence).toBe('certain');
+      expect(results[0].score).toBe(1);
     });
 
     it('matches "J. Torres" against "Jenna Torres" via initial variant', () => {

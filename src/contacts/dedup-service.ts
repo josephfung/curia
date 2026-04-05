@@ -195,17 +195,42 @@ export class DedupService {
     existingContacts: Contact[],
     existingIdentitiesMap: Map<string, ChannelIdentity[]>,
   ): DuplicatePair[] {
-    // Build blocking groups from existing contacts
+    const pairs: DuplicatePair[] = [];
+    const alreadyMatched = new Set<string>(); // contactIds already added as certain matches
+
+    // Pre-scan: channel identifier overlap is an auto-certain match regardless of name.
+    // This runs before blocking so contacts in different name-blocks are still compared.
+    const newIdKeys = new Set(newIdentities.map((i) => `${i.channel}:${i.channelIdentifier}`));
+    for (const candidate of existingContacts) {
+      if (candidate.id === newContact.id) continue;
+      const candidateIds = existingIdentitiesMap.get(candidate.id) ?? [];
+      for (const cId of candidateIds) {
+        const key = `${cId.channel}:${cId.channelIdentifier}`;
+        if (newIdKeys.has(key)) {
+          alreadyMatched.add(candidate.id);
+          pairs.push({
+            contactA: { id: newContact.id, displayName: newContact.displayName, role: newContact.role, identities: newIdentities },
+            contactB: { id: candidate.id, displayName: candidate.displayName, role: candidate.role, identities: candidateIds },
+            score: 1.0,
+            confidence: 'certain',
+            reason: `Same ${cId.channel} identifier (${cId.channelIdentifier})`,
+          });
+          break; // one overlap is enough — stop checking more identities for this candidate
+        }
+      }
+    }
+
+    // Name-blocking pass: skip contacts already matched via channel overlap
     const blockMap = new Map<string, Contact[]>();
     for (const c of existingContacts) {
+      if (alreadyMatched.has(c.id)) continue; // already a certain match
       for (const key of blockingKeys(c)) {
         if (!blockMap.has(key)) blockMap.set(key, []);
         blockMap.get(key)!.push(c);
       }
     }
 
-    // Find candidates in the same blocks as the new contact
-    const candidateSet = new Set<string>();
+    const candidateSet = new Set<string>(alreadyMatched); // don't re-add already-matched
     const candidates: Contact[] = [];
     for (const key of blockingKeys(newContact)) {
       for (const candidate of blockMap.get(key) ?? []) {
@@ -216,7 +241,6 @@ export class DedupService {
       }
     }
 
-    const pairs: DuplicatePair[] = [];
     for (const candidate of candidates) {
       const result = scoreContacts(
         newContact,
@@ -252,7 +276,38 @@ export class DedupService {
   ): DuplicatePair[] {
     if (contacts.length < 2) return [];
 
-    // Build blocking groups
+    const pairs: DuplicatePair[] = [];
+    const seen = new Set<string>(); // track "a:b" pairs already evaluated
+
+    // Pre-scan: build a reverse index from channel identity key → contactId
+    // to detect exact channel overlaps between any two contacts, regardless of name.
+    const channelIndex = new Map<string, string>(); // "channel:identifier" → first contactId seen
+    for (const c of contacts) {
+      for (const identity of identitiesMap.get(c.id) ?? []) {
+        const key = `${identity.channel}:${identity.channelIdentifier}`;
+        const existingId = channelIndex.get(key);
+        if (existingId && existingId !== c.id) {
+          // Found a shared channel identifier — certain match
+          const a = contacts.find((x) => x.id === existingId)!;
+          const b = c;
+          const pairKey = a.id < b.id ? `${a.id}:${b.id}` : `${b.id}:${a.id}`;
+          if (!seen.has(pairKey)) {
+            seen.add(pairKey);
+            pairs.push({
+              contactA: { id: a.id, displayName: a.displayName, role: a.role, identities: identitiesMap.get(a.id) ?? [] },
+              contactB: { id: b.id, displayName: b.displayName, role: b.role, identities: identitiesMap.get(b.id) ?? [] },
+              score: 1.0,
+              confidence: 'certain',
+              reason: `Same ${identity.channel} identifier (${identity.channelIdentifier})`,
+            });
+          }
+        } else {
+          channelIndex.set(key, c.id);
+        }
+      }
+    }
+
+    // Name-blocking pass for contacts not already matched by channel overlap
     const blockMap = new Map<string, Contact[]>();
     for (const c of contacts) {
       for (const key of blockingKeys(c)) {
@@ -261,16 +316,13 @@ export class DedupService {
       }
     }
 
-    const seen = new Set<string>(); // track "a:b" pairs already evaluated
-    const pairs: DuplicatePair[] = [];
-
     for (const group of blockMap.values()) {
       for (let i = 0; i < group.length; i++) {
         for (let j = i + 1; j < group.length; j++) {
           const a = group[i];
           const b = group[j];
           const pairKey = a.id < b.id ? `${a.id}:${b.id}` : `${b.id}:${a.id}`;
-          if (seen.has(pairKey)) continue;
+          if (seen.has(pairKey)) continue; // already added via channel overlap
           seen.add(pairKey);
 
           const result = scoreContacts(
