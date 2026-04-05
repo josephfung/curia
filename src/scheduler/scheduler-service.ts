@@ -73,18 +73,29 @@ export class SchedulerService {
   private pool: Pool;
   private bus: EventBus;
   private logger: Logger;
+  /** Default IANA timezone for cron expression parsing when a job has no per-job timezone. */
+  private timezone: string;
 
-  constructor(pool: Pool, bus: EventBus, logger: Logger) {
+  constructor(pool: Pool, bus: EventBus, logger: Logger, timezone = 'UTC') {
     this.pool = pool;
     this.bus = bus;
     this.logger = logger;
+    this.timezone = timezone;
   }
 
   // -- Cron helpers --
 
-  /** Parse a cron expression and return the next run time as a Date. */
-  nextRunFromCron(cronExpr: string): Date {
-    const expr = CronExpressionParser.parse(cronExpr);
+  /**
+   * Parse a cron expression and return the next run time as a Date.
+   *
+   * @param cronExpr  Standard 5-field cron expression
+   * @param timezone  IANA timezone to use for wall-clock interpretation.
+   *                  Defaults to the service's configured timezone so that
+   *                  "0 8 * * *" fires at 8am local time, not 8am UTC.
+   */
+  nextRunFromCron(cronExpr: string, timezone?: string): Date {
+    const tz = timezone ?? this.timezone;
+    const expr = CronExpressionParser.parse(cronExpr, { tz });
     return expr.next().toDate();
   }
 
@@ -92,9 +103,10 @@ export class SchedulerService {
    * Validate that a cron expression doesn't fire more often than the minimum interval.
    * Prevents DoS via high-frequency cron jobs (e.g., every second or every minute).
    */
-  validateCronFrequency(cronExpr: string): void {
+  validateCronFrequency(cronExpr: string, timezone?: string): void {
     const MIN_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
-    const expr = CronExpressionParser.parse(cronExpr);
+    const tz = timezone ?? this.timezone;
+    const expr = CronExpressionParser.parse(cronExpr, { tz });
     const first = expr.next().toDate();
     const second = expr.next().toDate();
     const intervalMs = second.getTime() - first.getTime();

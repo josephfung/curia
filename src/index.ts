@@ -370,7 +370,7 @@ async function main(): Promise<void> {
   // Scheduler — Postgres-backed job scheduler for cron and one-shot tasks.
   // SchedulerService is the shared service; Scheduler is the polling loop.
   // Constructed early so it can be passed to ExecutionLayer and HttpAdapter.
-  const schedulerService = new SchedulerService(pool, bus, logger);
+  const schedulerService = new SchedulerService(pool, bus, logger, config.timezone);
   const scheduler = new Scheduler({ pool, bus, logger, schedulerService });
 
   // Execution layer — now with bus, agent registry, and outbound gateway for
