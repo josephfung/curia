@@ -885,13 +885,12 @@ function createUiHtml(): string {
           // Show a transient status bubble so the user knows work is in progress.
           var skillName = payload.skill || payload.skillId || 'skill';
           renderMessage('status', 'Using ' + skillName + '\u2026');
-        } else if (payload.type === 'outbound.message') {
+        } else if (payload.type === 'message') {
           // Agent reply arrived via SSE — render it only if the POST response
           // hasn't already rendered it (race: whichever fires first wins).
           if (!chatReplyRendered) {
             chatReplyRendered = true;
             var content = (typeof payload.content === 'string') ? payload.content
-                        : (typeof payload.message === 'string') ? payload.message
                         : JSON.stringify(payload);
             renderMessage('agent', content);
             chatSendBtn.disabled = false;
@@ -918,6 +917,8 @@ function createUiHtml(): string {
       chatActiveConvIdx = -1;
       chatReplyRendered = false;
       chatMessagesEl.replaceChildren();
+      // Re-render the conversation list to clear the active highlight.
+      renderConvList();
     }
 
     // Renders the sidebar conversation list, highlighting the active entry.
@@ -997,10 +998,10 @@ function createUiHtml(): string {
           });
         })
         .then(function(data) {
-          // Render the reply unless the SSE outbound.message already did so.
+          // Render the reply unless the SSE already did so.
           if (!chatReplyRendered) {
             chatReplyRendered = true;
-            renderMessage('agent', data.reply);
+            renderMessage('agent', data.reply || '(no reply)');
           }
           chatSendBtn.disabled = false;
         })
@@ -1014,7 +1015,9 @@ function createUiHtml(): string {
     chatTextarea.addEventListener('keydown', function(e) {
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
-        sendChatMessage(e);
+        // Guard against concurrent submits — the button is disabled while a POST
+        // is in flight, but the keydown fires before the DOM repaint reflects that.
+        if (!chatSendBtn.disabled) sendChatMessage(e);
       }
     });
 
