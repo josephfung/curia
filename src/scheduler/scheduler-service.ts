@@ -14,6 +14,8 @@ export interface CreateJobParams {
   createdBy: string;
   intentAnchor?: string;
   errorBudget?: Record<string, unknown>;
+  /** IANA timezone for cron wall-clock interpretation. Defaults to the service's timezone. */
+  timezone?: string;
 }
 
 export interface CreateJobResult {
@@ -35,6 +37,8 @@ export interface JobRow {
   consecutiveFailures: number;
   createdBy: string;
   createdAt: string;
+  /** IANA timezone used for cron wall-clock interpretation. */
+  timezone: string;
   // Linked agent_task fields (null when no task is linked)
   agentTaskId: string | null;
   intentAnchor: string | null;
@@ -61,6 +65,7 @@ interface DbJobRow {
   consecutive_failures: number;
   created_by: string;
   created_at: string;
+  timezone: string;
   agent_task_id: string | null;
   intent_anchor: string | null;
   progress: Record<string, unknown> | null;
@@ -119,6 +124,8 @@ export class SchedulerService {
 
   async createJob(params: CreateJobParams): Promise<CreateJobResult> {
     const { agentId, cronExpr, runAt, taskPayload, createdBy, intentAnchor, errorBudget } = params;
+    // Per-job timezone: use caller's override, fall back to service default.
+    const jobTimezone = params.timezone ?? this.timezone;
 
     if (!cronExpr && !runAt) {
       throw new Error('Either cronExpr or runAt must be provided');
@@ -126,15 +133,16 @@ export class SchedulerService {
 
     // Validate cron frequency to prevent DoS via high-frequency schedules.
     if (cronExpr) {
-      this.validateCronFrequency(cronExpr);
+      this.validateCronFrequency(cronExpr, jobTimezone);
     }
 
-    // Calculate next_run_at: for cron jobs use the parser, for one-shot jobs use runAt directly.
-    const nextRunAt = cronExpr ? this.nextRunFromCron(cronExpr) : runAt!;
+    // Calculate next_run_at: for cron jobs use the parser (respecting per-job timezone),
+    // for one-shot jobs use runAt directly (already UTC from timestamp normalization).
+    const nextRunAt = cronExpr ? this.nextRunFromCron(cronExpr, jobTimezone) : runAt!;
 
     const insertSql = `
-      INSERT INTO scheduled_jobs (agent_id, cron_expr, run_at, task_payload, status, next_run_at, created_by)
-      VALUES ($1, $2, $3, $4, $5, $6, $7)
+      INSERT INTO scheduled_jobs (agent_id, cron_expr, run_at, task_payload, status, next_run_at, created_by, timezone)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
       RETURNING id
     `;
     const insertParams = [
@@ -145,6 +153,7 @@ export class SchedulerService {
       'pending',
       nextRunAt,
       createdBy,
+      jobTimezone,
     ];
 
     const { rows } = await this.pool.query(insertSql, insertParams);
@@ -253,17 +262,18 @@ export class SchedulerService {
   async unsuspendJob(jobId: string): Promise<void> {
     // Fetch the job to get cron_expr or run_at for recalculating next_run_at
     const { rows } = await this.pool.query(
-      `SELECT cron_expr, run_at FROM scheduled_jobs WHERE id = $1 AND status = 'suspended'`,
+      `SELECT cron_expr, run_at, timezone FROM scheduled_jobs WHERE id = $1 AND status = 'suspended'`,
       [jobId],
     );
     if (rows.length === 0) {
       throw new Error(`Job ${jobId} not found or not suspended`);
     }
 
-    const { cron_expr, run_at } = rows[0] as { cron_expr: string | null; run_at: Date | null };
+    const { cron_expr, run_at, timezone: jobTimezone } = rows[0] as { cron_expr: string | null; run_at: Date | null; timezone: string };
     let nextRunAt: Date;
     if (cron_expr) {
-      nextRunAt = this.nextRunFromCron(cron_expr);
+      // Use the per-job timezone so the next run fires at the correct wall-clock time.
+      nextRunAt = this.nextRunFromCron(cron_expr, jobTimezone);
     } else {
       // One-shot job: re-use original run_at (may be in the past — will fire immediately)
       nextRunAt = new Date(run_at!);
@@ -375,9 +385,10 @@ export class SchedulerService {
     error?: string,
   ): Promise<{ suspended: boolean }> {
     // Fetch the current job state to decide how to handle the completion.
-    const fetchSql = `SELECT id, cron_expr, status, consecutive_failures FROM scheduled_jobs WHERE id = $1`;
+    // Include timezone so nextRunFromCron() uses the per-job zone, not the system default.
+    const fetchSql = `SELECT id, cron_expr, status, consecutive_failures, timezone FROM scheduled_jobs WHERE id = $1`;
     const { rows } = await this.pool.query(fetchSql, [jobId]);
-    const job = rows[0] as { id: string; cron_expr: string | null; status: string; consecutive_failures: number } | undefined;
+    const job = rows[0] as { id: string; cron_expr: string | null; status: string; consecutive_failures: number; timezone: string } | undefined;
 
     if (!job) {
       throw new Error(`Job not found: ${jobId}`);
@@ -385,8 +396,8 @@ export class SchedulerService {
 
     if (success) {
       if (job.cron_expr) {
-        // Recurring job: advance to next run, reset failure counter.
-        const nextRunAt = this.nextRunFromCron(job.cron_expr);
+        // Recurring job: advance to next run using the per-job timezone, reset failure counter.
+        const nextRunAt = this.nextRunFromCron(job.cron_expr, job.timezone);
         const updateSql = `
           UPDATE scheduled_jobs
              SET last_run_at = now(),
@@ -456,6 +467,7 @@ function mapJobRow(row: DbJobRow): JobRow {
     consecutiveFailures: row.consecutive_failures,
     createdBy: row.created_by,
     createdAt: row.created_at,
+    timezone: row.timezone,
     agentTaskId: row.agent_task_id,
     intentAnchor: row.intent_anchor,
     progress: row.progress,
