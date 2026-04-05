@@ -145,7 +145,11 @@ Write it from the perspective of "what tasks should be routed here." One or two 
 
 ### `role` (optional)
 
-Only one value is meaningful: `coordinator`. Setting `role: coordinator` tells the dispatch layer to route all inbound messages to this agent. There must be exactly one coordinator per deployment. Omit this field entirely for specialist agents.
+Two conventional values:
+- `coordinator` — tells the dispatch layer to route all inbound messages here. There must be exactly one coordinator per deployment.
+- `specialist` — the conventional value for non-coordinator agents (e.g. `research-analyst`). The runtime treats any value other than `coordinator` the same way, but use `specialist` for consistency.
+
+Omit the field entirely only if you have a strong reason not to categorize the agent.
 
 ### `persona` (optional)
 
@@ -243,32 +247,16 @@ Caps resource consumption per task execution:
 error_budget:
   max_turns: 20        # LLM round-trips before the task is aborted
   max_cost_usd: 1.00   # estimated LLM spend before the task is aborted
+  max_errors: 3        # skill invocation failures before the task is aborted
 ```
 
-Both limits are enforced at task runtime. When a limit is hit, the task is marked as failed, the CEO is notified on the originating channel, and the agent returns to idle.
+All three limits are enforced at task runtime. When any limit is hit, the task is marked as failed, the CEO is notified on the originating channel, and the agent returns to idle.
 
-### `handler` (optional)
+### `handler` (optional — planned, not yet implemented)
 
-Path to a TypeScript file exporting custom lifecycle hooks. Use this when you need logic that can't be expressed in a system prompt alone:
+The YAML spec reserves a `handler` field for a future TypeScript escape hatch. The intent is to allow agents to export lifecycle hooks (`onTask`, `onSkillResult`, `beforeRespond`) for logic that can't be expressed in a system prompt alone.
 
-```typescript
-// agents/research-analyst.handler.ts
-import type { AgentHandler, AgentContext, SkillResult } from '../src/agents/types.js';
-
-export const handler: AgentHandler = {
-  async onTask(ctx: AgentContext) {
-    // runs before the LLM is called; modify ctx.messages or ctx.memory
-  },
-  async onSkillResult(skill: string, result: SkillResult, ctx: AgentContext) {
-    // runs after each skill returns; can modify result before it's fed back to LLM
-  },
-  async beforeRespond(ctx: AgentContext) {
-    // runs before the response is published; can add/modify the response
-  },
-};
-```
-
-All three hooks are optional — export only what you need.
+This field is not yet loaded or executed by the agent runtime. Do not use it in production configs — it will be silently ignored until the feature ships. See `docs/specs/02-agent-system.md` for the planned interface.
 
 ---
 

@@ -21,13 +21,12 @@ See [Adding an Agent](adding-an-agent.md) if you want to create a new agent rath
 
 ```
 skills/
-  email-send/
+  web-search/
     skill.json        # manifest — schema, metadata, risk level
     handler.ts        # implementation
     handler.test.ts   # unit + integration tests
   _shared/            # shared utilities imported by multiple handlers
     nylas.ts
-    google.ts
 ```
 
 Skills are self-contained. Keep external imports minimal and declare any required secrets in the manifest.
@@ -40,26 +39,22 @@ The manifest is the source of truth for what a skill does, what it needs, and ho
 
 ```json
 {
-  "name": "email-send",
-  "description": "Send an email via the Nylas API. Provide recipient, subject, and body. Supports optional CC and reply-to fields.",
+  "name": "web-search",
+  "description": "Search the web using the Brave Search API. Returns a ranked list of results with titles, URLs, and snippets. Use this for research tasks where you need current information.",
   "version": "1.0.0",
-  "sensitivity": "elevated",
-  "action_risk": "medium",
-  "infrastructure": true,
+  "sensitivity": "normal",
+  "action_risk": "none",
   "inputs": {
-    "to": "string",
-    "subject": "string",
-    "body": "string",
-    "cc": "string?",
-    "reply_to": "string?"
+    "query": "string",
+    "count": "number?"
   },
   "outputs": {
-    "message_id": "string",
-    "thread_id": "string"
+    "results": "object[]",
+    "total": "number"
   },
   "permissions": [],
-  "secrets": [],
-  "timeout": 30000
+  "secrets": ["brave_api_key"],
+  "timeout": 15000
 }
 ```
 
@@ -67,7 +62,7 @@ The manifest is the source of truth for what a skill does, what it needs, and ho
 
 #### `name` (required)
 
-Unique identifier for the skill. Must match the directory name exactly. Used as the tool name presented to the LLM, so use lowercase kebab-case (`email-send`, not `EmailSend` or `email_send`).
+Unique identifier for the skill. Must match the directory name exactly. Used as the tool name presented to the LLM, so use lowercase kebab-case (`web-search`, not `WebSearch` or `web_search`).
 
 #### `description` (required)
 
@@ -75,10 +70,10 @@ Plain-language description shown to the LLM when it decides which tool to use. W
 
 ```json
 // Too vague:
-"description": "Send email"
+"description": "Search the web"
 
 // Better:
-"description": "Send an email via the Nylas API. Provide recipient address, subject line, and HTML or plain-text body. Supports optional CC and reply-to."
+"description": "Search the web using the Brave Search API. Returns a ranked list of results with titles, URLs, and snippets. Use this for research tasks where you need current information."
 ```
 
 #### `version` (required)
@@ -87,18 +82,20 @@ Semantic version string (`major.minor.patch`). Increment the major version for b
 
 #### `sensitivity` (required)
 
-Controls whether agents need human approval before using this skill for the first time:
+Controls the elevated-skill gate in the execution layer:
 
 | Value | Meaning |
 |---|---|
-| `"normal"` | Auto-approved for agents with `allow_discovery: true`. No human gate. |
-| `"elevated"` | Requires one-time human approval per agent-skill pair before first use. Approval is persisted in `skill_approvals` — only prompted once. |
+| `"normal"` | Runs for any caller; no approval gate. |
+| `"elevated"` | Fail-closed: only executes when the caller has `role: 'ceo'` or `channel: 'cli'`. All other callers are rejected with an authorization error. |
 
-Use `"elevated"` for skills that have external effects: sending messages, writing to external systems, creating calendar events, making payments. Use `"normal"` for read-only or internal-state-only skills.
+Use `"elevated"` for skills with serious external effects: sending emails, making external API calls that could have irreversible consequences, or exposing sensitive data. Use `"normal"` for anything else.
 
-#### `action_risk` (required)
+The elevated check is per-call, not per-agent-pair — there is no stored approval table. Every invocation of an elevated skill is checked against the caller context on the fly.
 
-Declares the risk level of this skill's primary action. Used by the **autonomy engine** in Phase 2 to gate skill execution against the global autonomy score.
+#### `action_risk` (strongly recommended)
+
+Declares the risk level of this skill's primary action. Used by the **autonomy engine** in Phase 2 to gate skill execution against the global autonomy score. The field is optional in the schema (manifests that predate spec 12 don't have it), but all new skills should declare it now so the gating system is correctly labeled when it goes live.
 
 | Value | Min autonomy score | Capability class |
 |---|---|---|
@@ -110,13 +107,13 @@ Declares the risk level of this skill's primary action. Used by the **autonomy e
 
 A raw integer (0–100) may be used for precision when the named levels are too coarse. Values outside `[0, 100]` produce a validation error at skill load time.
 
-**Phase 1 status:** `action_risk` is declared now but not yet enforced at runtime — the gating engine is Phase 2. Declaring it now ensures all skills are correctly labeled when gating goes live. Do not skip this field.
+**Phase 1 status:** `action_risk` is declared now but not yet enforced at runtime — the gating engine is Phase 2. Declaring it now ensures all skills are correctly labeled when gating goes live.
 
-**How Phase 2 gating will work:** When an agent calls a skill, the execution layer will compare the skill's minimum required autonomy score against the live global score from `autonomy_config`. If the score is too low, the skill call is held and the user is notified for approval. The autonomy score is CEO-controlled and adjusted via the `set-autonomy` skill. See `docs/superpowers/specs/2026-04-03-autonomy-engine-design.md` for the full design.
+**How Phase 2 gating will work:** When an agent calls a skill, the execution layer will compare the skill's minimum required autonomy score against the live global score from `autonomy_config`. If the score is too low, the skill call is held and the CEO is notified for approval. The autonomy score is CEO-controlled and adjusted via the `set-autonomy` skill. See `docs/superpowers/specs/2026-04-03-autonomy-engine-design.md` for the full design.
 
 #### `infrastructure` (optional, default: `false`)
 
-Marks skills that are part of Curia's core infrastructure (email, calendar, contacts, scheduling, etc.) rather than user-contributed extensions. Infrastructure skills are loaded unconditionally at startup regardless of which agents pin them. Omit this field for contributed skills.
+Marks skills that are part of Curia's core infrastructure (email, calendar, contacts, scheduling, etc.) rather than user-contributed extensions. Infrastructure skills receive additional `SkillContext` fields: `bus`, `agentRegistry`, `outboundGateway`, `schedulerService`, `entityMemory`, etc. — see the `SkillContext` reference below. Omit this field for contributed skills.
 
 #### `inputs` (required)
 
@@ -153,9 +150,8 @@ Documents the shape of a successful result. This is informational for the LLM �
 
 ```json
 "outputs": {
-  "event": "object",
-  "event_id": "string",
-  "html_link": "string"
+  "results": "object[]",
+  "total": "number"
 }
 ```
 
@@ -165,15 +161,15 @@ Declared capabilities required by this skill, validated at load time. Currently 
 
 #### `secrets` (optional, default: `[]`)
 
-Names of secrets this skill will access via `ctx.secret("name")`. The execution layer validates that any secret requested at runtime was declared here — undeclared secret requests are rejected.
+Names of secrets this skill will access via `ctx.secret("name")`. The execution layer validates that any secret requested at runtime was declared here — undeclared secret requests are rejected with an error.
 
-Secret names map to environment variables at runtime (e.g., `"telegram_bot_token"` → `TELEGRAM_BOT_TOKEN`). See [Secrets Access](#secrets-access) below.
+Secret names map to environment variables at runtime (e.g., `"brave_api_key"` → `BRAVE_API_KEY`). See [Secrets Access](#secrets-access) below.
 
 ```json
-"secrets": ["telegram_bot_token", "slack_webhook_url"]
+"secrets": ["brave_api_key"]
 ```
 
-Note: Email and calendar skills use infrastructure clients (`ctx.nylasClient`, `ctx.googleClient`) bootstrapped at startup rather than the secret accessor. These do not need to be declared in `secrets`.
+Note: Infrastructure skills (email, calendar) access Nylas clients via `ctx.outboundGateway` and `ctx.nylasCalendarClient`, which are bootstrapped at startup. These are not secrets — do not declare them in `secrets`.
 
 #### `timeout` (optional, default: `30000`)
 
@@ -182,64 +178,98 @@ Per-invocation timeout in milliseconds. Skills that exceed this limit are killed
 Set higher for skills that call slow external APIs. Set lower for skills that should be fast and likely have a bug if they aren't.
 
 ```json
-"timeout": 120000   // 2 minutes for a research/browse skill
-"timeout": 10000    // 10 seconds for a fast lookup
+"timeout": 120000,   // 2 minutes for a research/browse skill
+"timeout": 10000     // 10 seconds for a fast lookup
 ```
 
 ---
 
 ## The Handler (`handler.ts`)
 
+All handlers export a class implementing the `SkillHandler` interface. The execution layer instantiates the class at load time and calls `execute()` per invocation.
+
 ```typescript
-// skills/email-send/handler.ts
-import type { SkillContext, SkillResult } from '../../src/skills/types.js';
+// skills/web-search/handler.ts
+import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
 
-export async function execute(ctx: SkillContext): Promise<SkillResult> {
-  const { to, subject, body, cc } = ctx.input as {
-    to: string;
-    subject: string;
-    body: string;
-    cc?: string;
-  };
+export class WebSearchHandler implements SkillHandler {
+  async execute(ctx: SkillContext): Promise<SkillResult> {
+    const { query, count = 10 } = ctx.input as { query: string; count?: number };
 
-  try {
-    // Use ctx.nylasClient for email (infrastructure client, not a secret)
-    const message = await ctx.nylasClient.messages.send({
-      to: [{ email: to }],
-      subject,
-      body,
-      cc: cc ? [{ email: cc }] : [],
-    });
+    // ctx.secret() is synchronous — no await needed
+    const apiKey = ctx.secret('brave_api_key');
 
-    return {
-      success: true,
-      data: {
-        message_id: message.id,
-        thread_id: message.threadId,
-      },
-    };
-  } catch (error) {
-    // Skills return errors as values — never throw
-    ctx.log.error({ error }, 'email-send failed');
-    return {
-      success: false,
-      error: error instanceof Error ? error.message : 'Unknown error sending email',
-    };
+    try {
+      const response = await fetch(
+        `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=${count}`,
+        { headers: { 'Accept': 'application/json', 'X-Subscription-Token': apiKey } },
+      );
+
+      if (!response.ok) {
+        return { success: false, error: `Brave Search API error: ${response.status} ${response.statusText}` };
+      }
+
+      const json = await response.json() as { web?: { results?: unknown[] }; query?: { total_count?: number } };
+      const results = json.web?.results ?? [];
+
+      return { success: true, data: { results, total: json.query?.total_count ?? results.length } };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      // Include query in the log so failures are traceable without reading the full task
+      ctx.log.error({ err, query }, 'web-search failed');
+      return { success: false, error: `web-search failed: ${message}` };
+    }
   }
 }
 ```
 
-### `SkillContext`
+### `SkillContext` (key fields)
 
 ```typescript
 interface SkillContext {
-  input: Record<string, unknown>;     // validated against manifest inputs
-  secret(name: string): Promise<string>; // fetch a declared secret value
-  log: Logger;                         // scoped pino child logger (includes skill name + task ID)
-  nylasClient: NylasClient;           // email infrastructure client
-  googleClient: GoogleAuth;           // Google Calendar/OAuth client
+  /** Validated input matching the manifest's inputs declaration */
+  input: Record<string, unknown>;
+
+  /** Synchronous secret access — only secrets declared in manifest.secrets are accessible.
+   *  Maps name → env var (e.g. 'brave_api_key' → process.env.BRAVE_API_KEY).
+   *  Throws if the name is not declared in the manifest. */
+  secret(name: string): string;
+
+  /** Scoped pino child logger (includes skill name and task ID in every line) */
+  log: Logger;
+
+  // --- Infrastructure-only fields (only populated when manifest.infrastructure: true) ---
+
+  /** Outbound gateway — use this to send email from infrastructure skills.
+   *  Never access email credentials directly; go through the gateway. */
+  outboundGateway?: OutboundGateway;
+
+  /** Nylas calendar client — for infrastructure skills that read/write calendar events */
+  nylasCalendarClient?: NylasCalendarClient;
+
+  /** Bus access — for infrastructure skills that need to publish events */
+  bus?: EventBus;
+
+  /** Scheduler service — for infrastructure skills like scheduler-create */
+  schedulerService?: SchedulerService;
+
+  /** Entity memory (knowledge graph) — for infrastructure skills that read/write long-term knowledge */
+  entityMemory?: EntityMemory;
+
+  // --- Available to all skills ---
+
+  /** Caller identity (role, channel). Guaranteed non-null for elevated skills. */
+  caller?: CallerContext;
+
+  /** Agent persona (display name, title, email signature) from coordinator config */
+  agentPersona?: AgentPersona;
+
+  /** Browser service — warm Playwright instance for JS-rendered pages */
+  browserService?: BrowserService;
 }
 ```
+
+See `src/skills/types.ts` for the full interface with all optional fields.
 
 ### `SkillResult`
 
@@ -249,17 +279,17 @@ type SkillResult =
   | { success: false; error: string };
 ```
 
-**Never throw from a handler.** Skills must return errors as `{ success: false, error: string }`. An uncaught exception in a handler is caught by the execution layer and converted to a failure result, but throwing loses the structured error context you'd get from a deliberate return.
+**Never throw from a handler.** Skills must return errors as `{ success: false, error: string }`. An uncaught exception is caught by the execution layer and converted to a failure result, but throwing loses the structured error context you'd get from a deliberate return — and makes it harder to write tests that verify error paths.
 
 ### Secrets Access
 
 ```typescript
 // Declare in manifest: "secrets": ["stripe_api_key"]
-const apiKey = await ctx.secret('stripe_api_key');
+const apiKey = ctx.secret('stripe_api_key');  // synchronous — no await
 ```
 
-- Secret names map to environment variables: `stripe_api_key` → `STRIPE_API_KEY`
-- The execution layer rejects requests for secrets not declared in the manifest
+- `ctx.secret()` is **synchronous** — it reads from environment variables at call time
+- The execution layer throws if the name is not declared in `manifest.secrets`
 - Secret values are never logged — the audit log records which secret was accessed, not its value
 - Agents/LLMs never see secret values — only the handler has access within its execution scope
 
@@ -268,53 +298,80 @@ const apiKey = await ctx.secret('stripe_api_key');
 ## Tests (`handler.test.ts`)
 
 ```typescript
-// skills/email-send/handler.test.ts
+// skills/web-search/handler.test.ts
 import { describe, it, expect, vi } from 'vitest';
-import { execute } from './handler.js';
+import pino from 'pino';
+import { WebSearchHandler } from './handler.js';
 import type { SkillContext } from '../../src/skills/types.js';
+
+// Use a real silent pino logger so the type is correct and log calls don't
+// produce output during tests. Spy on it directly if you need to assert logging.
+const logger = pino({ level: 'silent' });
 
 function makeCtx(input: Record<string, unknown>): SkillContext {
   return {
     input,
-    secret: vi.fn().mockResolvedValue('test-secret'),
-    log: { error: vi.fn(), info: vi.fn(), debug: vi.fn() } as any,
-    nylasClient: {
-      messages: {
-        send: vi.fn().mockResolvedValue({ id: 'msg-123', threadId: 'thread-456' }),
-      },
-    } as any,
-    googleClient: {} as any,
+    // Synchronous — return a fixed test value for declared secrets
+    secret: () => 'test-api-key',
+    log: logger,
   };
 }
 
-describe('email-send', () => {
-  it('returns message_id and thread_id on success', async () => {
-    const ctx = makeCtx({ to: 'test@example.com', subject: 'Hello', body: 'World' });
-    const result = await execute(ctx);
+describe('WebSearchHandler', () => {
+  const handler = new WebSearchHandler();
+
+  it('returns results on success', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ web: { results: [{ title: 'A', url: 'https://a.com' }] }, query: { total_count: 1 } }),
+    }));
+
+    const result = await handler.execute(makeCtx({ query: 'test query' }));
+
     expect(result.success).toBe(true);
     if (result.success) {
-      expect(result.data).toMatchObject({ message_id: 'msg-123' });
+      expect((result.data as { results: unknown[] }).results).toHaveLength(1);
     }
+
+    vi.unstubAllGlobals();
   });
 
-  it('returns failure result when Nylas throws', async () => {
-    const ctx = makeCtx({ to: 'bad', subject: 'x', body: 'y' });
-    (ctx.nylasClient.messages.send as any).mockRejectedValue(new Error('invalid address'));
-    const result = await execute(ctx);
+  it('returns failure result when fetch throws', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('network error')));
+
+    const result = await handler.execute(makeCtx({ query: 'test query' }));
+
     expect(result.success).toBe(false);
     if (!result.success) {
-      expect(result.error).toContain('invalid address');
+      expect(result.error).toContain('network error');
     }
+    // Verify the error was logged — silent failures are not allowed
+    // (if you need to assert this, spy on logger.error before the call)
+
+    vi.unstubAllGlobals();
+  });
+
+  it('returns failure when API responds with non-200', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 429, statusText: 'Too Many Requests' }));
+
+    const result = await handler.execute(makeCtx({ query: 'test query' }));
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error).toContain('429');
+    }
+
+    vi.unstubAllGlobals();
   });
 });
 ```
 
 Run tests with:
 ```bash
-pnpm test skills/email-send/handler.test.ts
+pnpm test skills/web-search/handler.test.ts
 ```
 
-Integration tests that call real external APIs should be tagged with `.integration.test.ts` and require the relevant env vars to be set. Unit tests mock external clients.
+Integration tests that call real external APIs should be tagged with `.integration.test.ts` and require the relevant env vars to be set. Unit tests stub `fetch` or mock infrastructure clients.
 
 ---
 
@@ -367,10 +424,12 @@ When the risk is between two levels, use the higher one. It's easier to lower au
 
 ## Checklist Before Opening a PR
 
-- [ ] `action_risk` is declared in `skill.json` (even if you think it's obvious)
-- [ ] `sensitivity` matches whether the skill has external effects
+- [ ] `action_risk` is declared in `skill.json`
+- [ ] `sensitivity` matches whether the skill has external effects (remember: `"elevated"` = CEO-or-CLI-only gate)
 - [ ] All optional inputs are suffixed with `?` in the manifest
+- [ ] Handler exports a **class** implementing `SkillHandler`, not a bare function
 - [ ] Handler never throws — all errors returned as `{ success: false, error }`
+- [ ] Error message in the failure return is prefixed with the skill name (e.g. `"web-search failed: ..."`)
 - [ ] `timeout` is set appropriately for the expected latency
 - [ ] Tests cover the success path and at least one failure path
 - [ ] Any required secrets are declared in `"secrets"` array
