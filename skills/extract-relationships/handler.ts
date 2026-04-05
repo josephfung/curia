@@ -12,6 +12,10 @@ import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/t
 import { EDGE_TYPES, NODE_TYPES } from '../../src/memory/types.js';
 import type { EdgeType, NodeType } from '../../src/memory/types.js';
 
+// Model constants — update here when model IDs rotate
+const CLASSIFIER_MODEL = 'claude-haiku-4-5-20251001';
+const EXTRACTION_MODEL = 'claude-sonnet-4-6';
+
 // Shape of each triple returned by the LLM extraction prompt.
 interface ExtractedTriple {
   subject: string;
@@ -50,7 +54,7 @@ export class ExtractRelationshipsHandler implements SkillHandler {
     // Cheap haiku call — exits early on the majority of messages (scheduling,
     // email drafts, lookups) that contain no entity-to-entity relationships.
     const classifierResponse = await client.messages.create({
-      model: 'claude-haiku-4-5-20251001',
+      model: CLASSIFIER_MODEL,
       max_tokens: 10,
       messages: [{
         role: 'user',
@@ -58,9 +62,14 @@ export class ExtractRelationshipsHandler implements SkillHandler {
       }],
     });
 
-    const classifierAnswer = (classifierResponse.content[0] as { type: string; text: string }).text
-      .toLowerCase()
-      .trim();
+    const classifierTextBlock = classifierResponse.content.find(
+      (c): c is { type: 'text'; text: string } => c.type === 'text',
+    );
+    if (!classifierTextBlock) {
+      ctx.log.warn({ textPreview: text.slice(0, 80) }, 'extract-relationships: classifier returned no text block, skipping');
+      return { success: true, data: { extracted: 0, confirmed: 0, skipped: true } };
+    }
+    const classifierAnswer = classifierTextBlock.text.toLowerCase().trim();
 
     if (!classifierAnswer.startsWith('yes')) {
       ctx.log.debug({ textPreview: text.slice(0, 80) }, 'extract-relationships: classifier gate — no relationships, skipping');
@@ -70,7 +79,7 @@ export class ExtractRelationshipsHandler implements SkillHandler {
     // -- Step 2: Extraction prompt --
     // Sonnet call with the full EDGE_TYPES vocabulary. Returns JSON triples.
     const extractionResponse = await client.messages.create({
-      model: 'claude-sonnet-4-6',
+      model: EXTRACTION_MODEL,
       max_tokens: 1000,
       messages: [{
         role: 'user',
@@ -94,8 +103,15 @@ ${text}`,
       }],
     });
 
+    const extractionTextBlock = extractionResponse.content.find(
+      (c): c is { type: 'text'; text: string } => c.type === 'text',
+    );
+    if (!extractionTextBlock) {
+      ctx.log.warn('extract-relationships: extraction returned no text block, treating as empty');
+      return { success: true, data: { extracted: 0, confirmed: 0, skipped: false } };
+    }
     // Strip optional markdown code fences the model may include despite instructions
-    const rawText = (extractionResponse.content[0] as { type: string; text: string }).text.trim();
+    const rawText = extractionTextBlock.text.trim();
     const jsonText = rawText.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '');
 
     let triples: ExtractedTriple[];
@@ -116,58 +132,62 @@ ${text}`,
     let confirmed = 0;
 
     for (const triple of triples) {
-      // Normalise predicate — fall back to 'relates_to' for unknown types
-      const predicate: EdgeType = (EDGE_TYPES as readonly string[]).includes(triple.predicate)
-        ? triple.predicate as EdgeType
-        : 'relates_to';
+      try {
+        // Normalise predicate — fall back to 'relates_to' for unknown types
+        const predicate: EdgeType = (EDGE_TYPES as readonly string[]).includes(triple.predicate)
+          ? triple.predicate as EdgeType
+          : 'relates_to';
 
-      // Normalise node types — fall back to 'person' for unknown types
-      const subjectType: NodeType = (NODE_TYPES as readonly string[]).includes(triple.subjectType)
-        ? triple.subjectType as NodeType
-        : 'person';
-      const objectType: NodeType = (NODE_TYPES as readonly string[]).includes(triple.objectType)
-        ? triple.objectType as NodeType
-        : 'person';
+        // Normalise node types — fall back to 'person' for unknown types
+        const subjectType: NodeType = (NODE_TYPES as readonly string[]).includes(triple.subjectType)
+          ? triple.subjectType as NodeType
+          : 'person';
+        const objectType: NodeType = (NODE_TYPES as readonly string[]).includes(triple.objectType)
+          ? triple.objectType as NodeType
+          : 'person';
 
-      // Resolve subject — find existing node by label or create a new one.
-      // New nodes from extraction get confidence 0.6 (lower than manually confirmed entities).
-      const subjectMatches = await ctx.entityMemory.findEntities(triple.subject);
-      const subjectNode = subjectMatches[0] ?? await ctx.entityMemory.createEntity({
-        type: subjectType,
-        label: triple.subject,
-        properties: {},
-        source,
-        confidence: 0.6,
-      });
+        // Resolve subject — find existing node by label or create a new one.
+        // New nodes from extraction get confidence 0.6 (lower than manually confirmed entities).
+        const subjectMatches = await ctx.entityMemory.findEntities(triple.subject);
+        const subjectNode = subjectMatches[0] ?? await ctx.entityMemory.createEntity({
+          type: subjectType,
+          label: triple.subject,
+          properties: {},
+          source,
+          confidence: 0.6,
+        });
 
-      // Resolve object — same pattern
-      const objectMatches = await ctx.entityMemory.findEntities(triple.object);
-      const objectNode = objectMatches[0] ?? await ctx.entityMemory.createEntity({
-        type: objectType,
-        label: triple.object,
-        properties: {},
-        source,
-        confidence: 0.6,
-      });
+        // Resolve object — same pattern
+        const objectMatches = await ctx.entityMemory.findEntities(triple.object);
+        const objectNode = objectMatches[0] ?? await ctx.entityMemory.createEntity({
+          type: objectType,
+          label: triple.object,
+          properties: {},
+          source,
+          confidence: 0.6,
+        });
 
-      // Clamp confidence to [0, 1] in case the LLM returns an out-of-range value
-      const confidence = typeof triple.confidence === 'number'
-        ? Math.min(1, Math.max(0, triple.confidence))
-        : 0.7;
+        // Clamp confidence to [0, 1] in case the LLM returns an out-of-range value
+        const confidence = typeof triple.confidence === 'number'
+          ? Math.min(1, Math.max(0, triple.confidence))
+          : 0.7;
 
-      const { created } = await ctx.entityMemory.upsertEdge(
-        subjectNode.id,
-        objectNode.id,
-        predicate,
-        {},
-        source,
-        confidence,
-      );
+        const { created } = await ctx.entityMemory.upsertEdge(
+          subjectNode.id,
+          objectNode.id,
+          predicate,
+          {},
+          source,
+          confidence,
+        );
 
-      if (created) {
-        extracted++;
-      } else {
-        confirmed++;
+        if (created) {
+          extracted++;
+        } else {
+          confirmed++;
+        }
+      } catch (err) {
+        ctx.log.warn({ err, subject: triple.subject, object: triple.object }, 'extract-relationships: failed to persist triple, skipping');
       }
     }
 
