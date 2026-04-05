@@ -10,7 +10,8 @@
     "run_at": "timestamp?",
     "agent_id": "string?",
     "intent_anchor": "string?",
-    "error_budget": "object?"
+    "error_budget": "object?",
+    "timezone": "string? (IANA timezone name, e.g. America/Toronto — overrides Curia's default timezone for this job's cron schedule)"
   },
   "outputs": { "jobId": "string", "agentTaskId": "string?" },
   "permissions": [],
