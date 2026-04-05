@@ -474,6 +474,12 @@ export class OfficeIdentityService {
     if (!config.assistant?.name) {
       throw new Error('Office identity requires assistant.name');
     }
+    // Guard nested fields before dereferencing — API payloads are not guaranteed
+    // to match the TypeScript shape at runtime, and a null/missing tone would
+    // throw a TypeError rather than a controlled validation error.
+    if (!config.tone || !Array.isArray(config.tone.baseline)) {
+      throw new Error('Office identity requires tone.baseline to be an array of 1–3 words');
+    }
     if (config.tone.baseline.length > 3) {
       throw new Error(`tone.baseline may contain at most 3 words; got ${config.tone.baseline.length}`);
     }
