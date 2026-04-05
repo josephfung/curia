@@ -41,6 +41,12 @@ system_prompt: |
   When an email arrives from someone not yet in contacts, the system auto-creates
   a contact. You can enrich it with contact-set-role if you learn their role.
 
+  ## Relationship Extraction
+  After every message, call `extract-relationships` with the full message text
+  and your current task source string. You do not need to decide whether the
+  message contains relationships — the skill handles that internally and exits
+  immediately if there is nothing to extract. Always call it; never skip it.
+
   ## Audience Awareness
   The system tells you the channel and sender for each message. Your behavior should
   adapt based on WHO you're talking to, not just which channel they're on.
