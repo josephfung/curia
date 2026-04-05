@@ -218,3 +218,29 @@ describe('KG chat routes', () => {
     await app.close();
   });
 });
+
+describe('KG web UI shell', () => {
+  it('GET / — response contains Chat nav button and #view-chat section', async () => {
+    const app = Fastify();
+    await app.register(cookie);
+    await app.register(knowledgeGraphRoutes, {
+      pool: createPool() as Pool,
+      logger: createLogger(),
+      webAppBootstrapSecret: 'test-secret',
+      secureCookies: false,
+      bus: createMockBus(),
+      eventRouter: createMockEventRouter(),
+    });
+
+    const response = await app.inject({ method: 'GET', url: '/' });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers['content-type']).toMatch(/text\/html/);
+    expect(response.body).toContain('id="nav-chat"');
+    expect(response.body).toContain('id="view-chat"');
+    // Confirm the nav button routes to 'chat' (not 'coming-soon').
+    expect(response.body).toContain("navigate('chat'");
+
+    await app.close();
+  });
+});
