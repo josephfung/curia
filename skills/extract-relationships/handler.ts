@@ -39,12 +39,15 @@ export class ExtractRelationshipsHandler implements SkillHandler {
     const { text, source } = ctx.input as { text?: string; source?: string };
 
     if (!text || typeof text !== 'string') {
+      ctx.log.error({ input: ctx.input }, 'extract-relationships: missing required input "text"');
       return { success: false, error: 'Missing required input: text (string)' };
     }
     if (!source || typeof source !== 'string') {
+      ctx.log.error({ input: ctx.input }, 'extract-relationships: missing required input "source"');
       return { success: false, error: 'Missing required input: source (string)' };
     }
     if (!ctx.entityMemory) {
+      ctx.log.error('extract-relationships: entity memory not available — is the database configured?');
       return { success: false, error: 'Entity memory not available — database not configured' };
     }
 
@@ -131,6 +134,7 @@ ${text}`,
     // -- Steps 3 & 4: Node resolution + edge upsert --
     let extracted = 0;
     let confirmed = 0;
+    let failed = 0;
 
     for (const triple of triples) {
       try {
@@ -188,12 +192,17 @@ ${text}`,
           confirmed++;
         }
       } catch (err) {
-        ctx.log.warn({ err, subject: triple.subject, object: triple.object }, 'extract-relationships: failed to persist triple, skipping');
+        // Log at error (not warn) — persistence failures are infrastructure errors
+        // (DB outage, connection loss) that must surface in Sentry, not soft warnings.
+        // The skill still returns success so the coordinator can continue, but the
+        // failed count lets callers see that triples were dropped.
+        ctx.log.error({ err, subject: triple.subject, object: triple.object }, 'extract-relationships: failed to persist triple, skipping');
+        failed++;
       }
     }
 
-    ctx.log.info({ extracted, confirmed }, 'extract-relationships: complete');
-    return { success: true, data: { extracted, confirmed, skipped: false } };
+    ctx.log.info({ extracted, confirmed, failed }, 'extract-relationships: complete');
+    return { success: true, data: { extracted, confirmed, failed, skipped: false } };
     } catch (err) {
       // Top-level catch for Anthropic API errors (rate limits, auth, timeouts, 5xx).
       // Skills must never throw — return a failure result so the execution layer

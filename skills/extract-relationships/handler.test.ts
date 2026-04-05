@@ -77,7 +77,7 @@ describe('ExtractRelationshipsHandler', () => {
 
     const result = await handler.execute(ctx);
 
-    expect(result).toEqual({ success: true, data: { extracted: 1, confirmed: 0, skipped: false } });
+    expect(result).toEqual({ success: true, data: { extracted: 1, confirmed: 0, failed: 0, skipped: false } });
 
     // Verify the edge exists in the KG
     const adaNodes = await entityMemory.findEntities('Ada Lovelace');
@@ -108,7 +108,7 @@ describe('ExtractRelationshipsHandler', () => {
     const ctx2 = makeCtx(entityMemory, { text: 'Xiaopu Fung is Joseph\'s wife.', source: 'test' });
     const result = await handler2.execute(ctx2);
 
-    expect(result).toEqual({ success: true, data: { extracted: 0, confirmed: 1, skipped: false } });
+    expect(result).toEqual({ success: true, data: { extracted: 0, confirmed: 1, failed: 0, skipped: false } });
 
     // Exactly two person nodes, one edge — no duplicate
     const josephNodes = await entityMemory.findEntities('Joseph Fung');
@@ -158,7 +158,7 @@ describe('ExtractRelationshipsHandler', () => {
 
     const result = await handler.execute(ctx);
 
-    expect(result).toEqual({ success: true, data: { extracted: 1, confirmed: 0, skipped: false } });
+    expect(result).toEqual({ success: true, data: { extracted: 1, confirmed: 0, failed: 0, skipped: false } });
 
     const xiaopuNodes = await entityMemory.findEntities('Xiaopu Fung');
     const josephNodes = await entityMemory.findEntities('Joseph Fung');
