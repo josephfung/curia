@@ -203,7 +203,9 @@ export class BrowserService {
       // If page creation fails, close the context to prevent a resource leak.
       // Without this, the BrowserContext would never be closed since it's not
       // yet in this.sessions and stop() only closes sessions in the map.
-      await context.close().catch(() => {});
+      await context.close().catch(closeErr => {
+        this.logger.error({ err: closeErr }, 'Failed to close context during page creation cleanup — possible resource leak');
+      });
       throw err;
     }
     const newSessionId = randomUUID();
@@ -299,13 +301,30 @@ export class BrowserService {
 
     process.env.DISPLAY = ':99';
 
-    // Give Xvfb a moment to initialize. If it fails to start (e.g. not installed),
-    // reject the promise so start() propagates the error to index.ts, which catches
-    // it and degrades gracefully without the web-browser skill.
+    // Give Xvfb a moment to initialize. If it fails to start (e.g. not installed,
+    // :99 already in use, missing X libraries), reject the promise so start()
+    // propagates the error to index.ts for graceful degradation without web-browser.
+    //
+    // We listen for both 'error' (OS-level spawn failure) and 'close' (process exited
+    // abnormally during startup). 'error' alone is not enough — Xvfb can exec
+    // successfully and then immediately exit with a non-zero code for runtime failures
+    // like a locked display or missing extensions, which only fires 'close', not 'error'.
     await new Promise<void>((resolve, reject) => {
-      this.xvfbProcess!.on('error', (err: Error) => {
+      const cleanup = () => {
+        this.xvfbProcess!.off('error', onError);
+        this.xvfbProcess!.off('close', onClose);
+      };
+      const onError = (err: Error) => {
+        cleanup();
         reject(new Error(`Xvfb failed to start: ${err.message}. Install with: apt-get install -y xvfb`));
-      });
+      };
+      const onClose = (code: number | null) => {
+        cleanup();
+        reject(new Error(`Xvfb exited during startup (code ${code ?? 'null'}) — is DISPLAY :99 already in use?`));
+      };
+      this.xvfbProcess!.once('error', onError);
+      this.xvfbProcess!.once('close', onClose);
+      // If Xvfb is still running after 500ms, consider startup successful
       setTimeout(resolve, 500);
     });
     this.logger.info('Xvfb started on DISPLAY=:99');

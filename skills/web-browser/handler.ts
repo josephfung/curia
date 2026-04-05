@@ -49,7 +49,13 @@ export class WebBrowserHandler implements SkillHandler {
       // context is being destroyed, so capturing a screenshot would be meaningless
       // and could race with the context teardown. The spec's "any action" clause
       // applies to actions that maintain session state; close_session is terminal.
-      await ctx.browserService.closeSession(session_id);
+      try {
+        await ctx.browserService.closeSession(session_id);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        ctx.log.error({ err, session_id }, 'Failed to close browser session');
+        return { success: false, error: `Failed to close browser session: ${message}` };
+      }
       ctx.log.info({ session_id }, 'Browser session closed');
       return { success: true, data: { content: '', session_id, url: '' } };
     }
