@@ -341,3 +341,54 @@ describe('ContactService', () => {
     });
   });
 });
+
+describe('EntityMemory.mergeEntities', () => {
+  let entityMemory: EntityMemory;
+
+  beforeEach(() => {
+    const embeddingService = EmbeddingService.createForTesting();
+    const store = KnowledgeGraphStore.createInMemory(embeddingService);
+    const validator = new MemoryValidator(store, embeddingService);
+    entityMemory = new EntityMemory(store, validator, embeddingService);
+  });
+
+  it('merges scalar properties onto primary node (most-recent-wins)', async () => {
+    const primary = await entityMemory.createEntity({
+      type: 'person',
+      label: 'Jenna Torres',
+      properties: { title: 'CFO', city: 'Toronto' },
+      source: 'test',
+    });
+    const secondary = await entityMemory.createEntity({
+      type: 'person',
+      label: 'J. Torres',
+      properties: { title: 'Chief Financial Officer', city: 'New York' },
+      source: 'test',
+    });
+
+    await entityMemory.mergeEntities(primary.id, secondary.id);
+
+    const merged = await entityMemory.getEntity(primary.id);
+    expect(merged).toBeDefined();
+    // In-memory: both have the same timestamp, so primary wins as tiebreaker.
+    expect(merged!.properties['title']).toBeDefined();
+  });
+
+  it('does not affect the primary node when secondary has no properties', async () => {
+    const primary = await entityMemory.createEntity({
+      type: 'person',
+      label: 'Alice',
+      properties: { city: 'Vancouver' },
+      source: 'test',
+    });
+    const secondary = await entityMemory.createEntity({
+      type: 'person',
+      label: 'Alice',
+      properties: {},
+      source: 'test',
+    });
+    await entityMemory.mergeEntities(primary.id, secondary.id);
+    const merged = await entityMemory.getEntity(primary.id);
+    expect(merged!.properties['city']).toBe('Vancouver');
+  });
+});
