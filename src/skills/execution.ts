@@ -122,6 +122,10 @@ export class ExecutionLayer {
 
     const { manifest, handler } = skill;
 
+    // Declare skillLogger here (before the normalization loop) so it is in scope
+    // for both the normalization error path and the rest of the method.
+    const skillLogger = this.logger.child({ skill: skillName });
+
     // Normalize timestamp inputs to UTC Z-suffix before invoking the handler.
     // The LLM often emits offset-less ISO strings (e.g. "2026-04-06T08:00:00")
     // which new Date() on a UTC server interprets as UTC — wrong for Toronto.
@@ -165,8 +169,6 @@ export class ExecutionLayer {
         };
       }
     }
-
-    const skillLogger = this.logger.child({ skill: skillName });
 
     // Build the sandboxed context — secret access is restricted to
     // only the secrets declared in the skill's manifest

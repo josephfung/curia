@@ -133,7 +133,16 @@ export class SchedulerService {
   async createJob(params: CreateJobParams): Promise<CreateJobResult> {
     const { agentId, cronExpr, runAt, taskPayload, createdBy, intentAnchor, errorBudget } = params;
     // Per-job timezone: use caller's override, fall back to service default.
-    const jobTimezone = params.timezone ?? this.timezone;
+    // Validate LLM-supplied overrides — cron-parser accepts some invalid zone strings
+    // (e.g. "UTC+99") without throwing, which would silently schedule jobs at wrong times.
+    const rawJobTimezone = params.timezone ?? this.timezone;
+    if (params.timezone !== undefined) {
+      const tzCheck = DateTime.local().setZone(rawJobTimezone);
+      if (!tzCheck.isValid) {
+        throw new Error(`Invalid timezone "${rawJobTimezone}" — must be a valid IANA timezone name (e.g. "America/Toronto")`);
+      }
+    }
+    const jobTimezone = rawJobTimezone;
 
     if (!cronExpr && !runAt) {
       throw new Error('Either cronExpr or runAt must be provided');
