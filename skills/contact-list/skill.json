@@ -3,6 +3,7 @@
   "description": "List all contacts, optionally filtered by role.",
   "version": "1.0.0",
   "sensitivity": "normal",
+  "action_risk": "none",
   "infrastructure": true,
   "inputs": {
     "role": "string?"

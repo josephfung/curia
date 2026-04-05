@@ -3,6 +3,7 @@
   "description": "Create a new calendar event with title, time, attendees, and optional description/location/conferencing. Attendees will receive invitation emails automatically.",
   "version": "1.0.0",
   "sensitivity": "normal",
+  "action_risk": "high",
   "infrastructure": true,
   "inputs": {
     "calendarId": "string",

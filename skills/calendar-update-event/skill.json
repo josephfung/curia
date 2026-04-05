@@ -3,6 +3,7 @@
   "description": "Modify an existing calendar event. Supports partial updates — only provide the fields that need changing (title, time, description, location, attendees, conferencing). Attendee changes trigger invitation updates.",
   "version": "1.0.0",
   "sensitivity": "normal",
+  "action_risk": "high",
   "infrastructure": true,
   "inputs": {
     "calendarId": "string",

@@ -3,6 +3,7 @@
   "description": "Send a new email. Provide comma-separated recipient email addresses, subject, and body. Emails are sent from Nathan Curia's email address.",
   "version": "1.0.0",
   "sensitivity": "normal",
+  "action_risk": "medium",
   "infrastructure": true,
   "inputs": {
     "to": "string",

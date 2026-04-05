@@ -3,6 +3,7 @@
   "description": "Cancel a scheduled job by its ID. The job is soft-deleted (status set to cancelled) and preserved for audit history.",
   "version": "1.0.0",
   "sensitivity": "elevated",
+  "action_risk": "low",
   "infrastructure": true,
   "inputs": { "job_id": "string" },
   "outputs": { "cancelled": "boolean" },

@@ -3,6 +3,7 @@
   "description": "Store or retrieve loyalty program information (airline frequent flyer numbers, hotel rewards numbers, etc.) in the knowledge graph. Use 'store' to save a loyalty program membership. Use 'retrieve' to look up all stored loyalty programs.",
   "version": "1.0.0",
   "sensitivity": "normal",
+  "action_risk": "none",
   "infrastructure": true,
   "inputs": {
     "action": "string (store | retrieve)",

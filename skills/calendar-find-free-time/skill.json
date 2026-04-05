@@ -3,6 +3,7 @@
   "description": "Find available time windows across one or more calendars. Returns free slots within a date range. Use duration (minutes) to filter to slots at least that long. Supports checking multiple people's availability at once.",
   "version": "1.0.0",
   "sensitivity": "normal",
+  "action_risk": "none",
   "infrastructure": true,
   "inputs": {
     "calendarIds": "array",

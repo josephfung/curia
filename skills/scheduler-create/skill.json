@@ -3,6 +3,7 @@
   "description": "Create a scheduled job. Supports cron expressions for recurring jobs and ISO 8601 timestamps for one-shot jobs. Provide intent_anchor to create a persistent multi-burst task.",
   "version": "1.0.0",
   "sensitivity": "elevated",
+  "action_risk": "low",
   "infrastructure": true,
   "inputs": {
     "task": "string",

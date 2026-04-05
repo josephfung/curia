@@ -3,6 +3,7 @@
   "description": "Store or retrieve personal meeting links (Zoom, Teams, Google Meet, etc.) in the knowledge graph. Use 'store' to save a meeting link for a specific person (e.g. the CEO's personal Zoom link, a board member's Teams link). Use 'retrieve' to look up stored meeting links, optionally filtered by person name.",
   "version": "1.0.0",
   "sensitivity": "normal",
+  "action_risk": "none",
   "infrastructure": true,
   "inputs": {
     "action": "string (store | retrieve)",

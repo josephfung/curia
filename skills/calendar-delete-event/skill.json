@@ -3,6 +3,7 @@
   "description": "Delete a calendar event. By default, attendees receive cancellation emails. Set notifyAttendees to false to suppress cancellation notifications.",
   "version": "1.0.0",
   "sensitivity": "normal",
+  "action_risk": "high",
   "infrastructure": true,
   "inputs": {
     "calendarId": "string",
