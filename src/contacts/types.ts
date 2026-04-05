@@ -168,3 +168,62 @@ export interface ChannelPolicyConfig {
 
 // -- Calendar registry types --
 export type { ContactCalendar, CreateCalendarLinkOptions } from './calendar-types.js';
+
+// -- Deduplication types --
+
+export type DedupConfidence = 'certain' | 'probable';
+
+export interface DuplicatePairContact {
+  id: string;
+  displayName: string;
+  role: string | null;
+  identities: ChannelIdentity[];
+}
+
+export interface DuplicatePair {
+  contactA: DuplicatePairContact;
+  contactB: DuplicatePairContact;
+  score: number;         // 0–1
+  confidence: DedupConfidence;
+  reason: string;        // human-readable: "Same email address", "Similar name (0.91)"
+}
+
+// -- Merge types --
+
+export interface MergeGoldenRecord {
+  displayName: string;
+  role: string | null;
+  notes: string | null;
+  status: ContactStatus;
+  identities: ChannelIdentity[];  // union of both contacts' identities
+  authOverrides: Array<{ permission: string; granted: boolean }>;
+}
+
+export interface MergeProposal {
+  primaryContactId: string;
+  secondaryContactId: string;
+  goldenRecord: MergeGoldenRecord;
+  dryRun: true;
+}
+
+export interface MergeResult {
+  primaryContactId: string;
+  secondaryContactId: string;
+  goldenRecord: MergeGoldenRecord;
+  dryRun: false;
+  mergedAt: Date;
+}
+
+// -- ContactService dependency injection for dedup wiring --
+
+export interface ContactServiceOptions {
+  dedupService?: import('./dedup-service.js').DedupService;
+  onDuplicateDetected?: (
+    newContactId: string,
+    matchContactId: string,
+    confidence: DedupConfidence,
+    reason: string,
+  ) => void;
+  /** Called after a successful non-dry-run merge to notify subscribers (e.g., for audit logging). */
+  onContactMerged?: (primaryId: string, secondaryId: string, mergedAt: Date) => void;
+}

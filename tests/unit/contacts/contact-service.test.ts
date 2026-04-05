@@ -2,6 +2,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { ContactService } from '../../../src/contacts/contact-service.js';
 import type { Contact } from '../../../src/contacts/types.js';
+import { DedupService } from '../../../src/contacts/dedup-service.js';
 import { KnowledgeGraphStore } from '../../../src/memory/knowledge-graph.js';
 import { EmbeddingService } from '../../../src/memory/embedding.js';
 import { EntityMemory } from '../../../src/memory/entity-memory.js';
@@ -339,5 +340,286 @@ describe('ContactService', () => {
       expect(result).toBeDefined();
       expect(result!.identities).toHaveLength(0);
     });
+  });
+
+  describe('mergeContacts', () => {
+    it('dry_run returns golden record without modifying DB', async () => {
+      const primary = await service.createContact({
+        displayName: 'Jenna Torres',
+        role: 'CFO',
+        source: 'ceo_stated',
+      });
+      const secondary = await service.createContact({
+        displayName: 'J. Torres',
+        role: null,
+        notes: 'Met at conference',
+        source: 'email_participant',
+      });
+
+      const proposal = await service.mergeContacts(primary.id, secondary.id, true);
+
+      expect(proposal.dryRun).toBe(true);
+      expect(proposal.primaryContactId).toBe(primary.id);
+      expect(proposal.secondaryContactId).toBe(secondary.id);
+      expect(proposal.goldenRecord.role).toBe('CFO');
+      expect(proposal.goldenRecord.notes).toContain('Met at conference');
+
+      // Verify nothing was written — secondary still exists
+      const stillExists = await service.getContact(secondary.id);
+      expect(stillExists).toBeDefined();
+    });
+
+    it('merge (dry_run: false) deletes secondary and updates primary', async () => {
+      const primary = await service.createContact({
+        displayName: 'Alice Smith',
+        role: 'CTO',
+        source: 'ceo_stated',
+      });
+      const secondary = await service.createContact({
+        displayName: 'Alice Smith',
+        role: null,
+        source: 'email_participant',
+      });
+      await service.linkIdentity({
+        contactId: secondary.id,
+        channel: 'email',
+        channelIdentifier: 'alice@acme.com',
+        source: 'email_participant',
+      });
+
+      const result = await service.mergeContacts(primary.id, secondary.id, false);
+
+      expect(result.dryRun).toBe(false);
+      expect(result.primaryContactId).toBe(primary.id);
+
+      // Secondary deleted
+      const secondaryGone = await service.getContact(secondary.id);
+      expect(secondaryGone).toBeUndefined();
+
+      // Primary has identity from secondary
+      const primaryIdentities = await service.getContactWithIdentities(primary.id);
+      expect(primaryIdentities?.identities.some(i => i.channelIdentifier === 'alice@acme.com')).toBe(true);
+    });
+
+    it('rejects merge where primary and secondary are the same contact', async () => {
+      const contact = await service.createContact({
+        displayName: 'Bob',
+        source: 'ceo_stated',
+      });
+      await expect(service.mergeContacts(contact.id, contact.id)).rejects.toThrow();
+    });
+
+    it('rejects merge when primary does not exist', async () => {
+      const secondary = await service.createContact({ displayName: 'Bob', source: 'ceo_stated' });
+      await expect(service.mergeContacts('00000000-0000-0000-0000-000000000000', secondary.id))
+        .rejects.toThrow();
+    });
+
+    it('rejects merge when secondary does not exist', async () => {
+      const primary = await service.createContact({ displayName: 'Alice', source: 'ceo_stated' });
+      await expect(service.mergeContacts(primary.id, '00000000-0000-0000-0000-000000000000'))
+        .rejects.toThrow();
+    });
+
+    it('status most-restrictive-wins: blocked beats confirmed', async () => {
+      const primary = await service.createContact({
+        displayName: 'Alice',
+        status: 'confirmed',
+        source: 'ceo_stated',
+      });
+      const secondary = await service.createContact({
+        displayName: 'Alice',
+        status: 'blocked',
+        source: 'email_participant',
+      });
+      const proposal = await service.mergeContacts(primary.id, secondary.id, true);
+      expect(proposal.goldenRecord.status).toBe('blocked');
+    });
+
+    it('notes from both contacts are concatenated', async () => {
+      const primary = await service.createContact({
+        displayName: 'Alice',
+        notes: 'Primary note',
+        source: 'ceo_stated',
+      });
+      const secondary = await service.createContact({
+        displayName: 'Alice',
+        notes: 'Secondary note',
+        source: 'email_participant',
+      });
+      const proposal = await service.mergeContacts(primary.id, secondary.id, true);
+      expect(proposal.goldenRecord.notes).toContain('Primary note');
+      expect(proposal.goldenRecord.notes).toContain('Secondary note');
+    });
+  });
+  describe('dedup hook (onDuplicateDetected)', () => {
+    it('calls onDuplicateDetected when a certain duplicate is created', async () => {
+      const notifications: Array<{ matchId: string; confidence: string }> = [];
+      const dedupService = new DedupService();
+      const hookedService = ContactService.createInMemory(entityMemory, {
+        dedupService,
+        onDuplicateDetected: (newId, matchId, confidence) => {
+          notifications.push({ matchId, confidence });
+        },
+      });
+
+      const existing = await hookedService.createContact({
+        displayName: 'Jenna Torres',
+        source: 'ceo_stated',
+      });
+      await hookedService.linkIdentity({
+        contactId: existing.id,
+        channel: 'email',
+        channelIdentifier: 'jenna@acme.com',
+        source: 'ceo_stated',
+      });
+
+      // Create a second contact with the same name — should trigger dedup
+      await hookedService.createContact({
+        displayName: 'Jenna Torres',
+        source: 'email_participant',
+      });
+
+      // Give the fire-and-forget a tick to complete
+      await new Promise((r) => setImmediate(r));
+
+      // The hook should have been called (same name = certain match)
+      expect(notifications.length).toBeGreaterThanOrEqual(1);
+    });
+
+    it('does not fail createContact() even if onDuplicateDetected throws', async () => {
+      const dedupService = new DedupService();
+      const hookedService = ContactService.createInMemory(entityMemory, {
+        dedupService,
+        onDuplicateDetected: () => { throw new Error('callback error'); },
+      });
+      // Create two contacts — the hook throws, but create should succeed
+      await hookedService.createContact({ displayName: 'Alice', source: 'test' });
+      const second = await hookedService.createContact({ displayName: 'Alice', source: 'test' });
+      await new Promise((r) => setImmediate(r));
+      expect(second.id).toBeDefined(); // create succeeded despite callback error
+    });
+  });
+
+  describe('findDuplicates', () => {
+    it('returns empty when there are no contacts', async () => {
+      const dedupService = new DedupService();
+      const svc = ContactService.createInMemory(entityMemory, { dedupService });
+      const pairs = await svc.findDuplicates();
+      expect(pairs).toHaveLength(0);
+    });
+
+    it('finds a duplicate pair by identical display name', async () => {
+      const dedupService = new DedupService();
+      const svc = ContactService.createInMemory(entityMemory, { dedupService });
+
+      // Two separate contacts with the same display name — triggers a probable/certain
+      // match based on Jaro-Winkler scoring. This is the primary dedup signal when
+      // channel identities differ (the in-memory backend enforces uniqueness on
+      // channel:identifier pairs, so same-email setup requires a real DB).
+      const a = await svc.createContact({ displayName: 'Bob Jones', source: 'ceo_stated' });
+      await svc.linkIdentity({
+        contactId: a.id,
+        channel: 'email',
+        channelIdentifier: 'bob@acme.com',
+        source: 'ceo_stated',
+      });
+      const b = await svc.createContact({ displayName: 'Bob Jones', source: 'email_participant' });
+      await svc.linkIdentity({
+        contactId: b.id,
+        channel: 'email',
+        channelIdentifier: 'bob.jones@acme.com',
+        source: 'email_participant',
+      });
+
+      const pairs = await svc.findDuplicates();
+      expect(pairs.some(p =>
+        (p.contactA.id === a.id && p.contactB.id === b.id) ||
+        (p.contactA.id === b.id && p.contactB.id === a.id)
+      )).toBe(true);
+    });
+  });
+});
+
+describe('EntityMemory.mergeEntities', () => {
+  let entityMemory: EntityMemory;
+
+  beforeEach(() => {
+    const embeddingService = EmbeddingService.createForTesting();
+    const store = KnowledgeGraphStore.createInMemory(embeddingService);
+    const validator = new MemoryValidator(store, embeddingService);
+    entityMemory = new EntityMemory(store, validator, embeddingService);
+  });
+
+  it('merges scalar properties onto primary node (most-recent-wins)', async () => {
+    const primary = await entityMemory.createEntity({
+      type: 'person',
+      label: 'Jenna Torres',
+      properties: { title: 'CFO', city: 'Toronto' },
+      source: 'test',
+    });
+    const secondary = await entityMemory.createEntity({
+      type: 'person',
+      label: 'J. Torres',
+      properties: { title: 'Chief Financial Officer', city: 'New York' },
+      source: 'test',
+    });
+
+    await entityMemory.mergeEntities(primary.id, secondary.id);
+
+    const merged = await entityMemory.getEntity(primary.id);
+    expect(merged).toBeDefined();
+    // In-memory: both have the same timestamp, so primary wins as tiebreaker.
+    expect(merged!.properties['title']).toBeDefined();
+  });
+
+  it('secondary properties override primary when secondary was updated more recently', async () => {
+    const primary = await entityMemory.createEntity({
+      type: 'person',
+      label: 'Old Primary',
+      properties: { city: 'Toronto', title: 'CFO' },
+      source: 'test',
+    });
+    const secondary = await entityMemory.createEntity({
+      type: 'person',
+      label: 'New Secondary',
+      properties: { city: 'New York', title: 'Chief Financial Officer' },
+      source: 'test',
+    });
+
+    // Make secondary's timestamp strictly newer than primary's.
+    // InMemoryBackend.getNode() returns the node object by reference (no copy),
+    // so mutating temporal.lastConfirmedAt here updates the stored node in-place.
+    // This is intentionally test-only; production code should never bypass the store API.
+    // @TODO: Once a store-level updateNode overload that accepts a full temporal object
+    // is added, switch this to use that API so the test isn't relying on reference identity.
+    const secondaryNode = await entityMemory.getEntity(secondary.id);
+    if (!secondaryNode) throw new Error('Secondary entity not found in store');
+    secondaryNode.temporal.lastConfirmedAt = new Date(Date.now() + 10_000);
+
+    await entityMemory.mergeEntities(primary.id, secondary.id);
+
+    const merged = await entityMemory.getEntity(primary.id);
+    // Secondary was newer, so its city and title should win
+    expect(merged!.properties['city']).toBe('New York');
+    expect(merged!.properties['title']).toBe('Chief Financial Officer');
+  });
+
+  it('does not affect the primary node when secondary has no properties', async () => {
+    const primary = await entityMemory.createEntity({
+      type: 'person',
+      label: 'Alice',
+      properties: { city: 'Vancouver' },
+      source: 'test',
+    });
+    const secondary = await entityMemory.createEntity({
+      type: 'person',
+      label: 'Alice',
+      properties: {},
+      source: 'test',
+    });
+    await entityMemory.mergeEntities(primary.id, secondary.id);
+    const merged = await entityMemory.getEntity(primary.id);
+    expect(merged!.properties['city']).toBe('Vancouver');
   });
 });

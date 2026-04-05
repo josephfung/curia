@@ -210,6 +210,78 @@ export class EntityMemory {
   }
 
   /**
+   * Merge secondary KG node into primary.
+   *
+   * Survivorship rules:
+   * - Scalar properties: most-recent-wins by comparing node temporal.lastConfirmedAt
+   *   timestamps. If timestamps are equal, primary wins.
+   * - Facts (child fact nodes): secondary's facts are re-stored on primary
+   *   via storeFact() to preserve deduplication logic.
+   *
+   * Phase 1 scope: scalar properties + facts. Edge re-pointing and secondary
+   * node deletion are deferred to Phase 2.
+   * @TODO Phase 2: re-point relationship edges from secondary to primary,
+   * then delete secondary node.
+   */
+  async mergeEntities(primaryId: string, secondaryId: string): Promise<void> {
+    const primaryNode = await this.store.getNode(primaryId);
+    const secondaryNode = await this.store.getNode(secondaryId);
+
+    if (!primaryNode) throw new Error(`Primary KG node not found: ${primaryId}`);
+    if (!secondaryNode) throw new Error(`Secondary KG node not found: ${secondaryId}`);
+
+    // Merge scalar properties: most-recent-wins by lastConfirmedAt; primary wins on tie.
+    const primaryUpdatedAt = primaryNode.temporal.lastConfirmedAt.getTime();
+    const secondaryUpdatedAt = secondaryNode.temporal.lastConfirmedAt.getTime();
+
+    const mergedProperties: Record<string, unknown> = { ...primaryNode.properties };
+
+    if (secondaryUpdatedAt > primaryUpdatedAt) {
+      // Secondary is more recent — its non-null properties override primary
+      for (const [key, val] of Object.entries(secondaryNode.properties)) {
+        if (val !== null && val !== undefined) {
+          mergedProperties[key] = val;
+        }
+      }
+    } else {
+      // Primary wins — fill in only missing properties from secondary
+      for (const [key, val] of Object.entries(secondaryNode.properties)) {
+        if (val !== null && val !== undefined && !(key in mergedProperties)) {
+          mergedProperties[key] = val;
+        }
+      }
+    }
+
+    // Update primary node with the merged property set
+    await this.store.updateNode(primaryId, { properties: mergedProperties });
+
+    // Move facts: fetch secondary's facts and re-store them on primary.
+    // getFacts() is more efficient than query() here — it returns only fact nodes
+    // without resolving relationship edges, which we don't need for the merge.
+    // storeFact() will handle deduplication — near-duplicate facts will merge
+    // rather than create duplicates.
+    const secondaryFacts = await this.getFacts(secondaryId);
+    for (const factNode of secondaryFacts) {
+      // Fact content lives in the node label; extra attributes may be in properties.
+      // We propagate the original source so provenance is preserved.
+      await this.storeFact({
+        entityNodeId: primaryId,
+        label: factNode.label,
+        properties: factNode.properties,
+        confidence: factNode.temporal.confidence,
+        decayClass: factNode.temporal.decayClass,
+        source: factNode.temporal.source,
+      });
+    }
+
+    // @TODO Phase 2: re-point relationship edges from secondaryId to primaryId,
+    // then delete the secondary node. Until then, the secondary node remains in the
+    // KG as a dangling node — its contact row has been deleted, but it is still
+    // reachable via queryEntity(secondaryId) and semantic search. Any code that
+    // resolves a kg_node_id back to a contact will find no contact for this node.
+  }
+
+  /**
    * Reset rate limit counters for a given agent+task key.
    * Delegates to the validator so the runtime doesn't need a direct validator reference.
    *

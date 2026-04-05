@@ -40,7 +40,9 @@ import { SkillRegistry } from './skills/registry.js';
 import { ExecutionLayer } from './skills/execution.js';
 import { loadSkillsFromDirectory } from './skills/loader.js';
 import { ContactService } from './contacts/contact-service.js';
+import { DedupService } from './contacts/dedup-service.js';
 import { ContactResolver } from './contacts/contact-resolver.js';
+import { createContactDuplicateDetected, createContactMerged } from './bus/events.js';
 import { NylasClient } from './channels/email/nylas-client.js';
 import { NylasCalendarClient } from './channels/calendar/nylas-calendar-client.js';
 import { EmailAdapter } from './channels/email/email-adapter.js';
@@ -161,7 +163,39 @@ async function main(): Promise<void> {
 
   // Contact system — provides identity resolution and contact management.
   // Always initialized (contacts work even without entity memory / KG).
-  const contactService = ContactService.createWithPostgres(pool, entityMemory, logger);
+  // DedupService is wired here so that createContact() automatically checks for
+  // probable duplicates and fires bus events when a match is found or merged.
+  const dedupService = new DedupService();
+  const contactService = ContactService.createWithPostgres(pool, entityMemory, logger, {
+    dedupService,
+    onDuplicateDetected: (newContactId, matchContactId, confidence, reason) => {
+      // Publish to the bus for audit logging and Coordinator notification.
+      // parentEventId is not available (dedup fires as a background side-effect
+      // of createContact(), not in response to a specific bus event).
+      const event = createContactDuplicateDetected({
+        newContactId,
+        probableMatchId: matchContactId,
+        confidence,
+        reason,
+      });
+      // bus.publish() is async — catch errors so a failed publish never crashes
+      // the createContact() call path or silently swallows the result.
+      bus.publish('dispatch', event).catch((err: unknown) =>
+        logger.error({ err }, 'Failed to publish contact.duplicate_detected — audit trail may be incomplete'),
+      );
+    },
+    onContactMerged: (primaryContactId, secondaryContactId, mergedAt) => {
+      const event = createContactMerged({
+        primaryContactId,
+        secondaryContactId,
+        // ContactMergedPayload.mergedAt is typed as Date — pass directly (no serialization here).
+        mergedAt,
+      });
+      bus.publish('dispatch', event).catch((err: unknown) =>
+        logger.error({ err }, 'Failed to publish contact.merged — audit trail may be incomplete'),
+      );
+    },
+  });
 
   // Authorization config — load role defaults, permissions, and channel trust.
   // These YAML files define the deterministic permission model.

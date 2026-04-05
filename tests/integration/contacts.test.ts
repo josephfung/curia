@@ -13,6 +13,8 @@ import { EmbeddingService } from '../../src/memory/embedding.js';
 import { EntityMemory } from '../../src/memory/entity-memory.js';
 import { MemoryValidator } from '../../src/memory/validation.js';
 import { createLogger } from '../../src/logger.js';
+import type { Logger } from '../../src/logger.js';
+import { DedupService } from '../../src/contacts/dedup-service.js';
 
 const { Pool } = pg;
 
@@ -25,10 +27,12 @@ describeIf('Contacts Integration', () => {
   let contactService: ContactService;
   let resolver: ContactResolver;
   let entityMemory: EntityMemory;
+  // logger hoisted so findDuplicates describe block can use it when constructing a fresh svc
+  let logger: Logger;
 
   beforeAll(async () => {
     pool = new Pool({ connectionString: DATABASE_URL });
-    const logger = createLogger('error');
+    logger = createLogger('error');
     const embeddingService = EmbeddingService.createForTesting();
     const kgStore = KnowledgeGraphStore.createWithPostgres(pool, embeddingService, logger);
     const validator = new MemoryValidator(kgStore, embeddingService);
@@ -134,5 +138,144 @@ describeIf('Contacts Integration', () => {
       // knowledgeSummary should include the fact we stored above
       expect(result.knowledgeSummary).toContain('annual budget');
     }
+  });
+
+  describe('contact merge', () => {
+    it('merges two contacts: secondary deleted, primary has union of identities', async () => {
+      const primary = await contactService.createContact({
+        displayName: 'Jenna Torres',
+        role: 'CFO',
+        source: 'ceo_stated',
+        status: 'confirmed',
+      });
+      const secondary = await contactService.createContact({
+        displayName: 'J. Torres',
+        role: null,
+        source: 'email_participant',
+        status: 'provisional',
+      });
+      await contactService.linkIdentity({
+        contactId: primary.id,
+        channel: 'email',
+        channelIdentifier: 'jenna.torres@acme.com',
+        source: 'ceo_stated',
+      });
+      await contactService.linkIdentity({
+        contactId: secondary.id,
+        channel: 'email',
+        channelIdentifier: 'j.torres@acme.com',
+        source: 'email_participant',
+      });
+
+      const result = await contactService.mergeContacts(primary.id, secondary.id, false);
+
+      expect(result.dryRun).toBe(false);
+      expect(result.primaryContactId).toBe(primary.id);
+
+      // Secondary should be gone
+      const gone = await contactService.getContact(secondary.id);
+      expect(gone).toBeUndefined();
+
+      // Primary should have both emails
+      const withIdentities = await contactService.getContactWithIdentities(primary.id);
+      const emails = withIdentities?.identities.map(i => i.channelIdentifier) ?? [];
+      expect(emails).toContain('jenna.torres@acme.com');
+      expect(emails).toContain('j.torres@acme.com');
+
+      // Golden record: role from primary, status most-restrictive (provisional > confirmed)
+      const updated = await contactService.getContact(primary.id);
+      expect(updated?.role).toBe('CFO');
+      expect(updated?.status).toBe('provisional'); // secondary was provisional
+    });
+
+    it('dry_run does not modify any contacts', async () => {
+      const primary = await contactService.createContact({
+        displayName: 'Alice Smith',
+        role: 'CTO',
+        source: 'ceo_stated',
+        status: 'confirmed',
+      });
+      const secondary = await contactService.createContact({
+        displayName: 'Alice Smith',
+        role: null,
+        source: 'email_participant',
+        status: 'confirmed',
+      });
+
+      const proposal = await contactService.mergeContacts(primary.id, secondary.id, true);
+
+      expect(proposal.dryRun).toBe(true);
+      expect(proposal.goldenRecord.displayName).toBe('Alice Smith');
+
+      // Both contacts must still exist — dry run is read-only
+      const primaryStillExists = await contactService.getContact(primary.id);
+      const secondaryStillExists = await contactService.getContact(secondary.id);
+      expect(primaryStillExists).toBeDefined();
+      expect(secondaryStillExists).toBeDefined();
+    });
+
+    it('auth overrides are consolidated (primary wins on conflict)', async () => {
+      const primary = await contactService.createContact({
+        displayName: 'Bob',
+        source: 'ceo_stated',
+        status: 'confirmed',
+      });
+      const secondary = await contactService.createContact({
+        displayName: 'Bob Smith',
+        source: 'email_participant',
+        status: 'confirmed',
+      });
+
+      // Primary explicitly grants view_financial_reports; secondary denies it.
+      // After merge, primary's grant must survive (primary wins on conflict).
+      await contactService.grantPermission(primary.id, 'view_financial_reports', true, 'ceo');
+      await contactService.grantPermission(secondary.id, 'view_financial_reports', false, 'ceo');
+      // Secondary has a unique override not present on primary — it should be preserved.
+      await contactService.grantPermission(secondary.id, 'schedule_meetings', true, 'ceo');
+
+      await contactService.mergeContacts(primary.id, secondary.id, false);
+
+      const overrides = await contactService.getAuthOverrides(primary.id);
+      const viewReportsOverride = overrides.find((o: { permission: string }) => o.permission === 'view_financial_reports');
+      const schedulingOverride = overrides.find((o: { permission: string }) => o.permission === 'schedule_meetings');
+
+      expect(viewReportsOverride?.granted).toBe(true);  // primary wins on conflict
+      expect(schedulingOverride?.granted).toBe(true);   // secondary's unique override preserved
+    });
+  });
+
+  describe('findDuplicates', () => {
+    it('returns certain duplicate pair for contacts with matching name variants', async () => {
+      const dedupService = new DedupService();
+      // Construct a fresh service with DedupService wired — the outer contactService
+      // has no DedupService so findDuplicates() would always return [].
+      const svc = ContactService.createWithPostgres(pool, entityMemory, logger, { dedupService });
+
+      // "Carol White" produces the initial variant "c white".
+      // "C. White" normalizes to "c white" — an exact match → certain (score 1.0).
+      // No shared channel identity needed; name similarity alone drives this result.
+      // (Linking the same email to two contacts would violate the unique constraint
+      // on contact_channel_identities, so channel-overlap dedup is tested at the
+      // DedupService unit level rather than here.)
+      const a = await svc.createContact({
+        displayName: 'Carol White',
+        source: 'ceo_stated',
+        status: 'confirmed',
+      });
+      const b = await svc.createContact({
+        displayName: 'C. White',
+        source: 'email_participant',
+        status: 'provisional',
+      });
+
+      const pairs = await svc.findDuplicates();
+      // Find the pair that contains both contacts we just created
+      const found = pairs.find(p =>
+        (p.contactA.id === a.id && p.contactB.id === b.id) ||
+        (p.contactA.id === b.id && p.contactB.id === a.id)
+      );
+      expect(found).toBeDefined();
+      expect(found?.confidence).toBe('certain'); // "c white" variant matches exactly → 1.0
+    });
   });
 });

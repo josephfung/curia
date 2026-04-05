@@ -1,0 +1,23 @@
+{
+  "name": "contact-merge",
+  "description": "Merge two contacts into one, consolidating channel identities and auth overrides using golden-record survivorship rules. Use dry_run: true to preview the result before committing. Always confirm with the CEO before running with dry_run: false.",
+  "version": "1.0.0",
+  "sensitivity": "elevated",
+  "action_risk": "low",
+  "infrastructure": true,
+  "inputs": {
+    "primary_contact_id": "string",
+    "secondary_contact_id": "string",
+    "dry_run": "boolean?"
+  },
+  "outputs": {
+    "primary_contact_id": "string",
+    "secondary_contact_id": "string",
+    "golden_record": "object",
+    "dry_run": "boolean",
+    "merged_at": "string?"
+  },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 30000
+}
