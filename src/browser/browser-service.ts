@@ -76,7 +76,7 @@ export class BrowserService {
       this.logger.error('Playwright browser disconnected — clearing sessions and restarting');
       this.sessions.clear();
       // Non-blocking restart — if it fails, subsequent skill calls return errors
-      void this.launchChromium().then(b => { this.browser = b; }).catch(err => {
+      void this.browserFactory().then(b => { this.browser = b; }).catch(err => {
         this.logger.error({ err }, 'Browser restart failed');
       });
     });
@@ -270,15 +270,17 @@ export class BrowserService {
       detached: false,
     });
 
-    this.xvfbProcess.on('error', (err) => {
-      // Xvfb not installed — throw so index.ts can catch and degrade gracefully
-      throw new Error(`Xvfb failed to start: ${err.message}. Install with: apt-get install -y xvfb`);
-    });
-
     process.env.DISPLAY = ':99';
 
-    // Give Xvfb a moment to initialize before Chromium tries to connect
-    await new Promise(resolve => setTimeout(resolve, 500));
+    // Give Xvfb a moment to initialize. If it fails to start (e.g. not installed),
+    // reject the promise so start() propagates the error to index.ts, which catches
+    // it and degrades gracefully without the web-browser skill.
+    await new Promise<void>((resolve, reject) => {
+      this.xvfbProcess!.on('error', (err: Error) => {
+        reject(new Error(`Xvfb failed to start: ${err.message}. Install with: apt-get install -y xvfb`));
+      });
+      setTimeout(resolve, 500);
+    });
     this.logger.info('Xvfb started on DISPLAY=:99');
   }
 }
