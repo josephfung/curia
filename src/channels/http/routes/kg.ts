@@ -900,8 +900,12 @@ function createUiHtml(): string {
       };
 
       chatStream.onerror = function() {
-        // Network interruption — the browser will try to reconnect automatically.
-        // Don't surface an error bubble here to avoid noise on transient drops.
+        // CLOSED means a permanent failure (401, 500, etc.) — browser will not retry.
+        // CONNECTING means auto-reconnect is in progress — no user action needed.
+        if (chatStream && chatStream.readyState === EventSource.CLOSED) {
+          renderMessage('error',
+            'Live connection lost. Replies will still arrive, but reload the page if updates stop appearing.');
+        }
       };
     }
 
@@ -1010,7 +1014,18 @@ function createUiHtml(): string {
           chatSendBtn.disabled = false;
         })
         .catch(function(err) {
-          renderMessage('error', err.message || 'Something went wrong. Please try again.');
+          var msg = err.message || '';
+          var userMsg;
+          // Network-level failure (no response at all)
+          if (!msg || msg.toLowerCase().includes('failed to fetch') || msg.includes('NetworkError')) {
+            userMsg = 'Could not reach the server. Check your connection and try again.';
+          // Non-JSON response body (e.g. HTML 502 from a load balancer)
+          } else if (msg.includes('JSON') || msg.toLowerCase().includes('unexpected token')) {
+            userMsg = 'Unexpected response from the server. Try reloading the page.';
+          } else {
+            userMsg = msg;
+          }
+          renderMessage('error', userMsg);
           chatSendBtn.disabled = false;
         });
     }
@@ -1350,8 +1365,13 @@ export async function knowledgeGraphRoutes(
     const heartbeat = setInterval(() => {
       try {
         reply.raw.write(':ping\n\n');
-      } catch {
+      } catch (err) {
+        // Write failed — client likely disconnected without a clean TCP close.
+        // Clear the interval and explicitly remove the SSE client to prevent a leak
+        // in the case where the 'close' event on request.raw doesn't fire.
+        logger.debug({ err, conversationId: query.conversationId }, 'KG chat SSE heartbeat write failed — removing client');
         clearInterval(heartbeat);
+        cleanup();
       }
     }, 30_000);
 
