@@ -21,6 +21,10 @@ export interface CreateEntityOptions {
   label: string;
   properties: Record<string, unknown>;
   source: string;
+  // Optional confidence override; defaults to 0.7 (the store default).
+  // Pass a lower value (e.g. 0.6) when creating nodes from LLM extraction
+  // output, where the entity may be a first-time mention with no prior context.
+  confidence?: number;
 }
 
 export interface StoreFactResult {
@@ -73,6 +77,8 @@ export class EntityMemory {
       label: options.label,
       properties: options.properties,
       source: options.source,
+      // Thread through the optional confidence override
+      confidence: options.confidence,
     });
   }
 
@@ -279,6 +285,58 @@ export class EntityMemory {
     // KG as a dangling node — its contact row has been deleted, but it is still
     // reachable via queryEntity(secondaryId) and semantic search. Any code that
     // resolves a kg_node_id back to a contact will find no contact for this node.
+  }
+
+  /**
+   * Idempotent edge creation between two entity nodes.
+   *
+   * Checks for an existing edge of the same type connecting the same pair of nodes
+   * in either direction. If found, bumps lastConfirmedAt and raises confidence
+   * (never lowers it). If not found, creates a new edge.
+   *
+   * The bidirectional check prevents duplicate edges when the same relationship
+   * is expressed from different angles ("A is B's spouse" vs "B is A's spouse").
+   *
+   * Returns the edge and whether it was newly created.
+   */
+  async upsertEdge(
+    sourceId: string,
+    targetId: string,
+    edgeType: EdgeType,
+    properties: Record<string, unknown>,
+    source: string,
+    confidence: number,
+  ): Promise<{ edge: KgEdge; created: boolean }> {
+    // getEdgesForNode returns edges where sourceId is on EITHER side of the edge,
+    // so a single call covers the bidirectional duplicate check.
+    const existingEdges = await this.store.getEdgesForNode(sourceId);
+    const match = existingEdges.find(e =>
+      e.type === edgeType &&
+      (
+        (e.sourceNodeId === sourceId && e.targetNodeId === targetId) ||
+        (e.sourceNodeId === targetId && e.targetNodeId === sourceId)
+      ),
+    );
+
+    if (match) {
+      // Re-assertion: raise confidence if the new extraction is more confident,
+      // and refresh the lastConfirmedAt timestamp.
+      const updated = await this.store.updateEdge(match.id, {
+        confidence: Math.max(match.temporal.confidence, confidence),
+        lastConfirmedAt: new Date(),
+      });
+      return { edge: updated, created: false };
+    }
+
+    const edge = await this.store.createEdge({
+      sourceNodeId: sourceId,
+      targetNodeId: targetId,
+      type: edgeType,
+      properties,
+      confidence,
+      source,
+    });
+    return { edge, created: true };
   }
 
   /**

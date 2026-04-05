@@ -30,6 +30,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Bus events** — `contact.duplicate_detected` and `contact.merged` published by the dispatch
   layer; reason strings are privacy-safe (no PII / identifier values)
 - Coordinator workflow guidance for dedup review and weekly scan; both new skills pinned
+- **`extract-relationships` skill** — self-classifying two-stage LLM pipeline (haiku classifier gate + sonnet extractor) that extracts entity-to-entity relationship triples from text and persists them to the knowledge graph; coordinator calls it after every message (spec: `docs/wip/2026-04-05-relationship-extraction-design.md`)
+- **12 new `EDGE_TYPES`** — personal (spouse, parent, child, sibling), professional (reports_to, manages, collaborates_with, advises, represents), and organisational (member_of, founded, invested_in), extending the existing 7 types
+- **`EntityMemory.upsertEdge()`** — idempotent edge persistence with bidirectional duplicate detection; confidence only increases on re-assertion, never decreases
+- **`EntityMemory.createEntity()` confidence option** — `CreateEntityOptions.confidence` field so extracted nodes can be seeded at 0.6 (below manually confirmed entities)
 
 ---
 

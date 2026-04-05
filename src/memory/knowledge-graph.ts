@@ -53,6 +53,7 @@ interface KnowledgeGraphBackend {
   createEdge(edge: KgEdge): Promise<void>;
   getEdgesForNode(nodeId: string): Promise<KgEdge[]>;
   deleteEdge(id: string): Promise<void>;
+  updateEdge(id: string, updates: { confidence: number; lastConfirmedAt: Date }): Promise<KgEdge>;
   traverse(startNodeId: string, maxDepth: number): Promise<TraversalResult>;
   semanticSearch(queryEmbedding: number[], limit: number): Promise<SearchResult[]>;
 }
@@ -213,6 +214,11 @@ export class KnowledgeGraphStore {
     await this.backend.deleteEdge(id);
   }
 
+  /** Update an edge's confidence and lastConfirmedAt. Used by upsertEdge for idempotency. */
+  async updateEdge(id: string, updates: { confidence: number; lastConfirmedAt: Date }): Promise<KgEdge> {
+    return this.backend.updateEdge(id, updates);
+  }
+
   /**
    * BFS traversal from a start node, depth-limited and cycle-safe.
    * Returns all reachable nodes within the depth limit and the edges between them.
@@ -348,6 +354,22 @@ class PostgresBackend implements KnowledgeGraphBackend {
   async deleteEdge(id: string): Promise<void> {
     this.logger.debug({ edgeId: id }, 'kg: deleting edge');
     await this.pool.query('DELETE FROM kg_edges WHERE id = $1', [id]);
+  }
+
+  async updateEdge(id: string, updates: { confidence: number; lastConfirmedAt: Date }): Promise<KgEdge> {
+    this.logger.debug({ edgeId: id }, 'kg: updating edge');
+    // Use GREATEST so confidence is monotonically non-decreasing even if two concurrent
+    // re-assertions both read the same prior value (lost-update race condition).
+    const result = await this.pool.query<PgEdgeRow>(
+      `UPDATE kg_edges SET confidence = GREATEST(confidence, $1), last_confirmed_at = $2 WHERE id = $3 RETURNING *`,
+      [updates.confidence, updates.lastConfirmedAt, id],
+    );
+    const row = result.rows[0];
+    if (!row) {
+      this.logger.error({ edgeId: id }, 'kg: updateEdge — edge not found in database');
+      throw new Error(`Edge not found: ${id}`);
+    }
+    return pgRowToEdge(row);
   }
 
   async traverse(startNodeId: string, maxDepth: number): Promise<TraversalResult> {
@@ -556,6 +578,21 @@ class InMemoryBackend implements KnowledgeGraphBackend {
 
   async deleteEdge(id: string): Promise<void> {
     this.edges.delete(id);
+  }
+
+  async updateEdge(id: string, updates: { confidence: number; lastConfirmedAt: Date }): Promise<KgEdge> {
+    const edge = this.edges.get(id);
+    if (!edge) throw new Error(`Edge not found: ${id}`);
+    const updated: KgEdge = {
+      ...edge,
+      temporal: {
+        ...edge.temporal,
+        confidence: updates.confidence,
+        lastConfirmedAt: updates.lastConfirmedAt,
+      },
+    };
+    this.edges.set(id, updated);
+    return updated;
   }
 
   /**

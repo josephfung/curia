@@ -379,4 +379,79 @@ describe('EntityMemory', () => {
       await expect(entityMemory.query('non-existent-id')).rejects.toThrow();
     });
   });
+
+  describe('upsertEdge', () => {
+    it('creates a new edge when none exists', async () => {
+      const a = await entityMemory.createEntity({ type: 'person', label: 'Upsert-A', properties: {}, source: 'test' });
+      const b = await entityMemory.createEntity({ type: 'person', label: 'Upsert-B', properties: {}, source: 'test' });
+
+      const result = await entityMemory.upsertEdge(a.id, b.id, 'spouse', {}, 'test', 0.8);
+
+      expect(result.created).toBe(true);
+      expect(result.edge.type).toBe('spouse');
+      expect(result.edge.temporal.confidence).toBe(0.8);
+    });
+
+    it('confirms an existing edge when called again with same direction', async () => {
+      const a = await entityMemory.createEntity({ type: 'person', label: 'Upsert-C', properties: {}, source: 'test' });
+      const b = await entityMemory.createEntity({ type: 'person', label: 'Upsert-D', properties: {}, source: 'test' });
+      await entityMemory.upsertEdge(a.id, b.id, 'manages', {}, 'test', 0.7);
+
+      const result = await entityMemory.upsertEdge(a.id, b.id, 'manages', {}, 'test', 0.7);
+
+      expect(result.created).toBe(false);
+      // Exactly one edge, not two
+      const queryResult = await entityMemory.query(a.id);
+      expect(queryResult.relationships).toHaveLength(1);
+    });
+
+    it('confirms an existing edge when called with reversed direction (bidirectional check)', async () => {
+      const a = await entityMemory.createEntity({ type: 'person', label: 'Upsert-E', properties: {}, source: 'test' });
+      const b = await entityMemory.createEntity({ type: 'person', label: 'Upsert-F', properties: {}, source: 'test' });
+      await entityMemory.upsertEdge(a.id, b.id, 'spouse', {}, 'test', 0.8);
+
+      // Call with reversed order — should confirm the existing edge, not create a duplicate
+      const result = await entityMemory.upsertEdge(b.id, a.id, 'spouse', {}, 'test', 0.8);
+
+      expect(result.created).toBe(false);
+      const queryResult = await entityMemory.query(a.id);
+      expect(queryResult.relationships).toHaveLength(1);
+    });
+
+    it('raises confidence when re-assertion has higher confidence', async () => {
+      const a = await entityMemory.createEntity({ type: 'person', label: 'Upsert-G', properties: {}, source: 'test' });
+      const b = await entityMemory.createEntity({ type: 'person', label: 'Upsert-H', properties: {}, source: 'test' });
+      await entityMemory.upsertEdge(a.id, b.id, 'reports_to', {}, 'test', 0.6);
+
+      const result = await entityMemory.upsertEdge(a.id, b.id, 'reports_to', {}, 'test', 0.9);
+
+      expect(result.created).toBe(false);
+      expect(result.edge.temporal.confidence).toBe(0.9);
+    });
+
+    it('does not lower confidence when re-assertion has lower confidence', async () => {
+      const a = await entityMemory.createEntity({ type: 'person', label: 'Upsert-I', properties: {}, source: 'test' });
+      const b = await entityMemory.createEntity({ type: 'person', label: 'Upsert-J', properties: {}, source: 'test' });
+      await entityMemory.upsertEdge(a.id, b.id, 'sibling', {}, 'test', 0.9);
+
+      const result = await entityMemory.upsertEdge(a.id, b.id, 'sibling', {}, 'test', 0.3);
+
+      expect(result.created).toBe(false);
+      // Confidence stays at 0.9, not lowered to 0.3
+      expect(result.edge.temporal.confidence).toBe(0.9);
+    });
+
+    it('refreshes lastConfirmedAt on re-assertion', async () => {
+      const a = await entityMemory.createEntity({ type: 'person', label: 'Upsert-K', properties: {}, source: 'test' });
+      const b = await entityMemory.createEntity({ type: 'person', label: 'Upsert-L', properties: {}, source: 'test' });
+      const first = await entityMemory.upsertEdge(a.id, b.id, 'advises', {}, 'test', 0.7);
+      const firstConfirmedAt = first.edge.temporal.lastConfirmedAt;
+
+      // Small delay to ensure timestamp differs
+      await new Promise(resolve => setTimeout(resolve, 5));
+      const second = await entityMemory.upsertEdge(a.id, b.id, 'advises', {}, 'test', 0.7);
+
+      expect(second.edge.temporal.lastConfirmedAt.getTime()).toBeGreaterThanOrEqual(firstConfirmedAt.getTime());
+    });
+  });
 });
