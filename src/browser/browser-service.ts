@@ -85,16 +85,16 @@ export class BrowserService {
       });
     });
 
-    // Initialize ad blocker once at startup — downloads and caches EasyList/EasyPrivacy
-    // filter lists. Each new BrowserContext gets the blocker applied on creation.
-    // This reduces page load time, DOM noise, and token cost from cleaned content.
-    try {
-      this.blocker = await PlaywrightBlocker.fromPrebuiltAdsAndTracking(fetch);
+    // Initialize ad blocker in the background — don't block startup on a network download.
+    // Sessions created before initialization completes will run without ad blocking,
+    // which is acceptable for correctness. The blocker will be applied to all contexts
+    // created after it finishes.
+    PlaywrightBlocker.fromPrebuiltAdsAndTracking(fetch).then(blocker => {
+      this.blocker = blocker;
       this.logger.info('Ad blocker initialized');
-    } catch (err) {
-      // Non-fatal: log and continue. Pages will load with ads but still work correctly.
+    }).catch((err: unknown) => {
       this.logger.warn({ err }, 'Ad blocker failed to initialize — continuing without ad blocking');
-    }
+    });
 
     this.sweepTimer = setInterval(() => void this.sweep(), this.sweepIntervalMs);
     // Don't let the sweep timer prevent graceful shutdown
