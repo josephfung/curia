@@ -191,32 +191,44 @@ single-row Postgres read per task — negligible.
 
 ## Guidelines for New Agents & Skills
 
-Every new skill manifest (`skill.json`) should declare an `autonomy_floor` field indicating
-the minimum autonomy band at which this skill is appropriate to run without explicit CEO
-approval:
+Every new skill manifest (`skill.json`) should declare an `action_risk` field indicating
+the minimum autonomy score required before this skill may run without explicit CEO approval:
 
 ```json
 {
   "name": "send-email",
-  "autonomy_floor": "spot-check",
+  "action_risk": "medium",
   ...
 }
 ```
 
+Named labels map to minimum score thresholds:
+
+| Label | Min score | Capability class |
+|---|---|---|
+| `none` | 0 | Read-only, no side effects |
+| `low` | 60 | Internal state writes (memory, contacts) |
+| `medium` | 70 | Outbound communications |
+| `high` | 80 | Calendar writes, commitments |
+| `critical` | 90 | Financial / destructive / irreversible |
+
+A raw number (0–100) may be used for precision (e.g. `75` for a skill that should unlock
+just above approval-required but below spot-check). Numbers outside [0, 100] produce a
+validation error at skill load time.
+
 This field is **not enforced by the execution layer in Phase 1** — it is documentation for
 the developer and for Phase 2's gate wiring. When the execution layer is extended to enforce
-autonomy floors, the field will already be present.
+action risk, the field will already be present.
 
-### Autonomy floor guidelines by capability class
+### Action risk guidelines by capability class
 
-| Capability class | Recommended floor | Rationale |
+| Capability class | Recommended value | Rationale |
 |---|---|---|
-| Read / retrieve / summarize | `full` | No external effect; always safe |
-| Internal state writes (memory, contacts) | `spot-check` | Affects future behavior but reversible |
-| Outbound communications | `spot-check` | External effect; CEO should have visibility |
-| Calendar writes | `approval-required` | Creates commitments on behalf of CEO |
-| Financial actions | `draft-only` | High-stakes; always require explicit instruction |
-| Destructive / irreversible actions | `restricted` | Never autonomous |
+| Read / retrieve / summarize | `none` | No external effect; always safe |
+| Internal state writes (memory, contacts) | `low` | Affects future behavior but reversible |
+| Outbound communications | `medium` | External effect; CEO should have visibility |
+| Calendar writes / commitments on behalf of CEO | `high` | Creates commitments |
+| Financial actions / destructive / irreversible | `critical` | Never autonomous |
 
 ### New agent checklist
 
@@ -288,12 +300,12 @@ Add to the "Adding Things" section of `CLAUDE.md`:
 ```markdown
 ### Autonomy Awareness
 
-When adding a new skill, declare its autonomy floor in `skill.json`:
-- `"autonomy_floor": "full"` — safe to run at any autonomy level (reads, retrieval)
-- `"autonomy_floor": "spot-check"` — outbound communications, internal state writes
-- `"autonomy_floor": "approval-required"` — calendar writes, commitments
-- `"autonomy_floor": "draft-only"` — financial actions
-- `"autonomy_floor": "restricted"` — irreversible or destructive actions
+When adding a new skill, declare its action risk in `skill.json`:
+- `"action_risk": "none"` — reads, retrieval, no external effect (always safe)
+- `"action_risk": "low"` — internal state writes (memory, contacts)
+- `"action_risk": "medium"` — outbound communications
+- `"action_risk": "high"` — calendar writes, commitments on behalf of CEO
+- `"action_risk": "critical"` — financial / destructive / irreversible actions
 
 See `docs/specs/12-autonomy-engine.md` for the full guidelines table.
 

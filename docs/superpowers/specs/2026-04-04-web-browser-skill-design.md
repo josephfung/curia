@@ -126,7 +126,7 @@ skills/web-browser/handler.ts
   "description": "Control a real web browser to interact with JS-rendered pages, fill forms, navigate multi-step flows, and interact with sites that have no API. Use this instead of web-fetch when a page requires JavaScript, login, or user interaction. Each call performs one action and returns the updated page state. Pass session_id back on subsequent calls to maintain browser context across actions.",
   "version": "1.0.0",
   "sensitivity": "normal",
-  "autonomy_floor": "spot-check",
+  "action_risk": "medium",
   "inputs": {
     "action": "string",
     "url": "string?",
@@ -148,8 +148,9 @@ skills/web-browser/handler.ts
 }
 ```
 
-`autonomy_floor: "spot-check"` — the browser can submit forms and trigger real-world side
-effects, so it must not run at `"full"` autonomy. Actions are logged and reviewable.
+`action_risk: "medium"` — the browser can submit forms and trigger real-world side effects
+(outbound communications class), so it requires a minimum autonomy score of 70. Actions
+are logged and reviewable.
 
 ---
 

@@ -19,7 +19,7 @@ Two new capabilities that unlock core EA work Curia cannot currently do:
 
 - **Skills Must Add Value Beyond the Bare LLM** — skills are API bridges. No skill contains classification, summarization, or judgment logic. The LLM decides what to draft; the skill saves it to Drafts. The LLM decides what to search for; the skill fetches results.
 - **Future-Proof for LLM Upgrades** — synthesis always stays in Curia's LLM, never in a pre-synthesis API (Perplexity rejected for this reason). As Claude gets smarter, Curia's research quality improves automatically at zero cost.
-- **Autonomy-Score-Aware** — all new skills declare `autonomy_floor` per spec 12 (autonomy engine). The global autonomy score governs which capabilities Curia may exercise independently — no per-channel config flags. Skills that ship now are available at any score; higher-autonomy behaviors (archiving, sending as the CEO) activate as the score increases into the appropriate band.
+- **Autonomy-Score-Aware** — all new skills declare `action_risk` per spec 12 (autonomy engine). The global autonomy score governs which capabilities Curia may exercise independently — no per-channel config flags. Skills that ship now are available at any score; higher-autonomy behaviors (archiving, sending as the CEO) activate as the score increases into the appropriate band.
 
 ---
 
@@ -31,14 +31,14 @@ CEO inbox capabilities map to autonomy bands (spec 12) rather than hard-coded ph
 The global autonomy score governs what Nathan does independently vs. asks first — no
 separate `autonomy_phase` config field.
 
-| Capability | autonomy_floor | Ships when |
+| Capability | action_risk | Ships when |
 |---|---|---|
-| Read inbox, read messages, list drafts | `full` | Now — reads are always safe |
-| Draft replies, save to the CEO's Drafts folder | `full` | Now — no outbound effect; nothing leaves until the CEO manually sends from Gmail |
-| Daily draft digest (scheduler job) | `full` | Now — read + notify, no external write |
-| Archive threads, apply Gmail labels | `spot-check` | When skills are built — Curia proceeds at `spot-check`+, asks at lower bands |
-| Reply as Curia (from nathancuria1@gmail.com) | `spot-check` | When `email-send` account param ships |
-| Reply as the CEO (from joseph@josephfung.ca) | `approval-required` | When `email-send` account param ships — sending on the CEO's behalf requires higher trust |
+| Read inbox, read messages, list drafts | `none` | Now — reads are always safe |
+| Draft replies, save to the CEO's Drafts folder | `none` | Now — no outbound effect; nothing leaves until the CEO manually sends from Gmail |
+| Daily draft digest (scheduler job) | `none` | Now — read + notify, no external write |
+| Archive threads, apply Gmail labels | `low` | When skills are built — Curia proceeds at score ≥ 60, asks at lower bands |
+| Reply as Curia (from nathancuria1@gmail.com) | `medium` | When `email-send` account param ships |
+| Reply as the CEO (from joseph@josephfung.ca) | `high` | When `email-send` account param ships — sending on the CEO's behalf requires higher trust |
 
 The autonomy engine (spec 12) injects the current band's behavioral description into
 every coordinator task. Curia self-governs accordingly without additional gating code
@@ -64,7 +64,7 @@ Skills are **account-aware** rather than account-specific — an optional `accou
   "name": "email-list",
   "sensitivity": "normal",
   "infrastructure": true,
-  "autonomy_floor": "full",
+  "action_risk": "none",
   "inputs": {
     "account": "string? (nathan | joseph, default nathan)",
     "folder": "string? (INBOX | DRAFTS | SENT | TRASH | <provider folder id>, default INBOX)",
@@ -86,7 +86,7 @@ Skills are **account-aware** rather than account-specific — an optional `accou
   "name": "email-get",
   "sensitivity": "normal",
   "infrastructure": true,
-  "autonomy_floor": "full",
+  "action_risk": "none",
   "inputs": {
     "account": "string? (nathan | joseph, default nathan)",
     "messageId": "string"
@@ -103,7 +103,7 @@ Skills are **account-aware** rather than account-specific — an optional `accou
   "name": "email-draft-save",
   "sensitivity": "elevated",
   "infrastructure": true,
-  "autonomy_floor": "full",
+  "action_risk": "none",
   "inputs": {
     "account": "string (nathan | joseph)",
     "to": "string",
@@ -118,7 +118,7 @@ Skills are **account-aware** rather than account-specific — an optional `accou
 ```
 
 Elevated sensitivity ensures a human-approval gate the first time the coordinator uses this
-skill. `autonomy_floor: "full"` reflects that saving a draft has no outbound effect — nothing
+skill. `action_risk: "none"` reflects that saving a draft has no outbound effect — nothing
 leaves until Joseph manually reviews and sends it from Gmail.
 
 **Scheduler job (Phase 1):**
@@ -131,17 +131,17 @@ This is set up during first-time onboarding via a CLI prompt like "keep an eye o
 
 **Future skills (not shipped now) — autonomy band triggers:**
 
-- `email-archive` (`autonomy_floor: "spot-check"`) — removes a message from `INBOX` via `UpdateMessageRequest`. Supports `account` param. Nathan should proceed independently at `spot-check`+; at lower bands he surfaces the action and waits for explicit approval.
-- `email-label` (`autonomy_floor: "spot-check"`) — applies Gmail labels to a thread via `UpdateMessageRequest`. Supports `account` param. Same band guidance as `email-archive`.
+- `email-archive` (`action_risk: "low"`) — removes a message from `INBOX` via `UpdateMessageRequest`. Supports `account` param. Nathan should proceed independently at score ≥ 60; at lower scores he surfaces the action and waits for explicit approval.
+- `email-label` (`action_risk: "low"`) — applies Gmail labels to a thread via `UpdateMessageRequest`. Supports `account` param. Same risk guidance as `email-archive`.
 - `email-send` / `email-reply` gain an `account` parameter when the autonomous reply capability ships:
-  - `account: "nathan"` → `autonomy_floor: "spot-check"` — Nathan replying as himself is standard outbound
-  - `account: "joseph"` → `autonomy_floor: "approval-required"` — sending on the CEO's behalf requires higher trust; below this band the OutboundGateway hard-blocks the send and the coordinator saves a draft instead
+  - `account: "nathan"` → `action_risk: "medium"` — Nathan replying as himself is standard outbound
+  - `account: "joseph"` → `action_risk: "high"` — sending on the CEO's behalf requires higher trust; below score 80 the OutboundGateway hard-blocks the send and the coordinator saves a draft instead
 
 ### Outbound Gateway
 
 All writes to the CEO's account (draft saves, eventual sends) route through `OutboundGateway`. Currently only draft saves are implemented — no sends. The gateway's blocked-contact and content-filter checks apply to drafts to prevent Curia from drafting problematic content.
 
-**Future autonomy gate (when `email-send(account: "joseph")` ships):** OutboundGateway will check the current autonomy score against the skill's `autonomy_floor: "approval-required"` (score ≥ 70). Below that threshold, `email-send` with `account: "joseph"` is blocked at the gateway level and the coordinator is instructed to save a draft instead. This is a hard gate — it holds even if the LLM's injected autonomy guidance would otherwise permit the action.
+**Future autonomy gate (when `email-send(account: "joseph")` ships):** OutboundGateway will check the current autonomy score against the skill's `action_risk: "high"` (score ≥ 80). Below that threshold, `email-send` with `account: "joseph"` is blocked at the gateway level and the coordinator is instructed to save a draft instead. This is a hard gate — it holds even if the LLM's injected autonomy guidance would otherwise permit the action.
 
 ### Contact System
 
@@ -213,7 +213,7 @@ Curia decides which to use based on the task. The skill exposes both via an inpu
   "name": "web-search",
   "description": "Search the web using Tavily. Returns structured results with title, URL, snippet, and (for advanced depth) extracted page content. Call multiple times with refined queries for complex research tasks.",
   "sensitivity": "normal",
-  "autonomy_floor": "full",
+  "action_risk": "none",
   "inputs": {
     "query": "string",
     "maxResults": "number? (default 5, max 20)",

@@ -24,10 +24,22 @@ export class SkillRegistry {
    * Throws if a skill with the same name is already registered —
    * duplicate names indicate a configuration error that should surface
    * at startup, not silently overwrite.
+   *
+   * Also validates action_risk when provided as a number: must be an integer
+   * in [0, 100]. Named labels are validated by TypeScript at compile time.
    */
   register(manifest: SkillManifest, handler: SkillHandler): void {
     if (this.skills.has(manifest.name)) {
       throw new Error(`Skill '${manifest.name}' is already registered`);
+    }
+    if (typeof manifest.action_risk === 'number') {
+      const risk = manifest.action_risk;
+      if (!Number.isInteger(risk) || risk < 0 || risk > 100) {
+        throw new Error(
+          `Skill '${manifest.name}' has invalid action_risk: ${risk}. ` +
+          `Numeric action_risk must be an integer between 0 and 100.`,
+        );
+      }
     }
     this.skills.set(manifest.name, { manifest, handler });
   }

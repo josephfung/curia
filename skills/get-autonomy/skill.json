@@ -9,5 +9,5 @@
   "permissions": [],
   "secrets": [],
   "timeout": 10000,
-  "autonomy_floor": "full"
+  "action_risk": "none"
 }

@@ -8,6 +8,23 @@
 import type { Logger } from '../logger.js';
 
 /**
+ * The risk level of a skill's actions, expressed as the minimum autonomy score
+ * required before the skill may run without explicit CEO approval.
+ *
+ * Named labels map to score thresholds:
+ *   none     →  0  — read-only, no side effects (always safe)
+ *   low      → 60  — internal state writes (memory, contacts)
+ *   medium   → 70  — outbound communications
+ *   high     → 80  — calendar writes, commitments on behalf of CEO
+ *   critical → 90  — financial / destructive / irreversible
+ *
+ * A raw number (0–100) may be used for precision (e.g. 75 for a skill that
+ * should unlock just above approval-required but below spot-check).
+ * Numbers outside [0, 100] produce a validation error at skill load time.
+ */
+export type ActionRisk = 'none' | 'low' | 'medium' | 'high' | 'critical' | number;
+
+/**
  * Skill manifest shape — loaded from skill.json files in each skill directory.
  * Declares what the skill does, what it needs, and its security classification.
  */
@@ -17,10 +34,11 @@ export interface SkillManifest {
   version: string;
   /** "normal" = auto-approvable; "elevated" = requires human approval on first use */
   sensitivity: 'normal' | 'elevated';
-  /** Autonomy floor: the minimum autonomy band required to invoke this skill.
-   *  Used by Phase 2 gate wiring to enforce autonomy-aware skill access.
-   *  Optional — existing manifests that predate spec 12 don't have this field. */
-  autonomy_floor?: 'full' | 'spot-check' | 'approval-required' | 'draft-only' | 'restricted';
+  /** Action risk: the minimum autonomy score required to invoke this skill without
+   *  explicit CEO approval. Used by Phase 2 gate wiring to enforce autonomy-aware
+   *  skill access. Optional — existing manifests that predate spec 12 don't have
+   *  this field. See ActionRisk for the named label → score mapping. */
+  action_risk?: ActionRisk;
   /** JSON Schema-ish description of expected inputs */
   inputs: Record<string, string>;
   /** JSON Schema-ish description of outputs */
