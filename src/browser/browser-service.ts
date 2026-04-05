@@ -76,14 +76,7 @@ export class BrowserService {
     this.browser = await this.browserFactory();
 
     // Restart browser automatically on disconnect (e.g., OOM kill)
-    this.browser.on('disconnected', () => {
-      this.logger.error('Playwright browser disconnected — clearing sessions and restarting');
-      this.sessions.clear();
-      // Non-blocking restart — if it fails, subsequent skill calls return errors
-      void this.browserFactory().then(b => { this.browser = b; }).catch(err => {
-        this.logger.error({ err }, 'Browser restart failed');
-      });
-    });
+    this.attachDisconnectedHandler(this.browser);
 
     // Initialize ad blocker in the background — don't block startup on a network download.
     // Sessions created before initialization completes will run without ad blocking,
@@ -101,6 +94,27 @@ export class BrowserService {
     this.sweepTimer.unref();
 
     this.logger.info({ sessionTtlMs: this.sessionTtlMs }, 'BrowserService started');
+  }
+
+  /**
+   * Attach the 'disconnected' crash-recovery listener to a browser instance.
+   * Called on the initial browser and on every restarted browser so that
+   * crash recovery continues working after the first restart.
+   */
+  private attachDisconnectedHandler(browser: import('playwright').Browser): void {
+    browser.on('disconnected', () => {
+      this.logger.error('Playwright browser disconnected — clearing sessions and restarting');
+      this.sessions.clear();
+      // Non-blocking restart — if it fails, subsequent skill calls return errors
+      void this.browserFactory().then(b => {
+        this.browser = b;
+        // Reattach the handler on the new browser instance so that a second
+        // crash is also recovered. Without this, recovery only works once.
+        this.attachDisconnectedHandler(b);
+      }).catch(err => {
+        this.logger.error({ err }, 'Browser restart failed');
+      });
+    });
   }
 
   /**

@@ -110,8 +110,10 @@ export class WebBrowserHandler implements SkillHandler {
           if (!value || typeof value !== 'string') {
             return { success: false, error: 'select requires value (string)' };
           }
-          // Playwright's selectOption works on <select> elements
-          await page.locator(selector).selectOption(value);
+          // Use resolveLocator for consistency with click/type — the LLM can use
+          // natural language ("Country dropdown") and it will resolve via role/label/text.
+          const selectTarget = await resolveLocator(page, selector);
+          await selectTarget.selectOption(value);
           break;
         }
 
@@ -164,16 +166,23 @@ async function resolveLocator(page: Page, selector: string): Promise<Locator> {
   ];
   for (const role of rolesToTry) {
     const loc = page.getByRole(role, { name: selector, exact: false });
-    if (await loc.count() > 0) return loc;
+    const count = await loc.count();
+    if (count > 0) {
+      // Use .first() when multiple elements match to avoid Playwright strict-mode
+      // errors. The LLM can retry with a more specific selector if needed.
+      return count === 1 ? loc : loc.first();
+    }
   }
 
   // Try getByLabel for form inputs described by their label text
   const labelLocator = page.getByLabel(selector, { exact: false });
-  if (await labelLocator.count() > 0) return labelLocator;
+  const labelCount = await labelLocator.count();
+  if (labelCount > 0) return labelCount === 1 ? labelLocator : labelLocator.first();
 
   // Try getByText for any visible element containing the text
   const textLocator = page.getByText(selector, { exact: false });
-  if (await textLocator.count() > 0) return textLocator;
+  const textCount = await textLocator.count();
+  if (textCount > 0) return textCount === 1 ? textLocator : textLocator.first();
 
   // CSS/XPath fallback — the LLM can pass a CSS selector directly if natural language fails
   return page.locator(selector);
