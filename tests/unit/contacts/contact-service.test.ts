@@ -414,6 +414,12 @@ describe('ContactService', () => {
         .rejects.toThrow();
     });
 
+    it('rejects merge when secondary does not exist', async () => {
+      const primary = await service.createContact({ displayName: 'Alice', source: 'ceo_stated' });
+      await expect(service.mergeContacts(primary.id, '00000000-0000-0000-0000-000000000000'))
+        .rejects.toThrow();
+    });
+
     it('status most-restrictive-wins: blocked beats confirmed', async () => {
       const primary = await service.createContact({
         displayName: 'Alice',

@@ -929,8 +929,10 @@ class PostgresContactBackend implements ContactServiceBackend {
          )`,
       [fromContactId, toContactId],
     );
+    // Only re-point active (non-revoked) rows; revoked rows stay on the secondary
+    // and will be effectively deleted when the secondary contact is deleted.
     await this.pool.query(
-      `UPDATE contact_auth_overrides SET contact_id = $1 WHERE contact_id = $2`,
+      `UPDATE contact_auth_overrides SET contact_id = $1 WHERE contact_id = $2 AND revoked_at IS NULL`,
       [toContactId, fromContactId],
     );
   }
