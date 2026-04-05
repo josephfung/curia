@@ -72,4 +72,20 @@ describe('ContactFindDuplicatesHandler', () => {
       expect(data.pairs[0].contact_a.contact_id).toBe('aaa');
     }
   });
+
+  it('rounds score to 2 decimal places', async () => {
+    const fakePair = {
+      contactA: { id: 'aaa', displayName: 'Alice', role: null, identities: [] },
+      contactB: { id: 'bbb', displayName: 'Bob', role: null, identities: [] },
+      score: 0.94567,
+      confidence: 'probable',
+      reason: 'Name similarity',
+    };
+    const contactService = { findDuplicates: async () => [fakePair] };
+    const result = await handler.execute(makeCtx({}, contactService));
+    if (result.success) {
+      const data = result.data as { pairs: Array<{ score: number }> };
+      expect(data.pairs[0].score).toBe(0.95);
+    }
+  });
 });
