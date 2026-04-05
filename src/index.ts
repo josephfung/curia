@@ -59,6 +59,7 @@ import { AutonomyService } from './autonomy/autonomy-service.js';
 import { BrowserService } from './browser/browser-service.js';
 import { OfficeIdentityService } from './identity/service.js';
 import type { AgentPersona } from './skills/types.js';
+import type { ConfigChangeEvent } from './bus/events.js';
 
 async function main(): Promise<void> {
   // 1. Config & logging — no dependencies, must come first.
@@ -353,6 +354,21 @@ async function main(): Promise<void> {
   };
   logger.info({ displayName: agentPersona.displayName, title: agentPersona.title }, 'Agent persona loaded from office identity service');
 
+  // Keep agentPersona in sync with hot-reloaded identity changes.
+  // ExecutionLayer holds a reference to the agentPersona object (not a snapshot),
+  // so mutating its properties in-place propagates to all future skill invocations —
+  // skills always see the current name/title/signature without any restart.
+  bus.subscribe('config.change', 'system', (event) => {
+    const configEvent = event as ConfigChangeEvent;
+    if (configEvent.payload.config_type === 'office_identity') {
+      const updated = officeIdentityService.get();
+      agentPersona.displayName = updated.assistant.name;
+      agentPersona.title = updated.assistant.title;
+      agentPersona.emailSignature = updated.assistant.emailSignature || undefined;
+      logger.info({ displayName: agentPersona.displayName }, 'Agent persona updated from identity hot-reload');
+    }
+  });
+
   let outboundFilter: OutboundContentFilter | undefined;
   if (coordinatorConfig) {
     const systemPromptMarkers = extractIdentityMarkers(officeIdentity);
@@ -449,8 +465,10 @@ async function main(): Promise<void> {
     // This runs in pass 2 so all specialists are already in the registry.
     let systemPrompt = agentConfig.system_prompt;
     if (agentConfig.role === 'coordinator') {
+      // Do NOT pass officeIdentityBlock here — leave ${office_identity_block}
+      // as a literal placeholder. It is replaced per-turn in AgentRuntime.processTask()
+      // by the officeIdentityService passed below, enabling hot-reload without a restart.
       systemPrompt = interpolateRuntimeContext(systemPrompt, {
-        officeIdentityBlock: officeIdentityService.compileSystemPromptBlock(),
         availableSpecialists: agentRegistry.specialistSummary(),
         agentContactId: agentIdentityContactId,
       });
@@ -476,6 +494,11 @@ async function main(): Promise<void> {
       // always current. Specialist agents don't need this — they work with
       // structured data, not user-facing time references.
       timezone: agentConfig.role === 'coordinator' ? config.timezone : undefined,
+      // The coordinator gets per-turn identity block injection via officeIdentityService.
+      // This replaces the ${office_identity_block} placeholder in the system prompt on
+      // every task, so identity hot-reloads (file watcher or API PUT) take effect on the
+      // next turn without a restart.
+      officeIdentityService: agentConfig.role === 'coordinator' ? officeIdentityService : undefined,
       // Map YAML snake_case fields to AgentConfig camelCase, falling back to
       // DEFAULT_ERROR_BUDGET values for any omitted fields.
       errorBudget: agentConfig.error_budget ? {

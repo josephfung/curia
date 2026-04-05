@@ -19,14 +19,23 @@ export interface IdentityRouteOptions {
   webAppBootstrapSecret: string;
 }
 
-/** Validate the x-web-bootstrap-secret header. Uses timing-safe comparison. */
+/** Validate the x-web-bootstrap-secret header. Uses timing-safe comparison.
+ *
+ * We compare buffer byte lengths — not JavaScript string char lengths — before
+ * calling timingSafeEqual. timingSafeEqual throws ERR_CRYPTO_TIMING_SAFE_EQUAL_LENGTH
+ * when the two buffers have different byte lengths. A multi-byte UTF-8 header could
+ * have the same char count as the configured secret but a different byte count,
+ * triggering an unhandled 500 without this guard.
+ */
 function validateBootstrapSecret(
   provided: unknown,
   configured: string,
 ): boolean {
   if (typeof provided !== 'string') return false;
-  if (provided.length !== configured.length) return false;
-  return timingSafeEqual(Buffer.from(provided), Buffer.from(configured));
+  const providedBuf = Buffer.from(provided);
+  const configuredBuf = Buffer.from(configured);
+  if (providedBuf.length !== configuredBuf.length) return false;
+  return timingSafeEqual(providedBuf, configuredBuf);
 }
 
 export async function identityRoutes(

@@ -12,6 +12,7 @@ import { DEFAULT_ERROR_BUDGET, type AgentError, type ErrorBudget } from '../erro
 // Value import (not type-only) — we call AutonomyService.formatPromptBlock() as a static method.
 import { AutonomyService } from '../autonomy/autonomy-service.js';
 import { formatTimeContextBlock } from '../time/time-context.js';
+import type { OfficeIdentityService } from '../identity/service.js';
 
 export interface AgentConfig {
   agentId: string;
@@ -32,6 +33,11 @@ export interface AgentConfig {
   /** Optional autonomy service — when provided, the autonomy block is injected
    *  into the effective system prompt on every task. Only the coordinator receives this. */
   autonomyService?: AutonomyService;
+  /** Optional identity service — when provided, ${office_identity_block} in the system
+   *  prompt is replaced with the freshly-compiled identity block on every task turn.
+   *  This enables hot-reload: identity changes via the API or file watcher take effect
+   *  on the very next coordinator turn without a restart. Only the coordinator uses this. */
+  officeIdentityService?: OfficeIdentityService;
   /** IANA timezone name (e.g. "America/Toronto"). When provided, the current date/time
    *  block is appended to the system prompt on every task so the date is always fresh.
    *  If omitted, no time block is injected. */
@@ -120,13 +126,31 @@ export class AgentRuntime {
   }
 
   private async processTask(taskEvent: AgentTaskEvent): Promise<void> {
-    const { agentId, systemPrompt, provider, bus, logger, memory, executionLayer, skillToolDefs, autonomyService } = this.config;
+    const { agentId, systemPrompt, provider, bus, logger, memory, executionLayer, skillToolDefs, autonomyService, officeIdentityService } = this.config;
     const { content, conversationId } = taskEvent.payload;
+
+    // Replace the ${office_identity_block} placeholder with the freshly-compiled
+    // identity block. This runs per-task (not at startup) so identity changes via
+    // the API or file watcher take effect on the next coordinator turn without a restart.
+    // The token stays literal in the stored systemPrompt; we substitute it here each turn.
+    let effectiveSystemPrompt = systemPrompt;
+    if (officeIdentityService) {
+      try {
+        effectiveSystemPrompt = effectiveSystemPrompt.replace(
+          '${office_identity_block}',
+          officeIdentityService.compileSystemPromptBlock(),
+        );
+      } catch (err) {
+        // A compile failure should not abort the task. Log at error (operator signal)
+        // and proceed with the placeholder literal visible — the misconfiguration will
+        // be obvious in the LLM's response if the block is structurally broken.
+        logger.error({ err, agentId }, 'Failed to compile identity block — ${office_identity_block} placeholder left in prompt');
+      }
+    }
 
     // Load the current autonomy config and append its behavioral block to the
     // system prompt. This runs per-task (not at startup) so a CEO score change
     // mid-session takes effect on Curia's next action without a restart.
-    let effectiveSystemPrompt = systemPrompt;
     if (autonomyService) {
       try {
         const autonomyConfig = await autonomyService.getConfig();

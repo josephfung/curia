@@ -253,7 +253,13 @@ export class OfficeIdentityService {
    * The new identity takes effect on the next turn.
    */
   async reload(): Promise<void> {
-    const identity = await this.loadFromDb();
+    let identity: OfficeIdentity | null;
+    try {
+      identity = await this.loadFromDb();
+    } catch (err) {
+      this.logger.error({ err }, 'Failed to load office identity from DB during reload');
+      throw err;
+    }
     if (!identity) {
       // After initialize() completes successfully, office_identity_current always has a record.
       // A null return here indicates DB inconsistency (missing pointer row) or a failed prior
@@ -362,9 +368,18 @@ export class OfficeIdentityService {
    */
   async stop(): Promise<void> {
     if (this.watcher) {
-      await this.watcher.close();
-      this.watcher = null;
-      this.logger.debug('Office identity file watcher stopped');
+      try {
+        await this.watcher.close();
+        this.logger.debug('Office identity file watcher stopped');
+      } catch (err) {
+        this.logger.error({ err }, 'Error closing office identity file watcher');
+        // Don't rethrow — callers (shutdown handler, tests) must be able to proceed
+        // even if the watcher close fails. The process is going away anyway.
+      } finally {
+        // Null out even if close() throws so repeated stop() calls don't try to
+        // close an already-errored watcher.
+        this.watcher = null;
+      }
     }
   }
 
