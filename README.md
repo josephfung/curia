@@ -324,8 +324,11 @@ The explorer supports:
 | 08 | Operations (deployment, health, monitoring) | Planned |
 | 09 | Contacts & identity (auth, unknown sender policy) | ✅ Implemented |
 | 10 | Audit log hardening (hash-chain, HITL, provenance) | Planned |
-| 11 | Autonomy engine (global score, CEO controls, per-task prompt injection) | ✅ Implemented |
-| 12 | Autonomy engine (self-monitoring, measurement, and automatic tuning) | Planned |
+| 11 | Entity context enrichment (KG-backed sender/entity profiles) | Planned — spec drafted |
+| 12 | Knowledge graph web explorer | ✅ Implemented |
+| 13 | Office identity (persona, voice, runtime config) | Planned — spec drafted |
+| — | Autonomy engine (global score, CEO controls, per-task prompt injection) | ✅ Implemented |
+| — | Autonomy engine (self-monitoring, measurement, and automatic tuning) | Planned |
 | — | Outbound safety (content filter, gateway, display name sanitization, caller verification) | Partial — deterministic rules done; LLM-as-judge planned |
 | — | Smoke test framework (14 chat-based cases, LLM-as-judge, HTML reports) | ✅ Implemented |
 | — | Web dashboard | Future |
@@ -346,6 +349,9 @@ The explorer supports:
 - **[Operations](docs/specs/08-operations.md)** — Config, deployment, health, monitoring
 - **[Contacts & Identity](docs/specs/09-contacts-and-identity.md)** — Contact service, authorization, unknown sender policy
 - **[Audit Log Hardening](docs/specs/10-audit-log-hardening.md)** — Hash-chain integrity, HITL records, LLM provenance
+- **[Entity Context Enrichment](docs/specs/11-entity-context-enrichment.md)** — KG-backed sender profiles, enriched inbound messages
+- **[Knowledge Graph Web Explorer](docs/specs/12-knowledge-graph-web-explorer.md)** — Browser UI for inspecting the knowledge graph
+- **[Office Identity](docs/specs/13-office-identity.md)** — Persona config, voice, runtime identity updates
 
 ---
 
