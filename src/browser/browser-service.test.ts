@@ -172,12 +172,20 @@ describe.skipIf(!runBrowserTests)('BrowserService (integration — real Chromium
     // Run the same DOM-cleaning evaluate() that the handler uses.
     // Clone the body before stripping so we don't permanently mutate the live DOM —
     // this mirrors the fix applied to getCleanedContent() in the handler.
-    const content = await session.page.evaluate(() => {
-      const root = document.body?.cloneNode(true) as HTMLBodyElement | null;
+    //
+    // page.evaluate() callbacks run inside the browser — DOM globals (document,
+    // HTMLBodyElement, etc.) exist at runtime but aren't in this project's server
+    // tsconfig lib. Access them via `globalThis` to satisfy the type-checker without
+    // adding "dom" to the lib (which would pollute the server-side type surface).
+    const content = await session.page.evaluate((): string => {
+      type AnyEl = { remove(): void; querySelectorAll(s: string): ArrayLike<AnyEl>; innerText?: string; textContent?: string | null };
+      type Win = { document?: { body?: { cloneNode(deep: boolean): AnyEl | null } } };
+      const win = globalThis as unknown as Win;
+      const root = win.document?.body?.cloneNode(true) ?? null;
       if (!root) return '';
       const noiseSelectors = ['script', 'style', 'noscript', 'svg', 'iframe', 'template'];
       for (const sel of noiseSelectors) {
-        root.querySelectorAll(sel).forEach(el => el.remove());
+        Array.from(root.querySelectorAll(sel)).forEach((el) => el.remove());
       }
       return (root.innerText ?? root.textContent ?? '').trim();
     });
