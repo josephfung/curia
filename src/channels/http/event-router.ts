@@ -66,8 +66,10 @@ export class EventRouter {
     // outbound.message — dispatches to pending POST resolvers and SSE clients
     bus.subscribe('outbound.message', 'channel', (event: BusEvent) => {
       if (event.type !== 'outbound.message') return;
-      // Only handle messages for the HTTP channel
-      if (event.payload.channelId !== 'http') return;
+      // Handle messages for channels that use synchronous POST/wait (http and web).
+      // Other channels (email, telegram) process replies asynchronously and have no
+      // pending promise waiting here.
+      if (event.payload.channelId !== 'http' && event.payload.channelId !== 'web') return;
 
       const convId = event.payload.conversationId;
 
@@ -146,10 +148,10 @@ export class EventRouter {
 
       const convId = event.payload.conversationId;
 
-      // Only HTTP requests have pending POST promises to reject.
-      // Non-HTTP channels (email, etc.) produce rejection events for audit and SSE,
-      // but have no synchronous caller waiting on a promise.
-      if (event.payload.channelId === 'http') {
+      // HTTP and web channel requests both have synchronous POST promises to reject.
+      // Other channels (email, telegram, etc.) produce rejection events for audit
+      // and SSE but have no synchronous caller waiting on a promise.
+      if (event.payload.channelId === 'http' || event.payload.channelId === 'web') {
         const pending = this.pendingResponses.get(convId);
         if (pending) {
           clearTimeout(pending.timeout);
