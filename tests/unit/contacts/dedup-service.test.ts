@@ -143,6 +143,12 @@ describe('DedupService', () => {
       expect(pairs).toHaveLength(0);
     });
 
+    it('returns empty list when there is only one contact', () => {
+      const a = makeContact({ id: 'a', displayName: 'Alice White' });
+      const pairs = svc.findAllDuplicates([a], new Map());
+      expect(pairs).toHaveLength(0);
+    });
+
     it('returns empty list when all contacts are in different blocking groups', () => {
       const contacts = [
         makeContact({ id: 'a', displayName: 'Alice White' }),

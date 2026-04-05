@@ -279,30 +279,45 @@ export class DedupService {
     const pairs: DuplicatePair[] = [];
     const seen = new Set<string>(); // track "a:b" pairs already evaluated
 
-    // Pre-scan: build a reverse index from channel identity key → contactId
-    // to detect exact channel overlaps between any two contacts, regardless of name.
-    const channelIndex = new Map<string, string>(); // "channel:identifier" → first contactId seen
+    // Pre-scan: build a reverse index from channel identity key → all contactIds
+    // that share it. Exact channel overlap is a certain match regardless of name.
+    const channelIndex = new Map<string, string[]>(); // "channel:identifier" → [contactId, ...]
     for (const c of contacts) {
       for (const identity of identitiesMap.get(c.id) ?? []) {
         const key = `${identity.channel}:${identity.channelIdentifier}`;
-        const existingId = channelIndex.get(key);
-        if (existingId && existingId !== c.id) {
-          // Found a shared channel identifier — certain match
-          const a = contacts.find((x) => x.id === existingId)!;
-          const b = c;
-          const pairKey = a.id < b.id ? `${a.id}:${b.id}` : `${b.id}:${a.id}`;
-          if (!seen.has(pairKey)) {
-            seen.add(pairKey);
-            pairs.push({
-              contactA: { id: a.id, displayName: a.displayName, role: a.role, identities: identitiesMap.get(a.id) ?? [] },
-              contactB: { id: b.id, displayName: b.displayName, role: b.role, identities: identitiesMap.get(b.id) ?? [] },
-              score: 1.0,
-              confidence: 'certain',
-              reason: `Same ${identity.channel} identifier (${identity.channelIdentifier})`,
-            });
-          }
+        const existing = channelIndex.get(key);
+        if (existing) {
+          existing.push(c.id);
         } else {
-          channelIndex.set(key, c.id);
+          channelIndex.set(key, [c.id]);
+        }
+      }
+    }
+
+    // Emit certain pairs for every group of contacts sharing a channel identifier.
+    // Using N×(N-1)/2 enumeration ensures three-way (or larger) overlaps are fully covered —
+    // the old single-entry map only linked A↔B but missed the B↔C pair.
+    for (const [key, contactIds] of channelIndex) {
+      if (contactIds.length < 2) continue;
+      // Parse the channel name for the reason string (e.g. "email" from "email:alice@acme.com")
+      const channelName = key.split(':')[0];
+      const identifierValue = key.slice(channelName.length + 1);
+      for (let i = 0; i < contactIds.length; i++) {
+        for (let j = i + 1; j < contactIds.length; j++) {
+          const aId = contactIds[i];
+          const bId = contactIds[j];
+          const pairKey = aId < bId ? `${aId}:${bId}` : `${bId}:${aId}`;
+          if (seen.has(pairKey)) continue;
+          seen.add(pairKey);
+          const a = contacts.find((x) => x.id === aId)!;
+          const b = contacts.find((x) => x.id === bId)!;
+          pairs.push({
+            contactA: { id: a.id, displayName: a.displayName, role: a.role, identities: identitiesMap.get(a.id) ?? [] },
+            contactB: { id: b.id, displayName: b.displayName, role: b.role, identities: identitiesMap.get(b.id) ?? [] },
+            score: 1.0,
+            confidence: 'certain',
+            reason: `Same ${channelName} identifier (${identifierValue})`,
+          });
         }
       }
     }
