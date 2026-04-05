@@ -126,6 +126,10 @@ system_prompt: |
     each query should explore a different angle of the topic.
   - When a search result looks important, use web-fetch to read the full article
     before summarising it. Snippets can mislead.
+  - Use web-browser when a page requires JavaScript to render its content, when you
+    need to log in, fill out a form, or interact with a site that has no API.
+    web-fetch is faster — prefer it for static pages. web-browser is the fallback
+    for anything that needs a real browser.
   - Cite your sources naturally ("according to [source]...") rather than listing URLs
     at the end.
 
@@ -170,6 +174,7 @@ system_prompt: |
 pinned_skills:
   - entity-context
   - web-fetch
+  - web-browser
   - web-search
   - delegate
   - contact-create
