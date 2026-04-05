@@ -5,7 +5,8 @@
 // injected into the coordinator's system prompt on every task.
 //
 // Phase 1: CEO-controlled via get-autonomy / set-autonomy skills.
-// Phase 2: Automatic adjustment based on action log data (future).
+// Phase 2: Hard gates in the execution layer driven by action_risk vs. live score (future).
+// Phase 3: Automatic adjustment based on action log data (future).
 
 import type { Pool } from 'pg';
 import type { Logger } from '../logger.js';
@@ -180,7 +181,7 @@ export class AutonomyService {
 
     // Atomic: read previous score, upsert config, and write history in a single query.
     // RETURNING previous_score gives us the atomically-captured old value for the response.
-    // @TODO Phase 2: If setScore is ever split into separate queries (e.g., for two-step
+    // @TODO Phase 3: If setScore is ever split into separate queries (e.g., for two-step
     // update flows), wrap in explicit BEGIN/COMMIT to preserve atomicity guarantees.
     const result = await this.pool.query<{ previous_score: number | null }>(
       `WITH locked AS (
