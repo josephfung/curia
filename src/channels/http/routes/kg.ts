@@ -838,6 +838,187 @@ function createUiHtml(): string {
 
     searchBtn.addEventListener('click', search);
     searchInput.addEventListener('keydown', function(e) { if (e.key === 'Enter') search(); });
+
+    // ── Chat ───────────────────────────────────────────────────────────
+
+    // Appends a message bubble to the thread panel and scrolls to bottom.
+    // Also persists the message to the in-memory conversation store so it
+    // survives switching between conversations.
+    // role: 'user' | 'agent' | 'status' | 'error'
+    function renderMessage(role, text) {
+      var bubble = document.createElement('div');
+      bubble.className = 'msg-bubble ' + role;
+      // textContent prevents stored XSS — messages come from the agent/user
+      // and could include characters that look like HTML.
+      bubble.textContent = text;
+      chatMessagesEl.appendChild(bubble);
+      chatMessagesEl.scrollTop = chatMessagesEl.scrollHeight;
+
+      // Persist to current conversation store (skip ephemeral status messages).
+      if (role !== 'status' && chatActiveConvIdx >= 0) {
+        chatConversations[chatActiveConvIdx].messages.push({ role: role, text: text });
+      }
+    }
+
+    // Opens an SSE stream for the given conversationId.
+    // Closes any previously open stream first to avoid leaking connections.
+    function openChatStream(convId) {
+      if (chatStream) {
+        chatStream.close();
+        chatStream = null;
+      }
+
+      var url = '/api/kg/chat/stream?conversationId=' + encodeURIComponent(convId);
+      chatStream = new EventSource(url);
+
+      chatStream.onmessage = function(event) {
+        var payload;
+        try {
+          payload = JSON.parse(event.data);
+        } catch {
+          // Malformed frame — ignore. The SSE spec allows comment frames (:ping)
+          // which EventSource silently drops, but custom parsers might not.
+          return;
+        }
+
+        if (payload.type === 'skill.invoke') {
+          // Show a transient status bubble so the user knows work is in progress.
+          var skillName = payload.skill || payload.skillId || 'skill';
+          renderMessage('status', 'Using ' + skillName + '\u2026');
+        } else if (payload.type === 'outbound.message') {
+          // Agent reply arrived via SSE — render it only if the POST response
+          // hasn't already rendered it (race: whichever fires first wins).
+          if (!chatReplyRendered) {
+            chatReplyRendered = true;
+            var content = (typeof payload.content === 'string') ? payload.content
+                        : (typeof payload.message === 'string') ? payload.message
+                        : JSON.stringify(payload);
+            renderMessage('agent', content);
+            chatSendBtn.disabled = false;
+          }
+        }
+        // skill.result: not rendered — it's internal bookkeeping for the agent layer.
+      };
+
+      chatStream.onerror = function() {
+        // Network interruption — the browser will try to reconnect automatically.
+        // Don't surface an error bubble here to avoid noise on transient drops.
+      };
+    }
+
+    // Creates a new in-session conversation, resets the thread panel,
+    // and updates the conversation list in the sidebar.
+    function newConversation() {
+      // Close the current SSE stream — a fresh one will open on the next send.
+      if (chatStream) {
+        chatStream.close();
+        chatStream = null;
+      }
+      chatConversationId = null;
+      chatActiveConvIdx = -1;
+      chatReplyRendered = false;
+      chatMessagesEl.replaceChildren();
+    }
+
+    // Renders the sidebar conversation list, highlighting the active entry.
+    function renderConvList() {
+      chatConvListEl.replaceChildren();
+      chatConversations.forEach(function(conv, idx) {
+        var item = document.createElement('div');
+        item.className = 'conv-item' + (idx === chatActiveConvIdx ? ' active' : '');
+        item.textContent = conv.label;
+        item.title = conv.label;
+        item.addEventListener('click', function() { switchConversation(idx); });
+        chatConvListEl.appendChild(item);
+      });
+    }
+
+    // Switches the active conversation: restores its messages in the thread panel
+    // and reopens the SSE stream for that conversationId.
+    function switchConversation(idx) {
+      if (idx === chatActiveConvIdx) return;
+      chatActiveConvIdx = idx;
+      chatConversationId = chatConversations[idx].id;
+      chatReplyRendered = false;
+
+      // Restore message history for the selected conversation.
+      chatMessagesEl.replaceChildren();
+      chatConversations[idx].messages.forEach(function(msg) {
+        var bubble = document.createElement('div');
+        bubble.className = 'msg-bubble ' + msg.role;
+        bubble.textContent = msg.text;
+        chatMessagesEl.appendChild(bubble);
+      });
+      chatMessagesEl.scrollTop = chatMessagesEl.scrollHeight;
+
+      // Reopen SSE for future messages in this conversation.
+      openChatStream(chatConversationId);
+      renderConvList();
+    }
+
+    // Handles the chat form submit: validates input, creates a conversation if needed,
+    // sends the message, and renders the reply (via POST response or SSE, whichever fires first).
+    function sendChatMessage(e) {
+      e.preventDefault();
+      var text = chatTextarea.value.trim();
+      if (!text) return;
+      chatTextarea.value = '';
+
+      // First message in a new conversation — generate a conversationId and create
+      // the conversation entry. crypto.randomUUID() is available in all modern browsers.
+      if (!chatConversationId) {
+        var newId = 'kg-web-' + crypto.randomUUID();
+        chatConversationId = newId;
+        // Truncate label to ~40 chars for the sidebar.
+        var label = text.length > 40 ? text.slice(0, 40) + '\u2026' : text;
+        chatConversations.push({ id: newId, label: label, messages: [] });
+        chatActiveConvIdx = chatConversations.length - 1;
+        renderConvList();
+        // Open SSE for this conversation BEFORE posting so no events are missed.
+        openChatStream(newId);
+      }
+
+      chatReplyRendered = false;
+      renderMessage('user', text);
+      chatSendBtn.disabled = true;
+
+      var convId = chatConversationId;
+
+      fetch('/api/kg/chat/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: text, conversationId: convId }),
+      })
+        .then(function(res) {
+          return res.json().then(function(body) {
+            // Surface structured backend errors (400/401/403/504/500 all return { error: "..." }).
+            if (!res.ok) throw new Error(body.error || ('HTTP ' + res.status));
+            return body;
+          });
+        })
+        .then(function(data) {
+          // Render the reply unless the SSE outbound.message already did so.
+          if (!chatReplyRendered) {
+            chatReplyRendered = true;
+            renderMessage('agent', data.reply);
+          }
+          chatSendBtn.disabled = false;
+        })
+        .catch(function(err) {
+          renderMessage('error', err.message || 'Something went wrong. Please try again.');
+          chatSendBtn.disabled = false;
+        });
+    }
+
+    // Allow Shift+Enter for newlines; plain Enter submits the form.
+    chatTextarea.addEventListener('keydown', function(e) {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        sendChatMessage(e);
+      }
+    });
+
+    chatForm.addEventListener('submit', sendChatMessage);
   </script>
 </body>
 </html>`;
