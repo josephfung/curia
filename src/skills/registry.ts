@@ -8,9 +8,16 @@
 // the agent runtime can pass them to the LLM's tool-use API.
 
 import type { SkillManifest, SkillHandler, RegisteredSkill, ToolDefinition } from './types.js';
+import { describeTimestampInput } from '../time/timestamp.js';
 
 export class SkillRegistry {
   private skills = new Map<string, RegisteredSkill>();
+  /** IANA timezone name used to populate timestamp input descriptions in tool schemas. */
+  private timezone: string;
+
+  constructor(timezone = 'UTC') {
+    this.timezone = timezone;
+  }
 
   /**
    * Register a skill with its manifest and handler.
@@ -81,6 +88,20 @@ export class SkillRegistry {
 
         const isOptional = typePart.endsWith('?');
         const baseType = isOptional ? typePart.slice(0, -1) : typePart;
+
+        // "timestamp" → string schema with canonical timezone-aware description.
+        // The centralized description tells the LLM to emit UTC-offset ISO strings
+        // and explains that offset-less strings are treated as Curia's local time.
+        // Any parenthetical description in the manifest is appended as extra context.
+        if (baseType === 'timestamp') {
+          const canonicalDesc = describeTimestampInput(this.timezone);
+          const fullDesc = description ? `${canonicalDesc} ${description}` : canonicalDesc;
+          properties[key] = { type: 'string', description: fullDesc };
+          if (!isOptional) {
+            required.push(key);
+          }
+          continue;
+        }
 
         // "string[]", "object[]", etc. → JSON Schema array type with items.
         // itemType is validated against the JSON Schema primitive type allowlist so

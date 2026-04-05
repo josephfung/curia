@@ -255,7 +255,7 @@ async function main(): Promise<void> {
   // Skill registry — loads all skills from the skills/ directory.
   // Skills are the framework's extension mechanism; agents invoke them
   // via the LLM's tool-use API through the execution layer.
-  const skillRegistry = new SkillRegistry();
+  const skillRegistry = new SkillRegistry(config.timezone);
   const skillsDir = path.resolve(import.meta.dirname, '../skills');
   try {
     const skillCount = await loadSkillsFromDirectory(skillsDir, skillRegistry, logger);
