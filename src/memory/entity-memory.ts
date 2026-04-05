@@ -282,6 +282,58 @@ export class EntityMemory {
   }
 
   /**
+   * Idempotent edge creation between two entity nodes.
+   *
+   * Checks for an existing edge of the same type connecting the same pair of nodes
+   * in either direction. If found, bumps lastConfirmedAt and raises confidence
+   * (never lowers it). If not found, creates a new edge.
+   *
+   * The bidirectional check prevents duplicate edges when the same relationship
+   * is expressed from different angles ("A is B's spouse" vs "B is A's spouse").
+   *
+   * Returns the edge and whether it was newly created.
+   */
+  async upsertEdge(
+    sourceId: string,
+    targetId: string,
+    edgeType: EdgeType,
+    properties: Record<string, unknown>,
+    source: string,
+    confidence: number,
+  ): Promise<{ edge: KgEdge; created: boolean }> {
+    // getEdgesForNode returns edges where sourceId is on EITHER side of the edge,
+    // so a single call covers the bidirectional duplicate check.
+    const existingEdges = await this.store.getEdgesForNode(sourceId);
+    const match = existingEdges.find(e =>
+      e.type === edgeType &&
+      (
+        (e.sourceNodeId === sourceId && e.targetNodeId === targetId) ||
+        (e.sourceNodeId === targetId && e.targetNodeId === sourceId)
+      ),
+    );
+
+    if (match) {
+      // Re-assertion: raise confidence if the new extraction is more confident,
+      // and refresh the lastConfirmedAt timestamp.
+      const updated = await this.store.updateEdge(match.id, {
+        confidence: Math.max(match.temporal.confidence, confidence),
+        lastConfirmedAt: new Date(),
+      });
+      return { edge: updated, created: false };
+    }
+
+    const edge = await this.store.createEdge({
+      sourceNodeId: sourceId,
+      targetNodeId: targetId,
+      type: edgeType,
+      properties,
+      confidence,
+      source,
+    });
+    return { edge, created: true };
+  }
+
+  /**
    * Reset rate limit counters for a given agent+task key.
    * Delegates to the validator so the runtime doesn't need a direct validator reference.
    *
