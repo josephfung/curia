@@ -1,0 +1,20 @@
+{
+  "name": "extract-relationships",
+  "description": "Extract entity-to-entity relationships from a passage of text and persist them as knowledge graph edges. Self-classifies internally — always safe to call; exits early if no relationships are found.",
+  "version": "1.0.0",
+  "sensitivity": "normal",
+  "action_risk": "low",
+  "infrastructure": true,
+  "inputs": {
+    "text": "string (the message or turn text to extract relationships from)",
+    "source": "string (provenance string, e.g. 'agent:coordinator/task:abc123/channel:cli')"
+  },
+  "outputs": {
+    "extracted": "number (new edges created)",
+    "confirmed": "number (existing edges re-asserted and updated)",
+    "skipped": "boolean (true if the classifier gate determined no relationships were present)"
+  },
+  "permissions": [],
+  "secrets": ["ANTHROPIC_API_KEY"],
+  "timeout": 15000
+}
