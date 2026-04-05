@@ -57,6 +57,7 @@ import { bootstrapAgentIdentity } from './entity-context/bootstrap.js';
 import { bootstrapCeoContact } from './contacts/ceo-bootstrap.js';
 import { AutonomyService } from './autonomy/autonomy-service.js';
 import { BrowserService } from './browser/browser-service.js';
+import { OfficeIdentityService } from './identity/service.js';
 import type { AgentPersona } from './skills/types.js';
 
 async function main(): Promise<void> {
@@ -118,6 +119,20 @@ async function main(): Promise<void> {
   // than slowing down delivery, hence the synchronous-before-fanout design.
   const bus = new EventBus(logger, (event) => auditLogger.log(event));
 
+  // 4b. Office identity — System-layer service that owns the instance persona.
+  // Must be initialized after migrations (schema) and bus (emits config.change events),
+  // and before agents boot (coordinator needs ${office_identity_block}).
+  // Fatal on failure: without an identity, the coordinator system prompt is incomplete.
+  const identityConfigPath = path.resolve(import.meta.dirname, '../config/office-identity.yaml');
+  const officeIdentityService = new OfficeIdentityService(pool, logger, bus, identityConfigPath);
+  try {
+    await officeIdentityService.initialize();
+    logger.info({ name: officeIdentityService.get().assistant.name }, 'Office identity initialized');
+  } catch (err) {
+    logger.fatal({ err }, 'Failed to initialize office identity service');
+    process.exit(1);
+  }
+
   // 5. LLM provider — hard fail early rather than discovering the missing
   // key only when the first user message arrives.
   if (!config.anthropicApiKey) {
@@ -176,7 +191,8 @@ async function main(): Promise<void> {
   // Fatal on failure: without a contactId, "your calendar" cannot be resolved
   // and entity_enrichment default='agent' would silently produce no results.
   let agentIdentityContactId: string | undefined;
-  const agentDisplayName = 'Curia'; // @TODO: read from coordinatorConfig.persona.display_name after agentConfigs are loaded
+  // Read display name from the identity service — now the single source of truth.
+  const agentDisplayName = officeIdentityService.get().assistant.name;
   try {
     const agentIdentity = await bootstrapAgentIdentity(agentDisplayName, pool, logger);
     agentIdentityContactId = agentIdentity.contactId;
@@ -326,31 +342,26 @@ async function main(): Promise<void> {
   // if the config uses a different role value (e.g., "chief-of-staff").
   const coordinatorConfig = agentConfigs.find(c => c.name === 'coordinator');
 
-  // Extract agent persona from the coordinator config. This is the single source
-  // of truth for the agent's identity — used by the system prompt (via YAML
-  // interpolation) and by skills (via SkillContext.agentPersona) so templates
-  // and outbound-facing code never hardcode the agent's name or title.
-  let agentPersona: AgentPersona | undefined;
-  if (coordinatorConfig?.persona) {
-    agentPersona = {
-      displayName: coordinatorConfig.persona.display_name ?? 'Curia',
-      title: coordinatorConfig.persona.title ?? 'Agent Chief of Staff',
-      emailSignature: coordinatorConfig.persona.email_signature ?? undefined,
-    };
-    logger.info({ displayName: agentPersona.displayName, title: agentPersona.title }, 'Agent persona extracted from coordinator config');
-  } else {
-    logger.warn('No coordinator persona found — skills will not have agent identity context');
-  }
+  // Extract agent persona from the identity service — the single source of truth
+  // for the agent's identity. Used by skills (via SkillContext.agentPersona) so
+  // templates and outbound-facing code never hardcode the agent's name or title.
+  const officeIdentity = officeIdentityService.get();
+  const agentPersona: AgentPersona = {
+    displayName: officeIdentity.assistant.name,
+    title: officeIdentity.assistant.title,
+    emailSignature: officeIdentity.assistant.emailSignature || undefined,
+  };
+  logger.info({ displayName: agentPersona.displayName, title: agentPersona.title }, 'Agent persona loaded from office identity service');
 
   let outboundFilter: OutboundContentFilter | undefined;
   if (coordinatorConfig) {
-    const systemPromptMarkers = extractSystemPromptMarkers(coordinatorConfig);
+    const systemPromptMarkers = extractIdentityMarkers(officeIdentity);
     const ceoEmail = config.nylasSelfEmail ?? '';
     if (!ceoEmail) {
       logger.warn('Outbound content filter initialized without CEO email — contact-data-leak rule may produce false positives');
     }
     if (systemPromptMarkers.length === 0) {
-      logger.warn('No system prompt markers extracted — system-prompt-fragment rule will not detect prompt leakage. Check that coordinator has persona.display_name and persona.tone configured.');
+      logger.warn('No system prompt markers extracted — system-prompt-fragment rule will not detect prompt leakage. Check that office identity has a name and title configured.');
     }
     outboundFilter = new OutboundContentFilter({
       systemPromptMarkers,
@@ -439,6 +450,7 @@ async function main(): Promise<void> {
     let systemPrompt = agentConfig.system_prompt;
     if (agentConfig.role === 'coordinator') {
       systemPrompt = interpolateRuntimeContext(systemPrompt, {
+        officeIdentityBlock: officeIdentityService.compileSystemPromptBlock(),
         availableSpecialists: agentRegistry.specialistSummary(),
         agentContactId: agentIdentityContactId,
       });
@@ -527,6 +539,7 @@ async function main(): Promise<void> {
     agentNames: agentConfigs.map(c => c.name),
     skillNames: skillRegistry.list().map(s => s.manifest.name),
     schedulerService,
+    identityService: officeIdentityService,
   });
 
   try {
@@ -545,6 +558,11 @@ async function main(): Promise<void> {
       } catch (err) {
         logger.error({ err }, 'Error stopping email adapter during shutdown');
       }
+    }
+    try {
+      await officeIdentityService.stop();
+    } catch (err) {
+      logger.error({ err }, 'Error stopping office identity file watcher during shutdown');
     }
     try {
       await httpAdapter.stop();
@@ -594,26 +612,27 @@ async function main(): Promise<void> {
 }
 
 /**
- * Extract distinctive marker phrases from the coordinator config that would
+ * Extract distinctive marker phrases from the office identity that would
  * indicate system prompt leakage if they appeared in an outbound email.
- * These are persona-specific strings that wouldn't occur in normal business writing.
+ * These are identity-specific strings that wouldn't occur in normal business writing.
+ *
+ * @TODO: The current markers only cover name and title. The full system prompt contains
+ * many more distinctive instruction phrases, but extracting arbitrary sentences risks
+ * false positives. This gap is intentionally left for the Stage 2 LLM-as-judge to cover.
  */
-function extractSystemPromptMarkers(
-  config: import('./agents/loader.js').AgentYamlConfig,
+function extractIdentityMarkers(
+  identity: import('./identity/types.js').OfficeIdentity,
 ): string[] {
   const markers: string[] = [];
 
   // Full instruction phrases — distinctive enough to not appear in business email.
-  // We use the full instruction form ("You are X") rather than just the name/title
+  // We use the full instruction form ("You are X") rather than just the name
   // to avoid false positives on email signatures.
-  if (config.persona?.display_name) {
-    markers.push(`You are ${config.persona.display_name}`);
+  if (identity.assistant.name) {
+    markers.push(`You are ${identity.assistant.name}`);
   }
-  if (config.persona?.display_name && config.persona?.title) {
-    markers.push(`${config.persona.display_name}, the ${config.persona.title}`);
-  }
-  if (config.persona?.tone) {
-    markers.push(config.persona.tone);
+  if (identity.assistant.name && identity.assistant.title) {
+    markers.push(`${identity.assistant.name}, ${identity.assistant.title}`);
   }
 
   return markers;

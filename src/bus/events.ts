@@ -173,6 +173,18 @@ interface ScheduleSuspendedPayload {
   consecutiveFailures: number;
 }
 
+// ConfigChangePayload — emitted by the System layer whenever a config object changes.
+// Currently only used by OfficeIdentityService (config_type: 'office_identity').
+// The diff_summary is a human-readable description of what changed; it is not machine-parseable.
+interface ConfigChangePayload {
+  config_type: string;          // e.g. 'office_identity'
+  version: number;              // new version number
+  previous_version: number;     // previous version number (0 if this is the first)
+  changed_by: string;           // 'wizard' | 'api' | 'file_load'
+  note?: string;                // optional human-readable reason
+  diff_summary: string;         // human-readable summary of what changed
+}
+
 // -- Discriminated union --
 // The `type` field is the discriminant; `sourceLayer` records which layer emitted the event.
 
@@ -290,6 +302,12 @@ export interface ScheduleSuspendedEvent extends BaseEvent {
   payload: ScheduleSuspendedPayload;
 }
 
+export interface ConfigChangeEvent extends BaseEvent {
+  type: 'config.change';
+  sourceLayer: 'system';
+  payload: ConfigChangePayload;
+}
+
 export type BusEvent =
   | InboundMessageEvent
   | AgentTaskEvent
@@ -307,7 +325,8 @@ export type BusEvent =
   | OutboundBlockedEvent  // Outbound content filter: message blocked before delivery (#38)
   | ScheduleCreatedEvent   // Scheduler: job created
   | ScheduleFiredEvent     // Scheduler: job fired
-  | ScheduleSuspendedEvent; // Scheduler: job auto-suspended
+  | ScheduleSuspendedEvent  // Scheduler: job auto-suspended
+  | ConfigChangeEvent;      // System: config object changed (office identity, etc.)
 
 // Convenience alias for use in handler maps / switch statements.
 export type EventType = BusEvent['type'];
@@ -560,6 +579,20 @@ export function createScheduleSuspended(
     id: randomUUID(),
     timestamp: new Date(),
     type: 'schedule.suspended',
+    sourceLayer: 'system',
+    payload: rest,
+    parentEventId,
+  };
+}
+
+export function createConfigChange(
+  payload: ConfigChangePayload & { parentEventId?: string },
+): ConfigChangeEvent {
+  const { parentEventId, ...rest } = payload;
+  return {
+    id: randomUUID(),
+    timestamp: new Date(),
+    type: 'config.change',
     sourceLayer: 'system',
     payload: rest,
     parentEventId,
