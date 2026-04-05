@@ -184,6 +184,7 @@ describe('ExtractRelationshipsHandler', () => {
     await handler.execute(ctx);
 
     const aliceNodes = await entityMemory.findEntities('Alice');
+    expect(aliceNodes).toHaveLength(1);
     const queryResult = await entityMemory.query(aliceNodes[0]!.id);
     expect(queryResult.relationships[0]!.edge.type).toBe('relates_to');
   });
