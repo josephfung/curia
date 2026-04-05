@@ -250,9 +250,11 @@ export class ExecutionLayer {
       ctx.autonomyService = this.autonomyService;
     }
 
-    // browserService is available to all skills (not infrastructure-gated).
-    // Browser interaction is a read-capable action that doesn't require bus access.
-    if (this.browserService) {
+    // browserService is scoped to the web-browser skill only — not granted to all skills.
+    // A real browser can navigate to internal network addresses, exfiltrate page content,
+    // and fill forms. Limiting access here prevents any other skill (even if compromised
+    // or buggy) from invoking browser capabilities it never declared.
+    if (this.browserService && manifest.name === 'web-browser') {
       ctx.browserService = this.browserService;
     }
 
