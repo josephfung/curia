@@ -405,24 +405,14 @@ async function main(): Promise<void> {
     const agentPinnedSkills = agentConfig.pinned_skills ?? [];
     const agentToolDefs = skillRegistry.toToolDefinitions(agentPinnedSkills);
 
-    // For the coordinator, interpolate runtime context (specialist list, date, timezone).
+    // For the coordinator, interpolate runtime context (specialist list, agent contact ID).
+    // Date and timezone are no longer baked in here — they are appended fresh on every
+    // task turn via AgentRuntime using formatTimeContextBlock() so they never go stale.
     // This runs in pass 2 so all specialists are already in the registry.
-    // Date is formatted as "YYYY-MM-DD, DayName" in the configured timezone
-    // so agents can resolve relative references like "next Friday".
     let systemPrompt = agentConfig.system_prompt;
     if (agentConfig.role === 'coordinator') {
-      const now = new Date();
-      const currentDate = now.toLocaleDateString('en-CA', {
-        timeZone: config.timezone,
-        year: 'numeric',
-        month: '2-digit',
-        day: '2-digit',
-        weekday: 'long',
-      });
       systemPrompt = interpolateRuntimeContext(systemPrompt, {
         availableSpecialists: agentRegistry.specialistSummary(),
-        currentDate,
-        timezone: config.timezone,
         agentContactId: agentIdentityContactId,
       });
     }
@@ -442,6 +432,10 @@ async function main(): Promise<void> {
       // that needs per-task autonomy prompt injection and the autonomy skills.
       // Use name (not role) — role is optional in agent YAML and may not be set.
       autonomyService: agentConfig.name === 'coordinator' ? autonomyService : undefined,
+      // The coordinator gets per-turn time block injection so the date/timezone are
+      // always current. Specialist agents don't need this — they work with
+      // structured data, not user-facing time references.
+      timezone: agentConfig.name === 'coordinator' ? config.timezone : undefined,
       // Map YAML snake_case fields to AgentConfig camelCase, falling back to
       // DEFAULT_ERROR_BUDGET values for any omitted fields.
       errorBudget: agentConfig.error_budget ? {
