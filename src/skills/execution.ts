@@ -18,6 +18,7 @@
 // never needs to call entity-context itself.
 
 import type { SkillResult, SkillContext, CallerContext, AgentPersona } from './types.js';
+import { normalizeTimestamp } from '../time/timestamp.js';
 import type { SkillRegistry } from './registry.js';
 import { sanitizeOutput } from './sanitize.js';
 import type { Logger } from '../logger.js';
@@ -52,6 +53,8 @@ export class ExecutionLayer {
   private autonomyService?: AutonomyService;
   /** The agent's own contactId — injected into ctx.agentContactId for entity_enrichment default='agent' */
   private agentContactId?: string;
+  /** IANA timezone name used for normalizing offset-less timestamp inputs from the LLM. */
+  private timezone: string;
 
   constructor(registry: SkillRegistry, logger: Logger, options?: {
     bus?: EventBus;
@@ -66,6 +69,7 @@ export class ExecutionLayer {
     entityContextAssembler?: EntityContextAssembler;
     autonomyService?: AutonomyService;
     agentContactId?: string;
+    timezone?: string;
   }) {
     this.registry = registry;
     this.logger = logger;
@@ -81,6 +85,7 @@ export class ExecutionLayer {
     this.entityContextAssembler = options?.entityContextAssembler;
     this.autonomyService = options?.autonomyService;
     this.agentContactId = options?.agentContactId;
+    this.timezone = options?.timezone ?? 'UTC';
   }
 
   /**
@@ -116,6 +121,24 @@ export class ExecutionLayer {
     }
 
     const { manifest, handler } = skill;
+
+    // Normalize timestamp inputs to UTC Z-suffix before invoking the handler.
+    // The LLM often emits offset-less ISO strings (e.g. "2026-04-06T08:00:00")
+    // which new Date() on a UTC server interprets as UTC — wrong for Toronto.
+    // normalizeTimestamp() interprets offset-less strings as Curia's local time.
+    for (const [key, typeStr] of Object.entries(manifest.inputs)) {
+      const baseType = typeStr.replace(/\?$/, '').replace(/\s*\(.*\)$/, '').trim();
+      if (baseType !== 'timestamp') continue;
+      const raw = input[key];
+      if (typeof raw !== 'string' || raw.trim() === '') continue;
+      try {
+        input[key] = normalizeTimestamp(raw, this.timezone);
+      } catch (err) {
+        // Non-fatal: log and pass the raw value through. The handler may reject it
+        // or the LLM may have sent something like "tomorrow" which is genuinely invalid.
+        this.logger.warn({ skillName, key, raw, err }, 'timestamp normalization failed; passing raw value to handler');
+      }
+    }
 
     // Elevated-skill gate: enforce caller verification before building context.
     // Fail-closed — if caller context is missing, elevated skills are blocked.
