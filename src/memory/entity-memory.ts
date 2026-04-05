@@ -273,6 +273,12 @@ export class EntityMemory {
         source: factNode.temporal.source,
       });
     }
+
+    // @TODO Phase 2: re-point relationship edges from secondaryId to primaryId,
+    // then delete the secondary node. Until then, the secondary node remains in the
+    // KG as a dangling node — its contact row has been deleted, but it is still
+    // reachable via queryEntity(secondaryId) and semantic search. Any code that
+    // resolves a kg_node_id back to a contact will find no contact for this node.
   }
 
   /**
