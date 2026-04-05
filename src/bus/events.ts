@@ -110,6 +110,23 @@ interface ContactUnknownPayload {
   channelTrustLevel?: 'low' | 'medium' | 'high';
 }
 
+// contact.duplicate_detected — published when a newly-created contact scores above
+// the 'certain' threshold against an existing contact. Fires non-blocking from
+// ContactService.createContact() when a DedupService is wired.
+interface ContactDuplicateDetectedPayload {
+  newContactId: string;
+  probableMatchId: string;
+  confidence: 'certain' | 'probable';
+  reason: string;
+}
+
+// contact.merged — published when two contacts have been successfully merged.
+interface ContactMergedPayload {
+  primaryContactId: string;
+  secondaryContactId: string;
+  mergedAt: string; // ISO 8601 timestamp
+}
+
 interface MessageHeldPayload {
   heldMessageId: string;
   channel: string;
@@ -257,6 +274,18 @@ export interface ContactUnknownEvent extends BaseEvent {
   payload: ContactUnknownPayload;
 }
 
+export interface ContactDuplicateDetectedEvent extends BaseEvent {
+  type: 'contact.duplicate_detected';
+  sourceLayer: 'dispatch';
+  payload: ContactDuplicateDetectedPayload;
+}
+
+export interface ContactMergedEvent extends BaseEvent {
+  type: 'contact.merged';
+  sourceLayer: 'dispatch';
+  payload: ContactMergedPayload;
+}
+
 export interface MessageHeldEvent extends BaseEvent {
   type: 'message.held';
   sourceLayer: 'dispatch';
@@ -320,6 +349,8 @@ export type BusEvent =
   | MemoryQueryEvent      // Phase 6: knowledge graph read audit
   | ContactResolvedEvent  // Contacts Phase A: sender matched to a known contact
   | ContactUnknownEvent   // Contacts Phase A: sender has no contact record
+  | ContactDuplicateDetectedEvent   // Dedup: new contact matches an existing one
+  | ContactMergedEvent              // Dedup: two contacts have been merged
   | MessageHeldEvent      // Unknown sender policy: message held for CEO review
   | MessageRejectedEvent  // Unknown sender policy: message rejected, signals HTTP adapter to return 403
   | OutboundBlockedEvent  // Outbound content filter: message blocked before delivery (#38)
@@ -507,6 +538,34 @@ export function createContactUnknown(
     id: randomUUID(),
     timestamp: new Date(),
     type: 'contact.unknown',
+    sourceLayer: 'dispatch',
+    payload: rest,
+    parentEventId,
+  };
+}
+
+export function createContactDuplicateDetected(
+  payload: ContactDuplicateDetectedPayload & { parentEventId?: string },
+): ContactDuplicateDetectedEvent {
+  const { parentEventId, ...rest } = payload;
+  return {
+    id: randomUUID(),
+    timestamp: new Date(),
+    type: 'contact.duplicate_detected',
+    sourceLayer: 'dispatch',
+    payload: rest,
+    parentEventId,
+  };
+}
+
+export function createContactMerged(
+  payload: ContactMergedPayload & { parentEventId?: string },
+): ContactMergedEvent {
+  const { parentEventId, ...rest } = payload;
+  return {
+    id: randomUUID(),
+    timestamp: new Date(),
+    type: 'contact.merged',
     sourceLayer: 'dispatch',
     payload: rest,
     parentEventId,
