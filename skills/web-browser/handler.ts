@@ -45,6 +45,10 @@ export class WebBrowserHandler implements SkillHandler {
       if (!session_id || typeof session_id !== 'string') {
         return { success: false, error: 'close_session requires session_id' };
       }
+      // screenshot: true is intentionally ignored for close_session — the browser
+      // context is being destroyed, so capturing a screenshot would be meaningless
+      // and could race with the context teardown. The spec's "any action" clause
+      // applies to actions that maintain session state; close_session is terminal.
       await ctx.browserService.closeSession(session_id);
       ctx.log.info({ session_id }, 'Browser session closed');
       return { success: true, data: { content: '', session_id, url: '' } };
@@ -152,12 +156,16 @@ export class WebBrowserHandler implements SkillHandler {
  *   4. locator() fallback (CSS/XPath for when natural language fails)
  */
 async function resolveLocator(page: Page, selector: string): Promise<Locator> {
-  // Try getByRole first — covers buttons, inputs, checkboxes by accessible name
-  const buttonLocator = page.getByRole('button', { name: selector, exact: false });
-  if (await buttonLocator.count() > 0) return buttonLocator;
-
-  const textboxLocator = page.getByRole('textbox', { name: selector, exact: false });
-  if (await textboxLocator.count() > 0) return textboxLocator;
+  // Try getByRole first — covers the full range of interactive elements by accessible name.
+  // Ordered roughly by likelihood to avoid unnecessary DOM queries.
+  const rolesToTry: Parameters<Page['getByRole']>[0][] = [
+    'button', 'link', 'textbox', 'checkbox', 'radio',
+    'combobox', 'menuitem', 'tab', 'option',
+  ];
+  for (const role of rolesToTry) {
+    const loc = page.getByRole(role, { name: selector, exact: false });
+    if (await loc.count() > 0) return loc;
+  }
 
   // Try getByLabel for form inputs described by their label text
   const labelLocator = page.getByLabel(selector, { exact: false });
@@ -178,14 +186,20 @@ async function resolveLocator(page: Page, selector: string): Promise<Locator> {
  */
 async function getCleanedContent(page: Page): Promise<string> {
   const raw = await page.evaluate(() => {
-    // Remove noise elements — we want content, not chrome
+    // Clone the body before stripping noise elements — mutating the live DOM would
+    // destroy scripts/styles/etc. for subsequent actions in the same session.
+    const root = document.body?.cloneNode(true) as HTMLBodyElement | null;
+    if (!root) return '';
+
+    // Remove noise elements from the clone — we want content, not chrome
     const noiseSelectors = ['script', 'style', 'noscript', 'svg', 'iframe', 'template'];
     for (const sel of noiseSelectors) {
-      document.querySelectorAll(sel).forEach(el => el.remove());
+      root.querySelectorAll(sel).forEach(el => el.remove());
     }
 
     // Extract form fields with their labels — the LLM needs to know what
-    // fields exist and what they're called to fill them correctly
+    // fields exist and what they're called to fill them correctly.
+    // Query the live DOM for form fields so we can look up labels by ID.
     const formFields: string[] = [];
     document.querySelectorAll('input, select, textarea').forEach(el => {
       const input = el as HTMLInputElement;
@@ -199,7 +213,7 @@ async function getCleanedContent(page: Page): Promise<string> {
       formFields.push(`[${input.type ?? 'field'}: ${label}]`);
     });
 
-    const bodyText = (document.body?.innerText ?? '').trim();
+    const bodyText = (root.innerText ?? root.textContent ?? '').trim();
     const formSummary = formFields.length > 0
       ? '\n\n--- Form fields ---\n' + formFields.join('\n')
       : '';
