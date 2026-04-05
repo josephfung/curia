@@ -277,6 +277,120 @@ function createUiHtml(): string {
     /* ── Chevron rotation for expand/collapse ──────────────────────── */
     .chevron               { transition: transform 0.2s; }
     .chevron.collapsed     { transform: rotate(-90deg); }
+
+    /* ── Chat view ───────────────────────────────────────────────────── */
+
+    /* Sidebar: conversation list */
+    .chat-sidebar {
+      flex: none;
+      width: 220px;
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    /* Thread column: messages + input bar */
+    .chat-thread {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    /* Scrollable message area */
+    .chat-messages {
+      flex: 1;
+      overflow-y: auto;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    /* Input bar at the bottom of the thread */
+    .chat-input-bar {
+      flex: none;
+      padding: 12px 16px;
+      border-top: 1px solid var(--border);
+      display: flex;
+      align-items: flex-end;
+      gap: 8px;
+    }
+
+    /* Resizable textarea */
+    textarea.chat-textarea {
+      flex: 1;
+      resize: none;
+      min-height: 56px;
+      max-height: 120px;
+      background: var(--muted);
+      border: 1px solid var(--input-border);
+      border-radius: var(--radius-md);
+      color: var(--fg);
+      font-family: inherit;
+      font-size: 0.875rem;
+      padding: 8px 12px;
+      outline: none;
+      transition: border-color 0.12s;
+    }
+    textarea.chat-textarea:focus { border-color: var(--teal); }
+
+    /* Message bubbles */
+    .msg-bubble {
+      max-width: 80%;
+      padding: 8px 12px;
+      border-radius: var(--radius-lg);
+      font-size: 0.875rem;
+      line-height: 1.5;
+      word-wrap: break-word;
+      white-space: pre-wrap;
+    }
+    .msg-bubble.user {
+      align-self: flex-end;
+      background: var(--teal);
+      color: var(--fg);
+      border-bottom-right-radius: 2px;
+    }
+    .msg-bubble.agent {
+      align-self: flex-start;
+      background: var(--card);
+      border: 1px solid var(--border);
+      color: var(--fg);
+      border-bottom-left-radius: 2px;
+    }
+    /* Status messages: skill.invoke notifications, "thinking…" indicator */
+    .msg-bubble.status {
+      align-self: center;
+      background: none;
+      color: var(--fg-muted);
+      font-size: 0.75rem;
+      font-style: italic;
+      padding: 2px 8px;
+      max-width: 100%;
+    }
+    .msg-bubble.error {
+      align-self: flex-start;
+      background: rgba(232,96,64,0.12);
+      border: 1px solid rgba(232,96,64,0.30);
+      color: var(--destructive);
+      border-bottom-left-radius: 2px;
+    }
+
+    /* Conversation list items */
+    .conv-item {
+      padding: 7px 10px;
+      border-radius: var(--radius-md);
+      font-size: 0.8125rem;
+      color: var(--fg-muted);
+      cursor: pointer;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      transition: background 0.12s, color 0.12s;
+    }
+    .conv-item:hover  { background: var(--accent); color: var(--fg); }
+    .conv-item.active { background: var(--muted);  color: var(--fg); }
   </style>
 </head>
 <body>
