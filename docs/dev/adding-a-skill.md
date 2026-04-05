@@ -25,8 +25,6 @@ skills/
     skill.json        # manifest — schema, metadata, risk level
     handler.ts        # implementation
     handler.test.ts   # unit + integration tests
-  _shared/            # shared utilities imported by multiple handlers
-    nylas.ts
 ```
 
 Skills are self-contained. Keep external imports minimal and declare any required secrets in the manifest.

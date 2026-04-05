@@ -2,7 +2,7 @@
 
 Agents are the LLM-powered workers in Curia. Each agent is defined by a YAML config file in `agents/`. Most agents require only a YAML file; complex agents can optionally add a TypeScript handler for custom lifecycle logic.
 
-See [Adding a Skill](adding-a-skill.md) if you want to add a capability rather than a new agent.
+See [Adding a Skill](adding-a-skill.md) if you want to add a capability rather than a new agent. Skills are available to all agents.
 
 ---
 
@@ -27,26 +27,6 @@ See [Adding a Skill](adding-a-skill.md) if you want to add a capability rather t
 name: expense-tracker          # unique identifier; used in logs, delegation, audit trail
 description: |                 # human-readable purpose; shown in the admin UI and audit log
   Tracks and categorizes expenses from receipts and emails.
-
-# ------------------------------------------------------------------
-# Role (optional)
-# ------------------------------------------------------------------
-
-role: coordinator              # only set this on the single Coordinator agent
-                               # omit this field for all specialist agents
-                               # effect: dispatch routes ALL inbound messages to this agent
-
-# ------------------------------------------------------------------
-# Persona (optional — Coordinator only)
-# ------------------------------------------------------------------
-
-persona:
-  display_name: Alex           # shown in outbound emails and messages
-  tone: professional but warm  # injected into system_prompt as ${persona.tone}
-  title: Agent Chief of Staff  # injected as ${persona.title}
-  email_signature: |
-    Alex
-    Office of the CEO
 
 # ------------------------------------------------------------------
 # Model (required)
@@ -83,7 +63,7 @@ pinned_skills:                 # skills always available in the agent's tool lis
   - scheduler-list
   - scheduler-cancel
 
-allow_discovery: false         # if true, agent can search the skill registry at runtime
+allow_discovery: true          # if true, agent can search the skill registry at runtime
                                # and request skills not in pinned_skills
                                # "normal" sensitivity skills auto-approve; "elevated" ones
                                # require one-time human approval per agent-skill pair
@@ -142,25 +122,6 @@ Plain-language description of what the agent does. This is:
 - Used by the Coordinator to decide which specialist to delegate to
 
 Write it from the perspective of "what tasks should be routed here." One or two sentences is enough.
-
-### `role` (optional)
-
-Two conventional values:
-- `coordinator` — tells the dispatch layer to route all inbound messages here. There must be exactly one coordinator per deployment.
-- `specialist` — the conventional value for non-coordinator agents (e.g. `research-analyst`). The runtime treats any value other than `coordinator` the same way, but use `specialist` for consistency.
-
-Omit the field entirely only if you have a strong reason not to categorize the agent.
-
-### `persona` (optional)
-
-Only relevant for the Coordinator. Defines the external-facing identity presented to users:
-
-- `display_name` — shown in email From fields, Telegram messages, etc.
-- `tone` — injected into the system prompt so the LLM can reference it
-- `title` — injected into the system prompt
-- `email_signature` — appended to outbound emails by the dispatch layer
-
-These fields are interpolated into `system_prompt` via `${persona.field_name}` syntax.
 
 ### `model` (required)
 
@@ -252,11 +213,6 @@ error_budget:
 
 All three limits are enforced at task runtime. When any limit is hit, the task is marked as failed, the CEO is notified on the originating channel, and the agent returns to idle.
 
-### `handler` (optional — planned, not yet implemented)
-
-The YAML spec reserves a `handler` field for a future TypeScript escape hatch. The intent is to allow agents to export lifecycle hooks (`onTask`, `onSkillResult`, `beforeRespond`) for logic that can't be expressed in a system prompt alone.
-
-This field is not yet loaded or executed by the agent runtime. Do not use it in production configs — it will be silently ignored until the feature ships. See `docs/specs/02-agent-system.md` for the planned interface.
 
 ---
 
@@ -289,8 +245,10 @@ For skill-level testing, write `handler.test.ts` in the skill directory instead.
 
 ## Related Docs
 
+- [Adding a Skill](adding-a-skill.md) — write a new skill for your agent to use
+
+### Key Specs
 - [Architecture Overview](../specs/00-overview.md) — five-layer bus model
 - [Agent System Spec](../specs/02-agent-system.md) — agent lifecycle, state model, status API
 - [Skills & Execution](../specs/03-skills-and-execution.md) — how skills work, discovery, approval gate
-- [Adding a Skill](adding-a-skill.md) — write a new skill for your agent to use
 - [Audit & Security](../specs/06-audit-and-security.md) — what gets logged and how
