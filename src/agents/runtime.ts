@@ -11,6 +11,7 @@ import { classifySkillError, formatTaskError } from '../errors/classify.js';
 import { DEFAULT_ERROR_BUDGET, type AgentError, type ErrorBudget } from '../errors/types.js';
 // Value import (not type-only) — we call AutonomyService.formatPromptBlock() as a static method.
 import { AutonomyService } from '../autonomy/autonomy-service.js';
+import { formatTimeContextBlock } from '../time/time-context.js';
 
 export interface AgentConfig {
   agentId: string;
@@ -31,6 +32,10 @@ export interface AgentConfig {
   /** Optional autonomy service — when provided, the autonomy block is injected
    *  into the effective system prompt on every task. Only the coordinator receives this. */
   autonomyService?: AutonomyService;
+  /** IANA timezone name (e.g. "America/Toronto"). When provided, the current date/time
+   *  block is appended to the system prompt on every task so the date is always fresh.
+   *  If omitted, no time block is injected. */
+  timezone?: string;
   /** Error budget config — turn and consecutive error limits per task.
    * maxTurns is checked at the start of each tool-use iteration, so
    * the effective number of tool-calling rounds is maxTurns - 1. */
@@ -134,6 +139,13 @@ export class AgentRuntime {
         logger.error({ err, agentId }, 'Failed to load autonomy config — proceeding with base system prompt');
         // effectiveSystemPrompt remains as systemPrompt.
       }
+    }
+
+    // Append current date/time block — refreshed every turn so the coordinator
+    // always has the correct date, even across midnight or DST transitions.
+    // This mirrors the autonomy block pattern: appended per-task, not frozen at bootstrap.
+    if (this.config.timezone) {
+      effectiveSystemPrompt += '\n\n' + formatTimeContextBlock(this.config.timezone, new Date());
     }
 
     // Initialize the error budget for this task.
