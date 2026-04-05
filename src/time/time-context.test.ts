@@ -31,15 +31,22 @@ describe('formatTimeContextBlock', () => {
     expect(block).toContain('Timezone: America/Toronto');
   });
 
-  it('shows EDT offset in April (UTC-4)', () => {
+  it('shows EDT offset in April (UTC-04:00)', () => {
     const now = new Date('2026-04-06T12:00:00Z');
     const block = formatTimeContextBlock('America/Toronto', now);
-    expect(block).toContain('UTC-4');
+    expect(block).toContain('UTC-04:00');
   });
 
-  it('shows EST offset in January (UTC-5)', () => {
+  it('shows EST offset in January (UTC-05:00)', () => {
     const now = new Date('2026-01-06T12:00:00Z');
     const block = formatTimeContextBlock('America/Toronto', now);
-    expect(block).toContain('UTC-5');
+    expect(block).toContain('UTC-05:00');
+  });
+
+  it('handles sub-hour timezone (Asia/Kolkata = UTC+05:30)', () => {
+    const now = new Date('2026-04-06T12:00:00Z');
+    const block = formatTimeContextBlock('Asia/Kolkata', now);
+    expect(block).toContain('UTC+05:30');
+    expect(block).not.toContain('UTC+5.5');
   });
 });

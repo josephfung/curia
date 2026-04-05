@@ -35,13 +35,13 @@ export function formatTimeContextBlock(timezone: string, now: Date): string {
   const time = dt.toFormat('hh:mm a');
   // e.g. "EDT" (DST-aware abbreviation)
   const abbr = dt.toFormat('ZZZZ');
-  // dt.offset is minutes; convert to hours for display
-  const offsetHours = dt.offset / 60;
-  const offsetLabel = offsetHours === 0
-    ? 'UTC'
-    : offsetHours > 0
-      ? `UTC+${offsetHours}`
-      : `UTC${offsetHours}`;
+  // Build offset label using ±HH:MM to handle sub-hour zones correctly
+  // (e.g. Asia/Kolkata = UTC+05:30, not UTC+5.5). dt.offset is in minutes.
+  const sign = dt.offset >= 0 ? '+' : '-';
+  const absMin = Math.abs(dt.offset);
+  const hh = String(Math.floor(absMin / 60)).padStart(2, '0');
+  const mm = String(absMin % 60).padStart(2, '0');
+  const offsetLabel = dt.offset === 0 ? 'UTC' : `UTC${sign}${hh}:${mm}`;
 
   return [
     '## Current Date & Time',
