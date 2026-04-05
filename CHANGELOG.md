@@ -71,7 +71,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Error recovery** — error budgets (`max_turns`, `max_cost_usd`, `max_errors`), failure pattern
   detection, state continuity across restarts (spec 5)
 - **Outbound content filter** — deterministic Stage 1 rules: system prompt fragments, internal
-  structure leakage, known secret patterns, contact data exfiltration (spec 15 partial)
+  structure leakage, known secret patterns, contact data exfiltration (later formalized as
+  spec 15; Stage 2 LLM-as-judge is planned)
 - **Smoke test framework** — 14 chat-based cases, LLM-as-judge evaluation, HTML reports
 
 ### Changed

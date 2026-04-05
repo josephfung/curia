@@ -103,7 +103,11 @@ Do **not** create `docs/superpowers/`, `docs/plans/`, or `docs/specs/designs/` �
 
 ### Every PR must update CHANGELOG.md
 
-Add entries under `## [Unreleased]` before creating the PR. Use these sections as needed:
+Add entries under `## [Unreleased]` before creating the PR. Exception: PRs that are
+solely bumping the version and moving `[Unreleased]` to a release heading (like this one)
+don't need a separate entry — the release heading itself is the record.
+
+Use these sections as needed:
 - **Added** — new skills, agents, channels, specs, or features
 - **Changed** — behavior changes to existing functionality
 - **Fixed** — bug fixes
