@@ -358,12 +358,17 @@ class PostgresBackend implements KnowledgeGraphBackend {
 
   async updateEdge(id: string, updates: { confidence: number; lastConfirmedAt: Date }): Promise<KgEdge> {
     this.logger.debug({ edgeId: id }, 'kg: updating edge');
+    // Use GREATEST so confidence is monotonically non-decreasing even if two concurrent
+    // re-assertions both read the same prior value (lost-update race condition).
     const result = await this.pool.query<PgEdgeRow>(
-      `UPDATE kg_edges SET confidence = $1, last_confirmed_at = $2 WHERE id = $3 RETURNING *`,
+      `UPDATE kg_edges SET confidence = GREATEST(confidence, $1), last_confirmed_at = $2 WHERE id = $3 RETURNING *`,
       [updates.confidence, updates.lastConfirmedAt, id],
     );
     const row = result.rows[0];
-    if (!row) throw new Error(`Edge not found: ${id}`);
+    if (!row) {
+      this.logger.error({ edgeId: id }, 'kg: updateEdge — edge not found in database');
+      throw new Error(`Edge not found: ${id}`);
+    }
     return pgRowToEdge(row);
   }
 

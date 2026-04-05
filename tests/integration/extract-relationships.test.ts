@@ -59,6 +59,11 @@ describeIf('extract-relationships integration', () => {
     assembler = new EntityContextAssembler(pool, logger);
 
     await pool.query('SELECT 1 FROM kg_nodes LIMIT 0');
+
+    // Clean any stale rows from previous runs that crashed before teardown.
+    // Without this, leftover 'integration-test' rows cause flaky toHaveLength(1) failures.
+    await pool.query("DELETE FROM kg_edges WHERE source = 'integration-test'");
+    await pool.query("DELETE FROM kg_nodes WHERE source = 'integration-test'");
   });
 
   afterAll(async () => {
@@ -132,6 +137,7 @@ describeIf('extract-relationships integration', () => {
     expect(result2).toMatchObject({ success: true, data: { extracted: 0, confirmed: 1, skipped: false } });
 
     const aNodes = await entityMemory.findEntities('Idempotency Person A');
+    expect(aNodes).toHaveLength(1);
     const edgeResult = await pool.query(
       `SELECT COUNT(*)::int AS cnt FROM kg_edges WHERE (source_node_id = $1 OR target_node_id = $1) AND type = 'reports_to'`,
       [aNodes[0]!.id],

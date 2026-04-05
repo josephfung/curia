@@ -114,9 +114,10 @@ ${text}`,
       ctx.log.warn('extract-relationships: extraction returned no text block, treating as empty');
       return { success: true, data: { extracted: 0, confirmed: 0, skipped: false } };
     }
-    // Strip optional markdown code fences the model may include despite instructions
+    // Strip optional markdown code fences the model may include despite instructions.
+    // Case-insensitive to handle ```JSON as well as ```json.
     const rawText = extractionTextBlock.text.trim();
-    const jsonText = rawText.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '');
+    const jsonText = rawText.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
 
     let triples: ExtractedTriple[];
     try {
@@ -136,41 +137,77 @@ ${text}`,
     let confirmed = 0;
     let failed = 0;
 
+    // Entity types that are valid relationship endpoints. 'fact' is excluded —
+    // facts describe a single entity and should not appear as nodes in a
+    // subject↔object relationship (that's the extract-facts skill's domain).
+    const ENTITY_NODE_TYPES: ReadonlySet<string> = new Set(
+      NODE_TYPES.filter(t => t !== 'fact'),
+    );
+
     for (const triple of triples) {
       try {
+        // Guard: skip malformed triples where required string fields are absent.
+        // The LLM may return null/undefined for subject or object on edge cases.
+        if (
+          !triple ||
+          typeof triple.subject !== 'string' ||
+          typeof triple.object !== 'string' ||
+          typeof triple.predicate !== 'string'
+        ) {
+          ctx.log.warn({ triple }, 'extract-relationships: skipping malformed triple');
+          failed++;
+          continue;
+        }
+
         // Normalise predicate — fall back to 'relates_to' for unknown types
         const predicate: EdgeType = (EDGE_TYPES as readonly string[]).includes(triple.predicate)
           ? triple.predicate as EdgeType
           : 'relates_to';
 
-        // Normalise node types — fall back to 'person' for unknown types
-        const subjectType: NodeType = (NODE_TYPES as readonly string[]).includes(triple.subjectType)
+        // Normalise node types — fall back to 'person' for unknown or non-entity types.
+        // 'fact' is intentionally excluded: relationship edges must connect entity nodes.
+        const subjectType: NodeType = ENTITY_NODE_TYPES.has(triple.subjectType)
           ? triple.subjectType as NodeType
           : 'person';
-        const objectType: NodeType = (NODE_TYPES as readonly string[]).includes(triple.objectType)
+        const objectType: NodeType = ENTITY_NODE_TYPES.has(triple.objectType)
           ? triple.objectType as NodeType
           : 'person';
 
-        // Resolve subject — find existing node by label or create a new one.
-        // New nodes from extraction get confidence 0.6 (lower than manually confirmed entities).
+        // Resolve subject — prefer a node whose type matches the extraction.
+        // Falling back to the first match handles cases where a node was previously
+        // created under a different type; creating a new node is the last resort.
         const subjectMatches = await ctx.entityMemory.findEntities(triple.subject);
-        const subjectNode = subjectMatches[0] ?? await ctx.entityMemory.createEntity({
-          type: subjectType,
-          label: triple.subject,
-          properties: {},
-          source,
-          confidence: 0.6,
-        });
+        const subjectNode =
+          subjectMatches.find(n => n.type === subjectType) ??
+          subjectMatches[0] ??
+          await ctx.entityMemory.createEntity({
+            type: subjectType,
+            label: triple.subject,
+            properties: {},
+            source,
+            confidence: 0.6,
+          });
 
         // Resolve object — same pattern
         const objectMatches = await ctx.entityMemory.findEntities(triple.object);
-        const objectNode = objectMatches[0] ?? await ctx.entityMemory.createEntity({
-          type: objectType,
-          label: triple.object,
-          properties: {},
-          source,
-          confidence: 0.6,
-        });
+        const objectNode =
+          objectMatches.find(n => n.type === objectType) ??
+          objectMatches[0] ??
+          await ctx.entityMemory.createEntity({
+            type: objectType,
+            label: triple.object,
+            properties: {},
+            source,
+            confidence: 0.6,
+          });
+
+        // Skip self-loops — subject and object resolved to the same node.
+        // The extraction prompt asks for two distinct entities but the LLM can still
+        // produce a triple like ("Joseph", "knows", "Joseph") on malformed input.
+        if (subjectNode.id === objectNode.id) {
+          ctx.log.warn({ subject: triple.subject, object: triple.object }, 'extract-relationships: skipping self-loop triple');
+          continue;
+        }
 
         // Clamp confidence to [0, 1] in case the LLM returns an out-of-range value
         const confidence = typeof triple.confidence === 'number'
