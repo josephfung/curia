@@ -8,7 +8,7 @@
 ## Problem
 
 The contacts system has no `contact.merge` skill, and no mechanism for detecting or resolving
-duplicate contacts. Duplicates accumulate through four vectors:
+duplicate contacts. Duplicates can accumulate through many vectors. here are four examples:
 
 1. **Email extraction then CEO statement** — an inbound email creates a sparse contact;
    the CEO later introduces the same person by name, creating a second record.
@@ -26,7 +26,7 @@ duplicate contacts. Duplicates accumulate through four vectors:
 **Approach 2 (chosen):** Skills + deterministic dedup service.
 
 `contact.merge` and `contact.find-duplicates` skills, backed by a deterministic scoring service
-(Jaro-Winkler + channel overlap). Dedup detection runs in two modes:
+(normalize for "first, last", "last first", initials, Jaro-Winkler + channel overlap). Dedup detection runs in two modes:
 
 - **On-creation:** After every new contact write, a non-blocking side-effect scores the new
   contact against existing contacts and publishes a bus event for `certain` matches.
