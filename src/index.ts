@@ -56,6 +56,7 @@ import { EntityContextAssembler } from './entity-context/assembler.js';
 import { bootstrapAgentIdentity } from './entity-context/bootstrap.js';
 import { bootstrapCeoContact } from './contacts/ceo-bootstrap.js';
 import { AutonomyService } from './autonomy/autonomy-service.js';
+import { BrowserService } from './browser/browser-service.js';
 import type { AgentPersona } from './skills/types.js';
 
 async function main(): Promise<void> {
@@ -252,6 +253,24 @@ async function main(): Promise<void> {
     logger.info('Nylas calendar client initialized');
   }
 
+  // Browser service — warm Playwright Chromium instance for the web-browser skill.
+  // Optional degradation: if Xvfb is unavailable on Linux, Curia boots normally
+  // but web-browser skill invocations will fail at the ctx.browserService check.
+  let browserService: BrowserService | undefined;
+  try {
+    const browserConfig = (config as unknown as { browser?: { sessionTtlMs?: number; sweepIntervalMs?: number } }).browser;
+    browserService = new BrowserService({
+      logger,
+      sessionTtlMs: browserConfig?.sessionTtlMs ?? 600_000,
+      sweepIntervalMs: browserConfig?.sweepIntervalMs ?? 120_000,
+    });
+    await browserService.start();
+    logger.info('Browser service started');
+  } catch (err) {
+    logger.warn({ err }, 'Browser service failed to start — web-browser skill will be unavailable');
+    browserService = undefined;
+  }
+
   // Skill registry — loads all skills from the skills/ directory.
   // Skills are the framework's extension mechanism; agents invoke them
   // via the LLM's tool-use API through the execution layer.
@@ -377,7 +396,7 @@ async function main(): Promise<void> {
   // infrastructure skills. outboundGateway gives email skills their send path.
   // entityContextAssembler enables entity_enrichment pre-enrichment and the
   // entity-context skill. agentContactId enables entity_enrichment default='agent'.
-  const executionLayer = new ExecutionLayer(skillRegistry, logger, { bus, agentRegistry, contactService, outboundGateway, heldMessages, schedulerService, entityMemory, agentPersona, nylasCalendarClient, entityContextAssembler, agentContactId: agentIdentityContactId, autonomyService, timezone: config.timezone });
+  const executionLayer = new ExecutionLayer(skillRegistry, logger, { bus, agentRegistry, contactService, outboundGateway, heldMessages, schedulerService, entityMemory, agentPersona, nylasCalendarClient, entityContextAssembler, agentContactId: agentIdentityContactId, autonomyService, browserService, timezone: config.timezone });
 
   // Two-pass agent registration:
   // Pass 1: Register all agents in the registry so specialistSummary() is complete
@@ -528,6 +547,13 @@ async function main(): Promise<void> {
       scheduler.stop();
     } catch (err) {
       logger.error({ err }, 'Error stopping scheduler during shutdown');
+    }
+    if (browserService) {
+      try {
+        await browserService.stop();
+      } catch (err) {
+        logger.error({ err }, 'Error stopping browser service during shutdown');
+      }
     }
     try {
       await pool.end();
