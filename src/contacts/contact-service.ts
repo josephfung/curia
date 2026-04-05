@@ -263,12 +263,19 @@ export class ContactService {
       this.logger?.warn('findDuplicates() called but no DedupService wired — returning empty');
       return [];
     }
-    const contacts = await this.backend.listContacts();
-    const identitiesMap = new Map<string, ChannelIdentity[]>();
-    for (const c of contacts) {
-      identitiesMap.set(c.id, await this.backend.getIdentitiesForContact(c.id));
+    try {
+      const contacts = await this.backend.listContacts();
+      const identitiesMap = new Map<string, ChannelIdentity[]>();
+      for (const c of contacts) {
+        identitiesMap.set(c.id, await this.backend.getIdentitiesForContact(c.id));
+      }
+      return this.dedupService.findAllDuplicates(contacts, identitiesMap, minConfidence);
+    } catch (err) {
+      // Log context before rethrowing — the skill handler's error will reference the raw
+      // backend error with no indication it came from a full-contact-list scan.
+      this.logger?.error({ err }, 'findDuplicates() failed during contact scan');
+      throw err;
     }
-    return this.dedupService.findAllDuplicates(contacts, identitiesMap, minConfidence);
   }
 
   /**
