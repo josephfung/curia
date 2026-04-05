@@ -340,6 +340,111 @@ describe('ContactService', () => {
       expect(result!.identities).toHaveLength(0);
     });
   });
+
+  describe('mergeContacts', () => {
+    it('dry_run returns golden record without modifying DB', async () => {
+      const primary = await service.createContact({
+        displayName: 'Jenna Torres',
+        role: 'CFO',
+        source: 'ceo_stated',
+      });
+      const secondary = await service.createContact({
+        displayName: 'J. Torres',
+        role: null,
+        notes: 'Met at conference',
+        source: 'email_participant',
+      });
+
+      const proposal = await service.mergeContacts(primary.id, secondary.id, true);
+
+      expect(proposal.dryRun).toBe(true);
+      expect(proposal.primaryContactId).toBe(primary.id);
+      expect(proposal.secondaryContactId).toBe(secondary.id);
+      expect(proposal.goldenRecord.role).toBe('CFO');
+      expect(proposal.goldenRecord.notes).toContain('Met at conference');
+
+      // Verify nothing was written — secondary still exists
+      const stillExists = await service.getContact(secondary.id);
+      expect(stillExists).toBeDefined();
+    });
+
+    it('merge (dry_run: false) deletes secondary and updates primary', async () => {
+      const primary = await service.createContact({
+        displayName: 'Alice Smith',
+        role: 'CTO',
+        source: 'ceo_stated',
+      });
+      const secondary = await service.createContact({
+        displayName: 'Alice Smith',
+        role: null,
+        source: 'email_participant',
+      });
+      await service.linkIdentity({
+        contactId: secondary.id,
+        channel: 'email',
+        channelIdentifier: 'alice@acme.com',
+        source: 'email_participant',
+      });
+
+      const result = await service.mergeContacts(primary.id, secondary.id, false);
+
+      expect(result.dryRun).toBe(false);
+      expect(result.primaryContactId).toBe(primary.id);
+
+      // Secondary deleted
+      const secondaryGone = await service.getContact(secondary.id);
+      expect(secondaryGone).toBeUndefined();
+
+      // Primary has identity from secondary
+      const primaryIdentities = await service.getContactWithIdentities(primary.id);
+      expect(primaryIdentities?.identities.some(i => i.channelIdentifier === 'alice@acme.com')).toBe(true);
+    });
+
+    it('rejects merge where primary and secondary are the same contact', async () => {
+      const contact = await service.createContact({
+        displayName: 'Bob',
+        source: 'ceo_stated',
+      });
+      await expect(service.mergeContacts(contact.id, contact.id)).rejects.toThrow();
+    });
+
+    it('rejects merge when primary does not exist', async () => {
+      const secondary = await service.createContact({ displayName: 'Bob', source: 'ceo_stated' });
+      await expect(service.mergeContacts('00000000-0000-0000-0000-000000000000', secondary.id))
+        .rejects.toThrow();
+    });
+
+    it('status most-restrictive-wins: blocked beats confirmed', async () => {
+      const primary = await service.createContact({
+        displayName: 'Alice',
+        status: 'confirmed',
+        source: 'ceo_stated',
+      });
+      const secondary = await service.createContact({
+        displayName: 'Alice',
+        status: 'blocked',
+        source: 'email_participant',
+      });
+      const proposal = await service.mergeContacts(primary.id, secondary.id, true);
+      expect(proposal.goldenRecord.status).toBe('blocked');
+    });
+
+    it('notes from both contacts are concatenated', async () => {
+      const primary = await service.createContact({
+        displayName: 'Alice',
+        notes: 'Primary note',
+        source: 'ceo_stated',
+      });
+      const secondary = await service.createContact({
+        displayName: 'Alice',
+        notes: 'Secondary note',
+        source: 'email_participant',
+      });
+      const proposal = await service.mergeContacts(primary.id, secondary.id, true);
+      expect(proposal.goldenRecord.notes).toContain('Primary note');
+      expect(proposal.goldenRecord.notes).toContain('Secondary note');
+    });
+  });
 });
 
 describe('EntityMemory.mergeEntities', () => {

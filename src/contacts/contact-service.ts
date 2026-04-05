@@ -19,8 +19,12 @@ import type {
   Contact,
   ContactStatus,
   ChannelIdentity,
+  ContactServiceOptions,
   CreateContactOptions,
   LinkIdentityOptions,
+  MergeGoldenRecord,
+  MergeProposal,
+  MergeResult,
   ResolvedSender,
   IdentitySource,
 } from './types.js';
@@ -47,6 +51,23 @@ interface ContactServiceBackend {
   getCalendarsForContact(contactId: string): Promise<ContactCalendar[]>;
   resolveCalendar(nylasCalendarId: string): Promise<ResolvedCalendar | null>;
   getPrimaryCalendar(contactId: string): Promise<ContactCalendar | null>;
+
+  /**
+   * Re-point all channel identities from fromContactId → toContactId.
+   * Identities that would violate UNIQUE(channel, channelIdentifier) are deleted.
+   */
+  reattachIdentities(fromContactId: string, toContactId: string): Promise<void>;
+
+  /**
+   * Re-point active auth overrides from fromContactId → toContactId.
+   * If primary already has an override for the same permission, secondary's is discarded.
+   */
+  reattachAuthOverrides(fromContactId: string, toContactId: string): Promise<void>;
+
+  /**
+   * Delete a contact by ID. Call only after FK-referenced rows have been re-pointed.
+   */
+  deleteContact(id: string): Promise<void>;
 }
 
 // -- Auto-verification sources --
@@ -69,24 +90,30 @@ const AUTO_VERIFIED_SOURCES: ReadonlySet<IdentitySource> = new Set([
  * - Resolves inbound senders by channel + identifier for dispatch routing
  */
 export class ContactService {
+  private onContactMerged?: (primaryId: string, secondaryId: string, mergedAt: Date) => void;
+
   private constructor(
     private backend: ContactServiceBackend,
     private entityMemory: EntityMemory | undefined,
     private logger?: Logger,
-  ) {}
+    options?: ContactServiceOptions,
+  ) {
+    this.onContactMerged = options?.onContactMerged;
+  }
 
   /** Create a Postgres-backed instance for production use */
   static createWithPostgres(
     pool: DbPool,
     entityMemory: EntityMemory | undefined,
     logger: Logger,
+    options?: ContactServiceOptions,
   ): ContactService {
-    return new ContactService(new PostgresContactBackend(pool, logger), entityMemory, logger);
+    return new ContactService(new PostgresContactBackend(pool, logger), entityMemory, logger, options);
   }
 
   /** Create an in-memory instance for testing */
-  static createInMemory(entityMemory?: EntityMemory): ContactService {
-    return new ContactService(new InMemoryContactBackend(), entityMemory);
+  static createInMemory(entityMemory?: EntityMemory, options?: ContactServiceOptions): ContactService {
+    return new ContactService(new InMemoryContactBackend(), entityMemory, undefined, options);
   }
 
   /**
@@ -418,6 +445,140 @@ export class ContactService {
   async getPrimaryCalendar(contactId: string): Promise<ContactCalendar | null> {
     return this.backend.getPrimaryCalendar(contactId);
   }
+
+  /**
+   * Merge secondary contact into primary.
+   *
+   * Golden record survivorship rules:
+   * - display_name, role: most-recent-wins (primary wins on tie)
+   * - notes: concatenate with separator
+   * - status: most-restrictive wins (blocked > provisional > confirmed)
+   * - channel identities: union (duplicates discarded)
+   * - auth overrides: union (primary wins on same-permission conflict)
+   * - KG nodes: merged via entityMemory.mergeEntities() (Phase 1: scalar + facts)
+   *
+   * @param dryRun - if true, return proposal without writing (default: false)
+   */
+  async mergeContacts(
+    primaryId: string,
+    secondaryId: string,
+    dryRun = false,
+  ): Promise<MergeProposal | MergeResult> {
+    if (primaryId === secondaryId) {
+      throw new Error('primary_contact_id and secondary_contact_id must be different');
+    }
+
+    const primary = await this.backend.getContact(primaryId);
+    if (!primary) throw new Error(`Contact not found: ${primaryId}`);
+    const secondary = await this.backend.getContact(secondaryId);
+    if (!secondary) throw new Error(`Contact not found: ${secondaryId}`);
+
+    const primaryIdentities = await this.backend.getIdentitiesForContact(primaryId);
+    const secondaryIdentities = await this.backend.getIdentitiesForContact(secondaryId);
+    const primaryOverrides = await this.backend.getAuthOverrides(primaryId);
+    const secondaryOverrides = await this.backend.getAuthOverrides(secondaryId);
+
+    const goldenRecord = this.computeGoldenRecord(
+      primary, primaryIdentities, primaryOverrides,
+      secondary, secondaryIdentities, secondaryOverrides,
+    );
+
+    if (dryRun) {
+      return { primaryContactId: primaryId, secondaryContactId: secondaryId, goldenRecord, dryRun: true };
+    }
+
+    // Merge KG nodes (best-effort — failure does not abort the contact merge)
+    if (primary.kgNodeId && secondary.kgNodeId && this.entityMemory) {
+      try {
+        await this.entityMemory.mergeEntities(primary.kgNodeId, secondary.kgNodeId);
+      } catch (err) {
+        this.logger?.warn({ err, primaryId, secondaryId }, 'KG node merge failed (non-fatal)');
+      }
+    }
+
+    await this.backend.reattachIdentities(secondaryId, primaryId);
+    await this.backend.reattachAuthOverrides(secondaryId, primaryId);
+
+    // Write the golden record fields onto the primary contact
+    const updatedPrimary: Contact = {
+      ...primary,
+      displayName: goldenRecord.displayName,
+      role: goldenRecord.role,
+      notes: goldenRecord.notes,
+      status: goldenRecord.status,
+      updatedAt: new Date(),
+    };
+    await this.backend.updateContact(updatedPrimary);
+    await this.backend.deleteContact(secondaryId);
+
+    const mergedAt = new Date();
+
+    if (this.onContactMerged) {
+      this.onContactMerged(primaryId, secondaryId, mergedAt);
+    }
+
+    this.logger?.info({ primaryId, secondaryId }, 'Contacts merged');
+
+    return {
+      primaryContactId: primaryId,
+      secondaryContactId: secondaryId,
+      goldenRecord,
+      dryRun: false,
+      mergedAt,
+    };
+  }
+
+  private computeGoldenRecord(
+    primary: Contact,
+    primaryIdentities: ChannelIdentity[],
+    primaryOverrides: Array<{ permission: string; granted: boolean }>,
+    secondary: Contact,
+    secondaryIdentities: ChannelIdentity[],
+    secondaryOverrides: Array<{ permission: string; granted: boolean }>,
+  ): MergeGoldenRecord {
+    const primaryIsMoreRecent = primary.updatedAt.getTime() >= secondary.updatedAt.getTime();
+
+    const displayName = primaryIsMoreRecent
+      ? (primary.displayName || secondary.displayName)
+      : (secondary.displayName || primary.displayName);
+
+    const role = primaryIsMoreRecent
+      ? (primary.role ?? secondary.role)
+      : (secondary.role ?? primary.role);
+
+    // Both notes are preserved — neither is discarded
+    const noteParts = [primary.notes, secondary.notes].filter(Boolean);
+    const notes = noteParts.length > 0 ? noteParts.join('\n---\n') : null;
+
+    // Most-restrictive status wins: blocked > provisional > confirmed
+    const STATUS_RANK: Record<ContactStatus, number> = { blocked: 3, provisional: 2, confirmed: 1 };
+    const status: ContactStatus =
+      STATUS_RANK[primary.status] >= STATUS_RANK[secondary.status]
+        ? primary.status
+        : secondary.status;
+
+    // Union of identities — deduplicated by channel:channelIdentifier key
+    const identityKeys = new Set<string>();
+    const identities: ChannelIdentity[] = [];
+    for (const identity of [...primaryIdentities, ...secondaryIdentities]) {
+      const key = `${identity.channel}:${identity.channelIdentifier}`;
+      if (!identityKeys.has(key)) {
+        identityKeys.add(key);
+        identities.push(identity);
+      }
+    }
+
+    // Union of auth overrides — primary wins on same-permission conflict
+    const overridePerms = new Set<string>(primaryOverrides.map(o => o.permission));
+    const authOverrides = [...primaryOverrides];
+    for (const override of secondaryOverrides) {
+      if (!overridePerms.has(override.permission)) {
+        authOverrides.push(override);
+      }
+    }
+
+    return { displayName, role, notes, status, identities, authOverrides };
+  }
 }
 
 // -- Postgres backend --
@@ -739,6 +900,46 @@ class PostgresContactBackend implements ContactServiceBackend {
     return this.rowToCalendar(row);
   }
 
+  async reattachIdentities(fromContactId: string, toContactId: string): Promise<void> {
+    // Delete identities that would conflict with the primary's existing ones
+    await this.pool.query(
+      `DELETE FROM contact_channel_identities
+       WHERE contact_id = $1
+         AND (channel, channel_identifier) IN (
+           SELECT channel, channel_identifier
+           FROM contact_channel_identities
+           WHERE contact_id = $2
+         )`,
+      [fromContactId, toContactId],
+    );
+    await this.pool.query(
+      `UPDATE contact_channel_identities SET contact_id = $1 WHERE contact_id = $2`,
+      [toContactId, fromContactId],
+    );
+  }
+
+  async reattachAuthOverrides(fromContactId: string, toContactId: string): Promise<void> {
+    await this.pool.query(
+      `DELETE FROM contact_auth_overrides
+       WHERE contact_id = $1
+         AND revoked_at IS NULL
+         AND permission IN (
+           SELECT permission FROM contact_auth_overrides
+           WHERE contact_id = $2 AND revoked_at IS NULL
+         )`,
+      [fromContactId, toContactId],
+    );
+    await this.pool.query(
+      `UPDATE contact_auth_overrides SET contact_id = $1 WHERE contact_id = $2`,
+      [toContactId, fromContactId],
+    );
+  }
+
+  async deleteContact(id: string): Promise<void> {
+    this.logger.debug({ contactId: id }, 'contacts: deleting contact');
+    await this.pool.query(`DELETE FROM contacts WHERE id = $1`, [id]);
+  }
+
   // -- Row mapping helpers --
 
   private rowToContact(row: {
@@ -1009,5 +1210,51 @@ class InMemoryContactBackend implements ContactServiceBackend {
       }
     }
     return null;
+  }
+
+  async reattachIdentities(fromContactId: string, toContactId: string): Promise<void> {
+    // Build set of channel:channelIdentifier keys already owned by the primary
+    const primaryKeys = new Set<string>();
+    for (const identity of this.identities.values()) {
+      if (identity.contactId === toContactId) {
+        primaryKeys.add(`${identity.channel}:${identity.channelIdentifier}`);
+      }
+    }
+    // Re-point secondary's identities onto primary, discarding any that conflict
+    for (const [id, identity] of this.identities) {
+      if (identity.contactId !== fromContactId) continue;
+      const key = `${identity.channel}:${identity.channelIdentifier}`;
+      if (primaryKeys.has(key)) {
+        // Duplicate — would violate UNIQUE constraint in Postgres, so discard
+        this.identities.delete(id);
+      } else {
+        this.identities.set(id, { ...identity, contactId: toContactId });
+        primaryKeys.add(key);
+      }
+    }
+  }
+
+  async reattachAuthOverrides(fromContactId: string, toContactId: string): Promise<void> {
+    // Build set of permissions already held (active) by the primary
+    const primaryPerms = new Set<string>();
+    for (const override of this.overrides.values()) {
+      if (override.contactId === toContactId && !override.revokedAt) {
+        primaryPerms.add(override.permission);
+      }
+    }
+    // Re-point secondary's active overrides; discard if primary already has one for same permission
+    for (const [id, override] of this.overrides) {
+      if (override.contactId !== fromContactId || override.revokedAt) continue;
+      if (primaryPerms.has(override.permission)) {
+        this.overrides.delete(id);
+      } else {
+        this.overrides.set(id, { ...override, contactId: toContactId });
+        primaryPerms.add(override.permission);
+      }
+    }
+  }
+
+  async deleteContact(id: string): Promise<void> {
+    this.contacts.delete(id);
   }
 }

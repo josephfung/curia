@@ -224,4 +224,6 @@ export interface ContactServiceOptions {
     confidence: DedupConfidence,
     reason: string,
   ) => void;
+  /** Called after a successful non-dry-run merge to notify subscribers (e.g., for audit logging). */
+  onContactMerged?: (primaryId: string, secondaryId: string, mergedAt: Date) => void;
 }
