@@ -29,11 +29,43 @@ CREATE TABLE scheduled_jobs (
   last_error    TEXT,
   consecutive_failures  INTEGER NOT NULL DEFAULT 0,
   created_by    TEXT NOT NULL,
-  created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  timezone      TEXT NOT NULL DEFAULT 'UTC'
 );
 
 CHECK (cron_expr IS NOT NULL OR run_at IS NOT NULL)
 ```
+
+---
+
+## Timezone Handling
+
+Curia's Docker container runs with no `TZ` environment variable, so the Node process always executes in UTC. Cron expressions must be interpreted in Curia's configured timezone (`config.timezone`, default `America/Toronto`) or a per-job override — not in UTC — so that `"0 8 * * *"` fires at 8am local time, not 8am UTC.
+
+### How it works
+
+- **System default**: `SchedulerService` is constructed with `config.timezone`. All `nextRunFromCron()` calls pass this as the `{ tz }` option to `cron-parser` unless overridden at the job level.
+- **Per-job override**: Each job stores its own timezone in the `scheduled_jobs.timezone` column (migration 012). The `scheduler-create` skill accepts an optional `timezone` input; if omitted, the service default is used.
+- **One-shot jobs (`run_at`)**: The `run_at` value is always stored as a UTC timestamp. The execution layer normalizes any offset-less ISO string submitted by the LLM to UTC before the handler sees it, so `run_at` is already correct regardless of timezone.
+- **Recurring jobs on completion**: When `completeJobRun()` advances `next_run_at` for a recurring job, it reads the job's own `timezone` column and passes it to `nextRunFromCron()`. This ensures DST transitions are handled correctly (e.g., a job scheduled for 8am stays at 8am local time after clocks change).
+
+### Per-job timezone via the skill
+
+```
+scheduler.create({
+  cron_expr: "0 8 * * *",
+  task: "Send daily briefing",
+  timezone: "America/Vancouver"   // overrides Curia's default (America/Toronto)
+})
+```
+
+If `timezone` is omitted, the job inherits Curia's configured system timezone.
+
+### Why not rely on the host TZ env var?
+
+The Docker container does not set `TZ`. Even if it did, relying on a host-level environment variable makes per-job timezone overrides impossible and couples the scheduler behaviour to deployment configuration. Explicit `{ tz }` options in `cron-parser` are more predictable and testable.
+
+---
 
 **Status values:** `pending`, `running`, `completed`, `failed`, `suspended`
 
