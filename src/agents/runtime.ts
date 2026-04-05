@@ -145,7 +145,14 @@ export class AgentRuntime {
     // always has the correct date, even across midnight or DST transitions.
     // This mirrors the autonomy block pattern: appended per-task, not frozen at bootstrap.
     if (this.config.timezone) {
-      effectiveSystemPrompt += '\n\n' + formatTimeContextBlock(this.config.timezone, new Date());
+      try {
+        effectiveSystemPrompt += '\n\n' + formatTimeContextBlock(this.config.timezone, new Date());
+      } catch (err) {
+        // An invalid timezone config produces "Invalid DateTime" strings in the block — which
+        // is worse than omitting the block entirely because it corrupts the agent's date reasoning.
+        // Log at error (operator signal) and proceed without the time block.
+        logger.error({ err, agentId, timezone: this.config.timezone }, 'formatTimeContextBlock failed — time context not injected; check TIMEZONE config');
+      }
     }
 
     // Initialize the error budget for this task.

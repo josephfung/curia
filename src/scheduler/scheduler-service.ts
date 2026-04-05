@@ -1,4 +1,5 @@
 import { CronExpressionParser } from 'cron-parser';
+import { DateTime } from 'luxon';
 import type { Pool } from 'pg';
 import type { EventBus } from '../bus/bus.js';
 import type { Logger } from '../logger.js';
@@ -82,6 +83,13 @@ export class SchedulerService {
   private timezone: string;
 
   constructor(pool: Pool, bus: EventBus, logger: Logger, timezone = 'UTC') {
+    // Validate the timezone at construction time — an invalid zone name causes
+    // cron-parser to throw opaque errors at runtime, and declarative jobs would
+    // silently fail to load at startup with no clear root cause.
+    const testDt = DateTime.local().setZone(timezone);
+    if (!testDt.isValid) {
+      throw new Error(`SchedulerService: invalid timezone "${timezone}" — check the TIMEZONE environment variable`);
+    }
     this.pool = pool;
     this.bus = bus;
     this.logger = logger;
@@ -353,9 +361,12 @@ export class SchedulerService {
     const taskPayload = { task: schedule.task };
     const nextRunAt = this.nextRunFromCron(schedule.cron);
 
+    // Include timezone so completeJobRun() re-advances next_run_at in the same zone.
+    // Without this, the DB column would default to 'UTC' while next_run_at was computed
+    // using this.timezone — causing every post-completion firing to be offset by the UTC delta.
     const sql = `
-      INSERT INTO scheduled_jobs (agent_id, cron_expr, task_payload, status, next_run_at, created_by)
-      VALUES ($1, $2, $3, $4, $5, $6)
+      INSERT INTO scheduled_jobs (agent_id, cron_expr, task_payload, status, next_run_at, created_by, timezone)
+      VALUES ($1, $2, $3, $4, $5, $6, $7)
       ON CONFLICT ON CONSTRAINT scheduled_jobs_declarative_uq
       DO UPDATE SET next_run_at = $5
       RETURNING id
@@ -367,6 +378,7 @@ export class SchedulerService {
       'pending',
       nextRunAt,
       'system',
+      this.timezone,
     ];
 
     const { rows } = await this.pool.query(sql, params);
@@ -386,6 +398,10 @@ export class SchedulerService {
   ): Promise<{ suspended: boolean }> {
     // Fetch the current job state to decide how to handle the completion.
     // Include timezone so nextRunFromCron() uses the per-job zone, not the system default.
+    // NOTE: this query requires migration 012 (adds the timezone column). If it has not been
+    // applied, pg will throw "column timezone does not exist", handleCompletion() will catch it
+    // and log an error, and the job will be left permanently in 'running' state with no recovery.
+    // Always run migrations before deploying code that depends on them.
     const fetchSql = `SELECT id, cron_expr, status, consecutive_failures, timezone FROM scheduled_jobs WHERE id = $1`;
     const { rows } = await this.pool.query(fetchSql, [jobId]);
     const job = rows[0] as { id: string; cron_expr: string | null; status: string; consecutive_failures: number; timezone: string } | undefined;

@@ -134,9 +134,15 @@ export class ExecutionLayer {
       try {
         input[key] = normalizeTimestamp(raw, this.timezone);
       } catch (err) {
-        // Non-fatal: log and pass the raw value through. The handler may reject it
-        // or the LLM may have sent something like "tomorrow" which is genuinely invalid.
-        this.logger.warn({ skillName, key, raw, err }, 'timestamp normalization failed; passing raw value to handler');
+        // Hard fail — passing a non-normalized timestamp to a calendar/scheduler handler
+        // would silently create events at the wrong time (the server runs UTC, so an
+        // offset-less string passed to new Date() is interpreted as UTC, not local time).
+        // Return a skill error so the LLM can re-emit the value with an explicit offset.
+        skillLogger.error({ err, key, raw }, 'timestamp normalization failed; refusing to invoke handler with unnormalized value');
+        return {
+          success: false,
+          error: `Input '${key}' could not be parsed as a valid datetime: "${raw}". Please provide an ISO 8601 string with a UTC offset (e.g. "2026-04-06T08:00:00-04:00").`,
+        };
       }
     }
 

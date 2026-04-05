@@ -31,6 +31,12 @@ export function formatCurrentDate(now: Date, timezone: string): string {
  */
 export function formatTimeContextBlock(timezone: string, now: Date): string {
   const dt = DateTime.fromJSDate(now, { zone: timezone });
+
+  // Luxon returns an invalid DateTime for unrecognized IANA zone names rather than throwing.
+  // Guard here so callers get an explicit error instead of a block full of "Invalid DateTime".
+  if (!dt.isValid) {
+    throw new Error(`formatTimeContextBlock: invalid timezone "${timezone}" (${dt.invalidReason ?? 'unknown reason'})`);
+  }
   const date = dt.toFormat('cccc, MMMM d, yyyy');
   const time = dt.toFormat('hh:mm a');
   // e.g. "EDT" (DST-aware abbreviation)
