@@ -163,43 +163,73 @@ export class OfficeIdentityService {
   /**
    * Saves a new version to the DB, updates the in-memory cache, emits a config.change audit event.
    * changedBy: 'wizard' | 'api' | 'file_load'
+   *
+   * The DB write is fully atomic: version number computation, row insert, and current-pointer
+   * upsert all happen inside a single transaction. The UNIQUE constraint on `version` provides
+   * a last-resort guard against duplicate version numbers if two callers race.
    */
   async update(config: OfficeIdentity, changedBy: string, note?: string): Promise<void> {
     this.validateIdentity(config);
 
-    // Capture previous version for the audit diff before overwriting the cache.
-    const previousVersion = await this.getCurrentVersionNumber();
+    // Snapshot the previous config before writing — used for the diff summary.
     const previousConfig = this.cached;
 
-    // Get the next version number.
-    const nextVersion = (previousVersion ?? 0) + 1;
+    const client = await this.pool.connect();
+    let nextVersion: number;
+    let previousVersion: number;
 
-    // Insert the new version row.
-    const insertResult = await this.pool.query<{ id: number }>(
-      `INSERT INTO office_identity_versions (version, config, changed_by, note)
-       VALUES ($1, $2, $3, $4)
-       RETURNING id`,
-      [nextVersion, JSON.stringify(config), changedBy, note ?? null],
-    );
+    try {
+      await client.query('BEGIN');
 
-    const newVersionId = insertResult.rows[0]!.id;
+      // Compute the next version atomically: lock the current pointer row to prevent
+      // two concurrent callers from both computing the same nextVersion.
+      // If no current record exists (first seed), the FOR UPDATE returns 0 rows and
+      // we start at version 1.
+      const lockResult = await client.query<{ version: number }>(
+        `SELECT v.version
+         FROM office_identity_current c
+         JOIN office_identity_versions v ON v.id = c.version_id
+         FOR UPDATE OF c`,
+      );
+      previousVersion = lockResult.rows[0]?.version ?? 0;
+      nextVersion = previousVersion + 1;
 
-    // Upsert the current pointer.
-    await this.pool.query(
-      `INSERT INTO office_identity_current (singleton, version_id, updated_at)
-       VALUES (TRUE, $1, now())
-       ON CONFLICT (singleton) DO UPDATE
-         SET version_id = EXCLUDED.version_id,
-             updated_at = EXCLUDED.updated_at`,
-      [newVersionId],
-    );
+      // Insert the new version row.
+      const insertResult = await client.query<{ id: number }>(
+        `INSERT INTO office_identity_versions (version, config, changed_by, note)
+         VALUES ($1, $2, $3, $4)
+         RETURNING id`,
+        [nextVersion, JSON.stringify(config), changedBy, note ?? null],
+      );
+      const newVersionId = insertResult.rows[0]!.id;
 
-    // Update the in-memory cache.
+      // Upsert the current pointer to point at the new version.
+      await client.query(
+        `INSERT INTO office_identity_current (singleton, version_id, updated_at)
+         VALUES (TRUE, $1, now())
+         ON CONFLICT (singleton) DO UPDATE
+           SET version_id = EXCLUDED.version_id,
+               updated_at = EXCLUDED.updated_at`,
+        [newVersionId],
+      );
+
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK').catch((rollbackErr: unknown) => {
+        this.logger.error({ err: rollbackErr }, 'Failed to roll back office identity update transaction');
+      });
+      throw err;
+    } finally {
+      client.release();
+    }
+
+    // Update the in-memory cache only after the transaction commits.
     this.cached = config;
 
     this.logger.info({ version: nextVersion, changedBy }, 'Office identity updated');
 
     // Emit config.change audit event on the bus.
+    // Best-effort — don't fail the update if the bus event fails.
     const diffSummary = previousConfig
       ? buildDiffSummary(previousConfig, config)
       : 'Initial identity loaded';
@@ -207,12 +237,11 @@ export class OfficeIdentityService {
     const event = createConfigChange({
       config_type: 'office_identity',
       version: nextVersion,
-      previous_version: previousVersion ?? 0,
+      previous_version: previousVersion,
       changed_by: changedBy,
       note,
       diff_summary: diffSummary,
     });
-    // Best-effort publish — don't fail the update if the bus event fails.
     this.bus.publish('system', event).catch((err: unknown) => {
       this.logger.error({ err }, 'Failed to publish config.change event for office identity update');
     });
@@ -226,8 +255,16 @@ export class OfficeIdentityService {
   async reload(): Promise<void> {
     const identity = await this.loadFromDb();
     if (!identity) {
-      this.logger.warn('Office identity reload: no DB record found — keeping existing cached identity');
-      return;
+      // After initialize() completes successfully, office_identity_current always has a record.
+      // A null return here indicates DB inconsistency (missing pointer row) or a failed prior
+      // update(). Throwing rather than silently keeping the stale cache ensures the HTTP route
+      // returns 500 instead of 200 with the wrong identity — callers (e.g. the wizard) must
+      // not believe a reload succeeded when the cache was not actually refreshed.
+      throw new Error(
+        'Office identity reload failed: no record found in office_identity_current. ' +
+        'This indicates a DB inconsistency — check that migration 013 was applied and ' +
+        'that the most recent update() call completed successfully.',
+      );
     }
     this.cached = identity;
     this.logger.info('Office identity reloaded from DB');
@@ -237,27 +274,32 @@ export class OfficeIdentityService {
    * Returns all historical versions, newest first.
    */
   async history(): Promise<OfficeIdentityVersion[]> {
-    const result = await this.pool.query<{
-      id: number;
-      version: number;
-      config: unknown;
-      changed_by: string;
-      note: string | null;
-      created_at: Date;
-    }>(
-      `SELECT id, version, config, changed_by, note, created_at
-       FROM office_identity_versions
-       ORDER BY version DESC`,
-    );
+    try {
+      const result = await this.pool.query<{
+        id: number;
+        version: number;
+        config: unknown;
+        changed_by: string;
+        note: string | null;
+        created_at: Date;
+      }>(
+        `SELECT id, version, config, changed_by, note, created_at
+         FROM office_identity_versions
+         ORDER BY version DESC`,
+      );
 
-    return result.rows.map(row => ({
-      id: row.id,
-      version: row.version,
-      config: row.config as OfficeIdentity,
-      changedBy: row.changed_by,
-      note: row.note ?? undefined,
-      createdAt: row.created_at,
-    }));
+      return result.rows.map(row => ({
+        id: row.id,
+        version: row.version,
+        config: row.config as OfficeIdentity,
+        changedBy: row.changed_by,
+        note: row.note ?? undefined,
+        createdAt: row.created_at,
+      }));
+    } catch (err) {
+      this.logger.error({ err }, 'Failed to query office identity history');
+      throw err;
+    }
   }
 
   /**
@@ -438,16 +480,6 @@ export class OfficeIdentityService {
     }
   }
 
-  /** Return the current version number from the DB, or null if no record exists. */
-  private async getCurrentVersionNumber(): Promise<number | null> {
-    const result = await this.pool.query<{ version: number }>(
-      `SELECT v.version
-       FROM office_identity_current c
-       JOIN office_identity_versions v ON v.id = c.version_id`,
-    );
-    return result.rows[0]?.version ?? null;
-  }
-
   /** Start watching the config file for changes. Writes a new DB version on change. */
   private startFileWatcher(): void {
     // chokidar watches the config file and triggers a reload on any change.
@@ -462,15 +494,34 @@ export class OfficeIdentityService {
 
     this.watcher.on('change', () => {
       this.logger.info({ path: this.configFilePath }, 'Office identity file changed — reloading');
-      // Parse the new file, write to DB, then reload from DB.
-      // Errors are logged but don't crash the process.
+      // Two-step: parse the file first, then write to DB.
+      // Separated so parse errors (operator-fixable by editing the file again) are
+      // distinguished from DB write errors (infrastructure failure requiring separate attention).
       Promise.resolve()
         .then(async () => {
-          const newIdentity = this.loadFromFile();
+          // Step 1: parse the updated YAML.
+          // On failure (bad YAML, missing required fields), log and abort. The existing
+          // in-memory identity is kept. The operator can fix the file and save again.
+          let newIdentity: OfficeIdentity;
+          try {
+            newIdentity = this.loadFromFile();
+          } catch (err: unknown) {
+            this.logger.error(
+              { err, path: this.configFilePath },
+              'Failed to parse office identity YAML — keeping existing identity. Fix the file and save again to retry.',
+            );
+            return;
+          }
+
+          // Step 2: persist to DB. This is a more serious failure — the file was valid
+          // but we couldn't commit the new version. Likely a DB connectivity issue.
           await this.update(newIdentity, 'file_load', 'Hot reload from config/office-identity.yaml');
         })
         .catch((err: unknown) => {
-          this.logger.error({ err }, 'Failed to reload office identity from file — keeping existing identity');
+          this.logger.error(
+            { err },
+            'Failed to write office identity to DB during hot reload — keeping existing identity. Check database connectivity.',
+          );
         });
     });
 

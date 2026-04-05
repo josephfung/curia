@@ -83,6 +83,13 @@ export async function identityRoutes(
       const updated = identityService.get();
       return reply.send({ identity: updated, updated: true });
     } catch (err) {
+      // Validation errors from validateIdentity() are plain Error instances with descriptive
+      // messages — return 400 so the wizard UI can surface them to the user.
+      // DB / infrastructure errors carry a Postgres error code — return 500.
+      const pgCode = (err as { code?: string }).code;
+      if (pgCode !== undefined) {
+        return reply.status(500).send({ error: 'Failed to save identity due to a server error. Check server logs.' });
+      }
       const message = err instanceof Error ? err.message : 'Failed to update identity';
       return reply.status(400).send({ error: message });
     }

@@ -4,7 +4,7 @@
 -- Append-only — rows are never updated or deleted.
 CREATE TABLE office_identity_versions (
   id          BIGSERIAL PRIMARY KEY,
-  version     INTEGER NOT NULL,           -- monotonically increasing per-change counter
+  version     INTEGER NOT NULL UNIQUE,     -- monotonically increasing per-change counter; UNIQUE enforces no duplicate versions
   config      JSONB NOT NULL,             -- full OfficeIdentity config snapshot at time of change
   changed_by  TEXT NOT NULL,              -- 'file_load' | 'wizard' | 'api'
   note        TEXT,                       -- optional human-readable reason for change
@@ -17,6 +17,6 @@ CREATE TABLE office_identity_versions (
 -- with singleton = FALSE, closing the gap the PK alone would leave open.
 CREATE TABLE office_identity_current (
   singleton   BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (singleton = TRUE),
-  version_id  INTEGER NOT NULL REFERENCES office_identity_versions(id),
+  version_id  BIGINT NOT NULL REFERENCES office_identity_versions(id),
   updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
