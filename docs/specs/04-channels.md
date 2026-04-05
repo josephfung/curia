@@ -10,7 +10,7 @@ Each channel is a self-contained adapter that translates between platform-specif
 
 ```typescript
 interface ChannelAdapter {
-  id: string;                      // e.g., "signal", "telegram", "email"
+  id: string;                      // e.g., "signal", "email"
   start(): Promise<void>;         // connect/listen
   stop(): Promise<void>;          // graceful shutdown
   send(message: OutboundMessage): Promise<void>;
@@ -30,7 +30,7 @@ Each adapter:
 interface InboundMessage {
   id: string;                  // UUID
   conversation_id: string;     // deterministic UUID v5 from channel:user_id:thread_id
-  channel_id: string;          // e.g., "telegram"
+  channel_id: string;          // e.g., "email"
   sender_id: string;           // platform-specific user ID
   content: string;             // normalized text content
   attachments?: Attachment[];  // files, images, etc.
@@ -69,12 +69,6 @@ Interactive terminal for local dev and testing. Reads from stdin, writes to stdo
 - Handles: text messages, attachments, reactions
 - Secrets: `signal_phone_number`
 
-### Telegram (Bot API)
-- Long-polling or webhook mode (configurable)
-- **Conversation ID:** derived from chat_id + message_thread_id
-- Handles: text, photos, documents, inline queries
-- Secrets: `telegram_bot_token`
-
 ### HTTP API
 - REST endpoints for programmatic access
 - SSE (Server-Sent Events) for real-time response streaming
@@ -109,7 +103,6 @@ Each channel is assigned a trust level that the dispatch layer tags on every inb
 |---|---|---|
 | **CLI** | `high` | Requires SSH/physical access to the host |
 | **Signal** | `high` | Strong identity via phone number + Signal protocol |
-| **Telegram** | `medium` | Platform-verified `chat_id`, but account compromise is possible |
 | **HTTP API** | `medium` | Token-authenticated, but tokens can be leaked |
 | **Email** | `low` | From headers are trivially spoofable; relies on SPF/DKIM/DMARC |
 

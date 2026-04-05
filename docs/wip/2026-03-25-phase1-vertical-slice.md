@@ -32,7 +32,7 @@ CLI output ← Channel Layer ← Bus ← Dispatch ← Bus ← Coordinator Agent 
 - Skills/execution layer (no tool use yet)
 - Memory system (no knowledge graph, no Bullpen)
 - Scheduler
-- Other channels (Email, Signal, Telegram, HTTP API)
+- Other channels (Email, Signal, HTTP API)
 - Other LLM providers (OpenAI, Ollama)
 - Agent config loading from YAML (Coordinator is hardcoded for now)
 
@@ -2106,6 +2106,6 @@ After completing all 13 tasks, you'll have:
 This is the skeleton. Future phases will add:
 - Phase 2: Agent config loading from YAML, memory system (working memory + knowledge graph)
 - Phase 3: Skills/execution layer, MCP client
-- Phase 4: Additional channels (Email, Telegram, Signal)
+- Phase 4: Additional channels (Email, Signal)
 - Phase 5: Scheduler, persistent tasks
 - Phase 6: HTTP API, agent status SSE

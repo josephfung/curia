@@ -155,7 +155,6 @@ For launch, this is data collection (audit log captures everything). Active bloc
 |---|---|---|---|
 | **CLI** | Local terminal / SSH access | `high` | Very low |
 | **Signal** | Phone number + Signal protocol | `high` | Very low |
-| **Telegram** | Bot API `chat_id` (platform-verified) | `medium` | Low |
 | **HTTP API** | Token-based auth | `medium` | Low (if tokens secured) |
 | **Email** | Nylas provider-level validation (SPF/DKIM/DMARC handled by email provider) | `low` | **High** (headers spoofable) |
 
@@ -182,7 +181,7 @@ The dispatch layer tags every message with the originating channel's trust level
 trust_policy:
   financial_actions: high       # requires Signal or CLI confirmation
   data_export: high             # requires Signal or CLI confirmation
-  scheduling: medium            # Telegram is fine
+  scheduling: medium            # HTTP API is fine
   information_queries: low      # email is fine for read-only questions
 ```
 

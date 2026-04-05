@@ -105,7 +105,7 @@ The contact resolver runs in the **dispatch layer**, on every inbound message, *
 
 ```
 Inbound message arrives
-  channel: "telegram", sender_id: "12345"
+  channel: "signal", sender_id: "+15550001111"
         │
         ▼
   SELECT c.id, c.display_name, c.role, c.kg_node_id, cci.verified
@@ -129,7 +129,7 @@ Inbound message arrives
     contact_id, display_name, role, kg_node_id, verification_status
 ```
 
-The enriched message is what the Coordinator receives. Instead of "Telegram chat_id 12345 sent a message," the Coordinator sees "Jenna Torres (CFO, verified) sent a message."
+The enriched message is what the Coordinator receives. Instead of "Signal number +15550001111 sent a message," the Coordinator sees "Jenna Torres (CFO, verified) sent a message."
 
 ### Participant Extraction
 
@@ -195,7 +195,6 @@ When an inbound message can't be matched to any contact, the system's response d
 |---|---|---|
 | **CLI** | `high` | N/A — always the primary user |
 | **Signal** | `high` | Hold silently, notify CEO |
-| **Telegram** | `medium` | Hold silently, notify CEO |
 | **HTTP API** | `medium` | Reject with 401 (unknown token) |
 | **Email** | `low` | Hold silently, notify CEO |
 
@@ -206,14 +205,13 @@ Policy is configurable per channel in `config/default.yaml`:
 contacts:
   unknown_sender_policy:
     signal: hold_and_notify
-    telegram: hold_and_notify
     email: auto_reply
     http_api: reject
 ```
 
 Held messages are queued in working memory with a `held_for_identification` flag. The Coordinator presents them to the CEO at the next opportunity:
 
-> "I received a Telegram message from an unknown sender (chat_id 99999) who says they're Jen Torres, asking for Q3 numbers. Do you know them?"
+> "I received a Signal message from an unknown sender (+15559999999) who says they're Jen Torres, asking for Q3 numbers. Do you know them?"
 
 If the CEO identifies the sender, the held message is re-processed with full contact context. If the CEO says "I don't know them," the held message is discarded and the sender remains unresolved.
 

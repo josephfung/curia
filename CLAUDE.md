@@ -8,7 +8,7 @@ Curia is a multi-agent AI platform for executives. Architecture specs are in `do
 
 Five layers connected by a message bus. Four domain layers have hard security boundaries; the fifth (System) is for trusted cross-cutting infrastructure.
 
-- **Channel Layer** — translates platform messages (Telegram, Email, etc.) into normalized bus events
+- **Channel Layer** — translates platform messages (Signal, Email, etc.) into normalized bus events
 - **Dispatch Layer** — routes messages to agents, enforces policy, translates responses back
 - **Agent Layer** — LLM-powered agents with isolated memory scopes
 - **Execution Layer** — runs skills (local or MCP), validates permissions, sanitizes outputs
@@ -84,11 +84,20 @@ Values by capability class:
 
 A raw number (0–100) may be used for precision. Numbers outside [0, 100] produce a validation error at skill load time.
 
-When adding a new agent, ensure it receives the autonomy block via the runtime injection mechanism (same pattern as date/timezone injection — pass `autonomyService` in `AgentRuntime` config if the agent needs autonomy awareness). See `docs/superpowers/specs/2026-04-03-autonomy-engine-design.md`.
+When adding a new agent, ensure it receives the autonomy block via the runtime injection mechanism (same pattern as date/timezone injection — pass `autonomyService` in `AgentRuntime` config if the agent needs autonomy awareness). See `docs/wip/2026-04-03-autonomy-engine-design.md`.
 
 ### New Agent
 1. Create `agents/<name>.yaml` with required fields (name, description, model, system_prompt)
 2. Optionally add `handler: ./<name>.handler.ts` for custom logic
+
+## WIP Artifacts (Plans & Designs)
+
+All timestamped work artifacts — implementation plans and design specs — live in `docs/wip/`. This overrides the default superpowers skill behavior:
+
+- **Spec docs** (design documents): `docs/wip/YYYY-MM-DD-<feature>-design.md`
+- **Plan docs** (implementation plans): `docs/wip/YYYY-MM-DD-<feature>.md`
+
+Do **not** create `docs/superpowers/`, `docs/plans/`, or `docs/specs/designs/` — those directories no longer exist. All new WIP artifacts go directly in `docs/wip/`.
 
 ## Scope Discipline
 

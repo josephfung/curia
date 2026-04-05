@@ -47,7 +47,7 @@ Think of it as a digital executive office: specialized agents sit at their desks
 - **Tracks expenses** from receipts and bank notifications, categorized and summarized
 - **Researches topics** across multiple sessions, building on previous findings
 - **Manages your calendar** with context about attendees and past interactions
-- **Responds on your behalf** across Signal, Telegram, and email — with your voice and your boundaries
+- **Responds on your behalf** across Signal and email — with your voice and your boundaries
 - **Remembers everything that matters** — who people are, what was decided, what's still pending — in a knowledge graph that gets smarter over time
 
 ### What Makes It Different
@@ -59,7 +59,7 @@ Think of it as a digital executive office: specialized agents sit at their desks
 | **Memory** | Conversation history (lost on restart) | Knowledge graph + entity memory + temporal awareness (survives restarts, ages gracefully) |
 | **Error handling** | Retry and hope | Error budgets, state continuity, pattern detection — agents resume, not restart |
 | **Agent communication** | Agents work in isolation | The Bullpen — structured, auditable, threaded inter-agent discussions |
-| **Multi-channel** | Single chat interface | Email, Signal, Telegram, CLI, HTTP API — same agent, any channel |
+| **Multi-channel** | Single chat interface | Email, Signal, CLI, HTTP API — same agent, any channel |
 
 ---
 
@@ -83,7 +83,7 @@ Security isn't a feature of Curia. It's the reason it exists.
 
 ### 1. Hard Layer Separation
 
-Every component declares its layer at startup. The bus enforces which event types each layer can publish or subscribe to. A compromised Telegram adapter can spam inbound messages — but it cannot invoke a skill, write to memory, or execute code. The boundary is architectural, not policy.
+Every component declares its layer at startup. The bus enforces which event types each layer can publish or subscribe to. A compromised email adapter can spam inbound messages — but it cannot invoke a skill, write to memory, or execute code. The boundary is architectural, not policy.
 
 ### 2. Append-Only Audit Trail
 
@@ -208,7 +208,6 @@ Talk to your agents wherever you are:
 |---|---|
 | **Email** | IMAP polling + SMTP. Agents read your inbox, extract action items, reply on your behalf. |
 | **Signal** | Via signal-cli. End-to-end encrypted messaging with your agents. |
-| **Telegram** | Bot API. Quick commands and conversations on the go. |
 | **CLI** | Interactive terminal for local development and testing. |
 | **HTTP API** | REST + SSE for web dashboards, mobile apps, and programmatic access. |
 
@@ -318,7 +317,7 @@ The explorer supports:
 | 01 | Memory system (working memory + knowledge graph) | Partial — core implemented; Bullpen, context management, decay engine planned |
 | 02 | Agent system (config, delegation, registry) | ✅ Implemented |
 | 03 | Skills & execution layer | Partial — local skills implemented; MCP discovery planned |
-| 04 | Channels (CLI, HTTP, Email) | Partial — CLI, HTTP, Email done; Signal & Telegram planned |
+| 04 | Channels (CLI, HTTP, Email) | Partial — CLI, HTTP, Email done; Signal planned |
 | 05 | Error recovery (budgets, patterns, continuity) | ✅ Implemented |
 | 06 | Audit & security | Partial — basic audit logging in place; redaction & hardening planned |
 | 07 | Scheduler (cron, one-shot, persistent tasks) | ✅ Implemented |
