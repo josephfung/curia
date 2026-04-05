@@ -87,6 +87,11 @@ export async function identityRoutes(
       return reply.status(400).send({ error: 'Request body must include an "identity" object' });
     }
 
+    // @TODO: The constraints field in the identity object is currently not protected —
+    // callers can omit or alter constraints, weakening the non-negotiable rules.
+    // The wizard PR will enforce constraint immutability via a separate UI flow
+    // (explicit confirmation step, separate from tone/persona edits).
+
     try {
       await identityService.update(body.identity, 'api', body.note);
       const updated = identityService.get();
