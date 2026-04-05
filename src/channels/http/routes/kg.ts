@@ -432,7 +432,7 @@ function createUiHtml(): string {
       <div style="display: flex; flex-direction: column; gap: 2px;">
 
         <!-- Chat -->
-        <button id="nav-chat" class="nav-item" onclick="navigate('coming-soon', 'Chat', 'nav-chat')">
+        <button id="nav-chat" class="nav-item" onclick="navigate('chat', 'Chat', 'nav-chat')">
           <!-- speech-bubble icon -->
           <svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
             <path d="M13 9.5A1.5 1.5 0 0 1 11.5 11H4L1.5 13.5V3A1.5 1.5 0 0 1 3 1.5h8.5A1.5 1.5 0 0 1 13 3v6.5z"/>
@@ -527,10 +527,34 @@ function createUiHtml(): string {
         </div>
       </div>
 
-      <!-- Coming Soon view (shared by Chat, Contacts, Tasks) -->
+      <!-- Coming Soon view (shared by Contacts, Tasks) -->
       <div id="view-coming-soon" style="display: none; height: 100%; flex-direction: column; align-items: center; justify-content: center;">
         <p style="font-size: 0.6875rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.15em; color: var(--fg-muted); margin: 0 0 8px;">Coming Soon</p>
         <h2 id="coming-soon-title" style="font-family: 'Lora', Georgia, serif; font-size: 2rem; font-weight: 500; color: var(--fg); margin: 0;"></h2>
+      </div>
+
+      <!-- Chat view — hidden until user clicks the Chat nav item -->
+      <div id="view-chat" style="display: none; height: 100%; flex-direction: row;">
+
+        <!-- Left: conversation list -->
+        <div class="chat-sidebar">
+          <div style="padding: 10px 8px; border-bottom: 1px solid var(--border);">
+            <button class="btn-primary" style="width: 100%;" onclick="newConversation()">+ New Chat</button>
+          </div>
+          <div id="chat-conv-list" style="flex: 1; overflow-y: auto; padding: 6px; display: flex; flex-direction: column; gap: 2px;"></div>
+        </div>
+
+        <!-- Right: message thread + input -->
+        <div class="chat-thread">
+          <div id="chat-messages" class="chat-messages"></div>
+          <div class="chat-input-bar">
+            <form id="chat-form" style="display: contents;">
+              <textarea id="chat-textarea" class="chat-textarea" placeholder="Message Curia\u2026" rows="2"></textarea>
+              <button type="submit" id="chat-send-btn" class="btn-primary" style="padding: 8px 16px;">Send</button>
+            </form>
+          </div>
+        </div>
+
       </div>
 
     </main>
