@@ -134,8 +134,8 @@ export async function identityRoutes(
       await identityService.reload();
       const identity = identityService.get();
       return reply.send({ identity, reloaded: true });
-    } catch (err) {
-      // Do not forward err.message — reload failures surface DB internals (table names,
+    } catch (_err) {
+      // Do not forward _err.message — reload failures surface DB internals (table names,
       // migration identifiers, constraint names) that should not reach API callers.
       // The error is already logged by reload() before rethrowing.
       return reply.status(500).send({ error: 'Failed to reload identity due to a server error. Check server logs.' });
