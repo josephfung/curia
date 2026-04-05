@@ -99,6 +99,46 @@ All timestamped work artifacts — implementation plans and design specs — liv
 
 Do **not** create `docs/superpowers/`, `docs/plans/`, or `docs/specs/designs/` — those directories no longer exist. All new WIP artifacts go directly in `docs/wip/`.
 
+## Changelog & Versioning
+
+### Every PR must update CHANGELOG.md
+
+Add entries under `## [Unreleased]` before creating the PR. Exception: PRs that are
+solely bumping the version and moving `[Unreleased]` to a release heading (like this one)
+don't need a separate entry — the release heading itself is the record.
+
+Use these sections as needed:
+- **Added** — new skills, agents, channels, specs, or features
+- **Changed** — behavior changes to existing functionality
+- **Fixed** — bug fixes
+- **Removed** — deleted features or files
+- **Security** — security fixes or hardening
+
+One bullet per logical change. Lead with the **feature name in bold**, then a brief description.
+Reference spec numbers where relevant (e.g. "spec 14").
+
+### When to bump the version number
+
+Bump `package.json` version in the same PR as the changelog entry. Use this table:
+
+| Change type | Bump | Examples |
+|---|---|---|
+| New skill, agent, or channel | **minor** (`0.X.0`) | Adding `web-search`, adding Signal channel |
+| Completed spec / major feature | **minor** (`0.X.0`) | Autonomy engine shipped, entity context enrichment |
+| Bug fix, small improvement, doc-only | **patch** (`0.x.Y`) | Fixing a skill error path, updating a guide |
+| Breaking change to public API surface | **minor** + note in changelog | Renaming a `SkillContext` field, changing `skill.json` schema |
+
+**Public API surfaces** (changes here must be called out explicitly in the changelog even pre-1.0):
+- `skill.json` manifest schema (fields, types, required/optional)
+- `SkillHandler` / `SkillContext` / `SkillResult` TypeScript interfaces
+- Agent YAML schema (`agents/*.yaml` fields)
+- Bus event type definitions (`src/bus/events.ts`)
+- Channel adapter interface
+
+**1.0.0** is reserved for when these surfaces are stable enough to commit to — do not bump to
+1.0.0 without explicit discussion. The milestone is API stability + production deployment,
+not just "it works."
+
 ## Scope Discipline
 
 - Fix what was asked. Don't refactor surrounding code.
