@@ -69,18 +69,20 @@ Cross-cutting: Audit Logger, Memory Engine, Scheduler.
 
 ### Autonomy Awareness
 
-When adding a new skill, declare its autonomy floor in `skill.json` (this field is not enforced in Phase 1 but is required for Phase 2 gate wiring):
+When adding a new skill, declare its action risk in `skill.json` (this field is not enforced in Phase 1 but is required for Phase 2 gate wiring):
 
 ```json
-"autonomy_floor": "spot-check"
+"action_risk": "medium"
 ```
 
-Floors by capability class:
-- `"full"` — reads, retrieval, summarization (no external effect)
-- `"spot-check"` — outbound communications, internal state writes
-- `"approval-required"` — calendar writes, commitments on behalf of CEO
-- `"draft-only"` — financial actions, high-stakes operations
-- `"restricted"` — irreversible or destructive actions
+Values by capability class:
+- `"none"` — reads, retrieval, summarization (no external effect; min score 0)
+- `"low"` — internal state writes, memory, contacts (min score 60)
+- `"medium"` — outbound communications (min score 70)
+- `"high"` — calendar writes, commitments on behalf of CEO (min score 80)
+- `"critical"` — financial / destructive / irreversible actions (min score 90)
+
+A raw number (0–100) may be used for precision. Numbers outside [0, 100] produce a validation error at skill load time.
 
 When adding a new agent, ensure it receives the autonomy block via the runtime injection mechanism (same pattern as date/timezone injection — pass `autonomyService` in `AgentRuntime` config if the agent needs autonomy awareness). See `docs/superpowers/specs/2026-04-03-autonomy-engine-design.md`.
 

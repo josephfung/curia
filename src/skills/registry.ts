@@ -10,6 +10,10 @@
 import type { SkillManifest, SkillHandler, RegisteredSkill, ToolDefinition } from './types.js';
 import { describeTimestampInput } from '../time/timestamp.js';
 
+// Valid named action_risk labels — used for runtime validation since manifests
+// are loaded from JSON via a bare cast and TypeScript cannot enforce this at runtime.
+const ACTION_RISK_LABELS = new Set(['none', 'low', 'medium', 'high', 'critical']);
+
 export class SkillRegistry {
   private skills = new Map<string, RegisteredSkill>();
   /** IANA timezone name used to populate timestamp input descriptions in tool schemas. */
@@ -24,10 +28,31 @@ export class SkillRegistry {
    * Throws if a skill with the same name is already registered —
    * duplicate names indicate a configuration error that should surface
    * at startup, not silently overwrite.
+   *
+   * Also validates action_risk at runtime — manifests are loaded from JSON via
+   * a bare `as SkillManifest` cast, so TypeScript cannot enforce enum correctness.
+   * Invalid values fail closed at skill load time rather than silently producing
+   * undefined thresholds later when autonomy gates are evaluated.
    */
   register(manifest: SkillManifest, handler: SkillHandler): void {
     if (this.skills.has(manifest.name)) {
       throw new Error(`Skill '${manifest.name}' is already registered`);
+    }
+    if (manifest.action_risk !== undefined) {
+      const risk = manifest.action_risk;
+      if (typeof risk === 'number') {
+        if (!Number.isInteger(risk) || risk < 0 || risk > 100) {
+          throw new Error(
+            `Skill '${manifest.name}' has invalid action_risk: ${risk}. ` +
+            `Numeric action_risk must be an integer between 0 and 100.`,
+          );
+        }
+      } else if (!ACTION_RISK_LABELS.has(risk as string)) {
+        throw new Error(
+          `Skill '${manifest.name}' has invalid action_risk label: "${String(risk)}". ` +
+          `Expected one of: ${[...ACTION_RISK_LABELS].join(', ')}.`,
+        );
+      }
     }
     this.skills.set(manifest.name, { manifest, handler });
   }
