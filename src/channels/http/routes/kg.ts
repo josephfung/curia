@@ -1,9 +1,12 @@
-import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { Pool } from 'pg';
+import type { EventBus } from '../../../bus/bus.js';
+import { createInboundMessage } from '../../../bus/events.js';
 import type { Logger } from '../../../logger.js';
+import { MessageRejectedError, type EventRouter } from '../event-router.js';
 
 export interface KnowledgeGraphRouteOptions {
   pool: Pool;
@@ -12,7 +15,26 @@ export interface KnowledgeGraphRouteOptions {
   // True when APP_ORIGIN is https:// — causes Set-Cookie to include the Secure flag.
   // False in local dev so cookies work on http://localhost without browser rejection.
   secureCookies: boolean;
+  // Bus + EventRouter are required for the chat endpoints (POST /api/kg/chat/messages
+  // and GET /api/kg/chat/stream). The chat routes dispatch inbound messages through the
+  // bus and stream outbound responses back via SSE, mirroring the pattern used by the
+  // existing /api/messages endpoints.
+  bus: EventBus;
+  eventRouter: EventRouter;
 }
+
+// How long the chat POST waits for an agent response before timing out.
+// Mirrors RESPONSE_TIMEOUT_MS in src/channels/http/routes/messages.ts — keep in sync.
+const CHAT_RESPONSE_TIMEOUT_MS = 120_000;
+
+// Channel identifier used when the KG web app dispatches messages to the agent layer.
+// The 'web' channel is special-cased in contact-resolver.ts to auto-resolve to the CEO —
+// the bootstrap secret is CEO-only, so any authenticated web request is implicitly the CEO.
+// See config/channel-trust.yaml for the channel policy.
+const WEB_CHANNEL_ID = 'web';
+// Sentinel sender ID for the web channel. The value is cosmetic — contact-resolver.ts
+// short-circuits to the CEO contact for this channel regardless of the sender string.
+const WEB_SENDER_ID = 'ceo-web-user';
 
 // Session token → expiry timestamp (ms). Scoped to the route registration
 // lifetime (process lifetime for production). Single-tenant tool: memory is fine.
@@ -654,7 +676,7 @@ export async function knowledgeGraphRoutes(
   app: FastifyInstance,
   options: KnowledgeGraphRouteOptions,
 ): Promise<void> {
-  const { pool, logger, webAppBootstrapSecret, secureCookies } = options;
+  const { pool, logger, webAppBootstrapSecret, secureCookies, bus, eventRouter } = options;
 
   // In-memory session store: token → expiry timestamp (ms).
   // Single-tenant tool — no DB persistence needed; sessions reset on server restart.
@@ -865,6 +887,118 @@ export async function knowledgeGraphRoutes(
         createdAt: row.created_at,
         lastConfirmedAt: row.last_confirmed_at,
       })),
+    });
+  });
+
+  // ── Chat endpoints ──────────────────────────────────────────────────────
+  //
+  // The chat endpoints let the KG web app send messages to the agent layer
+  // and stream responses back. They mirror the pattern of src/channels/http/routes/messages.ts
+  // (POST /api/messages + GET /api/messages/stream) but use the 'web' channel so
+  // contact-resolver auto-attributes the sender to the CEO (the bootstrap secret is CEO-only).
+  //
+  // Auth: both routes enforce the same assertSecret guard as the KG read APIs — they accept
+  // either a valid curia_session cookie (browser flow) or x-web-bootstrap-secret header
+  // (programmatic flow, e.g. tests and scripts).
+
+  /**
+   * POST /api/kg/chat/messages — dispatch a chat message, wait for the agent response.
+   *
+   * Body: { message: string, conversationId?: string }
+   * Response: { reply: string, conversationId: string }
+   *
+   * Mirrors the publish/wait pattern in POST /api/messages: register the waiter BEFORE
+   * publishing so a fast response isn't missed, then map publish/timeout/rejection
+   * errors to structured HTTP status codes.
+   */
+  app.post('/api/kg/chat/messages', async (request, reply) => {
+    if (!assertSecret(request, reply, webAppBootstrapSecret, sessions)) return;
+
+    const body = request.body as { message?: unknown; conversationId?: unknown };
+    if (typeof body?.message !== 'string' || body.message.trim().length === 0) {
+      return reply.status(400).send({ error: 'Missing required field: message (non-empty string)' });
+    }
+
+    const conversationId =
+      typeof body.conversationId === 'string' && body.conversationId.length > 0
+        ? body.conversationId
+        : `kg-web-${randomUUID()}`;
+
+    // Register the waiter BEFORE publishing so we don't race past a fast reply.
+    const responsePromise = eventRouter.waitForResponse(conversationId, CHAT_RESPONSE_TIMEOUT_MS);
+
+    try {
+      await bus.publish('channel', createInboundMessage({
+        conversationId,
+        channelId: WEB_CHANNEL_ID,
+        senderId: WEB_SENDER_ID,
+        content: body.message,
+      }));
+    } catch (publishErr) {
+      // Publish failed synchronously — cancel our pending waiter (still ours, nothing
+      // has had a chance to supersede it yet) and surface a 500.
+      eventRouter.cancelPending(conversationId);
+      const message = publishErr instanceof Error ? publishErr.message : String(publishErr);
+      logger.error({ err: publishErr, conversationId }, 'KG chat message publish failed');
+      return reply.status(500).send({ error: message });
+    }
+
+    try {
+      const content = await responsePromise;
+      return reply.send({ reply: content, conversationId });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.error({ err, conversationId }, 'KG chat message handling failed');
+      // instanceof check for rejection — string matching would silently break if the
+      // error wording changes. Timeout still falls back to substring because the event
+      // router doesn't expose a dedicated TimeoutError class.
+      const isRejected = err instanceof MessageRejectedError;
+      const isTimeout = message.includes('timeout') || message.includes('Timeout');
+      const status = isRejected ? 403 : isTimeout ? 504 : 500;
+      return reply.status(status).send({ error: message });
+    }
+  });
+
+  /**
+   * GET /api/kg/chat/stream — SSE stream of agent events for the KG web app.
+   *
+   * Streams outbound.message, skill.invoke, and skill.result events from the EventRouter,
+   * optionally filtered by ?conversationId=xxx. Mirrors GET /api/messages/stream.
+   */
+  app.get('/api/kg/chat/stream', async (request, reply) => {
+    if (!assertSecret(request, reply, webAppBootstrapSecret, sessions)) return;
+
+    const query = request.query as { conversationId?: string };
+
+    // Hand the raw socket over to us — Fastify won't send a default response after the
+    // handler returns, which is what we want for a long-lived SSE stream.
+    reply.hijack();
+    reply.raw.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+      // Nginx/ALB/Cloudflare buffer SSE by default — this header disables that.
+      'X-Accel-Buffering': 'no',
+    });
+    reply.raw.write(':connected\n\n');
+
+    const cleanup = eventRouter.addSseClient({
+      res: reply.raw,
+      conversationId: query.conversationId,
+    });
+
+    // 30s heartbeat keeps intermediary proxies from closing the connection on idle.
+    const heartbeat = setInterval(() => {
+      try {
+        reply.raw.write(':ping\n\n');
+      } catch {
+        clearInterval(heartbeat);
+      }
+    }, 30_000);
+
+    request.raw.on('close', () => {
+      clearInterval(heartbeat);
+      cleanup();
     });
   });
 }

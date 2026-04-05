@@ -137,6 +137,12 @@ export class HttpAdapter {
         logger,
         webAppBootstrapSecret,
         secureCookies,
+        // bus + eventRouter are passed through for the KG chat endpoints
+        // (POST /api/kg/chat/messages, GET /api/kg/chat/stream). The chat routes
+        // reuse the shared EventRouter subscriptions set up above so we don't leak
+        // per-request bus subscribers.
+        bus,
+        eventRouter: this.eventRouter,
       });
     }
 

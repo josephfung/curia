@@ -30,14 +30,18 @@ export class ContactResolver {
    * Returns rich SenderContext (with KG facts) for known contacts,
    * or UnknownSenderContext for unrecognized senders.
    *
-   * CLI and smoke-test channels always resolve as the primary user (CEO).
+   * CLI, smoke-test, and the KG web app channels always resolve as the primary user (CEO).
    */
   async resolve(channel: string, senderId: string): Promise<InboundSenderContext> {
-    // CLI and smoke-test are always the primary user (CEO).
+    // CLI, smoke-test, and 'web' are always the primary user (CEO):
+    // - 'cli' and 'smoke-test' are local console sessions — only the CEO has shell access.
+    // - 'web' is the KG web app, authenticated upstream via the bootstrap secret. The secret
+    //   is CEO-only, so any request that reaches the dispatch layer through this channel
+    //   has already been proven to be the CEO at the HTTP route level.
     // Look up the real CEO contact in the DB so downstream skills (calendar, entity-context)
     // get a proper UUID — passing the synthetic 'primary-user' string to UUID columns causes
     // PostgreSQL errors. Fall back to the synthetic ID only if no CEO contact exists yet.
-    if (channel === 'cli' || channel === 'smoke-test') {
+    if (channel === 'cli' || channel === 'smoke-test' || channel === 'web') {
       try {
         const ceoContacts = await this.contactService.findContactByRole('ceo');
         const ceo = ceoContacts[0];
