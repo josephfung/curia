@@ -573,10 +573,12 @@ function createUiHtml(): string {
     // Active conversation UUID — set when the user sends their first message
     // in a new conversation, or when switching between past conversations.
     var chatConversationId = null;
-    // Tracks whether the agent reply has been rendered for the current round-trip
-    // to prevent the SSE 'message' event and the POST response from both appending
-    // the same text (whichever fires first wins; the other is a no-op).
-    var chatReplyRendered = false;
+    // Tracks which conversationIds have had their agent reply rendered this round-trip,
+    // preventing both the SSE 'message' event and the POST response from appending the
+    // same text (whichever fires first wins; the other is a no-op).
+    // Keyed by conversationId so the guard is correctly scoped even when the user
+    // switches conversations while a POST is in-flight.
+    var chatRepliesDelivered = new Set();
     // In-session conversation list. Each entry: { id, label, messages: [] }
     // where messages are { role: 'user'|'agent'|'status'|'error', text: string }.
     var chatConversations = [];
@@ -888,8 +890,8 @@ function createUiHtml(): string {
         } else if (payload.type === 'message') {
           // Agent reply arrived via SSE — render it only if the POST response
           // hasn't already rendered it (race: whichever fires first wins).
-          if (!chatReplyRendered) {
-            chatReplyRendered = true;
+          if (!chatRepliesDelivered.has(convId)) {
+            chatRepliesDelivered.add(convId);
             var content = (typeof payload.content === 'string') ? payload.content
                         : JSON.stringify(payload);
             renderMessage('agent', content);
@@ -919,7 +921,6 @@ function createUiHtml(): string {
       }
       chatConversationId = null;
       chatActiveConvIdx = -1;
-      chatReplyRendered = false;
       chatSendBtn.disabled = false;
       chatMessagesEl.replaceChildren();
       // Re-render the conversation list to clear the active highlight.
@@ -945,7 +946,6 @@ function createUiHtml(): string {
       if (idx === chatActiveConvIdx) return;
       chatActiveConvIdx = idx;
       chatConversationId = chatConversations[idx].id;
-      chatReplyRendered = false;
 
       // Restore message history for the selected conversation.
       chatMessagesEl.replaceChildren();
@@ -987,11 +987,12 @@ function createUiHtml(): string {
         openChatStream(newId);
       }
 
-      chatReplyRendered = false;
+      // Capture convId before clearing the reply-delivered flag so the delete
+      // is keyed to the right conversation (chatConversationId was just set above).
+      var convId = chatConversationId;
+      chatRepliesDelivered.delete(convId);
       renderMessage('user', text);
       chatSendBtn.disabled = true;
-
-      var convId = chatConversationId;
 
       fetch('/api/kg/chat/messages', {
         method: 'POST',
@@ -1006,14 +1007,32 @@ function createUiHtml(): string {
           });
         })
         .then(function(data) {
-          // Render the reply unless the SSE already did so.
-          if (!chatReplyRendered) {
-            chatReplyRendered = true;
-            renderMessage('agent', data.reply || '(no reply)');
+          // Render the reply unless the SSE already did so (race: whichever fires first wins).
+          // Use the closure-captured convId to route to the correct conversation even if
+          // the user switched threads while this request was in-flight.
+          if (!chatRepliesDelivered.has(convId)) {
+            chatRepliesDelivered.add(convId);
+            var replyText = data.reply || '(no reply)';
+            var targetIdx = chatConversations.findIndex(function(c) { return c.id === convId; });
+            if (targetIdx >= 0) {
+              if (chatActiveConvIdx === targetIdx) {
+                // Still on the originating conversation — render to DOM.
+                renderMessage('agent', replyText);
+              } else {
+                // User switched away — persist to the correct history without rendering.
+                chatConversations[targetIdx].messages.push({ role: 'agent', text: replyText });
+              }
+            }
           }
-          chatSendBtn.disabled = false;
+          // Re-enable send only if the user is still in the originating conversation.
+          if (chatConversationId === convId) {
+            chatSendBtn.disabled = false;
+          }
         })
         .catch(function(err) {
+          // If the user switched conversations while this request was in-flight, swallow
+          // the error silently — surfacing a stale error in the new thread is confusing.
+          if (chatConversationId !== convId) return;
           var msg = err.message || '';
           var userMsg;
           // Network-level failure (no response at all)

@@ -70,6 +70,11 @@ export class EventRouter {
       // Other channels (email, telegram) process replies asynchronously and have no
       // pending promise waiting here.
       if (event.payload.channelId !== 'http' && event.payload.channelId !== 'web') return;
+      // @TODO: The sseClients Set is shared across all SSE endpoints. A client connected
+      // to /api/messages/stream with no conversationId filter will receive web-channel
+      // events after this change. Both endpoints require the same bootstrap-secret auth
+      // (contained for now), but the clean fix is to tag SseClient with channelId and
+      // filter in broadcastToSseClients. Track as a follow-up improvement.
 
       const convId = event.payload.conversationId;
 
