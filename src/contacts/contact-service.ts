@@ -218,7 +218,7 @@ export class ContactService {
             try {
               onDuplicateDetected(contact.id, matchId, pair.confidence, pair.reason);
             } catch (callbackErr) {
-              this.logger?.warn({ callbackErr }, 'onDuplicateDetected callback threw (ignored)');
+              this.logger?.warn({ err: callbackErr }, 'onDuplicateDetected callback threw (ignored)');
             }
           }
         } catch (err) {
@@ -561,7 +561,7 @@ export class ContactService {
       try {
         await this.entityMemory.mergeEntities(primary.kgNodeId, secondary.kgNodeId);
       } catch (err) {
-        this.logger?.warn({ err, primaryId, secondaryId }, 'KG node merge failed (non-fatal)');
+        this.logger?.warn({ err, primaryId, secondaryId, primaryKgNodeId: primary.kgNodeId, secondaryKgNodeId: secondary.kgNodeId }, 'KG node merge failed (non-fatal)');
       }
     }
 
@@ -583,7 +583,13 @@ export class ContactService {
     const mergedAt = new Date();
 
     if (this.onContactMerged) {
-      this.onContactMerged(primaryId, secondaryId, mergedAt);
+      try {
+        this.onContactMerged(primaryId, secondaryId, mergedAt);
+      } catch (callbackErr) {
+        // The merge is already fully committed at this point — swallow the callback error
+        // so the caller sees a successful merge result rather than a spurious failure.
+        this.logger?.warn({ err: callbackErr }, 'onContactMerged callback threw (non-fatal, merge already committed)');
+      }
     }
 
     this.logger?.info({ primaryId, secondaryId }, 'Contacts merged');

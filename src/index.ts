@@ -181,7 +181,7 @@ async function main(): Promise<void> {
       // bus.publish() is async — catch errors so a failed publish never crashes
       // the createContact() call path or silently swallows the result.
       bus.publish('dispatch', event).catch((err: unknown) =>
-        logger.warn({ err }, 'Failed to publish contact.duplicate_detected'),
+        logger.error({ err }, 'Failed to publish contact.duplicate_detected — audit trail may be incomplete'),
       );
     },
     onContactMerged: (primaryContactId, secondaryContactId, mergedAt) => {
@@ -192,7 +192,7 @@ async function main(): Promise<void> {
         mergedAt,
       });
       bus.publish('dispatch', event).catch((err: unknown) =>
-        logger.warn({ err }, 'Failed to publish contact.merged'),
+        logger.error({ err }, 'Failed to publish contact.merged — audit trail may be incomplete'),
       );
     },
   });
