@@ -50,6 +50,7 @@ export class ExtractRelationshipsHandler implements SkillHandler {
 
     const client = this.anthropicClient ?? new Anthropic({ apiKey: ctx.secret('ANTHROPIC_API_KEY') });
 
+    try {
     // -- Step 1: Classifier gate --
     // Cheap haiku call — exits early on the majority of messages (scheduling,
     // email drafts, lookups) that contain no entity-to-entity relationships.
@@ -193,5 +194,12 @@ ${text}`,
 
     ctx.log.info({ extracted, confirmed }, 'extract-relationships: complete');
     return { success: true, data: { extracted, confirmed, skipped: false } };
+    } catch (err) {
+      // Top-level catch for Anthropic API errors (rate limits, auth, timeouts, 5xx).
+      // Skills must never throw — return a failure result so the execution layer
+      // can audit and surface the error to the caller.
+      ctx.log.error({ err }, 'extract-relationships: unexpected error');
+      return { success: false, error: err instanceof Error ? err.message : String(err) };
+    }
   }
 }
