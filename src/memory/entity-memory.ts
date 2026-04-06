@@ -14,6 +14,13 @@ import type {
   SearchResult,
 } from './types.js';
 
+export interface EdgeResult {
+  edge: KgEdge;
+  /** The node at the other end of the edge */
+  node: KgNode;
+  direction: 'inbound' | 'outbound';
+}
+
 // -- Public input types --
 
 export interface CreateEntityOptions {
@@ -195,6 +202,58 @@ export class EntityMemory {
   }
 
   /**
+   * Find entity-to-entity relationship edges for a node.
+   *
+   * Returns edges in both directions by default. Excludes edges to 'fact' nodes —
+   * those are atomic facts stored on a single entity and are not relationships.
+   *
+   * Each result includes the connected node and a direction label relative to nodeId.
+   * 'outbound' means nodeId is the source; 'inbound' means nodeId is the target.
+   */
+  async findEdges(
+    nodeId: string,
+    opts?: { type?: EdgeType; direction?: 'inbound' | 'outbound' | 'both' },
+  ): Promise<EdgeResult[]> {
+    const direction = opts?.direction ?? 'both';
+    const allEdges = await this.store.getEdgesForNode(nodeId);
+    const results: EdgeResult[] = [];
+
+    for (const edge of allEdges) {
+      // Determine direction relative to nodeId
+      const isOutbound = edge.sourceNodeId === nodeId;
+      const edgeDirection: 'inbound' | 'outbound' = isOutbound ? 'outbound' : 'inbound';
+
+      // Apply direction filter
+      if (direction !== 'both' && edgeDirection !== direction) continue;
+
+      // Apply type filter
+      if (opts?.type !== undefined && edge.type !== opts.type) continue;
+
+      // Resolve the node on the other side
+      const otherId = isOutbound ? edge.targetNodeId : edge.sourceNodeId;
+      const node = await this.store.getNode(otherId);
+      if (!node) continue;
+
+      // Exclude fact nodes — they're stored facts about a single entity, not relationships
+      if (node.type === FACT_TYPE) continue;
+
+      results.push({ edge, node, direction: edgeDirection });
+    }
+
+    return results;
+  }
+
+  /**
+   * Delete a relationship edge by ID. Hard delete — permanent, no soft-delete.
+   * The store logs the deletion at debug level internally.
+   *
+   * @TODO Phase 2: emit a bus event for the audit logger (requires bus access in EntityMemory).
+   */
+  async deleteEdge(id: string): Promise<void> {
+    await this.store.deleteEdge(id);
+  }
+
+  /**
    * Create a typed relationship edge between two entity nodes.
    * This is for entity-to-entity links (person works_on project, etc.)
    * rather than entity-to-fact links (which storeFact handles internally).
@@ -290,12 +349,12 @@ export class EntityMemory {
   /**
    * Idempotent edge creation between two entity nodes.
    *
-   * Checks for an existing edge of the same type connecting the same pair of nodes
-   * in either direction. If found, bumps lastConfirmedAt and raises confidence
-   * (never lowers it). If not found, creates a new edge.
+   * Delegates to KnowledgeGraphStore.upsertEdge() which handles the atomic
+   * ON CONFLICT DO UPDATE at the database level. This is race-condition-safe —
+   * concurrent calls will not create duplicate edges.
    *
-   * The bidirectional check prevents duplicate edges when the same relationship
-   * is expressed from different angles ("A is B's spouse" vs "B is A's spouse").
+   * The store performs a bidirectional duplicate check (LEAST/GREATEST on node IDs),
+   * raises confidence on re-assertion (never lowers it), and refreshes lastConfirmedAt.
    *
    * Returns the edge and whether it was newly created.
    */
@@ -307,28 +366,7 @@ export class EntityMemory {
     source: string,
     confidence: number,
   ): Promise<{ edge: KgEdge; created: boolean }> {
-    // getEdgesForNode returns edges where sourceId is on EITHER side of the edge,
-    // so a single call covers the bidirectional duplicate check.
-    const existingEdges = await this.store.getEdgesForNode(sourceId);
-    const match = existingEdges.find(e =>
-      e.type === edgeType &&
-      (
-        (e.sourceNodeId === sourceId && e.targetNodeId === targetId) ||
-        (e.sourceNodeId === targetId && e.targetNodeId === sourceId)
-      ),
-    );
-
-    if (match) {
-      // Re-assertion: raise confidence if the new extraction is more confident,
-      // and refresh the lastConfirmedAt timestamp.
-      const updated = await this.store.updateEdge(match.id, {
-        confidence: Math.max(match.temporal.confidence, confidence),
-        lastConfirmedAt: new Date(),
-      });
-      return { edge: updated, created: false };
-    }
-
-    const edge = await this.store.createEdge({
+    return this.store.upsertEdge({
       sourceNodeId: sourceId,
       targetNodeId: targetId,
       type: edgeType,
@@ -336,7 +374,6 @@ export class EntityMemory {
       confidence,
       source,
     });
-    return { edge, created: true };
   }
 
   /**
