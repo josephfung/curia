@@ -1526,7 +1526,6 @@ export async function knowledgeGraphRoutes(
 
     // Reject malformed UUIDs before they reach SQL — Postgres would throw a cast error
     // and surface as a 500 rather than a useful 400 for the caller.
-    const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
     if (nodeId && !UUID_RE.test(nodeId)) {
       return reply.status(400).send({ error: 'Invalid node_id: must be a valid UUID.' });
     }
@@ -1608,6 +1607,9 @@ export async function knowledgeGraphRoutes(
   });
 
   const validContactStatuses: ContactStatus[] = ['confirmed', 'provisional', 'blocked'];
+  // Reused across contacts endpoints — Postgres UUID columns throw cast errors on bad input
+  // so we reject at the API boundary with a 400 instead.
+  const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
   app.get('/api/kg/contacts', async (request, reply) => {
     if (!assertSecret(request, reply, webAppBootstrapSecret, sessions)) return;
@@ -1644,12 +1646,20 @@ export async function knowledgeGraphRoutes(
       return reply.status(400).send({ error: 'Invalid status.' });
     }
 
+    const kgNodeId =
+      typeof body.kgNodeId === 'string' && body.kgNodeId.trim().length > 0
+        ? body.kgNodeId.trim()
+        : undefined;
+    if (kgNodeId && !UUID_RE.test(kgNodeId)) {
+      return reply.status(400).send({ error: 'Invalid kgNodeId: must be a valid UUID.' });
+    }
+
     const created = await contactService.createContact({
       displayName: body.displayName,
       role: typeof body.role === 'string' && body.role.trim().length > 0 ? body.role : undefined,
       status: status as ContactStatus,
       notes: typeof body.notes === 'string' && body.notes.trim().length > 0 ? body.notes : undefined,
-      kgNodeId: typeof body.kgNodeId === 'string' && body.kgNodeId.trim().length > 0 ? body.kgNodeId : undefined,
+      kgNodeId,
       source: 'kg_web_ui',
     });
 
@@ -1687,6 +1697,12 @@ export async function knowledgeGraphRoutes(
     }
     if (typeof body.role === 'string') {
       await contactService.setRole(id, body.role);
+    } else if (body.role === null) {
+      // Explicit null means "clear the role field" — setRole doesn't accept null so go direct.
+      await pool.query(`UPDATE contacts SET role = NULL, updated_at = $2 WHERE id = $1`, [
+        id,
+        new Date().toISOString(),
+      ]);
     }
     if (typeof body.status === 'string') {
       if (!validContactStatuses.includes(body.status as ContactStatus)) {
@@ -1697,6 +1713,9 @@ export async function knowledgeGraphRoutes(
 
     // Notes and kgNodeId are updated directly by preserving the rest of the contact.
     // This route exists only for the web UI and does not expose generic backend mutation.
+    if (typeof body.kgNodeId === 'string' && body.kgNodeId.trim().length > 0 && !UUID_RE.test(body.kgNodeId.trim())) {
+      return reply.status(400).send({ error: 'Invalid kgNodeId: must be a valid UUID.' });
+    }
     if (typeof body.notes === 'string' || typeof body.kgNodeId === 'string' || body.notes === null || body.kgNodeId === null) {
       const refreshed = await contactService.getContact(id);
       if (!refreshed) {
