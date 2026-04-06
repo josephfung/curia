@@ -54,6 +54,9 @@ interface KnowledgeGraphBackend {
   getEdgesForNode(nodeId: string): Promise<KgEdge[]>;
   deleteEdge(id: string): Promise<void>;
   updateEdge(id: string, updates: { confidence: number; lastConfirmedAt: Date }): Promise<KgEdge>;
+  // Atomic upsert: creates if no matching (src, tgt, type) pair exists in either
+  // direction; otherwise raises confidence and refreshes lastConfirmedAt.
+  upsertEdge(edge: KgEdge): Promise<{ edge: KgEdge; created: boolean }>;
   traverse(startNodeId: string, maxDepth: number): Promise<TraversalResult>;
   semanticSearch(queryEmbedding: number[], limit: number): Promise<SearchResult[]>;
 }
@@ -220,6 +223,31 @@ export class KnowledgeGraphStore {
   }
 
   /**
+   * Atomic idempotent edge creation.
+   * Creates a new edge if none of the same type connects the same node pair
+   * (in either direction). If one exists, raises its confidence and refreshes
+   * lastConfirmedAt. Never lowers confidence.
+   */
+  async upsertEdge(options: CreateEdgeOptions & { confidence: number }): Promise<{ edge: KgEdge; created: boolean }> {
+    const now = new Date();
+    const edge: KgEdge = {
+      id: createEdgeId(),
+      sourceNodeId: options.sourceNodeId,
+      targetNodeId: options.targetNodeId,
+      type: options.type,
+      properties: { ...options.properties },
+      temporal: {
+        createdAt: now,
+        lastConfirmedAt: now,
+        confidence: options.confidence,
+        decayClass: options.decayClass ?? 'slow_decay',
+        source: options.source,
+      },
+    };
+    return this.backend.upsertEdge(edge);
+  }
+
+  /**
    * BFS traversal from a start node, depth-limited and cycle-safe.
    * Returns all reachable nodes within the depth limit and the edges between them.
    */
@@ -354,6 +382,39 @@ class PostgresBackend implements KnowledgeGraphBackend {
   async deleteEdge(id: string): Promise<void> {
     this.logger.debug({ edgeId: id }, 'kg: deleting edge');
     await this.pool.query('DELETE FROM kg_edges WHERE id = $1', [id]);
+  }
+
+  async upsertEdge(edge: KgEdge): Promise<{ edge: KgEdge; created: boolean }> {
+    this.logger.debug({ sourceNodeId: edge.sourceNodeId, targetNodeId: edge.targetNodeId, type: edge.type }, 'kg: upserting edge');
+    // ON CONFLICT uses the full expression from idx_kg_edges_unique.
+    // RETURNING (created_at = $9) detects new inserts: for a new row, created_at equals
+    // the value we passed in ($9 = now); for an update, created_at stays as the original.
+    const result = await this.pool.query<PgEdgeRow & { is_new: boolean }>(
+      `INSERT INTO kg_edges
+         (id, source_node_id, target_node_id, type, properties, confidence, decay_class, source, created_at, last_confirmed_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9)
+       ON CONFLICT (
+         LEAST(source_node_id::text, target_node_id::text),
+         GREATEST(source_node_id::text, target_node_id::text),
+         type
+       ) DO UPDATE SET
+         confidence = GREATEST(kg_edges.confidence, EXCLUDED.confidence),
+         last_confirmed_at = EXCLUDED.last_confirmed_at
+       RETURNING *, (created_at = $9) AS is_new`,
+      [
+        edge.id,
+        edge.sourceNodeId,
+        edge.targetNodeId,
+        edge.type,
+        JSON.stringify(edge.properties),
+        edge.temporal.confidence,
+        edge.temporal.decayClass,
+        edge.temporal.source,
+        edge.temporal.createdAt,
+      ],
+    );
+    const row = result.rows[0]!;
+    return { edge: pgRowToEdge(row), created: row.is_new };
   }
 
   async updateEdge(id: string, updates: { confidence: number; lastConfirmedAt: Date }): Promise<KgEdge> {
@@ -564,6 +625,40 @@ class InMemoryBackend implements KnowledgeGraphBackend {
 
   async createEdge(edge: KgEdge): Promise<void> {
     this.edges.set(edge.id, edge);
+  }
+
+  async upsertEdge(edge: KgEdge): Promise<{ edge: KgEdge; created: boolean }> {
+    // Check for an existing edge of the same type in either direction
+    let existing: KgEdge | undefined;
+    for (const e of this.edges.values()) {
+      if (
+        e.type === edge.type &&
+        (
+          (e.sourceNodeId === edge.sourceNodeId && e.targetNodeId === edge.targetNodeId) ||
+          (e.sourceNodeId === edge.targetNodeId && e.targetNodeId === edge.sourceNodeId)
+        )
+      ) {
+        existing = e;
+        break;
+      }
+    }
+
+    if (existing) {
+      // Re-assertion: raise confidence (never lower), refresh lastConfirmedAt
+      const updated: KgEdge = {
+        ...existing,
+        temporal: {
+          ...existing.temporal,
+          confidence: Math.max(existing.temporal.confidence, edge.temporal.confidence),
+          lastConfirmedAt: edge.temporal.lastConfirmedAt,
+        },
+      };
+      this.edges.set(existing.id, updated);
+      return { edge: updated, created: false };
+    }
+
+    this.edges.set(edge.id, edge);
+    return { edge, created: true };
   }
 
   async getEdgesForNode(nodeId: string): Promise<KgEdge[]> {
