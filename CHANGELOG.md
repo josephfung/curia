@@ -14,6 +14,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 ## [Unreleased]
 
 ### Added
+- **Contacts CRUD UI** — search, create, edit, and delete contacts directly from the KG web app
 - **Contact deduplication** — `DedupService` scores contact pairs using Jaro-Winkler name
   similarity, exact channel identifier overlap (auto-certain), and 3-char name-prefix blocking;
   thresholds: ≥ 0.9 = `certain`, 0.7–0.9 = `probable`
