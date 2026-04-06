@@ -25,6 +25,9 @@ export interface KnowledgeGraphRouteOptions {
   bus: EventBus;
   eventRouter: EventRouter;
   contactService: ContactService;
+  // Shared session store — created in HttpAdapter, passed to both KG and identity routes
+  // so both can accept the curia_session cookie for authentication.
+  sessions: SessionStore;
 }
 
 // How long the chat POST waits for an agent response before timing out.
@@ -2089,21 +2092,8 @@ export async function knowledgeGraphRoutes(
   app: FastifyInstance,
   options: KnowledgeGraphRouteOptions,
 ): Promise<void> {
-  const { pool, logger, webAppBootstrapSecret, secureCookies, bus, eventRouter, contactService } = options;
-
-  // In-memory session store: token → expiry timestamp (ms).
-  // Single-tenant tool — no DB persistence needed; sessions reset on server restart.
-  const sessions: SessionStore = new Map();
-
-  // Prune expired sessions every minute so the Map doesn't grow unboundedly.
-  const pruneInterval = setInterval(() => {
-    const now = Date.now();
-    for (const [token, expiresAt] of sessions) {
-      if (now > expiresAt) sessions.delete(token);
-    }
-  }, 60_000);
-  // Unref so the interval doesn't prevent process exit during tests.
-  pruneInterval.unref();
+  const { pool, logger, webAppBootstrapSecret, secureCookies, bus, eventRouter, contactService, sessions } = options;
+  // sessions is managed by HttpAdapter — no local Map creation needed here.
 
   app.get('/', async (_request, reply) => {
     reply

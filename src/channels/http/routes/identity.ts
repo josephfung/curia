@@ -1,72 +1,62 @@
 // identity.ts — HTTP routes for the Office Identity API.
 //
-// All routes require x-web-bootstrap-secret authentication (same as the KG explorer).
-// Routes are only registered when webAppBootstrapSecret is configured.
+// All routes require session cookie or x-web-bootstrap-secret authentication
+// (same as the KG explorer). Routes are only registered when webAppBootstrapSecret
+// is configured.
 //
 // Endpoints:
-//   GET  /api/identity         — return the current active identity config
+//   GET  /api/identity         — return the current active identity config + configured flag
 //   PUT  /api/identity         — save a new version and trigger hot reload
 //   GET  /api/identity/history — return all versions, newest first
 //   POST /api/identity/reload  — force a reload from DB (used post-wizard)
 
-import { timingSafeEqual } from 'node:crypto';
-import type { FastifyInstance, FastifyReply } from 'fastify';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import type { Pool } from 'pg';
 import type { OfficeIdentityService } from '../../../identity/service.js';
 import type { OfficeIdentity } from '../../../identity/types.js';
+import { assertSecret, type SessionStore } from '../session-auth.js';
 
 export interface IdentityRouteOptions {
   identityService: OfficeIdentityService;
   webAppBootstrapSecret: string;
-}
-
-/** Validate the x-web-bootstrap-secret header. Uses timing-safe comparison.
- *
- * We compare buffer byte lengths — not JavaScript string char lengths — before
- * calling timingSafeEqual. timingSafeEqual throws ERR_CRYPTO_TIMING_SAFE_EQUAL_LENGTH
- * when the two buffers have different byte lengths. A multi-byte UTF-8 header could
- * have the same char count as the configured secret but a different byte count,
- * triggering an unhandled 500 without this guard.
- */
-function validateBootstrapSecret(
-  provided: unknown,
-  configured: string,
-): boolean {
-  if (typeof provided !== 'string') return false;
-  const providedBuf = Buffer.from(provided);
-  const configuredBuf = Buffer.from(configured);
-  if (providedBuf.length !== configuredBuf.length) return false;
-  return timingSafeEqual(providedBuf, configuredBuf);
+  // Shared session store from HttpAdapter — allows browser sessions (cookie auth)
+  // to call identity routes without the raw bootstrap secret being stored in JS.
+  sessions: SessionStore;
+  // Required for the configured flag query on GET /api/identity.
+  pool: Pool;
 }
 
 export async function identityRoutes(
   app: FastifyInstance,
   options: IdentityRouteOptions,
 ): Promise<void> {
-  const { identityService, webAppBootstrapSecret } = options;
+  const { identityService, webAppBootstrapSecret, sessions, pool } = options;
 
-  // Auth helper — validates the bootstrap secret on every request to these routes.
-  function requireBootstrapSecret(
-    headers: Record<string, string | string[] | undefined>,
-    reply: FastifyReply,
-  ): boolean {
-    const provided = headers['x-web-bootstrap-secret'];
-    if (!validateBootstrapSecret(provided, webAppBootstrapSecret)) {
-      void reply.status(401).send({
-        error: 'Unauthorized. Provide a valid x-web-bootstrap-secret header.',
-      });
-      return false;
-    }
-    return true;
+  // Auth helper — validates session cookie or bootstrap secret on every request.
+  function requireAuth(request: FastifyRequest, reply: FastifyReply): boolean {
+    return assertSecret(request, reply, webAppBootstrapSecret, sessions);
   }
 
   // -- GET /api/identity — return current identity config --
 
   app.get('/api/identity', async (request, reply) => {
-    if (!requireBootstrapSecret(request.headers as Record<string, string | string[] | undefined>, reply)) return;
+    if (!requireAuth(request, reply)) return;
 
     try {
       const identity = identityService.get();
-      return reply.send({ identity });
+
+      // Determine whether the identity has ever been explicitly configured via the wizard
+      // or API. A fresh deployment (only file_load versions) returns configured: false,
+      // which triggers the first-run wizard in the browser.
+      const configuredResult = await pool.query<{ configured: boolean }>(
+        `SELECT EXISTS (
+           SELECT 1 FROM office_identity_versions
+           WHERE changed_by IN ('wizard', 'api')
+         ) AS configured`,
+      );
+      const configured = configuredResult.rows[0]?.configured ?? false;
+
+      return reply.send({ identity, configured });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to get identity';
       return reply.status(500).send({ error: message });
@@ -76,7 +66,7 @@ export async function identityRoutes(
   // -- PUT /api/identity — save a new version and trigger hot reload --
 
   app.put('/api/identity', async (request, reply) => {
-    if (!requireBootstrapSecret(request.headers as Record<string, string | string[] | undefined>, reply)) return;
+    if (!requireAuth(request, reply)) return;
 
     const body = request.body as {
       identity?: OfficeIdentity;
@@ -112,7 +102,7 @@ export async function identityRoutes(
   // -- GET /api/identity/history — return all versions, newest first --
 
   app.get('/api/identity/history', async (request, reply) => {
-    if (!requireBootstrapSecret(request.headers as Record<string, string | string[] | undefined>, reply)) return;
+    if (!requireAuth(request, reply)) return;
 
     try {
       const history = await identityService.history();
@@ -128,7 +118,7 @@ export async function identityRoutes(
   // in the in-memory cache before the next coordinator turn.
 
   app.post('/api/identity/reload', async (request, reply) => {
-    if (!requireBootstrapSecret(request.headers as Record<string, string | string[] | undefined>, reply)) return;
+    if (!requireAuth(request, reply)) return;
 
     try {
       await identityService.reload();
