@@ -13,7 +13,7 @@
     "end": "timestamp? (new event end time)",
     "description": "string?",
     "location": "string?",
-    "attendees": "array?",
+    "attendees": "object[]? (list of attendees to set, each with email and optional name)",
     "conferencing": "object?",
     "colorId": "string?",
     "reminders": "object?"
