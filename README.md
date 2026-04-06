@@ -15,6 +15,7 @@
 </p>
 
 <p align="center">
+  <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/version-0.8.0-blueviolet" alt="Version: 0.8.0" /></a>
   <img src="https://img.shields.io/badge/status-pre--alpha-orange" alt="Status: Pre-Alpha" />
   <img src="https://img.shields.io/badge/license-MIT-blue" alt="License: MIT" />
   <img src="https://img.shields.io/badge/node-%3E%3D22-brightgreen" alt="Node >= 22" />
@@ -309,51 +310,29 @@ The explorer supports:
 
 ---
 
-## Project Status
+## Project Status & Documentation
 
 | Spec | Area | Status |
 |---|---|---|
-| 00 | Architecture & message bus | ✅ Implemented |
-| 01 | Memory system (working memory + knowledge graph) | Partial — core implemented; Bullpen, context management, decay engine planned |
-| 02 | Agent system (config, delegation, registry) | ✅ Implemented |
-| 03 | Skills & execution layer | Partial — local skills implemented; MCP discovery planned |
-| 04 | Channels (CLI, HTTP, Email) | Partial — CLI, HTTP, Email done; Signal planned |
-| 05 | Error recovery (budgets, patterns, continuity) | ✅ Implemented |
-| 06 | Audit & security | Partial — basic audit logging in place; redaction & hardening planned |
-| 07 | Scheduler (cron, one-shot, persistent tasks) | ✅ Implemented |
-| 08 | Operations (deployment, health, monitoring) | Planned |
-| 09 | Contacts & identity (auth, unknown sender policy) | ✅ Implemented |
-| 10 | Audit log hardening (hash-chain, HITL, provenance) | Planned |
-| 11 | Entity context enrichment (KG-backed sender/entity profiles) | Planned — spec drafted |
-| 12 | Knowledge graph web explorer | ✅ Implemented |
-| 13 | Office identity (persona, voice, runtime config) | Planned — spec drafted |
-| 14 | Autonomy engine (global score, CEO controls, per-task prompt injection) | ✅ Implemented |
-| — | Autonomy engine (self-monitoring, measurement, and automatic tuning) | Planned |
-| 15 | Outbound safety (content filter, gateway, display name sanitization, caller verification) | Partial — deterministic rules done; LLM-as-judge planned |
+| [00](docs/specs/00-overview.md) | Architecture & message bus | ✅ Implemented |
+| [01](docs/specs/01-memory-system.md) | Memory system (working memory + knowledge graph) | Partial — core implemented; Bullpen, context management, decay engine planned |
+| [02](docs/specs/02-agent-system.md) | Agent system (config, delegation, registry) | ✅ Implemented |
+| [03](docs/specs/03-skills-and-execution.md) | Skills & execution layer | Partial — local skills implemented; MCP discovery planned |
+| [04](docs/specs/04-channels.md) | Channels (CLI, HTTP, Email) | Partial — CLI, HTTP, Email done; Signal planned |
+| [05](docs/specs/05-error-recovery.md) | Error recovery (budgets, patterns, continuity) | ✅ Implemented |
+| [06](docs/specs/06-audit-and-security.md) | Audit & security | Partial — basic audit logging in place; redaction & hardening planned |
+| [07](docs/specs/07-scheduler.md) | Scheduler (cron, one-shot, persistent tasks) | ✅ Implemented |
+| [08](docs/specs/08-operations.md) | Operations (deployment, health, monitoring) | Planned |
+| [09](docs/specs/09-contacts-and-identity.md) | Contacts & identity (auth, unknown sender policy) | ✅ Implemented |
+| [10](docs/specs/10-audit-log-hardening.md) | Audit log hardening (hash-chain, HITL, provenance) | Planned |
+| [11](docs/specs/11-entity-context-enrichment.md) | Entity context enrichment (KG-backed sender/entity profiles) | Planned — spec drafted |
+| [12](docs/specs/12-knowledge-graph-web-explorer.md) | Knowledge graph web explorer | ✅ Implemented |
+| [13](docs/specs/13-office-identity.md) | Office identity (persona, voice, runtime config) | Partial - identity implemented; setup workflow planned |
+| [14](docs/specs/14-autonomy-engine.md) | Autonomy engine (global score, CEO controls, per-task prompt injection) | Partial: core implemented; self-monitoring & tuning planned |
+| [15](docs/specs/15-outbound-safety.md) | Outbound safety (content filter, gateway, display name sanitization, caller verification) | Partial — deterministic rules done; LLM-as-judge planned |
 | — | Smoke test framework (14 chat-based cases, LLM-as-judge, HTML reports) | ✅ Implemented |
-| — | Web dashboard | Future |
+| — | Web dashboard | Partial |
 | — | Voice/telephony channel | Future |
-
----
-
-## Documentation
-
-- **[Architecture Overview](docs/specs/00-overview.md)** — Layers, bus, message flow, design principles
-- **[Memory System](docs/specs/01-memory-system.md)** — Knowledge graph, entity memory, Bullpen, embeddings
-- **[Agent System](docs/specs/02-agent-system.md)** — Agent definition, lifecycle, LLM providers
-- **[Skills & Execution](docs/specs/03-skills-and-execution.md)** — Local + MCP skills, discovery, secrets
-- **[Channels](docs/specs/04-channels.md)** — Adapter interface, launch channels
-- **[Error Recovery](docs/specs/05-error-recovery.md)** — Budgets, state continuity, pattern detection
-- **[Audit & Security](docs/specs/06-audit-and-security.md)** — Audit log, security model, drift detection
-- **[Scheduler](docs/specs/07-scheduler.md)** — Jobs, persistent tasks, burst execution
-- **[Operations](docs/specs/08-operations.md)** — Config, deployment, health, monitoring
-- **[Contacts & Identity](docs/specs/09-contacts-and-identity.md)** — Contact service, authorization, unknown sender policy
-- **[Audit Log Hardening](docs/specs/10-audit-log-hardening.md)** — Hash-chain integrity, HITL records, LLM provenance
-- **[Entity Context Enrichment](docs/specs/11-entity-context-enrichment.md)** — KG-backed sender profiles, enriched inbound messages
-- **[Knowledge Graph Web Explorer](docs/specs/12-knowledge-graph-web-explorer.md)** — Browser UI for inspecting the knowledge graph
-- **[Office Identity](docs/specs/13-office-identity.md)** — Persona config, voice, runtime identity updates
-- **[Autonomy Engine](docs/specs/14-autonomy-engine.md)** — Global score, bands, CEO controls, skill `action_risk` declaration
-- **[Outbound Safety](docs/specs/15-outbound-safety.md)** — Gateway, content filter, caller verification, display name sanitization
 
 ---
 
@@ -362,8 +341,6 @@ The explorer supports:
 - **Local development** — `docker compose up -d` for Postgres, then `pnpm local` (or `pnpm dev` for hot-reload)
 - **Single VPS** — One Hetzner/DigitalOcean/Linode instance with Docker + Caddy
 - **Multiple instances** — Separate VPS per user/org. No multi-tenant complexity.
-
-Infrastructure is managed separately via the [ceo-deploy](https://github.com/josephfung/ceo-deploy) repo (Terraform + Docker Compose + Caddy). Security hardening, backups, and runbooks included.
 
 ---
 

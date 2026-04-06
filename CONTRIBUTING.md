@@ -92,6 +92,7 @@ Step-by-step guides for common extension tasks — more detail than the quick re
 
 - [**Adding an Agent**](docs/dev/adding-an-agent.md) — full YAML schema reference, skill pinning, autonomy injection, lifecycle hooks
 - [**Adding a Skill**](docs/dev/adding-a-skill.md) — manifest fields, `action_risk` and the autonomy gate, handler interface, secrets, testing checklist
+- [**Smoke Tests**](docs/dev/smoke-tests.md) - how our LLM-based testing works, and how to add more tests
 
 ## Adding a New Channel Adapter
 

@@ -13,76 +13,55 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
-### Added
-- **Scheduled Jobs UI** — new management view in the KG web app for creating, editing, deleting, and unsuspending scheduled jobs, with search by agent/status/cron/intent and full CRUD via the `/api/jobs` endpoints
-- **Architecture Decision Records** — `docs/adr/` directory with template, index, and 12 backfilled ADRs covering: Postgres over SQLite, message bus over direct calls, YAML agent config with TypeScript escape hatch, pgvector over dedicated vector DB, node-pg-migrate over Knex, custom framework over existing agent frameworks, Anthropic as primary LLM with provider-agnostic interface, OpenAI embeddings for knowledge graph, Nylas for email, Signal over Telegram, score-based autonomy engine, and LLM-as-judge evaluation (closes #7)
-- **ADR reminder in CLAUDE.md** — guidance on when to write an ADR when implementing specs with major architectural decisions
+---
 
-### Fixed
-- **Empty-response recovery** — when the LLM ends a turn with no text (e.g. after calling
-  `extract-relationships` as its last action), the agent runtime now attempts one recovery:
-  it appends a nudge turn and retries without tools to force a text reply. Only if the
-  recovery also fails does it fall back to the "unable to formulate a response" message.
-- **KG chat blank reply** — after `extract-relationships` ran as the last tool call, the LLM
-  produced `end_turn` with no text blocks, delivering an empty reply to the user. Fixed by
-  clarifying in the coordinator system prompt that `extract-relationships` is a background
-  housekeeping task and must not replace the text response; also added a defensive fallback
-  in the agent runtime that logs an error and returns a safe message instead of forwarding
-  an empty string to the user.
-- **Knowledge Graph viewport blank after layout refactor** — two root causes fixed: (1) `#cy` used
-  `height: 100%` inside a flex chain which is unreliable across browsers; switched to
-  `position: absolute; inset: 0` so the canvas always fills its `position: relative` parent; (2) the
-  `/assets/cytoscape.min.js` route used a `new URL('../../../../node_modules/...')` relative path
-  that breaks when tsup bundles into a flat `dist/index.js` — replaced with `createRequire` +
-  `require.resolve()` so Node's module resolution finds cytoscape correctly in any output structure.
-  Also added `cy.resize()` before layout runs and when navigating back to the KG view.
-- **`calendar-update-event` attendees input type** — declared as bare `array?` which is not a
-  valid JSON Schema type; corrected to `object[]?` matching the handler's expected shape
-  (`Array<{ email, name? }>`). Caused startup crash after primitive-type validation was added in 0.7.1.
-- **`calendar-find-free-time` and `calendar-check-conflicts` calendarIds input type** — both
-  declared as bare `array` (invalid JSON Schema type); corrected to `string[]` matching the
-  handlers' expected `string[]` shape. Would have caused startup crash on deploy.
-- **Duplicate `extract-relationships` in coordinator `pinned_skills`** — skill appeared twice,
-  causing Anthropic to receive two identical tool definitions in the tools array
-- **`query-relationships` and `delete-relationship` skill input schemas** — both skills used
-  `"string — description"` shorthand in `inputs`, which the manifest parser misreads as the
-  type token, producing invalid JSON Schema types that caused Anthropic to reject every chat
-  request with a 400 `invalid_request_error`; corrected to `"string (description)"` format
-- **`extract-relationships` not available to coordinator** — skill was missing from `pinned_skills`
-  in `coordinator.yaml`, so the LLM was instructed to call it but never received the tool definition;
-  tool calls silently failed and the agent hallucinated that the skill didn't exist
+## [0.8.0] — 2026-04-06
 
 ### Added
-- **Contacts CRUD UI** — search, create, edit, and delete contacts directly from the KG web app
-- **Contact deduplication** — `DedupService` scores contact pairs using Jaro-Winkler name
-  similarity, exact channel identifier overlap (auto-certain), and 3-char name-prefix blocking;
-  thresholds: ≥ 0.9 = `certain`, 0.7–0.9 = `probable`
-- **On-creation dedup hook** — `createContact()` fires a fire-and-forget background check and
-  publishes `contact.duplicate_detected` on the bus when a probable or certain match is found
-- **Contact merge** — `ContactService.mergeContacts()` computes a golden record (most-recent-wins
-  for scalars, concat for notes, most-restrictive for status, union for identities/overrides) and
-  consolidates all data onto the primary contact; `EntityMemory.mergeEntities()` merges the
-  corresponding KG nodes (Phase 1: scalar properties + facts; edge re-pointing deferred to Phase 2)
-- **`contact-find-duplicates` skill** — read-only full-contact-list scan; `action_risk: "none"`;
-  optional `min_confidence` filter (`certain` | `probable`)
-- **`contact-merge` skill** — elevated caller required; `dry_run` defaults to `true`; returns a
-  `MergeProposal` for review before committing; `action_risk: "low"`
-- **Bus events** — `contact.duplicate_detected` and `contact.merged` published by the dispatch
-  layer; reason strings are privacy-safe (no PII / identifier values)
-- Coordinator workflow guidance for dedup review and weekly scan; both new skills pinned
-- **`extract-relationships` skill** — self-classifying two-stage LLM pipeline (haiku classifier gate + sonnet extractor) that extracts entity-to-entity relationship triples from text and persists them to the knowledge graph; coordinator calls it after every message (spec: `docs/wip/2026-04-05-relationship-extraction-design.md`)
-- **12 new `EDGE_TYPES`** — personal (spouse, parent, child, sibling), professional (reports_to, manages, collaborates_with, advises, represents), and organisational (member_of, founded, invested_in), extending the existing 7 types
-- **`EntityMemory.upsertEdge()`** — idempotent edge persistence with bidirectional duplicate detection; confidence only increases on re-assertion, never decreases
-- **`EntityMemory.createEntity()` confidence option** — `CreateEntityOptions.confidence` field so extracted nodes can be seeded at 0.6 (below manually confirmed entities)
-- **`query-relationships` skill** — query entity-to-entity relationship edges by entity name, with optional edge type filter; handles zero-match, single-match, and ambiguous (multi-match) cases
-- **`delete-relationship` skill** — delete a KG edge by human-readable triple (subject, predicate, object); idempotent and direction-agnostic
+- **Scheduled Jobs UI** — management view in the web app for creating, editing, deleting, and unsuspending scheduled jobs; full CRUD via `/api/jobs` with search by agent, status, cron expression, and intent
+
+---
+
+## [0.7.0] — 2026-04-06
+
+### Added
+- **`query-relationships` skill** — query KG edges by entity name with optional edge-type filter
+- **`delete-relationship` skill** — delete a KG edge by triple (subject, predicate, object); idempotent and direction-agnostic
+- **Agent Tasks UI** — search and CRUD management view for agent tasks in the web app
+- **Architecture Decision Records** — `docs/adr/` with 12 backfilled ADRs covering major technical decisions (closes #7)
 
 ### Changed
-- **`EntityMemory.upsertEdge()`** — now delegates to `KnowledgeGraphStore.upsertEdge()` for atomic ON CONFLICT DO UPDATE; eliminates the pre-query race condition
-- **`KnowledgeGraphStore`** — new `upsertEdge()` method on both Postgres and in-memory backends
+- **`KnowledgeGraphStore.upsertEdge()`** — now atomic (`ON CONFLICT DO UPDATE`); eliminates pre-query race condition in concurrent extractions
 
 ### Fixed
-- **`kg_edges` uniqueness** — migration 014 adds a bidirectional unique index; concurrent extractions can no longer create duplicate edges for the same (subject, predicate, object) triple
+- **KG chat blank reply** — coordinator prompt clarified so `extract-relationships` does not suppress the text response; runtime retries with a nudge turn when the LLM produces no text, then falls back to a safe message
+- **KG viewport blank** — switched canvas sizing to `position: absolute; inset: 0`; fixed Cytoscape asset path via `createRequire`; added `cy.resize()` before layout and on navigate
+- **Calendar skill input types** — corrected bare `array` / `array?` in `calendar-update-event`, `calendar-find-free-time`, and `calendar-check-conflicts` to valid JSON Schema types (`object[]?`, `string[]`); caused startup crashes
+- **Duplicate `extract-relationships` in coordinator** — removed duplicate `pinned_skills` entry that caused Anthropic to receive two identical tool definitions
+- **Skill input schema format** — `query-relationships` and `delete-relationship` used invalid `"string — description"` shorthand; corrected to `"string (description)"`; caused 400 errors on every chat request
+
+---
+
+## [0.6.0] — 2026-04-05
+
+### Added
+- **`extract-relationships` skill** — two-stage LLM pipeline (Haiku classifier gate + Sonnet extractor) that extracts entity-to-entity relationship triples from text and persists them to the KG; coordinator calls it after every message
+- **12 new `EDGE_TYPES`** — personal (spouse, parent, child, sibling), professional (reports_to, manages, collaborates_with, advises, represents), organisational (member_of, founded, invested_in)
+- **`EntityMemory.upsertEdge()`** — idempotent edge persistence with bidirectional duplicate detection; confidence only increases on re-assertion
+- **`EntityMemory.createEntity()` confidence option** — extracted nodes can be seeded at 0.6 (below manually confirmed entities)
+- **Contact deduplication** — `DedupService` scores pairs using Jaro-Winkler name similarity and channel identifier overlap; thresholds: ≥ 0.9 = `certain`, 0.7–0.9 = `probable`; fires on contact creation
+- **Contact merge** — `ContactService.mergeContacts()` produces a golden record (most-recent-wins for scalars, union for identities); `EntityMemory.mergeEntities()` consolidates KG nodes
+- **`contact-find-duplicates` skill** — read-only scan with optional `min_confidence` filter
+- **`contact-merge` skill** — `dry_run` defaults to `true`; returns `MergeProposal` before committing; elevated caller required
+- **Contacts CRUD UI** — search, create, edit, and delete contacts from the KG web app
+- **Bus events** — `contact.duplicate_detected` and `contact.merged` (PII-free reason strings)
+
+### Changed
+- **`EntityMemory.upsertEdge()`** — delegates to `KnowledgeGraphStore.upsertEdge()` for atomic upsert
+
+### Fixed
+- **`kg_edges` uniqueness** — migration 014 adds a bidirectional unique index; concurrent extractions can no longer create duplicate edges
+- **`extract-relationships` missing from coordinator** — skill was absent from `pinned_skills`; tool calls silently failed; added and verified
 
 ---
 
@@ -182,7 +161,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Bootstrap orchestrator** — `src/index.ts` wires all layers in dependency order
 - Architecture specs 00–08, contributor docs (CONTRIBUTING.md, CODE_OF_CONDUCT.md, SECURITY.md)
 
-[Unreleased]: https://github.com/josephfung/curia/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/josephfung/curia/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/josephfung/curia/compare/v0.7.2...v0.8.0
+[0.7.0]: https://github.com/josephfung/curia/compare/v0.6.1...v0.7.2
+[0.6.0]: https://github.com/josephfung/curia/compare/v0.5.0...v0.6.1
 [0.5.0]: https://github.com/josephfung/curia/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/josephfung/curia/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/josephfung/curia/compare/v0.2.0...v0.3.0
