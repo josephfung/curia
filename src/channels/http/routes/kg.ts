@@ -437,6 +437,47 @@ function createUiHtml(): string {
       flex-direction: column;
       gap: 14px;
     }
+    .tasks-layout {
+      flex: 1;
+      display: flex;
+      overflow: hidden;
+    }
+    .tasks-list-panel {
+      flex: none;
+      width: 380px;
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    .tasks-list {
+      flex: 1;
+      overflow-y: auto;
+      padding: 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .task-card {
+      padding: 10px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      cursor: pointer;
+      transition: border-color 0.12s, background 0.12s;
+    }
+    .task-card:hover { border-color: var(--teal); }
+    .task-card.active {
+      border-color: var(--teal);
+      background: rgba(71,129,137,0.08);
+    }
+    .tasks-editor {
+      flex: 1;
+      overflow-y: auto;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
     .form-grid {
       display: grid;
       grid-template-columns: 1fr 1fr;
@@ -559,7 +600,7 @@ function createUiHtml(): string {
               Contacts
             </button>
 
-            <button id="nav-tasks" class="nav-sub-item" onclick="navigate('coming-soon', 'Tasks', 'nav-tasks')">
+            <button id="nav-tasks" class="nav-sub-item" onclick="navigate('tasks', 'Tasks', 'nav-tasks')">
               <!-- checklist icon -->
               <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
                 <rect x="1.5" y="1.5" width="10" height="10" rx="1.5"/>
@@ -658,10 +699,72 @@ function createUiHtml(): string {
         </div>
       </div>
 
-      <!-- Coming Soon view (Tasks) -->
-      <div id="view-coming-soon" style="display: none; height: 100%; flex-direction: column; align-items: center; justify-content: center;">
-        <p style="font-size: 0.6875rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.15em; color: var(--fg-muted); margin: 0 0 8px;">Coming Soon</p>
-        <h2 id="coming-soon-title" style="font-family: 'Lora', Georgia, serif; font-size: 2rem; font-weight: 500; color: var(--fg); margin: 0;"></h2>
+      <!-- Agent Tasks view -->
+      <div id="view-tasks" style="display: none; height: 100%; flex-direction: column;">
+        <div style="flex: none; display: flex; align-items: center; gap: 10px; padding: 10px 16px; border-bottom: 1px solid var(--border);">
+          <input id="tasks-search-input" type="text" placeholder="Search agent tasks by agent, intent, or status…" style="max-width: 420px;" />
+          <button id="tasks-search-btn" class="btn-primary">Search</button>
+          <button id="tasks-new-btn" class="btn-primary">+ New Agent Task</button>
+          <span id="tasks-status" style="font-size: 0.75rem; color: var(--fg-muted); margin-left: 4px;"></span>
+        </div>
+        <div class="tasks-layout">
+          <div class="tasks-list-panel">
+            <div style="padding: 10px 12px 0; font-size: 0.6875rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; color: var(--fg-muted);">Agent Tasks</div>
+            <div id="tasks-list" class="tasks-list"></div>
+          </div>
+          <div class="tasks-editor">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+              <h2 id="tasks-editor-title" style="font-family: 'Lora', Georgia, serif; font-size: 1.375rem; font-weight: 500; margin: 0;">Create Agent Task</h2>
+              <button id="tasks-delete-btn" class="btn-primary" style="display: none; background: var(--destructive); color: var(--fg);">Delete</button>
+            </div>
+
+            <form id="tasks-form" style="display: flex; flex-direction: column; gap: 12px; max-width: 900px;">
+              <div class="form-grid">
+                <div class="form-field">
+                  <label for="task-agent-id">Agent ID</label>
+                  <input id="task-agent-id" type="text" placeholder="e.g. coordinator" required />
+                </div>
+                <div class="form-field">
+                  <label for="task-status">Status</label>
+                  <select id="task-status">
+                    <option value="active">active</option>
+                    <option value="pending">pending</option>
+                    <option value="paused">paused</option>
+                    <option value="completed">completed</option>
+                    <option value="failed">failed</option>
+                    <option value="cancelled">cancelled</option>
+                  </select>
+                </div>
+              </div>
+              <div class="form-field">
+                <label for="task-intent-anchor">Intent anchor</label>
+                <textarea id="task-intent-anchor" rows="2" placeholder="Persistent task goal/context..." required></textarea>
+              </div>
+              <div class="form-grid">
+                <div class="form-field">
+                  <label for="task-conversation-id">Conversation ID (optional UUID)</label>
+                  <input id="task-conversation-id" type="text" placeholder="UUID (optional)" />
+                </div>
+                <div class="form-field">
+                  <label for="task-scheduled-job-id">Scheduled Job ID (optional UUID)</label>
+                  <input id="task-scheduled-job-id" type="text" placeholder="UUID (optional)" />
+                </div>
+              </div>
+              <div class="form-field">
+                <label for="task-error-budget">Error budget JSON</label>
+                <textarea id="task-error-budget" rows="4" placeholder='{"maxTurns": 12, "maxConsecutiveErrors": 3}'></textarea>
+              </div>
+              <div class="form-field">
+                <label for="task-progress">Progress JSON</label>
+                <textarea id="task-progress" rows="5" placeholder='{"phase":"initializing"}'></textarea>
+              </div>
+              <div style="display: flex; gap: 10px;">
+                <button type="submit" id="tasks-save-btn" class="btn-primary">Create Agent Task</button>
+                <button type="button" id="tasks-cancel-btn" class="btn-primary" style="background: var(--muted); color: var(--fg);">Cancel</button>
+              </div>
+            </form>
+          </div>
+        </div>
       </div>
 
       <!-- Chat view — hidden until user clicks the Chat nav item -->
@@ -700,6 +803,9 @@ function createUiHtml(): string {
     var contacts = [];
     var selectedContactId = null;
     var contactsMode = 'create';
+    var tasks = [];
+    var selectedTaskId = null;
+    var tasksMode = 'create';
 
     // ── Chat state ─────────────────────────────────────────────────────
     // Active EventSource for SSE — one per conversation, null when idle.
@@ -746,6 +852,23 @@ function createUiHtml(): string {
     var contactStatusInput = document.getElementById('contact-status');
     var contactKgNodeIdInput = document.getElementById('contact-kg-node-id');
     var contactNotesInput = document.getElementById('contact-notes');
+    var tasksStatusEl = document.getElementById('tasks-status');
+    var tasksSearchInput = document.getElementById('tasks-search-input');
+    var tasksSearchBtn = document.getElementById('tasks-search-btn');
+    var tasksNewBtn = document.getElementById('tasks-new-btn');
+    var tasksListEl = document.getElementById('tasks-list');
+    var tasksForm = document.getElementById('tasks-form');
+    var tasksEditorTitle = document.getElementById('tasks-editor-title');
+    var tasksDeleteBtn = document.getElementById('tasks-delete-btn');
+    var tasksSaveBtn = document.getElementById('tasks-save-btn');
+    var tasksCancelBtn = document.getElementById('tasks-cancel-btn');
+    var taskAgentIdInput = document.getElementById('task-agent-id');
+    var taskStatusInput = document.getElementById('task-status');
+    var taskIntentAnchorInput = document.getElementById('task-intent-anchor');
+    var taskConversationIdInput = document.getElementById('task-conversation-id');
+    var taskScheduledJobIdInput = document.getElementById('task-scheduled-job-id');
+    var taskErrorBudgetInput = document.getElementById('task-error-budget');
+    var taskProgressInput = document.getElementById('task-progress');
 
     // Chat DOM refs
     var chatMessagesEl = document.getElementById('chat-messages');
@@ -763,6 +886,11 @@ function createUiHtml(): string {
         !contactsDeleteBtn || !contactsSaveBtn || !contactsCancelBtn ||
         !contactDisplayNameInput || !contactRoleInput || !contactStatusInput ||
         !contactKgNodeIdInput || !contactNotesInput ||
+        !tasksStatusEl || !tasksSearchInput || !tasksSearchBtn || !tasksNewBtn ||
+        !tasksListEl || !tasksForm || !tasksEditorTitle || !tasksDeleteBtn ||
+        !tasksSaveBtn || !tasksCancelBtn || !taskAgentIdInput || !taskStatusInput ||
+        !taskIntentAnchorInput || !taskConversationIdInput || !taskScheduledJobIdInput ||
+        !taskErrorBudgetInput || !taskProgressInput ||
         !chatMessagesEl || !chatConvListEl || !chatForm || !chatTextarea || !chatSendBtn) {
       throw new Error('Curia KG: required DOM element missing — check template integrity.');
     }
@@ -881,18 +1009,17 @@ function createUiHtml(): string {
       var kgView   = document.getElementById('view-kg');
       var chatView = document.getElementById('view-chat');
       var contactsView = document.getElementById('view-contacts');
-      var csView   = document.getElementById('view-coming-soon');
+      var tasksView = document.getElementById('view-tasks');
 
       kgView.style.display   = view === 'kg'           ? 'flex' : 'none';
       chatView.style.display = view === 'chat'         ? 'flex' : 'none';
       contactsView.style.display = view === 'contacts' ? 'flex' : 'none';
-      csView.style.display   = view === 'coming-soon'  ? 'flex' : 'none';
-
-      if (view === 'coming-soon') {
-        document.getElementById('coming-soon-title').textContent = title;
-      }
+      tasksView.style.display = view === 'tasks'       ? 'flex' : 'none';
       if (view === 'contacts') {
         loadContacts();
+      }
+      if (view === 'tasks') {
+        loadTasks();
       }
 
       // On first entry into the Chat view with no conversations yet, ensure
@@ -1167,6 +1294,222 @@ function createUiHtml(): string {
         filterContacts();
       }
     });
+
+    // ── Agent Tasks ──────────────────────────────────────────────────
+    function setTasksStatus(msg, isError) {
+      tasksStatusEl.textContent = msg;
+      tasksStatusEl.style.color = isError ? 'var(--destructive)' : 'var(--fg-muted)';
+    }
+
+    function prettyJson(value) {
+      return JSON.stringify(value || {}, null, 2);
+    }
+
+    function parseJsonField(raw, fallback, fieldName) {
+      var value = raw.trim();
+      if (!value) return fallback;
+      try {
+        return JSON.parse(value);
+      } catch {
+        throw new Error(fieldName + ' must be valid JSON.');
+      }
+    }
+
+    function resetTaskForm() {
+      tasksMode = 'create';
+      selectedTaskId = null;
+      tasksEditorTitle.textContent = 'Create Agent Task';
+      tasksSaveBtn.textContent = 'Create Agent Task';
+      tasksDeleteBtn.style.display = 'none';
+      taskAgentIdInput.value = '';
+      taskStatusInput.value = 'active';
+      taskIntentAnchorInput.value = '';
+      taskConversationIdInput.value = '';
+      taskScheduledJobIdInput.value = '';
+      taskErrorBudgetInput.value = prettyJson({ maxTurns: 12, maxConsecutiveErrors: 3 });
+      taskProgressInput.value = prettyJson({});
+      renderTasksList(tasks);
+    }
+
+    function fillTaskForm(task) {
+      tasksMode = 'edit';
+      selectedTaskId = task.id;
+      tasksEditorTitle.textContent = 'Edit Agent Task';
+      tasksSaveBtn.textContent = 'Save Changes';
+      tasksDeleteBtn.style.display = 'inline-flex';
+      taskAgentIdInput.value = task.agentId;
+      taskStatusInput.value = task.status;
+      taskIntentAnchorInput.value = task.intentAnchor;
+      taskConversationIdInput.value = task.conversationId || '';
+      taskScheduledJobIdInput.value = task.scheduledJobId || '';
+      taskErrorBudgetInput.value = prettyJson(task.errorBudget);
+      taskProgressInput.value = prettyJson(task.progress);
+      renderTasksList(tasks);
+    }
+
+    function renderTasksList(list) {
+      tasksListEl.replaceChildren();
+      if (!list.length) {
+        var empty = document.createElement('p');
+        empty.style.cssText = 'font-size: 0.8125rem; color: var(--fg-muted); margin: 4px 2px;';
+        empty.textContent = 'No agent tasks found.';
+        tasksListEl.appendChild(empty);
+        return;
+      }
+      list.forEach(function(task) {
+        var card = document.createElement('div');
+        card.className = 'task-card' + (selectedTaskId === task.id ? ' active' : '');
+
+        var title = document.createElement('div');
+        title.style.cssText = 'font-size: 0.875rem; font-weight: 600; color: var(--fg);';
+        title.textContent = task.agentId + ' · ' + task.status;
+
+        var intent = document.createElement('div');
+        intent.style.cssText = 'font-size: 0.75rem; color: var(--fg-muted); margin-top: 4px; line-height: 1.35;';
+        intent.textContent = task.intentAnchor;
+
+        var meta = document.createElement('div');
+        meta.style.cssText = 'font-size: 0.6875rem; color: var(--fg-muted); margin-top: 6px;';
+        meta.textContent = 'Updated ' + new Date(task.updatedAt).toLocaleString();
+
+        card.append(title, intent, meta);
+        card.addEventListener('click', function() { fillTaskForm(task); });
+        tasksListEl.appendChild(card);
+      });
+    }
+
+    function loadTasks() {
+      setTasksStatus('Loading agent tasks…');
+      fetchJson('/api/kg/tasks')
+        .then(function(data) {
+          tasks = data.tasks || [];
+          renderTasksList(tasks);
+          setTasksStatus(tasks.length + ' agent task' + (tasks.length === 1 ? '' : 's'));
+          if (tasksMode === 'create' && !taskAgentIdInput.value) {
+            resetTaskForm();
+            return;
+          }
+          if (tasksMode === 'edit') {
+            var selected = tasks.find(function(t) { return t.id === selectedTaskId; });
+            if (selected) {
+              fillTaskForm(selected);
+            } else {
+              resetTaskForm();
+            }
+          }
+        })
+        .catch(function(err) { setTasksStatus(String(err), true); });
+    }
+
+    function filterTasks() {
+      var q = tasksSearchInput.value.trim().toLowerCase();
+      if (!q) {
+        renderTasksList(tasks);
+        setTasksStatus(tasks.length + ' agent task' + (tasks.length === 1 ? '' : 's'));
+        return;
+      }
+      var filtered = tasks.filter(function(task) {
+        return task.agentId.toLowerCase().includes(q) ||
+          task.intentAnchor.toLowerCase().includes(q) ||
+          task.status.toLowerCase().includes(q);
+      });
+      renderTasksList(filtered);
+      setTasksStatus(filtered.length + ' result' + (filtered.length === 1 ? '' : 's'));
+    }
+
+    function saveTask(e) {
+      e.preventDefault();
+      var agentId = taskAgentIdInput.value.trim();
+      var intentAnchor = taskIntentAnchorInput.value.trim();
+      if (!agentId) {
+        setTasksStatus('Agent ID is required.', true);
+        return;
+      }
+      if (!intentAnchor) {
+        setTasksStatus('Intent anchor is required.', true);
+        return;
+      }
+
+      var errorBudget;
+      var progress;
+      try {
+        errorBudget = parseJsonField(taskErrorBudgetInput.value, {}, 'Error budget');
+        progress = parseJsonField(taskProgressInput.value, {}, 'Progress');
+      } catch (err) {
+        setTasksStatus(err.message || String(err), true);
+        return;
+      }
+
+      var payload = {
+        agentId: agentId,
+        intentAnchor: intentAnchor,
+        status: taskStatusInput.value,
+        conversationId: taskConversationIdInput.value.trim() || null,
+        scheduledJobId: taskScheduledJobIdInput.value.trim() || null,
+        errorBudget: errorBudget,
+        progress: progress,
+      };
+
+      tasksSaveBtn.disabled = true;
+      setTasksStatus(tasksMode === 'create' ? 'Creating agent task…' : 'Saving agent task…');
+      var request = tasksMode === 'create'
+        ? fetch('/api/kg/tasks', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          })
+        : fetch('/api/kg/tasks/' + encodeURIComponent(selectedTaskId), {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          });
+
+      request
+        .then(function(res) {
+          return res.json().then(function(body) {
+            if (!res.ok) throw new Error(body.error || ('HTTP ' + res.status));
+            return body;
+          });
+        })
+        .then(function() {
+          setTasksStatus(tasksMode === 'create' ? 'Agent task created.' : 'Agent task updated.');
+          loadTasks();
+          if (tasksMode === 'create') resetTaskForm();
+        })
+        .catch(function(err) { setTasksStatus(err.message || String(err), true); })
+        .finally(function() { tasksSaveBtn.disabled = false; });
+    }
+
+    function deleteTask() {
+      if (!selectedTaskId) return;
+      if (!confirm('Delete this agent task? This action cannot be undone.')) return;
+      tasksDeleteBtn.disabled = true;
+      setTasksStatus('Deleting agent task…');
+      fetch('/api/kg/tasks/' + encodeURIComponent(selectedTaskId), { method: 'DELETE' })
+        .then(function(res) {
+          if (!res.ok) return res.json().then(function(body) { throw new Error(body.error || ('HTTP ' + res.status)); });
+        })
+        .then(function() {
+          setTasksStatus('Agent task deleted.');
+          resetTaskForm();
+          loadTasks();
+        })
+        .catch(function(err) { setTasksStatus(err.message || String(err), true); })
+        .finally(function() { tasksDeleteBtn.disabled = false; });
+    }
+
+    tasksForm.addEventListener('submit', saveTask);
+    tasksDeleteBtn.addEventListener('click', deleteTask);
+    tasksNewBtn.addEventListener('click', resetTaskForm);
+    tasksCancelBtn.addEventListener('click', resetTaskForm);
+    tasksSearchBtn.addEventListener('click', filterTasks);
+    tasksSearchInput.addEventListener('keydown', function(e) {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        filterTasks();
+      }
+    });
+    resetTaskForm();
 
     // ── Chat ───────────────────────────────────────────────────────────
 
@@ -1607,9 +1950,263 @@ export async function knowledgeGraphRoutes(
   });
 
   const validContactStatuses: ContactStatus[] = ['confirmed', 'provisional', 'blocked'];
+  const validTaskStatuses = ['active', 'pending', 'paused', 'completed', 'failed', 'cancelled'];
   // Reused across contacts endpoints — Postgres UUID columns throw cast errors on bad input
   // so we reject at the API boundary with a 400 instead.
   const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+  function serializeTask(row: {
+    id: string;
+    agent_id: string;
+    intent_anchor: string;
+    status: string;
+    progress: Record<string, unknown> | null;
+    error_budget: Record<string, unknown> | null;
+    conversation_id: string | null;
+    scheduled_job_id: string | null;
+    created_at: string;
+    updated_at: string;
+  }) {
+    return {
+      id: row.id,
+      agentId: row.agent_id,
+      intentAnchor: row.intent_anchor,
+      status: row.status,
+      progress: row.progress ?? {},
+      errorBudget: row.error_budget ?? {},
+      conversationId: row.conversation_id,
+      scheduledJobId: row.scheduled_job_id,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
+  }
+
+  app.get('/api/kg/tasks', async (request, reply) => {
+    if (!assertSecret(request, reply, webAppBootstrapSecret, sessions)) return;
+    const result = await pool.query(
+      `SELECT id, agent_id, intent_anchor, status, progress, error_budget, conversation_id, scheduled_job_id, created_at, updated_at
+       FROM agent_tasks
+       ORDER BY updated_at DESC
+       LIMIT 500`,
+    );
+    return reply.send({
+      tasks: result.rows.map((row) =>
+        serializeTask(row as {
+          id: string;
+          agent_id: string;
+          intent_anchor: string;
+          status: string;
+          progress: Record<string, unknown> | null;
+          error_budget: Record<string, unknown> | null;
+          conversation_id: string | null;
+          scheduled_job_id: string | null;
+          created_at: string;
+          updated_at: string;
+        }),
+      ),
+    });
+  });
+
+  app.post('/api/kg/tasks', async (request, reply) => {
+    if (!assertSecret(request, reply, webAppBootstrapSecret, sessions)) return;
+    const body = request.body as {
+      agentId?: unknown;
+      intentAnchor?: unknown;
+      status?: unknown;
+      progress?: unknown;
+      errorBudget?: unknown;
+      conversationId?: unknown;
+      scheduledJobId?: unknown;
+    };
+    if (typeof body.agentId !== 'string' || body.agentId.trim().length === 0) {
+      return reply.status(400).send({ error: 'agentId is required.' });
+    }
+    if (typeof body.intentAnchor !== 'string' || body.intentAnchor.trim().length === 0) {
+      return reply.status(400).send({ error: 'intentAnchor is required.' });
+    }
+    const status = typeof body.status === 'string' ? body.status : 'active';
+    if (!validTaskStatuses.includes(status)) {
+      return reply.status(400).send({ error: 'Invalid status.' });
+    }
+    if (body.errorBudget !== undefined && (typeof body.errorBudget !== 'object' || body.errorBudget === null || Array.isArray(body.errorBudget))) {
+      return reply.status(400).send({ error: 'errorBudget must be a JSON object.' });
+    }
+    if (body.progress !== undefined && (typeof body.progress !== 'object' || body.progress === null || Array.isArray(body.progress))) {
+      return reply.status(400).send({ error: 'progress must be a JSON object.' });
+    }
+
+    const conversationId =
+      typeof body.conversationId === 'string' && body.conversationId.trim().length > 0
+        ? body.conversationId.trim()
+        : null;
+    const scheduledJobId =
+      typeof body.scheduledJobId === 'string' && body.scheduledJobId.trim().length > 0
+        ? body.scheduledJobId.trim()
+        : null;
+    if (conversationId && !UUID_RE.test(conversationId)) {
+      return reply.status(400).send({ error: 'Invalid conversationId: must be a valid UUID.' });
+    }
+    if (scheduledJobId && !UUID_RE.test(scheduledJobId)) {
+      return reply.status(400).send({ error: 'Invalid scheduledJobId: must be a valid UUID.' });
+    }
+
+    const inserted = await pool.query(
+      `INSERT INTO agent_tasks (agent_id, intent_anchor, status, progress, error_budget, conversation_id, scheduled_job_id, updated_at)
+       VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6, $7, now())
+       RETURNING id, agent_id, intent_anchor, status, progress, error_budget, conversation_id, scheduled_job_id, created_at, updated_at`,
+      [
+        body.agentId.trim(),
+        body.intentAnchor.trim(),
+        status,
+        JSON.stringify((body.progress as Record<string, unknown> | undefined) ?? {}),
+        JSON.stringify((body.errorBudget as Record<string, unknown> | undefined) ?? {}),
+        conversationId,
+        scheduledJobId,
+      ],
+    );
+    return reply.status(201).send({
+      task: serializeTask(
+        inserted.rows[0] as {
+          id: string;
+          agent_id: string;
+          intent_anchor: string;
+          status: string;
+          progress: Record<string, unknown> | null;
+          error_budget: Record<string, unknown> | null;
+          conversation_id: string | null;
+          scheduled_job_id: string | null;
+          created_at: string;
+          updated_at: string;
+        },
+      ),
+    });
+  });
+
+  app.patch('/api/kg/tasks/:id', async (request, reply) => {
+    if (!assertSecret(request, reply, webAppBootstrapSecret, sessions)) return;
+    const { id } = request.params as { id: string };
+    if (!UUID_RE.test(id)) {
+      return reply.status(400).send({ error: 'Invalid task id.' });
+    }
+    const body = request.body as {
+      agentId?: unknown;
+      intentAnchor?: unknown;
+      status?: unknown;
+      progress?: unknown;
+      errorBudget?: unknown;
+      conversationId?: unknown;
+      scheduledJobId?: unknown;
+    };
+
+    const existing = await pool.query(
+      `SELECT id, agent_id, intent_anchor, status, progress, error_budget, conversation_id, scheduled_job_id, created_at, updated_at
+       FROM agent_tasks
+       WHERE id = $1`,
+      [id],
+    );
+    if (existing.rowCount === 0) {
+      return reply.status(404).send({ error: 'Agent task not found.' });
+    }
+    const row = existing.rows[0] as {
+      id: string;
+      agent_id: string;
+      intent_anchor: string;
+      status: string;
+      progress: Record<string, unknown> | null;
+      error_budget: Record<string, unknown> | null;
+      conversation_id: string | null;
+      scheduled_job_id: string | null;
+      created_at: string;
+      updated_at: string;
+    };
+
+    const agentId = typeof body.agentId === 'string' ? body.agentId.trim() : row.agent_id;
+    const intentAnchor = typeof body.intentAnchor === 'string' ? body.intentAnchor.trim() : row.intent_anchor;
+    const status = typeof body.status === 'string' ? body.status : row.status;
+    if (!agentId) return reply.status(400).send({ error: 'agentId is required.' });
+    if (!intentAnchor) return reply.status(400).send({ error: 'intentAnchor is required.' });
+    if (!validTaskStatuses.includes(status)) {
+      return reply.status(400).send({ error: 'Invalid status.' });
+    }
+    if (body.errorBudget !== undefined && (typeof body.errorBudget !== 'object' || body.errorBudget === null || Array.isArray(body.errorBudget))) {
+      return reply.status(400).send({ error: 'errorBudget must be a JSON object.' });
+    }
+    if (body.progress !== undefined && (typeof body.progress !== 'object' || body.progress === null || Array.isArray(body.progress))) {
+      return reply.status(400).send({ error: 'progress must be a JSON object.' });
+    }
+
+    const conversationId =
+      typeof body.conversationId === 'string'
+        ? body.conversationId.trim() || null
+        : body.conversationId === null
+        ? null
+        : row.conversation_id;
+    const scheduledJobId =
+      typeof body.scheduledJobId === 'string'
+        ? body.scheduledJobId.trim() || null
+        : body.scheduledJobId === null
+        ? null
+        : row.scheduled_job_id;
+    if (conversationId && !UUID_RE.test(conversationId)) {
+      return reply.status(400).send({ error: 'Invalid conversationId: must be a valid UUID.' });
+    }
+    if (scheduledJobId && !UUID_RE.test(scheduledJobId)) {
+      return reply.status(400).send({ error: 'Invalid scheduledJobId: must be a valid UUID.' });
+    }
+
+    const updated = await pool.query(
+      `UPDATE agent_tasks
+       SET agent_id = $2,
+           intent_anchor = $3,
+           status = $4,
+           progress = $5::jsonb,
+           error_budget = $6::jsonb,
+           conversation_id = $7,
+           scheduled_job_id = $8,
+           updated_at = now()
+       WHERE id = $1
+       RETURNING id, agent_id, intent_anchor, status, progress, error_budget, conversation_id, scheduled_job_id, created_at, updated_at`,
+      [
+        id,
+        agentId,
+        intentAnchor,
+        status,
+        JSON.stringify((body.progress as Record<string, unknown> | undefined) ?? row.progress ?? {}),
+        JSON.stringify((body.errorBudget as Record<string, unknown> | undefined) ?? row.error_budget ?? {}),
+        conversationId,
+        scheduledJobId,
+      ],
+    );
+    return reply.send({
+      task: serializeTask(
+        updated.rows[0] as {
+          id: string;
+          agent_id: string;
+          intent_anchor: string;
+          status: string;
+          progress: Record<string, unknown> | null;
+          error_budget: Record<string, unknown> | null;
+          conversation_id: string | null;
+          scheduled_job_id: string | null;
+          created_at: string;
+          updated_at: string;
+        },
+      ),
+    });
+  });
+
+  app.delete('/api/kg/tasks/:id', async (request, reply) => {
+    if (!assertSecret(request, reply, webAppBootstrapSecret, sessions)) return;
+    const { id } = request.params as { id: string };
+    if (!UUID_RE.test(id)) {
+      return reply.status(400).send({ error: 'Invalid task id.' });
+    }
+    const deleted = await pool.query('DELETE FROM agent_tasks WHERE id = $1', [id]);
+    if (deleted.rowCount === 0) {
+      return reply.status(404).send({ error: 'Agent task not found.' });
+    }
+    return reply.status(204).send();
+  });
 
   app.get('/api/kg/contacts', async (request, reply) => {
     if (!assertSecret(request, reply, webAppBootstrapSecret, sessions)) return;
