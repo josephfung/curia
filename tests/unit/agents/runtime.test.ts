@@ -500,6 +500,69 @@ describe('AgentRuntime tool-use loop', () => {
     expect(responseContent).toContain('formulate a response');
   });
 
+  it('returns fallback message when LLM produces whitespace-only text after tool use', async () => {
+    // Whitespace-only responses (e.g. '\n') are visually blank and must be treated
+    // the same as an empty string — trim() === '' catches both cases.
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+
+    let chatCallCount = 0;
+    const whitespaceTextProvider: LLMProvider = {
+      id: 'mock',
+      chat: vi.fn(async () => {
+        chatCallCount++;
+        if (chatCallCount === 1) {
+          return {
+            type: 'tool_use' as const,
+            toolCalls: [{ id: 'call-extract-2', name: 'extract-relationships', input: { text: 'Hello', source: 'test' } }],
+            usage: { inputTokens: 100, outputTokens: 20 },
+          };
+        }
+        return {
+          type: 'text' as const,
+          content: '\n',
+          usage: { inputTokens: 150, outputTokens: 1 },
+        };
+      }),
+    };
+
+    const mockExecution = {
+      invoke: vi.fn().mockResolvedValue({ success: true, data: { extracted: 0, confirmed: 0, skipped: true } }),
+    } as unknown as ExecutionLayer;
+
+    let responseContent = '';
+    bus.subscribe('agent.response', 'dispatch', async (event) => {
+      if (event.type === 'agent.response') {
+        responseContent = event.payload.content;
+      }
+    });
+
+    const agent = new AgentRuntime({
+      agentId: 'coordinator',
+      systemPrompt: 'You are an assistant.',
+      provider: whitespaceTextProvider,
+      bus,
+      logger,
+      executionLayer: mockExecution,
+      skillToolDefs: [{ name: 'extract-relationships', description: 'Extract relationships', input_schema: { type: 'object' as const, properties: {}, required: [] } }],
+    });
+    agent.register();
+
+    const task = createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'conv-whitespace-text',
+      channelId: 'cli',
+      senderId: 'user',
+      content: 'Hello',
+      parentEventId: 'inbound-whitespace',
+    });
+    await bus.publish('dispatch', task);
+
+    expect(responseContent).not.toBe('');
+    expect(responseContent).not.toBe('\n');
+    expect(responseContent).toContain('formulate a response');
+  });
+
   it('stops after budget maxTurns is exceeded to prevent infinite loops', async () => {
     const logger = createLogger('error');
     const bus = new EventBus(logger);
