@@ -73,6 +73,19 @@ Curia uses a message bus architecture with five layers — four domain layers wi
 
 Each layer has strict bus permissions. See [architecture overview](docs/specs/00-overview.md) for details.
 
+### Architecture Decision Records
+
+Significant architectural decisions are documented in [`docs/adr/`](docs/adr/). Read these before proposing changes — they explain *why* the system is the way it is, and which trade-offs were deliberately accepted.
+
+**If your change involves a major architectural decision, write an ADR before or alongside the implementation.** This includes:
+
+- Choosing one technology or pattern over another
+- Introducing a new external dependency that shapes the system
+- Deliberately rejecting an approach that might seem obvious
+- A breaking change to a public API surface with a stated rationale
+
+Use [`docs/adr/template.md`](docs/adr/template.md) and add a row to the index in [`docs/adr/README.md`](docs/adr/README.md). ADRs should be included in the same PR as the implementation, not filed separately after the fact.
+
 ## Developer Guides
 
 Step-by-step guides for common extension tasks — more detail than the quick references below:
