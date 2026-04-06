@@ -1,6 +1,6 @@
 # ADR-010: Signal as high-trust messaging channel, rejecting Telegram
 
-Date: 2026-05-05
+Date: 2026-04-05
 Status: Accepted
 
 ## Context
