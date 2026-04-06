@@ -1903,8 +1903,8 @@ function createUiHtml(): string {
           return res.json();
         })
         .then(function(data) {
-          var current = data.identity;
-          var prefs = current.behavioralPreferences ? current.behavioralPreferences.slice() : [];
+          var current = (data && data.identity) ? data.identity : {};
+          var prefs = Array.isArray(current.behavioralPreferences) ? current.behavioralPreferences.slice() : [];
           if (wizardState.preferences) { prefs.push(wizardState.preferences); }
 
           var payload = {
