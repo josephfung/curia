@@ -6,8 +6,8 @@
   "action_risk": "none",
   "infrastructure": true,
   "inputs": {
-    "entity": "string — the name or label of the entity to query (e.g. 'Joseph Fung')",
-    "edge_type": "string? — optional edge type filter (e.g. 'spouse', 'reports_to'). Must be one of the known edge types."
+    "entity": "string (the name or label of the entity to query, e.g. 'Joseph Fung')",
+    "edge_type": "string? (optional edge type filter, e.g. 'spouse' or 'reports_to'. Must be a known edge type.)"
   },
   "outputs": {
     "relationships": "array of {edge_id, subject, predicate, object, direction, confidence, last_confirmed_at} — populated when a single entity was found",
