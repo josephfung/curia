@@ -21,7 +21,7 @@ WHERE id IN (
 
 -- Bidirectional unique index: treats (A→B, type) and (B→A, type) as the same edge.
 -- Expression indexes require the full expression in ON CONFLICT clauses (not the index name).
-CREATE UNIQUE INDEX idx_kg_edges_unique
+CREATE UNIQUE INDEX IF NOT EXISTS idx_kg_edges_unique
   ON kg_edges (
     LEAST(source_node_id::text, target_node_id::text),
     GREATEST(source_node_id::text, target_node_id::text),
