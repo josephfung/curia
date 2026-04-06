@@ -22,7 +22,7 @@
   },
   "license": "MIT",
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.81.0",
+    "@anthropic-ai/sdk": "^0.82.0",
     "@fastify/cookie": "^11.0.2",
     "@fastify/cors": "^11.2.0",
     "@fastify/rate-limit": "^10.3.0",
