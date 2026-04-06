@@ -407,7 +407,19 @@ export class AgentRuntime {
         { agentId, inputTokens: response.usage.inputTokens, outputTokens: response.usage.outputTokens },
         'Agent task completed',
       );
-      responseContent = response.content;
+      if (response.content.trim() === '') {
+        // The LLM returned end_turn with no text blocks — this happens when the model
+        // considers its tool calls (e.g. extract-relationships) to be the full response
+        // and produces an empty content array. Surface as an error so we don't silently
+        // deliver a blank reply; the system prompt instructs the agent to always write text.
+        logger.error(
+          { agentId, conversationId, inputTokens: response.usage.inputTokens, outputTokens: response.usage.outputTokens },
+          'LLM returned empty text response after tool use — agent did not produce a user-facing reply',
+        );
+        responseContent = "I'm sorry, I wasn't able to formulate a response. Please try again.";
+      } else {
+        responseContent = response.content;
+      }
     } else {
       // Shouldn't reach here — chatWithRetry handles errors — but be safe
       logger.error({ agentId, error: response.error }, 'LLM call failed after retries');
