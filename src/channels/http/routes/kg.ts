@@ -1438,8 +1438,10 @@ function createUiHtml(): string {
             initCytoscape();
           }
         })
-        .catch(function() {
+        .catch(function(err) {
           // Identity service not available or check failed — fall back to main app.
+          // Log so operators can diagnose DB/network issues at login time.
+          console.error('[curia] identity check failed on login:', err);
           mainApp.style.display = 'flex';
           navigate('chat', 'Chat', 'nav-chat');
           initCytoscape();
@@ -1572,12 +1574,9 @@ function createUiHtml(): string {
             return res.json();
           })
           .then(function(data) { showWizard(data.identity); })
-          .catch(function() {
-            showWizard({
-              assistant: { name: '', title: '', emailSignature: '' },
-              tone: { baseline: ['warm', 'direct'], verbosity: 50, directness: 75 },
-              decisionStyle: { externalActions: 'conservative' },
-            });
+          .catch(function(err) {
+            console.error('[curia] failed to load identity for wizard pre-fill:', err);
+            showWizard(null);
           });
         return;
       }
@@ -1665,6 +1664,8 @@ function createUiHtml(): string {
     }
 
     function showWizard(identity) {
+      // Treat null/undefined identity as an empty object — all fields fall back to defaults.
+      if (!identity) identity = {};
       wizardState.name      = (identity && identity.assistant && identity.assistant.name)      || '';
       wizardState.title     = (identity && identity.assistant && identity.assistant.title)     || '';
       wizardState.signature = (identity && identity.assistant && identity.assistant.emailSignature) || '';
@@ -1923,6 +1924,7 @@ function createUiHtml(): string {
               // constraints are immutable via wizard — always preserve.
               constraints: current.constraints || [],
             },
+            changedBy: 'wizard',
             note: 'Saved via onboarding wizard',
           };
 
@@ -1934,13 +1936,20 @@ function createUiHtml(): string {
         })
         .then(function(res) {
           if (!res.ok) {
-            return res.json().then(function(body) {
-              throw new Error(body.error || 'Save failed');
+            return res.text().then(function(text) {
+              var msg = 'Save failed';
+              try { msg = JSON.parse(text).error || msg; } catch (_) {}
+              throw new Error(msg);
             });
           }
           return fetch('/api/identity/reload', { method: 'POST' });
         })
-        .then(function() {
+        .then(function(res) {
+          if (!res.ok) {
+            // Identity was saved to DB, but the in-memory cache was not refreshed.
+            // The error path re-enables the button so the user can retry.
+            throw new Error('Identity saved but in-memory reload failed \u2014 please try again or restart the server.');
+          }
           hideWizard();
           if (mainApp && mainApp.style.display === 'none') {
             mainApp.style.display = 'flex';

@@ -47,10 +47,20 @@ export function assertSecret(
   // Fallback: direct header (programmatic access via curl / scripts).
   // Reject non-string values (Fastify coerces duplicate headers to string[]).
   const provided = request.headers['x-web-bootstrap-secret'];
+  if (typeof provided !== 'string') {
+    reply.status(401).send({
+      error: 'Unauthorized. Authenticate via POST /auth or provide the x-web-bootstrap-secret header.',
+    });
+    return false;
+  }
+  // Compare byte lengths (not char lengths) before calling timingSafeEqual — it throws if
+  // the two buffers differ in length. A multi-byte UTF-8 secret can have the same char count
+  // but different byte length, so using Buffer.byteLength rather than String.length is correct.
+  const providedBuf = Buffer.from(provided);
+  const configuredBuf = Buffer.from(configuredSecret);
   if (
-    typeof provided !== 'string' ||
-    provided.length !== configuredSecret.length ||
-    !timingSafeEqual(Buffer.from(provided), Buffer.from(configuredSecret))
+    providedBuf.length !== configuredBuf.length ||
+    !timingSafeEqual(providedBuf, configuredBuf)
   ) {
     reply.status(401).send({
       error: 'Unauthorized. Authenticate via POST /auth or provide the x-web-bootstrap-secret header.',

@@ -58,8 +58,8 @@ export async function identityRoutes(
 
       return reply.send({ identity, configured });
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to get identity';
-      return reply.status(500).send({ error: message });
+      request.log.error({ err }, 'GET /api/identity: failed to query configured flag or get identity');
+      return reply.status(500).send({ error: 'Failed to get identity. Check server logs.' });
     }
   });
 
@@ -70,6 +70,7 @@ export async function identityRoutes(
 
     const body = request.body as {
       identity?: OfficeIdentity;
+      changedBy?: string;
       note?: string;
     };
 
@@ -83,10 +84,17 @@ export async function identityRoutes(
     // (explicit confirmation step, separate from tone/persona edits).
 
     try {
-      await identityService.update(body.identity, 'api', body.note);
+      // Accept 'wizard' or 'api' as the source; default to 'api' for direct API callers.
+      const VALID_CHANGED_BY = ['api', 'wizard'] as const;
+      type ChangedBy = typeof VALID_CHANGED_BY[number];
+      const changedBy: ChangedBy = VALID_CHANGED_BY.includes(body.changedBy as ChangedBy)
+        ? (body.changedBy as ChangedBy)
+        : 'api';
+      await identityService.update(body.identity, changedBy, body.note);
       const updated = identityService.get();
       return reply.send({ identity: updated, updated: true });
     } catch (err) {
+      request.log.error({ err }, 'PUT /api/identity: update failed');
       // Validation errors from validateIdentity() are plain Error instances with descriptive
       // messages — return 400 so the wizard UI can surface them to the user.
       // DB / infrastructure errors carry a Postgres error code — return 500.
@@ -108,8 +116,8 @@ export async function identityRoutes(
       const history = await identityService.history();
       return reply.send({ history });
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to get identity history';
-      return reply.status(500).send({ error: message });
+      request.log.error({ err }, 'GET /api/identity/history: failed to retrieve history');
+      return reply.status(500).send({ error: 'Failed to get identity history. Check server logs.' });
     }
   });
 
