@@ -408,15 +408,51 @@ export class AgentRuntime {
         'Agent task completed',
       );
       if (response.content.trim() === '') {
-        // The LLM returned end_turn with no text blocks — this happens when the model
-        // considers its tool calls (e.g. extract-relationships) to be the full response
-        // and produces an empty content array. Surface as an error so we don't silently
-        // deliver a blank reply; the system prompt instructs the agent to always write text.
-        logger.error(
+        // The LLM returned end_turn with no text — this happens when the model considers
+        // its tool calls (e.g. extract-relationships) to be the full response and produces
+        // an empty content array. Attempt one recovery: append the empty turn + a nudge,
+        // then call the LLM again without tools to force it to write the text reply.
+        logger.warn(
           { agentId, conversationId, inputTokens: response.usage.inputTokens, outputTokens: response.usage.outputTokens },
-          'LLM returned empty text response after tool use — agent did not produce a user-facing reply',
+          'LLM returned empty text after tool use — attempting recovery prompt',
         );
-        responseContent = "I'm sorry, I wasn't able to formulate a response. Please try again.";
+
+        // Append the empty assistant turn so the conversation structure stays valid
+        // (Anthropic rejects empty string content, so use a single space as a stand-in),
+        // then ask the LLM to write the text reply it skipped.
+        messages.push({ role: 'assistant', content: ' ' });
+        messages.push({ role: 'user', content: 'Please write your response to the user.' });
+
+        // Count the recovery call against the turn budget — it is a real LLM round-trip.
+        budget.turnsUsed++;
+        if (budget.turnsUsed >= budget.maxTurns) {
+          await this.handleBudgetExceeded(budget, taskEvent, 'maxTurns');
+          return;
+        }
+
+        // Call without tools — the LLM must produce text, it cannot call more tools.
+        const recovery = await this.chatWithRetry(provider, { messages }, budget, taskEvent);
+        // chatWithRetry returns null when it has already published error events and sent an
+        // error response — bail out here to avoid double-publishing a second response event
+        // and writing a phantom turn to working memory.
+        if (!recovery) return;
+
+        if (recovery.type === 'text' && recovery.content.trim() !== '') {
+          responseContent = recovery.content;
+          logger.info({ agentId, conversationId }, 'Empty-response recovery succeeded');
+        } else {
+          logger.error(
+            {
+              agentId,
+              conversationId,
+              recoveryType: recovery.type,
+              inputTokens: response.usage.inputTokens,
+              outputTokens: response.usage.outputTokens,
+            },
+            'LLM returned empty text response after tool use — recovery also failed, sending fallback',
+          );
+          responseContent = "I'm sorry, I wasn't able to formulate a response. Please try again.";
+        }
       } else {
         responseContent = response.content;
       }

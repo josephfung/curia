@@ -14,6 +14,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 ## [Unreleased]
 
 ### Fixed
+- **Empty-response recovery** — when the LLM ends a turn with no text (e.g. after calling
+  `extract-relationships` as its last action), the agent runtime now attempts one recovery:
+  it appends a nudge turn and retries without tools to force a text reply. Only if the
+  recovery also fails does it fall back to the "unable to formulate a response" message.
 - **KG chat blank reply** — after `extract-relationships` ran as the last tool call, the LLM
   produced `end_turn` with no text blocks, delivering an empty reply to the user. Fixed by
   clarifying in the coordinator system prompt that `extract-relationships` is a background
