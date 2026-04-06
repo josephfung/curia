@@ -64,7 +64,19 @@ export class CalendarUpdateEventHandler implements SkillHandler {
 
       const event = await ctx.nylasCalendarClient.updateEvent(calendarId, eventId, changes);
       ctx.log.info({ calendarId, eventId }, 'Updated calendar event');
-      return { success: true, data: { event } };
+      // Format timestamps as UTC ISO strings — LLMs can't reliably convert raw Unix seconds.
+      return {
+        success: true,
+        data: {
+          event: {
+            ...event,
+            startTime: event.startTime !== null && Number.isFinite(event.startTime) && event.startTime > 0
+              ? new Date(event.startTime * 1000).toISOString() : null,
+            endTime: event.endTime !== null && Number.isFinite(event.endTime) && event.endTime > 0
+              ? new Date(event.endTime * 1000).toISOString() : null,
+          },
+        },
+      };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       ctx.log.error({ err, calendarId, eventId }, 'Failed to update event');

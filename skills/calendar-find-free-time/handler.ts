@@ -81,8 +81,14 @@ export class CalendarFindFreeTimeHandler implements SkillHandler {
         ? freeWindows.filter((w) => w.end - w.start >= minSeconds)
         : freeWindows;
 
-      ctx.log.info({ calendarCount: calendarIds.length, freeWindowCount: filtered.length }, 'Found free time');
-      return { success: true, data: { freeWindows: filtered } };
+      // Format timestamps as UTC ISO strings — LLMs can't reliably convert raw Unix seconds.
+      const freeWindowsIso = filtered.map((w) => ({
+        start: new Date(w.start * 1000).toISOString(),
+        end: new Date(w.end * 1000).toISOString(),
+      }));
+
+      ctx.log.info({ calendarCount: calendarIds.length, freeWindowCount: freeWindowsIso.length }, 'Found free time');
+      return { success: true, data: { freeWindows: freeWindowsIso } };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       ctx.log.error({ err }, 'Failed to find free time');

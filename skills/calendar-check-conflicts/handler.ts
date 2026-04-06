@@ -37,8 +37,8 @@ export class CalendarCheckConflictsHandler implements SkillHandler {
       const conflicts: Array<{
         calendarId: string;
         contactName: string | null;
-        startTime: number;
-        endTime: number;
+        startTime: string;
+        endTime: string;
         status: string;
       }> = [];
 
@@ -56,11 +56,12 @@ export class CalendarCheckConflictsHandler implements SkillHandler {
         for (const slot of result.timeSlots) {
           // Check overlap: busy slot overlaps the proposed range
           if (slot.startTime < proposedEndTs && slot.endTime > proposedStartTs) {
+            // Format timestamps as UTC ISO strings — LLMs can't reliably convert raw Unix seconds.
             conflicts.push({
               calendarId: result.email,
               contactName,
-              startTime: slot.startTime,
-              endTime: slot.endTime,
+              startTime: new Date(slot.startTime * 1000).toISOString(),
+              endTime: new Date(slot.endTime * 1000).toISOString(),
               status: slot.status,
             });
           }

@@ -43,7 +43,7 @@ describe('CalendarUpdateEventHandler', () => {
   });
 
   it('updates event successfully', async () => {
-    const updatedEvent = { id: 'evt-1', title: 'Updated', description: '', location: '', startTime: 1000, endTime: 2000, startDate: null, endDate: null, participants: [], conferencing: null, status: 'confirmed', calendarId: 'cal-1', busy: true };
+    const updatedEvent = { id: 'evt-1', title: 'Updated', description: '', location: '', startTime: 1775466000, endTime: 1775469600, startDate: null, endDate: null, participants: [], conferencing: null, status: 'confirmed', calendarId: 'cal-1', busy: true };
     const nylasCalendarClient = { updateEvent: vi.fn().mockResolvedValue(updatedEvent) };
     const contactService = { resolveCalendar: vi.fn().mockResolvedValue(null) };
     const result = await handler.execute(makeCtx(
@@ -52,8 +52,11 @@ describe('CalendarUpdateEventHandler', () => {
     ));
     expect(result.success).toBe(true);
     if (result.success) {
-      const data = result.data as { event: { id: string } };
+      const data = result.data as { event: { id: string; startTime: string; endTime: string } };
       expect(data.event.id).toBe('evt-1');
+      // Timestamps must be ISO strings, not raw Unix seconds
+      expect(data.event.startTime).toBe('2026-04-06T09:00:00.000Z');
+      expect(data.event.endTime).toBe('2026-04-06T10:00:00.000Z');
     }
   });
 });

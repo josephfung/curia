@@ -55,12 +55,13 @@ describe('CalendarFindFreeTimeHandler', () => {
 
     expect(result.success).toBe(true);
     if (result.success) {
-      const data = result.data as { freeWindows: Array<{ start: number; end: number }> };
-      // Range 0-1000, busy 200-400 and 700-900 → free windows: 0-200, 400-700, 900-1000
+      const data = result.data as { freeWindows: Array<{ start: string; end: string }> };
+      // Range 0-1000 seconds (epoch), busy 200-400 and 700-900 → free windows: 0-200, 400-700, 900-1000
+      // Returned as UTC ISO strings
       expect(data.freeWindows).toEqual([
-        { start: 0, end: 200 },
-        { start: 400, end: 700 },
-        { start: 900, end: 1000 },
+        { start: '1970-01-01T00:00:00.000Z', end: '1970-01-01T00:03:20.000Z' },
+        { start: '1970-01-01T00:06:40.000Z', end: '1970-01-01T00:11:40.000Z' },
+        { start: '1970-01-01T00:15:00.000Z', end: '1970-01-01T00:16:40.000Z' },
       ]);
     }
   });
@@ -84,8 +85,10 @@ describe('CalendarFindFreeTimeHandler', () => {
 
     expect(result.success).toBe(true);
     if (result.success) {
-      const data = result.data as { freeWindows: Array<{ start: number; end: number }> };
-      expect(data.freeWindows).toEqual([{ start: 200, end: 1000 }]);
+      const data = result.data as { freeWindows: Array<{ start: string; end: string }> };
+      expect(data.freeWindows).toEqual([
+        { start: '1970-01-01T00:03:20.000Z', end: '1970-01-01T00:16:40.000Z' },
+      ]);
     }
   });
 });
