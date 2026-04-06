@@ -143,6 +143,19 @@ describe('SkillRegistry', () => {
     expect(tools[0].input_schema.required).toEqual(['ids']);
   });
 
+  it('throws on invalid primitive type in skill manifest (e.g. em-dash format)', () => {
+    // Regression test: "string — description" was the format that caused a production
+    // outage — the em-dash made the parser capture "string — description" as the type
+    // token, which is not a valid JSON Schema type. This must fail at startup.
+    registry.register(makeManifest({
+      name: 'bad-type-skill',
+      description: 'Bad manifest',
+      inputs: { entity: 'string — the entity name' },
+    }), stubHandler);
+    expect(() => registry.toToolDefinitions(['bad-type-skill']))
+      .toThrow(/invalid type/);
+  });
+
   it('throws on invalid array item type in skill manifest', () => {
     registry.register(makeManifest({
       name: 'bad-array-skill',

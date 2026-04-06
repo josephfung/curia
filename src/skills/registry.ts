@@ -143,6 +143,17 @@ export class SkillRegistry {
           }
           properties[key] = { type: 'array', items: { type: itemType }, ...(description ? { description } : {}) };
         } else {
+          // Validate against JSON Schema primitive types so a manifest typo like
+          // "string — description" fails loudly at startup rather than silently
+          // emitting an invalid schema that causes an opaque API 400 at call time.
+          // (This is the same pattern as the array-item validation above.)
+          const VALID_PRIMITIVE_TYPES = new Set(['string', 'number', 'integer', 'boolean', 'object', 'null']);
+          if (!VALID_PRIMITIVE_TYPES.has(baseType)) {
+            throw new Error(
+              `Skill '${name}' input '${key}': invalid type '${baseType}' in '${typeStr}'. ` +
+              `Expected one of: ${[...VALID_PRIMITIVE_TYPES].join(', ')}, or an array type (e.g. string[]).`,
+            );
+          }
           properties[key] = { type: baseType, ...(description ? { description } : {}) };
         }
 
