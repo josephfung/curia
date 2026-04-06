@@ -417,10 +417,10 @@ export class AgentRuntime {
           'LLM returned empty text after tool use — attempting recovery prompt',
         );
 
-        // Append the empty assistant turn so the conversation structure stays valid
-        // (Anthropic rejects empty string content, so use a single space as a stand-in),
-        // then ask the LLM to write the text reply it skipped.
-        messages.push({ role: 'assistant', content: ' ' });
+        // Append a minimal assistant turn to maintain valid turn alternation.
+        // Anthropic rejects both empty strings AND whitespace-only strings, so we
+        // use a non-whitespace ellipsis as a stand-in for "ran tools, no text produced".
+        messages.push({ role: 'assistant', content: '…' });
         messages.push({ role: 'user', content: 'Please write your response to the user.' });
 
         // Count the recovery call against the turn budget — it is a real LLM round-trip.
