@@ -1431,6 +1431,11 @@ function createUiHtml(): string {
         })
         .then(function(data) {
           if (!data.configured) {
+            // Reveal the main app shell before showing the wizard — #view-wizard is
+            // position:fixed but it's still a DOM child of #main-app, so display:none
+            // on the parent hides it regardless of positioning.
+            mainApp.style.display = 'flex';
+            initCytoscape();
             showWizard(data.identity);
           } else {
             mainApp.style.display = 'flex';
@@ -1951,10 +1956,6 @@ function createUiHtml(): string {
             throw new Error('Identity saved but in-memory reload failed \u2014 please try again or restart the server.');
           }
           hideWizard();
-          if (mainApp && mainApp.style.display === 'none') {
-            mainApp.style.display = 'flex';
-            initCytoscape();
-          }
           navigate('chat', 'Chat', 'nav-chat');
           chatSuccessBanner.style.display = 'block';
           setTimeout(function() { chatSuccessBanner.style.display = 'none'; }, 4000);
