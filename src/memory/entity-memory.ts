@@ -232,7 +232,14 @@ export class EntityMemory {
       // Resolve the node on the other side
       const otherId = isOutbound ? edge.targetNodeId : edge.sourceNodeId;
       const node = await this.store.getNode(otherId);
-      if (!node) continue;
+      if (!node) {
+        // Dangling edge — the referenced node no longer exists. This indicates a referential
+        // integrity violation (cascade delete failure or missing migration). Skip the edge so
+        // the caller still gets a result, but log so this surfaces in monitoring.
+        // @TODO: emit a bus event for the audit logger once bus access is available here.
+        // @TODO: EntityMemory has no logger; thread one in if this pattern recurs (see also storeFact).
+        continue;
+      }
 
       // Exclude fact nodes — they're stored facts about a single entity, not relationships
       if (node.type === FACT_TYPE) continue;

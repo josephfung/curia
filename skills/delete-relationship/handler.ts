@@ -97,13 +97,15 @@ export class DeleteRelationshipHandler implements SkillHandler {
         return { success: true, data: { deleted: false } };
       }
 
-      // Log before deletion for audit trail
-      ctx.log.info(
-        { edgeId: match.edge.id, subject, predicate, object, confidence: match.edge.temporal.confidence },
-        'delete-relationship: deleting edge',
-      );
+      ctx.log.debug({ edgeId: match.edge.id, subject, predicate, object }, 'delete-relationship: attempting deletion');
 
       await ctx.entityMemory.deleteEdge(match.edge.id);
+
+      // Log after the delete confirms the outcome rather than the intent
+      ctx.log.info(
+        { edgeId: match.edge.id, subject, predicate, object, confidence: match.edge.temporal.confidence },
+        'delete-relationship: edge deleted',
+      );
 
       return { success: true, data: { deleted: true, edge_id: match.edge.id } };
     } catch (err) {

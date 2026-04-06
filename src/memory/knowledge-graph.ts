@@ -413,7 +413,16 @@ class PostgresBackend implements KnowledgeGraphBackend {
         edge.temporal.createdAt,
       ],
     );
-    const row = result.rows[0]!;
+    const row = result.rows[0];
+    if (!row) {
+      // INSERT ... RETURNING should always return exactly one row. If it doesn't,
+      // a trigger or RLS policy may be suppressing the RETURNING clause.
+      this.logger.error(
+        { sourceNodeId: edge.sourceNodeId, targetNodeId: edge.targetNodeId, type: edge.type },
+        'kg: upsertEdge — RETURNING produced no row; possible trigger or RLS suppression',
+      );
+      throw new Error('upsertEdge: database returned no row after INSERT ... ON CONFLICT');
+    }
     return { edge: pgRowToEdge(row), created: row.is_new };
   }
 
