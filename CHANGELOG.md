@@ -14,6 +14,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 ## [Unreleased]
 
 ### Added
+- **Scheduled Jobs UI** — new management view in the KG web app for creating, editing, deleting, and unsuspending scheduled jobs, with search by agent/status/cron/intent and full CRUD via the `/api/jobs` endpoints
 - **Architecture Decision Records** — `docs/adr/` directory with template, index, and 12 backfilled ADRs covering: Postgres over SQLite, message bus over direct calls, YAML agent config with TypeScript escape hatch, pgvector over dedicated vector DB, node-pg-migrate over Knex, custom framework over existing agent frameworks, Anthropic as primary LLM with provider-agnostic interface, OpenAI embeddings for knowledge graph, Nylas for email, Signal over Telegram, score-based autonomy engine, and LLM-as-judge evaluation (closes #7)
 - **ADR reminder in CLAUDE.md** — guidance on when to write an ADR when implementing specs with major architectural decisions
 

@@ -853,6 +853,7 @@ function createUiHtml(): string {
                     <option value="suspended">suspended</option>
                     <option value="completed">completed</option>
                     <option value="cancelled">cancelled</option>
+                    <option value="failed">failed</option>
                   </select>
                 </div>
               </div>
@@ -1697,7 +1698,12 @@ function createUiHtml(): string {
       jobRunAtInput.value = '';
       jobIntentAnchorInput.value = '';
       jobTaskPayloadInput.value = prettyJson({ kind: 'follow_up', args: {} });
-      renderJobsList(jobs);
+      // Preserve the active search filter when resetting — don't blow away filtered results.
+      if (jobsSearchInput.value.trim()) {
+        filterJobs();
+      } else {
+        renderJobsList(jobs);
+      }
     }
 
     function fillJobForm(job) {
@@ -1714,7 +1720,12 @@ function createUiHtml(): string {
       jobRunAtInput.value = job.runAt || '';
       jobIntentAnchorInput.value = job.intentAnchor || '';
       jobTaskPayloadInput.value = prettyJson(job.taskPayload);
-      renderJobsList(jobs);
+      // Preserve the active search filter — clicking a card shouldn't un-filter the list.
+      if (jobsSearchInput.value.trim()) {
+        filterJobs();
+      } else {
+        renderJobsList(jobs);
+      }
     }
 
     function renderJobsList(list) {
@@ -1834,12 +1845,17 @@ function createUiHtml(): string {
         : fetch('/api/jobs/' + encodeURIComponent(selectedJobId), {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              status: jobStatusInput.disabled ? undefined : 'pending',
-              cron_expr: cronExpr || undefined,
-              run_at: runAt || undefined,
-              task_payload: taskPayload,
-            }),
+            // The backend treats status='pending' as an unsuspend-only operation and
+            // ignores other fields when status is present. Send either the unsuspend
+            // payload or the field-update payload — never both — to avoid silently
+            // dropping edits when saving a suspended job.
+            body: jobStatusInput.disabled
+              ? JSON.stringify({
+                  cron_expr: cronExpr || undefined,
+                  run_at: runAt || undefined,
+                  task_payload: taskPayload,
+                })
+              : JSON.stringify({ status: 'pending' }),
           });
 
       request
