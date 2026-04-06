@@ -1712,14 +1712,14 @@ function createUiHtml(): string {
       jobsEditorTitle.textContent = 'Edit Scheduled Job';
       jobsSaveBtn.textContent = 'Save Changes';
       jobsDeleteBtn.style.display = 'inline-flex';
-      jobAgentIdInput.value = job.agentId;
-      jobStatusInput.value = job.status;
+      jobAgentIdInput.value = job.agentId || '';
+      jobStatusInput.value = job.status || 'pending';
       // API only allows setting status back to pending (unsuspend) during PATCH.
       jobStatusInput.disabled = job.status !== 'suspended';
       jobCronExprInput.value = job.cronExpr || '';
       jobRunAtInput.value = job.runAt || '';
       jobIntentAnchorInput.value = job.intentAnchor || '';
-      jobTaskPayloadInput.value = prettyJson(job.taskPayload);
+      jobTaskPayloadInput.value = prettyJson(job.taskPayload || {});
       // Preserve the active search filter — clicking a card shouldn't un-filter the list.
       if (jobsSearchInput.value.trim()) {
         filterJobs();
@@ -1759,7 +1759,7 @@ function createUiHtml(): string {
       setJobsStatus('Loading scheduled jobs…');
       fetchJson('/api/jobs')
         .then(function(data) {
-          jobs = data.jobs || [];
+          jobs = data && Array.isArray(data.jobs) ? data.jobs : [];
           if (jobsSearchInput.value.trim()) {
             filterJobs();
           } else {
@@ -1791,8 +1791,8 @@ function createUiHtml(): string {
       }
       var filtered = jobs.filter(function(job) {
         var intent = job.intentAnchor || '';
-        return job.agentId.toLowerCase().includes(q) ||
-          job.status.toLowerCase().includes(q) ||
+        return (job.agentId || '').toLowerCase().includes(q) ||
+          (job.status || '').toLowerCase().includes(q) ||
           (job.cronExpr || '').toLowerCase().includes(q) ||
           intent.toLowerCase().includes(q);
       });
@@ -1846,16 +1846,16 @@ function createUiHtml(): string {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
             // The backend treats status='pending' as an unsuspend-only operation and
-            // ignores other fields when status is present. Send either the unsuspend
-            // payload or the field-update payload — never both — to avoid silently
-            // dropping edits when saving a suspended job.
-            body: jobStatusInput.disabled
-              ? JSON.stringify({
+            // ignores other fields when status is present. Only send the unsuspend
+            // payload when the user explicitly selected 'pending'; otherwise send field
+            // updates so edits to a suspended job's cron/payload are not silently dropped.
+            body: (!jobStatusInput.disabled && jobStatusInput.value === 'pending')
+              ? JSON.stringify({ status: 'pending' })
+              : JSON.stringify({
                   cron_expr: cronExpr || undefined,
                   run_at: runAt || undefined,
                   task_payload: taskPayload,
-                })
-              : JSON.stringify({ status: 'pending' }),
+                }),
           });
 
       request
