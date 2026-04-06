@@ -22,6 +22,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **`configured` flag on `GET /api/identity`** — returns `false` until the wizard or API has saved an identity explicitly; used for first-run detection in the browser without client-side state.
 
 ### Changed
+- **`ValidationResult` 'create' variant** — replaced `{ node: KgNode }` with `{ validated: ValidatedFactData }`, a narrower type that only carries label, properties, temporal metadata, and embedding. Removes the wasted `createNodeId()` call in the validator and makes the ownership boundary explicit: the validator validates, the store mints the ID and persists. (Closes #30)
 - **Default landing screen** — the app now lands on Chat instead of Knowledge Graph after login.
 - **Session auth refactor** — `assertSecret()` extracted to `src/channels/http/session-auth.ts`; sessions store lifted to `HttpAdapter` so identity routes now accept the `curia_session` cookie in addition to the `x-web-bootstrap-secret` header.
 

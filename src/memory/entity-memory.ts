@@ -127,14 +127,14 @@ export class EntityMemory {
         // with its assigned ID, so we use that directly for the edge.
         const persistedNode = await this.store.createNode({
           type: FACT_TYPE,
-          label: result.node.label,
-          properties: result.node.properties,
-          confidence: result.node.temporal.confidence,
-          decayClass: result.node.temporal.decayClass,
-          source: result.node.temporal.source,
+          label: result.validated.label,
+          properties: result.validated.properties,
+          confidence: result.validated.temporal.confidence,
+          decayClass: result.validated.temporal.decayClass,
+          source: result.validated.temporal.source,
           // Pass the pre-computed embedding from the validator's dedup check
           // to avoid a redundant OpenAI API call.
-          embedding: result.node.embedding,
+          embedding: result.validated.embedding,
         });
 
         // If edge creation fails, the node we just created becomes an orphan

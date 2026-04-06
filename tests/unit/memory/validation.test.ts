@@ -326,7 +326,7 @@ describe('MemoryValidator', () => {
 
       expect(result.action).toBe('create');
       if (result.action === 'create') {
-        expect(result.node.temporal.source).toBe('agent:coordinator/task:abc123/channel:cli');
+        expect(result.validated.temporal.source).toBe('agent:coordinator/task:abc123/channel:cli');
       }
     });
 
@@ -348,8 +348,8 @@ describe('MemoryValidator', () => {
 
       expect(result.action).toBe('create');
       if (result.action === 'create') {
-        expect(result.node.temporal.confidence).toBe(0.95);
-        expect(result.node.temporal.decayClass).toBe('permanent');
+        expect(result.validated.temporal.confidence).toBe(0.95);
+        expect(result.validated.temporal.decayClass).toBe('permanent');
       }
     });
 
@@ -369,8 +369,8 @@ describe('MemoryValidator', () => {
 
       expect(result.action).toBe('create');
       if (result.action === 'create') {
-        expect(result.node.temporal.confidence).toBe(0.7);
-        expect(result.node.temporal.decayClass).toBe('slow_decay');
+        expect(result.validated.temporal.confidence).toBe(0.7);
+        expect(result.validated.temporal.decayClass).toBe('slow_decay');
       }
     });
   });
