@@ -4,23 +4,35 @@
 // and cancelling scheduled jobs. All mutations are delegated to
 // SchedulerService so business rules (cron parsing, auto-suspend,
 // event publishing) stay in one place.
+//
+// Auth: these routes bypass the global Bearer token hook and instead
+// use session-cookie / bootstrap-secret auth (same as KG and identity
+// routes). This allows the dashboard web app to call them without a
+// Bearer token — the browser sends the curia_session cookie automatically.
 
 import type { FastifyInstance } from 'fastify';
 import type { SchedulerService } from '../../../scheduler/scheduler-service.js';
+import { assertSecret, type SessionStore } from '../session-auth.js';
 
 export interface JobRouteOptions {
   schedulerService: SchedulerService;
+  // Session auth — same pattern as KG and identity routes.
+  // Required so the dashboard (which authenticates via session cookie, not Bearer token)
+  // can access job endpoints.
+  webAppBootstrapSecret: string | undefined;
+  sessions: SessionStore;
 }
 
 export async function jobRoutes(
   app: FastifyInstance,
   options: JobRouteOptions,
 ): Promise<void> {
-  const { schedulerService } = options;
+  const { schedulerService, webAppBootstrapSecret, sessions } = options;
 
   // -- GET /api/jobs — list jobs with optional filters --
 
   app.get('/api/jobs', async (request, reply) => {
+    if (!assertSecret(request, reply, webAppBootstrapSecret, sessions)) return;
     try {
       const { status, agent_id } = request.query as { status?: string; agent_id?: string };
       const jobs = await schedulerService.listJobs({
@@ -37,6 +49,7 @@ export async function jobRoutes(
   // -- GET /api/jobs/:id — get a single job --
 
   app.get('/api/jobs/:id', async (request, reply) => {
+    if (!assertSecret(request, reply, webAppBootstrapSecret, sessions)) return;
     try {
       const { id } = request.params as { id: string };
       const job = await schedulerService.getJob(id);
@@ -53,6 +66,7 @@ export async function jobRoutes(
   // -- POST /api/jobs — create a new job --
 
   app.post('/api/jobs', async (request, reply) => {
+    if (!assertSecret(request, reply, webAppBootstrapSecret, sessions)) return;
     const body = request.body as {
       agent_id?: string;
       cron_expr?: string;
@@ -93,6 +107,7 @@ export async function jobRoutes(
   // -- PATCH /api/jobs/:id — update an existing job --
 
   app.patch('/api/jobs/:id', async (request, reply) => {
+    if (!assertSecret(request, reply, webAppBootstrapSecret, sessions)) return;
     const { id } = request.params as { id: string };
     const body = request.body as {
       status?: string;
@@ -132,6 +147,7 @@ export async function jobRoutes(
   // -- DELETE /api/jobs/:id — cancel (soft-delete) a job --
 
   app.delete('/api/jobs/:id', async (request, reply) => {
+    if (!assertSecret(request, reply, webAppBootstrapSecret, sessions)) return;
     const { id } = request.params as { id: string };
     try {
       await schedulerService.cancelJob(id);

@@ -111,12 +111,15 @@ export class HttpAdapter {
       // KG web app routes bypass bearer auth — the app shell, static assets, and
       // /auth exchange need no token; /api/kg/* routes enforce their own session/secret.
       // Identity routes bypass bearer auth — they enforce their own bootstrap secret auth.
+      // Job routes bypass bearer auth — the dashboard accesses them via session cookie,
+      // and jobRoutes calls assertSecret on every handler.
       if (
         routeUrl === '/' ||
         routeUrl === '/auth' ||
         routeUrl.startsWith('/assets') ||
         routeUrl.startsWith('/api/kg') ||
-        routeUrl.startsWith('/api/identity')
+        routeUrl.startsWith('/api/identity') ||
+        routeUrl.startsWith('/api/jobs')
       ) return;
 
       if (!validateBearerToken(request.headers.authorization, apiToken)) {
@@ -141,7 +144,14 @@ export class HttpAdapter {
     await this.app.register(messageRoutes, { bus, logger, eventRouter: this.eventRouter });
 
     if (this.config.schedulerService) {
-      await this.app.register(jobRoutes, { schedulerService: this.config.schedulerService });
+      // Job routes use session-cookie auth (same as KG routes) so the dashboard can
+      // access them without a Bearer token. webAppBootstrapSecret may be undefined when
+      // the web UI is disabled; assertSecret will return 503 in that case.
+      await this.app.register(jobRoutes, {
+        schedulerService: this.config.schedulerService,
+        webAppBootstrapSecret,
+        sessions,
+      });
     }
 
     // Identity routes — only registered when the bootstrap secret is configured.

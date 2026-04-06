@@ -1,8 +1,15 @@
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import Fastify from 'fastify';
+import cookie from '@fastify/cookie';
 import { jobRoutes } from '../../../../src/channels/http/routes/jobs.js';
 import type { SchedulerService } from '../../../../src/scheduler/scheduler-service.js';
 import type { JobRow } from '../../../../src/scheduler/scheduler-service.js';
+import type { SessionStore } from '../../../../src/channels/http/session-auth.js';
+
+// Shared bootstrap secret used across all tests.
+const TEST_SECRET = 'test-bootstrap-secret';
+// Auth header included in every inject call so assertSecret passes.
+const AUTH = { 'x-web-bootstrap-secret': TEST_SECRET };
 
 /** Build a mock SchedulerService with vi.fn() stubs for every method the routes call. */
 function mockSchedulerService(): SchedulerService {
@@ -18,10 +25,17 @@ function mockSchedulerService(): SchedulerService {
 
 describe('Job routes', () => {
   const scheduler = mockSchedulerService();
+  const sessions: SessionStore = new Map();
   const app = Fastify();
 
   beforeAll(async () => {
-    await app.register(jobRoutes, { schedulerService: scheduler });
+    // cookie plugin required by assertSecret's session-cookie path
+    await app.register(cookie);
+    await app.register(jobRoutes, {
+      schedulerService: scheduler,
+      webAppBootstrapSecret: TEST_SECRET,
+      sessions,
+    });
     await app.ready();
   });
 
@@ -32,7 +46,7 @@ describe('Job routes', () => {
   // -- GET /api/jobs --
 
   it('GET /api/jobs returns empty list', async () => {
-    const response = await app.inject({ method: 'GET', url: '/api/jobs' });
+    const response = await app.inject({ method: 'GET', url: '/api/jobs', headers: AUTH });
     expect(response.statusCode).toBe(200);
     const body = JSON.parse(response.body);
     expect(body).toEqual({ jobs: [] });
@@ -40,17 +54,22 @@ describe('Job routes', () => {
   });
 
   it('GET /api/jobs passes query filters to service', async () => {
-    await app.inject({ method: 'GET', url: '/api/jobs?status=pending&agent_id=agent-a' });
+    await app.inject({ method: 'GET', url: '/api/jobs?status=pending&agent_id=agent-a', headers: AUTH });
     expect(scheduler.listJobs).toHaveBeenCalledWith({
       status: 'pending',
       agentId: 'agent-a',
     });
   });
 
+  it('GET /api/jobs returns 401 without auth', async () => {
+    const response = await app.inject({ method: 'GET', url: '/api/jobs' });
+    expect(response.statusCode).toBe(401);
+  });
+
   // -- GET /api/jobs/:id --
 
   it('GET /api/jobs/:id returns 404 for unknown job', async () => {
-    const response = await app.inject({ method: 'GET', url: '/api/jobs/unknown-id' });
+    const response = await app.inject({ method: 'GET', url: '/api/jobs/unknown-id', headers: AUTH });
     expect(response.statusCode).toBe(404);
     const body = JSON.parse(response.body);
     expect(body).toEqual({ error: 'Job not found' });
@@ -76,7 +95,7 @@ describe('Job routes', () => {
     };
     vi.mocked(scheduler.getJob).mockResolvedValueOnce(fakeJob);
 
-    const response = await app.inject({ method: 'GET', url: '/api/jobs/job-42' });
+    const response = await app.inject({ method: 'GET', url: '/api/jobs/job-42', headers: AUTH });
     expect(response.statusCode).toBe(200);
     const body = JSON.parse(response.body);
     expect(body.job.id).toBe('job-42');
@@ -88,6 +107,7 @@ describe('Job routes', () => {
     const response = await app.inject({
       method: 'POST',
       url: '/api/jobs',
+      headers: AUTH,
       payload: {
         agent_id: 'agent-a',
         cron_expr: '0 9 * * *',
@@ -110,6 +130,7 @@ describe('Job routes', () => {
     const response = await app.inject({
       method: 'POST',
       url: '/api/jobs',
+      headers: AUTH,
       payload: {
         cron_expr: '0 9 * * *',
         task_payload: { task: 'test' },
@@ -124,6 +145,7 @@ describe('Job routes', () => {
     const response = await app.inject({
       method: 'POST',
       url: '/api/jobs',
+      headers: AUTH,
       payload: {
         agent_id: 'agent-a',
         cron_expr: '0 9 * * *',
@@ -138,6 +160,7 @@ describe('Job routes', () => {
     const response = await app.inject({
       method: 'POST',
       url: '/api/jobs',
+      headers: AUTH,
       payload: {
         agent_id: 'agent-a',
         task_payload: { task: 'test' },
@@ -151,7 +174,7 @@ describe('Job routes', () => {
   // -- DELETE /api/jobs/:id --
 
   it('DELETE /api/jobs/:id cancels a job', async () => {
-    const response = await app.inject({ method: 'DELETE', url: '/api/jobs/job-99' });
+    const response = await app.inject({ method: 'DELETE', url: '/api/jobs/job-99', headers: AUTH });
     expect(response.statusCode).toBe(200);
     const body = JSON.parse(response.body);
     expect(body).toEqual({ cancelled: true, jobId: 'job-99' });
@@ -164,6 +187,7 @@ describe('Job routes', () => {
     const response = await app.inject({
       method: 'PATCH',
       url: '/api/jobs/job-50',
+      headers: AUTH,
       payload: { status: 'pending' },
     });
     expect(response.statusCode).toBe(200);
@@ -176,6 +200,7 @@ describe('Job routes', () => {
     const response = await app.inject({
       method: 'PATCH',
       url: '/api/jobs/job-50',
+      headers: AUTH,
       payload: { cron_expr: '0 12 * * *' },
     });
     expect(response.statusCode).toBe(200);
@@ -192,6 +217,7 @@ describe('Job routes', () => {
     const response = await app.inject({
       method: 'PATCH',
       url: '/api/jobs/job-50',
+      headers: AUTH,
       payload: { status: 'pending' },
     });
     expect(response.statusCode).toBe(400);
