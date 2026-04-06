@@ -597,6 +597,7 @@ async function main(): Promise<void> {
     skillNames: skillRegistry.list().map(s => s.manifest.name),
     schedulerService,
     identityService: officeIdentityService,
+    contactService,
   });
 
   try {

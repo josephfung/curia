@@ -33,6 +33,7 @@ import { messageRoutes } from './routes/messages.js';
 import { knowledgeGraphRoutes } from './routes/kg.js';
 import { identityRoutes } from './routes/identity.js';
 import type { OfficeIdentityService } from '../../identity/service.js';
+import type { ContactService } from '../../contacts/contact-service.js';
 
 export interface HttpAdapterConfig {
   bus: EventBus;
@@ -47,6 +48,7 @@ export interface HttpAdapterConfig {
   skillNames: string[];
   schedulerService?: SchedulerService;
   identityService?: OfficeIdentityService;
+  contactService: ContactService;
 }
 
 export class HttpAdapter {
@@ -157,6 +159,7 @@ export class HttpAdapter {
         // per-request bus subscribers.
         bus,
         eventRouter: this.eventRouter,
+        contactService: this.config.contactService,
       });
     }
 
