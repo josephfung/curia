@@ -1,6 +1,6 @@
 import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
-import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { Pool } from 'pg';
 import type { EventBus } from '../../../bus/bus.js';
@@ -1827,9 +1827,13 @@ export async function knowledgeGraphRoutes(
   });
 
   app.get('/assets/cytoscape.min.js', async (_request, reply) => {
-    const cytoscapePath = fileURLToPath(
-      new URL('../../../../node_modules/cytoscape/dist/cytoscape.min.js', import.meta.url),
-    );
+    // Use createRequire so Node's module resolution finds cytoscape relative to
+    // this source file, not relative to the compiled bundle output path.
+    // The URL-relative approach (new URL('../../../../node_modules/...')) breaks
+    // when tsup bundles everything into a flat dist/index.js — the path walks
+    // above the project root and produces a 500.
+    const require = createRequire(import.meta.url);
+    const cytoscapePath = require.resolve('cytoscape/dist/cytoscape.min.js');
     const source = await readFile(cytoscapePath, 'utf8');
     // Long-lived cache — cytoscape is a pinned dependency; the version never
     // changes without a code change, so immutable caching is safe here.
