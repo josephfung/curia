@@ -1733,6 +1733,101 @@ function createUiHtml(): string {
       if (wizardState.step > 1) navigateWizardStep(wizardState.step - 1);
     }
 
+    // ── Tone pills ─────────────────────────────────────────────────────
+
+    function buildTonePills() {
+      var grid = document.getElementById('tone-pill-grid');
+      // Rebuild on each entry so the selection syncs with current wizardState.
+      if (grid.children.length > 0) {
+        syncPillSelections();
+        updateTonePreview();
+        return;
+      }
+      TONE_OPTIONS.forEach(function(word) {
+        var btn = document.createElement('button');
+        btn.className = 'tone-pill';
+        btn.textContent = word;
+        btn.dataset.word = word;
+        btn.addEventListener('click', function() { toggleTonePill(btn, word); });
+        grid.appendChild(btn);
+      });
+      syncPillSelections();
+      updateTonePreview();
+    }
+
+    function syncPillSelections() {
+      var grid = document.getElementById('tone-pill-grid');
+      var atMax = wizardState.toneBaseline.length >= 3;
+      Array.from(grid.children).forEach(function(btn) {
+        var word = btn.dataset.word;
+        var isSelected = wizardState.toneBaseline.indexOf(word) !== -1;
+        btn.classList.toggle('selected', isSelected);
+        btn.classList.toggle('disabled', atMax && !isSelected);
+        btn.disabled = atMax && !isSelected;
+      });
+    }
+
+    function toggleTonePill(btn, word) {
+      var idx = wizardState.toneBaseline.indexOf(word);
+      if (idx !== -1) {
+        // Minimum 1: prevent deselecting the last word.
+        if (wizardState.toneBaseline.length <= 1) return;
+        wizardState.toneBaseline.splice(idx, 1);
+      } else {
+        if (wizardState.toneBaseline.length >= 3) return;
+        wizardState.toneBaseline.push(word);
+      }
+      syncPillSelections();
+      updateTonePreview();
+    }
+
+    function updateTonePreview() {
+      var words = wizardState.toneBaseline;
+      var phrase = words.length === 1 ? words[0]
+        : words.length === 2 ? words[0] + ' and ' + words[1]
+        : words[0] + ', ' + words[1] + ' and ' + words[2];
+      var suffix = words.length >= 3 ? ' (Pick up to 3)' : '';
+      document.getElementById('tone-preview').textContent =
+        words.length > 0 ? 'Your tone is ' + phrase + '.' + suffix : '';
+    }
+
+    // ── Slider previews ────────────────────────────────────────────────
+
+    function verbosityBand(v) {
+      if (v <= 25) return '\u201cHere\u2019s the short answer.\u201d';
+      if (v <= 50) return '\u201cHappy to help \u2014 let me know if you\u2019d like more detail.\u201d';
+      if (v <= 75) return '\u201cHere\u2019s what you need to know, plus a bit of context.\u201d';
+      return '\u201cLet me walk you through this thoroughly.\u201d';
+    }
+
+    function directnessBand(v) {
+      if (v <= 25) return '\u201cThere are a few things worth considering here \u2014 it\u2019s hard to say definitively.\u201d';
+      if (v <= 50) return '\u201cI\u2019d lean toward option A, though it depends on your priorities.\u201d';
+      if (v <= 75) return '\u201cThursday works. I\u2019ll send the invite.\u201d';
+      return '\u201cDo it. The risk is low and the upside is clear.\u201d';
+    }
+
+    function updateVerbosityPreview() {
+      document.getElementById('verbosity-preview').textContent = verbosityBand(Number(wVerbosityInput.value));
+    }
+
+    function updateDirectnessPreview() {
+      document.getElementById('directness-preview').textContent = directnessBand(Number(wDirectnessInput.value));
+    }
+
+    // ── Posture picker ─────────────────────────────────────────────────
+
+    function selectPosture(value) {
+      wizardState.posture = value;
+      document.querySelectorAll('.posture-card').forEach(function(card) {
+        card.classList.toggle('selected', card.dataset.posture === value);
+      });
+    }
+
+    function syncPostureSelection() {
+      selectPosture(wizardState.posture);
+    }
+
     // ── KG API helpers ─────────────────────────────────────────────────
     function setStatus(msg, isError) {
       statusEl.textContent = msg;
