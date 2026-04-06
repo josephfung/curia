@@ -185,6 +185,39 @@ describe('CalendarListEventsHandler', () => {
     }
   });
 
+  it('sorts all-day events by startDate, not as epoch 0', async () => {
+    // Regression: before the fix, startTime=null fell back to 0, placing all-day events
+    // before every timed event regardless of their actual date.
+    const allDayLaterInWeek = {
+      id: 'allday-later', title: 'Conference Day', description: '', participants: [],
+      startTime: null, endTime: null, startDate: '2026-04-08', endDate: '2026-04-08',
+      location: '', conferencing: null, status: 'confirmed', calendarId: 'cal-1', busy: false,
+    };
+    const timedEarlierInWeek = {
+      id: 'timed-earlier', title: 'Morning Call', description: '', participants: [],
+      startTime: 1775466000, endTime: 1775469600, // 2026-04-06T09:00Z – 10:00Z
+      startDate: null, endDate: null,
+      location: '', conferencing: null, status: 'confirmed', calendarId: 'cal-1', busy: true,
+    };
+    const nylasCalendarClient = {
+      // Return in "wrong" order (all-day first) so the sort must fix it
+      listEvents: vi.fn().mockResolvedValue([allDayLaterInWeek, timedEarlierInWeek]),
+    };
+
+    const result = await handler.execute(makeCtx(
+      { calendarId: 'cal-1', timeMin: '2026-04-06T00:00:00Z', timeMax: '2026-04-09T00:00:00Z' },
+      { nylasCalendarClient: nylasCalendarClient as never },
+    ));
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const data = result.data as { events: Array<{ id: string }> };
+      // timed-earlier (2026-04-06) must come before allday-later (2026-04-08)
+      expect(data.events[0].id).toBe('timed-earlier');
+      expect(data.events[1].id).toBe('allday-later');
+    }
+  });
+
   it('formats timed event timestamps as UTC ISO strings for LLM consumption', async () => {
     // 1775489400 Unix seconds = 2026-04-06T15:30:00.000Z (11:30 AM EDT)
     const timedEvent = {

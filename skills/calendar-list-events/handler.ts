@@ -88,8 +88,14 @@ export class CalendarListEventsHandler implements SkillHandler {
       let events = successfulEvents.flat();
 
       // Sort merged events by start time so the agenda reads chronologically.
-      // startTime is Unix seconds (null for all-day events, which sort first at 0).
-      events.sort((a, b) => (a.startTime ?? 0) - (b.startTime ?? 0));
+      // Timed events use startTime (Unix seconds). All-day events have startTime=null and
+      // startDate='YYYY-MM-DD'; parse startDate to a comparable Unix seconds value so they
+      // interleave correctly with timed events. Events with no date at all sort last.
+      events.sort((a, b) => {
+        const aTs = a.startTime ?? (a.startDate ? Date.parse(`${a.startDate}T00:00:00Z`) / 1000 : Number.POSITIVE_INFINITY);
+        const bTs = b.startTime ?? (b.startDate ? Date.parse(`${b.startDate}T00:00:00Z`) / 1000 : Number.POSITIVE_INFINITY);
+        return aTs - bTs;
+      });
 
       // Client-side filtering: query matches title or description (case-insensitive)
       if (query && typeof query === 'string') {
