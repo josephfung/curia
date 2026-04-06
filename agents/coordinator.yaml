@@ -245,6 +245,7 @@ pinned_skills:
   - knowledge-travel-preferences
   - knowledge-loyalty-programs
   - context-for-email
+  - extract-relationships
   - calendar-list-calendars
   - calendar-register
   - calendar-list-events

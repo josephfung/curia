@@ -13,6 +13,11 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Fixed
+- **`extract-relationships` not available to coordinator** — skill was missing from `pinned_skills`
+  in `coordinator.yaml`, so the LLM was instructed to call it but never received the tool definition;
+  tool calls silently failed and the agent hallucinated that the skill didn't exist
+
 ### Added
 - **Contacts CRUD UI** — search, create, edit, and delete contacts directly from the KG web app
 - **Contact deduplication** — `DedupService` scores contact pairs using Jaro-Winkler name
