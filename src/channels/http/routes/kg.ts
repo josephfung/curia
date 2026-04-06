@@ -1,7 +1,7 @@
 import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
-import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import type { FastifyInstance } from 'fastify';
 import type { Pool } from 'pg';
 import type { EventBus } from '../../../bus/bus.js';
 import { createInboundMessage } from '../../../bus/events.js';
@@ -9,6 +9,7 @@ import type { Logger } from '../../../logger.js';
 import type { ContactService } from '../../../contacts/contact-service.js';
 import type { ContactStatus } from '../../../contacts/types.js';
 import { MessageRejectedError, type EventRouter } from '../event-router.js';
+import { assertSecret, type SessionStore } from '../session-auth.js';
 
 export interface KnowledgeGraphRouteOptions {
   pool: Pool;
@@ -24,6 +25,9 @@ export interface KnowledgeGraphRouteOptions {
   bus: EventBus;
   eventRouter: EventRouter;
   contactService: ContactService;
+  // Shared session store — created in HttpAdapter, passed to both KG and identity routes
+  // so both can accept the curia_session cookie for authentication.
+  sessions: SessionStore;
 }
 
 // How long the chat POST waits for an agent response before timing out.
@@ -38,10 +42,6 @@ const WEB_CHANNEL_ID = 'web';
 // Sentinel sender ID for the web channel. The value is cosmetic — contact-resolver.ts
 // short-circuits to the CEO contact for this channel regardless of the sender string.
 const WEB_SENDER_ID = 'ceo-web-user';
-
-// Session token → expiry timestamp (ms). Scoped to the route registration
-// lifetime (process lifetime for production). Single-tenant tool: memory is fine.
-type SessionStore = Map<string, number>;
 
 interface KgNodeRow {
   id: string;
@@ -72,47 +72,6 @@ function normalizeLimit(raw: string | undefined, fallback: number, max: number):
   const parsed = Number.parseInt(raw ?? '', 10);
   if (Number.isNaN(parsed)) return fallback;
   return Math.max(1, Math.min(parsed, max));
-}
-
-function assertSecret(
-  request: FastifyRequest,
-  reply: FastifyReply,
-  configuredSecret: string | undefined,
-  sessions: SessionStore,
-): boolean {
-  if (!configuredSecret) {
-    reply.status(503).send({
-      error: 'Knowledge graph web UI is disabled. Set WEB_APP_BOOTSTRAP_SECRET in .env to enable it.',
-    });
-    return false;
-  }
-
-  // Primary path: browser session cookie set by POST /auth.
-  // @fastify/cookie augments FastifyRequest with .cookies at runtime.
-  const cookies = (request as unknown as { cookies?: Record<string, string | undefined> }).cookies;
-  const sessionToken = cookies?.['curia_session'];
-  if (sessionToken) {
-    const expiresAt = sessions.get(sessionToken);
-    if (expiresAt !== undefined && Date.now() < expiresAt) return true;
-    // Expired or unknown token — fall through to header check below.
-  }
-
-  // Fallback: direct header (programmatic API access via curl / scripts).
-  // Reject non-string values (Fastify coerces duplicate headers to string[]).
-  // Use timing-safe comparison to prevent character-by-character brute force.
-  const provided = request.headers['x-web-bootstrap-secret'];
-  if (
-    typeof provided !== 'string' ||
-    provided.length !== configuredSecret.length ||
-    !timingSafeEqual(Buffer.from(provided), Buffer.from(configuredSecret))
-  ) {
-    reply.status(401).send({
-      error: 'Unauthorized. Authenticate via POST /auth or provide the x-web-bootstrap-secret header.',
-    });
-    return false;
-  }
-
-  return true;
 }
 
 // Design tokens — dark mode, from the Curia design system (theme.md).
@@ -552,6 +511,233 @@ function createUiHtml(): string {
     .form-field select:focus {
       border-color: var(--teal);
     }
+    /* ── Wizard overlay ─────────────────────────────────────────────── */
+    #view-wizard {
+      position: fixed;
+      inset: 0;
+      z-index: 60;
+      background: var(--bg);
+      display: none;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    .wizard-topbar {
+      flex: none;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 16px 24px;
+      border-bottom: 1px solid var(--border);
+    }
+    .wizard-body {
+      flex: 1;
+      overflow-y: auto;
+      padding: 32px 24px 40px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    .wizard-content {
+      width: 100%;
+      max-width: 520px;
+      display: flex;
+      flex-direction: column;
+    }
+    .wizard-heading {
+      font-family: 'Lora', Georgia, serif;
+      font-size: 1.375rem;
+      font-weight: 500;
+      color: var(--fg);
+      margin-bottom: 6px;
+    }
+    .wizard-subheading {
+      font-size: 0.8125rem;
+      color: var(--fg-muted);
+      margin-bottom: 28px;
+    }
+    .wizard-label {
+      font-size: 0.6875rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--fg-muted);
+      margin-bottom: 10px;
+    }
+    .wizard-field { margin-bottom: 20px; }
+    .wizard-field label {
+      display: block;
+      font-size: 0.8125rem;
+      font-weight: 500;
+      color: var(--fg-muted);
+      margin-bottom: 6px;
+    }
+    .wizard-field input {
+      background: var(--muted);
+      border: 1px solid var(--input-border);
+      border-radius: var(--radius-md);
+      color: var(--fg);
+      font-family: inherit;
+      font-size: 0.875rem;
+      padding: 10px 12px;
+      outline: none;
+      width: 100%;
+      transition: border-color 0.12s;
+    }
+    .wizard-field input:focus { border-color: var(--teal); }
+    .wizard-field textarea {
+      background: var(--muted);
+      border: 1px solid var(--input-border);
+      border-radius: var(--radius-md);
+      color: var(--fg);
+      font-family: inherit;
+      font-size: 0.875rem;
+      padding: 10px 12px;
+      outline: none;
+      width: 100%;
+      resize: vertical;
+      min-height: 90px;
+      transition: border-color 0.12s;
+    }
+    .wizard-field textarea:focus { border-color: var(--teal); }
+    .wizard-progress { display: flex; gap: 6px; align-items: center; }
+    .wizard-dot {
+      width: 28px;
+      height: 4px;
+      border-radius: 2px;
+      background: var(--muted);
+      transition: background 0.2s;
+    }
+    .wizard-dot.done { background: var(--primary); }
+    .tone-pill {
+      padding: 6px 14px;
+      border-radius: 99px;
+      border: 1px solid var(--accent);
+      background: none;
+      color: var(--fg-muted);
+      font-family: inherit;
+      font-size: 0.8125rem;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background 0.1s, color 0.1s, border-color 0.1s, opacity 0.1s;
+    }
+    .tone-pill.selected {
+      background: var(--primary);
+      color: var(--primary-fg);
+      border-color: var(--primary);
+    }
+    .tone-pill.disabled { opacity: 0.35; cursor: not-allowed; pointer-events: none; }
+    .wizard-preview {
+      font-size: 0.8125rem;
+      color: var(--teal);
+      min-height: 18px;
+      margin-bottom: 24px;
+    }
+    .wizard-sample {
+      font-size: 0.8125rem;
+      font-style: italic;
+      color: var(--fg-muted);
+      padding: 10px 14px;
+      background: var(--card);
+      border-radius: var(--radius-md);
+      border-left: 2px solid var(--muted);
+      margin-bottom: 24px;
+    }
+    .slider-labels {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.6875rem;
+      color: var(--accent);
+      margin-bottom: 8px;
+    }
+    .posture-grid { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 28px; }
+    .posture-card {
+      flex: 1;
+      min-width: 120px;
+      padding: 12px 14px;
+      border-radius: var(--radius-md);
+      border: 1px solid var(--muted);
+      background: none;
+      color: var(--fg-muted);
+      font-family: inherit;
+      text-align: left;
+      cursor: pointer;
+      transition: border-color 0.12s, background 0.12s;
+    }
+    .posture-card:hover { border-color: var(--accent); }
+    .posture-card.selected {
+      border-color: var(--primary);
+      background: rgba(222,222,222,0.06);
+      color: var(--fg);
+    }
+    .posture-card-title { font-size: 0.8125rem; font-weight: 600; margin-bottom: 3px; }
+    .posture-card-desc  { font-size: 0.75rem; }
+    .review-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 20px;
+      margin-bottom: 28px;
+    }
+    .review-row {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      padding: 10px 0;
+      border-bottom: 1px solid var(--border);
+    }
+    .review-row:last-child { border-bottom: none; }
+    .review-row-label {
+      font-size: 0.6875rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--fg-muted);
+    }
+    .review-row-value { font-size: 0.875rem; color: var(--fg); }
+    .wizard-nav {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+      margin-top: 8px;
+    }
+    .btn-wizard-back {
+      padding: 10px 20px;
+      border-radius: var(--radius-md);
+      border: 1px solid var(--muted);
+      background: none;
+      color: var(--fg-muted);
+      font-family: inherit;
+      font-size: 0.875rem;
+      cursor: pointer;
+      transition: border-color 0.12s, color 0.12s;
+    }
+    .btn-wizard-back:hover { border-color: var(--accent); color: var(--fg); }
+    .btn-wizard-next {
+      padding: 10px 24px;
+      border-radius: var(--radius-md);
+      background: var(--primary);
+      color: var(--primary-fg);
+      font-family: inherit;
+      font-size: 0.875rem;
+      font-weight: 600;
+      border: none;
+      cursor: pointer;
+      transition: opacity 0.12s;
+    }
+    .btn-wizard-next:hover    { opacity: 0.88; }
+    .btn-wizard-next:disabled { opacity: 0.5; cursor: not-allowed; }
+    #chat-success-banner {
+      display: none;
+      background: rgba(71,129,137,0.15);
+      border-bottom: 1px solid rgba(71,129,137,0.35);
+      color: var(--teal);
+      font-size: 0.8125rem;
+      font-weight: 500;
+      padding: 10px 16px;
+      text-align: center;
+      flex: none;
+    }
   </style>
 </head>
 <body>
@@ -660,6 +846,35 @@ function createUiHtml(): string {
                 <path d="M6.5 3.75v3.15l2 1.25"/>
               </svg>
               Scheduled Jobs
+            </button>
+          </div>
+        </div>
+
+        <!-- Settings (expandable section) -->
+        <div>
+          <button class="nav-item" id="settings-toggle" onclick="toggleSettings()">
+            <!-- gear icon -->
+            <svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="7.5" cy="7.5" r="2"/>
+              <path d="M7.5 1v1.5M7.5 12.5V14M14 7.5h-1.5M2.5 7.5H1M12.07 2.93l-1.06 1.06M4 11l-1.06 1.06M12.07 12.07l-1.06-1.06M4 4l-1.06-1.06"/>
+            </svg>
+            Settings
+            <svg id="settings-chevron" class="chevron" style="margin-left: auto;" width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M3 4.5L6 7.5L9 4.5"/>
+            </svg>
+          </button>
+
+          <div id="settings-submenu" style="display: flex; flex-direction: column; gap: 2px; margin-top: 2px;">
+            <button id="nav-wizard" class="nav-sub-item" onclick="navigate('wizard', 'Setup Wizard', 'nav-wizard')">
+              <!-- wand icon -->
+              <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M2 11L8 5"/>
+                <path d="M9.5 1.5l.5.5-.5.5-.5-.5z"/>
+                <path d="M5.5 2.5l.5.5-.5.5-.5-.5z"/>
+                <path d="M10.5 5.5l.5.5-.5.5-.5-.5z"/>
+                <path d="M8 5l3.5-3.5"/>
+              </svg>
+              Setup Wizard
             </button>
           </div>
         </div>
@@ -897,6 +1112,8 @@ function createUiHtml(): string {
 
         <!-- Right: message thread + input -->
         <div class="chat-thread">
+          <!-- Success banner — shown briefly after wizard completes -->
+          <div id="chat-success-banner">Your assistant is ready.</div>
           <div id="chat-messages" class="chat-messages"></div>
           <div class="chat-input-bar">
             <form id="chat-form" style="display: contents;">
@@ -908,6 +1125,116 @@ function createUiHtml(): string {
 
       </div>
 
+      <!-- ============================================================
+           WIZARD OVERLAY — full-screen, z-index 60.
+           Shown on first run (configured: false) or via Settings nav.
+      ============================================================= -->
+      <div id="view-wizard">
+
+        <!-- Top bar: wordmark + progress dots + step counter -->
+        <div class="wizard-topbar">
+          <span style="font-family: 'Lora', Georgia, serif; font-size: 1.125rem; font-weight: 500; letter-spacing: 0.06em; color: var(--fg);">CURIA</span>
+          <div class="wizard-progress">
+            <div class="wizard-dot" id="wdot-1"></div>
+            <div class="wizard-dot" id="wdot-2"></div>
+            <div class="wizard-dot" id="wdot-3"></div>
+            <div class="wizard-dot" id="wdot-4"></div>
+          </div>
+          <span id="wizard-step-label" style="font-size: 0.75rem; color: var(--fg-muted);">Step 1 of 4</span>
+        </div>
+
+        <div class="wizard-body">
+
+          <!-- Step 1 — Name your assistant -->
+          <div id="wstep-1" class="wizard-content" style="display: none;">
+            <div class="wizard-heading">What should your assistant be called?</div>
+            <div class="wizard-subheading">You can change these at any time from Settings.</div>
+            <div class="wizard-field">
+              <label for="w-name">Assistant name</label>
+              <input id="w-name" type="text" placeholder="Alex Curia" />
+            </div>
+            <div class="wizard-field">
+              <label for="w-title">Title</label>
+              <input id="w-title" type="text" placeholder="Executive Assistant to the CEO" />
+            </div>
+            <div class="wizard-field">
+              <label for="w-signature">Email signature <span style="font-weight:400;color:var(--fg-muted);">(optional)</span></label>
+              <textarea id="w-signature" placeholder="Alex Curia&#10;Office of the CEO"></textarea>
+            </div>
+            <div id="wstep1-error" style="display:none;color:var(--destructive);font-size:0.8125rem;margin-bottom:12px;"></div>
+            <div class="wizard-nav">
+              <span></span>
+              <button class="btn-wizard-next" onclick="wizardNext()">Next →</button>
+            </div>
+          </div>
+
+          <!-- Step 2 — Communication style -->
+          <div id="wstep-2" class="wizard-content" style="display: none;">
+            <div class="wizard-heading">How should your assistant communicate?</div>
+            <div class="wizard-subheading">Pick 1–3 words that describe the tone you want.</div>
+            <div class="wizard-label">Tone <span style="font-weight:400;text-transform:none;letter-spacing:0;">(pick up to 3)</span></div>
+            <div id="tone-pill-grid" style="display:flex;flex-wrap:wrap;gap:7px;margin-bottom:10px;"></div>
+            <div id="tone-preview" class="wizard-preview"></div>
+            <div class="wizard-label" style="margin-top:4px;">Detail level</div>
+            <input id="w-verbosity" type="range" min="0" max="100" value="50"
+              style="width:100%;accent-color:var(--primary);margin-bottom:6px;" oninput="updateVerbosityPreview()" />
+            <div class="slider-labels"><span>Brief</span><span>Thorough</span></div>
+            <div id="verbosity-preview" class="wizard-sample"></div>
+            <div class="wizard-label">Directness</div>
+            <input id="w-directness" type="range" min="0" max="100" value="75"
+              style="width:100%;accent-color:var(--primary);margin-bottom:6px;" oninput="updateDirectnessPreview()" />
+            <div class="slider-labels"><span>Measured</span><span>Direct</span></div>
+            <div id="directness-preview" class="wizard-sample"></div>
+            <div class="wizard-label">Decision posture <span style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--accent);">(for external actions)</span></div>
+            <div class="posture-grid">
+              <button class="posture-card" data-posture="conservative" onclick="selectPosture('conservative')">
+                <div class="posture-card-title">Conservative</div>
+                <div class="posture-card-desc">Verify before acting; flag ambiguity</div>
+              </button>
+              <button class="posture-card" data-posture="balanced" onclick="selectPosture('balanced')">
+                <div class="posture-card-title">Balanced</div>
+                <div class="posture-card-desc">Act when confident, flag when uncertain</div>
+              </button>
+              <button class="posture-card" data-posture="proactive" onclick="selectPosture('proactive')">
+                <div class="posture-card-title">Proactive</div>
+                <div class="posture-card-desc">Bias toward action; less checking in</div>
+              </button>
+            </div>
+            <div class="wizard-nav">
+              <button class="btn-wizard-back" onclick="wizardBack()">← Back</button>
+              <button class="btn-wizard-next" onclick="wizardNext()">Next →</button>
+            </div>
+          </div>
+
+          <!-- Step 3 — Anything else? -->
+          <div id="wstep-3" class="wizard-content" style="display: none;">
+            <div class="wizard-heading">Is there anything else we should know?</div>
+            <div class="wizard-subheading">Optional — any specific preferences you'd like your assistant to follow.</div>
+            <div class="wizard-field">
+              <textarea id="w-preferences" style="min-height:140px;"
+                placeholder="E.g., 'Always include agenda items in meeting requests' or 'Flag emails from investors as high priority'"></textarea>
+            </div>
+            <div class="wizard-nav">
+              <button class="btn-wizard-back" onclick="wizardBack()">← Back</button>
+              <button class="btn-wizard-next" onclick="wizardNext()">Review →</button>
+            </div>
+          </div>
+
+          <!-- Step 4 — Review & confirm -->
+          <div id="wstep-4" class="wizard-content" style="display: none;">
+            <div class="wizard-heading">Does everything look right?</div>
+            <div class="wizard-subheading">Go back to change anything, or save to get started.</div>
+            <div class="review-card" id="review-card"></div>
+            <div id="wizard-error" style="display:none;color:var(--destructive);font-size:0.8125rem;margin-bottom:12px;"></div>
+            <div class="wizard-nav">
+              <button class="btn-wizard-back" onclick="wizardBack()">← Back</button>
+              <button id="wizard-save-btn" class="btn-wizard-next" onclick="submitWizard()">Confirm &amp; save</button>
+            </div>
+          </div>
+
+        </div><!-- /.wizard-body -->
+      </div><!-- /#view-wizard -->
+
     </main>
   </div>
 
@@ -916,6 +1243,30 @@ function createUiHtml(): string {
     // ── State ──────────────────────────────────────────────────────────
     var cy = null;           // Cytoscape instance (lazy-initialised on first login)
     var memoryOpen = true;   // Memory nav section expanded by default
+    var settingsOpen = true; // Settings nav section expanded by default
+
+    // ── Wizard state ───────────────────────────────────────────────────
+    var wizardState = {
+      step: 1,
+      name: '',
+      title: '',
+      signature: '',
+      toneBaseline: ['warm', 'direct'],
+      verbosity: 50,
+      directness: 75,
+      posture: 'conservative',
+      preferences: '',
+    };
+
+    // All valid tone words — mirrors BASELINE_TONE_OPTIONS in src/identity/types.ts.
+    var TONE_OPTIONS = [
+      'warm','friendly','approachable','personable','empathetic','encouraging','gracious','caring',
+      'direct','blunt','candid','frank','matter-of-fact','no-nonsense',
+      'energetic','calm','composed','enthusiastic','steady','measured',
+      'playful','witty','dry','charming','diplomatic','tactful','thoughtful','curious',
+      'confident','assured','polished','authoritative','professional',
+    ];
+
     var activeNavId = 'nav-kg';
     var contacts = [];
     var selectedContactId = null;
@@ -957,6 +1308,8 @@ function createUiHtml(): string {
     var searchBtn     = document.getElementById('search-btn');
     var memoryCaret   = document.getElementById('memory-chevron');
     var memorySubmenu = document.getElementById('memory-submenu');
+    var settingsSubmenu = document.getElementById('settings-submenu');
+    var settingsCaret   = document.getElementById('settings-chevron');
     var contactsStatusEl = document.getElementById('contacts-status');
     var contactsSearchInput = document.getElementById('contacts-search-input');
     var contactsSearchBtn = document.getElementById('contacts-search-btn');
@@ -1013,10 +1366,33 @@ function createUiHtml(): string {
     var chatTextarea   = document.getElementById('chat-textarea');
     var chatSendBtn    = document.getElementById('chat-send-btn');
 
+    // Wizard DOM refs
+    var wstep1El         = document.getElementById('wstep-1');
+    var wstep2El         = document.getElementById('wstep-2');
+    var wstep3El         = document.getElementById('wstep-3');
+    var wstep4El         = document.getElementById('wstep-4');
+    var wDots            = [
+      document.getElementById('wdot-1'),
+      document.getElementById('wdot-2'),
+      document.getElementById('wdot-3'),
+      document.getElementById('wdot-4'),
+    ];
+    var wizardStepLabel  = document.getElementById('wizard-step-label');
+    var wNameInput       = document.getElementById('w-name');
+    var wTitleInput      = document.getElementById('w-title');
+    var wSignatureInput  = document.getElementById('w-signature');
+    var wVerbosityInput  = document.getElementById('w-verbosity');
+    var wDirectnessInput = document.getElementById('w-directness');
+    var wPrefsInput      = document.getElementById('w-preferences');
+    var wstep1Error      = document.getElementById('wstep1-error');
+    var wizardError      = document.getElementById('wizard-error');
+    var wizardSaveBtn    = document.getElementById('wizard-save-btn');
+    var chatSuccessBanner = document.getElementById('chat-success-banner');
+
     // Catch template/script divergence early rather than producing cryptic null errors
     if (!authWall || !mainApp || !authForm || !authInput || !authError ||
         !statusEl || !resultsEl || !searchInput || !searchBtn ||
-        !memoryCaret || !memorySubmenu ||
+        !memoryCaret || !memorySubmenu || !settingsSubmenu || !settingsCaret ||
         !contactsStatusEl || !contactsSearchInput || !contactsSearchBtn ||
         !contactsNewBtn || !contactsListEl || !contactsForm || !contactsEditorTitle ||
         !contactsDeleteBtn || !contactsSaveBtn || !contactsCancelBtn ||
@@ -1031,6 +1407,11 @@ function createUiHtml(): string {
         !jobsForm || !jobsEditorTitle || !jobsDeleteBtn || !jobsSaveBtn || !jobsCancelBtn ||
         !jobAgentIdInput || !jobStatusInput || !jobCronExprInput || !jobRunAtInput ||
         !jobIntentAnchorInput || !jobTaskPayloadInput ||
+        !wstep1El || !wstep2El || !wstep3El || !wstep4El ||
+        wDots.some(function(d) { return !d; }) ||
+        !wizardStepLabel || !wNameInput || !wTitleInput || !wSignatureInput ||
+        !wVerbosityInput || !wDirectnessInput || !wPrefsInput ||
+        !wstep1Error || !wizardError || !wizardSaveBtn || !chatSuccessBanner ||
         !chatMessagesEl || !chatConvListEl || !chatForm || !chatTextarea || !chatSendBtn) {
       throw new Error('Curia KG: required DOM element missing — check template integrity.');
     }
@@ -1041,9 +1422,35 @@ function createUiHtml(): string {
 
     function showMain() {
       authWall.style.display = 'none';
-      mainApp.style.display  = 'flex';
-      initCytoscape();
-      search(); // auto-load all nodes on entry
+      // Check whether identity has been configured via the wizard. If not, show the
+      // wizard overlay. Main app stays hidden until wizard completes (or identity check fails).
+      fetch('/api/identity')
+        .then(function(res) {
+          if (!res.ok) throw new Error('HTTP ' + res.status);
+          return res.json();
+        })
+        .then(function(data) {
+          if (!data.configured) {
+            // Reveal the main app shell before showing the wizard — #view-wizard is
+            // position:fixed but it's still a DOM child of #main-app, so display:none
+            // on the parent hides it regardless of positioning.
+            mainApp.style.display = 'flex';
+            initCytoscape();
+            showWizard(data.identity);
+          } else {
+            mainApp.style.display = 'flex';
+            navigate('chat', 'Chat', 'nav-chat');
+            initCytoscape();
+          }
+        })
+        .catch(function(err) {
+          // Identity service not available or check failed — fall back to main app.
+          // Log so operators can diagnose DB/network issues at login time.
+          console.error('[curia] identity check failed on login:', err);
+          mainApp.style.display = 'flex';
+          navigate('chat', 'Chat', 'nav-chat');
+          initCytoscape();
+        });
     }
 
     function showAuthError(msg) {
@@ -1146,17 +1553,45 @@ function createUiHtml(): string {
 
     // ── Navigation ─────────────────────────────────────────────────────
     function navigate(view, title, navId) {
-      var kgView   = document.getElementById('view-kg');
-      var chatView = document.getElementById('view-chat');
-      var contactsView = document.getElementById('view-contacts');
-      var tasksView = document.getElementById('view-tasks');
+      var kgView            = document.getElementById('view-kg');
+      var chatView          = document.getElementById('view-chat');
+      var contactsView      = document.getElementById('view-contacts');
+      var tasksView         = document.getElementById('view-tasks');
       var scheduledJobsView = document.getElementById('view-scheduled-jobs');
+      var viewWizard        = document.getElementById('view-wizard');
 
-      kgView.style.display   = view === 'kg'           ? 'flex' : 'none';
-      chatView.style.display = view === 'chat'         ? 'flex' : 'none';
-      contactsView.style.display = view === 'contacts' ? 'flex' : 'none';
-      tasksView.style.display = view === 'tasks'       ? 'flex' : 'none';
+      // When navigating to the wizard, fetch the current identity to pre-fill fields,
+      // then delegate to showWizard(). Return early — the wizard has its own overlay.
+      if (view === 'wizard') {
+        // Update active highlight before delegating — same ordering as all other nav paths.
+        if (activeNavId) {
+          var prev = document.getElementById(activeNavId);
+          if (prev) prev.classList.remove('active');
+        }
+        if (navId) {
+          var curr = document.getElementById(navId);
+          if (curr) curr.classList.add('active');
+          activeNavId = navId;
+        }
+        fetch('/api/identity')
+          .then(function(res) {
+            if (!res.ok) throw new Error('HTTP ' + res.status);
+            return res.json();
+          })
+          .then(function(data) { showWizard(data.identity); })
+          .catch(function(err) {
+            console.error('[curia] failed to load identity for wizard pre-fill:', err);
+            showWizard(null);
+          });
+        return;
+      }
+
+      kgView.style.display            = view === 'kg'             ? 'flex' : 'none';
+      chatView.style.display          = view === 'chat'           ? 'flex' : 'none';
+      contactsView.style.display      = view === 'contacts'       ? 'flex' : 'none';
+      tasksView.style.display         = view === 'tasks'          ? 'flex' : 'none';
       scheduledJobsView.style.display = view === 'scheduled-jobs' ? 'flex' : 'none';
+      if (viewWizard) viewWizard.style.display = 'none'; // always hide when navigating elsewhere
       // When returning to the KG view, tell Cytoscape to re-measure the container.
       // The canvas dimensions may be stale if the view was hidden (display:none)
       // since the last render. Defer to requestAnimationFrame so the browser
@@ -1168,6 +1603,9 @@ function createUiHtml(): string {
           cy.resize();
           cy.fit();
         });
+      }
+      if (view === 'kg') {
+        search(); // auto-load all nodes when entering the KG view
       }
       if (view === 'contacts') {
         loadContacts();
@@ -1202,6 +1640,332 @@ function createUiHtml(): string {
       memoryOpen = !memoryOpen;
       memorySubmenu.style.display = memoryOpen ? 'flex' : 'none';
       memoryCaret.classList.toggle('collapsed', !memoryOpen);
+    }
+
+    function toggleSettings() {
+      settingsOpen = !settingsOpen;
+      settingsSubmenu.style.display = settingsOpen ? 'flex' : 'none';
+      settingsCaret.classList.toggle('collapsed', !settingsOpen);
+    }
+
+    // ── Wizard step management ─────────────────────────────────────────
+
+    function navigateWizardStep(n) {
+      wstep1El.style.display = n === 1 ? 'flex' : 'none';
+      wstep2El.style.display = n === 2 ? 'flex' : 'none';
+      wstep3El.style.display = n === 3 ? 'flex' : 'none';
+      wstep4El.style.display = n === 4 ? 'flex' : 'none';
+      // Dots for steps before n are filled; current and future are empty.
+      wDots.forEach(function(dot, i) { dot.classList.toggle('done', i < n); });
+      wizardStepLabel.textContent = 'Step ' + n + ' of 4';
+      wizardState.step = n;
+      if (n === 2) {
+        buildTonePills();
+        syncPostureSelection();
+        updateVerbosityPreview();
+        updateDirectnessPreview();
+      }
+      if (n === 4) { renderReview(); }
+    }
+
+    function showWizard(identity) {
+      // Treat null/undefined identity as an empty object — all fields fall back to defaults.
+      if (!identity) identity = {};
+      wizardState.name      = (identity && identity.assistant && identity.assistant.name)      || '';
+      wizardState.title     = (identity && identity.assistant && identity.assistant.title)     || '';
+      wizardState.signature = (identity && identity.assistant && identity.assistant.emailSignature) || '';
+      wizardState.toneBaseline = (identity && identity.tone && identity.tone.baseline && identity.tone.baseline.length)
+        ? identity.tone.baseline.slice() : ['warm', 'direct'];
+      wizardState.verbosity  = (identity && identity.tone && identity.tone.verbosity  != null) ? identity.tone.verbosity  : 50;
+      wizardState.directness = (identity && identity.tone && identity.tone.directness != null) ? identity.tone.directness : 75;
+      wizardState.posture    = (identity && identity.decisionStyle && identity.decisionStyle.externalActions)
+        ? identity.decisionStyle.externalActions : 'conservative';
+      wizardState.preferences = '';
+
+      wNameInput.value       = wizardState.name;
+      wTitleInput.value      = wizardState.title;
+      wSignatureInput.value  = wizardState.signature;
+      wVerbosityInput.value  = String(wizardState.verbosity);
+      wDirectnessInput.value = String(wizardState.directness);
+      wPrefsInput.value      = '';
+
+      // Reset pill grid so it rebuilds with the new selection state.
+      var grid = document.getElementById('tone-pill-grid');
+      if (grid) grid.replaceChildren();
+
+      document.getElementById('view-wizard').style.display = 'flex';
+      wstep1Error.style.display = 'none';
+      wizardError.style.display = 'none';
+      navigateWizardStep(1);
+    }
+
+    function hideWizard() {
+      document.getElementById('view-wizard').style.display = 'none';
+    }
+
+    function validateWizardStep(n) {
+      if (n === 1) {
+        var name = wNameInput.value.trim();
+        if (!name) {
+          wstep1Error.textContent = 'Assistant name is required.';
+          wstep1Error.style.display = 'block';
+          return false;
+        }
+        wstep1Error.style.display = 'none';
+        wizardState.name      = name;
+        wizardState.title     = wTitleInput.value.trim();
+        wizardState.signature = wSignatureInput.value.trim();
+        return true;
+      }
+      if (n === 2) {
+        if (wizardState.toneBaseline.length === 0) return false;
+        wizardState.verbosity  = Number(wVerbosityInput.value);
+        wizardState.directness = Number(wDirectnessInput.value);
+        return true;
+      }
+      if (n === 3) {
+        wizardState.preferences = wPrefsInput.value.trim();
+        return true;
+      }
+      return true;
+    }
+
+    function wizardNext() {
+      if (!validateWizardStep(wizardState.step)) return;
+      if (wizardState.step < 4) navigateWizardStep(wizardState.step + 1);
+    }
+
+    function wizardBack() {
+      if (wizardState.step > 1) navigateWizardStep(wizardState.step - 1);
+    }
+
+    // ── Tone pills ─────────────────────────────────────────────────────
+
+    function buildTonePills() {
+      var grid = document.getElementById('tone-pill-grid');
+      // Rebuild on each entry so the selection syncs with current wizardState.
+      if (grid.children.length > 0) {
+        syncPillSelections();
+        updateTonePreview();
+        return;
+      }
+      TONE_OPTIONS.forEach(function(word) {
+        var btn = document.createElement('button');
+        btn.className = 'tone-pill';
+        btn.textContent = word;
+        btn.dataset.word = word;
+        btn.addEventListener('click', function() { toggleTonePill(btn, word); });
+        grid.appendChild(btn);
+      });
+      syncPillSelections();
+      updateTonePreview();
+    }
+
+    function syncPillSelections() {
+      var grid = document.getElementById('tone-pill-grid');
+      var atMax = wizardState.toneBaseline.length >= 3;
+      Array.from(grid.children).forEach(function(btn) {
+        var word = btn.dataset.word;
+        var isSelected = wizardState.toneBaseline.indexOf(word) !== -1;
+        btn.classList.toggle('selected', isSelected);
+        btn.classList.toggle('disabled', atMax && !isSelected);
+        btn.disabled = atMax && !isSelected;
+      });
+    }
+
+    function toggleTonePill(btn, word) {
+      var idx = wizardState.toneBaseline.indexOf(word);
+      if (idx !== -1) {
+        // Minimum 1: prevent deselecting the last word.
+        if (wizardState.toneBaseline.length <= 1) return;
+        wizardState.toneBaseline.splice(idx, 1);
+      } else {
+        if (wizardState.toneBaseline.length >= 3) return;
+        wizardState.toneBaseline.push(word);
+      }
+      syncPillSelections();
+      updateTonePreview();
+    }
+
+    function updateTonePreview() {
+      var words = wizardState.toneBaseline;
+      var phrase = words.length === 1 ? words[0]
+        : words.length === 2 ? words[0] + ' and ' + words[1]
+        : words[0] + ', ' + words[1] + ' and ' + words[2];
+      var suffix = words.length >= 3 ? ' (Pick up to 3)' : '';
+      document.getElementById('tone-preview').textContent =
+        words.length > 0 ? 'Your tone is ' + phrase + '.' + suffix : '';
+    }
+
+    // ── Slider previews ────────────────────────────────────────────────
+
+    function verbosityBand(v) {
+      if (v <= 25) return '\u201cHere\u2019s the short answer.\u201d';
+      if (v <= 50) return '\u201cHappy to help \u2014 let me know if you\u2019d like more detail.\u201d';
+      if (v <= 75) return '\u201cHere\u2019s what you need to know, plus a bit of context.\u201d';
+      return '\u201cLet me walk you through this thoroughly.\u201d';
+    }
+
+    function directnessBand(v) {
+      if (v <= 25) return '\u201cThere are a few things worth considering here \u2014 it\u2019s hard to say definitively.\u201d';
+      if (v <= 50) return '\u201cI\u2019d lean toward option A, though it depends on your priorities.\u201d';
+      if (v <= 75) return '\u201cThursday works. I\u2019ll send the invite.\u201d';
+      return '\u201cDo it. The risk is low and the upside is clear.\u201d';
+    }
+
+    function updateVerbosityPreview() {
+      document.getElementById('verbosity-preview').textContent = verbosityBand(Number(wVerbosityInput.value));
+    }
+
+    function updateDirectnessPreview() {
+      document.getElementById('directness-preview').textContent = directnessBand(Number(wDirectnessInput.value));
+    }
+
+    // ── Posture picker ─────────────────────────────────────────────────
+
+    function selectPosture(value) {
+      wizardState.posture = value;
+      document.querySelectorAll('.posture-card').forEach(function(card) {
+        card.classList.toggle('selected', card.dataset.posture === value);
+      });
+    }
+
+    function syncPostureSelection() {
+      selectPosture(wizardState.posture);
+    }
+
+    // ── Review & submit ────────────────────────────────────────────────
+
+    function renderReview() {
+      var card = document.getElementById('review-card');
+      // Remove all existing child nodes safely (no innerHTML — user input could contain HTML).
+      while (card.firstChild) card.removeChild(card.firstChild);
+
+      var v = wizardState.verbosity;
+      var verbosityDesc = v <= 25 ? 'Very brief responses — just the essentials.'
+        : v <= 50 ? 'Concise responses by default.'
+        : v <= 75 ? 'Adapts length to the situation.'
+        : 'Thorough by default — full context included.';
+
+      var d = wizardState.directness;
+      var directnessDesc = d <= 25 ? 'Measured — acknowledges uncertainty carefully.'
+        : d <= 50 ? 'Leans direct but hedges where uncertain.'
+        : d <= 75 ? 'Direct — minimal unnecessary hedging.'
+        : 'States positions plainly; no softening.';
+
+      var postureMap = {
+        conservative: 'Verifies before acting on external requests.',
+        balanced:     'Acts when confident; flags when uncertain.',
+        proactive:    'Biases toward action with less checking in.',
+      };
+      var postureDesc = postureMap[wizardState.posture] || '';
+
+      var words = wizardState.toneBaseline;
+      var tonePhrase = words.length === 1 ? words[0]
+        : words.length === 2 ? words[0] + ' and ' + words[1]
+        : words[0] + ', ' + words[1] + ' and ' + words[2];
+
+      var rows = [
+        { label: 'Assistant', value: wizardState.name + (wizardState.title ? ' \u2014 ' + wizardState.title : '') },
+        { label: 'Tone',      value: 'Your tone is ' + tonePhrase + '.' },
+        { label: 'Detail',    value: verbosityDesc },
+        { label: 'Directness', value: directnessDesc },
+        { label: 'Posture',   value: postureDesc },
+      ];
+      if (wizardState.preferences) {
+        rows.push({ label: 'Preference', value: '\u201c' + wizardState.preferences + '\u201d' });
+      }
+
+      rows.forEach(function(row) {
+        var rowEl   = document.createElement('div');
+        rowEl.className = 'review-row';
+        var labelEl = document.createElement('div');
+        labelEl.className = 'review-row-label';
+        labelEl.textContent = row.label;
+        var valueEl = document.createElement('div');
+        valueEl.className = 'review-row-value';
+        valueEl.textContent = row.value; // textContent — safe even with user input
+        rowEl.appendChild(labelEl);
+        rowEl.appendChild(valueEl);
+        card.appendChild(rowEl);
+      });
+    }
+
+    function submitWizard() {
+      wizardSaveBtn.disabled = true;
+      wizardSaveBtn.textContent = 'Saving\u2026';
+      wizardError.style.display = 'none';
+
+      // Fetch current identity to preserve behavioral_preferences and constraints.
+      fetch('/api/identity')
+        .then(function(res) {
+          if (!res.ok) throw new Error('HTTP ' + res.status);
+          return res.json();
+        })
+        .then(function(data) {
+          var current = (data && data.identity) ? data.identity : {};
+          var prefs = Array.isArray(current.behavioralPreferences) ? current.behavioralPreferences.slice() : [];
+          if (wizardState.preferences) { prefs.push(wizardState.preferences); }
+
+          var payload = {
+            identity: {
+              assistant: {
+                name: wizardState.name,
+                title: wizardState.title,
+                emailSignature: wizardState.signature,
+              },
+              tone: {
+                baseline: wizardState.toneBaseline,
+                verbosity: wizardState.verbosity,
+                directness: wizardState.directness,
+              },
+              behavioralPreferences: prefs,
+              decisionStyle: {
+                externalActions: wizardState.posture,
+                // internal_analysis is not surfaced in the wizard — preserve existing value.
+                internalAnalysis: (current.decisionStyle && current.decisionStyle.internalAnalysis)
+                  ? current.decisionStyle.internalAnalysis : 'proactive',
+              },
+              // constraints are immutable via wizard — always preserve.
+              constraints: current.constraints || [],
+            },
+            changedBy: 'wizard',
+            note: 'Saved via onboarding wizard',
+          };
+
+          return fetch('/api/identity', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          });
+        })
+        .then(function(res) {
+          if (!res.ok) {
+            return res.text().then(function(text) {
+              var msg = 'Save failed';
+              try { msg = JSON.parse(text).error || msg; } catch (_) {}
+              throw new Error(msg);
+            });
+          }
+          return fetch('/api/identity/reload', { method: 'POST' });
+        })
+        .then(function(res) {
+          if (!res.ok) {
+            // Identity was saved to DB, but the in-memory cache was not refreshed.
+            // The error path re-enables the button so the user can retry.
+            throw new Error('Identity saved but in-memory reload failed \u2014 please try again or restart the server.');
+          }
+          hideWizard();
+          navigate('chat', 'Chat', 'nav-chat');
+          chatSuccessBanner.style.display = 'block';
+          setTimeout(function() { chatSuccessBanner.style.display = 'none'; }, 4000);
+        })
+        .catch(function(err) {
+          wizardError.textContent = err.message || 'Something went wrong — please try again.';
+          wizardError.style.display = 'block';
+          wizardSaveBtn.disabled = false;
+          wizardSaveBtn.textContent = 'Confirm \u0026 save';
+        });
     }
 
     // ── KG API helpers ─────────────────────────────────────────────────
@@ -2133,21 +2897,8 @@ export async function knowledgeGraphRoutes(
   app: FastifyInstance,
   options: KnowledgeGraphRouteOptions,
 ): Promise<void> {
-  const { pool, logger, webAppBootstrapSecret, secureCookies, bus, eventRouter, contactService } = options;
-
-  // In-memory session store: token → expiry timestamp (ms).
-  // Single-tenant tool — no DB persistence needed; sessions reset on server restart.
-  const sessions: SessionStore = new Map();
-
-  // Prune expired sessions every minute so the Map doesn't grow unboundedly.
-  const pruneInterval = setInterval(() => {
-    const now = Date.now();
-    for (const [token, expiresAt] of sessions) {
-      if (now > expiresAt) sessions.delete(token);
-    }
-  }, 60_000);
-  // Unref so the interval doesn't prevent process exit during tests.
-  pruneInterval.unref();
+  const { pool, logger, webAppBootstrapSecret, secureCookies, bus, eventRouter, contactService, sessions } = options;
+  // sessions is managed by HttpAdapter — no local Map creation needed here.
 
   app.get('/', async (_request, reply) => {
     reply

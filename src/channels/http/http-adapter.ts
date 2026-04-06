@@ -34,6 +34,7 @@ import { knowledgeGraphRoutes } from './routes/kg.js';
 import { identityRoutes } from './routes/identity.js';
 import type { OfficeIdentityService } from '../../identity/service.js';
 import type { ContactService } from '../../contacts/contact-service.js';
+import { type SessionStore } from './session-auth.js';
 
 export interface HttpAdapterConfig {
   bus: EventBus;
@@ -123,6 +124,17 @@ export class HttpAdapter {
       }
     });
 
+    // Shared session store — used by both KG and identity routes to validate browser sessions.
+    // Sessions are set by POST /auth (KG routes) and verified by both route registrations.
+    const sessions: SessionStore = new Map();
+    const pruneInterval = setInterval(() => {
+      const now = Date.now();
+      for (const [token, expiresAt] of sessions) {
+        if (now > expiresAt) sessions.delete(token);
+      }
+    }, 60_000);
+    pruneInterval.unref();
+
     // Register routes — message routes receive the eventRouter, not raw bus
     await this.app.register(healthRoutes, { pool, logger, agentNames, skillNames });
     await this.app.register(agentRoutes, { agentRegistry });
@@ -138,6 +150,8 @@ export class HttpAdapter {
       await this.app.register(identityRoutes, {
         identityService: this.config.identityService,
         webAppBootstrapSecret,
+        sessions,
+        pool,
       });
     }
 
@@ -160,6 +174,7 @@ export class HttpAdapter {
         bus,
         eventRouter: this.eventRouter,
         contactService: this.config.contactService,
+        sessions,
       });
     }
 
