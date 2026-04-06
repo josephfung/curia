@@ -9,6 +9,7 @@ import type { Logger } from '../../../logger.js';
 import type { ContactService } from '../../../contacts/contact-service.js';
 import type { ContactStatus } from '../../../contacts/types.js';
 import { MessageRejectedError, type EventRouter } from '../event-router.js';
+import { assertSecret, type SessionStore } from '../session-auth.js';
 
 export interface KnowledgeGraphRouteOptions {
   pool: Pool;
@@ -39,10 +40,6 @@ const WEB_CHANNEL_ID = 'web';
 // short-circuits to the CEO contact for this channel regardless of the sender string.
 const WEB_SENDER_ID = 'ceo-web-user';
 
-// Session token → expiry timestamp (ms). Scoped to the route registration
-// lifetime (process lifetime for production). Single-tenant tool: memory is fine.
-type SessionStore = Map<string, number>;
-
 interface KgNodeRow {
   id: string;
   type: string;
@@ -72,47 +69,6 @@ function normalizeLimit(raw: string | undefined, fallback: number, max: number):
   const parsed = Number.parseInt(raw ?? '', 10);
   if (Number.isNaN(parsed)) return fallback;
   return Math.max(1, Math.min(parsed, max));
-}
-
-function assertSecret(
-  request: FastifyRequest,
-  reply: FastifyReply,
-  configuredSecret: string | undefined,
-  sessions: SessionStore,
-): boolean {
-  if (!configuredSecret) {
-    reply.status(503).send({
-      error: 'Knowledge graph web UI is disabled. Set WEB_APP_BOOTSTRAP_SECRET in .env to enable it.',
-    });
-    return false;
-  }
-
-  // Primary path: browser session cookie set by POST /auth.
-  // @fastify/cookie augments FastifyRequest with .cookies at runtime.
-  const cookies = (request as unknown as { cookies?: Record<string, string | undefined> }).cookies;
-  const sessionToken = cookies?.['curia_session'];
-  if (sessionToken) {
-    const expiresAt = sessions.get(sessionToken);
-    if (expiresAt !== undefined && Date.now() < expiresAt) return true;
-    // Expired or unknown token — fall through to header check below.
-  }
-
-  // Fallback: direct header (programmatic API access via curl / scripts).
-  // Reject non-string values (Fastify coerces duplicate headers to string[]).
-  // Use timing-safe comparison to prevent character-by-character brute force.
-  const provided = request.headers['x-web-bootstrap-secret'];
-  if (
-    typeof provided !== 'string' ||
-    provided.length !== configuredSecret.length ||
-    !timingSafeEqual(Buffer.from(provided), Buffer.from(configuredSecret))
-  ) {
-    reply.status(401).send({
-      error: 'Unauthorized. Authenticate via POST /auth or provide the x-web-bootstrap-secret header.',
-    });
-    return false;
-  }
-
-  return true;
 }
 
 // Design tokens — dark mode, from the Curia design system (theme.md).
