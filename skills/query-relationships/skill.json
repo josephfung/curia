@@ -1,0 +1,21 @@
+{
+  "name": "query-relationships",
+  "description": "Query entity-to-entity relationships from the knowledge graph. Resolves the entity by name. Returns all stored relationships, optionally filtered by edge type. When multiple nodes share the same name, returns an ambiguous response with candidates so you can ask the user to clarify.",
+  "version": "1.0.0",
+  "sensitivity": "normal",
+  "action_risk": "none",
+  "infrastructure": true,
+  "inputs": {
+    "entity": "string — the name or label of the entity to query (e.g. 'Joseph Fung')",
+    "edge_type": "string? — optional edge type filter (e.g. 'spouse', 'reports_to'). Must be one of the known edge types."
+  },
+  "outputs": {
+    "relationships": "array of {edge_id, subject, predicate, object, direction, confidence, last_confirmed_at} — populated when a single entity was found",
+    "count": "number — total relationships returned",
+    "ambiguous": "boolean — true when multiple nodes matched the entity name",
+    "candidates": "array of {id, label, type} — populated when ambiguous is true"
+  },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 10000
+}
