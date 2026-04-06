@@ -14,6 +14,12 @@ bus event types) are noted explicitly even in the `0.x` range.
 ## [Unreleased]
 
 ### Fixed
+- **Duplicate `extract-relationships` in coordinator `pinned_skills`** — skill appeared twice,
+  causing Anthropic to receive two identical tool definitions in the tools array
+- **`query-relationships` and `delete-relationship` skill input schemas** — both skills used
+  `"string — description"` shorthand in `inputs`, which the manifest parser misreads as the
+  type token, producing invalid JSON Schema types that caused Anthropic to reject every chat
+  request with a 400 `invalid_request_error`; corrected to `"string (description)"` format
 - **`extract-relationships` not available to coordinator** — skill was missing from `pinned_skills`
   in `coordinator.yaml`, so the LLM was instructed to call it but never received the tool definition;
   tool calls silently failed and the agent hallucinated that the skill didn't exist
