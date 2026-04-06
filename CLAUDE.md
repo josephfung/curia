@@ -119,7 +119,7 @@ Reference spec numbers where relevant (e.g. "spec 14").
 
 ### When to bump the version number
 
-Bump `package.json` version in the same PR as the changelog entry. Use this table:
+Bump `package.json` version in the same PR as the changelog entry. If the version number is bumped, be sure to tag the PR with the version number. Use this table:
 
 | Change type | Bump | Examples |
 |---|---|---|
