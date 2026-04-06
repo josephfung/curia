@@ -90,6 +90,25 @@ When adding a new agent, ensure it receives the autonomy block via the runtime i
 1. Create `agents/<name>.yaml` with required fields (name, description, model, system_prompt)
 2. Optionally add `handler: ./<name>.handler.ts` for custom logic
 
+## Architecture Decision Records (ADRs)
+
+ADRs live in `docs/adr/`. Each ADR documents a significant architectural decision — the context, the choice made, and the consequences.
+
+**When to write an ADR:** If the spec or plan you're working on contains a major architectural decision — a choice between fundamentally different approaches, a new external dependency that shapes the system, or a deliberate trade-off with long-term consequences — write an ADR before or alongside the implementation. Use `docs/adr/template.md`.
+
+Examples that warrant an ADR:
+- Choosing one technology over another (database engine, external API, messaging pattern)
+- A new design pattern or abstraction that other components will follow
+- Explicitly rejecting an approach that seems obvious (document why)
+- A breaking change to a public API surface with a stated rationale
+
+Examples that do NOT need an ADR:
+- Adding a new skill or agent using existing patterns
+- Bug fixes
+- Routine dependency updates
+
+Add a row to `docs/adr/README.md` for every new ADR.
+
 ## WIP Artifacts (Plans & Designs)
 
 All timestamped work artifacts — implementation plans and design specs — live in `docs/wip/`. This overrides the default superpowers skill behavior:
