@@ -511,6 +511,233 @@ function createUiHtml(): string {
     .form-field select:focus {
       border-color: var(--teal);
     }
+    /* ── Wizard overlay ─────────────────────────────────────────────── */
+    #view-wizard {
+      position: fixed;
+      inset: 0;
+      z-index: 60;
+      background: var(--bg);
+      display: none;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    .wizard-topbar {
+      flex: none;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 16px 24px;
+      border-bottom: 1px solid var(--border);
+    }
+    .wizard-body {
+      flex: 1;
+      overflow-y: auto;
+      padding: 32px 24px 40px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    .wizard-content {
+      width: 100%;
+      max-width: 520px;
+      display: flex;
+      flex-direction: column;
+    }
+    .wizard-heading {
+      font-family: 'Lora', Georgia, serif;
+      font-size: 1.375rem;
+      font-weight: 500;
+      color: var(--fg);
+      margin-bottom: 6px;
+    }
+    .wizard-subheading {
+      font-size: 0.8125rem;
+      color: var(--fg-muted);
+      margin-bottom: 28px;
+    }
+    .wizard-label {
+      font-size: 0.6875rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--fg-muted);
+      margin-bottom: 10px;
+    }
+    .wizard-field { margin-bottom: 20px; }
+    .wizard-field label {
+      display: block;
+      font-size: 0.8125rem;
+      font-weight: 500;
+      color: var(--fg-muted);
+      margin-bottom: 6px;
+    }
+    .wizard-field input {
+      background: var(--muted);
+      border: 1px solid var(--input-border);
+      border-radius: var(--radius-md);
+      color: var(--fg);
+      font-family: inherit;
+      font-size: 0.875rem;
+      padding: 10px 12px;
+      outline: none;
+      width: 100%;
+      transition: border-color 0.12s;
+    }
+    .wizard-field input:focus { border-color: var(--teal); }
+    .wizard-field textarea {
+      background: var(--muted);
+      border: 1px solid var(--input-border);
+      border-radius: var(--radius-md);
+      color: var(--fg);
+      font-family: inherit;
+      font-size: 0.875rem;
+      padding: 10px 12px;
+      outline: none;
+      width: 100%;
+      resize: vertical;
+      min-height: 90px;
+      transition: border-color 0.12s;
+    }
+    .wizard-field textarea:focus { border-color: var(--teal); }
+    .wizard-progress { display: flex; gap: 6px; align-items: center; }
+    .wizard-dot {
+      width: 28px;
+      height: 4px;
+      border-radius: 2px;
+      background: var(--muted);
+      transition: background 0.2s;
+    }
+    .wizard-dot.done { background: var(--primary); }
+    .tone-pill {
+      padding: 6px 14px;
+      border-radius: 99px;
+      border: 1px solid var(--accent);
+      background: none;
+      color: var(--fg-muted);
+      font-family: inherit;
+      font-size: 0.8125rem;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background 0.1s, color 0.1s, border-color 0.1s, opacity 0.1s;
+    }
+    .tone-pill.selected {
+      background: var(--primary);
+      color: var(--primary-fg);
+      border-color: var(--primary);
+    }
+    .tone-pill.disabled { opacity: 0.35; cursor: not-allowed; pointer-events: none; }
+    .wizard-preview {
+      font-size: 0.8125rem;
+      color: var(--teal);
+      min-height: 18px;
+      margin-bottom: 24px;
+    }
+    .wizard-sample {
+      font-size: 0.8125rem;
+      font-style: italic;
+      color: var(--fg-muted);
+      padding: 10px 14px;
+      background: var(--card);
+      border-radius: var(--radius-md);
+      border-left: 2px solid var(--muted);
+      margin-bottom: 24px;
+    }
+    .slider-labels {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.6875rem;
+      color: var(--accent);
+      margin-bottom: 8px;
+    }
+    .posture-grid { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 28px; }
+    .posture-card {
+      flex: 1;
+      min-width: 120px;
+      padding: 12px 14px;
+      border-radius: var(--radius-md);
+      border: 1px solid var(--muted);
+      background: none;
+      color: var(--fg-muted);
+      font-family: inherit;
+      text-align: left;
+      cursor: pointer;
+      transition: border-color 0.12s, background 0.12s;
+    }
+    .posture-card:hover { border-color: var(--accent); }
+    .posture-card.selected {
+      border-color: var(--primary);
+      background: rgba(222,222,222,0.06);
+      color: var(--fg);
+    }
+    .posture-card-title { font-size: 0.8125rem; font-weight: 600; margin-bottom: 3px; }
+    .posture-card-desc  { font-size: 0.75rem; }
+    .review-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 20px;
+      margin-bottom: 28px;
+    }
+    .review-row {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      padding: 10px 0;
+      border-bottom: 1px solid var(--border);
+    }
+    .review-row:last-child { border-bottom: none; }
+    .review-row-label {
+      font-size: 0.6875rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--fg-muted);
+    }
+    .review-row-value { font-size: 0.875rem; color: var(--fg); }
+    .wizard-nav {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+      margin-top: 8px;
+    }
+    .btn-wizard-back {
+      padding: 10px 20px;
+      border-radius: var(--radius-md);
+      border: 1px solid var(--muted);
+      background: none;
+      color: var(--fg-muted);
+      font-family: inherit;
+      font-size: 0.875rem;
+      cursor: pointer;
+      transition: border-color 0.12s, color 0.12s;
+    }
+    .btn-wizard-back:hover { border-color: var(--accent); color: var(--fg); }
+    .btn-wizard-next {
+      padding: 10px 24px;
+      border-radius: var(--radius-md);
+      background: var(--primary);
+      color: var(--primary-fg);
+      font-family: inherit;
+      font-size: 0.875rem;
+      font-weight: 600;
+      border: none;
+      cursor: pointer;
+      transition: opacity 0.12s;
+    }
+    .btn-wizard-next:hover    { opacity: 0.88; }
+    .btn-wizard-next:disabled { opacity: 0.5; cursor: not-allowed; }
+    #chat-success-banner {
+      display: none;
+      background: rgba(71,129,137,0.15);
+      border-bottom: 1px solid rgba(71,129,137,0.35);
+      color: var(--teal);
+      font-size: 0.8125rem;
+      font-weight: 500;
+      padding: 10px 16px;
+      text-align: center;
+      flex: none;
+    }
   </style>
 </head>
 <body>
@@ -885,6 +1112,8 @@ function createUiHtml(): string {
 
         <!-- Right: message thread + input -->
         <div class="chat-thread">
+          <!-- Success banner — shown briefly after wizard completes -->
+          <div id="chat-success-banner">Your assistant is ready.</div>
           <div id="chat-messages" class="chat-messages"></div>
           <div class="chat-input-bar">
             <form id="chat-form" style="display: contents;">
@@ -895,6 +1124,116 @@ function createUiHtml(): string {
         </div>
 
       </div>
+
+      <!-- ============================================================
+           WIZARD OVERLAY — full-screen, z-index 60.
+           Shown on first run (configured: false) or via Settings nav.
+      ============================================================= -->
+      <div id="view-wizard">
+
+        <!-- Top bar: wordmark + progress dots + step counter -->
+        <div class="wizard-topbar">
+          <span style="font-family: 'Lora', Georgia, serif; font-size: 1.125rem; font-weight: 500; letter-spacing: 0.06em; color: var(--fg);">CURIA</span>
+          <div class="wizard-progress">
+            <div class="wizard-dot" id="wdot-1"></div>
+            <div class="wizard-dot" id="wdot-2"></div>
+            <div class="wizard-dot" id="wdot-3"></div>
+            <div class="wizard-dot" id="wdot-4"></div>
+          </div>
+          <span id="wizard-step-label" style="font-size: 0.75rem; color: var(--fg-muted);">Step 1 of 4</span>
+        </div>
+
+        <div class="wizard-body">
+
+          <!-- Step 1 — Name your assistant -->
+          <div id="wstep-1" class="wizard-content" style="display: none;">
+            <div class="wizard-heading">What should your assistant be called?</div>
+            <div class="wizard-subheading">You can change these at any time from Settings.</div>
+            <div class="wizard-field">
+              <label for="w-name">Assistant name</label>
+              <input id="w-name" type="text" placeholder="Alex Curia" />
+            </div>
+            <div class="wizard-field">
+              <label for="w-title">Title</label>
+              <input id="w-title" type="text" placeholder="Executive Assistant to the CEO" />
+            </div>
+            <div class="wizard-field">
+              <label for="w-signature">Email signature <span style="font-weight:400;color:var(--fg-muted);">(optional)</span></label>
+              <textarea id="w-signature" placeholder="Alex Curia&#10;Office of the CEO"></textarea>
+            </div>
+            <div id="wstep1-error" style="display:none;color:var(--destructive);font-size:0.8125rem;margin-bottom:12px;"></div>
+            <div class="wizard-nav">
+              <span></span>
+              <button class="btn-wizard-next" onclick="wizardNext()">Next →</button>
+            </div>
+          </div>
+
+          <!-- Step 2 — Communication style -->
+          <div id="wstep-2" class="wizard-content" style="display: none;">
+            <div class="wizard-heading">How should your assistant communicate?</div>
+            <div class="wizard-subheading">Pick 1–3 words that describe the tone you want.</div>
+            <div class="wizard-label">Tone <span style="font-weight:400;text-transform:none;letter-spacing:0;">(pick up to 3)</span></div>
+            <div id="tone-pill-grid" style="display:flex;flex-wrap:wrap;gap:7px;margin-bottom:10px;"></div>
+            <div id="tone-preview" class="wizard-preview"></div>
+            <div class="wizard-label" style="margin-top:4px;">Detail level</div>
+            <input id="w-verbosity" type="range" min="0" max="100" value="50"
+              style="width:100%;accent-color:var(--primary);margin-bottom:6px;" oninput="updateVerbosityPreview()" />
+            <div class="slider-labels"><span>Brief</span><span>Thorough</span></div>
+            <div id="verbosity-preview" class="wizard-sample"></div>
+            <div class="wizard-label">Directness</div>
+            <input id="w-directness" type="range" min="0" max="100" value="75"
+              style="width:100%;accent-color:var(--primary);margin-bottom:6px;" oninput="updateDirectnessPreview()" />
+            <div class="slider-labels"><span>Measured</span><span>Direct</span></div>
+            <div id="directness-preview" class="wizard-sample"></div>
+            <div class="wizard-label">Decision posture <span style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--accent);">(for external actions)</span></div>
+            <div class="posture-grid">
+              <button class="posture-card" data-posture="conservative" onclick="selectPosture('conservative')">
+                <div class="posture-card-title">Conservative</div>
+                <div class="posture-card-desc">Verify before acting; flag ambiguity</div>
+              </button>
+              <button class="posture-card" data-posture="balanced" onclick="selectPosture('balanced')">
+                <div class="posture-card-title">Balanced</div>
+                <div class="posture-card-desc">Act when confident, flag when uncertain</div>
+              </button>
+              <button class="posture-card" data-posture="proactive" onclick="selectPosture('proactive')">
+                <div class="posture-card-title">Proactive</div>
+                <div class="posture-card-desc">Bias toward action; less checking in</div>
+              </button>
+            </div>
+            <div class="wizard-nav">
+              <button class="btn-wizard-back" onclick="wizardBack()">← Back</button>
+              <button class="btn-wizard-next" onclick="wizardNext()">Next →</button>
+            </div>
+          </div>
+
+          <!-- Step 3 — Anything else? -->
+          <div id="wstep-3" class="wizard-content" style="display: none;">
+            <div class="wizard-heading">Is there anything else we should know?</div>
+            <div class="wizard-subheading">Optional — any specific preferences you'd like your assistant to follow.</div>
+            <div class="wizard-field">
+              <textarea id="w-preferences" style="min-height:140px;"
+                placeholder="E.g., 'Always include agenda items in meeting requests' or 'Flag emails from investors as high priority'"></textarea>
+            </div>
+            <div class="wizard-nav">
+              <button class="btn-wizard-back" onclick="wizardBack()">← Back</button>
+              <button class="btn-wizard-next" onclick="wizardNext()">Review →</button>
+            </div>
+          </div>
+
+          <!-- Step 4 — Review & confirm -->
+          <div id="wstep-4" class="wizard-content" style="display: none;">
+            <div class="wizard-heading">Does everything look right?</div>
+            <div class="wizard-subheading">Go back to change anything, or save to get started.</div>
+            <div class="review-card" id="review-card"></div>
+            <div id="wizard-error" style="display:none;color:var(--destructive);font-size:0.8125rem;margin-bottom:12px;"></div>
+            <div class="wizard-nav">
+              <button class="btn-wizard-back" onclick="wizardBack()">← Back</button>
+              <button id="wizard-save-btn" class="btn-wizard-next" onclick="submitWizard()">Confirm &amp; save</button>
+            </div>
+          </div>
+
+        </div><!-- /.wizard-body -->
+      </div><!-- /#view-wizard -->
 
     </main>
   </div>
