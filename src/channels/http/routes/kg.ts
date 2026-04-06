@@ -270,7 +270,10 @@ function createUiHtml(): string {
     .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
 
     /* ── Cytoscape canvas ─────────────────────────────────────────────── */
-    #cy { width: 100%; height: 100%; }
+    /* Use absolute positioning so #cy fills its position:relative parent
+       regardless of whether the flex chain gives the parent a definite height.
+       height:100% on a flex-item child is unreliable across browsers. */
+    #cy { position: absolute; top: 0; left: 0; right: 0; bottom: 0; }
 
     /* ── Subtle scrollbars ───────────────────────────────────────────── */
     ::-webkit-scrollbar       { width: 5px; }
@@ -1015,6 +1018,13 @@ function createUiHtml(): string {
       chatView.style.display = view === 'chat'         ? 'flex' : 'none';
       contactsView.style.display = view === 'contacts' ? 'flex' : 'none';
       tasksView.style.display = view === 'tasks'       ? 'flex' : 'none';
+      // When returning to the KG view, tell Cytoscape to re-measure the container.
+      // The canvas dimensions may be stale if the view was hidden (display:none)
+      // since the last render.
+      if (view === 'kg' && cy) {
+        cy.resize();
+        cy.fit();
+      }
       if (view === 'contacts') {
         loadContacts();
       }
@@ -1100,6 +1110,10 @@ function createUiHtml(): string {
       );
       cy.elements().remove();
       cy.add(elements);
+      // Force Cytoscape to re-measure the container before running layout.
+      // Without this, the canvas may still be sized 0×0 from when main-app was
+      // display:none (e.g. on first load or after navigating away and back).
+      cy.resize();
       cy.layout({ name: 'cose', animate: false, fit: true }).run();
     }
 
