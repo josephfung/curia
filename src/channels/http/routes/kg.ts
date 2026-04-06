@@ -623,6 +623,35 @@ function createUiHtml(): string {
           </div>
         </div>
 
+        <!-- Settings (expandable section) -->
+        <div>
+          <button class="nav-item" id="settings-toggle" onclick="toggleSettings()">
+            <!-- gear icon -->
+            <svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="7.5" cy="7.5" r="2"/>
+              <path d="M7.5 1v1.5M7.5 12.5V14M14 7.5h-1.5M2.5 7.5H1M12.07 2.93l-1.06 1.06M4 11l-1.06 1.06M12.07 12.07l-1.06-1.06M4 4l-1.06-1.06"/>
+            </svg>
+            Settings
+            <svg id="settings-chevron" class="chevron" style="margin-left: auto;" width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M3 4.5L6 7.5L9 4.5"/>
+            </svg>
+          </button>
+
+          <div id="settings-submenu" style="display: flex; flex-direction: column; gap: 2px; margin-top: 2px;">
+            <button id="nav-wizard" class="nav-sub-item" onclick="navigate('wizard', 'Setup Wizard', 'nav-wizard')">
+              <!-- wand icon -->
+              <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M2 11L8 5"/>
+                <path d="M9.5 1.5l.5.5-.5.5-.5-.5z"/>
+                <path d="M5.5 2.5l.5.5-.5.5-.5-.5z"/>
+                <path d="M10.5 5.5l.5.5-.5.5-.5-.5z"/>
+                <path d="M8 5l3.5-3.5"/>
+              </svg>
+              Setup Wizard
+            </button>
+          </div>
+        </div>
+
       </div>
     </nav>
 
@@ -875,6 +904,7 @@ function createUiHtml(): string {
     // ── State ──────────────────────────────────────────────────────────
     var cy = null;           // Cytoscape instance (lazy-initialised on first login)
     var memoryOpen = true;   // Memory nav section expanded by default
+    var settingsOpen = true; // Settings nav section expanded by default
     var activeNavId = 'nav-kg';
     var contacts = [];
     var selectedContactId = null;
@@ -916,6 +946,8 @@ function createUiHtml(): string {
     var searchBtn     = document.getElementById('search-btn');
     var memoryCaret   = document.getElementById('memory-chevron');
     var memorySubmenu = document.getElementById('memory-submenu');
+    var settingsSubmenu = document.getElementById('settings-submenu');
+    var settingsCaret   = document.getElementById('settings-chevron');
     var contactsStatusEl = document.getElementById('contacts-status');
     var contactsSearchInput = document.getElementById('contacts-search-input');
     var contactsSearchBtn = document.getElementById('contacts-search-btn');
@@ -975,7 +1007,7 @@ function createUiHtml(): string {
     // Catch template/script divergence early rather than producing cryptic null errors
     if (!authWall || !mainApp || !authForm || !authInput || !authError ||
         !statusEl || !resultsEl || !searchInput || !searchBtn ||
-        !memoryCaret || !memorySubmenu ||
+        !memoryCaret || !memorySubmenu || !settingsSubmenu || !settingsCaret ||
         !contactsStatusEl || !contactsSearchInput || !contactsSearchBtn ||
         !contactsNewBtn || !contactsListEl || !contactsForm || !contactsEditorTitle ||
         !contactsDeleteBtn || !contactsSaveBtn || !contactsCancelBtn ||
@@ -1000,9 +1032,28 @@ function createUiHtml(): string {
 
     function showMain() {
       authWall.style.display = 'none';
-      mainApp.style.display  = 'flex';
-      initCytoscape();
-      search(); // auto-load all nodes on entry
+      // Check whether identity has been configured via the wizard. If not, show the
+      // wizard overlay. Main app stays hidden until wizard completes (or identity check fails).
+      fetch('/api/identity')
+        .then(function(res) {
+          if (!res.ok) throw new Error('HTTP ' + res.status);
+          return res.json();
+        })
+        .then(function(data) {
+          if (!data.configured) {
+            showWizard(data.identity);
+          } else {
+            mainApp.style.display = 'flex';
+            navigate('chat', 'Chat', 'nav-chat');
+            initCytoscape();
+          }
+        })
+        .catch(function() {
+          // Identity service not available or check failed — fall back to main app.
+          mainApp.style.display = 'flex';
+          navigate('chat', 'Chat', 'nav-chat');
+          initCytoscape();
+        });
     }
 
     function showAuthError(msg) {
@@ -1105,17 +1156,48 @@ function createUiHtml(): string {
 
     // ── Navigation ─────────────────────────────────────────────────────
     function navigate(view, title, navId) {
-      var kgView   = document.getElementById('view-kg');
-      var chatView = document.getElementById('view-chat');
-      var contactsView = document.getElementById('view-contacts');
-      var tasksView = document.getElementById('view-tasks');
+      var kgView            = document.getElementById('view-kg');
+      var chatView          = document.getElementById('view-chat');
+      var contactsView      = document.getElementById('view-contacts');
+      var tasksView         = document.getElementById('view-tasks');
       var scheduledJobsView = document.getElementById('view-scheduled-jobs');
+      var viewWizard        = document.getElementById('view-wizard');
 
-      kgView.style.display   = view === 'kg'           ? 'flex' : 'none';
-      chatView.style.display = view === 'chat'         ? 'flex' : 'none';
-      contactsView.style.display = view === 'contacts' ? 'flex' : 'none';
-      tasksView.style.display = view === 'tasks'       ? 'flex' : 'none';
+      // When navigating to the wizard, fetch the current identity to pre-fill fields,
+      // then delegate to showWizard(). Return early — the wizard has its own overlay.
+      if (view === 'wizard') {
+        // Update active highlight before delegating — same ordering as all other nav paths.
+        if (activeNavId) {
+          var prev = document.getElementById(activeNavId);
+          if (prev) prev.classList.remove('active');
+        }
+        if (navId) {
+          var curr = document.getElementById(navId);
+          if (curr) curr.classList.add('active');
+          activeNavId = navId;
+        }
+        fetch('/api/identity')
+          .then(function(res) {
+            if (!res.ok) throw new Error('HTTP ' + res.status);
+            return res.json();
+          })
+          .then(function(data) { showWizard(data.identity); })
+          .catch(function() {
+            showWizard({
+              assistant: { name: '', title: '', emailSignature: '' },
+              tone: { baseline: ['warm', 'direct'], verbosity: 50, directness: 75 },
+              decisionStyle: { externalActions: 'conservative' },
+            });
+          });
+        return;
+      }
+
+      kgView.style.display            = view === 'kg'             ? 'flex' : 'none';
+      chatView.style.display          = view === 'chat'           ? 'flex' : 'none';
+      contactsView.style.display      = view === 'contacts'       ? 'flex' : 'none';
+      tasksView.style.display         = view === 'tasks'          ? 'flex' : 'none';
       scheduledJobsView.style.display = view === 'scheduled-jobs' ? 'flex' : 'none';
+      if (viewWizard) viewWizard.style.display = 'none'; // always hide when navigating elsewhere
       // When returning to the KG view, tell Cytoscape to re-measure the container.
       // The canvas dimensions may be stale if the view was hidden (display:none)
       // since the last render. Defer to requestAnimationFrame so the browser
@@ -1127,6 +1209,9 @@ function createUiHtml(): string {
           cy.resize();
           cy.fit();
         });
+      }
+      if (view === 'kg') {
+        search(); // auto-load all nodes when entering the KG view
       }
       if (view === 'contacts') {
         loadContacts();
@@ -1161,6 +1246,26 @@ function createUiHtml(): string {
       memoryOpen = !memoryOpen;
       memorySubmenu.style.display = memoryOpen ? 'flex' : 'none';
       memoryCaret.classList.toggle('collapsed', !memoryOpen);
+    }
+
+    function toggleSettings() {
+      settingsOpen = !settingsOpen;
+      settingsSubmenu.style.display = settingsOpen ? 'flex' : 'none';
+      settingsCaret.classList.toggle('collapsed', !settingsOpen);
+    }
+
+    // Wizard show/hide — temporary stubs until Task 6 implements the full wizard.
+    // showMain() and navigate('wizard') call showWizard() before it's fully implemented;
+    // the stub falls back to Chat so the app is never left in a broken state.
+    function showWizard(identity) {
+      // TODO: implement full wizard overlay — replaced in Task 6
+      mainApp.style.display = 'flex';
+      navigate('chat', 'Chat', 'nav-chat');
+      initCytoscape();
+    }
+
+    function hideWizard() {
+      // TODO: implement — replaced in Task 6
     }
 
     // ── KG API helpers ─────────────────────────────────────────────────
