@@ -14,6 +14,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 ## [Unreleased]
 
 ### Fixed
+- **Duplicate `extract-relationships` in coordinator `pinned_skills`** — skill appeared twice,
+  causing Anthropic to receive two identical tool definitions in the tools array
 - **`query-relationships` and `delete-relationship` skill input schemas** — both skills used
   `"string — description"` shorthand in `inputs`, which the manifest parser misreads as the
   type token, producing invalid JSON Schema types that caused Anthropic to reject every chat
