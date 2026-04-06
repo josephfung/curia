@@ -17,6 +17,9 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **`calendar-update-event` attendees input type** — declared as bare `array?` which is not a
   valid JSON Schema type; corrected to `object[]?` matching the handler's expected shape
   (`Array<{ email, name? }>`). Caused startup crash after primitive-type validation was added in 0.7.1.
+- **`calendar-find-free-time` and `calendar-check-conflicts` calendarIds input type** — both
+  declared as bare `array` (invalid JSON Schema type); corrected to `string[]` matching the
+  handlers' expected `string[]` shape. Would have caused startup crash on deploy.
 - **Duplicate `extract-relationships` in coordinator `pinned_skills`** — skill appeared twice,
   causing Anthropic to receive two identical tool definitions in the tools array
 - **`query-relationships` and `delete-relationship` skill input schemas** — both skills used

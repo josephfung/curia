@@ -6,7 +6,7 @@
   "action_risk": "none",
   "infrastructure": true,
   "inputs": {
-    "calendarIds": "array",
+    "calendarIds": "string[] (list of calendar IDs to check for availability)",
     "timeMin": "timestamp (start of search window, inclusive)",
     "timeMax": "timestamp (end of search window, exclusive)",
     "duration": "number?"

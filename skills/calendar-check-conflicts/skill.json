@@ -6,7 +6,7 @@
   "action_risk": "none",
   "infrastructure": true,
   "inputs": {
-    "calendarIds": "array",
+    "calendarIds": "string[] (list of calendar IDs to check for conflicts)",
     "proposedStart": "timestamp (start of proposed slot)",
     "proposedEnd": "timestamp (end of proposed slot)"
   },
