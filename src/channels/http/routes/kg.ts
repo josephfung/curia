@@ -481,6 +481,47 @@ function createUiHtml(): string {
       flex-direction: column;
       gap: 14px;
     }
+    .jobs-layout {
+      flex: 1;
+      display: flex;
+      overflow: hidden;
+    }
+    .jobs-list-panel {
+      flex: none;
+      width: 380px;
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    .jobs-list {
+      flex: 1;
+      overflow-y: auto;
+      padding: 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .job-card {
+      padding: 10px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      cursor: pointer;
+      transition: border-color 0.12s, background 0.12s;
+    }
+    .job-card:hover { border-color: var(--teal); }
+    .job-card.active {
+      border-color: var(--teal);
+      background: rgba(71,129,137,0.08);
+    }
+    .jobs-editor {
+      flex: 1;
+      overflow-y: auto;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
     .form-grid {
       display: grid;
       grid-template-columns: 1fr 1fr;
@@ -610,6 +651,15 @@ function createUiHtml(): string {
                 <path d="M4 6.5L5.5 8L9 4.5"/>
               </svg>
               Tasks
+            </button>
+
+            <button id="nav-scheduled-jobs" class="nav-sub-item" onclick="navigate('scheduled-jobs', 'Scheduled Jobs', 'nav-scheduled-jobs')">
+              <!-- clock icon -->
+              <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="6.5" cy="6.5" r="5"/>
+                <path d="M6.5 3.75v3.15l2 1.25"/>
+              </svg>
+              Scheduled Jobs
             </button>
           </div>
         </div>
@@ -770,6 +820,70 @@ function createUiHtml(): string {
         </div>
       </div>
 
+      <!-- Scheduled Jobs view -->
+      <div id="view-scheduled-jobs" style="display: none; height: 100%; flex-direction: column;">
+        <div style="flex: none; display: flex; align-items: center; gap: 10px; padding: 10px 16px; border-bottom: 1px solid var(--border);">
+          <input id="jobs-search-input" type="text" placeholder="Search jobs by agent, status, cron, or intent…" style="max-width: 420px;" />
+          <button id="jobs-search-btn" class="btn-primary">Search</button>
+          <button id="jobs-new-btn" class="btn-primary">+ New Scheduled Job</button>
+          <span id="jobs-status" style="font-size: 0.75rem; color: var(--fg-muted); margin-left: 4px;"></span>
+        </div>
+        <div class="jobs-layout">
+          <div class="jobs-list-panel">
+            <div style="padding: 10px 12px 0; font-size: 0.6875rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; color: var(--fg-muted);">Scheduled Jobs</div>
+            <div id="jobs-list" class="jobs-list"></div>
+          </div>
+          <div class="jobs-editor">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+              <h2 id="jobs-editor-title" style="font-family: 'Lora', Georgia, serif; font-size: 1.375rem; font-weight: 500; margin: 0;">Create Scheduled Job</h2>
+              <button id="jobs-delete-btn" class="btn-primary" style="display: none; background: var(--destructive); color: var(--fg);">Delete</button>
+            </div>
+
+            <form id="jobs-form" style="display: flex; flex-direction: column; gap: 12px; max-width: 900px;">
+              <div class="form-grid">
+                <div class="form-field">
+                  <label for="job-agent-id">Agent ID</label>
+                  <input id="job-agent-id" type="text" placeholder="e.g. coordinator" required />
+                </div>
+                <div class="form-field">
+                  <label for="job-status">Status</label>
+                  <select id="job-status">
+                    <option value="pending">pending</option>
+                    <option value="running">running</option>
+                    <option value="suspended">suspended</option>
+                    <option value="completed">completed</option>
+                    <option value="cancelled">cancelled</option>
+                    <option value="failed">failed</option>
+                  </select>
+                </div>
+              </div>
+              <div class="form-grid">
+                <div class="form-field">
+                  <label for="job-cron-expr">Cron expression (optional)</label>
+                  <input id="job-cron-expr" type="text" placeholder="e.g. 0 8 * * 1-5" />
+                </div>
+                <div class="form-field">
+                  <label for="job-run-at">Run at (ISO-8601, optional)</label>
+                  <input id="job-run-at" type="text" placeholder="e.g. 2026-04-20T15:00:00Z" />
+                </div>
+              </div>
+              <div class="form-field">
+                <label for="job-intent-anchor">Intent anchor (optional — creates linked agent task)</label>
+                <textarea id="job-intent-anchor" rows="2" placeholder="Persistent intent for linked task..."></textarea>
+              </div>
+              <div class="form-field">
+                <label for="job-task-payload">Task payload JSON</label>
+                <textarea id="job-task-payload" rows="6" placeholder='{"kind":"follow_up","args":{"topic":"status update"}}' required></textarea>
+              </div>
+              <div style="display: flex; gap: 10px;">
+                <button type="submit" id="jobs-save-btn" class="btn-primary">Create Scheduled Job</button>
+                <button type="button" id="jobs-cancel-btn" class="btn-primary" style="background: var(--muted); color: var(--fg);">Cancel</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      </div>
+
       <!-- Chat view — hidden until user clicks the Chat nav item -->
       <div id="view-chat" style="display: none; height: 100%; flex-direction: row;">
 
@@ -809,6 +923,9 @@ function createUiHtml(): string {
     var tasks = [];
     var selectedTaskId = null;
     var tasksMode = 'create';
+    var jobs = [];
+    var selectedJobId = null;
+    var jobsMode = 'create';
 
     // ── Chat state ─────────────────────────────────────────────────────
     // Active EventSource for SSE — one per conversation, null when idle.
@@ -872,6 +989,22 @@ function createUiHtml(): string {
     var taskScheduledJobIdInput = document.getElementById('task-scheduled-job-id');
     var taskErrorBudgetInput = document.getElementById('task-error-budget');
     var taskProgressInput = document.getElementById('task-progress');
+    var jobsStatusEl = document.getElementById('jobs-status');
+    var jobsSearchInput = document.getElementById('jobs-search-input');
+    var jobsSearchBtn = document.getElementById('jobs-search-btn');
+    var jobsNewBtn = document.getElementById('jobs-new-btn');
+    var jobsListEl = document.getElementById('jobs-list');
+    var jobsForm = document.getElementById('jobs-form');
+    var jobsEditorTitle = document.getElementById('jobs-editor-title');
+    var jobsDeleteBtn = document.getElementById('jobs-delete-btn');
+    var jobsSaveBtn = document.getElementById('jobs-save-btn');
+    var jobsCancelBtn = document.getElementById('jobs-cancel-btn');
+    var jobAgentIdInput = document.getElementById('job-agent-id');
+    var jobStatusInput = document.getElementById('job-status');
+    var jobCronExprInput = document.getElementById('job-cron-expr');
+    var jobRunAtInput = document.getElementById('job-run-at');
+    var jobIntentAnchorInput = document.getElementById('job-intent-anchor');
+    var jobTaskPayloadInput = document.getElementById('job-task-payload');
 
     // Chat DOM refs
     var chatMessagesEl = document.getElementById('chat-messages');
@@ -894,6 +1027,10 @@ function createUiHtml(): string {
         !tasksSaveBtn || !tasksCancelBtn || !taskAgentIdInput || !taskStatusInput ||
         !taskIntentAnchorInput || !taskConversationIdInput || !taskScheduledJobIdInput ||
         !taskErrorBudgetInput || !taskProgressInput ||
+        !jobsStatusEl || !jobsSearchInput || !jobsSearchBtn || !jobsNewBtn || !jobsListEl ||
+        !jobsForm || !jobsEditorTitle || !jobsDeleteBtn || !jobsSaveBtn || !jobsCancelBtn ||
+        !jobAgentIdInput || !jobStatusInput || !jobCronExprInput || !jobRunAtInput ||
+        !jobIntentAnchorInput || !jobTaskPayloadInput ||
         !chatMessagesEl || !chatConvListEl || !chatForm || !chatTextarea || !chatSendBtn) {
       throw new Error('Curia KG: required DOM element missing — check template integrity.');
     }
@@ -1013,11 +1150,13 @@ function createUiHtml(): string {
       var chatView = document.getElementById('view-chat');
       var contactsView = document.getElementById('view-contacts');
       var tasksView = document.getElementById('view-tasks');
+      var scheduledJobsView = document.getElementById('view-scheduled-jobs');
 
       kgView.style.display   = view === 'kg'           ? 'flex' : 'none';
       chatView.style.display = view === 'chat'         ? 'flex' : 'none';
       contactsView.style.display = view === 'contacts' ? 'flex' : 'none';
       tasksView.style.display = view === 'tasks'       ? 'flex' : 'none';
+      scheduledJobsView.style.display = view === 'scheduled-jobs' ? 'flex' : 'none';
       // When returning to the KG view, tell Cytoscape to re-measure the container.
       // The canvas dimensions may be stale if the view was hidden (display:none)
       // since the last render. Defer to requestAnimationFrame so the browser
@@ -1035,6 +1174,9 @@ function createUiHtml(): string {
       }
       if (view === 'tasks') {
         loadTasks();
+      }
+      if (view === 'scheduled-jobs') {
+        loadJobs();
       }
 
       // On first entry into the Chat view with no conversations yet, ensure
@@ -1536,6 +1678,232 @@ function createUiHtml(): string {
       }
     });
     resetTaskForm();
+
+    // ── Scheduled Jobs ───────────────────────────────────────────────
+    function setJobsStatus(msg, isError) {
+      jobsStatusEl.textContent = msg;
+      jobsStatusEl.style.color = isError ? 'var(--destructive)' : 'var(--fg-muted)';
+    }
+
+    function resetJobForm() {
+      jobsMode = 'create';
+      selectedJobId = null;
+      jobsEditorTitle.textContent = 'Create Scheduled Job';
+      jobsSaveBtn.textContent = 'Create Scheduled Job';
+      jobsDeleteBtn.style.display = 'none';
+      jobAgentIdInput.value = '';
+      jobStatusInput.value = 'pending';
+      jobStatusInput.disabled = true;
+      jobCronExprInput.value = '';
+      jobRunAtInput.value = '';
+      jobIntentAnchorInput.value = '';
+      jobTaskPayloadInput.value = prettyJson({ kind: 'follow_up', args: {} });
+      // Preserve the active search filter when resetting — don't blow away filtered results.
+      if (jobsSearchInput.value.trim()) {
+        filterJobs();
+      } else {
+        renderJobsList(jobs);
+      }
+    }
+
+    function fillJobForm(job) {
+      jobsMode = 'edit';
+      selectedJobId = job.id;
+      jobsEditorTitle.textContent = 'Edit Scheduled Job';
+      jobsSaveBtn.textContent = 'Save Changes';
+      jobsDeleteBtn.style.display = 'inline-flex';
+      jobAgentIdInput.value = job.agentId || '';
+      jobStatusInput.value = job.status || 'pending';
+      // API only allows setting status back to pending (unsuspend) during PATCH.
+      jobStatusInput.disabled = job.status !== 'suspended';
+      jobCronExprInput.value = job.cronExpr || '';
+      jobRunAtInput.value = job.runAt || '';
+      jobIntentAnchorInput.value = job.intentAnchor || '';
+      jobTaskPayloadInput.value = prettyJson(job.taskPayload || {});
+      // Preserve the active search filter — clicking a card shouldn't un-filter the list.
+      if (jobsSearchInput.value.trim()) {
+        filterJobs();
+      } else {
+        renderJobsList(jobs);
+      }
+    }
+
+    function renderJobsList(list) {
+      jobsListEl.replaceChildren();
+      if (!list.length) {
+        var empty = document.createElement('p');
+        empty.style.cssText = 'font-size: 0.8125rem; color: var(--fg-muted); margin: 4px 2px;';
+        empty.textContent = 'No scheduled jobs found.';
+        jobsListEl.appendChild(empty);
+        return;
+      }
+      list.forEach(function(job) {
+        var card = document.createElement('div');
+        card.className = 'job-card' + (selectedJobId === job.id ? ' active' : '');
+        var title = document.createElement('div');
+        title.style.cssText = 'font-size: 0.875rem; font-weight: 600; color: var(--fg);';
+        title.textContent = job.agentId + ' · ' + job.status;
+        var schedule = document.createElement('div');
+        schedule.style.cssText = 'font-size: 0.75rem; color: var(--fg-muted); margin-top: 4px; line-height: 1.35;';
+        schedule.textContent = job.cronExpr ? ('Cron: ' + job.cronExpr) : ('Run at: ' + (job.runAt || 'n/a'));
+        var meta = document.createElement('div');
+        meta.style.cssText = 'font-size: 0.6875rem; color: var(--fg-muted); margin-top: 6px;';
+        meta.textContent = 'Next: ' + (job.nextRunAt ? new Date(job.nextRunAt).toLocaleString() : 'n/a');
+        card.append(title, schedule, meta);
+        card.addEventListener('click', function() { fillJobForm(job); });
+        jobsListEl.appendChild(card);
+      });
+    }
+
+    function loadJobs() {
+      setJobsStatus('Loading scheduled jobs…');
+      fetchJson('/api/jobs')
+        .then(function(data) {
+          jobs = data && Array.isArray(data.jobs) ? data.jobs : [];
+          if (jobsSearchInput.value.trim()) {
+            filterJobs();
+          } else {
+            renderJobsList(jobs);
+            setJobsStatus(jobs.length + ' scheduled job' + (jobs.length === 1 ? '' : 's'));
+          }
+          if (jobsMode === 'create' && !jobAgentIdInput.value) {
+            resetJobForm();
+            return;
+          }
+          if (jobsMode === 'edit') {
+            var selected = jobs.find(function(j) { return j.id === selectedJobId; });
+            if (selected) {
+              fillJobForm(selected);
+            } else {
+              resetJobForm();
+            }
+          }
+        })
+        .catch(function(err) { setJobsStatus(String(err), true); });
+    }
+
+    function filterJobs() {
+      var q = jobsSearchInput.value.trim().toLowerCase();
+      if (!q) {
+        renderJobsList(jobs);
+        setJobsStatus(jobs.length + ' scheduled job' + (jobs.length === 1 ? '' : 's'));
+        return;
+      }
+      var filtered = jobs.filter(function(job) {
+        var intent = job.intentAnchor || '';
+        return (job.agentId || '').toLowerCase().includes(q) ||
+          (job.status || '').toLowerCase().includes(q) ||
+          (job.cronExpr || '').toLowerCase().includes(q) ||
+          intent.toLowerCase().includes(q);
+      });
+      renderJobsList(filtered);
+      setJobsStatus(filtered.length + ' result' + (filtered.length === 1 ? '' : 's'));
+    }
+
+    function saveJob(e) {
+      e.preventDefault();
+      var agentId = jobAgentIdInput.value.trim();
+      if (!agentId) {
+        setJobsStatus('Agent ID is required.', true);
+        return;
+      }
+
+      var taskPayload;
+      try {
+        taskPayload = parseJsonField(jobTaskPayloadInput.value, null, 'Task payload');
+      } catch (err) {
+        setJobsStatus(err.message || String(err), true);
+        return;
+      }
+      if (!taskPayload || typeof taskPayload !== 'object' || Array.isArray(taskPayload)) {
+        setJobsStatus('Task payload must be a JSON object.', true);
+        return;
+      }
+
+      var cronExpr = jobCronExprInput.value.trim();
+      var runAt = jobRunAtInput.value.trim();
+      if (!cronExpr && !runAt) {
+        setJobsStatus('Either cron expression or run at is required.', true);
+        return;
+      }
+
+      jobsSaveBtn.disabled = true;
+      setJobsStatus(jobsMode === 'create' ? 'Creating scheduled job…' : 'Saving scheduled job…');
+
+      var request = jobsMode === 'create'
+        ? fetch('/api/jobs', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              agent_id: agentId,
+              cron_expr: cronExpr || undefined,
+              run_at: runAt || undefined,
+              task_payload: taskPayload,
+              intent_anchor: jobIntentAnchorInput.value.trim() || undefined,
+            }),
+          })
+        : fetch('/api/jobs/' + encodeURIComponent(selectedJobId), {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            // The backend treats status='pending' as an unsuspend-only operation and
+            // ignores other fields when status is present. Only send the unsuspend
+            // payload when the user explicitly selected 'pending'; otherwise send field
+            // updates so edits to a suspended job's cron/payload are not silently dropped.
+            body: (!jobStatusInput.disabled && jobStatusInput.value === 'pending')
+              ? JSON.stringify({ status: 'pending' })
+              : JSON.stringify({
+                  cron_expr: cronExpr || undefined,
+                  run_at: runAt || undefined,
+                  task_payload: taskPayload,
+                }),
+          });
+
+      request
+        .then(function(res) {
+          return res.json().then(function(body) {
+            if (!res.ok) throw new Error(body.error || ('HTTP ' + res.status));
+            return body;
+          });
+        })
+        .then(function() {
+          setJobsStatus(jobsMode === 'create' ? 'Scheduled job created.' : 'Scheduled job updated.');
+          loadJobs();
+          if (jobsMode === 'create') resetJobForm();
+        })
+        .catch(function(err) { setJobsStatus(err.message || String(err), true); })
+        .finally(function() { jobsSaveBtn.disabled = false; });
+    }
+
+    function deleteJob() {
+      if (!selectedJobId) return;
+      if (!confirm('Delete this scheduled job? This action cannot be undone.')) return;
+      jobsDeleteBtn.disabled = true;
+      setJobsStatus('Deleting scheduled job…');
+      fetch('/api/jobs/' + encodeURIComponent(selectedJobId), { method: 'DELETE' })
+        .then(function(res) {
+          if (!res.ok) return res.json().then(function(body) { throw new Error(body.error || ('HTTP ' + res.status)); });
+        })
+        .then(function() {
+          setJobsStatus('Scheduled job deleted.');
+          resetJobForm();
+          loadJobs();
+        })
+        .catch(function(err) { setJobsStatus(err.message || String(err), true); })
+        .finally(function() { jobsDeleteBtn.disabled = false; });
+    }
+
+    jobsForm.addEventListener('submit', saveJob);
+    jobsDeleteBtn.addEventListener('click', deleteJob);
+    jobsNewBtn.addEventListener('click', resetJobForm);
+    jobsCancelBtn.addEventListener('click', resetJobForm);
+    jobsSearchBtn.addEventListener('click', filterJobs);
+    jobsSearchInput.addEventListener('keydown', function(e) {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        filterJobs();
+      }
+    });
+    resetJobForm();
 
     // ── Chat ───────────────────────────────────────────────────────────
 
