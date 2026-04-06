@@ -14,6 +14,11 @@ bus event types) are noted explicitly even in the `0.x` range.
 ## [Unreleased]
 
 ### Fixed
+- **Knowledge Graph viewport blank after layout refactor** — `#cy` used `height: 100%` inside a flex
+  chain which is unreliable across browsers; switched to `position: absolute; inset: 0` so the canvas
+  always fills its `position: relative` parent. Added `cy.resize()` before layout runs so Cytoscape
+  re-measures the container after `main-app` transitions from `display: none`, and again when
+  navigating back to the KG view.
 - **`calendar-update-event` attendees input type** — declared as bare `array?` which is not a
   valid JSON Schema type; corrected to `object[]?` matching the handler's expected shape
   (`Array<{ email, name? }>`). Caused startup crash after primitive-type validation was added in 0.7.1.
