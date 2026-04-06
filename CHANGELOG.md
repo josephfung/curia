@@ -14,6 +14,12 @@ bus event types) are noted explicitly even in the `0.x` range.
 ## [Unreleased]
 
 ### Fixed
+- **KG chat blank reply** — after `extract-relationships` ran as the last tool call, the LLM
+  produced `end_turn` with no text blocks, delivering an empty reply to the user. Fixed by
+  clarifying in the coordinator system prompt that `extract-relationships` is a background
+  housekeeping task and must not replace the text response; also added a defensive fallback
+  in the agent runtime that logs an error and returns a safe message instead of forwarding
+  an empty string to the user.
 - **Knowledge Graph viewport blank after layout refactor** — `#cy` used `height: 100%` inside a flex
   chain which is unreliable across browsers; switched to `position: absolute; inset: 0` so the canvas
   always fills its `position: relative` parent. Added `cy.resize()` before layout runs so Cytoscape
