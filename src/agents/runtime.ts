@@ -408,15 +408,32 @@ export class AgentRuntime {
         'Agent task completed',
       );
       if (response.content.trim() === '') {
-        // The LLM returned end_turn with no text blocks — this happens when the model
-        // considers its tool calls (e.g. extract-relationships) to be the full response
-        // and produces an empty content array. Surface as an error so we don't silently
-        // deliver a blank reply; the system prompt instructs the agent to always write text.
-        logger.error(
-          { agentId, conversationId, inputTokens: response.usage.inputTokens, outputTokens: response.usage.outputTokens },
-          'LLM returned empty text response after tool use — agent did not produce a user-facing reply',
+        // The LLM returned end_turn with no text — this happens when the model considers
+        // its tool calls (e.g. extract-relationships) to be the full response and produces
+        // an empty content array. Attempt one recovery: append the empty turn + a nudge,
+        // then call the LLM again without tools to force it to write the text reply.
+        logger.warn(
+          { agentId, conversationId },
+          'LLM returned empty text after tool use — attempting recovery prompt',
         );
-        responseContent = "I'm sorry, I wasn't able to formulate a response. Please try again.";
+
+        // Append the empty assistant turn so the conversation structure stays valid,
+        // then ask the LLM to write the text reply it skipped.
+        messages.push({ role: 'assistant', content: '' });
+        messages.push({ role: 'user', content: 'Please write your response to the user.' });
+
+        // Call without tools — the LLM must produce text, it cannot call more tools.
+        const recovery = await this.chatWithRetry(provider, { messages }, budget, taskEvent);
+        if (recovery?.type === 'text' && recovery.content.trim() !== '') {
+          responseContent = recovery.content;
+          logger.info({ agentId, conversationId }, 'Empty-response recovery succeeded');
+        } else {
+          logger.error(
+            { agentId, conversationId, inputTokens: response.usage.inputTokens, outputTokens: response.usage.outputTokens },
+            'LLM returned empty text response after tool use — recovery also failed, sending fallback',
+          );
+          responseContent = "I'm sorry, I wasn't able to formulate a response. Please try again.";
+        }
       } else {
         responseContent = response.content;
       }
