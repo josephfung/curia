@@ -120,10 +120,22 @@ export class CalendarListEventsHandler implements SkillHandler {
       // convert to UTC ISO 8601 strings here. The LLM already knows the user's
       // timezone from the system prompt's time context block and can display ISO
       // strings correctly.
+      //
+      // Guard non-finite and non-positive values: Unix 0 is never a real calendar
+      // event time, and passing "1970-01-01T00:00:00Z" to the LLM would be silently
+      // wrong. Log and null-out rather than propagate corrupted data.
+      const toIso = (unix: number | null, field: string, eventId: string): string | null => {
+        if (unix === null) return null;
+        if (!Number.isFinite(unix) || unix <= 0) {
+          ctx.log.warn({ eventId, field, value: unix }, `calendar-list-events: suspicious ${field} value — omitting`);
+          return null;
+        }
+        return new Date(unix * 1000).toISOString();
+      };
       const formattedEvents = events.map((evt) => ({
         ...evt,
-        startTime: evt.startTime !== null ? new Date(evt.startTime * 1000).toISOString() : null,
-        endTime: evt.endTime !== null ? new Date(evt.endTime * 1000).toISOString() : null,
+        startTime: toIso(evt.startTime, 'startTime', evt.id),
+        endTime: toIso(evt.endTime, 'endTime', evt.id),
       }));
 
       ctx.log.info({ calendarIds, count: formattedEvents.length, failedCalendarIds }, 'Listed events');

@@ -253,6 +253,42 @@ describe('CalendarListEventsHandler', () => {
     }
   });
 
+  it('nulls out and warns on suspicious startTime values (0, negative, non-finite)', async () => {
+    // Unix 0 is never a real calendar time — a Nylas bug returning 0 would silently
+    // produce "1970-01-01T00:00:00Z" without this guard.
+    const suspectEvent = {
+      id: 'evt-suspect',
+      title: 'Corrupted event',
+      description: '',
+      participants: [],
+      startTime: 0,
+      endTime: -1,
+      startDate: null,
+      endDate: null,
+      location: '',
+      conferencing: null,
+      status: 'confirmed',
+      calendarId: 'cal-1',
+      busy: true,
+    };
+    const nylasCalendarClient = {
+      listEvents: vi.fn().mockResolvedValue([suspectEvent]),
+    };
+
+    const result = await handler.execute(makeCtx(
+      { calendarId: 'cal-1', timeMin: '2026-04-06T00:00:00Z', timeMax: '2026-04-07T00:00:00Z' },
+      { nylasCalendarClient: nylasCalendarClient as never },
+    ));
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const data = result.data as { events: Array<{ startTime: null; endTime: null }> };
+      // Should be nulled out, not passed as a 1970 date
+      expect(data.events[0].startTime).toBeNull();
+      expect(data.events[0].endTime).toBeNull();
+    }
+  });
+
   it('returns failure when no calendars are registered for caller', async () => {
     const nylasCalendarClient = { listEvents: vi.fn() };
     const contactService = {
