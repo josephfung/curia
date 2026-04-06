@@ -156,7 +156,10 @@ export class AnthropicProvider implements LLMProvider {
       );
       const content = textContent?.text ?? '';
       if (!content) {
-        this.logger.warn({ model, stopReason: response.stop_reason }, 'LLM returned empty text response');
+        // Log at error level — an empty text response means the user will receive a blank reply.
+        // The runtime catches this and returns a fallback message, but this event indicates
+        // the model ended its turn (stop_reason) without producing any user-facing text.
+        this.logger.error({ model, stopReason: response.stop_reason }, 'LLM returned empty text response');
       }
       return {
         type: 'text',

@@ -407,7 +407,7 @@ export class AgentRuntime {
         { agentId, inputTokens: response.usage.inputTokens, outputTokens: response.usage.outputTokens },
         'Agent task completed',
       );
-      if (!response.content) {
+      if (response.content === '') {
         // The LLM returned end_turn with no text blocks — this happens when the model
         // considers its tool calls (e.g. extract-relationships) to be the full response
         // and produces an empty content array. Surface as an error so we don't silently
