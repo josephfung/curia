@@ -263,7 +263,6 @@ pinned_skills:
   - calendar-check-conflicts
   - get-autonomy
   - set-autonomy
-  - extract-relationships
   - query-relationships
   - delete-relationship
 allow_discovery: true
