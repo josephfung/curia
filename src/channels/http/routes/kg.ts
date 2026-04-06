@@ -1383,8 +1383,15 @@ function createUiHtml(): string {
       fetchJson('/api/kg/tasks')
         .then(function(data) {
           tasks = data.tasks || [];
-          renderTasksList(tasks);
-          setTasksStatus(tasks.length + ' agent task' + (tasks.length === 1 ? '' : 's'));
+          // Re-apply active search filter after reload instead of always showing the full list.
+          // Without this, saving/deleting a task would silently clear the user's filter while
+          // leaving the search input populated — a misleading UI state.
+          if (tasksSearchInput.value.trim()) {
+            filterTasks();
+          } else {
+            renderTasksList(tasks);
+            setTasksStatus(tasks.length + ' agent task' + (tasks.length === 1 ? '' : 's'));
+          }
           if (tasksMode === 'create' && !taskAgentIdInput.value) {
             resetTaskForm();
             return;
