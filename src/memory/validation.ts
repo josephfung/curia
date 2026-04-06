@@ -2,8 +2,7 @@ import type { KnowledgeGraphStore } from './knowledge-graph.js';
 // Value import (not `import type`) because we call the static method
 // EmbeddingService.cosineSimilarity() at runtime.
 import { EmbeddingService } from './embedding.js';
-import type { StoreFactOptions, ValidationResult, KgNode } from './types.js';
-import { createNodeId } from './types.js';
+import type { StoreFactOptions, ValidationResult } from './types.js';
 
 // Spec line 116: cosine similarity threshold for deduplication
 const DEDUP_SIMILARITY_THRESHOLD = 0.92;
@@ -62,7 +61,7 @@ export class MemoryValidator {
    * Returns a ValidationResult discriminated union:
    * - 'rejected' if the rate limit is exceeded or the entity node does not exist
    * - 'update' if a near-duplicate fact already exists (caller should merge)
-   * - 'create' with a fully-constructed KgNode ready to persist
+   * - 'create' with validated fact data (label, properties, temporal, embedding) ready to persist
    */
   async validate(options: StoreFactOptions): Promise<ValidationResult> {
     // 1. Rate limiting — checked against the source string which encodes agent+task identity
@@ -118,27 +117,27 @@ export class MemoryValidator {
       }
     }
 
-    // 5. No duplicate found — construct a new fact node with full provenance.
-    //    The node is NOT persisted here; the caller owns the store write so that
-    //    it can coordinate with edge creation atomically.
+    // 5. No duplicate found — return validated fact data for the caller to persist.
+    //    The caller owns ID generation and the store write so that it can coordinate
+    //    with edge creation atomically. We only provide what we've computed here:
+    //    the validated inputs plus the embedding from the dedup scan above.
     const now = new Date();
-    const node: KgNode = {
-      id: createNodeId(),
-      type: 'fact',
-      label: options.label,
-      properties: options.properties ?? {},
-      embedding: newEmbedding,
-      temporal: {
-        createdAt: now,
-        lastConfirmedAt: now,
-        confidence: options.confidence ?? 0.7,
-        decayClass: options.decayClass ?? 'slow_decay',
-        // Full provenance chain: "agent:<name>/task:<id>/channel:<name>"
-        source: options.source,
+    return {
+      action: 'create',
+      validated: {
+        label: options.label,
+        properties: options.properties ?? {},
+        embedding: newEmbedding,
+        temporal: {
+          createdAt: now,
+          lastConfirmedAt: now,
+          confidence: options.confidence ?? 0.7,
+          decayClass: options.decayClass ?? 'slow_decay',
+          // Full provenance chain: "agent:<name>/task:<id>/channel:<name>"
+          source: options.source,
+        },
       },
     };
-
-    return { action: 'create', node };
   }
 
   /**

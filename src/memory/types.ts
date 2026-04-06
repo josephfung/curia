@@ -84,9 +84,23 @@ export interface StoreFactOptions {
   source: string; // provenance: "agent:coordinator/task:abc123/channel:cli"
 }
 
+// -- Validated data for a new fact node, produced by MemoryValidator --
+// Intentionally excludes `id` and `type`: the store owns ID generation and persistence.
+// The validator's job is to validate inputs and compute the embedding; the store's job
+// is to mint a UUID and write the row. Keeping these responsibilities separate prevents
+// callers from accidentally relying on a pre-computed ID that is never persisted.
+export interface ValidatedFactData {
+  label: string;
+  properties: Record<string, unknown>;
+  temporal: TemporalMetadata;
+  // Pre-computed embedding from the dedup scan — passed through so the store
+  // can skip a redundant embed() call when persisting the new node.
+  embedding: number[];
+}
+
 // -- Validation result --
 export type ValidationResult =
-  | { action: 'create'; node: KgNode }
+  | { action: 'create'; validated: ValidatedFactData }
   | { action: 'update'; existingNodeId: string; mergedProperties: Record<string, unknown> }
   | { action: 'conflict'; existingNodeId: string; reason: string }
   | { action: 'rejected'; reason: string };
