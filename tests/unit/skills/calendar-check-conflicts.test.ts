@@ -66,10 +66,13 @@ describe('CalendarCheckConflictsHandler', () => {
 
     expect(result.success).toBe(true);
     if (result.success) {
-      const data = result.data as { conflicts: Array<{ calendarId: string; contactName: string | null }>; clear: boolean };
+      const data = result.data as { conflicts: Array<{ calendarId: string; contactName: string | null; startTime: string; endTime: string }>; clear: boolean };
       expect(data.clear).toBe(false);
       expect(data.conflicts).toHaveLength(1);
       expect(data.conflicts[0].contactName).toBe('Joseph Fung');
+      // Timestamps must be ISO strings, not raw Unix seconds (1000s → 16:40, 2000s → 33:20)
+      expect(data.conflicts[0].startTime).toBe('1970-01-01T00:16:40.000Z');
+      expect(data.conflicts[0].endTime).toBe('1970-01-01T00:33:20.000Z');
     }
   });
 

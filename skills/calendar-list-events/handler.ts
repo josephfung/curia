@@ -12,6 +12,7 @@
 // the skill fetches all events in range and filters locally.
 
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { NylasCalendarEvent } from '../../src/channels/calendar/nylas-calendar-client.js';
 
 export class CalendarListEventsHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {
@@ -66,7 +67,7 @@ export class CalendarListEventsHandler implements SkillHandler {
       );
 
       const failedCalendarIds: string[] = [];
-      const successfulEvents: Array<typeof settled[0] extends PromiseFulfilledResult<infer T> ? T : never> = [];
+      const successfulEvents: NylasCalendarEvent[][] = [];
       for (let i = 0; i < settled.length; i++) {
         const result = settled[i];
         if (result.status === 'fulfilled') {
@@ -86,8 +87,15 @@ export class CalendarListEventsHandler implements SkillHandler {
 
       let events = successfulEvents.flat();
 
-      // Sort merged events by start time so the agenda reads chronologically
-      events.sort((a, b) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime());
+      // Sort merged events by start time so the agenda reads chronologically.
+      // Timed events use startTime (Unix seconds). All-day events have startTime=null and
+      // startDate='YYYY-MM-DD'; parse startDate to a comparable Unix seconds value so they
+      // interleave correctly with timed events. Events with no date at all sort last.
+      events.sort((a, b) => {
+        const aTs = a.startTime ?? (a.startDate ? Date.parse(`${a.startDate}T00:00:00Z`) / 1000 : Number.POSITIVE_INFINITY);
+        const bTs = b.startTime ?? (b.startDate ? Date.parse(`${b.startDate}T00:00:00Z`) / 1000 : Number.POSITIVE_INFINITY);
+        return aTs - bTs;
+      });
 
       // Client-side filtering: query matches title or description (case-insensitive)
       if (query && typeof query === 'string') {
@@ -112,8 +120,32 @@ export class CalendarListEventsHandler implements SkillHandler {
         events = events.slice(0, maxResults);
       }
 
-      ctx.log.info({ calendarIds, count: events.length, failedCalendarIds }, 'Listed events');
-      const data: Record<string, unknown> = { events, count: events.length };
+      // Format events for LLM consumption.
+      // Nylas returns timed event timestamps as Unix seconds. LLMs can't reliably
+      // do Unix epoch arithmetic (they produce wrong wall-clock times), so we
+      // convert to UTC ISO 8601 strings here. The LLM already knows the user's
+      // timezone from the system prompt's time context block and can display ISO
+      // strings correctly.
+      //
+      // Guard non-finite and non-positive values: Unix 0 is never a real calendar
+      // event time, and passing "1970-01-01T00:00:00Z" to the LLM would be silently
+      // wrong. Log and null-out rather than propagate corrupted data.
+      const toIso = (unix: number | null, field: string, eventId: string): string | null => {
+        if (unix === null) return null;
+        if (!Number.isFinite(unix) || unix <= 0) {
+          ctx.log.warn({ eventId, field, value: unix }, `calendar-list-events: suspicious ${field} value — omitting`);
+          return null;
+        }
+        return new Date(unix * 1000).toISOString();
+      };
+      const formattedEvents = events.map((evt) => ({
+        ...evt,
+        startTime: toIso(evt.startTime, 'startTime', evt.id),
+        endTime: toIso(evt.endTime, 'endTime', evt.id),
+      }));
+
+      ctx.log.info({ calendarIds, count: formattedEvents.length, failedCalendarIds }, 'Listed events');
+      const data: Record<string, unknown> = { events: formattedEvents, count: formattedEvents.length };
       // Surface partial failures so the LLM can inform the user
       if (failedCalendarIds.length > 0) {
         data.warnings = [`Failed to fetch events from ${failedCalendarIds.length} calendar(s): ${failedCalendarIds.join(', ')}`];

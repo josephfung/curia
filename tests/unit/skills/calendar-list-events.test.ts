@@ -147,11 +147,12 @@ describe('CalendarListEventsHandler', () => {
   });
 
   it('merges and sorts events from multiple calendars chronologically', async () => {
+    // startTime is Unix seconds (as returned by Nylas SDK) — smaller = earlier
     const workEvents = [
-      { ...mockEvents[1], id: 'work-1', startTime: '2026-04-01T14:00:00Z' },
+      { ...mockEvents[1], id: 'work-1', startTime: 5000 },
     ];
     const personalEvents = [
-      { ...mockEvents[0], id: 'personal-1', startTime: '2026-04-01T09:00:00Z' },
+      { ...mockEvents[0], id: 'personal-1', startTime: 1000 },
     ];
     const nylasCalendarClient = {
       listEvents: vi.fn()
@@ -178,9 +179,146 @@ describe('CalendarListEventsHandler', () => {
     if (result.success) {
       const data = result.data as { events: Array<{ id: string }> };
       expect(data.events).toHaveLength(2);
-      // personal-1 (09:00) should sort before work-1 (14:00)
+      // personal-1 (startTime: 1000) should sort before work-1 (startTime: 5000)
       expect(data.events[0].id).toBe('personal-1');
       expect(data.events[1].id).toBe('work-1');
+    }
+  });
+
+  it('sorts all-day events by startDate, not as epoch 0', async () => {
+    // Regression: before the fix, startTime=null fell back to 0, placing all-day events
+    // before every timed event regardless of their actual date.
+    const allDayLaterInWeek = {
+      id: 'allday-later', title: 'Conference Day', description: '', participants: [],
+      startTime: null, endTime: null, startDate: '2026-04-08', endDate: '2026-04-08',
+      location: '', conferencing: null, status: 'confirmed', calendarId: 'cal-1', busy: false,
+    };
+    const timedEarlierInWeek = {
+      id: 'timed-earlier', title: 'Morning Call', description: '', participants: [],
+      startTime: 1775466000, endTime: 1775469600, // 2026-04-06T09:00Z – 10:00Z
+      startDate: null, endDate: null,
+      location: '', conferencing: null, status: 'confirmed', calendarId: 'cal-1', busy: true,
+    };
+    const nylasCalendarClient = {
+      // Return in "wrong" order (all-day first) so the sort must fix it
+      listEvents: vi.fn().mockResolvedValue([allDayLaterInWeek, timedEarlierInWeek]),
+    };
+
+    const result = await handler.execute(makeCtx(
+      { calendarId: 'cal-1', timeMin: '2026-04-06T00:00:00Z', timeMax: '2026-04-09T00:00:00Z' },
+      { nylasCalendarClient: nylasCalendarClient as never },
+    ));
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const data = result.data as { events: Array<{ id: string }> };
+      // timed-earlier (2026-04-06) must come before allday-later (2026-04-08)
+      expect(data.events[0].id).toBe('timed-earlier');
+      expect(data.events[1].id).toBe('allday-later');
+    }
+  });
+
+  it('formats timed event timestamps as UTC ISO strings for LLM consumption', async () => {
+    // 1775489400 Unix seconds = 2026-04-06T15:30:00.000Z (11:30 AM EDT)
+    const timedEvent = {
+      id: 'evt-timed',
+      title: 'Catchup',
+      description: '',
+      participants: [],
+      startTime: 1775489400,
+      endTime: 1775491200,
+      startDate: null,
+      endDate: null,
+      location: '',
+      conferencing: null,
+      status: 'confirmed',
+      calendarId: 'cal-1',
+      busy: true,
+    };
+    const nylasCalendarClient = {
+      listEvents: vi.fn().mockResolvedValue([timedEvent]),
+    };
+
+    const result = await handler.execute(makeCtx(
+      { calendarId: 'cal-1', timeMin: '2026-04-06T00:00:00Z', timeMax: '2026-04-07T00:00:00Z' },
+      { nylasCalendarClient: nylasCalendarClient as never },
+    ));
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const data = result.data as { events: Array<{ startTime: string; endTime: string }> };
+      expect(data.events[0].startTime).toBe('2026-04-06T15:30:00.000Z');
+      expect(data.events[0].endTime).toBe('2026-04-06T16:00:00.000Z');
+    }
+  });
+
+  it('leaves startTime/endTime null for all-day events', async () => {
+    const allDayEvent = {
+      id: 'evt-allday',
+      title: 'Birthday',
+      description: '',
+      participants: [],
+      startTime: null,
+      endTime: null,
+      startDate: '2026-04-06',
+      endDate: '2026-04-06',
+      location: '',
+      conferencing: null,
+      status: 'confirmed',
+      calendarId: 'cal-1',
+      busy: false,
+    };
+    const nylasCalendarClient = {
+      listEvents: vi.fn().mockResolvedValue([allDayEvent]),
+    };
+
+    const result = await handler.execute(makeCtx(
+      { calendarId: 'cal-1', timeMin: '2026-04-06T00:00:00Z', timeMax: '2026-04-07T00:00:00Z' },
+      { nylasCalendarClient: nylasCalendarClient as never },
+    ));
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const data = result.data as { events: Array<{ startTime: null; endTime: null; startDate: string }> };
+      expect(data.events[0].startTime).toBeNull();
+      expect(data.events[0].endTime).toBeNull();
+      expect(data.events[0].startDate).toBe('2026-04-06');
+    }
+  });
+
+  it('nulls out and warns on suspicious startTime values (0, negative, non-finite)', async () => {
+    // Unix 0 is never a real calendar time — a Nylas bug returning 0 would silently
+    // produce "1970-01-01T00:00:00Z" without this guard.
+    const suspectEvent = {
+      id: 'evt-suspect',
+      title: 'Corrupted event',
+      description: '',
+      participants: [],
+      startTime: 0,
+      endTime: -1,
+      startDate: null,
+      endDate: null,
+      location: '',
+      conferencing: null,
+      status: 'confirmed',
+      calendarId: 'cal-1',
+      busy: true,
+    };
+    const nylasCalendarClient = {
+      listEvents: vi.fn().mockResolvedValue([suspectEvent]),
+    };
+
+    const result = await handler.execute(makeCtx(
+      { calendarId: 'cal-1', timeMin: '2026-04-06T00:00:00Z', timeMax: '2026-04-07T00:00:00Z' },
+      { nylasCalendarClient: nylasCalendarClient as never },
+    ));
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const data = result.data as { events: Array<{ startTime: null; endTime: null }> };
+      // Should be nulled out, not passed as a 1970 date
+      expect(data.events[0].startTime).toBeNull();
+      expect(data.events[0].endTime).toBeNull();
     }
   });
 
