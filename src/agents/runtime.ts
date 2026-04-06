@@ -413,23 +413,42 @@ export class AgentRuntime {
         // an empty content array. Attempt one recovery: append the empty turn + a nudge,
         // then call the LLM again without tools to force it to write the text reply.
         logger.warn(
-          { agentId, conversationId },
+          { agentId, conversationId, inputTokens: response.usage.inputTokens, outputTokens: response.usage.outputTokens },
           'LLM returned empty text after tool use — attempting recovery prompt',
         );
 
-        // Append the empty assistant turn so the conversation structure stays valid,
+        // Append the empty assistant turn so the conversation structure stays valid
+        // (Anthropic rejects empty string content, so use a single space as a stand-in),
         // then ask the LLM to write the text reply it skipped.
-        messages.push({ role: 'assistant', content: '' });
+        messages.push({ role: 'assistant', content: ' ' });
         messages.push({ role: 'user', content: 'Please write your response to the user.' });
+
+        // Count the recovery call against the turn budget — it is a real LLM round-trip.
+        budget.turnsUsed++;
+        if (budget.turnsUsed >= budget.maxTurns) {
+          await this.handleBudgetExceeded(budget, taskEvent, 'maxTurns');
+          return;
+        }
 
         // Call without tools — the LLM must produce text, it cannot call more tools.
         const recovery = await this.chatWithRetry(provider, { messages }, budget, taskEvent);
-        if (recovery?.type === 'text' && recovery.content.trim() !== '') {
+        // chatWithRetry returns null when it has already published error events and sent an
+        // error response — bail out here to avoid double-publishing a second response event
+        // and writing a phantom turn to working memory.
+        if (!recovery) return;
+
+        if (recovery.type === 'text' && recovery.content.trim() !== '') {
           responseContent = recovery.content;
           logger.info({ agentId, conversationId }, 'Empty-response recovery succeeded');
         } else {
           logger.error(
-            { agentId, conversationId, inputTokens: response.usage.inputTokens, outputTokens: response.usage.outputTokens },
+            {
+              agentId,
+              conversationId,
+              recoveryType: recovery.type,
+              inputTokens: response.usage.inputTokens,
+              outputTokens: response.usage.outputTokens,
+            },
             'LLM returned empty text response after tool use — recovery also failed, sending fallback',
           );
           responseContent = "I'm sorry, I wasn't able to formulate a response. Please try again.";
