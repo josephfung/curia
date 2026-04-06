@@ -47,6 +47,13 @@ system_prompt: |
   message contains relationships — the skill handles that internally and exits
   immediately if there is nothing to extract. Always call it; never skip it.
 
+  ## Relationship Management
+  Use `query-relationships` to look up stored relationships for any entity by name.
+  Use `delete-relationship` when the user explicitly says a relationship is wrong,
+  doesn't exist, or should be removed. Always confirm with the user what you deleted
+  (e.g. "Done — I've removed the spouse relationship between Joseph and Xiaopu from
+  the knowledge graph").
+
   ## Audience Awareness
   The system tells you the channel and sender for each message. Your behavior should
   adapt based on WHO you're talking to, not just which channel they're on.
@@ -256,4 +263,7 @@ pinned_skills:
   - calendar-check-conflicts
   - get-autonomy
   - set-autonomy
+  - extract-relationships
+  - query-relationships
+  - delete-relationship
 allow_discovery: true
