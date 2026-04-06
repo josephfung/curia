@@ -1,0 +1,23 @@
+{
+  "name": "delete-relationship",
+  "description": "Delete an entity-to-entity relationship from the knowledge graph. Identified by subject name, predicate (edge type), and object name. Permanent — cannot be undone. Use only when the user explicitly says a relationship is wrong or should be removed.",
+  "version": "1.0.0",
+  "sensitivity": "normal",
+  "action_risk": "low",
+  "infrastructure": true,
+  "inputs": {
+    "subject": "string — name/label of the source entity (e.g. 'Joseph Fung')",
+    "predicate": "string — the edge type to delete (e.g. 'spouse', 'reports_to'). Must be a known edge type.",
+    "object": "string — name/label of the target entity (e.g. 'Xiaopu Fung')"
+  },
+  "outputs": {
+    "deleted": "boolean — true if a matching edge was found and removed",
+    "edge_id": "string? — the ID of the deleted edge (populated when deleted is true)",
+    "ambiguous": "boolean? — true when subject or object matched multiple nodes",
+    "candidates": "array? — [{id, label, type}] for the ambiguous entity, when ambiguous is true",
+    "ambiguous_field": "string? — 'subject' or 'object', indicating which was ambiguous"
+  },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 10000
+}
