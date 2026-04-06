@@ -1020,10 +1020,15 @@ function createUiHtml(): string {
       tasksView.style.display = view === 'tasks'       ? 'flex' : 'none';
       // When returning to the KG view, tell Cytoscape to re-measure the container.
       // The canvas dimensions may be stale if the view was hidden (display:none)
-      // since the last render.
+      // since the last render. Defer to requestAnimationFrame so the browser
+      // completes layout on the newly-visible container before we read its
+      // dimensions — calling cy.resize() synchronously after a display change
+      // can still see stale 0x0 values in some browser/flex combinations.
       if (view === 'kg' && cy) {
-        cy.resize();
-        cy.fit();
+        requestAnimationFrame(function() {
+          cy.resize();
+          cy.fit();
+        });
       }
       if (view === 'contacts') {
         loadContacts();
