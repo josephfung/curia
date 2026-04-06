@@ -13,9 +13,10 @@ The agent system needs a mechanism for the executive to control how autonomously
 
 ## Decision
 
-Use a single score (0–100) with five named bands: Minimal (0–19), Supervised (20–39), Standard (40–59), Elevated (60–79), Full (80–100).
+Every skill manifest must declare an `action_risk` field indicating the minimum autonomy score at which this skill may run without explicit CEO confirmation.
 
-Each skill declares its minimum required score as an `action_risk` field in `skill.json`. The execution layer checks the current score against the skill's minimum before invoking it.
+Use a single score (0–100) with five named bands: none (0–59), low (60–69), medium (70–79), high (80–89), critical (90–100). Each skills `action_risk` can have a numeric value, or a named band as a shortcut.
+
 
 Score-based was chosen over capability-based because:
 - **Cognitive simplicity** — one number is easier to reason about than a permission matrix. The executive can say "I want supervised mode today" rather than managing a list of allowed capabilities.
@@ -23,7 +24,7 @@ Score-based was chosen over capability-based because:
 - **Natural language alignment** — "set autonomy to 60" maps cleanly to a Coordinator instruction. A permission matrix would require natural language parsing to determine which capabilities to toggle.
 - **Consistent enforcement** — the gate is in the execution layer, not the agent layer. Skills cannot bypass it, regardless of what the LLM requests.
 
-The five band names (Minimal, Supervised, Standard, Elevated, Full) are human-readable aliases for score ranges, documented in `docs/specs/14-autonomy-engine.md`.
+The five band names  are human-readable aliases for score ranges, documented in `docs/specs/14-autonomy-engine.md`.
 
 ## Consequences
 
