@@ -40,6 +40,15 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **12 new `EDGE_TYPES`** — personal (spouse, parent, child, sibling), professional (reports_to, manages, collaborates_with, advises, represents), and organisational (member_of, founded, invested_in), extending the existing 7 types
 - **`EntityMemory.upsertEdge()`** — idempotent edge persistence with bidirectional duplicate detection; confidence only increases on re-assertion, never decreases
 - **`EntityMemory.createEntity()` confidence option** — `CreateEntityOptions.confidence` field so extracted nodes can be seeded at 0.6 (below manually confirmed entities)
+- **`query-relationships` skill** — query entity-to-entity relationship edges by entity name, with optional edge type filter; handles zero-match, single-match, and ambiguous (multi-match) cases
+- **`delete-relationship` skill** — delete a KG edge by human-readable triple (subject, predicate, object); idempotent and direction-agnostic
+
+### Changed
+- **`EntityMemory.upsertEdge()`** — now delegates to `KnowledgeGraphStore.upsertEdge()` for atomic ON CONFLICT DO UPDATE; eliminates the pre-query race condition
+- **`KnowledgeGraphStore`** — new `upsertEdge()` method on both Postgres and in-memory backends
+
+### Fixed
+- **`kg_edges` uniqueness** — migration 014 adds a bidirectional unique index; concurrent extractions can no longer create duplicate edges for the same (subject, predicate, object) triple
 
 ---
 
