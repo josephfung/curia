@@ -491,6 +491,14 @@ async function main(): Promise<void> {
   for (const agentConfig of agentConfigs) {
     // Build tool definitions from pinned skills
     const agentPinnedSkills = agentConfig.pinned_skills ?? [];
+    for (const skillName of agentPinnedSkills) {
+      if (!skillRegistry.get(skillName)) {
+        logger.warn(
+          { agent: agentConfig.name, skill: skillName },
+          'Pinned skill not found in registry; skipping tool definition',
+        );
+      }
+    }
     const agentToolDefs = skillRegistry.toToolDefinitions(agentPinnedSkills);
 
     // For the coordinator, interpolate runtime context (specialist list, agent contact ID).
