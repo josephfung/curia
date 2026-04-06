@@ -1244,6 +1244,29 @@ function createUiHtml(): string {
     var cy = null;           // Cytoscape instance (lazy-initialised on first login)
     var memoryOpen = true;   // Memory nav section expanded by default
     var settingsOpen = true; // Settings nav section expanded by default
+
+    // ── Wizard state ───────────────────────────────────────────────────
+    var wizardState = {
+      step: 1,
+      name: '',
+      title: '',
+      signature: '',
+      toneBaseline: ['warm', 'direct'],
+      verbosity: 50,
+      directness: 75,
+      posture: 'conservative',
+      preferences: '',
+    };
+
+    // All valid tone words — mirrors BASELINE_TONE_OPTIONS in src/identity/types.ts.
+    var TONE_OPTIONS = [
+      'warm','friendly','approachable','personable','empathetic','encouraging','gracious','caring',
+      'direct','blunt','candid','frank','matter-of-fact','no-nonsense',
+      'energetic','calm','composed','enthusiastic','steady','measured',
+      'playful','witty','dry','charming','diplomatic','tactful','thoughtful','curious',
+      'confident','assured','polished','authoritative','professional',
+    ];
+
     var activeNavId = 'nav-kg';
     var contacts = [];
     var selectedContactId = null;
@@ -1343,6 +1366,29 @@ function createUiHtml(): string {
     var chatTextarea   = document.getElementById('chat-textarea');
     var chatSendBtn    = document.getElementById('chat-send-btn');
 
+    // Wizard DOM refs
+    var wstep1El         = document.getElementById('wstep-1');
+    var wstep2El         = document.getElementById('wstep-2');
+    var wstep3El         = document.getElementById('wstep-3');
+    var wstep4El         = document.getElementById('wstep-4');
+    var wDots            = [
+      document.getElementById('wdot-1'),
+      document.getElementById('wdot-2'),
+      document.getElementById('wdot-3'),
+      document.getElementById('wdot-4'),
+    ];
+    var wizardStepLabel  = document.getElementById('wizard-step-label');
+    var wNameInput       = document.getElementById('w-name');
+    var wTitleInput      = document.getElementById('w-title');
+    var wSignatureInput  = document.getElementById('w-signature');
+    var wVerbosityInput  = document.getElementById('w-verbosity');
+    var wDirectnessInput = document.getElementById('w-directness');
+    var wPrefsInput      = document.getElementById('w-preferences');
+    var wstep1Error      = document.getElementById('wstep1-error');
+    var wizardError      = document.getElementById('wizard-error');
+    var wizardSaveBtn    = document.getElementById('wizard-save-btn');
+    var chatSuccessBanner = document.getElementById('chat-success-banner');
+
     // Catch template/script divergence early rather than producing cryptic null errors
     if (!authWall || !mainApp || !authForm || !authInput || !authError ||
         !statusEl || !resultsEl || !searchInput || !searchBtn ||
@@ -1361,6 +1407,11 @@ function createUiHtml(): string {
         !jobsForm || !jobsEditorTitle || !jobsDeleteBtn || !jobsSaveBtn || !jobsCancelBtn ||
         !jobAgentIdInput || !jobStatusInput || !jobCronExprInput || !jobRunAtInput ||
         !jobIntentAnchorInput || !jobTaskPayloadInput ||
+        !wstep1El || !wstep2El || !wstep3El || !wstep4El ||
+        wDots.some(function(d) { return !d; }) ||
+        !wizardStepLabel || !wNameInput || !wTitleInput || !wSignatureInput ||
+        !wVerbosityInput || !wDirectnessInput || !wPrefsInput ||
+        !wstep1Error || !wizardError || !wizardSaveBtn || !chatSuccessBanner ||
         !chatMessagesEl || !chatConvListEl || !chatForm || !chatTextarea || !chatSendBtn) {
       throw new Error('Curia KG: required DOM element missing — check template integrity.');
     }
@@ -1593,18 +1644,93 @@ function createUiHtml(): string {
       settingsCaret.classList.toggle('collapsed', !settingsOpen);
     }
 
-    // Wizard show/hide — temporary stubs until Task 6 implements the full wizard.
-    // showMain() and navigate('wizard') call showWizard() before it's fully implemented;
-    // the stub falls back to Chat so the app is never left in a broken state.
+    // ── Wizard step management ─────────────────────────────────────────
+
+    function navigateWizardStep(n) {
+      wstep1El.style.display = n === 1 ? 'flex' : 'none';
+      wstep2El.style.display = n === 2 ? 'flex' : 'none';
+      wstep3El.style.display = n === 3 ? 'flex' : 'none';
+      wstep4El.style.display = n === 4 ? 'flex' : 'none';
+      // Dots for steps before n are filled; current and future are empty.
+      wDots.forEach(function(dot, i) { dot.classList.toggle('done', i < n); });
+      wizardStepLabel.textContent = 'Step ' + n + ' of 4';
+      wizardState.step = n;
+      if (n === 2) {
+        buildTonePills();
+        syncPostureSelection();
+        updateVerbosityPreview();
+        updateDirectnessPreview();
+      }
+      if (n === 4) { renderReview(); }
+    }
+
     function showWizard(identity) {
-      // TODO: implement full wizard overlay — replaced in Task 6
-      mainApp.style.display = 'flex';
-      navigate('chat', 'Chat', 'nav-chat');
-      initCytoscape();
+      wizardState.name      = (identity && identity.assistant && identity.assistant.name)      || '';
+      wizardState.title     = (identity && identity.assistant && identity.assistant.title)     || '';
+      wizardState.signature = (identity && identity.assistant && identity.assistant.emailSignature) || '';
+      wizardState.toneBaseline = (identity && identity.tone && identity.tone.baseline && identity.tone.baseline.length)
+        ? identity.tone.baseline.slice() : ['warm', 'direct'];
+      wizardState.verbosity  = (identity && identity.tone && identity.tone.verbosity  != null) ? identity.tone.verbosity  : 50;
+      wizardState.directness = (identity && identity.tone && identity.tone.directness != null) ? identity.tone.directness : 75;
+      wizardState.posture    = (identity && identity.decisionStyle && identity.decisionStyle.externalActions)
+        ? identity.decisionStyle.externalActions : 'conservative';
+      wizardState.preferences = '';
+
+      wNameInput.value       = wizardState.name;
+      wTitleInput.value      = wizardState.title;
+      wSignatureInput.value  = wizardState.signature;
+      wVerbosityInput.value  = String(wizardState.verbosity);
+      wDirectnessInput.value = String(wizardState.directness);
+      wPrefsInput.value      = '';
+
+      // Reset pill grid so it rebuilds with the new selection state.
+      var grid = document.getElementById('tone-pill-grid');
+      if (grid) grid.replaceChildren();
+
+      document.getElementById('view-wizard').style.display = 'flex';
+      wstep1Error.style.display = 'none';
+      wizardError.style.display = 'none';
+      navigateWizardStep(1);
     }
 
     function hideWizard() {
-      // TODO: implement — replaced in Task 6
+      document.getElementById('view-wizard').style.display = 'none';
+    }
+
+    function validateWizardStep(n) {
+      if (n === 1) {
+        var name = wNameInput.value.trim();
+        if (!name) {
+          wstep1Error.textContent = 'Assistant name is required.';
+          wstep1Error.style.display = 'block';
+          return false;
+        }
+        wstep1Error.style.display = 'none';
+        wizardState.name      = name;
+        wizardState.title     = wTitleInput.value.trim();
+        wizardState.signature = wSignatureInput.value.trim();
+        return true;
+      }
+      if (n === 2) {
+        if (wizardState.toneBaseline.length === 0) return false;
+        wizardState.verbosity  = Number(wVerbosityInput.value);
+        wizardState.directness = Number(wDirectnessInput.value);
+        return true;
+      }
+      if (n === 3) {
+        wizardState.preferences = wPrefsInput.value.trim();
+        return true;
+      }
+      return true;
+    }
+
+    function wizardNext() {
+      if (!validateWizardStep(wizardState.step)) return;
+      if (wizardState.step < 4) navigateWizardStep(wizardState.step + 1);
+    }
+
+    function wizardBack() {
+      if (wizardState.step > 1) navigateWizardStep(wizardState.step - 1);
     }
 
     // ── KG API helpers ─────────────────────────────────────────────────
