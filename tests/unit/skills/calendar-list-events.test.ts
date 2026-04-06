@@ -147,11 +147,12 @@ describe('CalendarListEventsHandler', () => {
   });
 
   it('merges and sorts events from multiple calendars chronologically', async () => {
+    // startTime is Unix seconds (as returned by Nylas SDK) — smaller = earlier
     const workEvents = [
-      { ...mockEvents[1], id: 'work-1', startTime: '2026-04-01T14:00:00Z' },
+      { ...mockEvents[1], id: 'work-1', startTime: 5000 },
     ];
     const personalEvents = [
-      { ...mockEvents[0], id: 'personal-1', startTime: '2026-04-01T09:00:00Z' },
+      { ...mockEvents[0], id: 'personal-1', startTime: 1000 },
     ];
     const nylasCalendarClient = {
       listEvents: vi.fn()
@@ -178,9 +179,77 @@ describe('CalendarListEventsHandler', () => {
     if (result.success) {
       const data = result.data as { events: Array<{ id: string }> };
       expect(data.events).toHaveLength(2);
-      // personal-1 (09:00) should sort before work-1 (14:00)
+      // personal-1 (startTime: 1000) should sort before work-1 (startTime: 5000)
       expect(data.events[0].id).toBe('personal-1');
       expect(data.events[1].id).toBe('work-1');
+    }
+  });
+
+  it('formats timed event timestamps as UTC ISO strings for LLM consumption', async () => {
+    // 1775489400 Unix seconds = 2026-04-06T15:30:00.000Z (11:30 AM EDT)
+    const timedEvent = {
+      id: 'evt-timed',
+      title: 'Catchup',
+      description: '',
+      participants: [],
+      startTime: 1775489400,
+      endTime: 1775491200,
+      startDate: null,
+      endDate: null,
+      location: '',
+      conferencing: null,
+      status: 'confirmed',
+      calendarId: 'cal-1',
+      busy: true,
+    };
+    const nylasCalendarClient = {
+      listEvents: vi.fn().mockResolvedValue([timedEvent]),
+    };
+
+    const result = await handler.execute(makeCtx(
+      { calendarId: 'cal-1', timeMin: '2026-04-06T00:00:00Z', timeMax: '2026-04-07T00:00:00Z' },
+      { nylasCalendarClient: nylasCalendarClient as never },
+    ));
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const data = result.data as { events: Array<{ startTime: string; endTime: string }> };
+      expect(data.events[0].startTime).toBe('2026-04-06T15:30:00.000Z');
+      expect(data.events[0].endTime).toBe('2026-04-06T16:00:00.000Z');
+    }
+  });
+
+  it('leaves startTime/endTime null for all-day events', async () => {
+    const allDayEvent = {
+      id: 'evt-allday',
+      title: 'Birthday',
+      description: '',
+      participants: [],
+      startTime: null,
+      endTime: null,
+      startDate: '2026-04-06',
+      endDate: '2026-04-06',
+      location: '',
+      conferencing: null,
+      status: 'confirmed',
+      calendarId: 'cal-1',
+      busy: false,
+    };
+    const nylasCalendarClient = {
+      listEvents: vi.fn().mockResolvedValue([allDayEvent]),
+    };
+
+    const result = await handler.execute(makeCtx(
+      { calendarId: 'cal-1', timeMin: '2026-04-06T00:00:00Z', timeMax: '2026-04-07T00:00:00Z' },
+      { nylasCalendarClient: nylasCalendarClient as never },
+    ));
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const data = result.data as { events: Array<{ startTime: null; endTime: null; startDate: string }> };
+      expect(data.events[0].startTime).toBeNull();
+      expect(data.events[0].endTime).toBeNull();
+      expect(data.events[0].startDate).toBe('2026-04-06');
     }
   });
 

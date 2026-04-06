@@ -12,6 +12,7 @@
 // the skill fetches all events in range and filters locally.
 
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { NylasCalendarEvent } from '../../src/channels/calendar/nylas-calendar-client.js';
 
 export class CalendarListEventsHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {
@@ -66,7 +67,7 @@ export class CalendarListEventsHandler implements SkillHandler {
       );
 
       const failedCalendarIds: string[] = [];
-      const successfulEvents: Array<typeof settled[0] extends PromiseFulfilledResult<infer T> ? T : never> = [];
+      const successfulEvents: NylasCalendarEvent[][] = [];
       for (let i = 0; i < settled.length; i++) {
         const result = settled[i];
         if (result.status === 'fulfilled') {
@@ -86,8 +87,9 @@ export class CalendarListEventsHandler implements SkillHandler {
 
       let events = successfulEvents.flat();
 
-      // Sort merged events by start time so the agenda reads chronologically
-      events.sort((a, b) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime());
+      // Sort merged events by start time so the agenda reads chronologically.
+      // startTime is Unix seconds (null for all-day events, which sort first at 0).
+      events.sort((a, b) => (a.startTime ?? 0) - (b.startTime ?? 0));
 
       // Client-side filtering: query matches title or description (case-insensitive)
       if (query && typeof query === 'string') {
@@ -112,8 +114,20 @@ export class CalendarListEventsHandler implements SkillHandler {
         events = events.slice(0, maxResults);
       }
 
-      ctx.log.info({ calendarIds, count: events.length, failedCalendarIds }, 'Listed events');
-      const data: Record<string, unknown> = { events, count: events.length };
+      // Format events for LLM consumption.
+      // Nylas returns timed event timestamps as Unix seconds. LLMs can't reliably
+      // do Unix epoch arithmetic (they produce wrong wall-clock times), so we
+      // convert to UTC ISO 8601 strings here. The LLM already knows the user's
+      // timezone from the system prompt's time context block and can display ISO
+      // strings correctly.
+      const formattedEvents = events.map((evt) => ({
+        ...evt,
+        startTime: evt.startTime !== null ? new Date(evt.startTime * 1000).toISOString() : null,
+        endTime: evt.endTime !== null ? new Date(evt.endTime * 1000).toISOString() : null,
+      }));
+
+      ctx.log.info({ calendarIds, count: formattedEvents.length, failedCalendarIds }, 'Listed events');
+      const data: Record<string, unknown> = { events: formattedEvents, count: formattedEvents.length };
       // Surface partial failures so the LLM can inform the user
       if (failedCalendarIds.length > 0) {
         data.warnings = [`Failed to fetch events from ${failedCalendarIds.length} calendar(s): ${failedCalendarIds.join(', ')}`];
