@@ -1828,6 +1828,136 @@ function createUiHtml(): string {
       selectPosture(wizardState.posture);
     }
 
+    // ── Review & submit ────────────────────────────────────────────────
+
+    function renderReview() {
+      var card = document.getElementById('review-card');
+      // Remove all existing child nodes safely (no innerHTML — user input could contain HTML).
+      while (card.firstChild) card.removeChild(card.firstChild);
+
+      var v = wizardState.verbosity;
+      var verbosityDesc = v <= 25 ? 'Very brief responses — just the essentials.'
+        : v <= 50 ? 'Concise responses by default.'
+        : v <= 75 ? 'Adapts length to the situation.'
+        : 'Thorough by default — full context included.';
+
+      var d = wizardState.directness;
+      var directnessDesc = d <= 25 ? 'Measured — acknowledges uncertainty carefully.'
+        : d <= 50 ? 'Leans direct but hedges where uncertain.'
+        : d <= 75 ? 'Direct — minimal unnecessary hedging.'
+        : 'States positions plainly; no softening.';
+
+      var postureMap = {
+        conservative: 'Verifies before acting on external requests.',
+        balanced:     'Acts when confident; flags when uncertain.',
+        proactive:    'Biases toward action with less checking in.',
+      };
+      var postureDesc = postureMap[wizardState.posture] || '';
+
+      var words = wizardState.toneBaseline;
+      var tonePhrase = words.length === 1 ? words[0]
+        : words.length === 2 ? words[0] + ' and ' + words[1]
+        : words[0] + ', ' + words[1] + ' and ' + words[2];
+
+      var rows = [
+        { label: 'Assistant', value: wizardState.name + (wizardState.title ? ' \u2014 ' + wizardState.title : '') },
+        { label: 'Tone',      value: 'Your tone is ' + tonePhrase + '.' },
+        { label: 'Detail',    value: verbosityDesc },
+        { label: 'Directness', value: directnessDesc },
+        { label: 'Posture',   value: postureDesc },
+      ];
+      if (wizardState.preferences) {
+        rows.push({ label: 'Preference', value: '\u201c' + wizardState.preferences + '\u201d' });
+      }
+
+      rows.forEach(function(row) {
+        var rowEl   = document.createElement('div');
+        rowEl.className = 'review-row';
+        var labelEl = document.createElement('div');
+        labelEl.className = 'review-row-label';
+        labelEl.textContent = row.label;
+        var valueEl = document.createElement('div');
+        valueEl.className = 'review-row-value';
+        valueEl.textContent = row.value; // textContent — safe even with user input
+        rowEl.appendChild(labelEl);
+        rowEl.appendChild(valueEl);
+        card.appendChild(rowEl);
+      });
+    }
+
+    function submitWizard() {
+      wizardSaveBtn.disabled = true;
+      wizardSaveBtn.textContent = 'Saving\u2026';
+      wizardError.style.display = 'none';
+
+      // Fetch current identity to preserve behavioral_preferences and constraints.
+      fetch('/api/identity')
+        .then(function(res) {
+          if (!res.ok) throw new Error('HTTP ' + res.status);
+          return res.json();
+        })
+        .then(function(data) {
+          var current = data.identity;
+          var prefs = current.behavioralPreferences ? current.behavioralPreferences.slice() : [];
+          if (wizardState.preferences) { prefs.push(wizardState.preferences); }
+
+          var payload = {
+            identity: {
+              assistant: {
+                name: wizardState.name,
+                title: wizardState.title,
+                emailSignature: wizardState.signature,
+              },
+              tone: {
+                baseline: wizardState.toneBaseline,
+                verbosity: wizardState.verbosity,
+                directness: wizardState.directness,
+              },
+              behavioralPreferences: prefs,
+              decisionStyle: {
+                externalActions: wizardState.posture,
+                // internal_analysis is not surfaced in the wizard — preserve existing value.
+                internalAnalysis: (current.decisionStyle && current.decisionStyle.internalAnalysis)
+                  ? current.decisionStyle.internalAnalysis : 'proactive',
+              },
+              // constraints are immutable via wizard — always preserve.
+              constraints: current.constraints || [],
+            },
+            note: 'Saved via onboarding wizard',
+          };
+
+          return fetch('/api/identity', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          });
+        })
+        .then(function(res) {
+          if (!res.ok) {
+            return res.json().then(function(body) {
+              throw new Error(body.error || 'Save failed');
+            });
+          }
+          return fetch('/api/identity/reload', { method: 'POST' });
+        })
+        .then(function() {
+          hideWizard();
+          if (mainApp && mainApp.style.display === 'none') {
+            mainApp.style.display = 'flex';
+            initCytoscape();
+          }
+          navigate('chat', 'Chat', 'nav-chat');
+          chatSuccessBanner.style.display = 'block';
+          setTimeout(function() { chatSuccessBanner.style.display = 'none'; }, 4000);
+        })
+        .catch(function(err) {
+          wizardError.textContent = err.message || 'Something went wrong — please try again.';
+          wizardError.style.display = 'block';
+          wizardSaveBtn.disabled = false;
+          wizardSaveBtn.textContent = 'Confirm \u0026 save';
+        });
+    }
+
     // ── KG API helpers ─────────────────────────────────────────────────
     function setStatus(msg, isError) {
       statusEl.textContent = msg;
