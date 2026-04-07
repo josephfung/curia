@@ -367,7 +367,8 @@ export class SignalRpcClient extends EventEmitter {
     const envelope = receiveParams?.envelope;
 
     if (!envelope) {
-      this.log.warn({ params: notification.params }, 'Signal RPC: receive notification missing envelope');
+      // Log only structural metadata — params may contain sourceNumber and message text (PII).
+      this.log.warn({ hasParams: !!notification.params }, 'Signal RPC: receive notification missing envelope');
       return;
     }
 
