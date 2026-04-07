@@ -45,12 +45,33 @@ export function loadExtraInjectionPatterns(configDir: string): ExtraInjectionPat
   }
 
   const raw = yaml.load(readFileSync(configPath, 'utf-8')) as RawDefaultYaml | null;
-  if (!raw || !raw.security?.extra_injection_patterns?.length) {
+  const entries = raw?.security?.extra_injection_patterns;
+
+  // Section absent or key missing — no extra patterns configured.
+  if (entries === undefined) {
     return [];
   }
 
-  const entries = raw.security.extra_injection_patterns;
+  // Explicit array check: a YAML typo like `extra_injection_patterns: {}` produces
+  // an object, not an array. Silently treating it as "no patterns" would disable
+  // all org-specific detection without any feedback to the operator.
+  if (!Array.isArray(entries)) {
+    throw new Error(
+      `security.extra_injection_patterns must be a list in ${configPath}`,
+    );
+  }
+
+  if (entries.length === 0) {
+    return [];
+  }
+
   return entries.map((entry, i) => {
+    // Guard against null entries or primitives — e.g. a bare `-` in YAML produces null.
+    if (!entry || typeof entry !== 'object') {
+      throw new Error(
+        `security.extra_injection_patterns[${i}] must be an object with 'regex' and 'label' fields in ${configPath}`,
+      );
+    }
     if (typeof entry.regex !== 'string' || !entry.regex) {
       throw new Error(
         `security.extra_injection_patterns[${i}] is missing a valid 'regex' string in ${configPath}`,
