@@ -434,6 +434,7 @@ export class SchedulerService {
                  next_run_at = $1,
                  consecutive_failures = 0,
                  last_error = NULL,
+                 run_started_at = NULL,
                  status = $2
            WHERE id = $3
         `;
@@ -445,7 +446,8 @@ export class SchedulerService {
              SET last_run_at = now(),
                  status = $1,
                  consecutive_failures = 0,
-                 last_error = NULL
+                 last_error = NULL,
+                 run_started_at = NULL
            WHERE id = $2
         `;
         await this.pool.query(updateSql, ['completed', jobId]);
@@ -465,6 +467,7 @@ export class SchedulerService {
          SET last_run_at = now(),
              consecutive_failures = $1,
              last_error = $2,
+             run_started_at = NULL,
              status = $3
        WHERE id = $4
     `;

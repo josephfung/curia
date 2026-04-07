@@ -348,6 +348,32 @@ describe('SchedulerService', () => {
 
       expect(result.suspended).toBe(false);
     });
+
+    it('clears run_started_at on success for a recurring job', async () => {
+      pool.query
+        .mockResolvedValueOnce({
+          rows: [{ id: 'job-1', cron_expr: '0 9 * * *', status: 'running', consecutive_failures: 0, timezone: 'UTC' }],
+        })
+        .mockResolvedValueOnce({ rows: [] }); // UPDATE
+
+      await svc.completeJobRun('job-1', true);
+
+      const [updateSql] = pool.query.mock.calls[1] as [string, unknown[]];
+      expect(updateSql).toContain('run_started_at = NULL');
+    });
+
+    it('clears run_started_at on failure', async () => {
+      pool.query
+        .mockResolvedValueOnce({
+          rows: [{ id: 'job-1', cron_expr: '0 9 * * *', status: 'running', consecutive_failures: 0, timezone: 'UTC' }],
+        })
+        .mockResolvedValueOnce({ rows: [] }); // UPDATE
+
+      await svc.completeJobRun('job-1', false, 'some error');
+
+      const [updateSql] = pool.query.mock.calls[1] as [string, unknown[]];
+      expect(updateSql).toContain('run_started_at = NULL');
+    });
   });
 
   // -- upsertDeclarativeJob --
