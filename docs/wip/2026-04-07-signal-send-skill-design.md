@@ -385,10 +385,14 @@ Coordinator (via CEO request)
   the original held message is not replayed — there is no held-message record for it.
   The CEO will need to ask the group to resend or ask Nathan to check the group.
   A future iteration could store group-held messages in the held-message table.
-- **Per-member blocked check for group outbound sends:** The gateway's blocked-contact
-  check for group sends uses the group_id (no matching contact record → passes). Individual
-  member blocking is enforced on the inbound trust check, not the outbound send. This is
-  acceptable because the CEO explicitly authorised the send by asking Nathan.
+- **Gateway-level group blocked check:** The gateway's own blocked-contact pipeline checks
+  the group_id as the recipientId — there is no contact record keyed on a group_id, so it
+  always passes. This is a known gap in the gateway's internal pipeline. It is compensated
+  by the skill: `signal-send` runs `checkGroupMemberTrust` (which surfaces blocked members)
+  *before* calling the gateway. A blocked group member causes the skill to return an error
+  immediately, so the send never reaches the gateway. From the CEO's perspective, blocked
+  members in a group fully prevent the outbound send — the gap is internal to the gateway
+  and never surfaces.
 - **Group membership change detection:** If a new member is added to a trusted group after
   Curia starts engaging, the next inbound message from that group will re-run the trust
   check and hold if the new member is unknown. This is correct behaviour but may surprise
