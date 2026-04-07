@@ -374,10 +374,16 @@ export class SchedulerService {
     const taskPayload = { task: schedule.task };
     const nextRunAt = this.nextRunFromCron(schedule.cron);
 
-    // If expectedDurationSeconds is provided, include it in the upsert so the
-    // stuck-job recovery watchdog uses the job-specific timeout threshold.
-    // If omitted, leave the column at its current value (null → system default applies).
-    const hasExpectedDuration = schedule.expectedDurationSeconds !== undefined;
+    // Validate expectedDurationSeconds: must be a finite positive integer.
+    // Invalid values (0, negative, NaN, Infinity, non-integer) are silently treated
+    // as absent so the system default applies rather than breaking recovery.
+    const rawDuration = schedule.expectedDurationSeconds;
+    const validDuration =
+      rawDuration !== undefined &&
+      Number.isInteger(rawDuration) &&
+      rawDuration > 0 &&
+      Number.isFinite(rawDuration);
+    const hasExpectedDuration = validDuration;
 
     // Include timezone so completeJobRun() re-advances next_run_at in the same zone.
     // Without this, the DB column would default to 'UTC' while next_run_at was computed
@@ -400,7 +406,7 @@ export class SchedulerService {
       this.timezone,
     ];
     if (hasExpectedDuration) {
-      params.push(schedule.expectedDurationSeconds!);
+      params.push(rawDuration);
     }
 
     const { rows } = await this.pool.query(sql, params);

@@ -394,6 +394,16 @@ export class Scheduler {
         const result = await this.schedulerService.recoverStuckJob(row.id, row.timeout_seconds);
 
         if (!result.noOp) {
+          // Remove any stale pendingJobs entry so a late agent.response for the
+          // old run cannot complete the freshly-reset job.
+          for (const [eventId, pendingJobId] of this.pendingJobs) {
+            if (pendingJobId === row.id) {
+              this.pendingJobs.delete(eventId);
+              this.logger.debug({ jobId: row.id, eventId }, 'Removed stale pendingJobs entry for recovered job');
+              break; // At most one entry per job
+            }
+          }
+
           this.logger.warn(
             {
               jobId: row.id,

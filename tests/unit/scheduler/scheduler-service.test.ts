@@ -436,7 +436,7 @@ describe('SchedulerService', () => {
       const result = await svc.recoverStuckJob('job-2', 600);
 
       expect(result.suspended).toBe(false);
-      const [updateSql, updateParams] = pool.query.mock.calls[1] as [string, unknown[]];
+      const [, updateParams] = pool.query.mock.calls[1] as [string, unknown[]];
       // For one-shot: next_run_at should be approximately now (within 5 seconds)
       const nextRunAt = updateParams[3] as Date;
       expect(nextRunAt).toBeInstanceOf(Date);
@@ -555,6 +555,23 @@ describe('SchedulerService', () => {
 
       const [sql] = pool.query.mock.calls[0] as [string];
       expect(sql).not.toContain('expected_duration_seconds');
+    });
+
+    it('ignores invalid expectedDurationSeconds values (0, negative, NaN, non-integer)', async () => {
+      const invalids = [0, -1, NaN, Infinity, 1.5, -0.5];
+
+      for (const invalid of invalids) {
+        pool.query.mockResolvedValueOnce({ rows: [{ id: 'job-x' }] });
+
+        await svc.upsertDeclarativeJob('coordinator', {
+          cron: '0 9 * * *',
+          task: 'test',
+          expectedDurationSeconds: invalid,
+        });
+
+        const [sql] = pool.query.mock.calls[pool.query.mock.calls.length - 1] as [string];
+        expect(sql).not.toContain('expected_duration_seconds');
+      }
     });
   });
 

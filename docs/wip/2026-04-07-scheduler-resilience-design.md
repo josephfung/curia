@@ -62,20 +62,17 @@ Both constants (7.5 multiplier, 3600s cap) are named module-level values in `sch
 Declarative jobs gain an optional `expectedDurationSeconds` field. The upsert path writes it to the DB column; missing field leaves the column at its current value (so manually-set durations are preserved across restarts).
 
 ```yaml
-scheduler:
-  jobs:
-    - id: morning-calendar
-      cron: "30 7 * * *"
-      timezone: "America/Toronto"
-      expectedDurationSeconds: 60
-      task: "Send Joseph a daily email with his schedule..."
+schedule:
+  - cron: "30 7 * * *"
+    task: "Send Joseph a daily email with his schedule..."
+    expectedDurationSeconds: 60
 ```
 
 ### Recovery logic (`recoverStuckJobs()`)
 
 For each job where `status = 'running'` and `run_started_at < now() - timeout`:
 
-1. **Increment `consecutive_failures`** — a stuck job is a failure. If this reaches the suspend threshold (3), the job is set to `'suspended'` instead of `'pending'`, and a `schedule.suspended` event is published. This prevents an unstable job from infinitely retrying.
+1. **Increment `consecutive_failures`** — a stuck job is a failure. If this reaches the suspend threshold (3), the job is set to `'suspended'` instead of `'pending'`. This prevents an unstable job from infinitely retrying.
 2. **Reset `status`** — to `'pending'` (or `'suspended'` per above).
 3. **Clear `run_started_at`** — set to `NULL`.
 4. **Advance `next_run_at`** — for recurring jobs (has `cron_expr`): if the stored value is in the past, advance to the next valid cron fire time so the job doesn't attempt to catch up on missed slots. For one-shot jobs (no `cron_expr`): set `next_run_at = now()` so the job re-fires on the next poll immediately.
@@ -83,7 +80,7 @@ For each job where `status = 'running'` and `run_started_at < now() - timeout`:
 6. **Publish `schedule.recovered`** — new discriminated union event, carries `jobId`, `agentId`, `runStartedAt`, `timeoutSeconds`. Written to audit log.
 7. **Log `warn`** — one line per recovered job with structured fields.
 
-All DB writes for a single job are wrapped in a transaction. If the transaction fails, the job is left in `'running'` state (safe — it will be retried on the next watchdog tick).
+If any DB write fails, the job is left in `'running'` state (safe — it will be retried on the next watchdog tick).
 
 ### Coordinator notification
 
@@ -96,10 +93,10 @@ Deferred. Notifying Nathan when a job is auto-recovered requires the `outbound.n
   type: 'schedule.recovered';
   jobId: string;
   agentId: string;
-  runStartedAt: string;       // ISO timestamp when job entered 'running'
-  timeoutSeconds: number;     // computed threshold that was exceeded
+  runStartedAt: string | null; // ISO timestamp when job entered 'running'; null for pre-migration rows
+  timeoutSeconds: number;      // computed threshold that was exceeded
   consecutiveFailures: number; // value after increment
-  suspended: boolean;         // true if job was suspended rather than reset
+  suspended: boolean;          // true if job was suspended rather than reset
 }
 ```
 
@@ -109,8 +106,7 @@ Deferred. Notifying Nathan when a job is auto-recovered requires the `outbound.n
 - Jobs within threshold are not touched
 - Jobs past threshold are reset: `status = 'pending'`, `run_started_at = NULL`, `consecutive_failures` incremented, `last_error` set
 - Third consecutive failure suspends the job instead of resetting
-- `schedule.recovered` event published for each recovered job
-- `schedule.suspended` published when job reaches suspend threshold via recovery
+- `schedule.recovered` event published for each recovered job (with `suspended: true` in payload when job reaches suspend threshold)
 
 **Unit: `fireJob()` changes**
 - `run_started_at` is written when status transitions to `'running'`

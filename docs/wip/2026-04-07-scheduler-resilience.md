@@ -2,6 +2,8 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> Run all commands from the repository root.
+
 **Goal:** Prevent scheduled jobs from getting permanently stuck in `running` state by adding per-job timeout tracking, a startup cleanup sweep, and a continuous watchdog loop.
 
 **Architecture:** Add two new DB columns (`run_started_at`, `expected_duration_seconds`) via migration; set `run_started_at` when a job is claimed and clear it on completion; on startup and every 5 minutes detect jobs that have exceeded their timeout threshold and reset them to `pending` (or `suspended` on the third consecutive failure).
@@ -40,7 +42,6 @@ ALTER TABLE scheduled_jobs
 - [ ] **Step 2: Run typecheck to confirm baseline is clean before any code changes**
 
 ```bash
-cd /Users/josephfung/Projects/office-of-the-ceo/worktrees/curia-scheduler-resilience
 npm run typecheck
 ```
 Expected: no errors.
