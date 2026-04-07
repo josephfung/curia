@@ -571,6 +571,16 @@ async function main(): Promise<void> {
   // Load declarative schedules from agent YAML configs and start the scheduler loop.
   // Runs after agent registration so all agents are known when jobs are upserted.
   await scheduler.loadDeclarativeJobs(agentConfigs);
+  // Recover any jobs left stuck in 'running' from a prior crash before the
+  // poll loop starts. This handles the "crash between claim and dispatch" failure mode.
+  // Non-fatal: a transient DB error here should not crash startup since the watchdog
+  // will retry the same recovery in 5 minutes.
+  try {
+    await scheduler.recoverStuckJobs();
+  } catch (err) {
+    // Non-fatal: watchdog will retry in 5 minutes.
+    logger.error({ err }, 'Startup stuck-job recovery failed — watchdog will retry in 5 minutes');
+  }
   scheduler.start();
   logger.info('Scheduler started');
 

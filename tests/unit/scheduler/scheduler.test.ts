@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { Scheduler, POLL_INTERVAL_MS } from '../../../src/scheduler/scheduler.js';
+import { Scheduler, POLL_INTERVAL_MS, WATCHDOG_INTERVAL_MS, computeRecoveryTimeout } from '../../../src/scheduler/scheduler.js';
 import type { AgentYamlConfig } from '../../../src/agents/loader.js';
 
 // -- Mock helpers --
@@ -31,6 +31,7 @@ function mockSchedulerService() {
     upsertDeclarativeJob: vi.fn(),
     getJob: vi.fn(),
     nextRunFromCron: vi.fn(),
+    recoverStuckJob: vi.fn(),
   };
 }
 
@@ -49,9 +50,12 @@ function fakeDbRow(overrides: Record<string, unknown> = {}) {
     consecutive_failures: 0,
     created_by: 'system',
     created_at: new Date().toISOString(),
+    timezone: 'UTC',
     agent_task_id: null,
     intent_anchor: null,
     progress: null,
+    run_started_at: null,
+    expected_duration_seconds: null,
     ...overrides,
   };
 }
@@ -130,6 +134,35 @@ describe('Scheduler', () => {
 
       expect(pool.query).not.toHaveBeenCalled();
     });
+
+    it('starts a watchdog interval that calls recoverStuckJobs', async () => {
+      pool.query.mockResolvedValue({ rows: [] }); // for both pollDueJobs and recoverStuckJobs
+
+      // Spy on recoverStuckJobs
+      const recoverSpy = vi.spyOn(scheduler, 'recoverStuckJobs').mockResolvedValue();
+
+      scheduler.start();
+
+      // Advance by one watchdog interval
+      await vi.advanceTimersByTimeAsync(WATCHDOG_INTERVAL_MS);
+
+      expect(recoverSpy).toHaveBeenCalled();
+    });
+
+    it('stop clears the watchdog interval', async () => {
+      pool.query.mockResolvedValue({ rows: [] });
+
+      const recoverSpy = vi.spyOn(scheduler, 'recoverStuckJobs').mockResolvedValue();
+
+      scheduler.start();
+      scheduler.stop();
+
+      recoverSpy.mockClear();
+
+      await vi.advanceTimersByTimeAsync(WATCHDOG_INTERVAL_MS * 3);
+
+      expect(recoverSpy).not.toHaveBeenCalled();
+    });
   });
 
   // -- pollDueJobs --
@@ -203,6 +236,19 @@ describe('Scheduler', () => {
 
       // Should not throw; should log the error
       expect(logger.error).toHaveBeenCalled();
+    });
+
+    it('sets run_started_at when claiming a job', async () => {
+      const row = fakeDbRow();
+      pool.query.mockResolvedValueOnce({ rows: [row] });       // SELECT due jobs
+      pool.query.mockResolvedValueOnce({ rowCount: 1, rows: [] }); // UPDATE claim
+
+      await scheduler.pollDueJobs();
+
+      const [claimSql, claimParams] = pool.query.mock.calls[1] as [string, unknown[]];
+      expect(claimSql).toContain('run_started_at');
+      expect(claimSql).toContain('now()');
+      expect(claimParams).toContain('job-1');
     });
   });
 
@@ -390,5 +436,128 @@ describe('Scheduler', () => {
       // Second one succeeded
       expect(logger.info).toHaveBeenCalled();
     });
+  });
+
+  // -- recoverStuckJobs --
+
+  describe('recoverStuckJobs', () => {
+    it('does nothing when no jobs are stuck', async () => {
+      pool.query.mockResolvedValueOnce({ rows: [] });
+
+      await scheduler.recoverStuckJobs();
+
+      expect(pool.query).toHaveBeenCalledOnce();
+      expect(schedulerService.recoverStuckJob).not.toHaveBeenCalled();
+      expect(bus.publish).not.toHaveBeenCalled();
+    });
+
+    it('recovers a stuck job: calls recoverStuckJob, publishes schedule.recovered', async () => {
+      const stuckRow = {
+        id: 'job-stuck',
+        agent_id: 'agent-1',
+        run_started_at: new Date(Date.now() - 3600_000).toISOString(),
+        timeout_seconds: 900,
+      };
+      pool.query.mockResolvedValueOnce({ rows: [stuckRow] });
+      schedulerService.recoverStuckJob.mockResolvedValueOnce({
+        noOp: false,
+        suspended: false,
+        consecutiveFailures: 1,
+      });
+
+      await scheduler.recoverStuckJobs();
+
+      expect(schedulerService.recoverStuckJob).toHaveBeenCalledWith('job-stuck', 900);
+
+      expect(bus.publish).toHaveBeenCalledOnce();
+      const [layer, event] = bus.publish.mock.calls[0] as [string, { type: string }];
+      expect(layer).toBe('system');
+      expect(event.type).toBe('schedule.recovered');
+    });
+
+    it('publishes schedule.recovered with suspended:true when job is suspended', async () => {
+      const stuckRow = {
+        id: 'job-3fail',
+        agent_id: 'agent-1',
+        run_started_at: new Date(Date.now() - 7200_000).toISOString(),
+        timeout_seconds: 600,
+      };
+      pool.query.mockResolvedValueOnce({ rows: [stuckRow] });
+      schedulerService.recoverStuckJob.mockResolvedValueOnce({
+        noOp: false,
+        suspended: true,
+        consecutiveFailures: 3,
+      });
+
+      await scheduler.recoverStuckJobs();
+
+      expect(bus.publish).toHaveBeenCalledOnce();
+      const [, event] = bus.publish.mock.calls[0] as [string, { type: string; payload: { suspended: boolean } }];
+      expect(event.type).toBe('schedule.recovered');
+      expect(event.payload.suspended).toBe(true);
+    });
+
+    it('skips publish and warn log when recoverStuckJob returns noOp:true (race condition)', async () => {
+      const stuckRow = {
+        id: 'job-race',
+        agent_id: 'agent-1',
+        run_started_at: new Date(Date.now() - 3600_000).toISOString(),
+        timeout_seconds: 900,
+      };
+      pool.query.mockResolvedValueOnce({ rows: [stuckRow] });
+      schedulerService.recoverStuckJob.mockResolvedValueOnce({
+        noOp: true,
+        suspended: false,
+        consecutiveFailures: 0,
+      });
+
+      await scheduler.recoverStuckJobs();
+
+      // No bus publish and no warn log — the job completed cleanly before recovery ran
+      expect(bus.publish).not.toHaveBeenCalled();
+      expect(logger.warn).not.toHaveBeenCalledWith(
+        expect.objectContaining({ jobId: 'job-race' }),
+        'Stuck job recovered',
+      );
+    });
+
+    it('continues recovering other jobs if one recovery fails', async () => {
+      const rows = [
+        { id: 'job-a', agent_id: 'agent-1', run_started_at: new Date().toISOString(), timeout_seconds: 600 },
+        { id: 'job-b', agent_id: 'agent-2', run_started_at: new Date().toISOString(), timeout_seconds: 600 },
+      ];
+      pool.query.mockResolvedValueOnce({ rows });
+      schedulerService.recoverStuckJob
+        .mockRejectedValueOnce(new Error('db error on job-a'))
+        .mockResolvedValueOnce({ noOp: false, suspended: false, consecutiveFailures: 1 });
+
+      await scheduler.recoverStuckJobs();
+
+      expect(schedulerService.recoverStuckJob).toHaveBeenCalledTimes(2);
+      expect(logger.error).toHaveBeenCalled();
+      expect(bus.publish).toHaveBeenCalledOnce();
+    });
+  });
+});
+
+describe('computeRecoveryTimeout', () => {
+  it('gives 7.5× timeout for short jobs', () => {
+    expect(computeRecoveryTimeout(60)).toBe(450);    // 1m → 7.5m
+    expect(computeRecoveryTimeout(120)).toBe(900);   // 2m → 15m
+  });
+
+  it('caps the extension at +60 minutes for long jobs', () => {
+    expect(computeRecoveryTimeout(1800)).toBe(5400);  // 30m → 90m (min(13500, 5400) = 5400)
+    expect(computeRecoveryTimeout(3600)).toBe(7200);  // 60m → 120m (min(27000, 7200) = 7200)
+    expect(computeRecoveryTimeout(7200)).toBe(10800); // 120m → 180m (min(54000, 10800) = 10800)
+  });
+
+  it('switches from multiplier to cap at the crossover point', () => {
+    // At 800s: 800 * 7.5 = 6000, 800 + 3600 = 4400. min = 4400 (cap wins)
+    expect(computeRecoveryTimeout(800)).toBe(4400);
+    // At 600s: 600 * 7.5 = 4500, 600 + 3600 = 4200. min = 4200 (cap wins)
+    expect(computeRecoveryTimeout(600)).toBe(4200);
+    // At 480s: 480 * 7.5 = 3600, 480 + 3600 = 4080. min = 3600 (multiplier wins)
+    expect(computeRecoveryTimeout(480)).toBe(3600);
   });
 });

@@ -14,7 +14,7 @@ const publishAllowlist: Record<Layer, Set<EventType>> = {
   dispatch: new Set(['agent.task', 'outbound.message', 'outbound.blocked', 'contact.resolved', 'contact.unknown', 'message.held', 'message.rejected', 'contact.duplicate_detected', 'contact.merged']),
   agent: new Set(['agent.response', 'agent.error', 'skill.invoke', 'skill.result', 'memory.store', 'memory.query']),
   execution: new Set(['skill.result']),
-  system: new Set(['inbound.message', 'agent.task', 'agent.response', 'agent.error', 'outbound.message', 'outbound.blocked', 'skill.invoke', 'skill.result', 'memory.store', 'memory.query', 'contact.resolved', 'contact.unknown', 'message.held', 'message.rejected', 'schedule.created', 'schedule.fired', 'schedule.suspended', 'config.change', 'contact.duplicate_detected', 'contact.merged']),
+  system: new Set(['inbound.message', 'agent.task', 'agent.response', 'agent.error', 'outbound.message', 'outbound.blocked', 'skill.invoke', 'skill.result', 'memory.store', 'memory.query', 'contact.resolved', 'contact.unknown', 'message.held', 'message.rejected', 'schedule.created', 'schedule.fired', 'schedule.suspended', 'schedule.recovered', 'config.change', 'contact.duplicate_detected', 'contact.merged']),
 };
 
 const subscribeAllowlist: Record<Layer, Set<EventType>> = {
@@ -22,7 +22,7 @@ const subscribeAllowlist: Record<Layer, Set<EventType>> = {
   dispatch: new Set(['inbound.message', 'agent.response', 'agent.error']),
   agent: new Set(['agent.task', 'skill.result']),
   execution: new Set(['skill.invoke']),
-  system: new Set(['inbound.message', 'agent.task', 'agent.response', 'agent.error', 'outbound.message', 'outbound.blocked', 'skill.invoke', 'skill.result', 'memory.store', 'memory.query', 'contact.resolved', 'contact.unknown', 'message.held', 'message.rejected', 'schedule.created', 'schedule.fired', 'schedule.suspended', 'config.change', 'contact.duplicate_detected', 'contact.merged']),
+  system: new Set(['inbound.message', 'agent.task', 'agent.response', 'agent.error', 'outbound.message', 'outbound.blocked', 'skill.invoke', 'skill.result', 'memory.store', 'memory.query', 'contact.resolved', 'contact.unknown', 'message.held', 'message.rejected', 'schedule.created', 'schedule.fired', 'schedule.suspended', 'schedule.recovered', 'config.change', 'contact.duplicate_detected', 'contact.merged']),
 };
 
 export function canPublish(layer: Layer, eventType: EventType): boolean {

@@ -44,6 +44,8 @@ export interface JobRow {
   agentTaskId: string | null;
   intentAnchor: string | null;
   progress: Record<string, unknown> | null;
+  runStartedAt: string | null;
+  expectedDurationSeconds: number | null;
 }
 
 export interface ListJobsFilters {
@@ -70,6 +72,8 @@ interface DbJobRow {
   agent_task_id: string | null;
   intent_anchor: string | null;
   progress: Record<string, unknown> | null;
+  run_started_at: string | null;          // set when job enters 'running'; cleared on completion
+  expected_duration_seconds: number | null; // per-job timeout hint; NULL → system default (600s)
 }
 
 // Threshold for auto-suspending jobs after consecutive failures.
@@ -365,23 +369,34 @@ export class SchedulerService {
    */
   async upsertDeclarativeJob(
     agentId: string,
-    schedule: { cron: string; task: string },
+    schedule: { cron: string; task: string; expectedDurationSeconds?: number },
   ): Promise<string> {
     const taskPayload = { task: schedule.task };
     const nextRunAt = this.nextRunFromCron(schedule.cron);
+
+    // Validate expectedDurationSeconds: must be a finite positive integer.
+    // Invalid values (0, negative, NaN, Infinity, non-integer) are silently treated
+    // as absent so the system default applies rather than breaking recovery.
+    const rawDuration = schedule.expectedDurationSeconds;
+    const validDuration =
+      rawDuration !== undefined &&
+      Number.isInteger(rawDuration) &&
+      rawDuration > 0 &&
+      Number.isFinite(rawDuration);
+    const hasExpectedDuration = validDuration;
 
     // Include timezone so completeJobRun() re-advances next_run_at in the same zone.
     // Without this, the DB column would default to 'UTC' while next_run_at was computed
     // using this.timezone — causing every post-completion firing to be offset by the UTC delta.
     const sql = `
-      INSERT INTO scheduled_jobs (agent_id, cron_expr, task_payload, status, next_run_at, created_by, timezone)
-      VALUES ($1, $2, $3, $4, $5, $6, $7)
+      INSERT INTO scheduled_jobs (agent_id, cron_expr, task_payload, status, next_run_at, created_by, timezone${hasExpectedDuration ? ', expected_duration_seconds' : ''})
+      VALUES ($1, $2, $3, $4, $5, $6, $7${hasExpectedDuration ? ', $8' : ''})
       ON CONFLICT ON CONSTRAINT scheduled_jobs_declarative_uq
       DO UPDATE SET next_run_at = $5,
-                    timezone = $7
+                    timezone = $7${hasExpectedDuration ? ',\n                    expected_duration_seconds = $8' : ''}
       RETURNING id
     `;
-    const params = [
+    const params: unknown[] = [
       agentId,
       schedule.cron,
       JSON.stringify(taskPayload),
@@ -390,6 +405,9 @@ export class SchedulerService {
       'system',
       this.timezone,
     ];
+    if (hasExpectedDuration) {
+      params.push(rawDuration);
+    }
 
     const { rows } = await this.pool.query(sql, params);
     return (rows[0] as { id: string }).id;
@@ -430,6 +448,7 @@ export class SchedulerService {
                  next_run_at = $1,
                  consecutive_failures = 0,
                  last_error = NULL,
+                 run_started_at = NULL,
                  status = $2
            WHERE id = $3
         `;
@@ -441,7 +460,8 @@ export class SchedulerService {
              SET last_run_at = now(),
                  status = $1,
                  consecutive_failures = 0,
-                 last_error = NULL
+                 last_error = NULL,
+                 run_started_at = NULL
            WHERE id = $2
         `;
         await this.pool.query(updateSql, ['completed', jobId]);
@@ -461,6 +481,7 @@ export class SchedulerService {
          SET last_run_at = now(),
              consecutive_failures = $1,
              last_error = $2,
+             run_started_at = NULL,
              status = $3
        WHERE id = $4
     `;
@@ -473,6 +494,76 @@ export class SchedulerService {
     }
 
     return { suspended: shouldSuspend };
+  }
+
+  /**
+   * Recover a single stuck job: increment failures, reset status to pending (or suspend),
+   * clear run_started_at, advance next_run_at, and write a descriptive last_error.
+   *
+   * Called by Scheduler.recoverStuckJobs() for each job that has exceeded its timeout.
+   */
+  async recoverStuckJob(
+    jobId: string,
+    timeoutSeconds: number,
+  ): Promise<{ noOp: boolean; suspended: boolean; consecutiveFailures: number }> {
+    const { rows } = await this.pool.query(
+      `SELECT id, cron_expr, run_at, consecutive_failures, timezone
+         FROM scheduled_jobs WHERE id = $1`,
+      [jobId],
+    );
+    const job = rows[0] as {
+      id: string;
+      cron_expr: string | null;
+      run_at: string | null;
+      consecutive_failures: number;
+      timezone: string;
+    } | undefined;
+
+    if (!job) {
+      throw new Error(`Job not found: ${jobId}`);
+    }
+
+    const newFailures = job.consecutive_failures + 1;
+    const shouldSuspend = newFailures >= SUSPEND_THRESHOLD;
+    const newStatus = shouldSuspend ? 'suspended' : 'pending';
+
+    // For recurring jobs: advance to the next valid fire time so the job doesn't
+    // attempt to catch up on missed slots. For one-shot jobs: re-fire immediately.
+    const nextRunAt = job.cron_expr
+      ? this.nextRunFromCron(job.cron_expr, job.timezone)
+      : new Date();
+
+    const timeoutMinutes = Math.round(timeoutSeconds / 60);
+    const lastError = `Job timed out after ${timeoutMinutes}m — auto-recovered`;
+
+    // Guard against a race where the job completed normally between our SELECT above
+    // and this UPDATE. The AND status = 'running' check ensures we only overwrite jobs
+    // that are still genuinely stuck — if rowCount is 0, the job already finished cleanly.
+    const result = await this.pool.query(
+      `UPDATE scheduled_jobs
+          SET status = $1,
+              consecutive_failures = $2,
+              last_error = $3,
+              run_started_at = NULL,
+              next_run_at = $4
+        WHERE id = $5
+          AND status = 'running'`,
+      [newStatus, newFailures, lastError, nextRunAt, jobId],
+    );
+
+    if (result.rowCount === 0) {
+      // The job completed normally between our SELECT and this UPDATE — no recovery needed.
+      this.logger.debug({ jobId }, 'recoverStuckJob: job completed before recovery ran — no-op');
+      return { noOp: true, suspended: false, consecutiveFailures: 0 };
+    }
+
+    if (shouldSuspend) {
+      this.logger.warn({ jobId, consecutiveFailures: newFailures }, 'Stuck job suspended after consecutive recovery failures');
+    } else {
+      this.logger.warn({ jobId, consecutiveFailures: newFailures, timeoutMinutes }, 'Stuck job recovered — reset to pending');
+    }
+
+    return { noOp: false, suspended: shouldSuspend, consecutiveFailures: newFailures };
   }
 }
 
@@ -497,5 +588,7 @@ function mapJobRow(row: DbJobRow): JobRow {
     agentTaskId: row.agent_task_id,
     intentAnchor: row.intent_anchor,
     progress: row.progress,
+    runStartedAt: row.run_started_at,
+    expectedDurationSeconds: row.expected_duration_seconds,
   };
 }

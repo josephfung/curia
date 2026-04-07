@@ -6,6 +6,7 @@ import type { AgentYamlConfig } from '../agents/loader.js';
 import {
   createScheduleFired,
   createScheduleSuspended,
+  createScheduleRecovered,
   createAgentTask,
 } from '../bus/events.js';
 import type { AgentResponseEvent, AgentErrorEvent } from '../bus/events.js';
@@ -13,6 +14,29 @@ import type { JobRow } from './scheduler-service.js';
 
 // Poll every 30 seconds for due jobs.
 export const POLL_INTERVAL_MS = 30_000;
+
+// Watchdog runs every 5 minutes to detect jobs stuck mid-run.
+export const WATCHDOG_INTERVAL_MS = 5 * 60 * 1000;
+
+// Default assumed duration for a job with no explicit expectedDurationSeconds.
+const DEFAULT_EXPECTED_DURATION_SECONDS = 600; // 10 minutes
+
+// Timeout = min(expected × MULTIPLIER, expected + CAP). Gives larger headroom for
+// short jobs while capping the maximum extension at +60 minutes for long ones.
+//   2m expected → 15m timeout;  30m expected → 90m timeout.
+const RECOVERY_TIMEOUT_MULTIPLIER = 7.5;
+const RECOVERY_TIMEOUT_CAP_SECONDS = 3600;
+
+/**
+ * Compute the recovery timeout for a job given its expected duration.
+ * Exported for unit testing; the SQL query in recoverStuckJobs() mirrors this formula.
+ */
+export function computeRecoveryTimeout(expectedDurationSeconds: number): number {
+  return Math.min(
+    expectedDurationSeconds * RECOVERY_TIMEOUT_MULTIPLIER,
+    expectedDurationSeconds + RECOVERY_TIMEOUT_CAP_SECONDS,
+  );
+}
 
 export interface SchedulerConfig {
   pool: Pool;
@@ -27,6 +51,7 @@ export class Scheduler {
   private logger: Logger;
   private schedulerService: SchedulerService;
   private intervalHandle: ReturnType<typeof setInterval> | null = null;
+  private watchdogHandle: ReturnType<typeof setInterval> | null = null;
 
   // Maps the agent.task event ID back to the job ID so we can match
   // agent.response / agent.error events to the originating scheduled job.
@@ -74,6 +99,13 @@ export class Scheduler {
       });
     }, POLL_INTERVAL_MS);
 
+    // Watchdog: periodically recover jobs that got stuck in 'running' state.
+    this.watchdogHandle = setInterval(() => {
+      this.recoverStuckJobs().catch((err) => {
+        this.logger.error({ err }, 'Unhandled error in recoverStuckJobs watchdog');
+      });
+    }, WATCHDOG_INTERVAL_MS);
+
     this.logger.info({ intervalMs: POLL_INTERVAL_MS }, 'Scheduler started');
   }
 
@@ -84,6 +116,10 @@ export class Scheduler {
     if (this.intervalHandle) {
       clearInterval(this.intervalHandle);
       this.intervalHandle = null;
+    }
+    if (this.watchdogHandle) {
+      clearInterval(this.watchdogHandle);
+      this.watchdogHandle = null;
     }
     this.logger.info('Scheduler stopped');
   }
@@ -130,6 +166,8 @@ export class Scheduler {
           agentTaskId: row.agent_task_id ?? null,
           intentAnchor: row.intent_anchor ?? null,
           progress: row.progress ?? null,
+          runStartedAt: row.run_started_at ?? null,
+          expectedDurationSeconds: row.expected_duration_seconds ?? null,
         };
         try {
           await this.fireJob(job);
@@ -165,7 +203,7 @@ export class Scheduler {
     // in a claimable state. The rowCount check prevents double-firing if another
     // scheduler instance (or overlapping poll) claimed the same job.
     const claimResult = await this.pool.query(
-      `UPDATE scheduled_jobs SET status = $1 WHERE id = $2 AND status IN ('pending', 'failed')`,
+      `UPDATE scheduled_jobs SET status = $1, run_started_at = now() WHERE id = $2 AND status IN ('pending', 'failed')`,
       ['running', job.id],
     );
     if (claimResult.rowCount === 0) {
@@ -298,6 +336,104 @@ export class Scheduler {
             'Failed to upsert declarative job',
           );
         }
+      }
+    }
+  }
+
+  /**
+   * Detect and recover jobs stuck in 'running' state beyond their timeout threshold.
+   * Called at startup (before scheduler.start()) and by the watchdog loop every 5 minutes.
+   *
+   * Timeout formula: min(expected × 7.5, expected + 3600s)
+   * This gives proportionally more headroom to short jobs while capping the max extension
+   * at +60 minutes for long-running jobs.
+   *
+   * Jobs with NULL run_started_at (e.g., stuck before this migration ran) are always recovered.
+   */
+  async recoverStuckJobs(): Promise<void> {
+    // Find all running jobs that have exceeded their timeout. The LEAST() formula mirrors
+    // the JS constants above — keep them in sync if the formula ever changes.
+    // run_started_at IS NULL handles jobs stuck before this migration added the column.
+    const sql = `
+      SELECT
+        id,
+        agent_id,
+        run_started_at,
+        LEAST(
+          COALESCE(expected_duration_seconds, $1)::float8 * $2,
+          (COALESCE(expected_duration_seconds, $1) + $3)::float8
+        )::integer AS timeout_seconds
+      FROM scheduled_jobs
+      WHERE status = 'running'
+        AND (
+          run_started_at IS NULL
+          OR run_started_at < now() - make_interval(secs =>
+              LEAST(
+                COALESCE(expected_duration_seconds, $1)::float8 * $2,
+                (COALESCE(expected_duration_seconds, $1) + $3)::float8
+              )
+            )
+        )
+      FOR UPDATE SKIP LOCKED
+    `;
+    const { rows } = await this.pool.query(sql, [
+      DEFAULT_EXPECTED_DURATION_SECONDS,
+      RECOVERY_TIMEOUT_MULTIPLIER,
+      RECOVERY_TIMEOUT_CAP_SECONDS,
+    ]);
+
+    if (rows.length === 0) {
+      this.logger.debug('recoverStuckJobs: no stuck jobs found');
+      return;
+    }
+
+    this.logger.warn({ count: rows.length }, 'Recovering stuck jobs');
+
+    for (const row of rows as Array<{ id: string; agent_id: string; run_started_at: string | null; timeout_seconds: number }>) {
+      try {
+        const result = await this.schedulerService.recoverStuckJob(row.id, row.timeout_seconds);
+
+        if (!result.noOp) {
+          // Remove any stale pendingJobs entry so a late agent.response for the
+          // old run cannot complete the freshly-reset job.
+          for (const [eventId, pendingJobId] of this.pendingJobs) {
+            if (pendingJobId === row.id) {
+              this.pendingJobs.delete(eventId);
+              this.logger.debug({ jobId: row.id, eventId }, 'Removed stale pendingJobs entry for recovered job');
+              break; // At most one entry per job
+            }
+          }
+
+          this.logger.warn(
+            {
+              jobId: row.id,
+              agentId: row.agent_id,
+              runStartedAt: row.run_started_at,
+              timeoutSeconds: row.timeout_seconds,
+              consecutiveFailures: result.consecutiveFailures,
+              suspended: result.suspended,
+            },
+            'Stuck job recovered',
+          );
+
+          // Publish audit event separately — failure here is non-fatal since the DB
+          // mutation already committed. Log at error but do not treat as a recovery failure.
+          try {
+            const recoveredEvent = createScheduleRecovered({
+              jobId: row.id,
+              agentId: row.agent_id,
+              runStartedAt: row.run_started_at,
+              timeoutSeconds: row.timeout_seconds,
+              consecutiveFailures: result.consecutiveFailures,
+              suspended: result.suspended,
+            });
+            await this.bus.publish('system', recoveredEvent);
+          } catch (publishErr) {
+            this.logger.error({ publishErr, jobId: row.id }, 'Failed to publish schedule.recovered event — job was recovered in DB');
+          }
+        }
+      } catch (err) {
+        this.logger.error({ err, jobId: row.id }, 'Failed to recover stuck job — will retry on next watchdog tick');
       }
     }
   }
