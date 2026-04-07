@@ -356,6 +356,38 @@ export class OutboundGateway {
     return this.nylasClient.listMessages(options);
   }
 
+  /**
+   * Retrieve the E.164 phone numbers of all current (non-pending) members of a
+   * Signal group. Curia's own phone number is excluded so callers can pass the
+   * result directly to trust-check logic without filtering.
+   *
+   * Throws if:
+   *   - Signal client is not configured
+   *   - The group is not found in the account's group list
+   *   - The signal-cli RPC call fails
+   */
+  async getSignalGroupMembers(groupId: string): Promise<string[]> {
+    if (!this.signalClient) {
+      throw new Error('outbound-gateway: Signal client not configured');
+    }
+
+    const groups = await this.signalClient.listGroups();
+    const group = groups.find((g) => g.id === groupId);
+
+    if (!group) {
+      // Log only the presence of a group ID — not the ID value itself (may be sensitive).
+      this.log.warn({ hasGroupId: !!groupId }, 'outbound-gateway: getSignalGroupMembers — group not found');
+      throw new Error(`outbound-gateway: group not found: ${groupId}`);
+    }
+
+    // Exclude Curia's own number — it would otherwise resolve to Curia's own contact
+    // record and could skew trust checks (Curia trusts itself, but it shouldn't count
+    // as a "verified member" of the group for trust-check purposes).
+    return group.members
+      .map((m) => m.number)
+      .filter((phone) => phone !== this.signalPhoneNumber);
+  }
+
   // ---------------------------------------------------------------------------
   // Private helpers
   // ---------------------------------------------------------------------------

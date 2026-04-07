@@ -320,3 +320,78 @@ describe('OutboundGateway', () => {
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// Helper: build a minimal SignalRpcClient mock with a configurable group list.
+// Defined outside the describe block so it is available at module scope.
+// ---------------------------------------------------------------------------
+function makeSignalClient(groups: import('../../../src/channels/signal/types.js').SignalGroupDetails[] = []) {
+  return {
+    send: vi.fn().mockResolvedValue(undefined),
+    sendReadReceipt: vi.fn().mockResolvedValue(undefined),
+    listGroups: vi.fn().mockResolvedValue(groups),
+  };
+}
+
+describe('OutboundGateway.getSignalGroupMembers', () => {
+  it('returns member phones excluding own number', async () => {
+    const { logger, contactService, contentFilter, bus } = createMocks();
+    const signalClient = makeSignalClient([
+      {
+        id: 'grpABC==',
+        name: 'Test Group',
+        members: [
+          { number: '+14155551234' },
+          { number: '+15555550000' }, // Curia's own number — must be excluded
+          { number: '+14165559999' },
+        ],
+        pendingMembers: [],
+        isMember: true,
+      },
+    ]);
+
+    const gateway = new OutboundGateway({
+      signalClient: signalClient as unknown as import('../../../src/channels/signal/signal-rpc-client.js').SignalRpcClient,
+      signalPhoneNumber: '+15555550000',
+      contactService,
+      contentFilter,
+      bus,
+      logger,
+    });
+
+    const members = await gateway.getSignalGroupMembers('grpABC==');
+    expect(members).toEqual(['+14155551234', '+14165559999']);
+    expect(members).not.toContain('+15555550000');
+  });
+
+  it('throws if the group is not found', async () => {
+    const { logger, contactService, contentFilter, bus } = createMocks();
+    const signalClient = makeSignalClient([]); // empty group list
+
+    const gateway = new OutboundGateway({
+      signalClient: signalClient as unknown as import('../../../src/channels/signal/signal-rpc-client.js').SignalRpcClient,
+      signalPhoneNumber: '+15555550000',
+      contactService,
+      contentFilter,
+      bus,
+      logger,
+    });
+
+    await expect(gateway.getSignalGroupMembers('nonexistent==')).rejects.toThrow('group not found');
+  });
+
+  it('throws if Signal client is not configured', async () => {
+    const { logger, nylasClient, contactService, contentFilter, bus } = createMocks();
+
+    const gateway = new OutboundGateway({
+      nylasClient,
+      contactService,
+      contentFilter,
+      bus,
+      ceoEmail: 'ceo@example.com',
+      logger,
+    });
+
+    await expect(gateway.getSignalGroupMembers('grpABC==')).rejects.toThrow('Signal client not configured');
+  });
+});
