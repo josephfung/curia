@@ -374,6 +374,19 @@ describe('SchedulerService', () => {
       const [updateSql] = pool.query.mock.calls[1] as [string, unknown[]];
       expect(updateSql).toContain('run_started_at = NULL');
     });
+
+    it('clears run_started_at on success for a one-shot job', async () => {
+      pool.query
+        .mockResolvedValueOnce({
+          rows: [{ id: 'job-1', cron_expr: null, status: 'running', consecutive_failures: 0, timezone: 'UTC' }],
+        })
+        .mockResolvedValueOnce({ rows: [] }); // UPDATE
+
+      await svc.completeJobRun('job-1', true);
+
+      const [updateSql] = pool.query.mock.calls[1] as [string, unknown[]];
+      expect(updateSql).toContain('run_started_at = NULL');
+    });
   });
 
   // -- recoverStuckJob --
