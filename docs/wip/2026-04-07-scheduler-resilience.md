@@ -683,7 +683,9 @@ describe('computeRecoveryTimeout', () => {
     expect(computeRecoveryTimeout(7200)).toBe(10800); // 120m → 180m (min(54000, 10800) = 10800)
   });
 
-  it('switches from multiplier to cap at the crossover point (800s)', () => {
+  it('switches from multiplier to cap around the crossover point (~554s)', () => {
+    // computeRecoveryTimeout crossover: expected * 7.5 = expected + 3600 → 6.5 * expected = 3600 → expected ≈ 553.85s (~554s)
+    // Below crossover: multiplier wins. Above crossover: cap (+3600) wins.
     // At 800s: 800 * 7.5 = 6000, 800 + 3600 = 4400. min = 4400 (cap wins)
     expect(computeRecoveryTimeout(800)).toBe(4400);
     // At 600s: 600 * 7.5 = 4500, 600 + 3600 = 4200. min = 4200 (cap wins)
