@@ -281,22 +281,35 @@ export class Dispatcher {
     let injectionMetadata: Record<string, unknown> | undefined;
 
     if (this.injectionScanner) {
-      const scan = this.injectionScanner.scan(payload.content);
-      taskContent = scan.sanitizedContent;
+      try {
+        const scan = this.injectionScanner.scan(payload.content);
+        taskContent = scan.sanitizedContent;
 
-      if (scan.riskScore > 0) {
-        injectionMetadata = {
-          risk_score: scan.riskScore,
-          injection_findings: scan.findings,
-        };
-        this.logger.warn(
-          {
-            channelId: payload.channelId,
-            senderId: payload.senderId,
+        if (scan.riskScore > 0) {
+          injectionMetadata = {
             risk_score: scan.riskScore,
-            findings: scan.findings.map(f => f.pattern),
-          },
-          'Inbound message flagged for potential prompt injection',
+            injection_findings: scan.findings,
+          };
+          this.logger.warn(
+            {
+              channelId: payload.channelId,
+              senderId: payload.senderId,
+              risk_score: scan.riskScore,
+              findings: scan.findings.map(f => f.pattern),
+            },
+            'Inbound message flagged for potential prompt injection',
+          );
+        }
+      } catch (scanErr) {
+        // Fail-open: a scanner crash must not silently drop the message.
+        // Log at error level (visible in monitoring) and forward the raw content
+        // to the Coordinator — Layer 2 defense (role separation + system prompt
+        // directives) remains active. Dropping the message here would be a worse
+        // outcome than forwarding unsanitized content with Layer 2 still intact.
+        // taskContent remains payload.content (set above); injectionMetadata remains undefined.
+        this.logger.error(
+          { err: scanErr, channelId: payload.channelId, senderId: payload.senderId },
+          'Inbound scanner threw unexpectedly — forwarding raw content to coordinator (Layer 2 defense still active)',
         );
       }
     }

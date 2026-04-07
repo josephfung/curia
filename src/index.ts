@@ -53,7 +53,7 @@ import { DEFAULT_ERROR_BUDGET } from './errors/types.js';
 import { OutboundContentFilter } from './dispatch/outbound-filter.js';
 import { OutboundGateway } from './skills/outbound-gateway.js';
 import { InboundScanner } from './dispatch/inbound-scanner.js';
-import { loadExtraInjectionPatterns } from './dispatch/security-config-loader.js';
+import { loadExtraInjectionPatterns, type ExtraInjectionPattern } from './dispatch/security-config-loader.js';
 import { SchedulerService } from './scheduler/scheduler-service.js';
 import { Scheduler } from './scheduler/scheduler.js';
 import { EntityContextAssembler } from './entity-context/assembler.js';
@@ -577,21 +577,22 @@ async function main(): Promise<void> {
   // Layer 1 inbound injection scanner — loads extra patterns from config/default.yaml
   // and constructs the scanner. Non-fatal on loader error: a broken custom pattern
   // entry should warn loudly but not prevent startup (built-in defaults still protect).
-  // configDir is already defined above (used for auth config loading).
-  let injectionScanner: InboundScanner;
+  // configDir is already defined above (used for auth config and yaml config loading).
+  // Narrow the try block to loadExtraInjectionPatterns() only — the constructor and
+  // logger.info are not config-loading concerns and should not be silenced by this catch.
+  let extraInjectionPatterns: ExtraInjectionPattern[] = [];
   try {
-    const extraPatterns = loadExtraInjectionPatterns(configDir);
-    injectionScanner = new InboundScanner({ extraPatterns });
-    logger.info(
-      { builtInPatterns: InboundScanner.DEFAULT_PATTERN_COUNT, extraPatterns: extraPatterns.length },
-      'Inbound injection scanner initialized',
-    );
+    extraInjectionPatterns = loadExtraInjectionPatterns(configDir);
   } catch (err) {
-    // Warn and fall back to built-in defaults — a misconfigured extra pattern
-    // should not block startup entirely (built-in coverage still applies).
+    // Warn and fall back to zero extra patterns — built-in defaults still protect.
+    // A misconfigured extra pattern entry should not block startup entirely.
     logger.warn({ err }, 'Failed to load extra injection patterns from config — using built-in defaults only');
-    injectionScanner = new InboundScanner();
   }
+  const injectionScanner = new InboundScanner({ extraPatterns: extraInjectionPatterns });
+  logger.info(
+    { builtInPatterns: InboundScanner.DEFAULT_PATTERN_COUNT, extraPatterns: extraInjectionPatterns.length },
+    'Inbound injection scanner initialized',
+  );
 
   // 7. Dispatcher — subscribes to inbound.message + agent.response.
   // Registered after the coordinator so agent.task already has a handler

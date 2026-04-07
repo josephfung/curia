@@ -66,9 +66,12 @@ export function loadExtraInjectionPatterns(configDir: string): ExtraInjectionPat
     try {
       // Case-insensitive matching applied automatically, consistent with built-in patterns.
       compiled = new RegExp(entry.regex, 'i');
-    } catch {
+    } catch (regexErr) {
+      // Chain the original SyntaxError so callers (and the pino logger) can see
+      // the engine's position-specific diagnostic — e.g., "Unterminated character class".
       throw new Error(
         `security.extra_injection_patterns[${i}] has invalid regex '${entry.regex}' in ${configPath}`,
+        { cause: regexErr },
       );
     }
 
