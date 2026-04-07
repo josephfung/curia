@@ -52,6 +52,8 @@ import { HeldMessageService } from './contacts/held-messages.js';
 import { DEFAULT_ERROR_BUDGET } from './errors/types.js';
 import { OutboundContentFilter } from './dispatch/outbound-filter.js';
 import { OutboundGateway } from './skills/outbound-gateway.js';
+import { InboundScanner } from './dispatch/inbound-scanner.js';
+import { loadExtraInjectionPatterns, type ExtraInjectionPattern } from './dispatch/security-config-loader.js';
 import { SchedulerService } from './scheduler/scheduler-service.js';
 import { Scheduler } from './scheduler/scheduler.js';
 import { EntityContextAssembler } from './entity-context/assembler.js';
@@ -572,17 +574,38 @@ async function main(): Promise<void> {
   scheduler.start();
   logger.info('Scheduler started');
 
+  // Layer 1 inbound injection scanner — loads extra patterns from config/default.yaml
+  // and constructs the scanner. Non-fatal on loader error: a broken custom pattern
+  // entry should warn loudly but not prevent startup (built-in defaults still protect).
+  // configDir is already defined above (used for auth config and yaml config loading).
+  // Narrow the try block to loadExtraInjectionPatterns() only — the constructor and
+  // logger.info are not config-loading concerns and should not be silenced by this catch.
+  let extraInjectionPatterns: ExtraInjectionPattern[] = [];
+  try {
+    extraInjectionPatterns = loadExtraInjectionPatterns(configDir);
+  } catch (err) {
+    // Warn and fall back to zero extra patterns — built-in defaults still protect.
+    // A misconfigured extra pattern entry should not block startup entirely.
+    logger.warn({ err }, 'Failed to load extra injection patterns from config — using built-in defaults only');
+  }
+  const injectionScanner = new InboundScanner({ extraPatterns: extraInjectionPatterns });
+  logger.info(
+    { builtInPatterns: InboundScanner.DEFAULT_PATTERN_COUNT, extraPatterns: extraInjectionPatterns.length },
+    'Inbound injection scanner initialized',
+  );
+
   // 7. Dispatcher — subscribes to inbound.message + agent.response.
   // Registered after the coordinator so agent.task already has a handler
   // when the dispatcher fans the first inbound message out.
   // Content filter, externalChannels, and ceoNotification are now handled by OutboundGateway.
-  // The Dispatcher only routes — it no longer contains any filter logic.
+  // The Dispatcher only routes — it no longer contains any filter or scan logic directly.
   const dispatcher = new Dispatcher({
     bus,
     logger,
     contactResolver,
     heldMessages,
     channelPolicies: authConfig?.channelPolicies,
+    injectionScanner,
   });
   dispatcher.register();
 
