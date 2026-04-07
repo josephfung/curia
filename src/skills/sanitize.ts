@@ -86,7 +86,7 @@ export function sanitizeOutput(
 
   // 4. Truncate if exceeding length limit
   if (text.length > maxLength) {
-    text = text.slice(0, maxLength) + '[truncated]';
+    text = text.slice(0, maxLength) + '[truncated — output exceeded limit]';
   }
 
   // 5. Wrap errors in <tool_error> tags so the LLM can distinguish

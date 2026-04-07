@@ -27,10 +27,11 @@ describe('sanitizeOutput', () => {
   });
 
   it('truncates output exceeding the character limit', () => {
+    const suffix = '[truncated — output exceeded limit]';
     const long = 'x'.repeat(15000);
     const result = sanitizeOutput(long, { maxLength: 10000 });
-    expect(result.length).toBeLessThanOrEqual(10000 + '[truncated]'.length);
-    expect(result).toContain('[truncated]');
+    expect(result.length).toBeLessThanOrEqual(10000 + suffix.length);
+    expect(result).toContain(suffix);
   });
 
   it('does not truncate output within the limit', () => {

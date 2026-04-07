@@ -34,9 +34,10 @@ import type { EntityContextAssembler } from '../entity-context/assembler.js';
 import type { AutonomyService } from '../autonomy/autonomy-service.js';
 import type { BrowserService } from '../browser/browser-service.js';
 
-// Warn (but don't truncate) when a skill returns more than this many chars.
-// Helps operators spot skills that might blow out the LLM context window.
-const LARGE_OUTPUT_THRESHOLD = 50_000;
+// Default max output length — used when no value is configured in default.yaml.
+// Skills returning more than this will have their output truncated before it
+// reaches the LLM context window.
+const DEFAULT_SKILL_OUTPUT_MAX_LENGTH = 200_000;
 
 export class ExecutionLayer {
   private registry: SkillRegistry;
@@ -57,6 +58,8 @@ export class ExecutionLayer {
   private agentContactId?: string;
   /** IANA timezone name used for normalizing offset-less timestamp inputs from the LLM. */
   private timezone: string;
+  /** Max character length for sanitized skill output before truncation. */
+  private skillOutputMaxLength: number;
 
   constructor(registry: SkillRegistry, logger: Logger, options?: {
     bus?: EventBus;
@@ -73,6 +76,7 @@ export class ExecutionLayer {
     browserService?: BrowserService;
     agentContactId?: string;
     timezone?: string;
+    skillOutputMaxLength?: number;
   }) {
     this.registry = registry;
     this.logger = logger;
@@ -90,6 +94,29 @@ export class ExecutionLayer {
     this.browserService = options?.browserService;
     this.agentContactId = options?.agentContactId;
     this.timezone = options?.timezone ?? 'UTC';
+    this.skillOutputMaxLength = options?.skillOutputMaxLength ?? DEFAULT_SKILL_OUTPUT_MAX_LENGTH;
+  }
+
+  /**
+   * Sanitize a skill error message and wrap it in <skill_error> tags.
+   *
+   * Wrapping in a structured tag serves two purposes:
+   * 1. The skill.result bus event carries clearly-typed error data for the audit log.
+   * 2. If the error string ever reaches the LLM directly, it reads as structured data
+   *    rather than a free-form instruction that could be mistaken for a system directive.
+   *
+   * The downstream runtime pipeline (classifySkillError → formatTaskError) will further
+   * sanitize and XML-escape this before injecting it into LLM history — the skill_error
+   * tag passes through sanitizeOutput() unchanged because it is not on the dangerous-tag
+   * list (system/instruction/prompt/role/script), so the full tagged string ends up in the
+   * <message> field of the <task_error> block where the LLM can interpret it correctly.
+   */
+  private wrapSkillError(message: string): string {
+    // Strip dangerous tags and redact secrets from the error message itself before
+    // wrapping — error messages can contain user-supplied values (e.g., timestamp
+    // inputs) or external content (e.g., HTTP response bodies) that are injection risks.
+    const sanitized = sanitizeOutput(message, { maxLength: this.skillOutputMaxLength });
+    return `<skill_error>${sanitized}</skill_error>`;
   }
 
   /**
@@ -121,7 +148,7 @@ export class ExecutionLayer {
     const skill = this.registry.get(skillName);
 
     if (!skill) {
-      return { success: false, error: `Skill '${skillName}' not found in registry` };
+      return { success: false, error: this.wrapSkillError(`Skill '${skillName}' not found in registry`) };
     }
 
     const { manifest, handler } = skill;
@@ -151,7 +178,7 @@ export class ExecutionLayer {
         skillLogger.error({ err, key, raw }, 'timestamp normalization failed; refusing to invoke handler with unnormalized value');
         return {
           success: false,
-          error: `Input '${key}' could not be parsed as a valid datetime: "${raw}". Please provide an ISO 8601 string with a UTC offset (e.g. "2026-04-06T08:00:00-04:00").`,
+          error: this.wrapSkillError(`Input '${key}' could not be parsed as a valid datetime: "${raw}". Please provide an ISO 8601 string with a UTC offset (e.g. "2026-04-06T08:00:00-04:00").`),
         };
       }
     }
@@ -164,14 +191,14 @@ export class ExecutionLayer {
         this.logger.warn({ skillName }, 'Elevated skill blocked: no caller context (fail-closed)');
         return {
           success: false,
-          error: `Skill '${skillName}' requires elevated privileges — no caller context provided (fail-closed)`,
+          error: this.wrapSkillError(`Skill '${skillName}' requires elevated privileges — no caller context provided (fail-closed)`),
         };
       }
       if (caller.role !== 'ceo') {
         this.logger.warn({ skillName, role: caller.role, channel: caller.channel }, 'Elevated skill blocked: unauthorized caller');
         return {
           success: false,
-          error: `Skill '${skillName}' requires elevated privileges — caller role '${caller.role ?? 'none'}' on channel '${caller.channel}' is not authorized`,
+          error: this.wrapSkillError(`Skill '${skillName}' requires elevated privileges — caller role '${caller.role ?? 'none'}' on channel '${caller.channel}' is not authorized`),
         };
       }
     }
@@ -215,7 +242,7 @@ export class ExecutionLayer {
         );
         return {
           success: false,
-          error: `Infrastructure skill '${skillName}' cannot run: bus, agent registry, or contactService not available in ExecutionLayer — ensure all three are passed to the ExecutionLayer constructor`,
+          error: this.wrapSkillError(`Infrastructure skill '${skillName}' cannot run: bus, agent registry, or contactService not available in ExecutionLayer — ensure all three are passed to the ExecutionLayer constructor`),
         };
       }
       ctx.bus = this.bus;
@@ -347,34 +374,43 @@ export class ExecutionLayer {
       ]);
 
       // Sanitize successful output before returning.
-      // No default truncation — sanitizeOutput only strips dangerous tags and
-      // redacts secrets. We log a warning for large outputs so operators can
-      // spot skills that might blow out the LLM context window.
+      // Strips dangerous tags, redacts secrets, and truncates to the configured limit.
       if (result.success && typeof result.data === 'string') {
-        const sanitized = sanitizeOutput(result.data);
-        if (sanitized.length > LARGE_OUTPUT_THRESHOLD) {
-          skillLogger.warn({ skillName, outputLength: sanitized.length }, 'Skill output exceeds large-output threshold');
+        const sanitized = sanitizeOutput(result.data, { maxLength: this.skillOutputMaxLength });
+        // Check the original length — post-sanitize length includes the suffix so >=
+        // would fire a false positive when output is exactly skillOutputMaxLength chars.
+        if (result.data.length > this.skillOutputMaxLength) {
+          skillLogger.warn({ skillName, outputLength: result.data.length }, 'Skill output truncated to configured limit');
         }
         return { success: true, data: sanitized };
       } else if (result.success && result.data !== null && result.data !== undefined) {
-        const sanitized = sanitizeOutput(JSON.stringify(result.data));
-        if (sanitized.length > LARGE_OUTPUT_THRESHOLD) {
-          skillLogger.warn({ skillName, outputLength: sanitized.length }, 'Skill output exceeds large-output threshold');
+        const raw = JSON.stringify(result.data);
+        const sanitized = sanitizeOutput(raw, { maxLength: this.skillOutputMaxLength });
+        if (raw.length > this.skillOutputMaxLength) {
+          skillLogger.warn({ skillName, outputLength: raw.length }, 'Skill output truncated to configured limit');
         }
         try {
           return { success: true, data: JSON.parse(sanitized) };
         } catch (parseErr) {
-          // Sanitization broke the JSON (e.g., truncation mid-key) — return as string
+          // Sanitization truncated the JSON mid-structure — return as string rather
+          // than silently dropping the truncation marker.
           skillLogger.warn({ err: parseErr, skillName }, 'Sanitized output is not valid JSON, returning as string');
           return { success: true, data: sanitized };
         }
+      }
+
+      // Handler returned { success: false, error } directly (did not throw).
+      // Sanitize and wrap the error message — handler errors can contain
+      // user-supplied values or external content that poses injection risk.
+      if (!result.success && result.error) {
+        return { success: false, error: this.wrapSkillError(result.error) };
       }
 
       return result;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       skillLogger.error({ err }, 'Skill invocation failed');
-      return { success: false, error: message };
+      return { success: false, error: this.wrapSkillError(message) };
     } finally {
       // Clean up the timeout timer whether we succeeded, failed, or timed out
       clearTimeout(timer!);

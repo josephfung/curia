@@ -1,3 +1,7 @@
+import yaml from 'js-yaml';
+import { readFileSync } from 'node:fs';
+import * as path from 'node:path';
+
 export interface Config {
   databaseUrl: string;
   anthropicApiKey: string | undefined;
@@ -20,6 +24,82 @@ export interface Config {
   // Without this, the first inbound email from the CEO creates them as provisional,
   // causing their messages to be held.
   ceoPrimaryEmail: string | undefined;
+}
+
+/**
+ * Typed shape for config/default.yaml.
+ *
+ * All fields are optional — the file may be partially populated or entirely
+ * absent in test/CI environments. Callers must supply their own defaults.
+ *
+ * NOTE: Several fields in this interface are not yet wired up in index.ts
+ * (browser, channels, agents). Those values are read with hardcoded defaults
+ * instead of from the YAML. This is tracked in:
+ * https://github.com/josephfung/curia/issues/204
+ */
+export interface YamlConfig {
+  channels?: {
+    cli?: { enabled?: boolean };
+  };
+  browser?: {
+    sessionTtlMs?: number;
+    sweepIntervalMs?: number;
+  };
+  agents?: {
+    coordinator?: { config_path?: string };
+  };
+  skillOutput?: {
+    /** Max character length for skill results before truncation. Default: 200_000. */
+    maxLength?: number;
+  };
+}
+
+/**
+ * Load and parse config/default.yaml.
+ *
+ * @param configDir - Absolute path to the directory containing default.yaml.
+ *   Pass `path.resolve(import.meta.dirname, '../config')` from index.ts.
+ * @returns Parsed YAML config, or an empty object if the file is absent.
+ * @throws If the file exists but cannot be parsed (YAML syntax error, permission
+ *   denied, etc.) — a broken config file should cause a loud startup failure,
+ *   not silently apply wrong defaults.
+ */
+export function loadYamlConfig(configDir: string): YamlConfig {
+  const filePath = path.join(configDir, 'default.yaml');
+  try {
+    const parsed = yaml.load(readFileSync(filePath, 'utf-8'));
+
+    // Empty file — treat as no config (same as absent).
+    if (parsed == null) return {};
+
+    // Root must be a mapping, not a scalar or sequence.
+    if (typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error('config/default.yaml must contain a YAML mapping at the root');
+    }
+
+    const config = parsed as YamlConfig;
+
+    // Validate skillOutput.maxLength if present — a non-positive or non-integer value
+    // would silently distort truncation behavior (e.g., negative would truncate to zero,
+    // a float would be misinterpreted by slice()).
+    const maxLength = config.skillOutput?.maxLength;
+    if (maxLength !== undefined && (!Number.isInteger(maxLength) || maxLength <= 0)) {
+      throw new Error(`skillOutput.maxLength must be a positive integer, got: ${maxLength}`);
+    }
+
+    return config;
+  } catch (err) {
+    // File absent in test/CI environments — silently return empty config.
+    if (err instanceof Error && (err as NodeJS.ErrnoException).code === 'ENOENT') {
+      return {};
+    }
+    // Anything else (YAML syntax error, invalid shape, permission denied, etc.) is a
+    // configuration mistake that must fail loudly rather than silently apply
+    // wrong defaults. Throw so main() crashes with a readable startup error.
+    throw new Error(
+      `Failed to load config/default.yaml: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
 }
 
 export function loadConfig(): Config {

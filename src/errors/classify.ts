@@ -41,8 +41,8 @@ const CODE_MAP: Record<string, ErrorType> = {
 };
 
 // Max length for sanitized error messages injected into LLM context.
-// sanitizeOutput() appends '[truncated]' (11 chars) when it truncates,
-// so the actual output can be up to maxLength + 11 chars. We use 400
+// sanitizeOutput() appends '[truncated — output exceeded limit]' (35 chars) when it truncates,
+// so the actual output can be up to maxLength + 35 chars. We use 400
 // as the nominal limit — the slight overshoot is acceptable for error context.
 const MAX_MESSAGE_LENGTH = 400;
 

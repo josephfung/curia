@@ -11,3 +11,11 @@ browser:
 agents:
   coordinator:
     config_path: agents/coordinator.yaml
+
+skillOutput:
+  # Maximum character length of a sanitized skill result before truncation.
+  # Skills that return more than this (search results, page crawls, long calendar
+  # lists) will have their output clipped and a truncation note appended.
+  # Raise this if you routinely hit the limit on large-payload skills; lower it
+  # to reduce LLM context pressure on installations with many concurrent agents.
+  maxLength: 200000  # 200k characters (~50k tokens at 4 chars/token)

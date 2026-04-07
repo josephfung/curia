@@ -19,7 +19,7 @@
 
 import * as path from 'node:path';
 import { runner } from 'node-pg-migrate';
-import { loadConfig } from './config.js';
+import { loadConfig, loadYamlConfig } from './config.js';
 import { createLogger } from './logger.js';
 import { HttpAdapter } from './channels/http/http-adapter.js';
 import { createPool } from './db/connection.js';
@@ -68,6 +68,8 @@ async function main(): Promise<void> {
   // loadConfig() throws synchronously if DATABASE_URL is missing, which is
   // intentional: we want a hard failure before any I/O is attempted.
   const config = loadConfig();
+  const configDir = path.resolve(import.meta.dirname, '../config');
+  const yamlConfig = loadYamlConfig(configDir);
   const logger = createLogger(config.logLevel);
   logger.info('Curia starting...');
 
@@ -309,6 +311,9 @@ async function main(): Promise<void> {
   // but web-browser skill invocations will fail at the ctx.browserService check.
   let browserService: BrowserService | undefined;
   try {
+    // TODO(#192): browserConfig should come from yamlConfig.browser, not this cast.
+    // The cast always resolves to undefined, so these values are always the hardcoded
+    // defaults and the YAML settings have no effect. Fix tracked in issue #204.
     const browserConfig = (config as unknown as { browser?: { sessionTtlMs?: number; sweepIntervalMs?: number } }).browser;
     browserService = new BrowserService({
       logger,
@@ -465,7 +470,7 @@ async function main(): Promise<void> {
   // infrastructure skills. outboundGateway gives email skills their send path.
   // entityContextAssembler enables entity_enrichment pre-enrichment and the
   // entity-context skill. agentContactId enables entity_enrichment default='agent'.
-  const executionLayer = new ExecutionLayer(skillRegistry, logger, { bus, agentRegistry, contactService, outboundGateway, heldMessages, schedulerService, entityMemory, agentPersona, nylasCalendarClient, entityContextAssembler, agentContactId: agentIdentityContactId, autonomyService, browserService, timezone: config.timezone });
+  const executionLayer = new ExecutionLayer(skillRegistry, logger, { bus, agentRegistry, contactService, outboundGateway, heldMessages, schedulerService, entityMemory, agentPersona, nylasCalendarClient, entityContextAssembler, agentContactId: agentIdentityContactId, autonomyService, browserService, timezone: config.timezone, skillOutputMaxLength: yamlConfig.skillOutput?.maxLength });
 
   // Two-pass agent registration:
   // Pass 1: Register all agents in the registry so specialistSummary() is complete
