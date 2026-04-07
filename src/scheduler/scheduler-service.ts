@@ -481,6 +481,66 @@ export class SchedulerService {
 
     return { suspended: shouldSuspend };
   }
+
+  /**
+   * Recover a single stuck job: increment failures, reset status to pending (or suspend),
+   * clear run_started_at, advance next_run_at, and write a descriptive last_error.
+   *
+   * Called by Scheduler.recoverStuckJobs() for each job that has exceeded its timeout.
+   */
+  async recoverStuckJob(
+    jobId: string,
+    timeoutSeconds: number,
+  ): Promise<{ suspended: boolean; consecutiveFailures: number }> {
+    const { rows } = await this.pool.query(
+      `SELECT id, cron_expr, run_at, consecutive_failures, timezone
+         FROM scheduled_jobs WHERE id = $1`,
+      [jobId],
+    );
+    const job = rows[0] as {
+      id: string;
+      cron_expr: string | null;
+      run_at: string | null;
+      consecutive_failures: number;
+      timezone: string;
+    } | undefined;
+
+    if (!job) {
+      throw new Error(`Job not found: ${jobId}`);
+    }
+
+    const newFailures = job.consecutive_failures + 1;
+    const shouldSuspend = newFailures >= SUSPEND_THRESHOLD;
+    const newStatus = shouldSuspend ? 'suspended' : 'pending';
+
+    // For recurring jobs: advance to the next valid fire time so the job doesn't
+    // attempt to catch up on missed slots. For one-shot jobs: re-fire immediately.
+    const nextRunAt = job.cron_expr
+      ? this.nextRunFromCron(job.cron_expr, job.timezone)
+      : new Date();
+
+    const timeoutMinutes = Math.round(timeoutSeconds / 60);
+    const lastError = `Job timed out after ${timeoutMinutes}m — auto-recovered`;
+
+    await this.pool.query(
+      `UPDATE scheduled_jobs
+          SET status = $1,
+              consecutive_failures = $2,
+              last_error = $3,
+              run_started_at = NULL,
+              next_run_at = $4
+        WHERE id = $5`,
+      [newStatus, newFailures, lastError, nextRunAt, jobId],
+    );
+
+    if (shouldSuspend) {
+      this.logger.warn({ jobId, consecutiveFailures: newFailures }, 'Stuck job suspended after consecutive recovery failures');
+    } else {
+      this.logger.warn({ jobId, consecutiveFailures: newFailures, timeoutMinutes }, 'Stuck job recovered — reset to pending');
+    }
+
+    return { suspended: shouldSuspend, consecutiveFailures: newFailures };
+  }
 }
 
 // -- Row mapping --

@@ -376,6 +376,89 @@ describe('SchedulerService', () => {
     });
   });
 
+  // -- recoverStuckJob --
+
+  describe('recoverStuckJob', () => {
+    it('resets a stuck cron job to pending and increments failures', async () => {
+      pool.query
+        .mockResolvedValueOnce({
+          rows: [{
+            id: 'job-1',
+            cron_expr: '30 7 * * *',
+            run_at: null,
+            consecutive_failures: 0,
+            timezone: 'America/Toronto',
+          }],
+        })
+        .mockResolvedValueOnce({ rows: [] }); // UPDATE
+
+      const result = await svc.recoverStuckJob('job-1', 900);
+
+      expect(result.suspended).toBe(false);
+      expect(result.consecutiveFailures).toBe(1);
+
+      const [updateSql, updateParams] = pool.query.mock.calls[1] as [string, unknown[]];
+      expect(updateSql).toContain('run_started_at = NULL');
+      expect(updateSql).toContain('consecutive_failures');
+      expect(updateParams).toContain('pending');
+      expect(updateParams).toContain('job-1');
+      // Error message should mention timeout
+      const lastError = updateParams.find(p => typeof p === 'string' && (p as string).includes('timed out'));
+      expect(lastError).toBeTruthy();
+    });
+
+    it('resets a one-shot stuck job to pending with next_run_at = now', async () => {
+      pool.query
+        .mockResolvedValueOnce({
+          rows: [{
+            id: 'job-2',
+            cron_expr: null,
+            run_at: new Date(Date.now() - 3600_000).toISOString(),
+            consecutive_failures: 0,
+            timezone: 'UTC',
+          }],
+        })
+        .mockResolvedValueOnce({ rows: [] });
+
+      const result = await svc.recoverStuckJob('job-2', 600);
+
+      expect(result.suspended).toBe(false);
+      const [updateSql, updateParams] = pool.query.mock.calls[1] as [string, unknown[]];
+      // For one-shot: next_run_at should be approximately now (within 5 seconds)
+      const nextRunAt = updateParams[3] as Date;
+      expect(nextRunAt).toBeInstanceOf(Date);
+      expect(Math.abs(nextRunAt.getTime() - Date.now())).toBeLessThan(5000);
+      expect(updateParams).toContain('pending');
+    });
+
+    it('suspends the job when consecutive_failures reaches SUSPEND_THRESHOLD', async () => {
+      pool.query
+        .mockResolvedValueOnce({
+          rows: [{
+            id: 'job-3',
+            cron_expr: '0 * * * *',
+            run_at: null,
+            consecutive_failures: 2, // one more failure = 3 = SUSPEND_THRESHOLD
+            timezone: 'UTC',
+          }],
+        })
+        .mockResolvedValueOnce({ rows: [] });
+
+      const result = await svc.recoverStuckJob('job-3', 600);
+
+      expect(result.suspended).toBe(true);
+      expect(result.consecutiveFailures).toBe(3);
+
+      const [, updateParams] = pool.query.mock.calls[1] as [string, unknown[]];
+      expect(updateParams).toContain('suspended');
+    });
+
+    it('throws when job not found', async () => {
+      pool.query.mockResolvedValueOnce({ rows: [] });
+      await expect(svc.recoverStuckJob('missing-job', 600)).rejects.toThrow('Job not found');
+    });
+  });
+
   // -- upsertDeclarativeJob --
 
   describe('upsertDeclarativeJob', () => {
