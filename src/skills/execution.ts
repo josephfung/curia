@@ -158,7 +158,7 @@ export class ExecutionLayer {
 
     // Elevated-skill gate: enforce caller verification before building context.
     // Fail-closed — if caller context is missing, elevated skills are blocked.
-    // CLI channel bypasses role check (trusted local operator; role may be null at startup).
+    // Role is authoritative — contact-resolver.ts already maps CLI callers to role: 'ceo'.
     if (manifest.sensitivity === 'elevated') {
       if (!caller) {
         this.logger.warn({ skillName }, 'Elevated skill blocked: no caller context (fail-closed)');
@@ -167,7 +167,7 @@ export class ExecutionLayer {
           error: `Skill '${skillName}' requires elevated privileges — no caller context provided (fail-closed)`,
         };
       }
-      if (caller.role !== 'ceo' && caller.channel !== 'cli') {
+      if (caller.role !== 'ceo') {
         this.logger.warn({ skillName, role: caller.role, channel: caller.channel }, 'Elevated skill blocked: unauthorized caller');
         return {
           success: false,
