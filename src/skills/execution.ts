@@ -377,14 +377,16 @@ export class ExecutionLayer {
       // Strips dangerous tags, redacts secrets, and truncates to the configured limit.
       if (result.success && typeof result.data === 'string') {
         const sanitized = sanitizeOutput(result.data, { maxLength: this.skillOutputMaxLength });
-        if (sanitized.length >= this.skillOutputMaxLength) {
+        // Check the original length — post-sanitize length includes the suffix so >=
+        // would fire a false positive when output is exactly skillOutputMaxLength chars.
+        if (result.data.length > this.skillOutputMaxLength) {
           skillLogger.warn({ skillName, outputLength: result.data.length }, 'Skill output truncated to configured limit');
         }
         return { success: true, data: sanitized };
       } else if (result.success && result.data !== null && result.data !== undefined) {
         const raw = JSON.stringify(result.data);
         const sanitized = sanitizeOutput(raw, { maxLength: this.skillOutputMaxLength });
-        if (sanitized.length >= this.skillOutputMaxLength) {
+        if (raw.length > this.skillOutputMaxLength) {
           skillLogger.warn({ skillName, outputLength: raw.length }, 'Skill output truncated to configured limit');
         }
         try {

@@ -59,16 +59,26 @@ export interface YamlConfig {
  *
  * @param configDir - Absolute path to the directory containing default.yaml.
  *   Pass `path.resolve(import.meta.dirname, '../config')` from index.ts.
- * @returns Parsed YAML config, or an empty object if the file is missing.
+ * @returns Parsed YAML config, or an empty object if the file is absent.
+ * @throws If the file exists but cannot be parsed (YAML syntax error, permission
+ *   denied, etc.) — a broken config file should cause a loud startup failure,
+ *   not silently apply wrong defaults.
  */
 export function loadYamlConfig(configDir: string): YamlConfig {
   const filePath = path.join(configDir, 'default.yaml');
   try {
     return (yaml.load(readFileSync(filePath, 'utf-8')) as YamlConfig) ?? {};
-  } catch {
-    // Missing or unreadable file — degrade gracefully. All callers must use
-    // their own defaults. This allows test environments to run without the file.
-    return {};
+  } catch (err) {
+    // File absent in test/CI environments — silently return empty config.
+    if (err instanceof Error && (err as NodeJS.ErrnoException).code === 'ENOENT') {
+      return {};
+    }
+    // Anything else (YAML syntax error, permission denied, etc.) is a
+    // configuration mistake that must fail loudly rather than silently apply
+    // wrong defaults. Throw so main() crashes with a readable startup error.
+    throw new Error(
+      `Failed to load config/default.yaml: ${err instanceof Error ? err.message : String(err)}`,
+    );
   }
 }
 
