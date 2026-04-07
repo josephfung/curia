@@ -31,6 +31,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **contact-service useless catch** — removed no-op try/catch in `createContact` that caught and immediately rethrew without adding any logic; preserved the KG orphan TODO as a comment at the call site (issue #49).
 
 ### Added
+- **Bullpen (Tier 2 inter-agent discussion)** — shared threaded workspace where agents can open, reply to, and close discussion threads. Flows through the bus as `agent.discuss` events. BullpenDispatcher routes discuss events to `agent.task` for all thread participants. Pending threads injected into agent context before every LLM call. Visible to dashboards via SSE stream. Implements spec 01 (lines 24–44). Closes #25.
 - **Onboarding wizard** — multi-step full-screen wizard guides new users through configuring the office identity (assistant name, tone, communication style, decision posture) on first run. Re-enterable from Settings → Setup Wizard. Requires the identity service (spec 13) to be configured.
 - **Settings nav** — new collapsible Settings section in the sidebar with Setup Wizard sub-item.
 - **`configured` flag on `GET /api/identity`** — returns `false` until the wizard or API has saved an identity explicitly; used for first-run detection in the browser without client-side state.
