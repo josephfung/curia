@@ -331,7 +331,10 @@ export class AgentRuntime {
         await bus.publish('agent', invokeEvent);
 
         const startTime = Date.now();
-        const result = await executionLayer.invoke(toolCall.name, toolCall.input, caller);
+        const result = await executionLayer.invoke(toolCall.name, toolCall.input, caller, {
+          taskEventId: taskEvent.id,
+          agentId,
+        });
         const durationMs = Date.now() - startTime;
 
         // Publish skill.result for audit trail
