@@ -221,7 +221,7 @@ class PostgresBullpenBackend implements BullpenBackend {
        FROM bullpen_threads t
        WHERE t.status = 'open'
          AND $1 = ANY(t.participants)
-         AND t.last_message_at > NOW() - ($2 || ' seconds')::INTERVAL
+         AND t.last_message_at > NOW() - ($2::numeric * INTERVAL '1 second')
          AND (
            SELECT sender_id FROM bullpen_messages
            WHERE thread_id = t.id ORDER BY created_at DESC LIMIT 1
@@ -305,6 +305,12 @@ export class BullpenService {
     if (existing.thread.messageCount >= 100) {
       throw new Error(`Thread ${threadId} has reached the message cap (100)`);
     }
+    // NOTE: The cap check above is not atomically enforced at the DB level — it is
+    // checked in application code between getThread() and postMessage(). Under concurrent
+    // load, two agents replying simultaneously could both pass this check and push
+    // message_count slightly past 100. This is accepted: the cap is a soft amplification
+    // control, not a hard data integrity constraint. BullpenDispatcher re-checks the cap
+    // before creating new tasks, so any overshoot self-limits quickly.
     const message: BullpenMessage = {
       id: randomUUID(), threadId, senderType: 'agent',
       senderId: senderAgentId, content, mentionedAgentIds,
