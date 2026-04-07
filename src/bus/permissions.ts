@@ -9,20 +9,22 @@ import type { Layer, EventType } from './events.js';
 //                 system layer gets full access for audit logging and monitoring.
 // Contact Merge: dispatch layer publishes contact.duplicate_detected and contact.merged — these
 //                fire as background side-effects of createContact() when DedupService is wired.
+// Bullpen: agent layer publishes agent.discuss; dispatch and system layers subscribe.
 const publishAllowlist: Record<Layer, Set<EventType>> = {
   channel: new Set(['inbound.message']),
   dispatch: new Set(['agent.task', 'outbound.message', 'outbound.blocked', 'contact.resolved', 'contact.unknown', 'message.held', 'message.rejected', 'contact.duplicate_detected', 'contact.merged']),
-  agent: new Set(['agent.response', 'agent.error', 'skill.invoke', 'skill.result', 'memory.store', 'memory.query']),
+  agent: new Set(['agent.response', 'agent.error', 'skill.invoke', 'skill.result', 'memory.store', 'memory.query', 'agent.discuss']),
   execution: new Set(['skill.result']),
-  system: new Set(['inbound.message', 'agent.task', 'agent.response', 'agent.error', 'outbound.message', 'outbound.blocked', 'skill.invoke', 'skill.result', 'memory.store', 'memory.query', 'contact.resolved', 'contact.unknown', 'message.held', 'message.rejected', 'schedule.created', 'schedule.fired', 'schedule.suspended', 'schedule.recovered', 'config.change', 'contact.duplicate_detected', 'contact.merged']),
+  system: new Set(['inbound.message', 'agent.task', 'agent.response', 'agent.error', 'outbound.message', 'outbound.blocked', 'skill.invoke', 'skill.result', 'memory.store', 'memory.query', 'contact.resolved', 'contact.unknown', 'message.held', 'message.rejected', 'schedule.created', 'schedule.fired', 'schedule.suspended', 'schedule.recovered', 'config.change', 'contact.duplicate_detected', 'contact.merged', 'agent.discuss']),
 };
 
+// agent.discuss subscribe for 'dispatch': used by BullpenDispatcher (wired in index.ts after agent registration).
 const subscribeAllowlist: Record<Layer, Set<EventType>> = {
   channel: new Set(['outbound.message', 'outbound.blocked', 'message.held', 'message.rejected']),
-  dispatch: new Set(['inbound.message', 'agent.response', 'agent.error']),
+  dispatch: new Set(['inbound.message', 'agent.response', 'agent.error', 'agent.discuss']),
   agent: new Set(['agent.task', 'skill.result']),
   execution: new Set(['skill.invoke']),
-  system: new Set(['inbound.message', 'agent.task', 'agent.response', 'agent.error', 'outbound.message', 'outbound.blocked', 'skill.invoke', 'skill.result', 'memory.store', 'memory.query', 'contact.resolved', 'contact.unknown', 'message.held', 'message.rejected', 'schedule.created', 'schedule.fired', 'schedule.suspended', 'schedule.recovered', 'config.change', 'contact.duplicate_detected', 'contact.merged']),
+  system: new Set(['inbound.message', 'agent.task', 'agent.response', 'agent.error', 'outbound.message', 'outbound.blocked', 'skill.invoke', 'skill.result', 'memory.store', 'memory.query', 'contact.resolved', 'contact.unknown', 'message.held', 'message.rejected', 'schedule.created', 'schedule.fired', 'schedule.suspended', 'schedule.recovered', 'config.change', 'contact.duplicate_detected', 'contact.merged', 'agent.discuss']),
 };
 
 export function canPublish(layer: Layer, eventType: EventType): boolean {

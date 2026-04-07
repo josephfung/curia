@@ -216,6 +216,19 @@ interface ConfigChangePayload {
   diff_summary: string;         // human-readable summary of what changed
 }
 
+// AgentDiscussPayload — emitted by the agent layer when a Bullpen message is posted.
+// `participants` is the full thread membership; `mentionedAgentIds` is the subset
+// that BullpenDispatcher will create tasks for (may be empty for broadcast messages).
+interface AgentDiscussPayload {
+  threadId: string;
+  messageId: string;           // DB row ID — for audit traceability
+  topic: string;               // denormalized for SSE display without a DB hit
+  senderAgentId: string;
+  participants: string[];      // all thread participants
+  mentionedAgentIds: string[]; // subset that get reply-expected tasks (empty = broadcast)
+  content: string;
+}
+
 // -- Discriminated union --
 // The `type` field is the discriminant; `sourceLayer` records which layer emitted the event.
 
@@ -312,6 +325,12 @@ export interface MessageRejectedEvent extends BaseEvent {
   payload: MessageRejectedPayload;
 }
 
+export interface AgentDiscussEvent extends BaseEvent {
+  type: 'agent.discuss';
+  sourceLayer: 'agent';
+  payload: AgentDiscussPayload;
+}
+
 // Memory events — emitted by the agent layer whenever the knowledge graph is written to or queried.
 // These form the audit trail for memory operations (Phase 6).
 
@@ -378,7 +397,8 @@ export type BusEvent =
   | ScheduleFiredEvent     // Scheduler: job fired
   | ScheduleSuspendedEvent   // Scheduler: job auto-suspended
   | ScheduleRecoveredEvent   // Scheduler: stuck job auto-recovered
-  | ConfigChangeEvent;      // System: config object changed (office identity, etc.)
+  | ConfigChangeEvent        // System: config object changed (office identity, etc.)
+  | AgentDiscussEvent;       // Bullpen: inter-agent discussion message
 
 // Convenience alias for use in handler maps / switch statements.
 export type EventType = BusEvent['type'];
@@ -688,6 +708,21 @@ export function createConfigChange(
     timestamp: new Date(),
     type: 'config.change',
     sourceLayer: 'system',
+    payload: rest,
+    parentEventId,
+  };
+}
+
+export function createAgentDiscuss(
+  // parentEventId is required — every discuss event must trace back to the agent.task that triggered it.
+  payload: AgentDiscussPayload & { parentEventId: string },
+): AgentDiscussEvent {
+  const { parentEventId, ...rest } = payload;
+  return {
+    id: randomUUID(),
+    timestamp: new Date(),
+    type: 'agent.discuss',
+    sourceLayer: 'agent',
     payload: rest,
     parentEventId,
   };
