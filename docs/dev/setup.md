@@ -177,7 +177,7 @@ Signal messaging runs via [signal-cli](https://github.com/AsamK/signal-cli). The
 
 **1. Bootstrap signal-cli**
 
-Signal requires seeding a Docker volume with your registered account credentials before Curia can use it. Follow the steps in `runbooks/signal-cli-bootstrap.md` (coming soon).
+Signal requires registering a phone number with signal-cli and seeding the `signal-data` Docker volume with the resulting credentials. Refer to your deployment documentation for the bootstrap procedure.
 
 **2. Set the env var**
 
