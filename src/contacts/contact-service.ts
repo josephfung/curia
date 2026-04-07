@@ -183,12 +183,10 @@ export class ContactService {
     try {
       await this.backend.createContact(contact);
     } catch (err) {
-      // If the DB insert fails after we auto-created a KG node, that node is now
-      // orphaned — it exists in the knowledge graph with no corresponding contact row.
-      // TODO: Clean up the orphaned KG node once EntityMemory exposes a delete method.
-      // For now, the orphan will remain. It won't cause functional issues (it's just a
-      // person node with no contact link), but should be cleaned up when entity deletion
-      // is added. Tracked by: https://github.com/curia-ai/curia/issues/TBD
+      // TODO: The KG node auto-created above is now orphaned — it exists in the knowledge
+      // graph with no corresponding contact row. Clean up once EntityMemory exposes a
+      // delete method. For now the orphan is harmless (person node with no contact link).
+      this.logger?.error({ err, contactId: contact.id }, 'Contact creation failed');
       throw err;
     }
 
