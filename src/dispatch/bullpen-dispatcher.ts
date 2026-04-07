@@ -19,27 +19,39 @@ export class BullpenDispatcher {
   }
 
   private async handleDiscuss(event: AgentDiscussEvent): Promise<void> {
-    const { threadId, topic, senderAgentId, participants, mentionedAgentIds } = event.payload;
+    const { threadId, senderAgentId, mentionedAgentIds } = event.payload;
 
-    // Cap check: defense-in-depth — the skill already enforces this, but check
-    // here too so a future code path cannot accidentally bypass the skill.
+    // Load the thread from DB to get authoritative participant list and topic.
+    // This also serves as cap + existence check, and prevents forged event.payload
+    // values (e.g. a rogue agent inflating participants or spoofing topic).
+    let threadRecord: Awaited<ReturnType<BullpenService['getThread']>>;
     try {
-      const thread = await this.bullpenService.getThread(threadId);
-      if (!thread) {
-        this.logger.warn({ threadId }, 'BullpenDispatcher: thread not found for agent.discuss event — skipping');
-        return;
-      }
-      if (thread.thread.messageCount >= 100) {
-        this.logger.warn(
-          { threadId, messageCount: thread.thread.messageCount },
-          'BullpenDispatcher: thread has hit message cap (100) — skipping task creation',
-        );
-        return;
-      }
+      threadRecord = await this.bullpenService.getThread(threadId);
     } catch (err) {
-      this.logger.error({ err, threadId }, 'BullpenDispatcher: failed to check thread cap — skipping');
+      this.logger.error({ err, threadId }, 'BullpenDispatcher: failed to load thread — skipping');
       return;
     }
+
+    if (!threadRecord) {
+      this.logger.warn({ threadId }, 'BullpenDispatcher: thread not found for agent.discuss event — skipping');
+      return;
+    }
+
+    // Validate that the event sender is actually a thread participant.
+    if (!threadRecord.thread.participants.includes(senderAgentId)) {
+      this.logger.warn({ threadId, senderAgentId }, 'BullpenDispatcher: senderAgentId not in thread participants — skipping');
+      return;
+    }
+
+    if (threadRecord.thread.messageCount >= 100) {
+      this.logger.warn(
+        { threadId, messageCount: threadRecord.thread.messageCount },
+        'BullpenDispatcher: thread has hit message cap (100) — skipping task creation',
+      );
+      return;
+    }
+
+    const { topic, participants } = threadRecord.thread;
 
     // Create one agent.task per participant, excluding the sender.
     // Mentioned agents get a reply-expected prompt; others get an FYI.

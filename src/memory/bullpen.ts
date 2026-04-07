@@ -143,9 +143,9 @@ class PostgresBullpenBackend implements BullpenBackend {
   }
 
   async postMessage(threadId: string, message: BullpenMessage): Promise<void> {
-    // Two separate statements wrapped in a transaction for atomicity.
-    // (A CTE that does INSERT + UPDATE requires the INSERT to be in the CTE's WITH clause,
-    // which Postgres supports, but requires careful parameter numbering.)
+    // Atomically insert the message and conditionally increment message_count.
+    // The UPDATE uses WHERE status='open' AND message_count<100 so that concurrent
+    // close or cap-reaching posts are rejected at the DB level, not just app level.
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
@@ -154,13 +154,18 @@ class PostgresBullpenBackend implements BullpenBackend {
          VALUES ($1, $2, $3, $4, $5, $6, $7)`,
         [message.id, threadId, message.senderType, message.senderId, JSON.stringify(message.content), message.mentionedAgentIds, message.createdAt],
       );
-      await client.query(
+      const updateRes = await client.query<{ message_count: number }>(
         `UPDATE bullpen_threads
          SET message_count = message_count + 1,
              last_message_at = $1
-         WHERE id = $2`,
+         WHERE id = $2 AND status = 'open' AND message_count < 100
+         RETURNING message_count`,
         [message.createdAt, threadId],
       );
+      if (updateRes.rows.length === 0) {
+        // Thread is closed or at cap — roll back the message insert.
+        throw new Error(`Thread ${threadId} is closed or has reached the message cap`);
+      }
       await client.query('COMMIT');
     } catch (err) {
       await client.query('ROLLBACK');
@@ -220,7 +225,7 @@ class PostgresBullpenBackend implements BullpenBackend {
       `SELECT t.id, t.topic, t.message_count, t.last_message_at
        FROM bullpen_threads t
        WHERE t.status = 'open'
-         AND $1 = ANY(t.participants)
+         AND t.participants @> ARRAY[$1]::text[]
          AND t.last_message_at > NOW() - ($2::numeric * INTERVAL '1 second')
          AND (
            SELECT sender_id FROM bullpen_messages
@@ -277,9 +282,11 @@ export class BullpenService {
     initialContent: string,
     mentionedAgentIds: string[],
   ): Promise<{ thread: BullpenThread; message: BullpenMessage }> {
+    // Normalize: always include the creator, deduplicate, preserve order.
+    const normalizedParticipants = [...new Set([creatorAgentId, ...participants])];
     const now = new Date();
     const thread: BullpenThread = {
-      id: randomUUID(), topic, creatorAgentId, participants,
+      id: randomUUID(), topic, creatorAgentId, participants: normalizedParticipants,
       status: 'open', messageCount: 1, lastMessageAt: now, createdAt: now,
     };
     const message: BullpenMessage = {
@@ -305,12 +312,12 @@ export class BullpenService {
     if (existing.thread.messageCount >= 100) {
       throw new Error(`Thread ${threadId} has reached the message cap (100)`);
     }
-    // NOTE: The cap check above is not atomically enforced at the DB level — it is
-    // checked in application code between getThread() and postMessage(). Under concurrent
-    // load, two agents replying simultaneously could both pass this check and push
-    // message_count slightly past 100. This is accepted: the cap is a soft amplification
-    // control, not a hard data integrity constraint. BullpenDispatcher re-checks the cap
-    // before creating new tasks, so any overshoot self-limits quickly.
+    if (!existing.thread.participants.includes(senderAgentId)) {
+      throw new Error(`Agent '${senderAgentId}' is not a participant of thread ${threadId}`);
+    }
+    // NOTE: The above checks run before the DB write; under concurrent load the
+    // Postgres backend re-validates status and cap atomically in the UPDATE WHERE
+    // clause, so a race can only overshoot by rejecting — not by persisting extra messages.
     const message: BullpenMessage = {
       id: randomUUID(), threadId, senderType: 'agent',
       senderId: senderAgentId, content, mentionedAgentIds,

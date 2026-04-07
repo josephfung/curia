@@ -13,7 +13,7 @@ function makeBus() {
       list.push(handler);
       handlers.set(type, list);
     }),
-    publish: vi.fn(async (_layer: string, event: unknown) => {
+    publish: vi.fn(async (_layer: string, _event: unknown) => {
       // Simulate bus delivery so tests can inspect published events
     }),
     _trigger: async (type: string, event: unknown) => {
