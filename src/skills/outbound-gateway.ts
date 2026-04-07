@@ -377,7 +377,7 @@ export class OutboundGateway {
     if (!group) {
       // Log only the presence of a group ID — not the ID value itself (may be sensitive).
       this.log.warn({ hasGroupId: !!groupId }, 'outbound-gateway: getSignalGroupMembers — group not found');
-      throw new Error(`outbound-gateway: group not found: ${groupId}`);
+      throw new Error('outbound-gateway: group not found');
     }
 
     // Exclude Curia's own number — it would otherwise resolve to Curia's own contact
@@ -385,7 +385,7 @@ export class OutboundGateway {
     // as a "verified member" of the group for trust-check purposes).
     return group.members
       .map((m) => m.number)
-      .filter((phone) => phone !== this.signalPhoneNumber);
+      .filter((phone): phone is string => !!phone && phone !== this.signalPhoneNumber);
   }
 
   // ---------------------------------------------------------------------------

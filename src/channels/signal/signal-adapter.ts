@@ -307,13 +307,19 @@ export class SignalAdapter {
       // skew the trust check. Only external member phones are meaningful here.
       memberPhones = group.members
         .map((m) => m.number)
-        .filter((phone) => phone !== this.config.phoneNumber);
+        .filter((phone): phone is string => !!phone && phone !== this.config.phoneNumber);
     } catch (err) {
       this.log.warn({ err, groupId }, 'Signal adapter: listGroups failed — treating group as untrusted (fail-closed)');
       return false;
     }
 
-    const trust = await checkGroupMemberTrust(memberPhones, this.config.contactService);
+    let trust: Awaited<ReturnType<typeof checkGroupMemberTrust>>;
+    try {
+      trust = await checkGroupMemberTrust(memberPhones, this.config.contactService);
+    } catch (err) {
+      this.log.warn({ err, groupId }, 'Signal adapter: checkGroupMemberTrust failed — treating group as untrusted (fail-closed)');
+      return false;
+    }
 
     if (trust.blockedMembers.length > 0) {
       // Silent drop — never acknowledge to blocked contacts that Curia is active
@@ -348,7 +354,13 @@ export class SignalAdapter {
         }
       }
 
-      await this.notifyCeoGroupHeld(groupId, trust.unknownMembers);
+      try {
+        await this.notifyCeoGroupHeld(groupId, trust.unknownMembers);
+      } catch (err) {
+        // notifyCeoGroupHeld has its own internal try-catch for the send call,
+        // but any error before that point would escape without this guard.
+        this.log.error({ err, groupId }, 'Signal adapter: unexpected error in notifyCeoGroupHeld');
+      }
 
       this.log.info(
         { groupId, unknownCount: trust.unknownMembers.length },

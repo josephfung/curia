@@ -168,8 +168,10 @@ export class SignalRpcClient extends EventEmitter {
    */
   async listGroups(): Promise<SignalGroupDetails[]> {
     const result = await this.call('listGroups', { account: this.config.accountNumber });
-    // signal-cli returns an array; guard against null in case of an empty result
-    return (result as SignalGroupDetails[]) ?? [];
+    if (!Array.isArray(result)) {
+      throw new Error('listGroups: unexpected response shape from signal-cli — expected array');
+    }
+    return result as SignalGroupDetails[];
   }
 
   // ---------------------------------------------------------------------------

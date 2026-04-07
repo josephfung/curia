@@ -88,7 +88,13 @@ export class SignalSendHandler implements SkillHandler {
         return { success: false, error: `Could not retrieve group members: ${message}` };
       }
 
-      const trust = await checkGroupMemberTrust(memberPhones, ctx.contactService);
+      let trust: Awaited<ReturnType<typeof checkGroupMemberTrust>>;
+      try {
+        trust = await checkGroupMemberTrust(memberPhones, ctx.contactService);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return { success: false, error: `Failed to verify group member trust: ${msg}` };
+      }
 
       if (!trust.trusted) {
         // Blocked members: report existence but NOT their phone numbers (privacy).
