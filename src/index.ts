@@ -324,6 +324,8 @@ async function main(): Promise<void> {
       logger,
     });
     // SignalAdapter is constructed further below, after OutboundGateway is available.
+    // Note: phone number intentionally omitted from the log — it's PII and would land
+    // in any log aggregation pipeline. The socket path is sufficient for diagnostics.
     logger.info({ socketPath: config.signalSocketPath }, 'Signal RPC client created');
   } else {
     logger.warn('SIGNAL_SOCKET_PATH/SIGNAL_PHONE_NUMBER not set — Signal channel disabled');

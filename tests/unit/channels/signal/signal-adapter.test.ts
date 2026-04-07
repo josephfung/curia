@@ -29,7 +29,8 @@ function makeMockRpcClient() {
     simulateMessage: (envelope: SignalEnvelope) => void;
   };
 
-  emitter.connect = vi.fn().mockResolvedValue(undefined);
+  // connect() is synchronous in the real implementation
+  emitter.connect = vi.fn().mockReturnValue(undefined);
   emitter.disconnect = vi.fn().mockResolvedValue(undefined);
   emitter.send = vi.fn().mockResolvedValue(undefined);
   emitter.sendReadReceipt = vi.fn().mockResolvedValue(undefined);

@@ -88,14 +88,25 @@ export class SignalRpcClient extends EventEmitter {
   // ---------------------------------------------------------------------------
 
   /**
-   * Connect to the signal-cli socket and start listening for messages.
-   * Resolves once the connection is established. If the socket is not yet
-   * available, the client will retry automatically — this method resolves on
-   * the first successful connect.
+   * Start the Signal RPC client. Resolves immediately — does NOT wait for the
+   * socket connection to succeed.
+   *
+   * Rationale: In Docker Compose, signal-cli and Curia start concurrently, so
+   * the socket may not be available on the first attempt. Rejecting `connect()`
+   * on the first failure would propagate to `SignalAdapter.start()`, then to
+   * `index.ts`, and crash the process — even though the reconnect loop would
+   * have eventually recovered. Instead, we start the reconnect loop and let it
+   * make the connection in the background. The 'connected' event signals when
+   * the socket is ready; inbound messages flow from that point.
+   *
+   * If you need to know when the first successful connection happens, listen
+   * for the 'connected' event.
    */
-  async connect(): Promise<void> {
+  connect(): void {
     this.stopping = false;
-    return this.attemptConnect();
+    // Start the first attempt but don't await it. If it fails, the 'close' event
+    // handler calls scheduleReconnect(), which will keep retrying with backoff.
+    void this.attemptConnect();
   }
 
   /**
@@ -148,11 +159,15 @@ export class SignalRpcClient extends EventEmitter {
   // ---------------------------------------------------------------------------
 
   private attemptConnect(): Promise<void> {
-    return new Promise((resolve, reject) => {
+    return new Promise((resolve) => {
       const socket = new net.Socket();
       this.socket = socket;
+      // Track whether the connect() promise has already settled so the 'error'
+      // handler doesn't try to resolve/reject an already-settled promise.
+      let settled = false;
 
       socket.connect(this.config.socketPath, () => {
+        settled = true;
         this.log.info({ socketPath: this.config.socketPath }, 'Signal RPC client connected');
         // Reset backoff on successful connect so the next disconnect starts fresh.
         this.backoffMs = BACKOFF_INITIAL_MS;
@@ -163,20 +178,32 @@ export class SignalRpcClient extends EventEmitter {
       socket.on('data', (chunk: Buffer) => this.handleData(chunk));
 
       socket.on('close', () => {
-        this.log.warn('Signal RPC socket closed');
+        // Clear the line buffer on disconnect — any partial line buffered from the
+        // previous session is invalid on the new connection and would corrupt the
+        // first message received after reconnect.
+        this.buffer = '';
         this.socket = null;
         // Reject any requests that were waiting for a response — they will never
         // arrive now that the socket is gone.
         this.rejectAllPending(new Error('Signal RPC socket closed unexpectedly'));
         this.emit('disconnected');
+        // Resolve the initial connect() promise if it hasn't settled yet — a
+        // failed first connect still "starts" the client; reconnect takes over.
+        if (!settled) {
+          settled = true;
+          resolve();
+        }
+        if (!this.stopping) {
+          this.log.warn('Signal RPC socket closed — scheduling reconnect');
+        }
         this.scheduleReconnect();
       });
 
       socket.on('error', (err: Error) => {
+        // Log the error. 'close' always fires after 'error' on a net.Socket,
+        // so reconnect scheduling and promise settlement both happen in the
+        // 'close' handler above — no action needed here beyond logging.
         this.log.warn({ err }, 'Signal RPC socket error');
-        // 'close' always fires after 'error', so rejectAllPending + scheduleReconnect
-        // happen there. We only reject the connect() promise here (first-connect failure).
-        reject(err);
       });
     });
   }

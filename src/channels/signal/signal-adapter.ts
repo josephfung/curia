@@ -53,7 +53,16 @@ export class SignalAdapter {
   constructor(config: SignalAdapterConfig) {
     this.config = config;
     this.log = config.logger.child({ component: 'signal-adapter' });
-    this.boundHandleInbound = (envelope) => void this.handleInbound(envelope);
+    // The .catch is required: handleInbound is async and errors inside it (e.g. a
+    // bus.publish rejection) would otherwise become an UnhandledPromiseRejection,
+    // crashing Node in default configuration. We catch here rather than inside
+    // handleInbound because handleInbound already catches expected errors (contact
+    // resolution failures) — this outer catch is the backstop for unexpected throws.
+    this.boundHandleInbound = (envelope) => {
+      void this.handleInbound(envelope).catch((err: unknown) => {
+        this.log.error({ err }, 'Signal adapter: unexpected error in inbound handler');
+      });
+    };
   }
 
   async start(): Promise<void> {
@@ -79,8 +88,12 @@ export class SignalAdapter {
     // missed during the connect window.
     rpcClient.on('message', this.boundHandleInbound);
 
-    await rpcClient.connect();
-    this.log.info({ phoneNumber: this.config.phoneNumber }, 'Signal adapter started');
+    // connect() is synchronous — it starts the connection attempt in the background
+    // and returns immediately. If signal-cli is not yet available (Docker startup race),
+    // the RPC client's exponential backoff will retry until it connects. The 'connected'
+    // event on the RPC client signals when messages will start flowing.
+    rpcClient.connect();
+    this.log.info('Signal adapter started — connecting to signal-cli socket');
   }
 
   async stop(): Promise<void> {
@@ -204,10 +217,13 @@ export class SignalAdapter {
 
     if (!outboundGateway) {
       // Should not happen in normal operation — Signal adapter only starts when
-      // outboundGateway is available (see index.ts wiring). Defensive guard.
+      // outboundGateway is available (see index.ts wiring). If this fires, it
+      // indicates a wiring bug: the adapter was constructed without a gateway.
+      // Logged at error (not warn) because the coordinator's response is silently
+      // lost — the CEO sent a message and got no reply.
       // TODO: once the gateway always has a Signal client when this adapter is
-      // active, upgrade this to log.error — it would indicate a wiring bug.
-      this.log.warn({ conversationId }, 'Signal adapter: outbound gateway not available, cannot send reply');
+      // active, convert this to an explicit assertion.
+      this.log.error({ conversationId }, 'Signal adapter: outbound gateway not available — reply dropped. Check index.ts wiring.');
       return;
     }
 

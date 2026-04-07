@@ -107,7 +107,12 @@ describe('SignalRpcClient', () => {
       accountNumber: '+15555550000',
       logger: makeLogger(),
     });
-    await client.connect();
+    // connect() is now synchronous — it starts the attempt in the background.
+    // Wait for the 'connected' event to know the socket is actually open.
+    await new Promise<void>((resolve) => {
+      client.once('connected', resolve);
+      client.connect();
+    });
   });
 
   afterEach(async () => {

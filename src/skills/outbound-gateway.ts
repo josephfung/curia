@@ -404,6 +404,16 @@ export class OutboundGateway {
       return { success: false, blockedReason: 'Signal send requires either recipient or groupId' };
     }
 
+    if (request.recipient && request.groupId) {
+      // Both set is a caller bug — signal-cli would send to both or error unpredictably.
+      // Fail fast with a clear error rather than silently mis-routing.
+      this.log.warn(
+        { channel: 'signal', recipient: request.recipient, groupId: request.groupId },
+        'outbound-gateway: Signal send has both recipient and groupId set — exactly one required',
+      );
+      return { success: false, blockedReason: 'Signal send must specify exactly one of recipient or groupId, not both' };
+    }
+
     try {
       await this.signalClient.send({
         account: this.signalPhoneNumber,
