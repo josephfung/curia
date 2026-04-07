@@ -54,6 +54,7 @@ export class ExecutionLayer {
   private entityContextAssembler?: EntityContextAssembler;
   private autonomyService?: AutonomyService;
   private browserService?: BrowserService;
+  private bullpenService?: import('../memory/bullpen.js').BullpenService;
   /** The agent's own contactId — injected into ctx.agentContactId for entity_enrichment default='agent' */
   private agentContactId?: string;
   /** IANA timezone name used for normalizing offset-less timestamp inputs from the LLM. */
@@ -74,6 +75,7 @@ export class ExecutionLayer {
     entityContextAssembler?: EntityContextAssembler;
     autonomyService?: AutonomyService;
     browserService?: BrowserService;
+    bullpenService?: import('../memory/bullpen.js').BullpenService;
     agentContactId?: string;
     timezone?: string;
     skillOutputMaxLength?: number;
@@ -92,6 +94,7 @@ export class ExecutionLayer {
     this.entityContextAssembler = options?.entityContextAssembler;
     this.autonomyService = options?.autonomyService;
     this.browserService = options?.browserService;
+    this.bullpenService = options?.bullpenService;
     this.agentContactId = options?.agentContactId;
     this.timezone = options?.timezone ?? 'UTC';
     this.skillOutputMaxLength = options?.skillOutputMaxLength ?? DEFAULT_SKILL_OUTPUT_MAX_LENGTH;
@@ -144,6 +147,7 @@ export class ExecutionLayer {
     skillName: string,
     input: Record<string, unknown>,
     caller?: CallerContext,
+    options?: { taskEventId?: string; agentId?: string },
   ): Promise<SkillResult> {
     const skill = this.registry.get(skillName);
 
@@ -229,6 +233,10 @@ export class ExecutionLayer {
       // contactService is available to all skills — read-only contact lookups
       // (calendars, display names, etc.) are not a privilege escalation.
       contactService: this.contactService,
+      // Thread agentId and taskEventId into context unconditionally — infrastructure
+      // skills (bullpen) need these for event publishing; harmless for others.
+      agentId: options?.agentId,
+      taskEventId: options?.taskEventId,
     };
 
     // Infrastructure skills get bus and agent registry access.
@@ -268,6 +276,10 @@ export class ExecutionLayer {
       // nylasCalendarClient is optional — only calendar skills need it
       if (this.nylasCalendarClient) {
         ctx.nylasCalendarClient = this.nylasCalendarClient;
+      }
+      // bullpenService is optional — only the bullpen skill needs it
+      if (this.bullpenService) {
+        ctx.bullpenService = this.bullpenService;
       }
     }
 

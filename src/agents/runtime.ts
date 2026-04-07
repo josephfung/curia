@@ -13,6 +13,7 @@ import { DEFAULT_ERROR_BUDGET, type AgentError, type ErrorBudget } from '../erro
 import { AutonomyService } from '../autonomy/autonomy-service.js';
 import { formatTimeContextBlock } from '../time/time-context.js';
 import type { OfficeIdentityService } from '../identity/service.js';
+import { formatBullpenContext, type BullpenService } from '../memory/bullpen.js';
 
 export interface AgentConfig {
   agentId: string;
@@ -49,6 +50,11 @@ export interface AgentConfig {
     maxTurns: number;
     maxConsecutiveErrors: number;
   };
+  /** Optional Bullpen service for pending thread context injection.
+   *  When provided, pending threads are injected as a system message before every LLM call. */
+  bullpenService?: BullpenService;
+  /** How far back to look for active threads, in minutes. Default: 60. */
+  bullpenWindowMinutes?: number;
 }
 
 // LLM retry backoff schedule (milliseconds). Three attempts with exponential backoff.
@@ -204,6 +210,10 @@ export class AgentRuntime {
       { role: 'user', content },
     ];
 
+    // Track insertion position for Bullpen context — it must follow sender context (if any)
+    // so the agent reads: system prompt → who is talking → what's pending in Bullpen → history.
+    let bullpenInsertAt = 1;
+
     // Inject resolved sender context as a system message so the coordinator
     // knows who it's talking to. Inserted after the system prompt but before
     // history, so it's visible but doesn't pollute working memory.
@@ -254,6 +264,30 @@ export class AgentRuntime {
 
       // Insert after system prompt (index 0) but before history
       messages.splice(1, 0, { role: 'system', content: senderInfo });
+      // Bullpen block must come after sender context, so advance its insertion index
+      bullpenInsertAt = 2;
+    }
+
+    // Inject pending Bullpen threads as a system message so the agent is aware
+    // of active inter-agent discussions. Inserted after sender context (if any),
+    // before conversation history — matching spec context budget priority order.
+    if (this.config.bullpenService) {
+      try {
+        const pendingThreads = await this.config.bullpenService.getPendingThreadsForAgent(
+          agentId,
+          this.config.bullpenWindowMinutes ?? 60,
+        );
+        if (pendingThreads.length > 0) {
+          const bullpenBlock = formatBullpenContext(pendingThreads);
+          // Insert after sender context (if present) but before conversation history.
+          // bullpenInsertAt is 2 when sender context was injected, 1 otherwise.
+          messages.splice(bullpenInsertAt, 0, { role: 'system', content: bullpenBlock });
+        }
+      } catch (err) {
+        // A Bullpen lookup failure must not abort the task. Log and continue —
+        // the agent will proceed without thread context rather than failing entirely.
+        logger.error({ err, agentId }, 'Failed to load Bullpen pending threads — proceeding without thread context');
+      }
     }
 
     logger.info({ agentId, conversationId, historyLength: history.length }, 'Agent processing task');
@@ -331,7 +365,10 @@ export class AgentRuntime {
         await bus.publish('agent', invokeEvent);
 
         const startTime = Date.now();
-        const result = await executionLayer.invoke(toolCall.name, toolCall.input, caller);
+        const result = await executionLayer.invoke(toolCall.name, toolCall.input, caller, {
+          taskEventId: taskEvent.id,
+          agentId,
+        });
         const durationMs = Date.now() - startTime;
 
         // Publish skill.result for audit trail

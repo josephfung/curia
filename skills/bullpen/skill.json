@@ -1,0 +1,25 @@
+{
+  "name": "bullpen",
+  "description": "Open, reply to, read, or close inter-agent Bullpen discussion threads. Use 'post' to start a new thread addressed to other agents, 'reply' to add a message to an existing thread, 'get_thread' to read the full message history, and 'close' to end a thread when the discussion is complete.",
+  "version": "1.0.0",
+  "sensitivity": "normal",
+  "action_risk": "low",
+  "infrastructure": true,
+  "inputs": {
+    "action": "string: 'post' | 'reply' | 'get_thread' | 'close'",
+    "topic": "string: thread topic — required for 'post'",
+    "participants": "string[]: agent IDs to include in the thread — required for 'post'",
+    "mentioned_agent_ids": "string[]: agent IDs to @ mention (optional for 'post' and 'reply'; defaults to all participants for 'post')",
+    "content": "string: message content — required for 'post' and 'reply'",
+    "thread_id": "string: thread ID — required for 'reply', 'get_thread', 'close'"
+  },
+  "outputs": {
+    "thread_id": "string: the thread ID",
+    "message_id": "string: the persisted message ID (post/reply)",
+    "thread": "object: full thread + messages (get_thread)",
+    "status": "string: 'closed' (close)"
+  },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 10000
+}

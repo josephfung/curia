@@ -359,9 +359,12 @@ export class Dispatcher {
       : undefined;
 
     if (!routing) {
-      this.logger.warn(
+      // Expected for bullpen tasks: BullpenDispatcher publishes agent.task events with
+      // channelId "bullpen", which have no routing entry here. Downgraded to debug to
+      // avoid noisy warn logs in normal operation.
+      this.logger.debug(
         { parentEventId: event.parentEventId },
-        'No routing info for agent response — cannot deliver',
+        'No routing info for agent response — expected for bullpen tasks, skipping outbound delivery',
       );
       return;
     }

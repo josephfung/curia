@@ -64,6 +64,8 @@ import { BrowserService } from './browser/browser-service.js';
 import { OfficeIdentityService } from './identity/service.js';
 import type { AgentPersona } from './skills/types.js';
 import type { ConfigChangeEvent } from './bus/events.js';
+import { BullpenService } from './memory/bullpen.js';
+import { BullpenDispatcher } from './dispatch/bullpen-dispatcher.js';
 
 async function main(): Promise<void> {
   // 1. Config & logging — no dependencies, must come first.
@@ -164,6 +166,11 @@ async function main(): Promise<void> {
   } else {
     logger.warn('OPENAI_API_KEY not set — entity memory disabled (knowledge graph unavailable)');
   }
+
+  // Bullpen service — Tier 2 inter-agent discussion. Always initialized (no
+  // external API key required — just Postgres, which is already confirmed above).
+  const bullpenService = BullpenService.createWithPostgres(pool, logger);
+  logger.info('Bullpen service initialized');
 
   // Contact system — provides identity resolution and contact management.
   // Always initialized (contacts work even without entity memory / KG).
@@ -472,7 +479,7 @@ async function main(): Promise<void> {
   // infrastructure skills. outboundGateway gives email skills their send path.
   // entityContextAssembler enables entity_enrichment pre-enrichment and the
   // entity-context skill. agentContactId enables entity_enrichment default='agent'.
-  const executionLayer = new ExecutionLayer(skillRegistry, logger, { bus, agentRegistry, contactService, outboundGateway, heldMessages, schedulerService, entityMemory, agentPersona, nylasCalendarClient, entityContextAssembler, agentContactId: agentIdentityContactId, autonomyService, browserService, timezone: config.timezone, skillOutputMaxLength: yamlConfig.skillOutput?.maxLength });
+  const executionLayer = new ExecutionLayer(skillRegistry, logger, { bus, agentRegistry, contactService, outboundGateway, heldMessages, schedulerService, entityMemory, agentPersona, nylasCalendarClient, entityContextAssembler, agentContactId: agentIdentityContactId, autonomyService, browserService, bullpenService, timezone: config.timezone, skillOutputMaxLength: yamlConfig.skillOutput?.maxLength });
 
   // Two-pass agent registration:
   // Pass 1: Register all agents in the registry so specialistSummary() is complete
@@ -554,6 +561,8 @@ async function main(): Promise<void> {
         maxTurns: agentConfig.error_budget.max_turns ?? DEFAULT_ERROR_BUDGET.maxTurns,
         maxConsecutiveErrors: agentConfig.error_budget.max_errors ?? DEFAULT_ERROR_BUDGET.maxConsecutiveErrors,
       } : undefined,
+      bullpenService,
+      bullpenWindowMinutes: 60,
     });
     agent.register();
 
@@ -618,6 +627,10 @@ async function main(): Promise<void> {
     injectionScanner,
   });
   dispatcher.register();
+
+  // BullpenDispatcher — routes agent.discuss → agent.task for inter-agent Bullpen discussions.
+  const bullpenDispatcher = new BullpenDispatcher(bus, logger, bullpenService);
+  bullpenDispatcher.register();
 
   // Start the email adapter AFTER the dispatcher is registered so inbound.message
   // events always have a subscriber. Starting before registration would drop emails

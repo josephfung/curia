@@ -90,6 +90,19 @@ interface AgentErrorPayload {
   context: Record<string, unknown>;
 }
 
+// AgentDiscussPayload — emitted by the agent layer when a Bullpen message is posted.
+// `participants` is the full thread membership; `mentionedAgentIds` is the subset
+// that BullpenDispatcher will create tasks for (may be empty for broadcast messages).
+interface AgentDiscussPayload {
+  threadId: string;
+  messageId: string;           // DB row ID — for audit traceability
+  topic: string;               // denormalized for SSE display without a DB hit
+  senderAgentId: string;
+  participants: string[];      // all thread participants
+  mentionedAgentIds: string[]; // subset that get reply-expected tasks (empty = broadcast)
+  content: string;
+}
+
 // Contact event payloads — emitted by the dispatch layer during contact resolution (Contacts Phase A).
 
 interface ContactResolvedPayload {
@@ -216,6 +229,7 @@ interface ConfigChangePayload {
   diff_summary: string;         // human-readable summary of what changed
 }
 
+
 // -- Discriminated union --
 // The `type` field is the discriminant; `sourceLayer` records which layer emitted the event.
 
@@ -273,6 +287,12 @@ export interface AgentErrorEvent extends BaseEvent {
   payload: AgentErrorPayload;
 }
 
+export interface AgentDiscussEvent extends BaseEvent {
+  type: 'agent.discuss';
+  sourceLayer: 'agent';
+  payload: AgentDiscussPayload;
+}
+
 // Contact events — emitted by the dispatch layer during the contact resolution step.
 // contact.resolved fires when a sender maps to a known contact; contact.unknown fires when no match is found.
 
@@ -311,6 +331,7 @@ export interface MessageRejectedEvent extends BaseEvent {
   sourceLayer: 'dispatch';
   payload: MessageRejectedPayload;
 }
+
 
 // Memory events — emitted by the agent layer whenever the knowledge graph is written to or queried.
 // These form the audit trail for memory operations (Phase 6).
@@ -365,6 +386,7 @@ export type BusEvent =
   | SkillInvokeEvent
   | SkillResultEvent
   | AgentErrorEvent          // Error recovery: structured error events for audit and user notification
+  | AgentDiscussEvent        // Bullpen: inter-agent discussion message
   | MemoryStoreEvent      // Phase 6: knowledge graph write audit
   | MemoryQueryEvent      // Phase 6: knowledge graph read audit
   | ContactResolvedEvent  // Contacts Phase A: sender matched to a known contact
@@ -378,7 +400,7 @@ export type BusEvent =
   | ScheduleFiredEvent     // Scheduler: job fired
   | ScheduleSuspendedEvent   // Scheduler: job auto-suspended
   | ScheduleRecoveredEvent   // Scheduler: stuck job auto-recovered
-  | ConfigChangeEvent;      // System: config object changed (office identity, etc.)
+  | ConfigChangeEvent;       // System: config object changed (office identity, etc.)
 
 // Convenience alias for use in handler maps / switch statements.
 export type EventType = BusEvent['type'];
@@ -499,6 +521,21 @@ export function createAgentError(
     id: randomUUID(),
     timestamp: new Date(),
     type: 'agent.error',
+    sourceLayer: 'agent',
+    payload: rest,
+    parentEventId,
+  };
+}
+
+export function createAgentDiscuss(
+  // parentEventId is required — every discuss event must trace back to the agent.task that triggered it.
+  payload: AgentDiscussPayload & { parentEventId: string },
+): AgentDiscussEvent {
+  const { parentEventId, ...rest } = payload;
+  return {
+    id: randomUUID(),
+    timestamp: new Date(),
+    type: 'agent.discuss',
     sourceLayer: 'agent',
     payload: rest,
     parentEventId,

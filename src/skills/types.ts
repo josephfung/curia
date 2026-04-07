@@ -137,6 +137,12 @@ export interface SkillContext {
    *  Provides CRUD operations on calendar events and free/busy queries
    *  via the Nylas unified API (provider-agnostic). */
   nylasCalendarClient?: import('../channels/calendar/nylas-calendar-client.js').NylasCalendarClient;
+  /** Bullpen service — available to infrastructure skills for inter-agent discussion threads */
+  bullpenService?: import('../memory/bullpen.js').BullpenService;
+  /** ID of the agent invoking this skill — injected by the execution layer */
+  agentId?: string;
+  /** ID of the originating agent.task event — for causal chain tracing in event payloads */
+  taskEventId?: string;
   /** Caller identity — populated from the task event's sender context.
    *  Guaranteed to be defined for elevated skills (execution layer rejects without it).
    *  Available but optional for normal skills. */

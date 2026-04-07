@@ -178,6 +178,25 @@ export class EventRouter {
       this.broadcastToSseClients(sseData, convId);
     });
 
+    // agent.discuss — broadcast Bullpen activity to all SSE clients for dashboard observability.
+    // Uses 'system' layer (same privilege as skill.invoke/skill.result) so the HTTP channel
+    // can observe agent-layer events without publishing them.
+    bus.subscribe('agent.discuss', 'system', (event: BusEvent) => {
+      if (event.type !== 'agent.discuss') return;
+      const sseData = JSON.stringify({
+        type: 'agent.discuss',
+        thread_id: event.payload.threadId,
+        topic: event.payload.topic,
+        sender_agent_id: event.payload.senderAgentId,
+        mentioned_agent_ids: event.payload.mentionedAgentIds,
+        participants: event.payload.participants,
+        timestamp: event.timestamp,
+      });
+      // System-wide broadcast — not filtered by conversationId
+      this.broadcastToSseClients(sseData);
+    });
+
+
     this.logger.info('HTTP event router subscriptions registered');
   }
 
@@ -233,12 +252,12 @@ export class EventRouter {
       if (!shouldSend) continue;
       try {
         client.res.write(`data: ${sseData}\n\n`);
-      } catch {
+      } catch (err) {
         // Client connection is dead — remove it. The 'close' event handler
         // will also fire eventually, but cleaning up here prevents repeated
         // failed writes for subsequent events in this tick.
         this.sseClients.delete(client);
-        this.logger.debug({ conversationId: client.conversationId }, 'Removed dead SSE client');
+        this.logger.debug({ err, conversationId: client.conversationId }, 'Removed dead SSE client');
       }
     }
   }
