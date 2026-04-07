@@ -4,6 +4,19 @@
 
 Curia is a multi-agent AI platform for executives. Architecture specs are in `docs/specs/`. Read `docs/specs/00-overview.md` first for the full picture.
 
+## Naming Convention: Always "Curia", Never "Nathan"
+
+**Never refer to the AI agent/instance as "Nathan" in code, comments, docs, or runbooks.**
+"Nathan Curia" is the name of the current deployed instance, but it is instance-specific
+configuration — not a name that belongs in the codebase. Using it in source would make
+the code non-generic and couple every comment to this one deployment.
+
+Always use "Curia" instead:
+- ✅ "Curia's registered phone number"
+- ✅ "Curia's outbound activity"
+- ❌ "Nathan's phone number"
+- ❌ "Nathan sent this from another device"
+
 ## Architecture
 
 Five layers connected by a message bus. Four domain layers have hard security boundaries; the fifth (System) is for trusted cross-cutting infrastructure.

@@ -27,8 +27,8 @@ export interface Config {
   // Signal channel config. Both must be set to enable the Signal adapter.
   // signalSocketPath: path to the signal-cli daemon Unix socket (e.g. /run/signal-cli/socket).
   //   In Docker Compose, this is mounted from the signal-cli container's socket volume.
-  // signalPhoneNumber: Nathan's E.164 number (e.g. +12223334444). This is the Signal account
-  //   that was registered via `signal-cli register` + `signal-cli verify`.
+  // signalPhoneNumber: Curia's registered E.164 number (e.g. +12223334444). This is the Signal
+  //   account registered via `signal-cli register` + `signal-cli verify`.
   signalSocketPath: string | undefined;
   signalPhoneNumber: string | undefined;
 }

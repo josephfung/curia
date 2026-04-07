@@ -39,7 +39,7 @@ export interface SignalAdapterConfig {
    */
   outboundGateway: OutboundGateway | undefined;
   contactService: ContactService;
-  /** Nathan's E.164 phone number — the Signal account that receives messages */
+  /** Curia's registered E.164 phone number — the Signal account that receives messages */
   phoneNumber: string;
 }
 
