@@ -127,10 +127,12 @@ describe('classifyError', () => {
   });
 
   it('truncates messages to 400 chars', () => {
+    const suffix = '[truncated — output exceeded limit]';
     const longMessage = 'x'.repeat(500);
     const err = new Error(longMessage);
     const result = classifyError(err, 'test');
-    expect(result.message.length).toBeLessThanOrEqual(400 + '[truncated — output exceeded limit]'.length);
+    expect(result.message.length).toBeLessThanOrEqual(400 + suffix.length);
+    expect(result.message).toContain(suffix);
   });
 
   it('strips XML tags from error messages', () => {

@@ -67,13 +67,33 @@ export interface YamlConfig {
 export function loadYamlConfig(configDir: string): YamlConfig {
   const filePath = path.join(configDir, 'default.yaml');
   try {
-    return (yaml.load(readFileSync(filePath, 'utf-8')) as YamlConfig) ?? {};
+    const parsed = yaml.load(readFileSync(filePath, 'utf-8'));
+
+    // Empty file — treat as no config (same as absent).
+    if (parsed == null) return {};
+
+    // Root must be a mapping, not a scalar or sequence.
+    if (typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error('config/default.yaml must contain a YAML mapping at the root');
+    }
+
+    const config = parsed as YamlConfig;
+
+    // Validate skillOutput.maxLength if present — a non-positive or non-integer value
+    // would silently distort truncation behavior (e.g., negative would truncate to zero,
+    // a float would be misinterpreted by slice()).
+    const maxLength = config.skillOutput?.maxLength;
+    if (maxLength !== undefined && (!Number.isInteger(maxLength) || maxLength <= 0)) {
+      throw new Error(`skillOutput.maxLength must be a positive integer, got: ${maxLength}`);
+    }
+
+    return config;
   } catch (err) {
     // File absent in test/CI environments — silently return empty config.
     if (err instanceof Error && (err as NodeJS.ErrnoException).code === 'ENOENT') {
       return {};
     }
-    // Anything else (YAML syntax error, permission denied, etc.) is a
+    // Anything else (YAML syntax error, invalid shape, permission denied, etc.) is a
     // configuration mistake that must fail loudly rather than silently apply
     // wrong defaults. Throw so main() crashes with a readable startup error.
     throw new Error(

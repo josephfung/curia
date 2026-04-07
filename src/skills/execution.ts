@@ -399,6 +399,13 @@ export class ExecutionLayer {
         }
       }
 
+      // Handler returned { success: false, error } directly (did not throw).
+      // Sanitize and wrap the error message — handler errors can contain
+      // user-supplied values or external content that poses injection risk.
+      if (!result.success && result.error) {
+        return { success: false, error: this.wrapSkillError(result.error) };
+      }
+
       return result;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
