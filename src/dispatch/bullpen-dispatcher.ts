@@ -1,0 +1,83 @@
+import type { EventBus } from '../bus/bus.js';
+import type { AgentDiscussEvent } from '../bus/events.js';
+import { createAgentTask } from '../bus/events.js';
+import type { Logger } from '../logger.js';
+import type { BullpenService } from '../memory/bullpen.js';
+
+export class BullpenDispatcher {
+  constructor(
+    private bus: EventBus,
+    private logger: Logger,
+    private bullpenService: BullpenService,
+  ) {}
+
+  register(): void {
+    this.bus.subscribe('agent.discuss', 'dispatch', async (event) => {
+      await this.handleDiscuss(event as AgentDiscussEvent);
+    });
+    this.logger.info('BullpenDispatcher registered');
+  }
+
+  private async handleDiscuss(event: AgentDiscussEvent): Promise<void> {
+    const { threadId, topic, senderAgentId, participants, mentionedAgentIds } = event.payload;
+
+    // Cap check: defense-in-depth — the skill already enforces this, but check
+    // here too so a future code path cannot accidentally bypass the skill.
+    try {
+      const thread = await this.bullpenService.getThread(threadId);
+      if (!thread) {
+        this.logger.warn({ threadId }, 'BullpenDispatcher: thread not found for agent.discuss event — skipping');
+        return;
+      }
+      if (thread.thread.messageCount >= 100) {
+        this.logger.warn(
+          { threadId, messageCount: thread.thread.messageCount },
+          'BullpenDispatcher: thread has hit message cap (100) — skipping task creation',
+        );
+        return;
+      }
+    } catch (err) {
+      this.logger.error({ err, threadId }, 'BullpenDispatcher: failed to check thread cap — skipping');
+      return;
+    }
+
+    // Create one agent.task per participant, excluding the sender.
+    // Mentioned agents get a reply-expected prompt; others get an FYI.
+    const otherParticipants = participants.filter((id) => id !== senderAgentId);
+
+    for (const agentId of otherParticipants) {
+      const isMentioned = mentionedAgentIds.includes(agentId);
+      const content = isMentioned
+        ? `You've been mentioned in Bullpen thread "${topic}" (thread_id: ${threadId}) by ${senderAgentId}. Review the injected thread context and reply using the bullpen skill.`
+        : `FYI: New activity in Bullpen thread "${topic}" (thread_id: ${threadId}) from ${senderAgentId}. No response required, but reply if you have something to add.`;
+
+      try {
+        const task = createAgentTask({
+          agentId,
+          // threadId as conversationId scopes working memory to this thread,
+          // so agents accumulate context across multiple activations in the same discussion.
+          conversationId: threadId,
+          channelId: 'bullpen',
+          senderId: senderAgentId,
+          content,
+          metadata: {
+            taskOrigin: 'bullpen',
+            threadId,
+            mentioned: isMentioned,
+          },
+          parentEventId: event.id,
+        });
+        await this.bus.publish('dispatch', task);
+        this.logger.debug(
+          { agentId, threadId, mentioned: isMentioned },
+          'BullpenDispatcher: created agent.task for participant',
+        );
+      } catch (err) {
+        this.logger.error(
+          { err, agentId, threadId },
+          'BullpenDispatcher: failed to publish agent.task for participant',
+        );
+      }
+    }
+  }
+}
