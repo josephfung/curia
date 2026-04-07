@@ -97,12 +97,7 @@ On first run this applies all database migrations, then starts the full stack. Y
 
 ### 5. Verify
 
-**CLI:** In a second terminal, you can interact with Curia directly:
-
-```bash
-pnpm local
-# Once running, type a message into the CLI prompt
-```
+**CLI:** In the terminal where Curia is running, type a message at the prompt to interact with it directly.
 
 **Web app:** Open `http://localhost:3000` in your browser. You'll be prompted for your `WEB_APP_BOOTSTRAP_SECRET`. Once authenticated, the knowledge graph browser is available.
 
@@ -264,4 +259,7 @@ Make sure the Docker container is running (`docker compose ps`). If the containe
 
 **Email channel not activating**
 
-All three Nylas vars (`NYLAS_API_KEY`, `NYLAS_GRANT_ID`, `NYLAS_SELF_EMAIL`) must be set. If any are missing, the channel silently disables itself at startup — check the startup logs for `NYLAS_API_KEY/NYLAS_GRANT_ID not set — email channel disabled`.
+All three Nylas vars (`NYLAS_API_KEY`, `NYLAS_GRANT_ID`, `NYLAS_SELF_EMAIL`) must be set. If any are missing, the channel disables itself at startup. Two possible log messages:
+
+- `NYLAS_API_KEY/NYLAS_GRANT_ID not set — email channel disabled` — the API key or grant ID is missing
+- `NYLAS_SELF_EMAIL not set — email adapter disabled` — the first two vars are set but `NYLAS_SELF_EMAIL` is missing
