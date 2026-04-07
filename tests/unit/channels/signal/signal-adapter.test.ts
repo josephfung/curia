@@ -25,6 +25,7 @@ function makeMockRpcClient() {
     disconnect: ReturnType<typeof vi.fn>;
     send: ReturnType<typeof vi.fn>;
     sendReadReceipt: ReturnType<typeof vi.fn>;
+    listGroups: ReturnType<typeof vi.fn>;
     // Helper to simulate an inbound message from signal-cli
     simulateMessage: (envelope: SignalEnvelope) => void;
   };
@@ -34,6 +35,7 @@ function makeMockRpcClient() {
   emitter.disconnect = vi.fn().mockResolvedValue(undefined);
   emitter.send = vi.fn().mockResolvedValue(undefined);
   emitter.sendReadReceipt = vi.fn().mockResolvedValue(undefined);
+  emitter.listGroups = vi.fn().mockResolvedValue([]);
   emitter.simulateMessage = (envelope) => emitter.emit('message', envelope);
 
   return emitter as unknown as SignalRpcClient & {
@@ -41,6 +43,7 @@ function makeMockRpcClient() {
     disconnect: ReturnType<typeof vi.fn>;
     send: ReturnType<typeof vi.fn>;
     sendReadReceipt: ReturnType<typeof vi.fn>;
+    listGroups: ReturnType<typeof vi.fn>;
     simulateMessage: (envelope: SignalEnvelope) => void;
   };
 }
@@ -48,6 +51,7 @@ function makeMockRpcClient() {
 function makeMockGateway() {
   return {
     send: vi.fn().mockResolvedValue({ success: true }),
+    getSignalGroupMembers: vi.fn().mockRejectedValue(new Error('Signal client not configured')),
   } as unknown as OutboundGateway;
 }
 
@@ -103,6 +107,7 @@ describe('SignalAdapter', () => {
       outboundGateway: gateway,
       contactService,
       phoneNumber: PHONE,
+      ceoEmail: 'ceo@example.com',
     });
 
     await adapter.start();
@@ -143,6 +148,7 @@ describe('SignalAdapter', () => {
       outboundGateway: gateway,
       contactService: confirmedService,
       phoneNumber: PHONE,
+      ceoEmail: 'ceo@example.com',
     });
     await confirmedAdapter.start();
 
@@ -171,6 +177,7 @@ describe('SignalAdapter', () => {
       outboundGateway: gateway,
       contactService: provisionalService,
       phoneNumber: PHONE,
+      ceoEmail: 'ceo@example.com',
     });
     await provisionalAdapter.start();
 
@@ -191,6 +198,7 @@ describe('SignalAdapter', () => {
       outboundGateway: gateway,
       contactService: blockedService,
       phoneNumber: PHONE,
+      ceoEmail: 'ceo@example.com',
     });
     await blockedAdapter.start();
 
@@ -211,6 +219,7 @@ describe('SignalAdapter', () => {
       outboundGateway: gateway,
       contactService: confirmedService,
       phoneNumber: PHONE,
+      ceoEmail: 'ceo@example.com',
     });
     await confirmedAdapter.start();
 
@@ -241,6 +250,7 @@ describe('SignalAdapter', () => {
       outboundGateway: gateway,
       contactService: unknownService,
       phoneNumber: PHONE,
+      ceoEmail: 'ceo@example.com',
     });
     await unknownAdapter.start();
 
@@ -362,5 +372,98 @@ describe('SignalAdapter', () => {
 
     // Re-start for afterEach cleanup
     await adapter.start();
+  });
+
+  // ---------------------------------------------------------------------------
+  // Group trust check
+  // ---------------------------------------------------------------------------
+
+  function makeGroupEnvelope(groupId: string, overrides: Partial<SignalEnvelope> = {}): SignalEnvelope {
+    return makeEnvelope({
+      dataMessage: {
+        timestamp: 1700000000000,
+        message: 'Group message',
+        expiresInSeconds: 0,
+        viewOnce: false,
+        groupInfo: { groupId, type: 'DELIVER' },
+      },
+      ...overrides,
+    });
+  }
+
+  describe('Group trust check', () => {
+    const GROUP_ID = 'grpABC==';
+
+    it('publishes an inbound.message for a group with all verified members', async () => {
+      const published: unknown[] = [];
+      bus.subscribe('inbound.message', 'dispatch', (e) => { published.push(e); });
+
+      // rpcClient.listGroups returns this group with one member
+      (rpcClient.listGroups as ReturnType<typeof vi.fn>).mockResolvedValue([
+        { id: GROUP_ID, name: 'G', members: [{ number: '+14155551234' }], pendingMembers: [], isMember: true },
+      ]);
+      // contactService resolves the member as active
+      (contactService.resolveByChannelIdentity as ReturnType<typeof vi.fn>).mockResolvedValue(
+        { contactId: 'c1', status: 'active' },
+      );
+
+      rpcClient.simulateMessage(makeGroupEnvelope(GROUP_ID));
+      await new Promise((r) => setTimeout(r, 30));
+
+      expect(published).toHaveLength(1);
+    });
+
+    it('holds a group message and emails the CEO when a member is unknown', async () => {
+      const published: unknown[] = [];
+      bus.subscribe('inbound.message', 'dispatch', (e) => { published.push(e); });
+
+      (rpcClient.listGroups as ReturnType<typeof vi.fn>).mockResolvedValue([
+        { id: GROUP_ID, name: 'G', members: [{ number: '+14155551234' }], pendingMembers: [], isMember: true },
+      ]);
+      // Member has no contact record
+      (contactService.resolveByChannelIdentity as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+
+      rpcClient.simulateMessage(makeGroupEnvelope(GROUP_ID));
+      await new Promise((r) => setTimeout(r, 30));
+
+      expect(published).toHaveLength(0);
+      expect(gateway.send).toHaveBeenCalledWith(
+        expect.objectContaining({
+          channel: 'email',
+          to: 'ceo@example.com',
+          subject: 'Signal group message held — member verification needed',
+        }),
+      );
+    });
+
+    it('drops a group message silently when a member is blocked (no email, no publish)', async () => {
+      const published: unknown[] = [];
+      bus.subscribe('inbound.message', 'dispatch', (e) => { published.push(e); });
+
+      (rpcClient.listGroups as ReturnType<typeof vi.fn>).mockResolvedValue([
+        { id: GROUP_ID, name: 'G', members: [{ number: '+14155551234' }], pendingMembers: [], isMember: true },
+      ]);
+      (contactService.resolveByChannelIdentity as ReturnType<typeof vi.fn>).mockResolvedValue(
+        { contactId: 'c1', status: 'blocked' },
+      );
+
+      rpcClient.simulateMessage(makeGroupEnvelope(GROUP_ID));
+      await new Promise((r) => setTimeout(r, 30));
+
+      expect(published).toHaveLength(0);
+      expect(gateway.send).not.toHaveBeenCalled();
+    });
+
+    it('treats a group as untrusted when listGroups throws', async () => {
+      const published: unknown[] = [];
+      bus.subscribe('inbound.message', 'dispatch', (e) => { published.push(e); });
+
+      (rpcClient.listGroups as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('socket error'));
+
+      rpcClient.simulateMessage(makeGroupEnvelope(GROUP_ID));
+      await new Promise((r) => setTimeout(r, 30));
+
+      expect(published).toHaveLength(0);
+    });
   });
 });

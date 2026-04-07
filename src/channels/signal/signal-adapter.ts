@@ -19,6 +19,7 @@ import type { OutboundMessageEvent } from '../../bus/events.js';
 import type { SignalEnvelope } from './types.js';
 import { SignalRpcClient } from './signal-rpc-client.js';
 import { convertSignalEnvelope } from './message-converter.js';
+import { checkGroupMemberTrust } from './group-trust.js';
 import { createInboundMessage } from '../../bus/events.js';
 import { sanitizeOutput } from '../../skills/sanitize.js';
 
@@ -39,8 +40,15 @@ export interface SignalAdapterConfig {
    */
   outboundGateway: OutboundGateway | undefined;
   contactService: ContactService;
-  /** Nathan's E.164 phone number — the Signal account that receives messages */
+  /** Curia's E.164 phone number — the Signal account that receives messages */
   phoneNumber: string;
+  /**
+   * CEO's email address for group hold notifications.
+   * When a group message is held because of unverified members, Curia sends the
+   * CEO an email listing the unknown phone numbers.
+   * If absent or empty, holds are logged at error but no email is sent.
+   */
+  ceoEmail?: string;
 }
 
 export class SignalAdapter {
@@ -119,6 +127,19 @@ export class SignalAdapter {
     }
 
     const { conversationId, senderId, content, metadata } = converted;
+
+    // ------------------------------------------------------------------
+    // Step 0: Group trust check
+    // ------------------------------------------------------------------
+    // Before engaging with any group conversation, verify every member's
+    // phone number is a known, verified contact. A single unknown or blocked
+    // member causes the message to be held or dropped.
+    // This runs before contact resolution so we don't create a contact for the
+    // sender of an untrusted group message.
+    if (metadata.isGroup && metadata.groupId) {
+      const shouldProceed = await this.handleGroupTrustCheck(metadata.groupId);
+      if (!shouldProceed) return;
+    }
 
     // ------------------------------------------------------------------
     // Step 1: Contact resolution and auto-create
@@ -258,6 +279,127 @@ export class SignalAdapter {
       this.log.info({ conversationId, recipient, groupId }, 'Signal reply sent via gateway');
     } else {
       this.log.warn({ conversationId, reason: result.blockedReason }, 'Signal reply blocked by gateway');
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Private: group trust
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Runs the group trust check for an inbound group message.
+   * Returns true if the group is trusted and processing should continue.
+   * Returns false if the message was held or dropped — caller must return early.
+   */
+  private async handleGroupTrustCheck(groupId: string): Promise<boolean> {
+    // Fetch group membership from signal-cli. Fail-closed: if listGroups throws
+    // (e.g. socket error, signal-cli restart), treat the group as untrusted so
+    // we never accidentally engage with an unverified group.
+    let memberPhones: string[];
+    try {
+      const groups = await this.config.rpcClient.listGroups();
+      const group = groups.find((g) => g.id === groupId);
+      if (!group) {
+        this.log.warn({ groupId }, 'Signal adapter: group not found in listGroups — treating as untrusted (fail-closed)');
+        return false;
+      }
+      // Exclude Curia's own number — it would resolve to Curia's own contact and
+      // skew the trust check. Only external member phones are meaningful here.
+      memberPhones = group.members
+        .map((m) => m.number)
+        .filter((phone) => phone !== this.config.phoneNumber);
+    } catch (err) {
+      this.log.warn({ err, groupId }, 'Signal adapter: listGroups failed — treating group as untrusted (fail-closed)');
+      return false;
+    }
+
+    const trust = await checkGroupMemberTrust(memberPhones, this.config.contactService);
+
+    if (trust.blockedMembers.length > 0) {
+      // Silent drop — never acknowledge to blocked contacts that Curia is active
+      // or monitoring the group. No email notification.
+      this.log.debug(
+        { groupId, blockedCount: trust.blockedMembers.length },
+        'Signal adapter: group message dropped — blocked member in group',
+      );
+      return false;
+    }
+
+    if (trust.unknownMembers.length > 0) {
+      // Auto-create provisional contacts for unknown members so the CEO can
+      // identify them using the contact skills. Same pattern as unknown 1:1 senders.
+      for (const phone of trust.unknownMembers) {
+        try {
+          const contact = await this.config.contactService.createContact({
+            displayName: phone,
+            fallbackDisplayName: phone,
+            source: 'signal_participant',
+            status: 'provisional',
+          });
+          await this.config.contactService.linkIdentity({
+            contactId: contact.id,
+            channel: 'signal',
+            channelIdentifier: phone,
+            source: 'signal_participant',
+          });
+        } catch (err) {
+          // Best-effort — continue with remaining members even if one fails
+          this.log.warn({ err, phone }, 'Signal adapter: failed to auto-create contact for unknown group member');
+        }
+      }
+
+      await this.notifyCeoGroupHeld(groupId, trust.unknownMembers);
+
+      this.log.info(
+        { groupId, unknownCount: trust.unknownMembers.length },
+        'Signal adapter: group message held — unknown members, CEO notified via email',
+      );
+      return false;
+    }
+
+    return true; // all members verified — proceed
+  }
+
+  /**
+   * Send the CEO an email notification when a group message is held due to
+   * unverified members. Uses the outbound gateway so the email goes through
+   * the normal content filter pipeline.
+   *
+   * The CLI is not assumed to be monitored, so email is the reliable async
+   * channel for this notification.
+   */
+  private async notifyCeoGroupHeld(groupId: string, unknownPhones: string[]): Promise<void> {
+    const { outboundGateway, ceoEmail } = this.config;
+
+    if (!outboundGateway || !ceoEmail) {
+      this.log.error(
+        { groupId, hasGateway: !!outboundGateway, hasCeoEmail: !!ceoEmail },
+        'Signal adapter: cannot notify CEO of held group message — outbound gateway or ceoEmail not configured',
+      );
+      return;
+    }
+
+    const memberList = unknownPhones.map((p) => `• ${p} — no verified contact`).join('\n');
+    const body = [
+      'A Signal group message was received but held because the following group members have not yet been verified:',
+      '',
+      memberList,
+      '',
+      'Once you have verified these contacts, you can ask me to send a message to the group and I will re-check membership before engaging.',
+      '',
+      `Group ID (for reference): ${groupId}`,
+    ].join('\n');
+
+    try {
+      await outboundGateway.send({
+        channel: 'email',
+        to: ceoEmail,
+        subject: 'Signal group message held — member verification needed',
+        body,
+      });
+    } catch (err) {
+      // Non-fatal — the message is still held. Log at error so it's visible in alerting.
+      this.log.error({ err, groupId }, 'Signal adapter: failed to send CEO group-held notification via email');
     }
   }
 }
