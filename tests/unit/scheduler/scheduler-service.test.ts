@@ -488,6 +488,33 @@ describe('SchedulerService', () => {
       expect(sql).toContain('ON CONFLICT');
       expect(sql).toContain('scheduled_jobs_declarative_uq');
     });
+
+    it('writes expectedDurationSeconds when provided', async () => {
+      pool.query.mockResolvedValueOnce({ rows: [{ id: 'job-decl-1' }] });
+
+      await svc.upsertDeclarativeJob('coordinator', {
+        cron: '30 7 * * *',
+        task: 'Send morning brief',
+        expectedDurationSeconds: 60,
+      });
+
+      const [sql, params] = pool.query.mock.calls[0] as [string, unknown[]];
+      expect(sql).toContain('expected_duration_seconds');
+      expect(params).toContain(60);
+    });
+
+    it('omits expected_duration_seconds when not provided (preserves existing DB value)', async () => {
+      pool.query.mockResolvedValueOnce({ rows: [{ id: 'job-decl-2' }] });
+
+      await svc.upsertDeclarativeJob('coordinator', {
+        cron: '0 9 * * 1',
+        task: 'Weekly standup',
+        // no expectedDurationSeconds
+      });
+
+      const [sql] = pool.query.mock.calls[0] as [string];
+      expect(sql).not.toContain('expected_duration_seconds');
+    });
   });
 
   // -- updateJob --

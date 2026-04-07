@@ -369,23 +369,28 @@ export class SchedulerService {
    */
   async upsertDeclarativeJob(
     agentId: string,
-    schedule: { cron: string; task: string },
+    schedule: { cron: string; task: string; expectedDurationSeconds?: number },
   ): Promise<string> {
     const taskPayload = { task: schedule.task };
     const nextRunAt = this.nextRunFromCron(schedule.cron);
+
+    // If expectedDurationSeconds is provided, include it in the upsert so the
+    // stuck-job recovery watchdog uses the job-specific timeout threshold.
+    // If omitted, leave the column at its current value (null → system default applies).
+    const hasExpectedDuration = schedule.expectedDurationSeconds !== undefined;
 
     // Include timezone so completeJobRun() re-advances next_run_at in the same zone.
     // Without this, the DB column would default to 'UTC' while next_run_at was computed
     // using this.timezone — causing every post-completion firing to be offset by the UTC delta.
     const sql = `
-      INSERT INTO scheduled_jobs (agent_id, cron_expr, task_payload, status, next_run_at, created_by, timezone)
-      VALUES ($1, $2, $3, $4, $5, $6, $7)
+      INSERT INTO scheduled_jobs (agent_id, cron_expr, task_payload, status, next_run_at, created_by, timezone${hasExpectedDuration ? ', expected_duration_seconds' : ''})
+      VALUES ($1, $2, $3, $4, $5, $6, $7${hasExpectedDuration ? ', $8' : ''})
       ON CONFLICT ON CONSTRAINT scheduled_jobs_declarative_uq
       DO UPDATE SET next_run_at = $5,
-                    timezone = $7
+                    timezone = $7${hasExpectedDuration ? ',\n                    expected_duration_seconds = $8' : ''}
       RETURNING id
     `;
-    const params = [
+    const params: unknown[] = [
       agentId,
       schedule.cron,
       JSON.stringify(taskPayload),
@@ -394,6 +399,9 @@ export class SchedulerService {
       'system',
       this.timezone,
     ];
+    if (hasExpectedDuration) {
+      params.push(schedule.expectedDurationSeconds!);
+    }
 
     const { rows } = await this.pool.query(sql, params);
     return (rows[0] as { id: string }).id;
