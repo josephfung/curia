@@ -173,51 +173,21 @@ No restart required if Curia is already running — the skill picks up the key o
 
 ### Signal
 
-Signal messaging runs via [signal-cli](https://github.com/AsamK/signal-cli), which handles registration and acts as a daemon that Curia connects to over a Unix socket.
+Signal messaging runs via [signal-cli](https://github.com/AsamK/signal-cli). The socket path is wired up automatically by Docker Compose — the only thing you need to set is your phone number.
 
-**1. Install signal-cli**
+**1. Bootstrap signal-cli**
 
-On macOS:
-```bash
-brew install signal-cli
-```
+Signal requires seeding a Docker volume with your registered account credentials before Curia can use it. Follow the steps in `runbooks/signal-cli-bootstrap.md` (coming soon).
 
-On Linux, download the latest release from the [signal-cli releases page](https://github.com/AsamK/signal-cli/releases) and ensure it's on your `PATH`.
-
-**2. Register a phone number**
-
-You'll need a phone number that is not already registered with Signal on a mobile device — either a fresh SIM or a VoIP number (e.g. from Google Voice).
-
-```bash
-signal-cli -a +1XXXXXXXXXX register
-# Enter the SMS verification code you receive:
-signal-cli -a +1XXXXXXXXXX verify <code>
-```
-
-Alternatively, you can link signal-cli as a secondary device to an existing Signal account:
-```bash
-signal-cli link -n "Curia Dev"
-# Scan the QR code printed to the terminal with your Signal mobile app
-```
-
-**3. Start signal-cli as a daemon**
-
-Curia connects to signal-cli over a JSON-RPC Unix socket. Start the daemon before starting Curia:
-
-```bash
-signal-cli -a +1XXXXXXXXXX daemon --socket /tmp/signal.sock
-```
-
-Keep this running in a separate terminal (or run it as a background service).
-
-**4. Set the env vars**
+**2. Set the env var**
 
 ```env
-SIGNAL_SOCKET_PATH=/tmp/signal.sock
-SIGNAL_PHONE_NUMBER=+1XXXXXXXXXX
+SIGNAL_PHONE_NUMBER=+12223334444
 ```
 
-Restart Curia — the Signal channel activates when both vars are present. You can verify by checking startup logs for the absence of `SIGNAL_SOCKET_PATH/SIGNAL_PHONE_NUMBER not set — Signal channel disabled`.
+That's the E.164 number you registered via `signal-cli register` + `verify`. `SIGNAL_SOCKET_PATH` is set automatically by `compose.production.yaml` — do not set it in `.env`.
+
+Restart Curia — the Signal channel activates when `SIGNAL_PHONE_NUMBER` is set and the signal-data volume is populated.
 
 ---
 
