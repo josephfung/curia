@@ -6,7 +6,7 @@ This guide gets your local Curia instance running. Setup is organized into three
 |---|---|---|
 | **1 — Minimum** | Anthropic + Postgres | Agents running, CLI and web app working |
 | **2 — Recommended** | + Nylas + OpenAI | Email channel active, entity memory and semantic search working |
-| **3 — Full** | + Tavily (+ Signal, coming soon) | Web research skill, encrypted Signal messaging |
+| **3 — Full** | + Tavily + Signal | Web research skill, encrypted Signal messaging |
 
 Complete each tier before moving to the next.
 
