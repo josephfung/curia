@@ -322,11 +322,12 @@ export class Dispatcher {
       content: taskContent,
       senderContext,
       // Merge: preserve any pre-existing inbound metadata (e.g. email subject from
-      // the email adapter) and layer injection findings on top. If there are no
-      // injection findings, passes through the original metadata unchanged.
-      metadata: (payload.metadata || injectionMetadata)
-        ? { ...payload.metadata, ...injectionMetadata }
-        : undefined,
+      // the email adapter) and layer injection findings on top. When there are no
+      // injection findings, pass through the original metadata object unchanged
+      // (no copy) to avoid unnecessary allocation on the clean-message hot path.
+      metadata: injectionMetadata
+        ? { ...(payload.metadata ?? {}), ...injectionMetadata }
+        : payload.metadata,
       parentEventId: event.id,
     });
 
