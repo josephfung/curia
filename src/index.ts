@@ -571,6 +571,9 @@ async function main(): Promise<void> {
   // Load declarative schedules from agent YAML configs and start the scheduler loop.
   // Runs after agent registration so all agents are known when jobs are upserted.
   await scheduler.loadDeclarativeJobs(agentConfigs);
+  // Recover any jobs left stuck in 'running' from a prior crash before the
+  // poll loop starts. This handles the "crash between claim and dispatch" failure mode.
+  await scheduler.recoverStuckJobs();
   scheduler.start();
   logger.info('Scheduler started');
 
