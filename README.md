@@ -273,40 +273,16 @@ Each agent specifies its provider and model. Configure fallbacks for resilience 
 
 > **Note:** Curia is in pre-alpha. The spec is complete; implementation is underway. Star the repo to follow progress.
 
-```bash
-# Clone
-git clone https://github.com/josephfung/curia.git
-cd curia
+Getting set up involves connecting a few external services (Postgres, an LLM provider, optionally Nylas for email). The full guide covers prerequisites, configuration tiers, and verification steps:
 
-# Configure
-cp .env.example .env
-# Edit .env with your API keys and channel credentials
-
-# Install dependencies
-pnpm install
-
-# Start Postgres (pgvector + pgAudit)
-docker compose up -d
-
-# Run (auto-migrates on start)
-pnpm local
-```
-
-This starts Postgres via Docker, applies any pending migrations, then launches the Curia stack. Talk to it via CLI immediately; email and HTTP channels activate as configured in `.env`.
+**[→ Development Setup Guide](docs/dev/setup.md)**
 
 
-### Knowledge Graph Web Explorer
+### Web App
 
-Curia now includes a built-in graph browser at `GET /kg` backed by Postgres `kg_nodes` + `kg_edges`.
+Curia includes a built-in web app at `http://localhost:3000`. Current features include a knowledge graph browser for exploring nodes, relationships, and entity memory. More tools will be added here as the platform matures.
 
-1. Set `WEB_APP_BOOTSTRAP_SECRET` in `.env`
-2. Start Curia (`pnpm local`)
-3. Open `http://localhost:3000/kg`, enter `WEB_APP_BOOTSTRAP_SECRET` in the UI, then search/browse.
-
-The explorer supports:
-- node search (`/api/kg/nodes`)
-- neighborhood traversal (`/api/kg/graph`)
-- interactive rendering via Cytoscape.js (open source, MIT), served locally by Curia
+The web app requires `WEB_APP_BOOTSTRAP_SECRET` in `.env` — set this to any long random string before starting. See the [setup guide](docs/dev/setup.md) for details.
 
 ---
 
@@ -332,15 +308,7 @@ The explorer supports:
 | [15](docs/specs/15-outbound-safety.md) | Outbound safety (content filter, gateway, display name sanitization, caller verification) | Partial — deterministic rules done; LLM-as-judge planned |
 | [16](docs/specs/16-smoke-test-framework.md) | Smoke test framework (chat-based cases, LLM-as-judge, HTML reports) | ✅ Implemented |
 | — | Web dashboard | Partial |
-| — | Voice/telephony channel | Future |
-
----
-
-## Deployment
-
-- **Local development** — `docker compose up -d` for Postgres, then `pnpm local` (or `pnpm dev` for hot-reload)
-- **Single VPS** — One Hetzner/DigitalOcean/Linode instance with Docker + Caddy
-- **Multiple instances** — Separate VPS per user/org. No multi-tenant complexity.
+| — | Additional channels: Voice, Slack, Telegram | Future |
 
 ---
 
