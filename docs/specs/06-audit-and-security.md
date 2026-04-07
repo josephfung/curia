@@ -162,22 +162,22 @@ For launch, this is data collection (audit log captures everything). Active bloc
 
 ### Contact Trust Registry
 
-Known contacts are stored in the `contacts` table. This is the live source of truth — contacts can be added, edited, and queried at runtime without a deployment. Static allowlists in config are not used.
+Known contacts are stored across two tables (`contacts` + `contact_channel_identities`) that already exist in the schema. This is the live source of truth — contacts can be added, edited, and queried at runtime without a deployment. Static allowlists in config are not used.
+
+`contacts` holds the person record. Two new columns are added via migration to support trust scoring:
 
 ```sql
-CREATE TABLE contacts (
-  id                 UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  identifier         TEXT NOT NULL,                         -- email address, phone number, etc.
-  channel            TEXT NOT NULL,                         -- 'email' | 'signal' | 'http_api' | 'cli'
-  display_name       TEXT,
-  trust_level        TEXT,                                  -- nullable per-contact override: 'high' | 'medium' | 'low'
-  contact_confidence NUMERIC(3,2) NOT NULL DEFAULT 0.0,    -- 0.0–1.0; accumulated signal over time
-  notes              TEXT,
-  created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
-  last_seen_at       TIMESTAMPTZ,
-  UNIQUE (identifier, channel)
-);
+-- New columns added to existing contacts table:
+ALTER TABLE contacts ADD COLUMN trust_level        TEXT;           -- nullable per-contact override: 'high' | 'medium' | 'low'
+ALTER TABLE contacts ADD COLUMN contact_confidence NUMERIC(3,2) NOT NULL DEFAULT 0.0;  -- 0.0–1.0
+```
+
+`contact_channel_identities` maps `(channel, channel_identifier)` → `contact_id` and is the lookup target when classifying an inbound sender:
+
+```sql
+-- Existing table (from 005_create_contacts.sql):
+-- contact_channel_identities (contact_id FK, channel, channel_identifier, verified, ...)
+-- UNIQUE(channel, channel_identifier)
 ```
 
 `contact_confidence` is orthogonal to `trustLevel`. It accumulates over time as signal builds: successful interactions, explicit CEO verification, pairing confirmation, or manual entry. A contact with years of email history may carry `contact_confidence: 0.95` even though the email channel always carries `trustLevel: low`.
@@ -188,24 +188,24 @@ Neither `contact_confidence` nor `trustLevel` is propagated directly to bus even
 
 ### Unknown Sender Routing
 
-Unknown senders — those not found in the `contacts` table — are not silently rejected. The channel adapter looks up the sender in `contacts` (yielding `contactConfidence: 0.0` if absent), computes `messageTrustScore`, and publishes the event. The dispatch layer routes based on per-channel configuration:
+Unknown senders — those not found in `contact_channel_identities` for the given `(channel, channel_identifier)` — are not silently rejected. The channel adapter performs this lookup, yields `contactConfidence: 0.0` if absent, computes `messageTrustScore`, and publishes the event. The dispatch layer routes based on per-channel configuration in `config/channel-trust.yaml`:
 
 ```yaml
-# config/default.yaml
+# config/channel-trust.yaml
 channels:
   email:
-    unknown_sender: escalate     # 'ignore' | 'hold' | 'escalate'
+    unknown_sender: hold_and_notify   # 'allow' | 'hold_and_notify' | 'reject'
   signal:
-    unknown_sender: escalate
-  http_api:
-    unknown_sender: ignore       # unauthenticated requests are dropped
+    unknown_sender: hold_and_notify
+  http:
+    unknown_sender: reject            # unauthenticated requests are dropped
   cli:
-    unknown_sender: escalate     # unexpected in practice; escalate as anomaly
+    unknown_sender: allow             # all CLI sessions are the CEO
 ```
 
-- **`ignore`** — event is audit-logged and discarded. No response sent. Used for channels where unknown traffic is predominantly non-human (bots, scanners, spam).
-- **`hold`** — event is queued in a pending review table. CEO can inspect and approve or dismiss. No action taken until reviewed.
-- **`escalate`** — event is forwarded to the Coordinator with an escalation flag. The Coordinator decides whether to surface it to the CEO, defer it, or discard it based on content analysis.
+- **`allow`** — message proceeds normally. Used for channels where the auth mechanism already guarantees sender identity (CLI, web app with bootstrap secret).
+- **`hold_and_notify`** — event is queued in the held messages table and the CEO is notified. No action taken until reviewed.
+- **`reject`** — event is audit-logged and discarded. No response sent.
 
 All unknown sender events are audit-logged regardless of routing decision, including sender identifier, channel, and the routing action taken.
 
@@ -278,7 +278,7 @@ When a request's `messageTrustScore` falls below the required threshold, the Coo
 
 For high-impact requests from low-trust channels, the Coordinator proactively sends a verification challenge via a higher-trust channel:
 
-```
+```text
 [Signal] Nathan: I received an email requesting a transfer of Q2 expense
 data to drive.google.com/new-folder-id. Can you confirm this is you?
 Reply YES to proceed or NO to cancel.
@@ -352,9 +352,10 @@ These are non-negotiable for launch:
 - [ ] Rate limiting active at dispatch layer
 - [ ] Intent drift detection pauses tasks (not just logs)
 - [ ] Email channel exposes provider-level SPF/DKIM/DMARC validation via Nylas message metadata
-- [ ] `contacts` table migration applied with correct schema and indexes
+- [ ] Migration adds `trust_level` and `contact_confidence` columns to existing `contacts` table
 - [ ] All `inbound.message` events carry `messageTrustScore` (computed float); `trustLevel` and `contactConfidence` are inputs only, not propagated
-- [ ] Unknown sender routing configurable per channel in `config/default.yaml`
+- [ ] Unknown sender lookup targets `contact_channel_identities (channel, channel_identifier)`
+- [ ] Unknown sender routing configured in `config/channel-trust.yaml` using `allow` / `hold_and_notify` / `reject`
 - [ ] Trust-gated action thresholds use `messageTrustScore` numeric values, not trust level enum strings
 - [ ] Data sensitivity tags on knowledge graph entities
 - [ ] Bulk export gates active for confidential+ data
