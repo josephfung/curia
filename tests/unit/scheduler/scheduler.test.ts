@@ -204,6 +204,19 @@ describe('Scheduler', () => {
       // Should not throw; should log the error
       expect(logger.error).toHaveBeenCalled();
     });
+
+    it('sets run_started_at when claiming a job', async () => {
+      const row = fakeDbRow();
+      pool.query.mockResolvedValueOnce({ rows: [row] });       // SELECT due jobs
+      pool.query.mockResolvedValueOnce({ rowCount: 1, rows: [] }); // UPDATE claim
+
+      await scheduler.pollDueJobs();
+
+      const [claimSql, claimParams] = pool.query.mock.calls[1] as [string, unknown[]];
+      expect(claimSql).toContain('run_started_at');
+      expect(claimSql).toContain('now()');
+      expect(claimParams).toContain('job-1');
+    });
   });
 
   // -- completion tracking --
