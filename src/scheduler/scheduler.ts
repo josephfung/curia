@@ -51,6 +51,7 @@ export class Scheduler {
   private logger: Logger;
   private schedulerService: SchedulerService;
   private intervalHandle: ReturnType<typeof setInterval> | null = null;
+  private watchdogHandle: ReturnType<typeof setInterval> | null = null;
 
   // Maps the agent.task event ID back to the job ID so we can match
   // agent.response / agent.error events to the originating scheduled job.
@@ -98,6 +99,13 @@ export class Scheduler {
       });
     }, POLL_INTERVAL_MS);
 
+    // Watchdog: periodically recover jobs that got stuck in 'running' state.
+    this.watchdogHandle = setInterval(() => {
+      this.recoverStuckJobs().catch((err) => {
+        this.logger.error({ err }, 'Unhandled error in recoverStuckJobs watchdog');
+      });
+    }, WATCHDOG_INTERVAL_MS);
+
     this.logger.info({ intervalMs: POLL_INTERVAL_MS }, 'Scheduler started');
   }
 
@@ -108,6 +116,10 @@ export class Scheduler {
     if (this.intervalHandle) {
       clearInterval(this.intervalHandle);
       this.intervalHandle = null;
+    }
+    if (this.watchdogHandle) {
+      clearInterval(this.watchdogHandle);
+      this.watchdogHandle = null;
     }
     this.logger.info('Scheduler stopped');
   }

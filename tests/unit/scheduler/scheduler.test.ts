@@ -134,6 +134,35 @@ describe('Scheduler', () => {
 
       expect(pool.query).not.toHaveBeenCalled();
     });
+
+    it('starts a watchdog interval that calls recoverStuckJobs', async () => {
+      pool.query.mockResolvedValue({ rows: [] }); // for both pollDueJobs and recoverStuckJobs
+
+      // Spy on recoverStuckJobs
+      const recoverSpy = vi.spyOn(scheduler, 'recoverStuckJobs').mockResolvedValue();
+
+      scheduler.start();
+
+      // Advance by one watchdog interval
+      await vi.advanceTimersByTimeAsync(WATCHDOG_INTERVAL_MS);
+
+      expect(recoverSpy).toHaveBeenCalled();
+    });
+
+    it('stop clears the watchdog interval', async () => {
+      pool.query.mockResolvedValue({ rows: [] });
+
+      const recoverSpy = vi.spyOn(scheduler, 'recoverStuckJobs').mockResolvedValue();
+
+      scheduler.start();
+      scheduler.stop();
+
+      recoverSpy.mockClear();
+
+      await vi.advanceTimersByTimeAsync(WATCHDOG_INTERVAL_MS * 3);
+
+      expect(recoverSpy).not.toHaveBeenCalled();
+    });
   });
 
   // -- pollDueJobs --
