@@ -14,6 +14,15 @@ bus event types) are noted explicitly even in the `0.x` range.
 ## [Unreleased]
 
 ### Added
+- **Development setup guide** (`docs/dev/setup.md`): tiered setup guide for contributors covering minimum (Anthropic + Postgres), recommended (+ Nylas + OpenAI), and full (+ Signal + Tavily) configurations. Includes Nylas account walkthrough, signal-cli registration steps, and a troubleshooting section.
+- **Signal env vars** added to `.env.example` as commented-out template entries.
+
+### Changed
+- **README Quick Start** condensed to a teaser linking to the new setup guide.
+- **README Web App section** (formerly "Knowledge Graph Web Explorer") updated with broader language reflecting the full web app.
+- **README status table** updated: "Voice/telephony channel" → "Additional channels: Voice, Slack, Telegram".
+- **README Deployment section** removed.
+
 - **Signal channel** (spec 04): inbound and outbound messaging via signal-cli daemon socket.
   Includes `SignalRpcClient` (JSON-RPC 2.0 over Unix socket with exponential-backoff reconnect
   and deduplication), `SignalAdapter` (contact auto-creation, prompt injection sanitization,
