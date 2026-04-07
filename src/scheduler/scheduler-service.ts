@@ -499,7 +499,7 @@ export class SchedulerService {
   async recoverStuckJob(
     jobId: string,
     timeoutSeconds: number,
-  ): Promise<{ suspended: boolean; consecutiveFailures: number }> {
+  ): Promise<{ noOp: boolean; suspended: boolean; consecutiveFailures: number }> {
     const { rows } = await this.pool.query(
       `SELECT id, cron_expr, run_at, consecutive_failures, timezone
          FROM scheduled_jobs WHERE id = $1`,
@@ -548,7 +548,7 @@ export class SchedulerService {
     if (result.rowCount === 0) {
       // The job completed normally between our SELECT and this UPDATE — no recovery needed.
       this.logger.debug({ jobId }, 'recoverStuckJob: job completed before recovery ran — no-op');
-      return { suspended: false, consecutiveFailures: 0 };
+      return { noOp: true, suspended: false, consecutiveFailures: 0 };
     }
 
     if (shouldSuspend) {
@@ -557,7 +557,7 @@ export class SchedulerService {
       this.logger.warn({ jobId, consecutiveFailures: newFailures, timeoutMinutes }, 'Stuck job recovered — reset to pending');
     }
 
-    return { suspended: shouldSuspend, consecutiveFailures: newFailures };
+    return { noOp: false, suspended: shouldSuspend, consecutiveFailures: newFailures };
   }
 }
 

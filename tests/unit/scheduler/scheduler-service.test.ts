@@ -466,6 +466,47 @@ describe('SchedulerService', () => {
       expect(updateParams).toContain('suspended');
     });
 
+    it('returns noOp:true when job completed between SELECT and UPDATE (race condition)', async () => {
+      pool.query
+        .mockResolvedValueOnce({
+          rows: [{
+            id: 'job-race',
+            cron_expr: '0 * * * *',
+            run_at: null,
+            consecutive_failures: 0,
+            timezone: 'UTC',
+          }],
+        })
+        // UPDATE affects 0 rows — job completed cleanly before recovery ran
+        .mockResolvedValueOnce({ rowCount: 0, rows: [] });
+
+      const result = await svc.recoverStuckJob('job-race', 600);
+
+      expect(result.noOp).toBe(true);
+      expect(result.suspended).toBe(false);
+      expect(result.consecutiveFailures).toBe(0);
+    });
+
+    it('returns noOp:false when recovery UPDATE succeeds', async () => {
+      pool.query
+        .mockResolvedValueOnce({
+          rows: [{
+            id: 'job-ok',
+            cron_expr: '0 * * * *',
+            run_at: null,
+            consecutive_failures: 0,
+            timezone: 'UTC',
+          }],
+        })
+        .mockResolvedValueOnce({ rowCount: 1, rows: [] });
+
+      const result = await svc.recoverStuckJob('job-ok', 600);
+
+      expect(result.noOp).toBe(false);
+      expect(result.suspended).toBe(false);
+      expect(result.consecutiveFailures).toBe(1);
+    });
+
     it('throws when job not found', async () => {
       pool.query.mockResolvedValueOnce({ rows: [] });
       await expect(svc.recoverStuckJob('missing-job', 600)).rejects.toThrow('Job not found');

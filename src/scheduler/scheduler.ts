@@ -382,7 +382,10 @@ export class Scheduler {
       RECOVERY_TIMEOUT_CAP_SECONDS,
     ]);
 
-    if (rows.length === 0) return;
+    if (rows.length === 0) {
+      this.logger.debug('recoverStuckJobs: no stuck jobs found');
+      return;
+    }
 
     this.logger.warn({ count: rows.length }, 'Recovering stuck jobs');
 
@@ -390,27 +393,35 @@ export class Scheduler {
       try {
         const result = await this.schedulerService.recoverStuckJob(row.id, row.timeout_seconds);
 
-        const recoveredEvent = createScheduleRecovered({
-          jobId: row.id,
-          agentId: row.agent_id,
-          runStartedAt: row.run_started_at,
-          timeoutSeconds: row.timeout_seconds,
-          consecutiveFailures: result.consecutiveFailures,
-          suspended: result.suspended,
-        });
-        await this.bus.publish('system', recoveredEvent);
+        if (!result.noOp) {
+          this.logger.warn(
+            {
+              jobId: row.id,
+              agentId: row.agent_id,
+              runStartedAt: row.run_started_at,
+              timeoutSeconds: row.timeout_seconds,
+              consecutiveFailures: result.consecutiveFailures,
+              suspended: result.suspended,
+            },
+            'Stuck job recovered',
+          );
 
-        this.logger.warn(
-          {
-            jobId: row.id,
-            agentId: row.agent_id,
-            runStartedAt: row.run_started_at,
-            timeoutSeconds: row.timeout_seconds,
-            consecutiveFailures: result.consecutiveFailures,
-            suspended: result.suspended,
-          },
-          'Stuck job recovered',
-        );
+          // Publish audit event separately — failure here is non-fatal since the DB
+          // mutation already committed. Log at error but do not treat as a recovery failure.
+          try {
+            const recoveredEvent = createScheduleRecovered({
+              jobId: row.id,
+              agentId: row.agent_id,
+              runStartedAt: row.run_started_at,
+              timeoutSeconds: row.timeout_seconds,
+              consecutiveFailures: result.consecutiveFailures,
+              suspended: result.suspended,
+            });
+            await this.bus.publish('system', recoveredEvent);
+          } catch (publishErr) {
+            this.logger.error({ publishErr, jobId: row.id }, 'Failed to publish schedule.recovered event — job was recovered in DB');
+          }
+        }
       } catch (err) {
         this.logger.error({ err, jobId: row.id }, 'Failed to recover stuck job — will retry on next watchdog tick');
       }

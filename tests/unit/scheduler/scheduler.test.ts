@@ -460,6 +460,7 @@ describe('Scheduler', () => {
       };
       pool.query.mockResolvedValueOnce({ rows: [stuckRow] });
       schedulerService.recoverStuckJob.mockResolvedValueOnce({
+        noOp: false,
         suspended: false,
         consecutiveFailures: 1,
       });
@@ -483,6 +484,7 @@ describe('Scheduler', () => {
       };
       pool.query.mockResolvedValueOnce({ rows: [stuckRow] });
       schedulerService.recoverStuckJob.mockResolvedValueOnce({
+        noOp: false,
         suspended: true,
         consecutiveFailures: 3,
       });
@@ -495,6 +497,30 @@ describe('Scheduler', () => {
       expect(event.payload.suspended).toBe(true);
     });
 
+    it('skips publish and warn log when recoverStuckJob returns noOp:true (race condition)', async () => {
+      const stuckRow = {
+        id: 'job-race',
+        agent_id: 'agent-1',
+        run_started_at: new Date(Date.now() - 3600_000).toISOString(),
+        timeout_seconds: 900,
+      };
+      pool.query.mockResolvedValueOnce({ rows: [stuckRow] });
+      schedulerService.recoverStuckJob.mockResolvedValueOnce({
+        noOp: true,
+        suspended: false,
+        consecutiveFailures: 0,
+      });
+
+      await scheduler.recoverStuckJobs();
+
+      // No bus publish and no warn log — the job completed cleanly before recovery ran
+      expect(bus.publish).not.toHaveBeenCalled();
+      expect(logger.warn).not.toHaveBeenCalledWith(
+        expect.objectContaining({ jobId: 'job-race' }),
+        'Stuck job recovered',
+      );
+    });
+
     it('continues recovering other jobs if one recovery fails', async () => {
       const rows = [
         { id: 'job-a', agent_id: 'agent-1', run_started_at: new Date().toISOString(), timeout_seconds: 600 },
@@ -503,7 +529,7 @@ describe('Scheduler', () => {
       pool.query.mockResolvedValueOnce({ rows });
       schedulerService.recoverStuckJob
         .mockRejectedValueOnce(new Error('db error on job-a'))
-        .mockResolvedValueOnce({ suspended: false, consecutiveFailures: 1 });
+        .mockResolvedValueOnce({ noOp: false, suspended: false, consecutiveFailures: 1 });
 
       await scheduler.recoverStuckJobs();
 
