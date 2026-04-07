@@ -13,6 +13,14 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Added
+- **Signal channel** (spec 04): inbound and outbound messaging via signal-cli daemon socket.
+  Includes `SignalRpcClient` (JSON-RPC 2.0 over Unix socket with exponential-backoff reconnect
+  and deduplication), `SignalAdapter` (contact auto-creation, prompt injection sanitization,
+  hold-for-approval unknown sender policy via channel-trust.yaml), and 1:1 read receipts for
+  confirmed senders. `OutboundGateway` extended to support Signal sends alongside email.
+  Enable by setting `SIGNAL_SOCKET_PATH` and `SIGNAL_PHONE_NUMBER` env vars (ADR-013).
+
 ---
 
 ## [0.11.0] — 2026-04-07

@@ -75,10 +75,13 @@ interface ContactServiceBackend {
 
 // -- Auto-verification sources --
 // Per spec: ceo_stated, email_participant, crm_import, calendar_attendee are auto-verified.
+// signal_participant is also auto-verified — Signal's phone-number identity is stronger than
+// email (no header spoofing), so we trust the source number at the same level as email_participant.
 // Only self_claimed starts unverified.
 const AUTO_VERIFIED_SOURCES: ReadonlySet<IdentitySource> = new Set([
   'ceo_stated',
   'email_participant',
+  'signal_participant',
   'crm_import',
   'calendar_attendee',
 ]);

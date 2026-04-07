@@ -1,6 +1,12 @@
 channels:
   cli:
     enabled: true
+  # Signal channel is enabled by setting SIGNAL_SOCKET_PATH + SIGNAL_PHONE_NUMBER env vars.
+  # enabled: false here is the default — the adapter won't start if the env vars are absent.
+  # Trust level and unknown sender policy are in config/channel-trust.yaml (trust: high,
+  # unknown_sender: hold_and_notify) — those don't change regardless of this flag.
+  signal:
+    enabled: false
 
 browser:
   # How long a browser session stays alive after its last action (ms).
