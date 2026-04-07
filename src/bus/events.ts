@@ -191,6 +191,19 @@ interface ScheduleSuspendedPayload {
   consecutiveFailures: number;
 }
 
+interface ScheduleRecoveredPayload {
+  jobId: string;
+  agentId: string;
+  /** ISO timestamp when the job entered 'running' state. Null if pre-migration. */
+  runStartedAt: string | null;
+  /** Computed timeout threshold that was exceeded, in seconds. */
+  timeoutSeconds: number;
+  /** Value of consecutive_failures after incrementing for this recovery. */
+  consecutiveFailures: number;
+  /** True if the job was suspended rather than reset to pending. */
+  suspended: boolean;
+}
+
 // ConfigChangePayload — emitted by the System layer whenever a config object changes.
 // Currently only used by OfficeIdentityService (config_type: 'office_identity').
 // The diff_summary is a human-readable description of what changed; it is not machine-parseable.
@@ -332,6 +345,12 @@ export interface ScheduleSuspendedEvent extends BaseEvent {
   payload: ScheduleSuspendedPayload;
 }
 
+export interface ScheduleRecoveredEvent extends BaseEvent {
+  type: 'schedule.recovered';
+  sourceLayer: 'system';
+  payload: ScheduleRecoveredPayload;
+}
+
 export interface ConfigChangeEvent extends BaseEvent {
   type: 'config.change';
   sourceLayer: 'system';
@@ -357,7 +376,8 @@ export type BusEvent =
   | OutboundBlockedEvent  // Outbound content filter: message blocked before delivery (#38)
   | ScheduleCreatedEvent   // Scheduler: job created
   | ScheduleFiredEvent     // Scheduler: job fired
-  | ScheduleSuspendedEvent  // Scheduler: job auto-suspended
+  | ScheduleSuspendedEvent   // Scheduler: job auto-suspended
+  | ScheduleRecoveredEvent   // Scheduler: stuck job auto-recovered
   | ConfigChangeEvent;      // System: config object changed (office identity, etc.)
 
 // Convenience alias for use in handler maps / switch statements.
@@ -639,6 +659,20 @@ export function createScheduleSuspended(
     id: randomUUID(),
     timestamp: new Date(),
     type: 'schedule.suspended',
+    sourceLayer: 'system',
+    payload: rest,
+    parentEventId,
+  };
+}
+
+export function createScheduleRecovered(
+  payload: ScheduleRecoveredPayload & { parentEventId?: string },
+): ScheduleRecoveredEvent {
+  const { parentEventId, ...rest } = payload;
+  return {
+    id: randomUUID(),
+    timestamp: new Date(),
+    type: 'schedule.recovered',
     sourceLayer: 'system',
     payload: rest,
     parentEventId,
