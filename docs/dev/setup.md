@@ -46,8 +46,8 @@ Open `.env` and fill in these values. The rest can stay as-is for now.
 
 ```env
 DB_USER=curia
-DB_PASSWORD=curia
-DATABASE_URL=postgres://curia:curia@localhost:5432/curia
+DB_PASSWORD=curia_dev
+DATABASE_URL=postgres://curia:curia_dev@localhost:5432/curia
 ```
 
 **Anthropic** — your API key from [console.anthropic.com](https://console.anthropic.com). Powers all agents.
