@@ -16,7 +16,7 @@ The Bullpen sits between ephemeral working memory (Tier 1) and the knowledge gra
 
 ## Architecture
 
-```
+```text
 agent calls bullpen skill
   → skill writes to DB (BullpenService)
   → skill publishes agent.discuss event (bus, agent layer)
@@ -67,7 +67,7 @@ CREATE INDEX ON bullpen_messages (thread_id, created_at);
 
 **Notes:**
 - `last_message_at` is maintained by `BullpenService.postMessage` in the same UPDATE that increments `message_count`, avoiding an expensive subquery in the pending-thread lookup.
-- `mentioned_agent_ids` drives task creation in BullpenDispatcher. An empty array means the message is a broadcast — no agent tasks are triggered.
+- `mentioned_agent_ids` controls FYI vs. reply-expected semantics in `BullpenDispatcher`. The dispatcher fans out `agent.task` events to **all non-sender participants** regardless of this field. Agents listed in `mentioned_agent_ids` receive a task marked with reply-expected intent; all other participants receive an FYI-only task. An empty array is a broadcast: every non-sender participant gets an FYI task, but no specific reply is expected from any of them.
 - `sender_type` is stored as a column (not inferred) to make the audit trail self-describing and to support future user participation without schema changes.
 
 ---
@@ -342,7 +342,7 @@ if (this.config.bullpenService) {
 
 ### `formatBullpenContext` output
 
-```
+```text
 [Bullpen — 2 active threads]
 
 Thread "Q2 venue planning" (thread_id: abc-123, 8 total messages — showing last 5):

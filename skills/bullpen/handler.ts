@@ -50,14 +50,21 @@ export class BullpenHandler implements SkillHandler {
             return { success: false, error: "Missing required field: 'content'" };
           }
 
+          // Trim and reject blank/whitespace-only participant IDs
+          const cleanParticipants = (participants as string[]).map(p => p.trim()).filter(p => p.length > 0);
+          if (cleanParticipants.length === 0) {
+            return { success: false, error: "Field 'participants' must contain at least one non-empty agent ID" };
+          }
+
           const rawMentioned = input['mentioned_agent_ids'];
-          // Default: mention all participants when not specified (caller typically wants replies when opening a thread)
+          // Trim/filter mentions, then constrain to thread participants to prevent out-of-thread fan-out.
+          // Default: mention all participants when not specified (caller wants replies when opening a thread).
           const mentionedAgentIds: string[] = Array.isArray(rawMentioned) && rawMentioned.every(m => typeof m === 'string')
-            ? rawMentioned as string[]
-            : participants as string[];
+            ? (rawMentioned as string[]).map(m => m.trim()).filter(m => m.length > 0 && cleanParticipants.includes(m))
+            : cleanParticipants;
 
           const { thread, message } = await ctx.bullpenService.openThread(
-            topic, ctx.agentId, participants as string[], content, mentionedAgentIds,
+            topic, ctx.agentId, cleanParticipants, content, mentionedAgentIds,
           );
 
           // Publish is best-effort — thread is already persisted. If publish fails,
@@ -94,16 +101,18 @@ export class BullpenHandler implements SkillHandler {
             return { success: false, error: "Missing required field: 'content'" };
           }
 
-          const rawMentioned = input['mentioned_agent_ids'];
-          // Default: empty (broadcast reply — no specific response expected)
-          const mentionedAgentIds: string[] = Array.isArray(rawMentioned) && rawMentioned.every(m => typeof m === 'string')
-            ? rawMentioned as string[]
-            : [];
-
-          // Fetch thread before posting to get participants for the event payload.
-          // postMessage will also validate the thread exists, but we need participants here.
+          // Fetch thread before posting to get participants for the event payload and to
+          // constrain mentions to actual thread members. postMessage validates the thread too,
+          // but we need participants here for mention filtering.
           const existing = await ctx.bullpenService.getThread(threadId);
           if (!existing) return { success: false, error: `Thread ${threadId} not found` };
+
+          const rawMentioned = input['mentioned_agent_ids'];
+          // Trim/filter mentions, then constrain to actual thread participants to prevent out-of-thread fan-out.
+          // Default: empty (broadcast reply — no specific response expected).
+          const mentionedAgentIds: string[] = Array.isArray(rawMentioned) && rawMentioned.every(m => typeof m === 'string')
+            ? (rawMentioned as string[]).map(m => m.trim()).filter(m => m.length > 0 && existing.thread.participants.includes(m))
+            : [];
 
           const message = await ctx.bullpenService.postMessage(threadId, ctx.agentId, content, mentionedAgentIds);
 

@@ -135,6 +135,7 @@ class PostgresBullpenBackend implements BullpenBackend {
       );
       await client.query('COMMIT');
     } catch (err) {
+      this.logger.error({ err, threadId: thread.id }, 'Bullpen openThread transaction failed');
       await client.query('ROLLBACK');
       throw err;
     } finally {
@@ -168,6 +169,7 @@ class PostgresBullpenBackend implements BullpenBackend {
       }
       await client.query('COMMIT');
     } catch (err) {
+      this.logger.error({ err, threadId }, 'Bullpen postMessage transaction failed');
       await client.query('ROLLBACK');
       throw err;
     } finally {
