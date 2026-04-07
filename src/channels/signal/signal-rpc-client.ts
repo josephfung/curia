@@ -27,6 +27,7 @@
 
 import { EventEmitter } from 'node:events';
 import * as net from 'node:net';
+import { StringDecoder } from 'node:string_decoder';
 import type { Logger } from '../../logger.js';
 import type {
   SignalSendParams,
@@ -60,6 +61,11 @@ export class SignalRpcClient extends EventEmitter {
 
   private socket: net.Socket | null = null;
   private buffer = '';
+  // StringDecoder handles multibyte characters (e.g. emoji, CJK) that may be
+  // split across TCP/socket chunk boundaries. chunk.toString('utf8') would corrupt
+  // a character whose bytes span two chunks; StringDecoder buffers the incomplete
+  // bytes internally and emits only complete characters.
+  private readonly decoder = new StringDecoder('utf8');
   private requestCounter = 0;
   // Map of pending request IDs → { resolve, reject, timeoutHandle }
   private readonly pending = new Map<
@@ -286,7 +292,7 @@ export class SignalRpcClient extends EventEmitter {
    * signal-cli's newline-delimited JSON means each '\n' marks the end of one message.
    */
   private handleData(chunk: Buffer): void {
-    this.buffer += chunk.toString('utf8');
+    this.buffer += this.decoder.write(chunk);
     const lines = this.buffer.split('\n');
     // The last element is either empty (if chunk ended with '\n') or a partial line.
     // Keep it in the buffer for the next chunk.
@@ -306,14 +312,16 @@ export class SignalRpcClient extends EventEmitter {
       // Guard against valid JSON that isn't an object (e.g. a bare string or number).
       // signal-cli should never send these, but be defensive — 'in' throws on non-objects.
       if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
-        this.log.warn({ line: line.slice(0, 200) }, 'Signal RPC: received unexpected non-object JSON line');
+        // Log the line length only — the raw content may contain message text (PII).
+        this.log.warn({ lineLength: line.length }, 'Signal RPC: received unexpected non-object JSON line');
         return;
       }
       parsed = raw as JsonRpcMessage;
     } catch (err) {
       // Malformed JSON from signal-cli — log and skip. This could indicate a
       // protocol version mismatch or a partial write that wasn't framed correctly.
-      this.log.warn({ err, line: line.slice(0, 200) }, 'Signal RPC: received malformed JSON line');
+      // Log the line length only — the raw content may contain message text (PII).
+      this.log.warn({ err, lineLength: line.length }, 'Signal RPC: received malformed JSON line');
       return;
     }
 

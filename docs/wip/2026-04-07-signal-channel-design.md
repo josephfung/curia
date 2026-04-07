@@ -40,7 +40,7 @@ cross-host or unusual Docker networking, but not needed for the standard deploym
 
 ### Component ownership
 
-```
+```text
 signal-cli (separate service, Java)
   └─ Unix socket /run/signal-cli/socket
        └─ SignalRpcClient (Node.js, owns connection + reconnect)
@@ -108,10 +108,10 @@ JSON-RPC 2.0 client over a Unix/TCP socket. Responsibilities:
 Key interface:
 ```typescript
 class SignalRpcClient extends EventEmitter {
-  async connect(): Promise<void>
-  async disconnect(): Promise<void>
-  async send(params: SignalSendParams): Promise<void>
-  async sendReadReceipt(params: SignalReadReceiptParams): Promise<void>
+  connect(): void                                            // fire-and-forget, starts reconnect loop
+  disconnect(): Promise<void>
+  send(params: SignalSendParams): Promise<void>
+  sendReadReceipt(params: SignalReadReceiptParams): Promise<void>
 }
 ```
 

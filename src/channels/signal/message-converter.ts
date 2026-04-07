@@ -89,6 +89,12 @@ export function convertSignalEnvelope(
   // 1:1:   signal:<E.164 number>         — the sender's phone number
   // The `group=` prefix prevents collisions between a group ID that happens to
   // look like a phone number and an actual 1:1 conversation.
+  //
+  // Guard: if groupInfo is present but groupId is empty, we cannot form a valid
+  // conversation ID and must skip the message. This should never happen in practice
+  // (signal-cli always sets groupId for group messages), but be defensive.
+  if (groupInfo && !groupInfo.groupId) return null;
+
   const isGroup = !!groupInfo;
   const conversationId = isGroup
     ? `signal:group=${groupInfo.groupId}`

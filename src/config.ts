@@ -140,7 +140,9 @@ export function loadConfig(): Config {
     nylasPollingIntervalMs,
     nylasSelfEmail: process.env.NYLAS_SELF_EMAIL ?? '',
     ceoPrimaryEmail: process.env.CEO_PRIMARY_EMAIL?.trim().toLowerCase() || undefined,
-    signalSocketPath: process.env.SIGNAL_SOCKET_PATH || undefined,
-    signalPhoneNumber: process.env.SIGNAL_PHONE_NUMBER || undefined,
+    // .trim() prevents a whitespace-only value (e.g. "  ") from activating the
+    // Signal adapter with a bogus socket path or phone number.
+    signalSocketPath: process.env.SIGNAL_SOCKET_PATH?.trim() || undefined,
+    signalPhoneNumber: process.env.SIGNAL_PHONE_NUMBER?.trim() || undefined,
   };
 }

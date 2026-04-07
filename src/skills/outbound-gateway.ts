@@ -407,8 +407,9 @@ export class OutboundGateway {
     if (request.recipient && request.groupId) {
       // Both set is a caller bug — signal-cli would send to both or error unpredictably.
       // Fail fast with a clear error rather than silently mis-routing.
+      // Don't log the actual values — phone numbers and group IDs are PII.
       this.log.warn(
-        { channel: 'signal', recipient: request.recipient, groupId: request.groupId },
+        { channel: 'signal' },
         'outbound-gateway: Signal send has both recipient and groupId set — exactly one required',
       );
       return { success: false, blockedReason: 'Signal send must specify exactly one of recipient or groupId, not both' };
@@ -423,16 +424,18 @@ export class OutboundGateway {
         message: request.message,
       });
 
+      // Log destination type (1:1 vs group) but not the actual number/ID — PII.
       this.log.info(
-        { channel: 'signal', recipient: request.recipient, groupId: request.groupId },
+        { channel: 'signal', destinationType: request.groupId ? 'group' : '1:1' },
         'outbound-gateway: Signal message sent successfully',
       );
 
       return { success: true };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
+      // Log destination type only — phone numbers and group IDs are PII.
       this.log.error(
-        { err, channel: 'signal', recipient: request.recipient, groupId: request.groupId },
+        { err, channel: 'signal', destinationType: request.groupId ? 'group' : '1:1' },
         'outbound-gateway: signal-cli send failed',
       );
       return { success: false, blockedReason: `Send failed: ${message}` };

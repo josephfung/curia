@@ -491,11 +491,11 @@ New channel = minor bump per versioning table.
 - [ ] **Step 1: Run full test suite and fix any failures**
 
 ```bash
-npm --prefix /Users/josephfung/Projects/office-of-the-ceo/worktrees/curia-signal-channel test
+npm test
 ```
 
 - [ ] **Step 2: Run typecheck**
 
 ```bash
-npm --prefix /Users/josephfung/Projects/office-of-the-ceo/worktrees/curia-signal-channel run typecheck
+npm run typecheck
 ```
