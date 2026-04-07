@@ -180,12 +180,15 @@ export class ContactService {
       updatedAt: now,
     };
 
-    // TODO: If this throws after we auto-created a KG node above, that node is now
-    // orphaned — it exists in the knowledge graph with no corresponding contact row.
-    // Clean up the orphaned KG node once EntityMemory exposes a delete method.
-    // For now it won't cause functional issues (just a person node with no contact link),
-    // but should be cleaned up when entity deletion is added.
-    await this.backend.createContact(contact);
+    try {
+      await this.backend.createContact(contact);
+    } catch (err) {
+      // TODO: The KG node auto-created above is now orphaned — it exists in the knowledge
+      // graph with no corresponding contact row. Clean up once EntityMemory exposes a
+      // delete method. For now the orphan is harmless (person node with no contact link).
+      this.logger?.error({ err, contactId: contact.id }, 'Contact creation failed');
+      throw err;
+    }
 
     // Fire-and-forget dedup check. Runs asynchronously — never blocks the create.
     // A failure here is logged and swallowed; it must not fail the contact creation.
