@@ -13,6 +13,9 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Security
+- **`.env.example` credential placeholders** — replaced `curia_dev` database credentials with obviously-dummy `your-db-user` / `your-db-password` placeholders to avoid false-positive secrets scanner alerts.
+
 ### Fixed
 - **Scheduled Jobs page auth** — `/api/jobs` routes now use session-cookie auth (same as KG/identity routes) instead of the global Bearer token hook, so the dashboard can load the page without an `Unauthorized` error.
 
