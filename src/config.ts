@@ -1,3 +1,7 @@
+import yaml from 'js-yaml';
+import { readFileSync } from 'node:fs';
+import * as path from 'node:path';
+
 export interface Config {
   databaseUrl: string;
   anthropicApiKey: string | undefined;
@@ -20,6 +24,52 @@ export interface Config {
   // Without this, the first inbound email from the CEO creates them as provisional,
   // causing their messages to be held.
   ceoPrimaryEmail: string | undefined;
+}
+
+/**
+ * Typed shape for config/default.yaml.
+ *
+ * All fields are optional — the file may be partially populated or entirely
+ * absent in test/CI environments. Callers must supply their own defaults.
+ *
+ * NOTE: Several fields in this interface are not yet wired up in index.ts
+ * (browser, channels, agents). Those values are read with hardcoded defaults
+ * instead of from the YAML. This is tracked in:
+ * https://github.com/josephfung/curia/issues/204
+ */
+export interface YamlConfig {
+  channels?: {
+    cli?: { enabled?: boolean };
+  };
+  browser?: {
+    sessionTtlMs?: number;
+    sweepIntervalMs?: number;
+  };
+  agents?: {
+    coordinator?: { config_path?: string };
+  };
+  skillOutput?: {
+    /** Max character length for skill results before truncation. Default: 200_000. */
+    maxLength?: number;
+  };
+}
+
+/**
+ * Load and parse config/default.yaml.
+ *
+ * @param configDir - Absolute path to the directory containing default.yaml.
+ *   Pass `path.resolve(import.meta.dirname, '../config')` from index.ts.
+ * @returns Parsed YAML config, or an empty object if the file is missing.
+ */
+export function loadYamlConfig(configDir: string): YamlConfig {
+  const filePath = path.join(configDir, 'default.yaml');
+  try {
+    return (yaml.load(readFileSync(filePath, 'utf-8')) as YamlConfig) ?? {};
+  } catch {
+    // Missing or unreadable file — degrade gracefully. All callers must use
+    // their own defaults. This allows test environments to run without the file.
+    return {};
+  }
 }
 
 export function loadConfig(): Config {

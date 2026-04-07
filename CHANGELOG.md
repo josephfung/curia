@@ -14,6 +14,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 ## [Unreleased]
 
 ### Security
+- **Tool output sanitization** — execution layer now enforces a configurable character limit on all skill results (default 200k chars, set via `skillOutput.maxLength` in `config/default.yaml`), appending `[truncated — output exceeded limit]` when exceeded. All error paths in `ExecutionLayer.invoke()` now sanitize the error message and wrap it in `<skill_error>` tags before publishing to the bus, preventing error content from external sources from being misinterpreted as system instructions (closes #191). Cleanup: `loadYamlConfig()` added to `src/config.ts` with a typed `YamlConfig` interface so `default.yaml` is properly parsed rather than accessed via unsafe casts; browser config cast tracked as cleanup in #204.
 - **Dummy credential placeholders** — replaced `curia_dev` in `.env.example` and `docker-compose.yml` defaults with obviously-dummy `your-db-user` / `your-db-password` values to eliminate false-positive secrets scanner alerts (closes #50).
 - **Elevated-skill gate: remove CLI channel bypass** — the `caller.channel !== 'cli'` branch in `src/skills/execution.ts` was redundant (the contact resolver already maps CLI callers to `role: 'ceo'`) and created latent attack surface: any future code path that published an `inbound.message` event with `channelId: 'cli'` and a non-CEO sender would have passed the gate. Gate now relies solely on `caller.role`.
 

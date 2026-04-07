@@ -130,7 +130,7 @@ describe('classifyError', () => {
     const longMessage = 'x'.repeat(500);
     const err = new Error(longMessage);
     const result = classifyError(err, 'test');
-    expect(result.message.length).toBeLessThanOrEqual(411); // 400 + '[truncated]'
+    expect(result.message.length).toBeLessThanOrEqual(400 + '[truncated — output exceeded limit]'.length);
   });
 
   it('strips XML tags from error messages', () => {
