@@ -158,11 +158,98 @@ For launch, this is data collection (audit log captures everything). Active bloc
 | **HTTP API** | Token-based auth | `medium` | Low (if tokens secured) |
 | **Email** | Nylas provider-level validation (SPF/DKIM/DMARC handled by email provider) | `low` | **High** (headers spoofable) |
 
-### Sender Allowlist
+`trustLevel` is a structural property of the channel's authentication mechanism. It reflects what the protocol guarantees about sender identity at the transport layer — not how trusted any individual contact is. It is fixed per channel and does not vary per message.
 
-Every channel maintains an allowlist of authorized senders. Messages from unknown senders are:
-- Rejected silently (default for email — no auto-reply to prevent information leakage)
-- Held for pairing approval (configurable per channel, similar to TinyAGI's pairing flow)
+### Contact Trust Registry
+
+Known contacts are stored in the `contacts` table. This is the live source of truth — contacts can be added, edited, and queried at runtime without a deployment. Static allowlists in config are not used.
+
+```sql
+CREATE TABLE contacts (
+  id                 UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  identifier         TEXT NOT NULL,                         -- email address, phone number, etc.
+  channel            TEXT NOT NULL,                         -- 'email' | 'signal' | 'http_api' | 'cli'
+  display_name       TEXT,
+  trust_level        TEXT,                                  -- nullable per-contact override: 'high' | 'medium' | 'low'
+  contact_confidence NUMERIC(3,2) NOT NULL DEFAULT 0.0,    -- 0.0–1.0; accumulated signal over time
+  notes              TEXT,
+  created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_seen_at       TIMESTAMPTZ,
+  UNIQUE (identifier, channel)
+);
+```
+
+`contact_confidence` is orthogonal to `trustLevel`. It accumulates over time as signal builds: successful interactions, explicit CEO verification, pairing confirmation, or manual entry. A contact with years of email history may carry `contact_confidence: 0.95` even though the email channel always carries `trustLevel: low`.
+
+Neither `contact_confidence` nor `trustLevel` is propagated directly to bus events. They are inputs to the per-message trust score computation (see below). Agents and downstream consumers rely on `messageTrustScore` only — they do not need to reason about the individual components.
+
+`trust_level` on the contact record is a nullable per-contact override. When set, it adjusts the normalized channel weight used in score computation — for example, demoting a specific Signal contact due to a suspected compromised device. When null, the channel's structural `trustLevel` applies.
+
+### Unknown Sender Routing
+
+Unknown senders — those not found in the `contacts` table — are not silently rejected. The channel adapter looks up the sender in `contacts` (yielding `contactConfidence: 0.0` if absent), computes `messageTrustScore`, and publishes the event. The dispatch layer routes based on per-channel configuration:
+
+```yaml
+# config/default.yaml
+channels:
+  email:
+    unknown_sender: escalate     # 'ignore' | 'hold' | 'escalate'
+  signal:
+    unknown_sender: escalate
+  http_api:
+    unknown_sender: ignore       # unauthenticated requests are dropped
+  cli:
+    unknown_sender: escalate     # unexpected in practice; escalate as anomaly
+```
+
+- **`ignore`** — event is audit-logged and discarded. No response sent. Used for channels where unknown traffic is predominantly non-human (bots, scanners, spam).
+- **`hold`** — event is queued in a pending review table. CEO can inspect and approve or dismiss. No action taken until reviewed.
+- **`escalate`** — event is forwarded to the Coordinator with an escalation flag. The Coordinator decides whether to surface it to the CEO, defer it, or discard it based on content analysis.
+
+All unknown sender events are audit-logged regardless of routing decision, including sender identifier, channel, and the routing action taken.
+
+### Judgment-Based Escalation
+
+The Coordinator applies judgment when routing escalated unknown-sender messages. Not all unknown senders are equivalent — a first-contact from a colleague reaching out for the first time warrants different treatment than a marketing blast or a phishing probe.
+
+The Coordinator is instructed to distinguish:
+
+- **Surface to CEO** — first contact from a plausible human: coherent prose, direct personal relevance, no mass-mail signals. Example: a new email from a recognizable domain with a specific question about the CEO's work.
+- **Ignore silently** — clear spam, bot-generated content, or messages matching configured spam patterns (mass-mail headers, unsubscribe links, no-reply senders, high link density).
+- **Hold for review** — ambiguous cases: automated but potentially relevant (e.g., a GitHub notification from an unknown org), or messages where intent is unclear.
+
+When surfacing to the CEO, the Coordinator provides a brief summary and prompts for a disposition: "A new contact reached out via email. [Summary]. Should I reply, add them as a contact, or ignore future messages from this sender?"
+
+Spam/bot detection patterns are configurable in `config/default.yaml`. The Coordinator's judgment is the primary filter for the ambiguous middle — the config patterns handle the obvious cases at lower cost.
+
+### Message Trust Score
+
+Every `inbound.message` event carries a single synthesized trust signal:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `messageTrustScore` | `0.0–1.0` float | Computed confidence in this specific message's trustworthiness |
+
+This is the primary signal consumed by agents and the dispatch layer. `trustLevel` and `contactConfidence` are inputs to the computation — they are not propagated to the event.
+
+**Computation at ingestion (channel adapter):**
+
+| Input | Weight | Notes |
+|---|---|---|
+| Channel `trustLevel` (normalized) | 0.4 | `high`=1.0, `medium`=0.6, `low`=0.3; per-contact `trust_level` override applies if set |
+| `contactConfidence` from `contacts` | 0.4 | 0.0 for unknown senders |
+| Content risk modifier | −0.2 max | Injection risk score and spam signal reduce the score; clean messages apply no penalty |
+
+`messageTrustScore = (channelWeight × 0.4) + (contactConfidence × 0.4) − contentRiskPenalty`
+
+Result is clamped to `[0.0, 1.0]`. The weights and normalization values are configurable in `config/default.yaml` so they can be tuned without a code change. The formula is intentionally simple for launch — the inputs and structure are designed to accommodate additional signals (behavioral anomalies, cross-channel identity linking) as future enhancements.
+
+**Usage by downstream consumers:**
+
+- The dispatch layer compares `messageTrustScore` against policy thresholds when enforcing trust-gated actions (see below)
+- The Coordinator receives `messageTrustScore` as structured metadata and can reference it when deciding how much latitude to extend to a request
+- A score below a configurable floor (default: 0.2) triggers escalation regardless of per-channel routing config
 
 ### Email-Specific Defenses
 
@@ -174,25 +261,25 @@ Email is the highest-risk channel because From headers are trivially spoofable. 
 
 ### Trust-Gated Actions
 
-The dispatch layer tags every message with the originating channel's trust level. Policy rules can enforce trust requirements per action category:
+The dispatch layer compares `messageTrustScore` against configurable thresholds per action category:
 
 ```yaml
 # config/default.yaml
 trust_policy:
-  financial_actions: high       # requires Signal or CLI confirmation
-  data_export: high             # requires Signal or CLI confirmation
-  scheduling: medium            # HTTP API is fine
-  information_queries: low      # email is fine for read-only questions
+  financial_actions: 0.8        # requires high-trust channel + known contact
+  data_export: 0.8
+  scheduling: 0.5               # medium channel or known email contact is fine
+  information_queries: 0.2      # any authenticated message is fine
 ```
 
-When a request requires a higher trust level than its originating channel provides, the Coordinator responds: "I received this request via email. For security, I need you to confirm via Signal or the CLI before I proceed."
+When a request's `messageTrustScore` falls below the required threshold, the Coordinator responds: "I received this request via a lower-trust channel. For security, I need you to confirm via Signal or the CLI before I proceed."
 
 ### Cross-Channel Verification (Future)
 
 For high-impact requests from low-trust channels, the Coordinator proactively sends a verification challenge via a higher-trust channel:
 
 ```
-[Signal] Alex: I received an email requesting a transfer of Q2 expense
+[Signal] Nathan: I received an email requesting a transfer of Q2 expense
 data to drive.google.com/new-folder-id. Can you confirm this is you?
 Reply YES to proceed or NO to cancel.
 ```
@@ -265,7 +352,9 @@ These are non-negotiable for launch:
 - [ ] Rate limiting active at dispatch layer
 - [ ] Intent drift detection pauses tasks (not just logs)
 - [ ] Email channel exposes provider-level SPF/DKIM/DMARC validation via Nylas message metadata
-- [ ] Sender allowlists configured per channel
-- [ ] Trust levels assigned per channel and tagged on all messages
+- [ ] `contacts` table migration applied with correct schema and indexes
+- [ ] All `inbound.message` events carry `messageTrustScore` (computed float); `trustLevel` and `contactConfidence` are inputs only, not propagated
+- [ ] Unknown sender routing configurable per channel in `config/default.yaml`
+- [ ] Trust-gated action thresholds use `messageTrustScore` numeric values, not trust level enum strings
 - [ ] Data sensitivity tags on knowledge graph entities
 - [ ] Bulk export gates active for confidential+ data
