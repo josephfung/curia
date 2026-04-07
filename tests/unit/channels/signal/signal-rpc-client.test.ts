@@ -226,4 +226,38 @@ describe('SignalRpcClient', () => {
     // The good message should still arrive
     expect(messages).toHaveLength(1);
   });
+
+  it('resolves with an array of group details on listGroups success', async () => {
+    const groups = [
+      {
+        id: 'grpABC==',
+        name: 'Test Group',
+        members: [{ number: '+14155551234' }],
+        pendingMembers: [],
+        isMember: true,
+      },
+    ];
+
+    const listPromise = client.listGroups();
+
+    await new Promise((r) => setTimeout(r, 20));
+    const req = mock.popRequest();
+    expect(req).toBeDefined();
+    expect(req!.method).toBe('listGroups');
+    expect(req!.params).toMatchObject({ account: '+15555550000' });
+    mock.respondSuccess(req!.id, groups);
+
+    await expect(listPromise).resolves.toEqual(groups);
+  });
+
+  it('rejects if signal-cli returns an error for listGroups', async () => {
+    const listPromise = client.listGroups();
+
+    await new Promise((r) => setTimeout(r, 50));
+    const req = mock.popRequest();
+    expect(req).toBeDefined();
+    mock.respondError(req!.id, -1, 'Not registered');
+
+    await expect(listPromise).rejects.toThrow('Not registered');
+  });
 });
