@@ -13,6 +13,7 @@ import { DEFAULT_ERROR_BUDGET, type AgentError, type ErrorBudget } from '../erro
 import { AutonomyService } from '../autonomy/autonomy-service.js';
 import { formatTimeContextBlock } from '../time/time-context.js';
 import type { OfficeIdentityService } from '../identity/service.js';
+import { formatBullpenContext } from '../memory/bullpen.js';
 
 export interface AgentConfig {
   agentId: string;
@@ -49,6 +50,11 @@ export interface AgentConfig {
     maxTurns: number;
     maxConsecutiveErrors: number;
   };
+  /** Optional Bullpen service for pending thread context injection.
+   *  When provided, pending threads are injected as a system message before every LLM call. */
+  bullpenService?: import('../memory/bullpen.js').BullpenService;
+  /** How far back to look for active threads, in minutes. Default: 60. */
+  bullpenWindowMinutes?: number;
 }
 
 // LLM retry backoff schedule (milliseconds). Three attempts with exponential backoff.
@@ -254,6 +260,28 @@ export class AgentRuntime {
 
       // Insert after system prompt (index 0) but before history
       messages.splice(1, 0, { role: 'system', content: senderInfo });
+    }
+
+    // Inject pending Bullpen threads as a system message so the agent is aware
+    // of active inter-agent discussions. Inserted after sender context (if any),
+    // before conversation history — matching spec context budget priority order.
+    if (this.config.bullpenService) {
+      try {
+        const pendingThreads = await this.config.bullpenService.getPendingThreadsForAgent(
+          agentId,
+          this.config.bullpenWindowMinutes ?? 60,
+        );
+        if (pendingThreads.length > 0) {
+          const bullpenBlock = formatBullpenContext(pendingThreads);
+          // Insert at position 1 (after main system prompt) so it precedes
+          // conversation history but doesn't displace the system prompt itself.
+          messages.splice(1, 0, { role: 'system', content: bullpenBlock });
+        }
+      } catch (err) {
+        // A Bullpen lookup failure must not abort the task. Log and continue —
+        // the agent will proceed without thread context rather than failing entirely.
+        logger.error({ err, agentId }, 'Failed to load Bullpen pending threads — proceeding without thread context');
+      }
     }
 
     logger.info({ agentId, conversationId, historyLength: history.length }, 'Agent processing task');
