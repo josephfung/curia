@@ -530,16 +530,26 @@ export class SchedulerService {
     const timeoutMinutes = Math.round(timeoutSeconds / 60);
     const lastError = `Job timed out after ${timeoutMinutes}m — auto-recovered`;
 
-    await this.pool.query(
+    // Guard against a race where the job completed normally between our SELECT above
+    // and this UPDATE. The AND status = 'running' check ensures we only overwrite jobs
+    // that are still genuinely stuck — if rowCount is 0, the job already finished cleanly.
+    const result = await this.pool.query(
       `UPDATE scheduled_jobs
           SET status = $1,
               consecutive_failures = $2,
               last_error = $3,
               run_started_at = NULL,
               next_run_at = $4
-        WHERE id = $5`,
+        WHERE id = $5
+          AND status = 'running'`,
       [newStatus, newFailures, lastError, nextRunAt, jobId],
     );
+
+    if (result.rowCount === 0) {
+      // The job completed normally between our SELECT and this UPDATE — no recovery needed.
+      this.logger.debug({ jobId }, 'recoverStuckJob: job completed before recovery ran — no-op');
+      return { suspended: false, consecutiveFailures: 0 };
+    }
 
     if (shouldSuspend) {
       this.logger.warn({ jobId, consecutiveFailures: newFailures }, 'Stuck job suspended after consecutive recovery failures');

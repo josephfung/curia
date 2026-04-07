@@ -374,6 +374,7 @@ export class Scheduler {
               )
             )
         )
+      FOR UPDATE SKIP LOCKED
     `;
     const { rows } = await this.pool.query(sql, [
       DEFAULT_EXPECTED_DURATION_SECONDS,
