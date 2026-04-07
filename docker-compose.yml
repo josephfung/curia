@@ -12,8 +12,8 @@ services:
       - ./docker/postgres-init-pgaudit.sql:/docker-entrypoint-initdb.d/10-pgaudit.sql:ro
     environment:
       POSTGRES_DB: curia
-      POSTGRES_USER: ${DB_USER:-curia}
-      POSTGRES_PASSWORD: ${DB_PASSWORD:-curia_dev}
+      POSTGRES_USER: ${DB_USER:-your-db-user}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-your-db-password}
     # Load pgAudit and configure session-level auditing via command args.
     # All pgAudit settings are here (not in the init script) so there's one
     # place to look. The init script only handles CREATE EXTENSION and role setup.
