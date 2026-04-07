@@ -5,6 +5,7 @@ import type { Logger } from '../logger.js';
 import type { ContactResolver } from '../contacts/contact-resolver.js';
 import type { HeldMessageService } from '../contacts/held-messages.js';
 import type { InboundSenderContext, ChannelPolicyConfig } from '../contacts/types.js';
+import type { InboundScanner } from './inbound-scanner.js';
 
 export interface DispatcherConfig {
   bus: EventBus;
@@ -12,6 +13,9 @@ export interface DispatcherConfig {
   contactResolver?: ContactResolver;
   heldMessages?: HeldMessageService;
   channelPolicies?: Record<string, ChannelPolicyConfig>;
+  /** Layer 1 prompt injection scanner. When provided, every inbound message is
+   *  scanned before reaching the Coordinator — tags stripped, risk_score attached. */
+  injectionScanner?: InboundScanner;
 }
 
 /**
@@ -30,6 +34,7 @@ export class Dispatcher {
   private contactResolver?: ContactResolver;
   private heldMessages?: HeldMessageService;
   private channelPolicies?: Record<string, ChannelPolicyConfig>;
+  private injectionScanner?: InboundScanner;
   /**
    * Maps agent.task event ID → channel routing info.
    * When the agent publishes agent.response (with parentEventId pointing to the task),
@@ -46,6 +51,7 @@ export class Dispatcher {
     this.contactResolver = config.contactResolver;
     this.heldMessages = config.heldMessages;
     this.channelPolicies = config.channelPolicies;
+    this.injectionScanner = config.injectionScanner;
   }
 
   register(): void {
@@ -268,13 +274,41 @@ export class Dispatcher {
       }
     }
 
+    // Layer 1 prompt injection scan — runs after policy gates so blocked/held
+    // messages never reach the scanner. Sanitized content replaces raw content
+    // before it reaches the Coordinator's LLM; risk_score is attached as metadata.
+    let taskContent = payload.content;
+    let injectionMetadata: Record<string, unknown> | undefined;
+
+    if (this.injectionScanner) {
+      const scan = this.injectionScanner.scan(payload.content);
+      taskContent = scan.sanitizedContent;
+
+      if (scan.riskScore > 0) {
+        injectionMetadata = {
+          risk_score: scan.riskScore,
+          injection_findings: scan.findings,
+        };
+        this.logger.warn(
+          {
+            channelId: payload.channelId,
+            senderId: payload.senderId,
+            risk_score: scan.riskScore,
+            findings: scan.findings.map(f => f.pattern),
+          },
+          'Inbound message flagged for potential prompt injection',
+        );
+      }
+    }
+
     const taskEvent = createAgentTask({
       agentId: 'coordinator',
       conversationId: payload.conversationId,
       channelId: payload.channelId,
       senderId: payload.senderId,
-      content: payload.content,
+      content: taskContent,
       senderContext,
+      metadata: injectionMetadata,
       parentEventId: event.id,
     });
 

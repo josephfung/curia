@@ -19,3 +19,30 @@ skillOutput:
   # Raise this if you routinely hit the limit on large-payload skills; lower it
   # to reduce LLM context pressure on installations with many concurrent agents.
   maxLength: 200000  # 200k characters (~50k tokens at 4 chars/token)
+
+security:
+  # Layer 1 prompt injection detection (spec §06-audit-and-security.md).
+  #
+  # Additional regex patterns to check beyond the built-in defaults.
+  # Built-in defaults cover: "ignore previous instructions", "ignore all prior
+  # instructions", "you are now", "system:", "[system]", "act as", "disregard your".
+  #
+  # Each entry must have:
+  #   regex  — a valid JavaScript regex string (case-insensitive matching is applied automatically)
+  #   label  — human-readable name that appears in audit log findings
+  #
+  # Example:
+  #   extra_injection_patterns:
+  #     - regex: "forget everything above"
+  #       label: "forget everything above"
+  #     - regex: "new\\s+persona"
+  #       label: "new persona"
+  #
+  # Changes take effect on restart — no code changes required.
+  #
+  # ⚠️  ReDoS warning: avoid patterns with unbounded nested quantifiers such as
+  # (a+)+ or (.+)+ — these can cause catastrophic backtracking on adversarial input
+  # and may freeze the Node.js event loop. Prefer simple bounded patterns (e.g.
+  # "forget\s+everything" rather than "(forget.+)+"). These patterns run in the
+  # main process on every inbound message, so keep them efficient.
+  extra_injection_patterns: []
