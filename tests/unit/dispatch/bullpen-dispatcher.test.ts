@@ -77,6 +77,7 @@ describe('BullpenDispatcher', () => {
       .find(([_l, e]) => (e as { type: string }).type === 'agent.task')?.[1] as { payload: { channelId: string; metadata: Record<string, unknown> } };
     expect(task?.payload.channelId).toBe('bullpen');
     expect(task?.payload.metadata?.taskOrigin).toBe('bullpen');
+    expect(task?.payload.metadata?.threadId).toBe(thread.id);
   });
 
   it('marks mentioned agents with mentioned: true in metadata', async () => {
