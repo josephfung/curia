@@ -45,6 +45,7 @@ export class BullpenDispatcher {
     // Mentioned agents get a reply-expected prompt; others get an FYI.
     const otherParticipants = participants.filter((id) => id !== senderAgentId);
 
+    let dispatched = 0;
     for (const agentId of otherParticipants) {
       const isMentioned = mentionedAgentIds.includes(agentId);
       const content = isMentioned
@@ -68,6 +69,7 @@ export class BullpenDispatcher {
           parentEventId: event.id,
         });
         await this.bus.publish('dispatch', task);
+        dispatched++;
         this.logger.debug(
           { agentId, threadId, mentioned: isMentioned },
           'BullpenDispatcher: created agent.task for participant',
@@ -78,6 +80,14 @@ export class BullpenDispatcher {
           'BullpenDispatcher: failed to publish agent.task for participant',
         );
       }
+    }
+
+    // If every dispatch failed, log an aggregated error — the thread will go unanswered.
+    if (dispatched === 0 && otherParticipants.length > 0) {
+      this.logger.error(
+        { threadId, expected: otherParticipants.length },
+        'BullpenDispatcher: all participant task dispatches failed — thread will receive no replies',
+      );
     }
   }
 }

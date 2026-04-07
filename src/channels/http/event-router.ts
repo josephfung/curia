@@ -252,12 +252,12 @@ export class EventRouter {
       if (!shouldSend) continue;
       try {
         client.res.write(`data: ${sseData}\n\n`);
-      } catch {
+      } catch (err) {
         // Client connection is dead — remove it. The 'close' event handler
         // will also fire eventually, but cleaning up here prevents repeated
         // failed writes for subsequent events in this tick.
         this.sseClients.delete(client);
-        this.logger.debug({ conversationId: client.conversationId }, 'Removed dead SSE client');
+        this.logger.debug({ err, conversationId: client.conversationId }, 'Removed dead SSE client');
       }
     }
   }

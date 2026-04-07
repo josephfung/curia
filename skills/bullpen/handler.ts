@@ -60,16 +60,25 @@ export class BullpenHandler implements SkillHandler {
             topic, ctx.agentId, participants as string[], content, mentionedAgentIds,
           );
 
-          await ctx.bus.publish('agent', createAgentDiscuss({
-            threadId: thread.id,
-            messageId: message.id,
-            topic: thread.topic,
-            senderAgentId: ctx.agentId,
-            participants: thread.participants,
-            mentionedAgentIds,
-            content,
-            parentEventId: ctx.taskEventId,
-          }));
+          // Publish is best-effort — thread is already persisted. If publish fails,
+          // agents will still see the thread via pending-thread context injection.
+          try {
+            await ctx.bus.publish('agent', createAgentDiscuss({
+              threadId: thread.id,
+              messageId: message.id,
+              topic: thread.topic,
+              senderAgentId: ctx.agentId,
+              participants: thread.participants,
+              mentionedAgentIds,
+              content,
+              parentEventId: ctx.taskEventId,
+            }));
+          } catch (publishErr) {
+            ctx.log.error(
+              { err: publishErr, threadId: thread.id },
+              'Bullpen: thread created but discuss event publish failed — agents will see it on next poll',
+            );
+          }
 
           return { success: true, data: { thread_id: thread.id, message_id: message.id } };
         }
@@ -98,16 +107,25 @@ export class BullpenHandler implements SkillHandler {
 
           const message = await ctx.bullpenService.postMessage(threadId, ctx.agentId, content, mentionedAgentIds);
 
-          await ctx.bus.publish('agent', createAgentDiscuss({
-            threadId,
-            messageId: message.id,
-            topic: existing.thread.topic,
-            senderAgentId: ctx.agentId,
-            participants: existing.thread.participants,
-            mentionedAgentIds,
-            content,
-            parentEventId: ctx.taskEventId,
-          }));
+          // Publish is best-effort — reply is already persisted. If publish fails,
+          // agents will still see the message via pending-thread context injection.
+          try {
+            await ctx.bus.publish('agent', createAgentDiscuss({
+              threadId,
+              messageId: message.id,
+              topic: existing.thread.topic,
+              senderAgentId: ctx.agentId,
+              participants: existing.thread.participants,
+              mentionedAgentIds,
+              content,
+              parentEventId: ctx.taskEventId,
+            }));
+          } catch (publishErr) {
+            ctx.log.error(
+              { err: publishErr, threadId },
+              'Bullpen: reply posted but discuss event publish failed — agents will see it on next poll',
+            );
+          }
 
           return { success: true, data: { thread_id: threadId, message_id: message.id } };
         }
