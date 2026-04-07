@@ -1094,10 +1094,18 @@ Expected: FAIL.
     const taskPayload = { task: schedule.task };
     const nextRunAt = this.nextRunFromCron(schedule.cron);
 
-    // If expectedDurationSeconds is provided, include it in the upsert so the
-    // stuck-job recovery watchdog uses the job-specific timeout threshold.
-    // If omitted, leave the column at its current value (null → system default applies).
-    const hasExpectedDuration = schedule.expectedDurationSeconds !== undefined;
+    // Validate expectedDurationSeconds before persisting: must be a finite positive integer.
+    // Invalid values (0, negative, NaN, Infinity, non-integer) are treated as absent so the
+    // column retains its current value and the system default (10 min) applies via COALESCE.
+    const rawDuration = schedule.expectedDurationSeconds;
+    const validatedDuration =
+      typeof rawDuration === 'number' &&
+      Number.isFinite(rawDuration) &&
+      Number.isInteger(rawDuration) &&
+      rawDuration > 0
+        ? rawDuration
+        : undefined;
+    const hasExpectedDuration = validatedDuration !== undefined;
 
     const sql = `
       INSERT INTO scheduled_jobs (agent_id, cron_expr, task_payload, status, next_run_at, created_by, timezone${hasExpectedDuration ? ', expected_duration_seconds' : ''})
@@ -1117,7 +1125,7 @@ Expected: FAIL.
       this.timezone,
     ];
     if (hasExpectedDuration) {
-      params.push(schedule.expectedDurationSeconds!);
+      params.push(validatedDuration);
     }
 
     const { rows } = await this.pool.query(sql, params);

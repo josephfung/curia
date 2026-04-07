@@ -36,7 +36,7 @@ ALTER TABLE scheduled_jobs
 
 **`run_started_at`** — set to `now()` when `status` transitions to `'running'`, cleared to `NULL` on `completeJobRun()` (success or failure). This is the anchor for timeout calculation. Previously there was no way to know when a job entered the running state.
 
-**`expected_duration_seconds`** — nullable. The expected wall-clock time for this job to complete. If `NULL`, the system-wide default of 600 seconds (10 minutes) applies via `COALESCE`. Set from YAML for declarative jobs (re-applied on each restart), set explicitly at creation time for dynamic jobs. Existing rows default to `NULL` (i.e. the 10-minute default) without requiring backfill.
+**`expected_duration_seconds`** — nullable. The expected wall-clock time for this job to complete. If `NULL`, the system-wide default of 600 seconds (10 minutes) applies via `COALESCE`. Set from YAML for declarative jobs (re-applied on each restart). Setting this at creation time for dynamic jobs is **not shipped in this release** — `CreateJobParams` does not expose the field yet; tracked as follow-up work. Existing rows default to `NULL` (i.e. the 10-minute default) without requiring backfill.
 
 ### Timeout formula
 
