@@ -46,6 +46,8 @@ import { createContactDuplicateDetected, createContactMerged } from './bus/event
 import { NylasClient } from './channels/email/nylas-client.js';
 import { NylasCalendarClient } from './channels/calendar/nylas-calendar-client.js';
 import { EmailAdapter } from './channels/email/email-adapter.js';
+import { SignalRpcClient } from './channels/signal/signal-rpc-client.js';
+import { SignalAdapter } from './channels/signal/signal-adapter.js';
 import { loadAuthConfig } from './contacts/config-loader.js';
 import { AuthorizationService } from './contacts/authorization.js';
 import { HeldMessageService } from './contacts/held-messages.js';
@@ -307,6 +309,28 @@ async function main(): Promise<void> {
     logger.warn('NYLAS_API_KEY/NYLAS_GRANT_ID not set — email channel disabled');
   }
 
+  // Signal channel — optional, requires SIGNAL_SOCKET_PATH and SIGNAL_PHONE_NUMBER.
+  // SignalRpcClient is constructed here so it can be passed to OutboundGateway (the gateway
+  // needs it for outbound Signal sends). SignalAdapter is started further below, after the
+  // gateway is constructed and the dispatcher is registered.
+  // Ordering matters: dispatcher must be registered before any adapter starts, so inbound
+  // messages never arrive without a subscriber (same rule as EmailAdapter).
+  let signalRpcClient: SignalRpcClient | undefined;
+  let signalAdapter: SignalAdapter | undefined;
+  if (config.signalSocketPath && config.signalPhoneNumber) {
+    signalRpcClient = new SignalRpcClient({
+      socketPath: config.signalSocketPath,
+      accountNumber: config.signalPhoneNumber,
+      logger,
+    });
+    // SignalAdapter is constructed further below, after OutboundGateway is available.
+    // Note: phone number intentionally omitted from the log — it's PII and would land
+    // in any log aggregation pipeline. The socket path is sufficient for diagnostics.
+    logger.info({ socketPath: config.signalSocketPath }, 'Signal RPC client created');
+  } else {
+    logger.warn('SIGNAL_SOCKET_PATH/SIGNAL_PHONE_NUMBER not set — Signal channel disabled');
+  }
+
   // Calendar client — uses the same Nylas credentials as email.
   // Independent instance, no shared state with the email client.
   let nylasCalendarClient: NylasCalendarClient | undefined;
@@ -435,30 +459,47 @@ async function main(): Promise<void> {
   }
 
   // Outbound gateway — single choke-point for all outbound external communication.
-  // Wraps nylasClient with blocked-contact checks and content filtering before
-  // any message leaves Curia. Only instantiated when nylasClient is available
-  // (i.e., Nylas credentials are configured). Skills receive it via SkillContext.
+  // Runs blocked-contact checks and content filtering before any message leaves Curia.
+  //
+  // Initialization guard:
+  //   Production assumption: Nylas + Signal are always configured together.
+  //   The guard initializes the gateway when either client is available + outboundFilter
+  //   is ready. This keeps the gateway functional for Signal-only setups (e.g., during
+  //   initial deployment before Nylas credentials are added) and for testing scenarios.
+  //
+  //   TODO: If the system ever runs in a Signal-only mode in production (no Nylas), the
+  //   blocked-content CEO notification path will silently degrade (no email to send it on).
+  //   In that mode, log.error is the fallback — see OutboundGateway.send() comments.
+  //   For now we assume Nylas + Signal together, so this path is only for dev flexibility.
   let outboundGateway: OutboundGateway | undefined;
-  if (nylasClient && outboundFilter && config.nylasSelfEmail) {
+  const hasAnyOutboundClient = !!(nylasClient || signalRpcClient);
+  if (hasAnyOutboundClient && outboundFilter) {
     outboundGateway = new OutboundGateway({
       nylasClient,
+      signalClient: signalRpcClient,
+      signalPhoneNumber: config.signalPhoneNumber,
       contactService,
       contentFilter: outboundFilter,
       bus,
-      ceoEmail: config.nylasSelfEmail,
+      // ceoEmail is optional in OutboundGatewayConfig; only needed for email notifications.
+      // When Nylas is configured, this must be set or CEO blocked-content alerts won't send.
+      ceoEmail: config.nylasSelfEmail || undefined,
       logger,
     });
-    logger.info('Outbound gateway initialized');
-  } else if (nylasClient) {
-    // nylasClient is available but outboundFilter or ceoEmail is missing — log a warning.
+    logger.info({
+      hasEmail: !!nylasClient,
+      hasSignal: !!signalRpcClient,
+    }, 'Outbound gateway initialized');
+  } else if (nylasClient && !outboundFilter) {
+    // nylasClient is available but outboundFilter is missing (no coordinator config found).
     // Email skills will be unavailable because they check ctx.outboundGateway before sending.
-    logger.warn('Outbound gateway NOT initialized — missing outboundFilter or nylasSelfEmail. Email send/reply skills will be unavailable.');
+    logger.warn('Outbound gateway NOT initialized — outboundFilter not ready (coordinator config missing?). Outbound send skills will be unavailable.');
   }
 
   // Construct the email adapter (but don't start it yet — it must not poll until
   // the dispatcher is registered, otherwise inbound.message events have no subscriber
   // and are permanently dropped because the adapter advances its high-water mark).
-  if (outboundGateway && config.nylasSelfEmail) {
+  if (outboundGateway && nylasClient && config.nylasSelfEmail) {
     emailAdapter = new EmailAdapter({
       bus,
       logger,
@@ -466,6 +507,19 @@ async function main(): Promise<void> {
       contactService,
       pollingIntervalMs: config.nylasPollingIntervalMs,
       selfEmail: config.nylasSelfEmail,
+    });
+  }
+
+  // Construct the Signal adapter (but don't start it yet — same ordering rule as email:
+  // dispatcher must be registered first so inbound.message always has a subscriber).
+  if (outboundGateway && signalRpcClient && config.signalPhoneNumber) {
+    signalAdapter = new SignalAdapter({
+      bus,
+      logger,
+      rpcClient: signalRpcClient,
+      outboundGateway,
+      contactService,
+      phoneNumber: config.signalPhoneNumber,
     });
   }
 
@@ -641,6 +695,15 @@ async function main(): Promise<void> {
     logger.info('Email channel adapter started');
   }
 
+  // Start the Signal adapter AFTER the dispatcher is registered — same ordering rule as email.
+  // SignalAdapter.start() connects to the signal-cli socket and registers the inbound listener.
+  // If signal-cli is not yet running (e.g., cold start with both containers starting simultaneously),
+  // the RPC client's exponential backoff will retry until the socket is available.
+  if (signalAdapter) {
+    await signalAdapter.start();
+    logger.info('Signal channel adapter started');
+  }
+
   // HTTP API channel — REST + SSE endpoints for external clients.
   // Runs alongside the CLI channel so both can be used simultaneously.
   const httpAdapter = new HttpAdapter({
@@ -674,6 +737,13 @@ async function main(): Promise<void> {
         await emailAdapter.stop();
       } catch (err) {
         logger.error({ err }, 'Error stopping email adapter during shutdown');
+      }
+    }
+    if (signalAdapter) {
+      try {
+        await signalAdapter.stop();
+      } catch (err) {
+        logger.error({ err }, 'Error stopping Signal adapter during shutdown');
       }
     }
     try {

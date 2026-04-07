@@ -27,6 +27,7 @@ export interface ChannelIdentity {
 export type IdentitySource =
   | 'ceo_stated'
   | 'email_participant'
+  | 'signal_participant'
   | 'crm_import'
   | 'calendar_attendee'
   | 'self_claimed';

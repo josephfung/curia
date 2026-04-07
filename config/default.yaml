@@ -1,6 +1,9 @@
 channels:
   cli:
     enabled: true
+  # Signal channel activation is controlled by env vars, not this file.
+  # Set SIGNAL_SOCKET_PATH + SIGNAL_PHONE_NUMBER at runtime to enable the Signal adapter.
+  # Trust level and unknown-sender policy live in config/channel-trust.yaml.
 
 browser:
   # How long a browser session stays alive after its last action (ms).

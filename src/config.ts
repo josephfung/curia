@@ -24,6 +24,13 @@ export interface Config {
   // Without this, the first inbound email from the CEO creates them as provisional,
   // causing their messages to be held.
   ceoPrimaryEmail: string | undefined;
+  // Signal channel config. Both must be set to enable the Signal adapter.
+  // signalSocketPath: path to the signal-cli daemon Unix socket (e.g. /run/signal-cli/socket).
+  //   In Docker Compose, this is mounted from the signal-cli container's socket volume.
+  // signalPhoneNumber: Nathan's E.164 number (e.g. +12223334444). This is the Signal account
+  //   that was registered via `signal-cli register` + `signal-cli verify`.
+  signalSocketPath: string | undefined;
+  signalPhoneNumber: string | undefined;
 }
 
 /**
@@ -133,5 +140,9 @@ export function loadConfig(): Config {
     nylasPollingIntervalMs,
     nylasSelfEmail: process.env.NYLAS_SELF_EMAIL ?? '',
     ceoPrimaryEmail: process.env.CEO_PRIMARY_EMAIL?.trim().toLowerCase() || undefined,
+    // .trim() prevents a whitespace-only value (e.g. "  ") from activating the
+    // Signal adapter with a bogus socket path or phone number.
+    signalSocketPath: process.env.SIGNAL_SOCKET_PATH?.trim() || undefined,
+    signalPhoneNumber: process.env.SIGNAL_PHONE_NUMBER?.trim() || undefined,
   };
 }
