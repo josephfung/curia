@@ -128,6 +128,26 @@ export interface OutboundGatewayConfig {
 }
 
 // ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Returns a redacted form of a recipient identifier safe to write to logs.
+ * Keeps the first 3 and last 3 characters so the log entry is still useful for
+ * debugging (e.g. "joh***com" for an email, "+12***444" for a phone) without
+ * logging the full address.
+ *
+ * Examples:
+ *   "joe@example.com"  → "joe***com"
+ *   "+14155552671"     → "+14***671"
+ *   "abc"              → "***"        (too short — redact fully)
+ */
+function redactId(value: string): string {
+  if (value.length <= 6) return '***';
+  return `${value.slice(0, 3)}***${value.slice(-3)}`;
+}
+
+// ---------------------------------------------------------------------------
 // OutboundGateway
 // ---------------------------------------------------------------------------
 
@@ -182,7 +202,7 @@ export class OutboundGateway {
       const contact = await this.contactService.resolveByChannelIdentity(request.channel, recipientId);
       if (contact !== null && contact.status === 'blocked') {
         this.log.warn(
-          { channel: request.channel, recipientId, contactId: contact.contactId },
+          { channel: request.channel, recipientId: redactId(recipientId), contactId: contact.contactId },
           'outbound-gateway: send blocked — recipient is blocked',
         );
         return { success: false, blockedReason: 'Recipient is blocked' };
@@ -190,7 +210,7 @@ export class OutboundGateway {
     } catch (err) {
       // DB or service error — log at warn and proceed.
       this.log.warn(
-        { err, channel: request.channel, recipientId },
+        { err, channel: request.channel, recipientId: redactId(recipientId) },
         'outbound-gateway: contact resolution failed, proceeding without blocked check',
       );
     }
@@ -221,7 +241,7 @@ export class OutboundGateway {
     } catch (err) {
       // Filter crash — treat as blocked with a synthetic finding
       this.log.warn(
-        { err, channel: request.channel, recipientId },
+        { err, channel: request.channel, recipientId: redactId(recipientId) },
         'outbound-gateway: content filter threw — treating as blocked (fail-closed)',
       );
       filterPassed = false;
@@ -233,7 +253,7 @@ export class OutboundGateway {
       // which may contain sensitive data fragments that triggered the rule).
       const ruleNames = filterFindings.map((f) => f.rule).join('; ');
       this.log.warn(
-        { channel: request.channel, recipientId, rules: ruleNames },
+        { channel: request.channel, recipientId: redactId(recipientId), rules: ruleNames },
         'outbound-gateway: outbound message blocked by content filter',
       );
 
@@ -290,13 +310,13 @@ export class OutboundGateway {
         });
         if (!notifyResult.success) {
           this.log.error(
-            { blockId, ceoEmail: this.ceoEmail, reason: notifyResult.blockedReason },
+            { blockId, ceoEmail: redactId(this.ceoEmail), reason: notifyResult.blockedReason },
             'Failed to send CEO notification for blocked outbound content',
           );
         }
       } else {
         this.log.error(
-          { blockId, channel: request.channel, recipientId },
+          { blockId, channel: request.channel, recipientId: redactId(recipientId) },
           'outbound-gateway: CEO notification skipped — no email client configured. Block recorded in audit log only.',
         );
       }
