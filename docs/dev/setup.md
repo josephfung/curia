@@ -185,7 +185,7 @@ Signal requires registering a phone number with signal-cli and seeding the `sign
 SIGNAL_PHONE_NUMBER=+12223334444
 ```
 
-That's the E.164 number you registered via `signal-cli register` + `verify`. `SIGNAL_SOCKET_PATH` is set automatically by `compose.production.yaml` — do not set it in `.env`.
+That's the E.164 number you registered via `signal-cli register` + `verify`. `SIGNAL_SOCKET_PATH` is managed by the deployment layer — do not set it in `.env`.
 
 Restart Curia — the Signal channel activates when `SIGNAL_PHONE_NUMBER` is set and the signal-data volume is populated.
 
