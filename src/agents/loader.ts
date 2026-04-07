@@ -39,6 +39,8 @@ export interface AgentYamlConfig {
   schedule?: Array<{
     cron: string;
     task: string;
+    /** Expected wall-clock duration in seconds. Drives stuck-job recovery timeout. */
+    expectedDurationSeconds?: number;
   }>;
   error_budget?: {
     max_turns?: number;

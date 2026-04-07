@@ -130,6 +130,8 @@ export class Scheduler {
           agentTaskId: row.agent_task_id ?? null,
           intentAnchor: row.intent_anchor ?? null,
           progress: row.progress ?? null,
+          runStartedAt: row.run_started_at ?? null,
+          expectedDurationSeconds: row.expected_duration_seconds ?? null,
         };
         try {
           await this.fireJob(job);

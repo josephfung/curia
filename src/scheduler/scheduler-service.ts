@@ -44,6 +44,8 @@ export interface JobRow {
   agentTaskId: string | null;
   intentAnchor: string | null;
   progress: Record<string, unknown> | null;
+  runStartedAt: string | null;
+  expectedDurationSeconds: number | null;
 }
 
 export interface ListJobsFilters {
@@ -70,6 +72,8 @@ interface DbJobRow {
   agent_task_id: string | null;
   intent_anchor: string | null;
   progress: Record<string, unknown> | null;
+  run_started_at: string | null;          // set when job enters 'running'; cleared on completion
+  expected_duration_seconds: number | null; // per-job timeout hint; NULL → system default (600s)
 }
 
 // Threshold for auto-suspending jobs after consecutive failures.
@@ -497,5 +501,7 @@ function mapJobRow(row: DbJobRow): JobRow {
     agentTaskId: row.agent_task_id,
     intentAnchor: row.intent_anchor,
     progress: row.progress,
+    runStartedAt: row.run_started_at,
+    expectedDurationSeconds: row.expected_duration_seconds,
   };
 }
