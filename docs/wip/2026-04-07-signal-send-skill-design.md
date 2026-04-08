@@ -49,11 +49,11 @@ parties could inadvertently leak context or be manipulated by a social-engineeri
 
 ### Group trust outcomes
 
-| Members              | Action                                                                 |
-|----------------------|------------------------------------------------------------------------|
-| All verified         | Engage normally (inbound published, outbound sent)                     |
-| Any provisional/unknown | Hold; notify CEO via email; create provisional contacts for unknowns |
-| Any blocked          | Ignore silently; no CEO notification                                   |
+| Members                 | Inbound outcome                                                                             | Outbound outcome (signal-send)                                                                |
+|-------------------------|---------------------------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------|
+| All verified            | Message published to bus; normal dispatch                                                   | `signal-send` proceeds; `SkillResult { success: true }`                                       |
+| Any provisional/unknown | Hold; auto-create provisional contacts; notify CEO via email; message not published to bus  | `signal-send` returns `SkillResult { success: false }` listing the unverified phone numbers   |
+| Any blocked             | Drop silently; no CEO notification; message not published to bus                            | `signal-send` returns `SkillResult { success: false }` — blocked member count only (no phones)|
 
 ### CLI is not monitored
 
@@ -192,8 +192,8 @@ passes the trust check — or use `signal-send` to initiate.
 A Signal group message was received but held because the following group members
 have not yet been verified:
 
-• +1 (519) 555-0123 — no contact record
-• +1 (416) 555-9999 — provisional contact
++15195550123 — no verified contact
++14165559999 — no verified contact
 
 Once you've verified these contacts, you can ask me to send a message to the group
 and I'll re-check membership before engaging.
@@ -335,14 +335,20 @@ Coordinator (via CEO request)
 
 ## Error handling
 
-- `listGroups()` RPC failure: log warn, treat group as untrusted (fail-closed). Coordinator
-  will see an error; CEO notified inline. Inbound messages from the group are held.
-- `checkGroupMemberTrust()` DB failure: log warn, treat affected members as unknown
-  (fail-closed). Same outcome as above.
+- `listGroups()` RPC failure: `SignalRpcClient.listGroups()` throws. The caller (adapter or
+  gateway) catches, logs warn, and treats the group as untrusted (fail-closed). Inbound
+  messages from the group are held; outbound `signal-send` returns a `SkillResult` error.
+- `checkGroupMemberTrust()` DB failure: `checkGroupMemberTrust()` throws when the underlying
+  `contactService.resolveByChannelIdentity()` rejects — it does **not** convert DB errors
+  into unknownMembers internally. The caller is responsible for catching the exception and
+  applying fail-closed behavior: log warn and treat affected members as untrusted (hold
+  inbound messages; return `SkillResult { success: false }` for outbound sends).
 - CEO notification email failure: log error but do NOT re-raise. The group message is still
   held. The audit log records the hold event.
-- `getSignalGroupMembers()` returns empty list (group not found or not a member): log warn,
-  return error to caller. Skill returns `{ success: false, error: 'Group not found or Curia is not a member.' }`.
+- `getSignalGroupMembers()` group not found: the method **throws** (it does not return an
+  empty list) when the group ID is not found in the account's group list or Signal is not
+  configured. Callers catch the exception, log a warning, and surface the error. For the
+  `signal-send` skill this returns `{ success: false, error: 'Group not found or Curia is not a member.' }`.
 
 ---
 

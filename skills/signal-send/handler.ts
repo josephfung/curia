@@ -92,8 +92,14 @@ export class SignalSendHandler implements SkillHandler {
       try {
         trust = await checkGroupMemberTrust(memberPhones, ctx.contactService);
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        return { success: false, error: `Failed to verify group member trust: ${msg}` };
+        // Log structured details for ops visibility. memberPhones are internal (E.164 phone
+        // numbers of group members) and safe to log; err.message could contain RPC internals
+        // so we return a stable string to the caller instead of forwarding it.
+        ctx.log.warn(
+          { err, memberPhones, memberCount: memberPhones.length },
+          'signal-send: group member trust check threw unexpectedly',
+        );
+        return { success: false, error: 'Failed to verify group member trust' };
       }
 
       if (!trust.trusted) {
@@ -113,20 +119,40 @@ export class SignalSendHandler implements SkillHandler {
           };
         }
       }
+
+      // Dispatch immediately after the trust check — minimises the TOCTOU window between
+      // membership verification and the actual send. Group membership can change between
+      // awaits; keeping the send here (rather than in the shared path below) ensures no
+      // unrelated async work runs between the check and the dispatch.
+      ctx.log.info({ destinationType: 'group' }, 'signal-send: dispatching Signal message via gateway');
+
+      try {
+        const result = await ctx.outboundGateway.send({
+          channel: 'signal',
+          groupId: group_id,
+          message,
+        });
+
+        if (!result.success) {
+          return { success: false, error: result.blockedReason ?? 'Signal send failed' };
+        }
+
+        return { success: true, data: { delivered_to: group_id, channel: 'signal' } };
+      } catch (err) {
+        const errMessage = err instanceof Error ? err.message : String(err);
+        ctx.log.error({ err, destinationType: 'group' }, 'signal-send: gateway threw unexpectedly');
+        return { success: false, error: `Signal send failed: ${errMessage}` };
+      }
     }
 
-    // --- Dispatch via gateway ---
+    // --- Dispatch via gateway (1:1) ---
 
-    ctx.log.info(
-      { destinationType: group_id ? 'group' : '1:1' },
-      'signal-send: dispatching Signal message via gateway',
-    );
+    ctx.log.info({ destinationType: '1:1' }, 'signal-send: dispatching Signal message via gateway');
 
     try {
       const result = await ctx.outboundGateway.send({
         channel: 'signal',
         recipient: recipient,
-        groupId: group_id,
         message,
       });
 
@@ -140,13 +166,13 @@ export class SignalSendHandler implements SkillHandler {
       return {
         success: true,
         data: {
-          delivered_to: recipient ?? group_id,
+          delivered_to: recipient,
           channel: 'signal',
         },
       };
     } catch (err) {
       const errMessage = err instanceof Error ? err.message : String(err);
-      ctx.log.error({ err, destinationType: group_id ? 'group' : '1:1' }, 'signal-send: gateway threw unexpectedly');
+      ctx.log.error({ err, destinationType: '1:1' }, 'signal-send: gateway threw unexpectedly');
       return { success: false, error: `Signal send failed: ${errMessage}` };
     }
   }
