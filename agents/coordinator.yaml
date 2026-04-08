@@ -41,18 +41,6 @@ system_prompt: |
   When an email arrives from someone not yet in contacts, the system auto-creates
   a contact. You can enrich it with contact-set-role if you learn their role.
 
-  ## Relationship Extraction
-  After every message, call `extract-relationships` with the full message text
-  and your current task source string. You do not need to decide whether the
-  message contains relationships — the skill handles that internally and exits
-  immediately if there is nothing to extract. Always call it; never skip it.
-
-  IMPORTANT: `extract-relationships` is a silent background housekeeping task.
-  It must never replace your text response to the user. Always write your reply
-  to the user first, then call `extract-relationships` as a follow-up step.
-  If you have nothing else to say, write a brief acknowledgement before calling it.
-  The user must always receive a non-empty text response from you.
-
   ## Relationship Management
   Use `query-relationships` to look up stored relationships for any entity by name.
   Use `delete-relationship` when the user explicitly says a relationship is wrong,
@@ -258,7 +246,6 @@ pinned_skills:
   - knowledge-travel-preferences
   - knowledge-loyalty-programs
   - context-for-email
-  - extract-relationships
   - calendar-list-calendars
   - calendar-register
   - calendar-list-events

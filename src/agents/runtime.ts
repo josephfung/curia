@@ -446,9 +446,9 @@ export class AgentRuntime {
       );
       if (response.content.trim() === '') {
         // The LLM returned end_turn with no text — this happens when the model considers
-        // its tool calls (e.g. extract-relationships) to be the full response and produces
-        // an empty content array. Attempt one recovery: append the empty turn + a nudge,
-        // then call the LLM again without tools to force it to write the text reply.
+        // its tool calls to be the full response and produces an empty content array.
+        // Attempt one recovery: append the empty turn + a nudge, then call the LLM again
+        // without tools to force it to write the text reply.
         logger.warn(
           { agentId, conversationId, inputTokens: response.usage.inputTokens, outputTokens: response.usage.outputTokens },
           'LLM returned empty text after tool use — attempting recovery prompt',
