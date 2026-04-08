@@ -1,11 +1,12 @@
 import type { EventBus } from '../bus/bus.js';
 import type { InboundMessageEvent, AgentResponseEvent, AgentErrorEvent } from '../bus/events.js';
-import { createAgentTask, createOutboundMessage, createContactResolved, createContactUnknown, createMessageHeld, createMessageRejected } from '../bus/events.js';
+import { createAgentTask, createOutboundMessage, createContactResolved, createContactUnknown, createMessageHeld, createMessageRejected, createConversationCheckpoint } from '../bus/events.js';
 import type { Logger } from '../logger.js';
 import type { ContactResolver } from '../contacts/contact-resolver.js';
 import type { HeldMessageService } from '../contacts/held-messages.js';
 import type { InboundSenderContext, ChannelPolicyConfig } from '../contacts/types.js';
 import type { InboundScanner } from './inbound-scanner.js';
+import type { DbPool } from '../db/connection.js';
 
 export interface DispatcherConfig {
   bus: EventBus;
@@ -16,6 +17,11 @@ export interface DispatcherConfig {
   /** Layer 1 prompt injection scanner. When provided, every inbound message is
    *  scanned before reaching the Coordinator — tags stripped, risk_score attached. */
   injectionScanner?: InboundScanner;
+  /** Postgres pool — used to query working_memory for checkpoint turns.
+   *  When omitted, checkpoint scheduling is disabled (e.g. in unit tests). */
+  pool?: DbPool;
+  /** Milliseconds of inactivity before conversation.checkpoint fires. Default: 600000. */
+  conversationCheckpointDebounceMs?: number;
 }
 
 /**
@@ -44,6 +50,10 @@ export class Dispatcher {
    * runtime sets parentEventId on its response to the task event that triggered it.
    */
   private taskRouting = new Map<string, { channelId: string; conversationId: string; senderId: string }>();
+  /** Key: `${conversationId}:${agentId}` — reset on every agent.response */
+  private checkpointTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private pool: DbPool | undefined;
+  private conversationCheckpointDebounceMs: number;
 
   constructor(config: DispatcherConfig) {
     this.bus = config.bus;
@@ -52,6 +62,16 @@ export class Dispatcher {
     this.heldMessages = config.heldMessages;
     this.channelPolicies = config.channelPolicies;
     this.injectionScanner = config.injectionScanner;
+    this.pool = config.pool;
+    this.conversationCheckpointDebounceMs = config.conversationCheckpointDebounceMs ?? 600_000;
+  }
+
+  /** Clear all pending checkpoint timers. Call during graceful shutdown. */
+  close(): void {
+    for (const timer of this.checkpointTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.checkpointTimers.clear();
   }
 
   register(): void {
@@ -381,5 +401,74 @@ export class Dispatcher {
       parentEventId: event.id,
     });
     await this.bus.publish('dispatch', outbound);
+
+    // Schedule a checkpoint for this conversation — resets the debounce timer if
+    // already running, so only fires after a full window of inactivity.
+    this.scheduleCheckpoint(routing.conversationId, event.payload.agentId, routing.channelId);
+  }
+
+  private scheduleCheckpoint(conversationId: string, agentId: string, channelId: string): void {
+    // Checkpoint requires pool to query working_memory — if not configured, skip.
+    if (!this.pool) return;
+
+    const key = `${conversationId}:${agentId}`;
+    const existing = this.checkpointTimers.get(key);
+    if (existing) clearTimeout(existing);
+
+    const timer = setTimeout(() => {
+      this.checkpointTimers.delete(key);
+      // Fire-and-forget — errors are logged inside fireCheckpoint
+      void this.fireCheckpoint(conversationId, agentId, channelId);
+    }, this.conversationCheckpointDebounceMs);
+
+    this.checkpointTimers.set(key, timer);
+  }
+
+  private async fireCheckpoint(conversationId: string, agentId: string, channelId: string): Promise<void> {
+    try {
+      // Look up the last watermark for this conversation+agent pair
+      const watermarkResult = await this.pool!.query<{ last_checkpoint_at: string }>(
+        `SELECT last_checkpoint_at FROM conversation_checkpoints
+         WHERE conversation_id = $1 AND agent_id = $2`,
+        [conversationId, agentId],
+      );
+      const since = watermarkResult.rows[0]?.last_checkpoint_at ?? '';
+
+      // Fetch turns from working memory since the watermark
+      const turnsResult = await this.pool!.query<{ role: string; content: string }>(
+        `SELECT role, content FROM working_memory
+         WHERE conversation_id = $1 AND agent_id = $2
+           AND role IN ('user', 'assistant')
+           ${since ? 'AND created_at > $3' : ''}
+         ORDER BY created_at ASC`,
+        since ? [conversationId, agentId, since] : [conversationId, agentId],
+      );
+
+      if (turnsResult.rows.length === 0) {
+        // Nothing new since last checkpoint — skip publishing
+        return;
+      }
+
+      const turns = turnsResult.rows.map(row => ({
+        role: row.role as 'user' | 'assistant',
+        content: row.content,
+      }));
+
+      const event = createConversationCheckpoint({
+        conversationId,
+        agentId,
+        channelId,
+        since,
+        turns,
+      });
+
+      await this.bus.publish('dispatch', event);
+      this.logger.info(
+        { conversationId, agentId, turnCount: turns.length },
+        'Conversation checkpoint published',
+      );
+    } catch (err) {
+      this.logger.error({ err, conversationId, agentId }, 'Failed to fire conversation checkpoint');
+    }
   }
 }
