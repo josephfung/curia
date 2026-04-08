@@ -100,11 +100,12 @@ export class KnowledgeTravelPreferencesHandler implements SkillHandler {
       return existing[0]!;
     }
 
-    return ctx.entityMemory!.createEntity({
+    const { entity } = await ctx.entityMemory!.createEntity({
       type: 'concept',
       label: ANCHOR_LABEL,
       properties: { category: 'travel-knowledge' },
       source: 'skill:knowledge-travel-preferences',
     });
+    return entity;
   }
 }

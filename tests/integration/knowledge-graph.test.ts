@@ -75,7 +75,7 @@ describeIf('Knowledge Graph Integration', () => {
   });
 
   it('stores and retrieves entity facts via EntityMemory', async () => {
-    const entity = await entityMemory.createEntity({
+    const { entity } = await entityMemory.createEntity({
       type: 'person',
       label: 'Integration Person',
       properties: {},
