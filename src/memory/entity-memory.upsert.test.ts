@@ -3,12 +3,13 @@ import { KnowledgeGraphStore } from './knowledge-graph.js';
 import { EmbeddingService } from './embedding.js';
 import { EntityMemory } from './entity-memory.js';
 import { MemoryValidator } from './validation.js';
+import { createSilentLogger } from '../logger.js';
 
 function makeEntityMemory() {
   const embeddingService = EmbeddingService.createForTesting();
   const store = KnowledgeGraphStore.createInMemory(embeddingService);
   const validator = new MemoryValidator(store, embeddingService);
-  return { mem: new EntityMemory(store, validator, embeddingService), store };
+  return { mem: new EntityMemory(store, validator, embeddingService, createSilentLogger()), store };
 }
 
 describe('EntityMemory.mergeEntities Phase 2', () => {
