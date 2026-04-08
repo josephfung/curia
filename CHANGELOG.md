@@ -11,28 +11,13 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ---
 
-## [Unreleased]
+## [0.12.1] — 2026-04-07
 
 ### Added
-- **Development setup guide** (`docs/dev/setup.md`): tiered setup guide for contributors covering minimum (Anthropic + Postgres), recommended (+ Nylas + OpenAI), and full (+ Signal + Tavily) configurations. Includes Nylas account walkthrough, signal-cli registration steps, and a troubleshooting section.
-- **Signal env vars** added to `.env.example` as commented-out template entries.
-
+- **Signal channel** (spec 04): inbound and outbound messaging via signal-cli daemon socket. Includes group trust model.
+- **Development setup guide** (`docs/dev/setup.md`): tiered setup guide for contributors covering minimum (Anthropic + Postgres), recommended (+ Nylas + OpenAI), and full (+ Signal + Tavily) configurations. 
 ### Changed
-- **README Quick Start** condensed to a teaser linking to the new setup guide.
-- **README Web App section** (formerly "Knowledge Graph Web Explorer") updated with broader language reflecting the full web app.
-- **README status table** updated: "Voice/telephony channel" → "Additional channels: Voice, Slack, Telegram".
-- **README Deployment section** removed.
-
-- **Signal channel** (spec 04): inbound and outbound messaging via signal-cli daemon socket.
-  Includes `SignalRpcClient` (JSON-RPC 2.0 over Unix socket with exponential-backoff reconnect
-  and deduplication), `SignalAdapter` (contact auto-creation, prompt injection sanitization,
-  hold-for-approval unknown sender policy via channel-trust.yaml), and 1:1 read receipts for
-  confirmed senders. `OutboundGateway` extended to support Signal sends alongside email.
-  Enable by setting `SIGNAL_SOCKET_PATH` and `SIGNAL_PHONE_NUMBER` env vars (ADR-013).
-- **`signal-send` skill**: proactively send Signal messages (1:1 by E.164 phone number, group by group ID) via the OutboundGateway.
-- **Signal group trust model**: before engaging with any Signal group (inbound or outbound), all member phone numbers are verified against the contact system. Unknown members cause the group message to be held and the CEO notified via email; blocked members cause silent drop. Shared `checkGroupMemberTrust()` helper used by both `SignalAdapter` (inbound) and `signal-send` (outbound).
-- **`SignalRpcClient.listGroups()`**: typed wrapper for signal-cli's `listGroups` JSON-RPC method.
-- **`OutboundGateway.getSignalGroupMembers()`**: resolves a group ID to member phone numbers, excluding Curia's own number.
+- **README clean up** Condensed Quick Start, cleaned up Web App section, and updated project table.
 
 ---
 
