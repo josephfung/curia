@@ -6,6 +6,7 @@ import {
   createOutboundMessage,
   createSkillInvoke,
   createSkillResult,
+  createConversationCheckpoint,
   type BusEvent,
 } from '../../../src/bus/events.js';
 
@@ -93,6 +94,26 @@ describe('Event Types', () => {
     expect(event.type).toBe('skill.result');
     expect(event.sourceLayer).toBe('execution');
     expect(event.payload.durationMs).toBe(250);
+  });
+
+  it('creates a conversation.checkpoint event', () => {
+    const event = createConversationCheckpoint({
+      conversationId: 'email:thread-abc',
+      agentId: 'coordinator',
+      channelId: 'email',
+      since: '2026-04-08T10:00:00Z',
+      turns: [
+        { role: 'user', content: 'Xiaopu is my wife' },
+        { role: 'assistant', content: 'Got it, I will remember that.' },
+      ],
+    });
+
+    expect(event.type).toBe('conversation.checkpoint');
+    expect(event.sourceLayer).toBe('dispatch');
+    expect(event.payload.conversationId).toBe('email:thread-abc');
+    expect(event.payload.turns).toHaveLength(2);
+    expect(event.id).toBeTruthy();
+    expect(event.timestamp).toBeInstanceOf(Date);
   });
 
   it('type narrows via discriminated union', () => {

@@ -378,6 +378,22 @@ export interface ConfigChangeEvent extends BaseEvent {
   payload: ConfigChangePayload;
 }
 
+export interface ConversationCheckpointPayload {
+  conversationId: string;
+  agentId: string;
+  channelId: string;
+  /** ISO timestamp — turns created after this point are included. Empty string on first checkpoint. */
+  since: string;
+  /** Ordered chronologically (oldest first). Contains only turns since `since`. */
+  turns: Array<{ role: 'user' | 'assistant'; content: string }>;
+}
+
+export interface ConversationCheckpointEvent extends BaseEvent {
+  type: 'conversation.checkpoint';
+  sourceLayer: 'dispatch';
+  payload: ConversationCheckpointPayload;
+}
+
 export type BusEvent =
   | InboundMessageEvent
   | AgentTaskEvent
@@ -400,7 +416,8 @@ export type BusEvent =
   | ScheduleFiredEvent     // Scheduler: job fired
   | ScheduleSuspendedEvent   // Scheduler: job auto-suspended
   | ScheduleRecoveredEvent   // Scheduler: stuck job auto-recovered
-  | ConfigChangeEvent;       // System: config object changed (office identity, etc.)
+  | ConfigChangeEvent        // System: config object changed (office identity, etc.)
+  | ConversationCheckpointEvent; // Checkpoint pipeline: Dispatch fires after inactivity window
 
 // Convenience alias for use in handler maps / switch statements.
 export type EventType = BusEvent['type'];
@@ -727,5 +744,17 @@ export function createConfigChange(
     sourceLayer: 'system',
     payload: rest,
     parentEventId,
+  };
+}
+
+export function createConversationCheckpoint(
+  payload: ConversationCheckpointPayload,
+): ConversationCheckpointEvent {
+  return {
+    id: randomUUID(),
+    timestamp: new Date(),
+    sourceLayer: 'dispatch',
+    type: 'conversation.checkpoint',
+    payload,
   };
 }
