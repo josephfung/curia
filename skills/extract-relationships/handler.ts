@@ -177,29 +177,25 @@ ${text}`,
         // Falling back to the first match handles cases where a node was previously
         // created under a different type; creating a new node is the last resort.
         const subjectMatches = await ctx.entityMemory.findEntities(triple.subject);
-        const subjectNode =
-          subjectMatches.find(n => n.type === subjectType) ??
-          subjectMatches[0] ??
-          await ctx.entityMemory.createEntity({
-            type: subjectType,
-            label: triple.subject,
-            properties: {},
-            source,
-            confidence: 0.6,
-          });
+        const subjectMatch = subjectMatches.find(n => n.type === subjectType) ?? subjectMatches[0];
+        const subjectNode = subjectMatch ?? (await ctx.entityMemory.createEntity({
+          type: subjectType,
+          label: triple.subject,
+          properties: {},
+          source,
+          confidence: 0.6,
+        })).entity;
 
         // Resolve object — same pattern
         const objectMatches = await ctx.entityMemory.findEntities(triple.object);
-        const objectNode =
-          objectMatches.find(n => n.type === objectType) ??
-          objectMatches[0] ??
-          await ctx.entityMemory.createEntity({
-            type: objectType,
-            label: triple.object,
-            properties: {},
-            source,
-            confidence: 0.6,
-          });
+        const objectMatch = objectMatches.find(n => n.type === objectType) ?? objectMatches[0];
+        const objectNode = objectMatch ?? (await ctx.entityMemory.createEntity({
+          type: objectType,
+          label: triple.object,
+          properties: {},
+          source,
+          confidence: 0.6,
+        })).entity;
 
         // Skip self-loops — subject and object resolved to the same node.
         // The extraction prompt asks for two distinct entities but the LLM can still

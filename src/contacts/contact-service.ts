@@ -163,13 +163,23 @@ export class ContactService {
     // Auto-create a KG person node if we have entityMemory and no explicit kgNodeId
     let kgNodeId: string | null = options.kgNodeId ?? null;
     if (!kgNodeId && this.entityMemory) {
-      const entity = await this.entityMemory.createEntity({
+      const { entity, created } = await this.entityMemory.createEntity({
         type: 'person',
         label: safeName,
         properties: options.role ? { role: options.role } : {},
         source: options.source,
       });
-      kgNodeId = entity.id;
+      if (!created && options.role) {
+        // A KG node already existed for this label. Apply the role property if
+        // it isn't already set — the existing node may have been created without
+        // one (e.g. by extract-relationships which always passes empty properties).
+        const { node } = await this.entityMemory.updateNode(entity.id, {
+          properties: { ...entity.properties, role: options.role },
+        });
+        kgNodeId = node.id;
+      } else {
+        kgNodeId = entity.id;
+      }
     }
 
     const contact: Contact = {

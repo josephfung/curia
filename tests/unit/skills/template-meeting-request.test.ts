@@ -39,11 +39,17 @@ function makeEntityMemory() {
       return matches;
     }),
     createEntity: vi.fn(async (opts: { type: string; label: string; properties: Record<string, unknown>; source: string }) => {
+      // Check if an entity with this label already exists (mimics upsert behaviour)
+      for (const e of entities.values()) {
+        if (e.label.toLowerCase() === opts.label.toLowerCase()) {
+          return { entity: e, created: false };
+        }
+      }
       const id = `entity-${nextId++}`;
       const entity = { id, label: opts.label, properties: opts.properties };
       entities.set(id, entity);
       facts.set(id, []);
-      return entity;
+      return { entity, created: true };
     }),
     storeFact: vi.fn(async (opts: { entityNodeId: string; label: string; properties: Record<string, unknown>; confidence: number; decayClass: string; source: string }) => {
       const entityFacts = facts.get(opts.entityNodeId) ?? [];
@@ -126,7 +132,7 @@ describe('TemplateMeetingRequestHandler', () => {
 
     it('returns custom policy from KG when available', async () => {
       const em = makeEntityMemory();
-      const anchor = await em.createEntity({
+      const { entity: anchor } = await em.createEntity({
         type: 'concept', label: 'template:meeting-request',
         properties: { category: 'email-policy' }, source: 'test',
       });
@@ -158,7 +164,7 @@ describe('TemplateMeetingRequestHandler', () => {
 
     it('handles plain-text custom policy (non-JSON)', async () => {
       const em = makeEntityMemory();
-      const anchor = await em.createEntity({
+      const { entity: anchor } = await em.createEntity({
         type: 'concept', label: 'template:meeting-request',
         properties: {}, source: 'test',
       });

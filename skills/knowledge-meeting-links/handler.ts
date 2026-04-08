@@ -123,11 +123,12 @@ export class KnowledgeMeetingLinksHandler implements SkillHandler {
       return existing[0]!;
     }
 
-    return ctx.entityMemory!.createEntity({
+    const { entity } = await ctx.entityMemory!.createEntity({
       type: 'concept',
       label: ANCHOR_LABEL,
       properties: { category: 'meeting-knowledge' },
       source: 'skill:knowledge-meeting-links',
     });
+    return entity;
   }
 }

@@ -73,7 +73,7 @@ describe('ContactService', () => {
     });
 
     it('links to existing KG node when kgNodeId provided', async () => {
-      const entity = await entityMemory.createEntity({
+      const { entity } = await entityMemory.createEntity({
         type: 'person',
         label: 'Existing Person',
         properties: {},
@@ -544,22 +544,23 @@ describe('ContactService', () => {
 
 describe('EntityMemory.mergeEntities', () => {
   let entityMemory: EntityMemory;
+  let store: KnowledgeGraphStore;
 
   beforeEach(() => {
     const embeddingService = EmbeddingService.createForTesting();
-    const store = KnowledgeGraphStore.createInMemory(embeddingService);
+    store = KnowledgeGraphStore.createInMemory(embeddingService);
     const validator = new MemoryValidator(store, embeddingService);
     entityMemory = new EntityMemory(store, validator, embeddingService, createSilentLogger());
   });
 
   it('merges scalar properties onto primary node (most-recent-wins)', async () => {
-    const primary = await entityMemory.createEntity({
+    const { entity: primary } = await entityMemory.createEntity({
       type: 'person',
       label: 'Jenna Torres',
       properties: { title: 'CFO', city: 'Toronto' },
       source: 'test',
     });
-    const secondary = await entityMemory.createEntity({
+    const { entity: secondary } = await entityMemory.createEntity({
       type: 'person',
       label: 'J. Torres',
       properties: { title: 'Chief Financial Officer', city: 'New York' },
@@ -575,13 +576,13 @@ describe('EntityMemory.mergeEntities', () => {
   });
 
   it('secondary properties override primary when secondary was updated more recently', async () => {
-    const primary = await entityMemory.createEntity({
+    const { entity: primary } = await entityMemory.createEntity({
       type: 'person',
       label: 'Old Primary',
       properties: { city: 'Toronto', title: 'CFO' },
       source: 'test',
     });
-    const secondary = await entityMemory.createEntity({
+    const { entity: secondary } = await entityMemory.createEntity({
       type: 'person',
       label: 'New Secondary',
       properties: { city: 'New York', title: 'Chief Financial Officer' },
@@ -607,13 +608,15 @@ describe('EntityMemory.mergeEntities', () => {
   });
 
   it('does not affect the primary node when secondary has no properties', async () => {
-    const primary = await entityMemory.createEntity({
+    const { entity: primary } = await entityMemory.createEntity({
       type: 'person',
       label: 'Alice',
       properties: { city: 'Vancouver' },
       source: 'test',
     });
-    const secondary = await entityMemory.createEntity({
+    // Insert secondary directly via store to bypass upsert dedup
+    // (simulates pre-migration duplicate with same label but empty properties)
+    const secondary = await store.createNode({
       type: 'person',
       label: 'Alice',
       properties: {},

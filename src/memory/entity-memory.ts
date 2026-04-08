@@ -79,16 +79,22 @@ export class EntityMemory {
   /**
    * Create a non-fact entity node (person, org, project, etc.).
    * Facts about the entity are stored separately via storeFact().
+   *
+   * Uses upsertNode internally so that calling createEntity twice with the
+   * same (label, type) pair returns the existing node rather than creating
+   * a duplicate. The `created` flag lets callers distinguish first-insert
+   * from re-assertion, which is useful for applying defaults (e.g. roles in
+   * ContactService) without overwriting data set by a later, richer call.
    */
-  async createEntity(options: CreateEntityOptions): Promise<KgNode> {
-    return this.store.createNode({
+  async createEntity(options: CreateEntityOptions): Promise<{ entity: KgNode; created: boolean }> {
+    const { node, created } = await this.store.upsertNode({
       type: options.type,
       label: options.label,
       properties: options.properties,
       source: options.source,
-      // Thread through the optional confidence override
-      confidence: options.confidence,
+      confidence: options.confidence ?? 0.7,
     });
+    return { entity: node, created };
   }
 
   /** Retrieve an entity node by ID. Returns undefined if not found. */

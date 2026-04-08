@@ -9,10 +9,16 @@ import { DeleteRelationshipHandler } from './handler.js';
 import type { SkillContext } from '../../src/skills/types.js';
 
 function makeEntityMemory() {
+  return makeEntityMemoryWithStore().mem;
+}
+
+// Returns both mem and store for tests that need to bypass upsert
+// (e.g. to simulate pre-migration duplicate data by inserting directly)
+function makeEntityMemoryWithStore() {
   const embeddingService = EmbeddingService.createForTesting();
   const store = KnowledgeGraphStore.createInMemory(embeddingService);
   const validator = new MemoryValidator(store, embeddingService);
-  return new EntityMemory(store, validator, embeddingService, createSilentLogger());
+  return { mem: new EntityMemory(store, validator, embeddingService, createSilentLogger()), store };
 }
 
 function makeCtx(entityMemory: EntityMemory, input: Record<string, unknown>): SkillContext {
@@ -38,8 +44,8 @@ describe('DeleteRelationshipHandler', () => {
 
   it('returns deleted:false (idempotent) when edge does not exist', async () => {
     const mem = makeEntityMemory();
-    await mem.createEntity({ type: 'person', label: 'Joseph', properties: {}, source: 'test' });
-    await mem.createEntity({ type: 'person', label: 'Xiaopu', properties: {}, source: 'test' });
+    await mem.createEntity({ type: 'person', label: 'Joseph', properties: {}, source: 'test' }); // return value not needed
+    await mem.createEntity({ type: 'person', label: 'Xiaopu', properties: {}, source: 'test' }); // return value not needed
 
     const handler = new DeleteRelationshipHandler();
     const ctx = makeCtx(mem, { subject: 'Joseph', predicate: 'spouse', object: 'Xiaopu' });
@@ -50,8 +56,8 @@ describe('DeleteRelationshipHandler', () => {
 
   it('deletes the edge and returns deleted:true with edge_id', async () => {
     const mem = makeEntityMemory();
-    const joseph = await mem.createEntity({ type: 'person', label: 'Joseph', properties: {}, source: 'test' });
-    const xiaopu = await mem.createEntity({ type: 'person', label: 'Xiaopu', properties: {}, source: 'test' });
+    const { entity: joseph } = await mem.createEntity({ type: 'person', label: 'Joseph', properties: {}, source: 'test' });
+    const { entity: xiaopu } = await mem.createEntity({ type: 'person', label: 'Xiaopu', properties: {}, source: 'test' });
     const { edge } = await mem.upsertEdge(joseph.id, xiaopu.id, 'spouse', {}, 'test', 0.9);
 
     const handler = new DeleteRelationshipHandler();
@@ -70,8 +76,8 @@ describe('DeleteRelationshipHandler', () => {
 
   it('finds the edge regardless of which direction it was stored', async () => {
     const mem = makeEntityMemory();
-    const joseph = await mem.createEntity({ type: 'person', label: 'Joseph', properties: {}, source: 'test' });
-    const xiaopu = await mem.createEntity({ type: 'person', label: 'Xiaopu', properties: {}, source: 'test' });
+    const { entity: joseph } = await mem.createEntity({ type: 'person', label: 'Joseph', properties: {}, source: 'test' });
+    const { entity: xiaopu } = await mem.createEntity({ type: 'person', label: 'Xiaopu', properties: {}, source: 'test' });
     // Stored with xiaopu as source
     await mem.upsertEdge(xiaopu.id, joseph.id, 'spouse', {}, 'test', 0.9);
 
@@ -85,9 +91,11 @@ describe('DeleteRelationshipHandler', () => {
   });
 
   it('returns ambiguous:true when subject matches multiple nodes', async () => {
-    const mem = makeEntityMemory();
+    // createEntity uses upsertNode which prevents duplicates.
+    // Insert a second node directly to simulate pre-migration duplicate data.
+    const { mem, store } = makeEntityMemoryWithStore();
     await mem.createEntity({ type: 'person', label: 'John Smith', properties: {}, source: 'test' });
-    await mem.createEntity({ type: 'person', label: 'John Smith', properties: {}, source: 'test' });
+    await store.createNode({ type: 'person', label: 'John Smith', properties: {}, source: 'test' });
     await mem.createEntity({ type: 'person', label: 'Jane', properties: {}, source: 'test' });
 
     const handler = new DeleteRelationshipHandler();
@@ -102,10 +110,12 @@ describe('DeleteRelationshipHandler', () => {
   });
 
   it('returns ambiguous:true when object matches multiple nodes', async () => {
-    const mem = makeEntityMemory();
+    // createEntity uses upsertNode which prevents duplicates.
+    // Insert a second node directly to simulate pre-migration duplicate data.
+    const { mem, store } = makeEntityMemoryWithStore();
     await mem.createEntity({ type: 'person', label: 'Joseph', properties: {}, source: 'test' });
     await mem.createEntity({ type: 'person', label: 'Jane Smith', properties: {}, source: 'test' });
-    await mem.createEntity({ type: 'person', label: 'Jane Smith', properties: {}, source: 'test' });
+    await store.createNode({ type: 'person', label: 'Jane Smith', properties: {}, source: 'test' });
 
     const handler = new DeleteRelationshipHandler();
     const ctx = makeCtx(mem, { subject: 'Joseph', predicate: 'manages', object: 'Jane Smith' });
