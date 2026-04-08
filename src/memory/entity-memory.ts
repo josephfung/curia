@@ -314,10 +314,8 @@ export class EntityMemory {
    * - Facts (child fact nodes): secondary's facts are re-stored on primary
    *   via storeFact() to preserve deduplication logic.
    *
-   * Phase 1 scope: scalar properties + facts. Edge re-pointing and secondary
-   * node deletion are deferred to Phase 2.
-   * @TODO Phase 2: re-point relationship edges from secondary to primary,
-   * then delete secondary node.
+   * Phase 1: scalar properties + facts. Phase 2: relationship edge re-pointing
+   * and secondary node deletion (implemented below).
    */
   async mergeEntities(primaryId: string, secondaryId: string): Promise<void> {
     const primaryNode = await this.store.getNode(primaryId);
@@ -370,11 +368,54 @@ export class EntityMemory {
       });
     }
 
-    // @TODO Phase 2: re-point relationship edges from secondaryId to primaryId,
-    // then delete the secondary node. Until then, the secondary node remains in the
-    // KG as a dangling node — its contact row has been deleted, but it is still
-    // reachable via queryEntity(secondaryId) and semantic search. Any code that
-    // resolves a kg_node_id back to a contact will find no contact for this node.
+    // Phase 2: Re-point secondary's entity relationship edges to primary.
+    // We iterate all edges on secondary and upsert equivalent edges on primary.
+    // upsertEdge handles the bidirectional uniqueness constraint atomically —
+    // if primary already has the same edge, confidence is raised rather than
+    // creating a duplicate. Edges to fact nodes are skipped — facts were
+    // already re-stored on primary in Phase 1 via storeFact().
+    const secondaryEdges = await this.store.getEdgesForNode(secondaryId);
+    const secondaryFactNodeIds: string[] = [];
+
+    for (const edge of secondaryEdges) {
+      const isOutbound = edge.sourceNodeId === secondaryId;
+      const otherId = isOutbound ? edge.targetNodeId : edge.sourceNodeId;
+
+      // Self-loop guard (should not exist, but be defensive)
+      if (otherId === secondaryId) continue;
+
+      const otherNode = await this.store.getNode(otherId);
+      if (!otherNode) continue;
+
+      if (otherNode.type === FACT_TYPE) {
+        // Collect secondary fact node IDs for cleanup after edge transfer.
+        // These were re-stored on primary in Phase 1; deleting them here
+        // prevents orphaned fact nodes after the secondary entity is removed.
+        secondaryFactNodeIds.push(otherId);
+        continue;
+      }
+
+      // Transfer the relationship edge to primary
+      await this.store.upsertEdge({
+        sourceNodeId: isOutbound ? primaryId : otherId,
+        targetNodeId: isOutbound ? otherId : primaryId,
+        type: edge.type,
+        properties: edge.properties,
+        confidence: edge.temporal.confidence,
+        decayClass: edge.temporal.decayClass,
+        source: edge.temporal.source,
+      });
+    }
+
+    // Delete secondary's fact nodes (already re-created on primary in Phase 1).
+    // Must happen before deleteNode so cascade doesn't beat us to it.
+    for (const factNodeId of secondaryFactNodeIds) {
+      await this.store.deleteNode(factNodeId);
+    }
+
+    // Delete the secondary entity node. ON DELETE CASCADE on kg_edges removes
+    // any remaining edges (e.g. self-loops or edges not transferred above).
+    await this.store.deleteNode(secondaryId);
   }
 
   /**
