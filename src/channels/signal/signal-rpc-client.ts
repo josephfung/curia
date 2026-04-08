@@ -35,6 +35,7 @@ import type {
   JsonRpcRequest,
   JsonRpcMessage,
   SignalReceiveParams,
+  SignalGroupDetails,
 } from './types.js';
 
 export interface SignalRpcClientConfig {
@@ -158,6 +159,19 @@ export class SignalRpcClient extends EventEmitter {
    */
   async sendReadReceipt(params: SignalReadReceiptParams): Promise<void> {
     await this.call('sendReceipt', params as unknown as Record<string, unknown>);
+  }
+
+  /**
+   * List all Signal groups the account is currently a member of.
+   * Returns the full membership list including phone numbers for each member.
+   * Used by the group trust check to verify all members before engaging.
+   */
+  async listGroups(): Promise<SignalGroupDetails[]> {
+    const result = await this.call('listGroups', { account: this.config.accountNumber });
+    if (!Array.isArray(result)) {
+      throw new Error('listGroups: unexpected response shape from signal-cli — expected array');
+    }
+    return result as SignalGroupDetails[];
   }
 
   // ---------------------------------------------------------------------------

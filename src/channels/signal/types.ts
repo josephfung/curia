@@ -205,3 +205,35 @@ export type JsonRpcMessage =
   | JsonRpcSuccessResponse
   | JsonRpcErrorResponse
   | JsonRpcNotification;
+
+// ---------------------------------------------------------------------------
+// Group types — for listGroups RPC call
+// ---------------------------------------------------------------------------
+
+/**
+ * A single member entry from signal-cli's listGroups response.
+ * Identity anchor is `number` (E.164 phone) — `uuid` is present but not used
+ * for trust decisions since UUIDs can rotate if an account re-registers.
+ */
+export interface SignalGroupMember {
+  /** E.164 phone number, e.g. "+14155552671" */
+  number: string;
+  uuid?: string;
+}
+
+/**
+ * Group details as returned by signal-cli's `listGroups` JSON-RPC method.
+ * `name` is user-defined and NOT trusted for identity — only `members[].number`
+ * values are meaningful for trust checks.
+ */
+export interface SignalGroupDetails {
+  /** Base64-encoded Signal group V2 ID — stable identifier for the group */
+  id: string;
+  /** User-defined group display name — do not use for identity */
+  name: string;
+  /** Current group members (joined) */
+  members: SignalGroupMember[];
+  /** Invited but not yet joined */
+  pendingMembers: SignalGroupMember[];
+  isMember: boolean;
+}

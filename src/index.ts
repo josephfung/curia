@@ -520,6 +520,7 @@ async function main(): Promise<void> {
       outboundGateway,
       contactService,
       phoneNumber: config.signalPhoneNumber,
+      ceoEmail: config.ceoPrimaryEmail,
     });
   }
 

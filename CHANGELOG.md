@@ -29,6 +29,10 @@ bus event types) are noted explicitly even in the `0.x` range.
   hold-for-approval unknown sender policy via channel-trust.yaml), and 1:1 read receipts for
   confirmed senders. `OutboundGateway` extended to support Signal sends alongside email.
   Enable by setting `SIGNAL_SOCKET_PATH` and `SIGNAL_PHONE_NUMBER` env vars (ADR-013).
+- **`signal-send` skill**: proactively send Signal messages (1:1 by E.164 phone number, group by group ID) via the OutboundGateway.
+- **Signal group trust model**: before engaging with any Signal group (inbound or outbound), all member phone numbers are verified against the contact system. Unknown members cause the group message to be held and the CEO notified via email; blocked members cause silent drop. Shared `checkGroupMemberTrust()` helper used by both `SignalAdapter` (inbound) and `signal-send` (outbound).
+- **`SignalRpcClient.listGroups()`**: typed wrapper for signal-cli's `listGroups` JSON-RPC method.
+- **`OutboundGateway.getSignalGroupMembers()`**: resolves a group ID to member phone numbers, excluding Curia's own number.
 
 ---
 
