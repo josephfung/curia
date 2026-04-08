@@ -168,7 +168,8 @@ describe('ExtractFactsHandler', () => {
     const anthropic2 = makeMockAnthropicClient(['yes', facts]);
     const handler2 = new ExtractFactsHandler(anthropic2 as never);
     const ctx2 = makeCtx(entityMemory, { text: 'Joseph lives in Toronto.', source: 'test' });
-    await handler2.execute(ctx2);
+    const result2 = await handler2.execute(ctx2);
+    expect(result2).toEqual({ success: true, data: { stored: 1, skipped: false, failed: 0 } });
 
     // Only one fact node should exist — storeFact merged the second call into the first
     const josephNodes = await entityMemory.findEntities('Joseph Fung');
