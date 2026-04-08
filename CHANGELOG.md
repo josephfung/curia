@@ -11,6 +11,20 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ---
 
+## [Unreleased]
+
+### Fixed
+- **KG node deduplication** — one-time migration deduplicates existing `kg_nodes` rows with matching `(lower(label), type)`, re-pointing edges and contacts to canonical nodes before removing duplicates.
+
+### Added
+- **`kg_nodes` uniqueness constraint** — `idx_kg_nodes_unique` on `(lower(label), type) WHERE type != 'fact'` prevents future duplicate entity nodes.
+- **`KnowledgeGraphStore.upsertNode()`** — idempotent node creation; raises confidence on conflict, never creates duplicates. Returns `{ node, created }`.
+- **`EntityMemory.createEntity()`** — now returns `{ entity, created }` instead of `KgNode`. Delegates to `upsertNode` for race-safe creation. **Breaking change** for callers (all internal call sites updated).
+- **`EntityMemory.updateNode()`** — new public method. Label changes that collide with an existing node of the same type automatically merge the nodes. Returns `{ node, merged }` — callers must use the returned `node.id`, which may differ from the input id when `merged: true`.
+- **`mergeEntities` Phase 2** — re-points secondary entity edges to primary and deletes the secondary node (was previously deferred with a TODO).
+
+---
+
 ## [0.12.1] — 2026-04-07
 
 ### Added
