@@ -150,7 +150,8 @@ export function createConversationCheckpoint(
 ): ConversationCheckpointEvent {
   return {
     id: crypto.randomUUID(),
-    timestamp: new Date().toISOString(),
+    timestamp: new Date(),
+    sourceLayer: 'dispatch',
     type: 'conversation.checkpoint',
     payload,
   };
@@ -549,14 +550,12 @@ async function fireAgentResponse(
     taskEventId,
     conversationId,
     agentId,
-    channelId,
     content = 'ok',
-  }: { taskEventId: string; conversationId: string; agentId: string; channelId: string; content?: string },
+  }: { taskEventId: string; conversationId: string; agentId: string; content?: string },
 ) {
   const event = createAgentResponse({
     agentId,
     conversationId,
-    channelId,
     content,
     parentEventId: taskEventId,
   });
@@ -579,7 +578,6 @@ describe('Dispatcher checkpoint debounce', () => {
       taskEventId: 'task-1',
       conversationId: 'email:thread-abc',
       agentId: 'coordinator',
-      channelId: 'email',
     });
 
     // No checkpoint yet
@@ -601,7 +599,6 @@ describe('Dispatcher checkpoint debounce', () => {
       taskEventId: 'task-1',
       conversationId: 'email:thread-abc',
       agentId: 'coordinator',
-      channelId: 'email',
     });
 
     await vi.advanceTimersByTimeAsync(300); // not yet elapsed
@@ -611,7 +608,6 @@ describe('Dispatcher checkpoint debounce', () => {
       taskEventId: 'task-2',
       conversationId: 'email:thread-abc',
       agentId: 'coordinator',
-      channelId: 'email',
     });
 
     await vi.advanceTimersByTimeAsync(300); // 300ms after reset — still not elapsed
@@ -629,7 +625,6 @@ describe('Dispatcher checkpoint debounce', () => {
       taskEventId: 'task-1',
       conversationId: 'email:thread-abc',
       agentId: 'coordinator',
-      channelId: 'email',
     });
 
     dispatcher.close();

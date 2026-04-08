@@ -149,10 +149,9 @@ This is a bug fix, so a patch bump applies.
 
 - [ ] **Step 2: Bump patch version in package.json**
 
-Find the current version (e.g. `"version": "0.18.0"`) and increment the patch digit:
-```json
-"version": "0.18.1"
-```
+Find the `"version"` field in `package.json` and increment the patch component
+(`x.y.Z` → `x.y.(Z+1)`). Patch bumps apply to bug fixes, small improvements,
+and doc-only changes — see the versioning table in `CLAUDE.md`.
 
 - [ ] **Step 3: Commit**
 

@@ -135,9 +135,11 @@ private scheduleCheckpoint(conversationId: string, agentId: string, channelId: s
 
   const debounceMs = this.config.dispatch?.conversationCheckpointDebounceMs ?? 600_000; // 10 min default
 
-  const timer = setTimeout(async () => {
+  const timer = setTimeout(() => {
     this.checkpointTimers.delete(key);
-    await this.fireCheckpoint(conversationId, agentId, channelId);
+    void this.fireCheckpoint(conversationId, agentId, channelId).catch(err =>
+      this.logger.error({ err, conversationId, agentId }, 'Checkpoint timer callback failed'),
+    );
   }, debounceMs);
 
   this.checkpointTimers.set(key, timer);
