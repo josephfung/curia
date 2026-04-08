@@ -11,7 +11,7 @@
 | 01 | [Memory System](01-memory-system.md) | Knowledge graph, entity memory, working memory, Bullpen, embeddings | Partial — core implemented; Bullpen, context management, decay engine planned |
 | 02 | [Agent System](02-agent-system.md) | Agent definition, lifecycle, state, execution modes, LLM providers | ✅ Implemented |
 | 03 | [Skills & Execution](03-skills-and-execution.md) | Local skills, MCP, discovery, secrets, permissions | Partial — local skills implemented; MCP discovery planned |
-| 04 | [Channels](04-channels.md) | Adapter interface, CLI, HTTP, Email channels, message normalization | Partial — CLI, HTTP, Email done; Signal planned |
+| 04 | [Channels](04-channels.md) | Adapter interface, CLI, HTTP, Signal, Email channels, message normalization | ✅ Implemented |
 | 05 | [Error Recovery](05-error-recovery.md) | Error budgets, state continuity, pattern detection, failure model | ✅ Implemented |
 | 06 | [Audit & Security](06-audit-and-security.md) | Audit log, redaction, tool sanitization, intent drift, security | Partial — basic audit logging in place; redaction & hardening planned |
 | 07 | [Scheduler](07-scheduler.md) | Job model, cron, one-shot, persistent tasks, burst execution | ✅ Implemented |

@@ -294,7 +294,7 @@ The web app requires `WEB_APP_BOOTSTRAP_SECRET` in `.env` — set this to any lo
 | [01](docs/specs/01-memory-system.md) | Memory system (working memory + knowledge graph) | Partial — core implemented; Bullpen, context management, decay engine planned |
 | [02](docs/specs/02-agent-system.md) | Agent system (config, delegation, registry) | ✅ Implemented |
 | [03](docs/specs/03-skills-and-execution.md) | Skills & execution layer | Partial — local skills implemented; MCP discovery planned |
-| [04](docs/specs/04-channels.md) | Channels (CLI, HTTP, Email) | Partial — CLI, HTTP, Email done; Signal planned |
+| [04](docs/specs/04-channels.md) | Channels (CLI, HTTP, Signal, Email) | ✅ Implemented |
 | [05](docs/specs/05-error-recovery.md) | Error recovery (budgets, patterns, continuity) | ✅ Implemented |
 | [06](docs/specs/06-audit-and-security.md) | Audit & security | Partial — basic audit logging in place; redaction & hardening planned |
 | [07](docs/specs/07-scheduler.md) | Scheduler (cron, one-shot, persistent tasks) | ✅ Implemented |
