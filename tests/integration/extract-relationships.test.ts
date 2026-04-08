@@ -14,6 +14,7 @@ import { KnowledgeGraphStore } from '../../src/memory/knowledge-graph.js';
 import { EmbeddingService } from '../../src/memory/embedding.js';
 import { EntityMemory } from '../../src/memory/entity-memory.js';
 import { MemoryValidator } from '../../src/memory/validation.js';
+import { createSilentLogger } from '../../src/logger.js';
 import { EntityContextAssembler } from '../../src/entity-context/assembler.js';
 import { ExtractRelationshipsHandler } from '../../skills/extract-relationships/handler.js';
 import type { SkillContext } from '../../src/skills/types.js';
@@ -55,7 +56,7 @@ describeIf('extract-relationships integration', () => {
     const embeddingService = EmbeddingService.createForTesting();
     const store = KnowledgeGraphStore.createWithPostgres(pool, embeddingService, logger);
     const validator = new MemoryValidator(store, embeddingService);
-    entityMemory = new EntityMemory(store, validator, embeddingService);
+    entityMemory = new EntityMemory(store, validator, embeddingService, createSilentLogger());
     assembler = new EntityContextAssembler(pool, logger);
 
     await pool.query('SELECT 1 FROM kg_nodes LIMIT 0');

@@ -12,7 +12,7 @@ import { KnowledgeGraphStore } from '../../src/memory/knowledge-graph.js';
 import { EmbeddingService } from '../../src/memory/embedding.js';
 import { EntityMemory } from '../../src/memory/entity-memory.js';
 import { MemoryValidator } from '../../src/memory/validation.js';
-import { createLogger } from '../../src/logger.js';
+import { createLogger, createSilentLogger } from '../../src/logger.js';
 import type { Logger } from '../../src/logger.js';
 import { DedupService } from '../../src/contacts/dedup-service.js';
 
@@ -36,7 +36,7 @@ describeIf('Contacts Integration', () => {
     const embeddingService = EmbeddingService.createForTesting();
     const kgStore = KnowledgeGraphStore.createWithPostgres(pool, embeddingService, logger);
     const validator = new MemoryValidator(kgStore, embeddingService);
-    entityMemory = new EntityMemory(kgStore, validator, embeddingService);
+    entityMemory = new EntityMemory(kgStore, validator, embeddingService, createSilentLogger());
     contactService = ContactService.createWithPostgres(pool, entityMemory, logger);
     resolver = new ContactResolver(contactService, entityMemory, undefined, logger);
 

@@ -4,7 +4,7 @@ import { KnowledgeGraphStore } from '../../src/memory/knowledge-graph.js';
 import { EmbeddingService } from '../../src/memory/embedding.js';
 import { EntityMemory } from '../../src/memory/entity-memory.js';
 import { MemoryValidator } from '../../src/memory/validation.js';
-import { createLogger } from '../../src/logger.js';
+import { createLogger, createSilentLogger } from '../../src/logger.js';
 
 const { Pool } = pg;
 
@@ -23,7 +23,7 @@ describeIf('Knowledge Graph Integration', () => {
     const embeddingService = EmbeddingService.createForTesting();
     store = KnowledgeGraphStore.createWithPostgres(pool, embeddingService, logger);
     const validator = new MemoryValidator(store, embeddingService);
-    entityMemory = new EntityMemory(store, validator, embeddingService);
+    entityMemory = new EntityMemory(store, validator, embeddingService, createSilentLogger());
 
     // Verify pgvector extension and tables exist
     await pool.query('SELECT 1 FROM kg_nodes LIMIT 0');

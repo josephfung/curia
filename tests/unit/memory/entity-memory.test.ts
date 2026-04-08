@@ -3,6 +3,7 @@ import { EntityMemory } from '../../../src/memory/entity-memory.js';
 import { KnowledgeGraphStore } from '../../../src/memory/knowledge-graph.js';
 import { EmbeddingService } from '../../../src/memory/embedding.js';
 import { MemoryValidator } from '../../../src/memory/validation.js';
+import { createSilentLogger } from '../../../src/logger.js';
 
 describe('EntityMemory', () => {
   let entityMemory: EntityMemory;
@@ -12,7 +13,7 @@ describe('EntityMemory', () => {
     const embeddingService = EmbeddingService.createForTesting();
     store = KnowledgeGraphStore.createInMemory(embeddingService);
     const validator = new MemoryValidator(store, embeddingService);
-    entityMemory = new EntityMemory(store, validator, embeddingService);
+    entityMemory = new EntityMemory(store, validator, embeddingService, createSilentLogger());
   });
 
   describe('entity management', () => {
@@ -192,7 +193,7 @@ describe('EntityMemory', () => {
       // validate() not validateContradiction(). This test verifies the rejected path.
       // Hit the rate limit to force a rejection.
       const validator = new MemoryValidator(store, EmbeddingService.createForTesting());
-      const em = new EntityMemory(store, validator, EmbeddingService.createForTesting());
+      const em = new EntityMemory(store, validator, EmbeddingService.createForTesting(), createSilentLogger());
       // Pre-fill rate limit counter
       for (let i = 0; i < 50; i++) {
         validator.recordWrite('agent:test/task:rate-limit-test');
@@ -266,7 +267,7 @@ describe('EntityMemory', () => {
       const embeddingService = EmbeddingService.createForTesting();
       const localStore = KnowledgeGraphStore.createInMemory(embeddingService);
       const validator = new MemoryValidator(localStore, embeddingService);
-      const em = new EntityMemory(localStore, validator, embeddingService);
+      const em = new EntityMemory(localStore, validator, embeddingService, createSilentLogger());
 
       const entity = await em.createEntity({
         type: 'person',

@@ -163,7 +163,7 @@ async function main(): Promise<void> {
     const embeddingService = EmbeddingService.createWithOpenAI(config.openaiApiKey, logger);
     const kgStore = KnowledgeGraphStore.createWithPostgres(pool, embeddingService, logger);
     const validator = new MemoryValidator(kgStore, embeddingService);
-    entityMemory = new EntityMemory(kgStore, validator, embeddingService);
+    entityMemory = new EntityMemory(kgStore, validator, embeddingService, logger);
     logger.info('Entity memory initialized with knowledge graph');
   } else {
     logger.warn('OPENAI_API_KEY not set — entity memory disabled (knowledge graph unavailable)');

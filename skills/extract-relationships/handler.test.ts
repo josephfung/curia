@@ -9,6 +9,7 @@ import { KnowledgeGraphStore } from '../../src/memory/knowledge-graph.js';
 import { EmbeddingService } from '../../src/memory/embedding.js';
 import { EntityMemory } from '../../src/memory/entity-memory.js';
 import { MemoryValidator } from '../../src/memory/validation.js';
+import { createSilentLogger } from '../../src/logger.js';
 import { ExtractRelationshipsHandler } from './handler.js';
 import type { SkillContext } from '../../src/skills/types.js';
 
@@ -18,7 +19,7 @@ function makeEntityMemory(): EntityMemory {
   const embeddingService = EmbeddingService.createForTesting();
   const store = KnowledgeGraphStore.createInMemory(embeddingService);
   const validator = new MemoryValidator(store, embeddingService);
-  return new EntityMemory(store, validator, embeddingService);
+  return new EntityMemory(store, validator, embeddingService, createSilentLogger());
 }
 
 function makeCtx(entityMemory: EntityMemory, input: Record<string, unknown>): SkillContext {
