@@ -9,7 +9,7 @@ import type { SkillResult } from '../skills/types.js';
 // Add new checkpoint skills here — no changes to Dispatch or the runtime required.
 const CHECKPOINT_SKILLS: Array<{ name: string }> = [
   { name: 'extract-relationships' },
-  // { name: 'extract-entities' },  // add when issue #151 is built
+  { name: 'extract-facts' },
 ];
 
 export class ConversationCheckpointProcessor {
