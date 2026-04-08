@@ -3,30 +3,34 @@ import { Dispatcher } from '../../../src/dispatch/dispatcher.js';
 import type { EventBus } from '../../../src/bus/bus.js';
 import type { DbPool } from '../../../src/db/connection.js';
 import type { Logger } from '../../../src/logger.js';
-import { createAgentResponse } from '../../../src/bus/events.js';
+import { createAgentResponse, type BusEvent, type ConversationCheckpointEvent } from '../../../src/bus/events.js';
+
+function isCheckpointEvent(e: BusEvent): e is ConversationCheckpointEvent {
+  return e.type === 'conversation.checkpoint';
+}
 
 function makeStubs(debounceMs = 500) {
-  const publishedEvents: unknown[] = [];
-  const subscribeHandlers = new Map<string, (event: unknown) => Promise<void>>();
+  const publishedEvents: BusEvent[] = [];
+  const subscribeHandlers = new Map<string, (event: BusEvent) => Promise<void>>();
 
   const bus = {
-    subscribe: vi.fn((eventType: string, _layer: string, handler: (e: unknown) => Promise<void>) => {
+    subscribe: vi.fn((eventType: string, _layer: string, handler: (e: BusEvent) => Promise<void>) => {
       subscribeHandlers.set(eventType, handler);
     }),
-    publish: vi.fn(async (_layer: string, event: unknown) => {
+    publish: vi.fn(async (_layer: string, event: BusEvent) => {
       publishedEvents.push(event);
     }),
   } as unknown as EventBus;
 
   // Two-call sequence for every fireCheckpoint invocation:
   //   call 1 — conversation_checkpoints watermark query → no prior watermark
-  //   call 2 — working_memory turns query → one turn to process
+  //   call 2 — working_memory turns query → one turn to process (includes created_at for `through`)
   const queryMock = vi.fn()
     .mockResolvedValueOnce({ rows: [] })
-    .mockResolvedValueOnce({ rows: [{ role: 'user', content: 'hello' }] })
+    .mockResolvedValueOnce({ rows: [{ role: 'user', content: 'hello', created_at: '2026-01-01T00:00:00Z' }] })
     // Subsequent invocations (reset/debounce tests) also need pairs
     .mockResolvedValueOnce({ rows: [] })
-    .mockResolvedValueOnce({ rows: [{ role: 'user', content: 'hello again' }] });
+    .mockResolvedValueOnce({ rows: [{ role: 'user', content: 'hello again', created_at: '2026-01-01T00:01:00Z' }] });
 
   const pool = { query: queryMock } as unknown as DbPool;
 
@@ -51,7 +55,7 @@ function seedRouting(dispatcher: Dispatcher, taskEventId: string, channelId: str
 }
 
 async function fireAgentResponse(
-  subscribeHandlers: Map<string, (event: unknown) => Promise<void>>,
+  subscribeHandlers: Map<string, (event: BusEvent) => Promise<void>>,
   {
     taskEventId,
     conversationId,
@@ -88,14 +92,14 @@ describe('Dispatcher checkpoint debounce', () => {
     });
 
     // No checkpoint yet — debounce hasn't elapsed
-    expect(publishedEvents.filter((e: any) => e.type === 'conversation.checkpoint')).toHaveLength(0);
+    expect(publishedEvents.filter(isCheckpointEvent)).toHaveLength(0);
 
     // Advance time past debounce
     await vi.advanceTimersByTimeAsync(600);
 
-    const checkpoints = publishedEvents.filter((e: any) => e.type === 'conversation.checkpoint');
+    const checkpoints = publishedEvents.filter(isCheckpointEvent);
     expect(checkpoints).toHaveLength(1);
-    expect((checkpoints[0] as any).payload.conversationId).toBe('email:thread-abc');
+    expect(checkpoints[0]!.payload.conversationId).toBe('email:thread-abc');
   });
 
   it('resets the timer on a second agent.response before debounce elapses', async () => {
@@ -120,10 +124,10 @@ describe('Dispatcher checkpoint debounce', () => {
     });
 
     await vi.advanceTimersByTimeAsync(300); // 300ms after reset — still not elapsed
-    expect(publishedEvents.filter((e: any) => e.type === 'conversation.checkpoint')).toHaveLength(0);
+    expect(publishedEvents.filter(isCheckpointEvent)).toHaveLength(0);
 
     await vi.advanceTimersByTimeAsync(300); // now past debounce from second response
-    expect(publishedEvents.filter((e: any) => e.type === 'conversation.checkpoint')).toHaveLength(1);
+    expect(publishedEvents.filter(isCheckpointEvent)).toHaveLength(1);
   });
 
   it('clears all timers on close() — no checkpoint fires after shutdown', async () => {
@@ -140,6 +144,6 @@ describe('Dispatcher checkpoint debounce', () => {
     dispatcher.close();
 
     await vi.advanceTimersByTimeAsync(1000);
-    expect(publishedEvents.filter((e: any) => e.type === 'conversation.checkpoint')).toHaveLength(0);
+    expect(publishedEvents.filter(isCheckpointEvent)).toHaveLength(0);
   });
 });

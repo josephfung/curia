@@ -36,10 +36,14 @@ async function fireCheckpoint(
     agentId: string;
     channelId: string;
     since: string;
+    through?: string;
     turns: Array<{ role: 'user' | 'assistant'; content: string }>;
   },
 ) {
-  const event = createConversationCheckpoint(payload);
+  const event = createConversationCheckpoint({
+    ...payload,
+    through: payload.through ?? '2026-01-01T00:00:00Z',
+  });
   const handler = subscribeHandlers.get('conversation.checkpoint');
   if (!handler) throw new Error('No handler registered for conversation.checkpoint');
   await handler(event);
@@ -105,7 +109,7 @@ describe('ConversationCheckpointProcessor', () => {
 
     expect(stubs.queryMock).toHaveBeenCalledWith(
       expect.stringContaining('INSERT INTO conversation_checkpoints'),
-      ['email:thread-abc', 'coordinator'],
+      ['email:thread-abc', 'coordinator', '2026-01-01T00:00:00Z'],
     );
   });
 

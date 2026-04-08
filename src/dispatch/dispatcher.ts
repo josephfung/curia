@@ -434,19 +434,22 @@ export class Dispatcher {
       );
       const since = watermarkResult.rows[0]?.last_checkpoint_at ?? '';
 
-      // Fetch turns from working memory since the watermark.
+      // Fetch turns from working memory since the watermark. Also select created_at so
+      // we can carry the newest turn's timestamp as `through` in the event payload — the
+      // processor uses that exact value as the new watermark, avoiding the window between
+      // the batch read and the upsert where new turns could otherwise be silently skipped.
       // Two explicit query strings rather than a conditional template fragment — avoids
       // the risk of a parameter slot ($3) drifting out of sync with the array when edited.
       const turnsQuery = since
-        ? `SELECT role, content FROM working_memory
+        ? `SELECT role, content, created_at FROM working_memory
            WHERE conversation_id = $1 AND agent_id = $2
              AND role IN ('user', 'assistant') AND created_at > $3
            ORDER BY created_at ASC`
-        : `SELECT role, content FROM working_memory
+        : `SELECT role, content, created_at FROM working_memory
            WHERE conversation_id = $1 AND agent_id = $2
              AND role IN ('user', 'assistant')
            ORDER BY created_at ASC`;
-      const turnsResult = await this.pool!.query<{ role: string; content: string }>(
+      const turnsResult = await this.pool!.query<{ role: string; content: string; created_at: string }>(
         turnsQuery,
         since ? [conversationId, agentId, since] : [conversationId, agentId],
       );
@@ -461,11 +464,15 @@ export class Dispatcher {
         content: row.content,
       }));
 
+      // Use the last row's created_at as the batch upper bound (rows ordered ASC).
+      const through = turnsResult.rows[turnsResult.rows.length - 1]!.created_at;
+
       const event = createConversationCheckpoint({
         conversationId,
         agentId,
         channelId,
         since,
+        through,
         turns,
       });
 

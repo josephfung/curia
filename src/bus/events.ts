@@ -384,6 +384,10 @@ interface ConversationCheckpointPayload {
   channelId: string;
   /** ISO timestamp — turns created after this point are included. Empty string on first checkpoint. */
   since: string;
+  /** ISO timestamp of the newest turn in this batch. Used as the new watermark value
+   *  in conversation_checkpoints.last_checkpoint_at; avoids advancing the watermark past
+   *  turns that arrived between the DB read and the upsert. */
+  through: string;
   /** Ordered chronologically (oldest first). Contains only turns since `since`. */
   turns: Array<{ role: 'user' | 'assistant'; content: string }>;
 }

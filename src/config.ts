@@ -99,6 +99,13 @@ export function loadYamlConfig(configDir: string): YamlConfig {
       throw new Error(`skillOutput.maxLength must be a positive integer, got: ${maxLength}`);
     }
 
+    const checkpointDebounceMs = config.dispatch?.conversationCheckpointDebounceMs;
+    if (checkpointDebounceMs !== undefined && (!Number.isInteger(checkpointDebounceMs) || checkpointDebounceMs <= 0)) {
+      throw new Error(
+        `dispatch.conversationCheckpointDebounceMs must be a positive integer, got: ${checkpointDebounceMs}`,
+      );
+    }
+
     return config;
   } catch (err) {
     // File absent in test/CI environments — silently return empty config.
