@@ -213,7 +213,7 @@ ${text}`,
           } else {
             // storeFact returns stored:false on rate-limit rejection or contradiction.
             // Log at warn (not error) — these are expected semantic outcomes, not infra failures.
-            ctx.log.warn({ subject: fact.subject, attribute: fact.attribute, conflict: result.conflict }, 'extract-facts: fact rejected or conflicted');
+            ctx.log.warn({ subject: fact.subject, attribute: fact.attribute, conflict: result.conflict, source }, 'extract-facts: fact rejected or conflicted');
           }
         } catch (err) {
           // Log at error — persistence failures are infrastructure errors (DB outage,

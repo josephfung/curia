@@ -203,4 +203,23 @@ describe('ExtractFactsHandler', () => {
 
     expect(result).toEqual({ success: true, data: { stored: 0, skipped: false, failed: 0 } });
   });
+
+  it('handles storeFact returning stored:false (rate-limit or contradiction) — not counted as failed', async () => {
+    const entityMemory = makeEntityMemory();
+    const facts = JSON.stringify([
+      { subject: 'Joseph Fung', subjectType: 'person', attribute: 'home_city', value: 'Toronto', confidence: 0.9, decayClass: 'slow_decay' },
+    ]);
+    const anthropic = makeMockAnthropicClient(['yes', facts]);
+    const handler = new ExtractFactsHandler(anthropic as never);
+
+    // Mock storeFact to return stored:false (simulates rate-limit rejection or contradiction)
+    const storeFact = vi.spyOn(entityMemory, 'storeFact').mockResolvedValueOnce({ stored: false, conflict: 'Rate limit exceeded' });
+
+    const ctx = makeCtx(entityMemory, { text: 'Joseph lives in Toronto.', source: 'test' });
+    const result = await handler.execute(ctx);
+
+    // stored:false is not counted as failed — it is an expected semantic outcome
+    expect(result).toEqual({ success: true, data: { stored: 0, skipped: false, failed: 0 } });
+    expect(storeFact).toHaveBeenCalledOnce();
+  });
 });
