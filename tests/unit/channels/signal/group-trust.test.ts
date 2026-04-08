@@ -7,7 +7,7 @@ import type { ContactService } from '../../../../src/contacts/contact-service.js
  * for the given phone numbers, and null for any other identifier.
  */
 function makeContactService(
-  responses: Record<string, { contactId: string; status: string } | null>,
+  responses: Record<string, { contactId: string; status: 'confirmed' | 'provisional' | 'blocked' } | null>,
 ): ContactService {
   return {
     resolveByChannelIdentity: vi.fn().mockImplementation(
@@ -20,7 +20,7 @@ function makeContactService(
 describe('checkGroupMemberTrust', () => {
   it('returns trusted:true when all members are verified contacts', async () => {
     const svc = makeContactService({
-      '+14155551234': { contactId: 'c1', status: 'active' },
+      '+14155551234': { contactId: 'c1', status: 'confirmed' },
       '+14165559999': { contactId: 'c2', status: 'confirmed' },
     });
 

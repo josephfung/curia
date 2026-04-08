@@ -36,7 +36,7 @@ export interface GroupTrustResult {
  * Each phone is resolved against the contact system:
  *   - null contact or status 'provisional' → unknownMember
  *   - status 'blocked'                     → blockedMember
- *   - any other status (active, confirmed)  → trusted
+ *   - status 'confirmed' (any non-provisional, non-blocked status) → trusted
  *
  * @param memberPhones - E.164 numbers of group members (own account already excluded)
  * @param contactService - ContactService for resolving phone numbers to contacts
@@ -55,7 +55,7 @@ export async function checkGroupMemberTrust(
     } else if (contact.status === 'blocked') {
       blockedMembers.push(phone);
     }
-    // active / confirmed / any other non-provisional, non-blocked status → trusted
+    // confirmed / any other non-provisional, non-blocked status → trusted
   }
 
   return {

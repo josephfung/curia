@@ -137,7 +137,7 @@ export async function checkGroupMemberTrust(
 - `resolveByChannelIdentity('signal', phone)` → null | contact
 - null or status `'provisional'` → unknownMember
 - status `'blocked'` → blockedMember
-- status `'active'` (or other non-provisional/non-blocked) → trusted
+- status `'confirmed'` (or other non-provisional/non-blocked) → trusted
 
 `trusted: true` iff `unknownMembers.length === 0 && blockedMembers.length === 0`.
 
@@ -329,7 +329,7 @@ Coordinator (via CEO request)
 | `skills/signal-send/handler.ts` | New skill handler |
 | `skills/signal-send/handler.test.ts` | New skill tests |
 | `CHANGELOG.md` | Add entry under `[Unreleased]` |
-| `package.json` | Bump version to `0.11.0` (new skill = minor) |
+| `package.json` | Bump version to `0.12.1` |
 
 ---
 

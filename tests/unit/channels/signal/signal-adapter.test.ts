@@ -402,9 +402,9 @@ describe('SignalAdapter', () => {
       (rpcClient.listGroups as ReturnType<typeof vi.fn>).mockResolvedValue([
         { id: GROUP_ID, name: 'G', members: [{ number: '+14155551234' }], pendingMembers: [], isMember: true },
       ]);
-      // contactService resolves the member as active
+      // contactService resolves the member as confirmed (trusted)
       (contactService.resolveByChannelIdentity as ReturnType<typeof vi.fn>).mockResolvedValue(
-        { contactId: 'c1', status: 'active' },
+        { contactId: 'c1', status: 'confirmed' },
       );
 
       rpcClient.simulateMessage(makeGroupEnvelope(GROUP_ID));

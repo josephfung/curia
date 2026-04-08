@@ -83,9 +83,9 @@ export class SignalSendHandler implements SkillHandler {
       try {
         memberPhones = await ctx.outboundGateway.getSignalGroupMembers(group_id);
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
+        const errMessage = err instanceof Error ? err.message : String(err);
         ctx.log.warn({ err, groupId: '[redacted]' }, 'signal-send: failed to fetch group members');
-        return { success: false, error: `Could not retrieve group members: ${message}` };
+        return { success: false, error: `Could not retrieve group members: ${errMessage}` };
       }
 
       let trust: Awaited<ReturnType<typeof checkGroupMemberTrust>>;
