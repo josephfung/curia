@@ -89,3 +89,66 @@ describe('EntityMemory.mergeEntities Phase 2', () => {
     expect(primaryFacts.some(f => f.label === 'title: CEO')).toBe(true);
   });
 });
+
+describe('EntityMemory.updateNode', () => {
+  it('updates properties without merge when no label change', async () => {
+    const { mem } = makeEntityMemory();
+    const node = await mem.createEntity({ type: 'person', label: 'Alice', properties: {}, source: 'test' });
+
+    const { node: updated, merged } = await mem.updateNode(node.id, { properties: { role: 'CEO' } });
+
+    expect(merged).toBe(false);
+    expect(updated.id).toBe(node.id);
+    expect(updated.properties).toEqual({ role: 'CEO' });
+  });
+
+  it('updates label without merge when no collision', async () => {
+    const { mem } = makeEntityMemory();
+    const node = await mem.createEntity({ type: 'person', label: 'Joe', properties: {}, source: 'test' });
+
+    const { node: updated, merged } = await mem.updateNode(node.id, { label: 'Joseph' });
+
+    expect(merged).toBe(false);
+    expect(updated.id).toBe(node.id);
+    expect(updated.label).toBe('Joseph');
+  });
+
+  it('merges nodes when label update collides with an existing node of the same type', async () => {
+    const { mem } = makeEntityMemory();
+    const canonical = await mem.createEntity({ type: 'person', label: 'Joseph Fung', properties: {}, source: 'test' });
+    const toRename = await mem.createEntity({ type: 'person', label: 'Joe', properties: {}, source: 'test' });
+
+    const { node: result, merged } = await mem.updateNode(toRename.id, { label: 'Joseph Fung' });
+
+    expect(merged).toBe(true);
+    // Returned node is the canonical, not the renamed node
+    expect(result.id).toBe(canonical.id);
+    // The renamed node no longer exists
+    expect(await mem.getEntity(toRename.id)).toBeUndefined();
+  });
+
+  it('does NOT merge when same label but different type', async () => {
+    const { mem } = makeEntityMemory();
+    await mem.createEntity({ type: 'organization', label: 'Apple', properties: {}, source: 'test' });
+    const concept = await mem.createEntity({ type: 'concept', label: 'Fruit', properties: {}, source: 'test' });
+
+    // Renaming concept to 'Apple' — no collision because types differ
+    const { merged } = await mem.updateNode(concept.id, { label: 'Apple' });
+
+    expect(merged).toBe(false);
+  });
+
+  it('transfers edges to canonical on merge-on-collision', async () => {
+    const { mem } = makeEntityMemory();
+    const canonical = await mem.createEntity({ type: 'person', label: 'Joseph Fung', properties: {}, source: 'test' });
+    const toRename = await mem.createEntity({ type: 'person', label: 'Joe', properties: {}, source: 'test' });
+    const org = await mem.createEntity({ type: 'organization', label: 'Acme', properties: {}, source: 'test' });
+
+    await mem.upsertEdge(toRename.id, org.id, 'member_of', {}, 'test', 0.8);
+
+    await mem.updateNode(toRename.id, { label: 'Joseph Fung' });
+
+    const edges = await mem.findEdges(canonical.id);
+    expect(edges.some(e => e.node.id === org.id && e.edge.type === 'member_of')).toBe(true);
+  });
+});

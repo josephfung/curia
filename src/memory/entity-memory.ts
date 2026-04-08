@@ -97,6 +97,68 @@ export class EntityMemory {
   }
 
   /**
+   * Update a node's label and/or properties.
+   *
+   * ╔══════════════════════════════════════════════════════════════════════╗
+   * ║  IMPORTANT — READ BEFORE CALLING THIS METHOD                        ║
+   * ║                                                                      ║
+   * ║  When `updates.label` is provided, this method checks whether the   ║
+   * ║  new label collides with an existing node of the same type.         ║
+   * ║  If a collision is found, the two nodes are MERGED — the existing   ║
+   * ║  node becomes canonical and the node you passed in is DELETED.      ║
+   * ║                                                                      ║
+   * ║  When merged === true:                                               ║
+   * ║    • node.id in the result is DIFFERENT from the id you passed in   ║
+   * ║    • The original id no longer exists in the knowledge graph        ║
+   * ║    • You MUST update any local reference to the old id              ║
+   * ║    • Surface this to the agent — it needs to know the canonical id  ║
+   * ║                                                                      ║
+   * ║  Example:                                                            ║
+   * ║    const { node, merged } = await entityMemory.updateNode(          ║
+   * ║      joeId, { label: 'Joseph Fung' }                                ║
+   * ║    );                                                                ║
+   * ║    if (merged) {                                                     ║
+   * ║      // joeId is gone. node.id is the canonical Joseph Fung node.   ║
+   * ║      // Log, surface to the agent, update your local reference.     ║
+   * ║    }                                                                 ║
+   * ╚══════════════════════════════════════════════════════════════════════╝
+   */
+  async updateNode(
+    id: string,
+    updates: { label?: string; properties?: Record<string, unknown> },
+  ): Promise<{ node: KgNode; merged: boolean }> {
+    if (!updates.label) {
+      // Properties-only update — no collision possible, simple pass-through
+      const node = await this.store.updateNode(id, updates);
+      return { node, merged: false };
+    }
+
+    // Label change: check for a collision with an existing node of the same type
+    const current = await this.store.getNode(id);
+    if (!current) throw new Error(`Node not found: ${id}`);
+
+    if (current.type !== FACT_TYPE) {
+      const candidates = await this.store.findNodesByLabel(updates.label);
+      const collision = candidates.find(n => n.type === current.type && n.id !== id);
+
+      if (collision) {
+        // Merge: the existing node is canonical; the node being renamed is secondary.
+        // mergeEntities handles property merge, fact migration, edge re-pointing,
+        // and deletion of the secondary node.
+        await this.mergeEntities(collision.id, id);
+        // Re-fetch canonical to get post-merge state (properties may have been updated)
+        const canonical = await this.store.getNode(collision.id);
+        if (!canonical) throw new Error(`Canonical node not found after merge: ${collision.id}`);
+        return { node: canonical, merged: true };
+      }
+    }
+
+    // No collision — proceed with normal label update
+    const node = await this.store.updateNode(id, updates);
+    return { node, merged: false };
+  }
+
+  /**
    * Find entity nodes by label (case-insensitive, exact match).
    * Delegates to store.findNodesByLabel which uses ILIKE in Postgres
    * and a toLowerCase comparison in the in-memory backend.
