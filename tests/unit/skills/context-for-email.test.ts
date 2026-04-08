@@ -42,7 +42,8 @@ function makeEntityMemory() {
       const entity = { id, label: opts.label, properties: opts.properties };
       entities.set(id, entity);
       facts.set(id, []);
-      return entity;
+      // Return the new { entity, created } shape matching the updated createEntity API
+      return { entity, created: true };
     }),
     storeFact: vi.fn(async (opts: { entityNodeId: string; label: string; properties: Record<string, unknown>; confidence: number; decayClass: string; source: string }) => {
       const entityFacts = facts.get(opts.entityNodeId) ?? [];
@@ -142,7 +143,7 @@ describe('ContextForEmailHandler', () => {
     it('includes meeting link when found in KG', async () => {
       const em = makeEntityMemory();
       // Set up a meeting-links anchor with Alice's Zoom link
-      const anchor = await em.createEntity({
+      const { entity: anchor } = await em.createEntity({
         type: 'concept', label: 'meeting-links',
         properties: {}, source: 'test',
       });

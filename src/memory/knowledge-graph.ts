@@ -57,6 +57,9 @@ interface KnowledgeGraphBackend {
   // Atomic upsert: creates if no matching (src, tgt, type) pair exists in either
   // direction; otherwise raises confidence and refreshes lastConfirmedAt.
   upsertEdge(edge: KgEdge): Promise<{ edge: KgEdge; created: boolean }>;
+  // Idempotent node creation: matches on lower(label) + type for non-fact nodes.
+  // fact nodes always insert as new regardless of label collision.
+  upsertNode(node: KgNode): Promise<{ node: KgNode; created: boolean }>;
   traverse(startNodeId: string, maxDepth: number): Promise<TraversalResult>;
   semanticSearch(queryEmbedding: number[], limit: number): Promise<SearchResult[]>;
 }
@@ -126,6 +129,40 @@ export class KnowledgeGraphStore {
 
     await this.backend.createNode(node);
     return node;
+  }
+
+  /**
+   * Idempotent node creation for non-fact entity nodes.
+   *
+   * Creates a new node if none with the same (lower(label), type) exists.
+   * If one exists, raises its confidence (never lowers) and refreshes
+   * lastConfirmedAt. Properties, label, and embedding of the existing node
+   * are left untouched — use updateNode() to change those explicitly.
+   *
+   * fact nodes always create a new node regardless of label collision.
+   *
+   * Returns the persisted node and whether it was newly created.
+   */
+  async upsertNode(options: CreateNodeOptions & { confidence: number }): Promise<{ node: KgNode; created: boolean }> {
+    const now = new Date();
+    const embedding = options.embedding ?? await this.embeddingService.embed(options.label);
+
+    const node: KgNode = {
+      id: createNodeId(),
+      type: options.type,
+      label: options.label,
+      properties: { ...options.properties },
+      embedding,
+      temporal: {
+        createdAt: now,
+        lastConfirmedAt: now,
+        confidence: options.confidence,
+        decayClass: options.decayClass ?? 'slow_decay',
+        source: options.source,
+      },
+    };
+
+    return this.backend.upsertNode(node);
   }
 
   /** Retrieve a node by ID, or undefined if not found */
@@ -300,6 +337,40 @@ class PostgresBackend implements KnowledgeGraphBackend {
     );
   }
 
+  async upsertNode(node: KgNode): Promise<{ node: KgNode; created: boolean }> {
+    this.logger.debug({ type: node.type, label: node.label }, 'kg: upserting node');
+    const embeddingStr = node.embedding ? `[${node.embedding.join(',')}]` : null;
+    const result = await this.pool.query<PgNodeRow & { is_new: boolean }>(
+      `INSERT INTO kg_nodes (id, type, label, properties, embedding, confidence, decay_class, source, created_at, last_confirmed_at)
+       VALUES ($1, $2, $3, $4, $5::vector, $6, $7, $8, $9, $9)
+       ON CONFLICT (lower(label), type) WHERE type != 'fact'
+       DO UPDATE SET
+         confidence = GREATEST(kg_nodes.confidence, EXCLUDED.confidence),
+         last_confirmed_at = EXCLUDED.last_confirmed_at
+       RETURNING *, (xmax = 0) AS is_new`,
+      [
+        node.id,
+        node.type,
+        node.label,
+        JSON.stringify(node.properties),
+        embeddingStr,
+        node.temporal.confidence,
+        node.temporal.decayClass,
+        node.temporal.source,
+        node.temporal.createdAt,
+      ],
+    );
+    const row = result.rows[0];
+    if (!row) {
+      this.logger.error(
+        { type: node.type, label: node.label },
+        'kg: upsertNode — RETURNING produced no row; possible trigger or RLS suppression',
+      );
+      throw new Error('upsertNode: database returned no row after INSERT ... ON CONFLICT');
+    }
+    return { node: pgRowToNode(row), created: row.is_new };
+  }
+
   async getNode(id: string): Promise<KgNode | undefined> {
     const result = await this.pool.query<PgNodeRow>(
       'SELECT * FROM kg_nodes WHERE id = $1',
@@ -387,8 +458,8 @@ class PostgresBackend implements KnowledgeGraphBackend {
   async upsertEdge(edge: KgEdge): Promise<{ edge: KgEdge; created: boolean }> {
     this.logger.debug({ sourceNodeId: edge.sourceNodeId, targetNodeId: edge.targetNodeId, type: edge.type }, 'kg: upserting edge');
     // ON CONFLICT uses the full expression from idx_kg_edges_unique.
-    // RETURNING (created_at = $9) detects new inserts: for a new row, created_at equals
-    // the value we passed in ($9 = now); for an update, created_at stays as the original.
+    // xmax = 0 reliably detects new inserts: Postgres sets xmax to 0 on INSERT and
+    // to the updating transaction XID on UPDATE, making it the canonical new-row check.
     const result = await this.pool.query<PgEdgeRow & { is_new: boolean }>(
       `INSERT INTO kg_edges
          (id, source_node_id, target_node_id, type, properties, confidence, decay_class, source, created_at, last_confirmed_at)
@@ -400,7 +471,7 @@ class PostgresBackend implements KnowledgeGraphBackend {
        ) DO UPDATE SET
          confidence = GREATEST(kg_edges.confidence, EXCLUDED.confidence),
          last_confirmed_at = EXCLUDED.last_confirmed_at
-       RETURNING *, (created_at = $9) AS is_new`,
+       RETURNING *, (xmax = 0) AS is_new`,
       [
         edge.id,
         edge.sourceNodeId,
@@ -591,6 +662,39 @@ class InMemoryBackend implements KnowledgeGraphBackend {
 
   async createNode(node: KgNode): Promise<void> {
     this.nodes.set(node.id, node);
+  }
+
+  async upsertNode(node: KgNode): Promise<{ node: KgNode; created: boolean }> {
+    // fact nodes are never deduplicated — always insert as new
+    if (node.type === 'fact') {
+      this.nodes.set(node.id, node);
+      return { node, created: true };
+    }
+
+    const lowerLabel = node.label.toLowerCase();
+    let existing: KgNode | undefined;
+    for (const n of this.nodes.values()) {
+      if (n.type !== 'fact' && n.label.toLowerCase() === lowerLabel && n.type === node.type) {
+        existing = n;
+        break;
+      }
+    }
+
+    if (existing) {
+      const updated: KgNode = {
+        ...existing,
+        temporal: {
+          ...existing.temporal,
+          confidence: Math.max(existing.temporal.confidence, node.temporal.confidence),
+          lastConfirmedAt: node.temporal.lastConfirmedAt,
+        },
+      };
+      this.nodes.set(existing.id, updated);
+      return { node: updated, created: false };
+    }
+
+    this.nodes.set(node.id, node);
+    return { node, created: true };
   }
 
   async getNode(id: string): Promise<KgNode | undefined> {

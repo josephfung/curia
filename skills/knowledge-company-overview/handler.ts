@@ -102,11 +102,12 @@ export class KnowledgeCompanyOverviewHandler implements SkillHandler {
       return existing[0]!;
     }
 
-    return ctx.entityMemory!.createEntity({
+    const { entity } = await ctx.entityMemory!.createEntity({
       type: 'organization',
       label: ANCHOR_LABEL,
       properties: { category: 'company-knowledge' },
       source: 'skill:knowledge-company-overview',
     });
+    return entity;
   }
 }

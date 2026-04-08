@@ -79,21 +79,121 @@ export class EntityMemory {
   /**
    * Create a non-fact entity node (person, org, project, etc.).
    * Facts about the entity are stored separately via storeFact().
+   *
+   * Uses upsertNode internally so that calling createEntity twice with the
+   * same (label, type) pair returns the existing node rather than creating
+   * a duplicate. The `created` flag lets callers distinguish first-insert
+   * from re-assertion, which is useful for applying defaults (e.g. roles in
+   * ContactService) without overwriting data set by a later, richer call.
    */
-  async createEntity(options: CreateEntityOptions): Promise<KgNode> {
-    return this.store.createNode({
+  async createEntity(options: CreateEntityOptions): Promise<{ entity: KgNode; created: boolean }> {
+    const { node, created } = await this.store.upsertNode({
       type: options.type,
       label: options.label,
       properties: options.properties,
       source: options.source,
-      // Thread through the optional confidence override
-      confidence: options.confidence,
+      confidence: options.confidence ?? 0.7,
     });
+    return { entity: node, created };
   }
 
   /** Retrieve an entity node by ID. Returns undefined if not found. */
   async getEntity(id: string): Promise<KgNode | undefined> {
     return this.store.getNode(id);
+  }
+
+  /**
+   * Update a node's label and/or properties.
+   *
+   * ╔══════════════════════════════════════════════════════════════════════╗
+   * ║  IMPORTANT — READ BEFORE CALLING THIS METHOD                        ║
+   * ║                                                                      ║
+   * ║  When `updates.label` is provided, this method checks whether the   ║
+   * ║  new label collides with an existing node of the same type.         ║
+   * ║  If a collision is found, the two nodes are MERGED — the existing   ║
+   * ║  node becomes canonical and the node you passed in is DELETED.      ║
+   * ║                                                                      ║
+   * ║  When merged === true:                                               ║
+   * ║    • node.id in the result is DIFFERENT from the id you passed in   ║
+   * ║    • The original id no longer exists in the knowledge graph        ║
+   * ║    • You MUST update any local reference to the old id              ║
+   * ║    • Surface this to the agent — it needs to know the canonical id  ║
+   * ║                                                                      ║
+   * ║  Example:                                                            ║
+   * ║    const { node, merged } = await entityMemory.updateNode(          ║
+   * ║      joeId, { label: 'Joseph Fung' }                                ║
+   * ║    );                                                                ║
+   * ║    if (merged) {                                                     ║
+   * ║      // joeId is gone. node.id is the canonical Joseph Fung node.   ║
+   * ║      // Log, surface to the agent, update your local reference.     ║
+   * ║    }                                                                 ║
+   * ╚══════════════════════════════════════════════════════════════════════╝
+   */
+  async updateNode(
+    id: string,
+    updates: { label?: string; properties?: Record<string, unknown> },
+  ): Promise<{ node: KgNode; merged: boolean }> {
+    if (!updates.label) {
+      // Properties-only update — no collision possible, simple pass-through
+      const node = await this.store.updateNode(id, updates);
+      return { node, merged: false };
+    }
+
+    // Label change: check for a collision with an existing node of the same type
+    const current = await this.store.getNode(id);
+    if (!current) throw new Error(`Node not found: ${id}`);
+
+    if (current.type !== FACT_TYPE) {
+      const candidates = await this.store.findNodesByLabel(updates.label);
+      const collision = candidates.find(n => n.type === current.type && n.id !== id);
+
+      if (collision) {
+        // Merge: the existing node is canonical; the node being renamed is secondary.
+        // mergeEntities handles property merge, fact migration, edge re-pointing,
+        // and deletion of the secondary node.
+        await this.mergeEntities(collision.id, id);
+        // Re-fetch canonical to get post-merge state (properties may have been updated)
+        const canonical = await this.store.getNode(collision.id);
+        if (!canonical) throw new Error(`Canonical node not found after merge: ${collision.id}`);
+        return { node: canonical, merged: true };
+      }
+    }
+
+    // No collision — proceed with normal label update.
+    // Wrap in try/catch to handle a TOCTOU race: another process may have inserted
+    // a conflicting node between the findNodesByLabel check above and the UPDATE here.
+    // Postgres error 23505 (unique_violation) indicates exactly this scenario.
+    try {
+      const node = await this.store.updateNode(id, updates);
+      return { node, merged: false };
+    } catch (err) {
+      const pgCode = (err as { code?: string }).code;
+      const errMessage = (err as { message?: string }).message ?? '';
+      const isUniqueViolation = pgCode === '23505' || errMessage.toLowerCase().includes('unique');
+
+      if (!isUniqueViolation) throw err;
+
+      // Race lost: re-do collision lookup now that the conflicting row exists.
+      // Re-fetch current to ensure we have the latest type (the node may have been
+      // modified by the concurrent process between our initial getNode and now).
+      const raced = await this.store.getNode(id);
+      if (!raced) throw new Error(`Node not found after unique-violation race: ${id}`);
+
+      const racedCandidates = await this.store.findNodesByLabel(updates.label!);
+      const racedCollision = racedCandidates.find(n => n.type === raced.type && n.id !== id);
+
+      if (!racedCollision) {
+        // The conflicting node was deleted before we re-queried — retry the update.
+        const node = await this.store.updateNode(id, updates);
+        return { node, merged: false };
+      }
+
+      // Collision confirmed post-race: merge as normal.
+      await this.mergeEntities(racedCollision.id, id);
+      const canonical = await this.store.getNode(racedCollision.id);
+      if (!canonical) throw new Error(`Canonical node not found after race-condition merge: ${racedCollision.id}`);
+      return { node: canonical, merged: true };
+    }
   }
 
   /**
@@ -314,10 +414,8 @@ export class EntityMemory {
    * - Facts (child fact nodes): secondary's facts are re-stored on primary
    *   via storeFact() to preserve deduplication logic.
    *
-   * Phase 1 scope: scalar properties + facts. Edge re-pointing and secondary
-   * node deletion are deferred to Phase 2.
-   * @TODO Phase 2: re-point relationship edges from secondary to primary,
-   * then delete secondary node.
+   * Phase 1: scalar properties + facts. Phase 2: relationship edge re-pointing
+   * and secondary node deletion (implemented below).
    */
   async mergeEntities(primaryId: string, secondaryId: string): Promise<void> {
     const primaryNode = await this.store.getNode(primaryId);
@@ -370,11 +468,56 @@ export class EntityMemory {
       });
     }
 
-    // @TODO Phase 2: re-point relationship edges from secondaryId to primaryId,
-    // then delete the secondary node. Until then, the secondary node remains in the
-    // KG as a dangling node — its contact row has been deleted, but it is still
-    // reachable via queryEntity(secondaryId) and semantic search. Any code that
-    // resolves a kg_node_id back to a contact will find no contact for this node.
+    // Phase 2: Re-point secondary's entity relationship edges to primary.
+    // We iterate all edges on secondary and upsert equivalent edges on primary.
+    // upsertEdge handles the bidirectional uniqueness constraint atomically —
+    // if primary already has the same edge, confidence is raised rather than
+    // creating a duplicate. Edges to fact nodes are skipped — facts were
+    // already re-stored on primary in Phase 1 via storeFact().
+    const secondaryEdges = await this.store.getEdgesForNode(secondaryId);
+    const secondaryFactNodeIds: string[] = [];
+
+    for (const edge of secondaryEdges) {
+      const isOutbound = edge.sourceNodeId === secondaryId;
+      const otherId = isOutbound ? edge.targetNodeId : edge.sourceNodeId;
+
+      // Self-loop guard (should not exist, but be defensive)
+      if (otherId === secondaryId) continue;
+      // Skip edges pointing to primary — would become self-loops after merge
+      if (otherId === primaryId) continue;
+
+      const otherNode = await this.store.getNode(otherId);
+      if (!otherNode) continue;
+
+      if (otherNode.type === FACT_TYPE) {
+        // Collect secondary fact node IDs for cleanup after edge transfer.
+        // These were re-stored on primary in Phase 1; deleting them here
+        // prevents orphaned fact nodes after the secondary entity is removed.
+        secondaryFactNodeIds.push(otherId);
+        continue;
+      }
+
+      // Transfer the relationship edge to primary
+      await this.store.upsertEdge({
+        sourceNodeId: isOutbound ? primaryId : otherId,
+        targetNodeId: isOutbound ? otherId : primaryId,
+        type: edge.type,
+        properties: edge.properties,
+        confidence: edge.temporal.confidence,
+        decayClass: edge.temporal.decayClass,
+        source: edge.temporal.source,
+      });
+    }
+
+    // Delete secondary's fact nodes (already re-created on primary in Phase 1).
+    // Must happen before deleteNode so cascade doesn't beat us to it.
+    for (const factNodeId of secondaryFactNodeIds) {
+      await this.store.deleteNode(factNodeId);
+    }
+
+    // Delete the secondary entity node. ON DELETE CASCADE on kg_edges removes
+    // any remaining edges (e.g. self-loops or edges not transferred above).
+    await this.store.deleteNode(secondaryId);
   }
 
   /**

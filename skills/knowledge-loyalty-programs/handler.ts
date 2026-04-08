@@ -119,11 +119,12 @@ export class KnowledgeLoyaltyProgramsHandler implements SkillHandler {
       return existing[0]!;
     }
 
-    return ctx.entityMemory!.createEntity({
+    const { entity } = await ctx.entityMemory!.createEntity({
       type: 'concept',
       label: ANCHOR_LABEL,
       properties: { category: 'loyalty-knowledge' },
       source: 'skill:knowledge-loyalty-programs',
     });
+    return entity;
   }
 }

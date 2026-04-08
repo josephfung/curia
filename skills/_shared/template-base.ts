@@ -248,7 +248,7 @@ async function findOrCreateAnchor(
   const existing = await ctx.entityMemory!.findEntities(templateLabel);
   if (existing.length > 0) return existing[0]!.id;
 
-  const anchor = await ctx.entityMemory!.createEntity({
+  const { entity: anchor } = await ctx.entityMemory!.createEntity({
     type: 'concept',
     label: templateLabel,
     properties: { category: 'email-policy' },

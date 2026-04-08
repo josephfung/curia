@@ -39,7 +39,8 @@ function makeEntityMemory() {
       const entity = { id, label: opts.label, properties: opts.properties };
       entities.set(id, entity);
       facts.set(id, []);
-      return entity;
+      // Return the new { entity, created } shape matching the updated createEntity API
+      return { entity, created: true };
     }),
     storeFact: vi.fn(async (opts: { entityNodeId: string; label: string; properties: Record<string, unknown>; confidence: number; decayClass: string; source: string }) => {
       const entityFacts = facts.get(opts.entityNodeId) ?? [];
@@ -196,7 +197,7 @@ describe('KnowledgeCompanyOverviewHandler', () => {
       em.storeFact.mockRejectedValueOnce(new Error('DB connection lost'));
 
       // First need to create anchor
-      em.createEntity.mockResolvedValueOnce({ id: 'e-1', label: 'company-overview', properties: {} });
+      em.createEntity.mockResolvedValueOnce({ entity: { id: 'e-1', label: 'company-overview', properties: {} }, created: true });
 
       const result = await handler.execute(makeCtx(
         { action: 'store', field: 'legal_name', value: 'Acme' },

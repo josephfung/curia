@@ -26,24 +26,32 @@ function makeCtx(
 
 /** Stub EntityMemory with in-memory storage. */
 function makeEntityMemory() {
-  const entities = new Map<string, { id: string; label: string; properties: Record<string, unknown> }>();
+  const entities = new Map<string, { id: string; type: string; label: string; properties: Record<string, unknown> }>();
   const facts = new Map<string, Array<{ id: string; label: string; properties: Record<string, unknown>; temporal: { lastConfirmedAt: Date; confidence: number; decayClass: string; source: string; createdAt: Date } }>>();
   let nextId = 1;
 
   return {
     findEntities: vi.fn(async (label: string) => {
-      const matches: Array<{ id: string; label: string; properties: Record<string, unknown> }> = [];
+      const matches: Array<{ id: string; type: string; label: string; properties: Record<string, unknown> }> = [];
       for (const e of entities.values()) {
         if (e.label.toLowerCase() === label.toLowerCase()) matches.push(e);
       }
       return matches;
     }),
     createEntity: vi.fn(async (opts: { type: string; label: string; properties: Record<string, unknown>; source: string }) => {
+      // Check if an entity with this (label, type) pair already exists (mimics upsert
+      // behaviour). The real upsertNode deduplicates on lower(label) + type — checking
+      // label alone would wrongly deduplicate nodes with the same label but different types.
+      for (const e of entities.values()) {
+        if (e.label.toLowerCase() === opts.label.toLowerCase() && e.type === opts.type) {
+          return { entity: e, created: false };
+        }
+      }
       const id = `entity-${nextId++}`;
-      const entity = { id, label: opts.label, properties: opts.properties };
+      const entity = { id, type: opts.type, label: opts.label, properties: opts.properties };
       entities.set(id, entity);
       facts.set(id, []);
-      return entity;
+      return { entity, created: true };
     }),
     storeFact: vi.fn(async (opts: { entityNodeId: string; label: string; properties: Record<string, unknown>; confidence: number; decayClass: string; source: string }) => {
       const entityFacts = facts.get(opts.entityNodeId) ?? [];
@@ -126,7 +134,7 @@ describe('TemplateMeetingRequestHandler', () => {
 
     it('returns custom policy from KG when available', async () => {
       const em = makeEntityMemory();
-      const anchor = await em.createEntity({
+      const { entity: anchor } = await em.createEntity({
         type: 'concept', label: 'template:meeting-request',
         properties: { category: 'email-policy' }, source: 'test',
       });
@@ -158,7 +166,7 @@ describe('TemplateMeetingRequestHandler', () => {
 
     it('handles plain-text custom policy (non-JSON)', async () => {
       const em = makeEntityMemory();
-      const anchor = await em.createEntity({
+      const { entity: anchor } = await em.createEntity({
         type: 'concept', label: 'template:meeting-request',
         properties: {}, source: 'test',
       });

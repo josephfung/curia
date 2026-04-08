@@ -8,11 +8,17 @@ import { createSilentLogger } from '../../src/logger.js';
 import { QueryRelationshipsHandler } from './handler.js';
 import type { SkillContext } from '../../src/skills/types.js';
 
-function makeEntityMemory() {
+// makeEntityMemoryWithStore returns both for tests that need direct store access
+// (e.g. to simulate pre-migration duplicates by bypassing upsert logic)
+function makeEntityMemoryWithStore() {
   const embeddingService = EmbeddingService.createForTesting();
   const store = KnowledgeGraphStore.createInMemory(embeddingService);
   const validator = new MemoryValidator(store, embeddingService);
-  return new EntityMemory(store, validator, embeddingService, createSilentLogger());
+  return { mem: new EntityMemory(store, validator, embeddingService, createSilentLogger()), store };
+}
+
+function makeEntityMemory() {
+  return makeEntityMemoryWithStore().mem;
 }
 
 function makeCtx(entityMemory: EntityMemory, input: Record<string, unknown>): SkillContext {
@@ -37,9 +43,9 @@ describe('QueryRelationshipsHandler', () => {
 
   it('returns all relationships for a known entity', async () => {
     const mem = makeEntityMemory();
-    const joseph = await mem.createEntity({ type: 'person', label: 'Joseph Fung', properties: {}, source: 'test' });
-    const xiaopu = await mem.createEntity({ type: 'person', label: 'Xiaopu Fung', properties: {}, source: 'test' });
-    const acme = await mem.createEntity({ type: 'organization', label: 'Acme Corp', properties: {}, source: 'test' });
+    const { entity: joseph } = await mem.createEntity({ type: 'person', label: 'Joseph Fung', properties: {}, source: 'test' });
+    const { entity: xiaopu } = await mem.createEntity({ type: 'person', label: 'Xiaopu Fung', properties: {}, source: 'test' });
+    const { entity: acme } = await mem.createEntity({ type: 'organization', label: 'Acme Corp', properties: {}, source: 'test' });
     await mem.upsertEdge(joseph.id, xiaopu.id, 'spouse', {}, 'test', 0.9);
     await mem.upsertEdge(joseph.id, acme.id, 'member_of', {}, 'test', 0.8);
 
@@ -55,9 +61,9 @@ describe('QueryRelationshipsHandler', () => {
 
   it('filters by edge_type when provided', async () => {
     const mem = makeEntityMemory();
-    const joseph = await mem.createEntity({ type: 'person', label: 'Joseph Fung', properties: {}, source: 'test' });
-    const xiaopu = await mem.createEntity({ type: 'person', label: 'Xiaopu Fung', properties: {}, source: 'test' });
-    const acme = await mem.createEntity({ type: 'organization', label: 'Acme Corp', properties: {}, source: 'test' });
+    const { entity: joseph } = await mem.createEntity({ type: 'person', label: 'Joseph Fung', properties: {}, source: 'test' });
+    const { entity: xiaopu } = await mem.createEntity({ type: 'person', label: 'Xiaopu Fung', properties: {}, source: 'test' });
+    const { entity: acme } = await mem.createEntity({ type: 'organization', label: 'Acme Corp', properties: {}, source: 'test' });
     await mem.upsertEdge(joseph.id, xiaopu.id, 'spouse', {}, 'test', 0.9);
     await mem.upsertEdge(joseph.id, acme.id, 'member_of', {}, 'test', 0.8);
 
@@ -72,10 +78,14 @@ describe('QueryRelationshipsHandler', () => {
   });
 
   it('returns ambiguous:true with candidates when multiple nodes match', async () => {
-    const mem = makeEntityMemory();
-    // Two nodes with the same label
+    // createEntity uses upsertNode which prevents duplicates.
+    // Insert a second node directly via the store to simulate pre-migration duplicate data.
+    const { mem, store } = makeEntityMemoryWithStore();
+
+    // Create first node via normal path
     await mem.createEntity({ type: 'person', label: 'John Smith', properties: {}, source: 'test' });
-    await mem.createEntity({ type: 'person', label: 'John Smith', properties: {}, source: 'test' });
+    // Insert second node directly to bypass upsert (simulates pre-migration duplicate)
+    await store.createNode({ type: 'person', label: 'John Smith', properties: {}, source: 'test' });
 
     const handler = new QueryRelationshipsHandler();
     const ctx = makeCtx(mem, { entity: 'John Smith' });
@@ -89,7 +99,7 @@ describe('QueryRelationshipsHandler', () => {
 
   it('returns error for an unknown edge_type', async () => {
     const mem = makeEntityMemory();
-    await mem.createEntity({ type: 'person', label: 'Joseph Fung', properties: {}, source: 'test' });
+    await mem.createEntity({ type: 'person', label: 'Joseph Fung', properties: {}, source: 'test' }); // return value not needed
 
     const handler = new QueryRelationshipsHandler();
     const ctx = makeCtx(mem, { entity: 'Joseph Fung', edge_type: 'not_a_real_type' });
@@ -101,8 +111,8 @@ describe('QueryRelationshipsHandler', () => {
 
   it('labels outbound and inbound direction correctly', async () => {
     const mem = makeEntityMemory();
-    const joseph = await mem.createEntity({ type: 'person', label: 'Joseph Fung', properties: {}, source: 'test' });
-    const xiaopu = await mem.createEntity({ type: 'person', label: 'Xiaopu Fung', properties: {}, source: 'test' });
+    const { entity: joseph } = await mem.createEntity({ type: 'person', label: 'Joseph Fung', properties: {}, source: 'test' });
+    const { entity: xiaopu } = await mem.createEntity({ type: 'person', label: 'Xiaopu Fung', properties: {}, source: 'test' });
     // Edge is stored outbound from joseph to xiaopu
     await mem.upsertEdge(joseph.id, xiaopu.id, 'manages', {}, 'test', 0.8);
 

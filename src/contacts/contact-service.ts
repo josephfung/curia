@@ -163,13 +163,23 @@ export class ContactService {
     // Auto-create a KG person node if we have entityMemory and no explicit kgNodeId
     let kgNodeId: string | null = options.kgNodeId ?? null;
     if (!kgNodeId && this.entityMemory) {
-      const entity = await this.entityMemory.createEntity({
+      const { entity, created } = await this.entityMemory.createEntity({
         type: 'person',
         label: safeName,
         properties: options.role ? { role: options.role } : {},
         source: options.source,
       });
-      kgNodeId = entity.id;
+      if (!created && options.role) {
+        // A KG node already existed for this label. Apply the role property if
+        // it isn't already set — the existing node may have been created without
+        // one (e.g. by extract-relationships which always passes empty properties).
+        const { node } = await this.entityMemory.updateNode(entity.id, {
+          properties: { ...entity.properties, role: options.role },
+        });
+        kgNodeId = node.id;
+      } else {
+        kgNodeId = entity.id;
+      }
     }
 
     const contact: Contact = {
@@ -186,11 +196,26 @@ export class ContactService {
     try {
       await this.backend.createContact(contact);
     } catch (err) {
-      // TODO: The KG node auto-created above is now orphaned — it exists in the knowledge
-      // graph with no corresponding contact row. Clean up once EntityMemory exposes a
-      // delete method. For now the orphan is harmless (person node with no contact link).
-      this.logger?.error({ err, contactId: contact.id }, 'Contact creation failed');
-      throw err;
+      const pgCode = (err as { code?: string }).code;
+      const constraint = (err as { constraint?: string }).constraint;
+      // idx_contacts_kg_node_unique (partial unique index on kg_node_id) fires when
+      // upsertNode returned an existing kg_node that is already claimed by another
+      // contact — e.g. two people both named "Alice Smith". Retry without a KG link;
+      // the two contacts can be merged later via the contact-merge flow.
+      if (pgCode === '23505' && constraint === 'idx_contacts_kg_node_unique') {
+        this.logger?.warn(
+          { contactId: contact.id, kgNodeId: contact.kgNodeId },
+          'KG node already claimed by another contact — creating contact without KG link',
+        );
+        contact.kgNodeId = null;
+        await this.backend.createContact(contact);
+      } else {
+        // TODO: The KG node auto-created above is now orphaned — it exists in the knowledge
+        // graph with no corresponding contact row. Clean up once EntityMemory exposes a
+        // delete method. For now the orphan is harmless (person node with no contact link).
+        this.logger?.error({ err, contactId: contact.id }, 'Contact creation failed');
+        throw err;
+      }
     }
 
     // Fire-and-forget dedup check. Runs asynchronously — never blocks the create.
@@ -1118,6 +1143,18 @@ class InMemoryContactBackend implements ContactServiceBackend {
   private calendars = new Map<string, ContactCalendar>();
 
   async createContact(contact: Contact): Promise<void> {
+    // Enforce the partial unique index idx_contacts_kg_node_unique to match Postgres.
+    if (contact.kgNodeId !== null) {
+      for (const existing of this.contacts.values()) {
+        if (existing.kgNodeId === contact.kgNodeId) {
+          const err = Object.assign(new Error('duplicate key value violates unique constraint "idx_contacts_kg_node_unique"'), {
+            code: '23505',
+            constraint: 'idx_contacts_kg_node_unique',
+          });
+          throw err;
+        }
+      }
+    }
     this.contacts.set(contact.id, contact);
   }
 

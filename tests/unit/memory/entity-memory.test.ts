@@ -18,7 +18,7 @@ describe('EntityMemory', () => {
 
   describe('entity management', () => {
     it('creates a new entity and retrieves it', async () => {
-      const entity = await entityMemory.createEntity({
+      const { entity } = await entityMemory.createEntity({
         type: 'person',
         label: 'Joseph Fung',
         properties: { title: 'CEO' },
@@ -53,7 +53,7 @@ describe('EntityMemory', () => {
     });
 
     it('stores entity properties on the node', async () => {
-      const entity = await entityMemory.createEntity({
+      const { entity } = await entityMemory.createEntity({
         type: 'organization',
         label: 'Curia',
         properties: { founded: 2023, industry: 'AI' },
@@ -66,7 +66,7 @@ describe('EntityMemory', () => {
 
   describe('fact management', () => {
     it('stores a fact about an entity', async () => {
-      const entity = await entityMemory.createEntity({
+      const { entity } = await entityMemory.createEntity({
         type: 'person',
         label: 'Joseph',
         properties: {},
@@ -82,7 +82,7 @@ describe('EntityMemory', () => {
     });
 
     it('returns nodeId when a fact is stored', async () => {
-      const entity = await entityMemory.createEntity({
+      const { entity } = await entityMemory.createEntity({
         type: 'person',
         label: 'Joseph',
         properties: {},
@@ -98,7 +98,7 @@ describe('EntityMemory', () => {
     });
 
     it('retrieves all facts about an entity', async () => {
-      const entity = await entityMemory.createEntity({
+      const { entity } = await entityMemory.createEntity({
         type: 'person',
         label: 'Joseph',
         properties: {},
@@ -119,13 +119,13 @@ describe('EntityMemory', () => {
     });
 
     it('getFacts returns only fact-type nodes, not entity nodes', async () => {
-      const personA = await entityMemory.createEntity({
+      const { entity: personA } = await entityMemory.createEntity({
         type: 'person',
         label: 'Alice',
         properties: {},
         source: 'test',
       });
-      const personB = await entityMemory.createEntity({
+      const { entity: personB } = await entityMemory.createEntity({
         type: 'person',
         label: 'Bob',
         properties: {},
@@ -147,7 +147,7 @@ describe('EntityMemory', () => {
     });
 
     it('deduplicates identical facts (returns stored:true with existing nodeId)', async () => {
-      const entity = await entityMemory.createEntity({
+      const { entity } = await entityMemory.createEntity({
         type: 'person',
         label: 'Joseph',
         properties: {},
@@ -174,7 +174,7 @@ describe('EntityMemory', () => {
     });
 
     it('returns stored:false with conflict reason on contradiction', async () => {
-      const entity = await entityMemory.createEntity({
+      const { entity } = await entityMemory.createEntity({
         type: 'person',
         label: 'Joseph',
         properties: {},
@@ -210,13 +210,13 @@ describe('EntityMemory', () => {
 
   describe('link', () => {
     it('creates a directed edge between two entities', async () => {
-      const person = await entityMemory.createEntity({
+      const { entity: person } = await entityMemory.createEntity({
         type: 'person',
         label: 'Alice',
         properties: {},
         source: 'test',
       });
-      const project = await entityMemory.createEntity({
+      const { entity: project } = await entityMemory.createEntity({
         type: 'project',
         label: 'Curia',
         properties: {},
@@ -232,7 +232,7 @@ describe('EntityMemory', () => {
 
   describe('semantic search', () => {
     it('searches across all knowledge', async () => {
-      const entity = await entityMemory.createEntity({
+      const { entity } = await entityMemory.createEntity({
         type: 'project',
         label: 'Curia AI Platform',
         properties: {},
@@ -269,7 +269,7 @@ describe('EntityMemory', () => {
       const validator = new MemoryValidator(localStore, embeddingService);
       const em = new EntityMemory(localStore, validator, embeddingService, createSilentLogger());
 
-      const entity = await em.createEntity({
+      const { entity } = await em.createEntity({
         type: 'person',
         label: 'Test Subject',
         properties: {},
@@ -305,13 +305,13 @@ describe('EntityMemory', () => {
 
   describe('query - what do I know about X?', () => {
     it('returns entity with connected facts and relationships', async () => {
-      const person = await entityMemory.createEntity({
+      const { entity: person } = await entityMemory.createEntity({
         type: 'person',
         label: 'Alice',
         properties: {},
         source: 'test',
       });
-      const project = await entityMemory.createEntity({
+      const { entity: project } = await entityMemory.createEntity({
         type: 'project',
         label: 'Curia',
         properties: {},
@@ -330,7 +330,7 @@ describe('EntityMemory', () => {
     });
 
     it('returns the queried entity node', async () => {
-      const entity = await entityMemory.createEntity({
+      const { entity } = await entityMemory.createEntity({
         type: 'organization',
         label: 'Anthropic',
         properties: { sector: 'AI safety' },
@@ -342,7 +342,7 @@ describe('EntityMemory', () => {
     });
 
     it('returns empty facts and relationships when entity is isolated', async () => {
-      const entity = await entityMemory.createEntity({
+      const { entity } = await entityMemory.createEntity({
         type: 'concept',
         label: 'Isolated Node',
         properties: {},
@@ -355,13 +355,13 @@ describe('EntityMemory', () => {
     });
 
     it('relationships include the edge and the connected node', async () => {
-      const a = await entityMemory.createEntity({
+      const { entity: a } = await entityMemory.createEntity({
         type: 'person',
         label: 'Bob',
         properties: {},
         source: 'test',
       });
-      const b = await entityMemory.createEntity({
+      const { entity: b } = await entityMemory.createEntity({
         type: 'project',
         label: 'ProjectX',
         properties: {},
@@ -383,8 +383,8 @@ describe('EntityMemory', () => {
 
   describe('upsertEdge', () => {
     it('creates a new edge when none exists', async () => {
-      const a = await entityMemory.createEntity({ type: 'person', label: 'Upsert-A', properties: {}, source: 'test' });
-      const b = await entityMemory.createEntity({ type: 'person', label: 'Upsert-B', properties: {}, source: 'test' });
+      const { entity: a } = await entityMemory.createEntity({ type: 'person', label: 'Upsert-A', properties: {}, source: 'test' });
+      const { entity: b } = await entityMemory.createEntity({ type: 'person', label: 'Upsert-B', properties: {}, source: 'test' });
 
       const result = await entityMemory.upsertEdge(a.id, b.id, 'spouse', {}, 'test', 0.8);
 
@@ -394,8 +394,8 @@ describe('EntityMemory', () => {
     });
 
     it('confirms an existing edge when called again with same direction', async () => {
-      const a = await entityMemory.createEntity({ type: 'person', label: 'Upsert-C', properties: {}, source: 'test' });
-      const b = await entityMemory.createEntity({ type: 'person', label: 'Upsert-D', properties: {}, source: 'test' });
+      const { entity: a } = await entityMemory.createEntity({ type: 'person', label: 'Upsert-C', properties: {}, source: 'test' });
+      const { entity: b } = await entityMemory.createEntity({ type: 'person', label: 'Upsert-D', properties: {}, source: 'test' });
       await entityMemory.upsertEdge(a.id, b.id, 'manages', {}, 'test', 0.7);
 
       const result = await entityMemory.upsertEdge(a.id, b.id, 'manages', {}, 'test', 0.7);
@@ -407,8 +407,8 @@ describe('EntityMemory', () => {
     });
 
     it('confirms an existing edge when called with reversed direction (bidirectional check)', async () => {
-      const a = await entityMemory.createEntity({ type: 'person', label: 'Upsert-E', properties: {}, source: 'test' });
-      const b = await entityMemory.createEntity({ type: 'person', label: 'Upsert-F', properties: {}, source: 'test' });
+      const { entity: a } = await entityMemory.createEntity({ type: 'person', label: 'Upsert-E', properties: {}, source: 'test' });
+      const { entity: b } = await entityMemory.createEntity({ type: 'person', label: 'Upsert-F', properties: {}, source: 'test' });
       await entityMemory.upsertEdge(a.id, b.id, 'spouse', {}, 'test', 0.8);
 
       // Call with reversed order — should confirm the existing edge, not create a duplicate
@@ -420,8 +420,8 @@ describe('EntityMemory', () => {
     });
 
     it('raises confidence when re-assertion has higher confidence', async () => {
-      const a = await entityMemory.createEntity({ type: 'person', label: 'Upsert-G', properties: {}, source: 'test' });
-      const b = await entityMemory.createEntity({ type: 'person', label: 'Upsert-H', properties: {}, source: 'test' });
+      const { entity: a } = await entityMemory.createEntity({ type: 'person', label: 'Upsert-G', properties: {}, source: 'test' });
+      const { entity: b } = await entityMemory.createEntity({ type: 'person', label: 'Upsert-H', properties: {}, source: 'test' });
       await entityMemory.upsertEdge(a.id, b.id, 'reports_to', {}, 'test', 0.6);
 
       const result = await entityMemory.upsertEdge(a.id, b.id, 'reports_to', {}, 'test', 0.9);
@@ -431,8 +431,8 @@ describe('EntityMemory', () => {
     });
 
     it('does not lower confidence when re-assertion has lower confidence', async () => {
-      const a = await entityMemory.createEntity({ type: 'person', label: 'Upsert-I', properties: {}, source: 'test' });
-      const b = await entityMemory.createEntity({ type: 'person', label: 'Upsert-J', properties: {}, source: 'test' });
+      const { entity: a } = await entityMemory.createEntity({ type: 'person', label: 'Upsert-I', properties: {}, source: 'test' });
+      const { entity: b } = await entityMemory.createEntity({ type: 'person', label: 'Upsert-J', properties: {}, source: 'test' });
       await entityMemory.upsertEdge(a.id, b.id, 'sibling', {}, 'test', 0.9);
 
       const result = await entityMemory.upsertEdge(a.id, b.id, 'sibling', {}, 'test', 0.3);
@@ -443,8 +443,8 @@ describe('EntityMemory', () => {
     });
 
     it('refreshes lastConfirmedAt on re-assertion', async () => {
-      const a = await entityMemory.createEntity({ type: 'person', label: 'Upsert-K', properties: {}, source: 'test' });
-      const b = await entityMemory.createEntity({ type: 'person', label: 'Upsert-L', properties: {}, source: 'test' });
+      const { entity: a } = await entityMemory.createEntity({ type: 'person', label: 'Upsert-K', properties: {}, source: 'test' });
+      const { entity: b } = await entityMemory.createEntity({ type: 'person', label: 'Upsert-L', properties: {}, source: 'test' });
       const first = await entityMemory.upsertEdge(a.id, b.id, 'advises', {}, 'test', 0.7);
       const firstConfirmedAt = first.edge.temporal.lastConfirmedAt;
 
