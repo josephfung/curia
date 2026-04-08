@@ -5,6 +5,7 @@ import type { KnowledgeGraphStore } from './knowledge-graph.js';
 // so EntityMemory holds no direct reference. Kept in the API for forward-compatibility.
 import type { EmbeddingService } from './embedding.js';
 import type { MemoryValidator } from './validation.js';
+import type { Logger } from '../logger.js';
 import type {
   KgNode,
   KgEdge,
@@ -72,6 +73,7 @@ export class EntityMemory {
     // that wire the dependency graph. All embedding work is currently delegated to the
     // store (createNode embeds labels; semanticSearch embeds query strings internally).
     _embeddingService: EmbeddingService,
+    private logger: Logger,
   ) {}
 
   /**
@@ -148,8 +150,18 @@ export class EntityMemory {
             source: options.source,
           });
         } catch (err) {
-          // Attempt to clean up the orphan node; ignore errors (best effort)
-          try { await this.store.deleteNode(persistedNode.id); } catch { /* best effort */ }
+          // Attempt to clean up the orphan node. If cleanup also fails, log at error level
+          // so the dangling node can be found and removed manually.
+          try {
+            await this.store.deleteNode(persistedNode.id);
+          } catch (cleanupErr) {
+            // Include both errors so the log entry is self-contained — an operator can see
+            // why the edge failed and why cleanup failed without correlating with caller logs.
+            this.logger.error(
+              { nodeId: persistedNode.id, edgeCreationErr: err, cleanupErr },
+              'storeFact: edge creation failed and orphan cleanup also failed — fact node is now dangling',
+            );
+          }
           throw err;
         }
 
@@ -193,7 +205,16 @@ export class EntityMemory {
         : edge.sourceNodeId;
 
       const node = await this.store.getNode(otherId);
-      if (node && node.type === FACT_TYPE) {
+      if (!node) {
+        // Dangling edge — referenced node no longer exists (referential integrity violation).
+        // @TODO: emit a bus event for the audit logger once bus access is available here.
+        this.logger.error(
+          { edgeId: edge.id, nodeId: otherId, entityNodeId },
+          'getFacts: dangling edge detected — referenced node does not exist',
+        );
+        continue;
+      }
+      if (node.type === FACT_TYPE) {
         facts.push(node);
       }
     }
@@ -237,7 +258,10 @@ export class EntityMemory {
         // integrity violation (cascade delete failure or missing migration). Skip the edge so
         // the caller still gets a result, but log so this surfaces in monitoring.
         // @TODO: emit a bus event for the audit logger once bus access is available here.
-        // @TODO: EntityMemory has no logger; thread one in if this pattern recurs (see also storeFact).
+        this.logger.error(
+          { edgeId: edge.id, nodeId: otherId, entityNodeId: nodeId },
+          'findEdges: dangling edge detected — referenced node does not exist',
+        );
         continue;
       }
 
@@ -433,7 +457,15 @@ export class EntityMemory {
         : edge.sourceNodeId;
 
       const node = await this.store.getNode(otherId);
-      if (!node) continue;
+      if (!node) {
+        // Dangling edge — referenced node no longer exists (referential integrity violation).
+        // @TODO: emit a bus event for the audit logger once bus access is available here.
+        this.logger.error(
+          { edgeId: edge.id, nodeId: otherId, entityNodeId },
+          'query: dangling edge detected — referenced node does not exist',
+        );
+        continue;
+      }
 
       if (node.type === FACT_TYPE) {
         // Fact nodes belong in the facts bucket

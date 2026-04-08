@@ -6,7 +6,7 @@ import { KnowledgeGraphStore } from '../../../src/memory/knowledge-graph.js';
 import { EmbeddingService } from '../../../src/memory/embedding.js';
 import { EntityMemory } from '../../../src/memory/entity-memory.js';
 import { MemoryValidator } from '../../../src/memory/validation.js';
-import { createLogger } from '../../../src/logger.js';
+import { createLogger, createSilentLogger } from '../../../src/logger.js';
 
 describe('ContactResolver', () => {
   let resolver: ContactResolver;
@@ -17,7 +17,7 @@ describe('ContactResolver', () => {
     const embeddingService = EmbeddingService.createForTesting();
     const store = KnowledgeGraphStore.createInMemory(embeddingService);
     const validator = new MemoryValidator(store, embeddingService);
-    entityMemory = new EntityMemory(store, validator, embeddingService);
+    entityMemory = new EntityMemory(store, validator, embeddingService, createSilentLogger());
     contactService = ContactService.createInMemory(entityMemory);
     resolver = new ContactResolver(contactService, entityMemory, undefined, createLogger('error'));
   });

@@ -73,7 +73,7 @@ export async function createHarness(): Promise<CuriaHarness> {
     const embeddingService = EmbeddingService.createWithOpenAI(config.openaiApiKey, logger);
     const kgStore = KnowledgeGraphStore.createWithPostgres(pool, embeddingService, logger);
     const validator = new MemoryValidator(kgStore, embeddingService);
-    entityMemory = new EntityMemory(kgStore, validator, embeddingService);
+    entityMemory = new EntityMemory(kgStore, validator, embeddingService, logger);
   }
 
   // Contact system — provides identity resolution and contact management.

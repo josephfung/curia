@@ -5,6 +5,7 @@ import { KnowledgeGraphStore } from '../../../src/memory/knowledge-graph.js';
 import { EmbeddingService } from '../../../src/memory/embedding.js';
 import { EntityMemory } from '../../../src/memory/entity-memory.js';
 import { MemoryValidator } from '../../../src/memory/validation.js';
+import { createSilentLogger } from '../../../src/logger.js';
 import type { Contact } from '../../../src/contacts/types.js';
 
 describe('ContactService — calendar methods', () => {
@@ -15,7 +16,7 @@ describe('ContactService — calendar methods', () => {
     const embeddingService = EmbeddingService.createForTesting();
     const store = KnowledgeGraphStore.createInMemory(embeddingService);
     const validator = new MemoryValidator(store, embeddingService);
-    const entityMemory = new EntityMemory(store, validator, embeddingService);
+    const entityMemory = new EntityMemory(store, validator, embeddingService, createSilentLogger());
     service = ContactService.createInMemory(entityMemory);
 
     ceoContact = await service.createContact({

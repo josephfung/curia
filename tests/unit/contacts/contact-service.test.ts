@@ -7,6 +7,7 @@ import { KnowledgeGraphStore } from '../../../src/memory/knowledge-graph.js';
 import { EmbeddingService } from '../../../src/memory/embedding.js';
 import { EntityMemory } from '../../../src/memory/entity-memory.js';
 import { MemoryValidator } from '../../../src/memory/validation.js';
+import { createSilentLogger } from '../../../src/logger.js';
 
 describe('ContactService', () => {
   let service: ContactService;
@@ -16,7 +17,7 @@ describe('ContactService', () => {
     const embeddingService = EmbeddingService.createForTesting();
     const store = KnowledgeGraphStore.createInMemory(embeddingService);
     const validator = new MemoryValidator(store, embeddingService);
-    entityMemory = new EntityMemory(store, validator, embeddingService);
+    entityMemory = new EntityMemory(store, validator, embeddingService, createSilentLogger());
     service = ContactService.createInMemory(entityMemory);
   });
 
@@ -548,7 +549,7 @@ describe('EntityMemory.mergeEntities', () => {
     const embeddingService = EmbeddingService.createForTesting();
     const store = KnowledgeGraphStore.createInMemory(embeddingService);
     const validator = new MemoryValidator(store, embeddingService);
-    entityMemory = new EntityMemory(store, validator, embeddingService);
+    entityMemory = new EntityMemory(store, validator, embeddingService, createSilentLogger());
   });
 
   it('merges scalar properties onto primary node (most-recent-wins)', async () => {
