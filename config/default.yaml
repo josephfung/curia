@@ -15,6 +15,11 @@ agents:
   coordinator:
     config_path: agents/coordinator.yaml
 
+dispatch:
+  # Milliseconds of inactivity after the last agent response before a conversation.checkpoint
+  # event fires and background memory extraction (extract-relationships, etc.) runs.
+  conversationCheckpointDebounceMs: 600000   # 10 minutes
+
 skillOutput:
   # Maximum character length of a sanitized skill result before truncation.
   # Skills that return more than this (search results, page crawls, long calendar

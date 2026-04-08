@@ -59,6 +59,11 @@ export interface YamlConfig {
     /** Max character length for skill results before truncation. Default: 200_000. */
     maxLength?: number;
   };
+  dispatch?: {
+    /** Milliseconds of inactivity before a conversation.checkpoint event is published.
+     *  Defaults to 600000 (10 minutes). */
+    conversationCheckpointDebounceMs?: number;
+  };
 }
 
 /**
