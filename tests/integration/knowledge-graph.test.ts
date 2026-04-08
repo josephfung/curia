@@ -30,7 +30,12 @@ describeIf('Knowledge Graph Integration', () => {
   });
 
   afterAll(async () => {
-    // Clean up test data
+    // Clean up test data in FK-safe order.
+    // Contacts (from the contacts integration test running concurrently) may reference
+    // kg_nodes, so we must clear contacts first to avoid a FK violation on DELETE FROM kg_nodes.
+    await pool.query('DELETE FROM contact_auth_overrides');
+    await pool.query('DELETE FROM contact_channel_identities');
+    await pool.query('DELETE FROM contacts');
     await pool.query('DELETE FROM kg_edges');
     await pool.query('DELETE FROM kg_nodes');
     await pool.end();

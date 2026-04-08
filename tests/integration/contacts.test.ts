@@ -58,12 +58,14 @@ describeIf('Contacts Integration', () => {
 
   it('creates a contact with auto-linked KG node', async () => {
     const contact = await contactService.createContact({
-      displayName: 'Integration Test Person',
+      // Unique name: avoids collision with knowledge-graph.test.ts which also creates
+      // "Integration Test Person" — upsertNode would share the node, breaking cleanup.
+      displayName: 'Contacts-Only Test Person',
       role: 'Advisor',
       source: 'integration-test',
     });
     expect(contact.id).toBeDefined();
-    expect(contact.displayName).toBe('Integration Test Person');
+    expect(contact.displayName).toBe('Contacts-Only Test Person');
     expect(contact.role).toBe('Advisor');
     // entityMemory is wired in, so a KG person node should be auto-created
     expect(contact.kgNodeId).toBeDefined();

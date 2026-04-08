@@ -63,11 +63,20 @@ describeIf('extract-relationships integration', () => {
 
     // Clean any stale rows from previous runs that crashed before teardown.
     // Without this, leftover 'integration-test' rows cause flaky toHaveLength(1) failures.
+    // Delete contacts first: contacts may reference kg_nodes (due to upsertNode dedup), and
+    // FK constraints require contacts to be removed before their referenced nodes can be deleted.
+    await pool.query("DELETE FROM contact_auth_overrides WHERE contact_id IN (SELECT c.id FROM contacts c JOIN kg_nodes n ON c.kg_node_id = n.id WHERE n.source = 'integration-test')");
+    await pool.query("DELETE FROM contact_channel_identities WHERE contact_id IN (SELECT c.id FROM contacts c JOIN kg_nodes n ON c.kg_node_id = n.id WHERE n.source = 'integration-test')");
+    await pool.query("DELETE FROM contacts WHERE kg_node_id IN (SELECT id FROM kg_nodes WHERE source = 'integration-test')");
     await pool.query("DELETE FROM kg_edges WHERE source = 'integration-test'");
     await pool.query("DELETE FROM kg_nodes WHERE source = 'integration-test'");
   });
 
   afterAll(async () => {
+    // Same FK-safe order as beforeAll cleanup.
+    await pool.query("DELETE FROM contact_auth_overrides WHERE contact_id IN (SELECT c.id FROM contacts c JOIN kg_nodes n ON c.kg_node_id = n.id WHERE n.source = 'integration-test')");
+    await pool.query("DELETE FROM contact_channel_identities WHERE contact_id IN (SELECT c.id FROM contacts c JOIN kg_nodes n ON c.kg_node_id = n.id WHERE n.source = 'integration-test')");
+    await pool.query("DELETE FROM contacts WHERE kg_node_id IN (SELECT id FROM kg_nodes WHERE source = 'integration-test')");
     await pool.query("DELETE FROM kg_edges WHERE source = 'integration-test'");
     await pool.query("DELETE FROM kg_nodes WHERE source = 'integration-test'");
     await pool.end();
