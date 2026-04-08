@@ -779,7 +779,11 @@ async function main(): Promise<void> {
     }
     // Clear pending checkpoint timers before closing the pool — prevents in-flight
     // fireCheckpoint calls from querying a closed pool during shutdown.
-    dispatcher.close();
+    try {
+      dispatcher.close();
+    } catch (err) {
+      logger.error({ err }, 'Error clearing checkpoint timers during shutdown');
+    }
     try {
       await pool.end();
     } catch (err) {

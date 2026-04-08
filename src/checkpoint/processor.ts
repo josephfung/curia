@@ -59,13 +59,25 @@ export class ConversationCheckpointProcessor {
     );
 
     // Advance the watermark. Upsert so first checkpoint creates the row.
-    await this.pool.query(
-      `INSERT INTO conversation_checkpoints (conversation_id, agent_id, last_checkpoint_at)
-       VALUES ($1, $2, now())
-       ON CONFLICT (conversation_id, agent_id)
-       DO UPDATE SET last_checkpoint_at = now()`,
-      [conversationId, agentId],
-    );
+    // Wrapped in its own try/catch so that a transient DB error is logged with
+    // full context (conversationId/agentId) rather than surfacing to the bus's
+    // generic catch-all which would lose those fields. Consequence of failure:
+    // the same turns will be re-processed on the next checkpoint (idempotent).
+    try {
+      await this.pool.query(
+        `INSERT INTO conversation_checkpoints (conversation_id, agent_id, last_checkpoint_at)
+         VALUES ($1, $2, now())
+         ON CONFLICT (conversation_id, agent_id)
+         DO UPDATE SET last_checkpoint_at = now()`,
+        [conversationId, agentId],
+      );
+    } catch (err) {
+      this.logger.error(
+        { err, conversationId, agentId },
+        'Failed to advance checkpoint watermark — skills ran but watermark not saved; turns will re-process on next checkpoint',
+      );
+      return;
+    }
 
     this.logger.info(
       { conversationId, agentId, turnCount: turns.length },

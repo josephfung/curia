@@ -434,13 +434,20 @@ export class Dispatcher {
       );
       const since = watermarkResult.rows[0]?.last_checkpoint_at ?? '';
 
-      // Fetch turns from working memory since the watermark
+      // Fetch turns from working memory since the watermark.
+      // Two explicit query strings rather than a conditional template fragment — avoids
+      // the risk of a parameter slot ($3) drifting out of sync with the array when edited.
+      const turnsQuery = since
+        ? `SELECT role, content FROM working_memory
+           WHERE conversation_id = $1 AND agent_id = $2
+             AND role IN ('user', 'assistant') AND created_at > $3
+           ORDER BY created_at ASC`
+        : `SELECT role, content FROM working_memory
+           WHERE conversation_id = $1 AND agent_id = $2
+             AND role IN ('user', 'assistant')
+           ORDER BY created_at ASC`;
       const turnsResult = await this.pool!.query<{ role: string; content: string }>(
-        `SELECT role, content FROM working_memory
-         WHERE conversation_id = $1 AND agent_id = $2
-           AND role IN ('user', 'assistant')
-           ${since ? 'AND created_at > $3' : ''}
-         ORDER BY created_at ASC`,
+        turnsQuery,
         since ? [conversationId, agentId, since] : [conversationId, agentId],
       );
 
