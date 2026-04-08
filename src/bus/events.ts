@@ -378,7 +378,7 @@ export interface ConfigChangeEvent extends BaseEvent {
   payload: ConfigChangePayload;
 }
 
-export interface ConversationCheckpointPayload {
+interface ConversationCheckpointPayload {
   conversationId: string;
   agentId: string;
   channelId: string;
