@@ -13,6 +13,9 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Changed
+- **`docs/specs/00-overview.md` spec index** — added Status column, rows 12–16 (Knowledge Graph Web Explorer, Office Identity, Autonomy Engine, Outbound Safety, Smoke Test Framework), and unified Scope notes with README Area column (channels named explicitly, cron/one-shot in scheduler, unknown sender policy in contacts, KG-backed profiles in entity context enrichment).
+
 ### Added
 - **Conversation checkpoint pipeline** — Dispatch publishes a `conversation.checkpoint` event after 10 minutes of inactivity per conversation–agent pair. A new System Layer `ConversationCheckpointProcessor` subscribes, concatenates new turns since the last watermark, fans out to background memory skills (`extract-relationships`; extensible to future skills), then advances the per-(conversationId, agentId) watermark in the new `conversation_checkpoints` table. Adds migration 017. **Breaking change:** `conversation.checkpoint` added to the bus event type discriminated union.
 
