@@ -26,6 +26,9 @@ interface ExtractedFact {
   decayClass: DecayClass;
 }
 
+// 'fact' is excluded from the prompt's subject-type list so the LLM never emits
+// subjectType:"fact" in its output — entity subjects must be non-fact nodes.
+// The ENTITY_NODE_TYPES Set below is the runtime safety net for the same constraint.
 const NODE_TYPES_LIST = NODE_TYPES.filter(t => t !== 'fact').join(', ');
 const DECAY_CLASSES_LIST = DECAY_CLASSES.join(', ');
 
@@ -139,6 +142,10 @@ ${text}`,
 
       // -- Steps 3 & 4: Entity resolution + fact storage --
       let stored = 0;
+      // failed counts two things: malformed LLM output (skipped in the guard below) and
+      // infrastructure errors thrown during entity resolution or storeFact persistence.
+      // storeFact returning stored:false (rate-limit / contradiction) is NOT counted as
+      // failed — those are expected semantic outcomes logged at warn, not error.
       let failed = 0;
 
       // Entity node types (fact nodes themselves are excluded as subjects —
