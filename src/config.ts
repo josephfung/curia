@@ -59,6 +59,11 @@ export interface YamlConfig {
     /** Max character length for skill results before truncation. Default: 200_000. */
     maxLength?: number;
   };
+  dispatch?: {
+    /** Milliseconds of inactivity before a conversation.checkpoint event is published.
+     *  Defaults to 600000 (10 minutes). */
+    conversationCheckpointDebounceMs?: number;
+  };
 }
 
 /**
@@ -92,6 +97,13 @@ export function loadYamlConfig(configDir: string): YamlConfig {
     const maxLength = config.skillOutput?.maxLength;
     if (maxLength !== undefined && (!Number.isInteger(maxLength) || maxLength <= 0)) {
       throw new Error(`skillOutput.maxLength must be a positive integer, got: ${maxLength}`);
+    }
+
+    const checkpointDebounceMs = config.dispatch?.conversationCheckpointDebounceMs;
+    if (checkpointDebounceMs !== undefined && (!Number.isInteger(checkpointDebounceMs) || checkpointDebounceMs <= 0)) {
+      throw new Error(
+        `dispatch.conversationCheckpointDebounceMs must be a positive integer, got: ${checkpointDebounceMs}`,
+      );
     }
 
     return config;

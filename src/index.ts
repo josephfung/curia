@@ -68,6 +68,7 @@ import type { AgentPersona } from './skills/types.js';
 import type { ConfigChangeEvent } from './bus/events.js';
 import { BullpenService } from './memory/bullpen.js';
 import { BullpenDispatcher } from './dispatch/bullpen-dispatcher.js';
+import { ConversationCheckpointProcessor } from './checkpoint/processor.js';
 
 async function main(): Promise<void> {
   // 1. Config & logging — no dependencies, must come first.
@@ -680,8 +681,15 @@ async function main(): Promise<void> {
     heldMessages,
     channelPolicies: authConfig?.channelPolicies,
     injectionScanner,
+    pool,
+    conversationCheckpointDebounceMs: yamlConfig.dispatch?.conversationCheckpointDebounceMs,
   });
   dispatcher.register();
+
+  // Conversation checkpoint processor — System Layer subscriber that runs background
+  // memory skills (extract-relationships, etc.) at end of each conversation.
+  const checkpointProcessor = new ConversationCheckpointProcessor(bus, executionLayer, pool, logger);
+  checkpointProcessor.register();
 
   // BullpenDispatcher — routes agent.discuss → agent.task for inter-agent Bullpen discussions.
   const bullpenDispatcher = new BullpenDispatcher(bus, logger, bullpenService);
@@ -768,6 +776,13 @@ async function main(): Promise<void> {
       } catch (err) {
         logger.error({ err }, 'Error stopping browser service during shutdown');
       }
+    }
+    // Clear pending checkpoint timers before closing the pool — prevents in-flight
+    // fireCheckpoint calls from querying a closed pool during shutdown.
+    try {
+      dispatcher.close();
+    } catch (err) {
+      logger.error({ err }, 'Error clearing checkpoint timers during shutdown');
     }
     try {
       await pool.end();

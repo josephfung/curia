@@ -13,6 +13,12 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Added
+- **Conversation checkpoint pipeline** — Dispatch publishes a `conversation.checkpoint` event after 10 minutes of inactivity per conversation–agent pair. A new System Layer `ConversationCheckpointProcessor` subscribes, concatenates new turns since the last watermark, fans out to background memory skills (`extract-relationships`; extensible to future skills), then advances the per-(conversationId, agentId) watermark in the new `conversation_checkpoints` table. Adds migration 017. **Breaking change:** `conversation.checkpoint` added to the bus event type discriminated union.
+
+### Changed
+- **`extract-relationships` moved to checkpoint pipeline** — extraction now runs once per conversation–agent pair (after 10 min of inactivity) rather than as an LLM tool call on every message. Fixes the coordinator confabulation bugs (see PR #221).
+
 ### Fixed
 - **Coordinator confabulation bug** — removed `extract-relationships` from the coordinator's LLM tool loop. The per-message tool call caused empty-text turns that triggered the empty-response recovery mechanism, which confabulated "I already provided my response" in Signal group chats and the web UI. Relationship extraction moves to the conversation checkpoint pipeline (forthcoming).
 - **KG node deduplication** — one-time migration deduplicates existing `kg_nodes` rows with matching `(lower(label), type)`, re-pointing edges and contacts to canonical nodes before removing duplicates.
