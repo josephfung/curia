@@ -155,8 +155,10 @@ export class EntityMemory {
           try {
             await this.store.deleteNode(persistedNode.id);
           } catch (cleanupErr) {
+            // Include both errors so the log entry is self-contained — an operator can see
+            // why the edge failed and why cleanup failed without correlating with caller logs.
             this.logger.error(
-              { nodeId: persistedNode.id, err: cleanupErr },
+              { nodeId: persistedNode.id, edgeCreationErr: err, cleanupErr },
               'storeFact: edge creation failed and orphan cleanup also failed — fact node is now dangling',
             );
           }
@@ -203,7 +205,16 @@ export class EntityMemory {
         : edge.sourceNodeId;
 
       const node = await this.store.getNode(otherId);
-      if (node && node.type === FACT_TYPE) {
+      if (!node) {
+        // Dangling edge — referenced node no longer exists (referential integrity violation).
+        // @TODO: emit a bus event for the audit logger once bus access is available here.
+        this.logger.error(
+          { edgeId: edge.id, nodeId: otherId, entityNodeId },
+          'getFacts: dangling edge detected — referenced node does not exist',
+        );
+        continue;
+      }
+      if (node.type === FACT_TYPE) {
         facts.push(node);
       }
     }
@@ -247,6 +258,10 @@ export class EntityMemory {
         // integrity violation (cascade delete failure or missing migration). Skip the edge so
         // the caller still gets a result, but log so this surfaces in monitoring.
         // @TODO: emit a bus event for the audit logger once bus access is available here.
+        this.logger.error(
+          { edgeId: edge.id, nodeId: otherId, entityNodeId: nodeId },
+          'findEdges: dangling edge detected — referenced node does not exist',
+        );
         continue;
       }
 
@@ -442,7 +457,15 @@ export class EntityMemory {
         : edge.sourceNodeId;
 
       const node = await this.store.getNode(otherId);
-      if (!node) continue;
+      if (!node) {
+        // Dangling edge — referenced node no longer exists (referential integrity violation).
+        // @TODO: emit a bus event for the audit logger once bus access is available here.
+        this.logger.error(
+          { edgeId: edge.id, nodeId: otherId, entityNodeId },
+          'query: dangling edge detected — referenced node does not exist',
+        );
+        continue;
+      }
 
       if (node.type === FACT_TYPE) {
         // Fact nodes belong in the facts bucket
