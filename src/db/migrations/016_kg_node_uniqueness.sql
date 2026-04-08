@@ -15,7 +15,7 @@ JOIN (
     type
   FROM kg_nodes
   WHERE type != 'fact'
-  ORDER BY lower(label), type, confidence DESC, created_at ASC
+  ORDER BY lower(label), type, confidence DESC, created_at ASC, id ASC
 ) canon
   ON  lower(dup.label) = canon.lower_label
   AND dup.type         = canon.type
@@ -56,20 +56,27 @@ FROM _kg_node_canonical m
 WHERE target_node_id = m.duplicate_id;
 
 -- Step 4: Re-point contacts.kg_node_id to canonical.
--- If the canonical node already has a contact, NULL out the duplicate's FK
--- to avoid violating the partial unique index on contacts(kg_node_id).
--- The nulled-out contact row should be merged via the contact-merge flow.
+-- Use ROW_NUMBER() to deterministically pick one contact per canonical_id.
+-- That contact gets re-pointed; all other contacts for the same canonical
+-- are NULLed to avoid violating idx_contacts_kg_node_unique.
+WITH ranked AS (
+  SELECT
+    c.id           AS contact_id,
+    m.canonical_id,
+    ROW_NUMBER() OVER (
+      PARTITION BY m.canonical_id
+      ORDER BY c.id
+    ) AS rn
+  FROM contacts c
+  JOIN _kg_node_canonical m ON c.kg_node_id = m.duplicate_id
+)
 UPDATE contacts
 SET kg_node_id = CASE
-  WHEN NOT EXISTS (
-    SELECT 1 FROM contacts c2
-    WHERE c2.kg_node_id = m.canonical_id
-      AND c2.id != contacts.id
-  ) THEN m.canonical_id
+  WHEN r.rn = 1 THEN r.canonical_id
   ELSE NULL
 END
-FROM _kg_node_canonical m
-WHERE contacts.kg_node_id = m.duplicate_id;
+FROM ranked r
+WHERE contacts.id = r.contact_id;
 
 -- Step 5: Delete duplicate nodes (ON DELETE CASCADE removes remaining edges)
 DELETE FROM kg_nodes

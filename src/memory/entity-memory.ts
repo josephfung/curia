@@ -159,9 +159,41 @@ export class EntityMemory {
       }
     }
 
-    // No collision — proceed with normal label update
-    const node = await this.store.updateNode(id, updates);
-    return { node, merged: false };
+    // No collision — proceed with normal label update.
+    // Wrap in try/catch to handle a TOCTOU race: another process may have inserted
+    // a conflicting node between the findNodesByLabel check above and the UPDATE here.
+    // Postgres error 23505 (unique_violation) indicates exactly this scenario.
+    try {
+      const node = await this.store.updateNode(id, updates);
+      return { node, merged: false };
+    } catch (err) {
+      const pgCode = (err as { code?: string }).code;
+      const errMessage = (err as { message?: string }).message ?? '';
+      const isUniqueViolation = pgCode === '23505' || errMessage.toLowerCase().includes('unique');
+
+      if (!isUniqueViolation) throw err;
+
+      // Race lost: re-do collision lookup now that the conflicting row exists.
+      // Re-fetch current to ensure we have the latest type (the node may have been
+      // modified by the concurrent process between our initial getNode and now).
+      const raced = await this.store.getNode(id);
+      if (!raced) throw new Error(`Node not found after unique-violation race: ${id}`);
+
+      const racedCandidates = await this.store.findNodesByLabel(updates.label!);
+      const racedCollision = racedCandidates.find(n => n.type === raced.type && n.id !== id);
+
+      if (!racedCollision) {
+        // The conflicting node was deleted before we re-queried — retry the update.
+        const node = await this.store.updateNode(id, updates);
+        return { node, merged: false };
+      }
+
+      // Collision confirmed post-race: merge as normal.
+      await this.mergeEntities(racedCollision.id, id);
+      const canonical = await this.store.getNode(racedCollision.id);
+      if (!canonical) throw new Error(`Canonical node not found after race-condition merge: ${racedCollision.id}`);
+      return { node: canonical, merged: true };
+    }
   }
 
   /**
@@ -451,6 +483,8 @@ export class EntityMemory {
 
       // Self-loop guard (should not exist, but be defensive)
       if (otherId === secondaryId) continue;
+      // Skip edges pointing to primary — would become self-loops after merge
+      if (otherId === primaryId) continue;
 
       const otherNode = await this.store.getNode(otherId);
       if (!otherNode) continue;

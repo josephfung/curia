@@ -347,7 +347,7 @@ class PostgresBackend implements KnowledgeGraphBackend {
        DO UPDATE SET
          confidence = GREATEST(kg_nodes.confidence, EXCLUDED.confidence),
          last_confirmed_at = EXCLUDED.last_confirmed_at
-       RETURNING *, (created_at = $9) AS is_new`,
+       RETURNING *, (xmax = 0) AS is_new`,
       [
         node.id,
         node.type,
@@ -458,8 +458,8 @@ class PostgresBackend implements KnowledgeGraphBackend {
   async upsertEdge(edge: KgEdge): Promise<{ edge: KgEdge; created: boolean }> {
     this.logger.debug({ sourceNodeId: edge.sourceNodeId, targetNodeId: edge.targetNodeId, type: edge.type }, 'kg: upserting edge');
     // ON CONFLICT uses the full expression from idx_kg_edges_unique.
-    // RETURNING (created_at = $9) detects new inserts: for a new row, created_at equals
-    // the value we passed in ($9 = now); for an update, created_at stays as the original.
+    // xmax = 0 reliably detects new inserts: Postgres sets xmax to 0 on INSERT and
+    // to the updating transaction XID on UPDATE, making it the canonical new-row check.
     const result = await this.pool.query<PgEdgeRow & { is_new: boolean }>(
       `INSERT INTO kg_edges
          (id, source_node_id, target_node_id, type, properties, confidence, decay_class, source, created_at, last_confirmed_at)
@@ -471,7 +471,7 @@ class PostgresBackend implements KnowledgeGraphBackend {
        ) DO UPDATE SET
          confidence = GREATEST(kg_edges.confidence, EXCLUDED.confidence),
          last_confirmed_at = EXCLUDED.last_confirmed_at
-       RETURNING *, (created_at = $9) AS is_new`,
+       RETURNING *, (xmax = 0) AS is_new`,
       [
         edge.id,
         edge.sourceNodeId,

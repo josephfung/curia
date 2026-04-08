@@ -26,27 +26,29 @@ function makeCtx(
 
 /** Stub EntityMemory with in-memory storage. */
 function makeEntityMemory() {
-  const entities = new Map<string, { id: string; label: string; properties: Record<string, unknown> }>();
+  const entities = new Map<string, { id: string; type: string; label: string; properties: Record<string, unknown> }>();
   const facts = new Map<string, Array<{ id: string; label: string; properties: Record<string, unknown>; temporal: { lastConfirmedAt: Date; confidence: number; decayClass: string; source: string; createdAt: Date } }>>();
   let nextId = 1;
 
   return {
     findEntities: vi.fn(async (label: string) => {
-      const matches: Array<{ id: string; label: string; properties: Record<string, unknown> }> = [];
+      const matches: Array<{ id: string; type: string; label: string; properties: Record<string, unknown> }> = [];
       for (const e of entities.values()) {
         if (e.label.toLowerCase() === label.toLowerCase()) matches.push(e);
       }
       return matches;
     }),
     createEntity: vi.fn(async (opts: { type: string; label: string; properties: Record<string, unknown>; source: string }) => {
-      // Check if an entity with this label already exists (mimics upsert behaviour)
+      // Check if an entity with this (label, type) pair already exists (mimics upsert
+      // behaviour). The real upsertNode deduplicates on lower(label) + type — checking
+      // label alone would wrongly deduplicate nodes with the same label but different types.
       for (const e of entities.values()) {
-        if (e.label.toLowerCase() === opts.label.toLowerCase()) {
+        if (e.label.toLowerCase() === opts.label.toLowerCase() && e.type === opts.type) {
           return { entity: e, created: false };
         }
       }
       const id = `entity-${nextId++}`;
-      const entity = { id, label: opts.label, properties: opts.properties };
+      const entity = { id, type: opts.type, label: opts.label, properties: opts.properties };
       entities.set(id, entity);
       facts.set(id, []);
       return { entity, created: true };

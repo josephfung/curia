@@ -241,3 +241,14 @@ instance.
 
 Patch bump (`0.x.Y`): this is a data-hygiene fix with infrastructure additions, no new
 user-facing capability.
+
+The `createEntity()` return type change (from `KgNode` to `{ entity: KgNode; created: boolean }`)
+is an internal breaking change. A patch bump is correct here because `EntityMemory` is not a
+listed public API surface per the project's versioning policy. Public surfaces are: `skill.json`
+schema, `SkillHandler`/`SkillContext`/`SkillResult` interfaces, agent YAML schema, bus event
+type definitions, and channel adapter interface. `EntityMemory` is an internal platform service;
+all callers live in the same repository and were updated atomically in this PR.
+
+Note: even though this does not trigger a minor bump, the `createEntity()` signature change IS
+called out explicitly in CHANGELOG.md as a breaking change so the impact is visible to reviewers
+and future readers of the history.
