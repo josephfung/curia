@@ -99,18 +99,41 @@ The `KnowledgeGraphBackend` interface gains a corresponding `upsertNode` method.
 
 ### 3. `EntityMemory` changes
 
-#### 3a. Expose `updateNode()` publicly
+#### 3a. Expose `updateNode()` publicly — with merge-on-collision
 
-`EntityMemory` gains a public `updateNode()` pass-through to `store.updateNode()`. It is
-currently called only internally (in `mergeEntities` and `storeFact`), but `contact-service`
-needs to call it after a `createEntity` conflict.
+`EntityMemory` gains a public `updateNode()` method. It is not a simple pass-through —
+when `updates.label` is present it must guard against the case where the new label
+collides with an existing node of the same type (e.g. renaming "Joe" → "Joseph Fung"
+when a "Joseph Fung" node already exists).
 
+Updating a label to match an existing node is a signal that the two nodes represent the
+same entity. The correct response is to merge them, not to throw a constraint violation.
+
+**Algorithm when `updates.label` is provided:**
+
+1. Fetch the current node (needed to know its `type` for the collision check).
+2. Query for an existing node with `lower(label) = lower(updates.label)` and the same
+   `type`, excluding `fact` and excluding `id` itself.
+3. If a collision exists → call `mergeEntities(existingId, id)` (existing node is the
+   canonical; the node being renamed is the secondary). Return
+   `{ node: canonical, merged: true }`.
+4. If no collision → call `store.updateNode(id, updates)` as normal. Return
+   `{ node: updated, merged: false }`.
+
+**Return type:**
 ```ts
 async updateNode(
   id: string,
   updates: { label?: string; properties?: Record<string, unknown> }
-): Promise<KgNode>
+): Promise<{ node: KgNode; merged: boolean }>
 ```
+
+`merged: true` signals that `node.id` in the result is **different** from the `id` the
+caller passed in. Any code holding a reference to the old ID should update it.
+
+**Internal callers are unaffected.** `mergeEntities()` and `storeFact()` call
+`store.updateNode()` directly (bypassing `EntityMemory.updateNode()`) and only pass
+`properties`, never `label` — the merge-on-collision logic is never triggered for them.
 
 #### 3b. `createEntity()` returns `{ entity, created }`
 
@@ -143,12 +166,18 @@ const { entity, created } = await this.entityMemory.createEntity({
   source: options.source,
 });
 if (!created && options.role) {
-  await this.entityMemory.updateNode(entity.id, {
+  const { node } = await this.entityMemory.updateNode(entity.id, {
     properties: { ...entity.properties, role: options.role },
   });
+  kgNodeId = node.id;
+} else {
+  kgNodeId = entity.id;
 }
-kgNodeId = entity.id;
 ```
+
+Note: `updateNode` now returns `{ node, merged }`. Even for a properties-only update
+(no label change), we destructure `node` to get the canonical ID — though `merged` will
+always be `false` here since no label is being changed.
 
 Other call sites (`extract-relationships`, `knowledge-meeting-links`, `template-base`)
 pass `{}` or constant category properties into race-guarded find-first patterns; no
@@ -185,6 +214,12 @@ After the existing Phase 1 logic (property merge + fact migration), add:
   already had the same relationship) are not duplicated
 - `createEntity` returns `created: true` on first call, `created: false` on second call
   with the same `(label, type)`
+- `updateNode` with a label change to a non-conflicting label updates normally,
+  returns `{ node: updated, merged: false }`
+- `updateNode` with a label change that collides with an existing node of the same type
+  merges the two nodes, returns `{ node: canonical, merged: true }` where `node.id` is
+  the canonical node's ID (not the original ID passed in)
+- `updateNode` with only a properties change (no label) never triggers merge logic
 
 Tests use the in-memory backend (no Postgres required). The migration SQL is tested by
 the existing integration test harness that runs migrations against a real Postgres
@@ -195,7 +230,7 @@ instance.
 | File | Change |
 |---|---|
 | `src/memory/knowledge-graph.ts` | Add `upsertNode` to backend interface, `PostgresBackend`, `InMemoryBackend`, and `KnowledgeGraphStore` |
-| `src/memory/entity-memory.ts` | Expose `updateNode()` publicly; change `createEntity()` return type; complete `mergeEntities()` Phase 2 |
+| `src/memory/entity-memory.ts` | Add public `updateNode()` with merge-on-collision; change `createEntity()` return type; complete `mergeEntities()` Phase 2 |
 | `src/contacts/contact-service.ts` | Destructure `{ entity, created }` from `createEntity()`; call `updateNode()` if `!created && options.role` |
 | `skills/extract-relationships/handler.ts` | Destructure `{ entity }` from `createEntity()` — no other change |
 | `skills/knowledge-meeting-links/handler.ts` | Destructure `{ entity }` from `createEntity()` — no other change |
