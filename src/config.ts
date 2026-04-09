@@ -72,6 +72,25 @@ export interface YamlConfig {
      *  Defaults to 600000 (10 minutes). */
     conversationCheckpointDebounceMs?: number;
   };
+  security?: {
+    extra_injection_patterns?: Array<{ regex: string; label: string }>;
+    trust_score?: {
+      /** Weight for the channel trust component (0–1). Default: 0.4 */
+      channel_weight?: number;
+      /** Weight for the contact confidence component (0–1). Default: 0.4 */
+      contact_weight?: number;
+      /** Maximum penalty for injection risk (0–1). Default: 0.2 */
+      max_risk_penalty?: number;
+    };
+    /** Minimum trust score; messages below this are held unless channel policy is 'ignore'. Default: 0.2 */
+    trust_score_floor?: number;
+  };
+  trust_policy?: {
+    financial_actions?: number;
+    data_export?: number;
+    scheduling?: number;
+    information_queries?: number;
+  };
 }
 
 /**
