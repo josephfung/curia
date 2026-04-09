@@ -232,6 +232,58 @@ interface ConfigChangePayload {
   diff_summary: string;         // human-readable summary of what changed
 }
 
+// LlmCallPayload — emitted by the agent runtime after every LLM API call completes.
+// Provides model provenance, token accounting, timing, and content fingerprints for audit.
+// Spec 10 (audit log hardening): required by NIST AI 600-1, EU AI Act Article 12, OWASP LLM10.
+// Multiple llm.call events may share the same agent.task parent (one per LLM round-trip in
+// multi-turn tool-use loops).
+interface LlmCallPayload {
+  agentId: string;
+  conversationId: string;
+  // Model provenance — what was requested vs. what actually ran (provider may alias)
+  requestedModel: string;       // e.g. 'claude-sonnet-4-20250514'
+  actualModel: string;          // from the API response (may differ if provider aliases)
+  provider: string;             // 'anthropic' | 'openai' | 'ollama'
+  // Token accounting
+  inputTokens: number;
+  outputTokens: number;
+  estimatedCostUsd: number;     // computed from provider pricing at call time
+  // Timing
+  latencyMs: number;
+  // Upstream correlation — enables cross-referencing with the provider's own audit logs
+  providerRequestId: string;    // Anthropic: x-request-id header; OpenAI: x-request-id header
+  // Content fingerprints — SHA-256 of full prompt/response (not raw content;
+  // full prompts/responses go in llm_call_archive, see spec 10)
+  promptHash: string;
+  responseHash: string;
+}
+
+// HumanDecisionPayload — emitted by the dispatch layer when a human approves, denies, or
+// reviews an agent action. Captures the full decision context for compliance and audit.
+// Spec 10 (audit log hardening): required by EU AI Act Article 14, HITL audit standards.
+// Used for: outbound email approval gates, unknown-sender decisions, elevated skill approvals,
+// and any future human-in-the-loop gate. Timeout decisions use decision: 'timeout'.
+interface HumanDecisionPayload {
+  // What was decided
+  decision: 'approve' | 'deny' | 'modify' | 'escalate' | 'timeout';
+  // Who decided
+  deciderId: string;            // sender ID of the human who made the decision
+  deciderChannel: string;       // channel through which the decision was made
+  // What they were deciding on
+  subjectEventId: string;       // audit event ID of the action that required human review
+  subjectSummary: string;       // human-readable description of what was being decided
+  // Decision context
+  contextShown: string[];       // list of information items presented to the human
+  rationale?: string;           // optional: reason provided by the human
+  // Timing — presentedAt/decidedAt captures time-to-decide for compliance analysis
+  presentedAt: Date;            // when the decision was presented to the human
+  decidedAt: Date;              // when the human responded (or timeout fired)
+  // What would have happened without intervention
+  defaultAction: string;        // 'block' | 'allow' | 'queue' — system's default if no response
+  // Autonomy context
+  autonomyTier?: string;        // which autonomy tier was in effect (e.g., 'unknown_sender')
+}
+
 
 // -- Discriminated union --
 // The `type` field is the discriminant; `sourceLayer` records which layer emitted the event.
@@ -381,6 +433,22 @@ export interface ConfigChangeEvent extends BaseEvent {
   payload: ConfigChangePayload;
 }
 
+// LlmCallEvent — published by the agent layer after every LLM API call.
+// parentEventId references the agent.task that triggered it.
+export interface LlmCallEvent extends BaseEvent {
+  type: 'llm.call';
+  sourceLayer: 'agent';
+  payload: LlmCallPayload;
+}
+
+// HumanDecisionEvent — published by the dispatch layer when a human resolves an approval gate.
+// parentEventId references the event (e.g., outbound.message, message.held) that triggered the gate.
+export interface HumanDecisionEvent extends BaseEvent {
+  type: 'human.decision';
+  sourceLayer: 'dispatch';
+  payload: HumanDecisionPayload;
+}
+
 interface ConversationCheckpointPayload {
   conversationId: string;
   agentId: string;
@@ -424,7 +492,9 @@ export type BusEvent =
   | ScheduleSuspendedEvent   // Scheduler: job auto-suspended
   | ScheduleRecoveredEvent   // Scheduler: stuck job auto-recovered
   | ConfigChangeEvent        // System: config object changed (office identity, etc.)
-  | ConversationCheckpointEvent; // Checkpoint pipeline: Dispatch fires after inactivity window
+  | ConversationCheckpointEvent // Checkpoint pipeline: Dispatch fires after inactivity window
+  | LlmCallEvent             // Spec 10: LLM API call provenance (model, tokens, cost, hashes)
+  | HumanDecisionEvent;      // Spec 10: human-in-the-loop decision record (approve/deny/etc.)
 
 // Convenience alias for use in handler maps / switch statements.
 export type EventType = BusEvent['type'];
@@ -763,5 +833,35 @@ export function createConversationCheckpoint(
     sourceLayer: 'dispatch',
     type: 'conversation.checkpoint',
     payload,
+  };
+}
+
+export function createLlmCall(
+  // parentEventId is required — every LLM call must trace back to the agent.task that triggered it.
+  payload: LlmCallPayload & { parentEventId: string },
+): LlmCallEvent {
+  const { parentEventId, ...rest } = payload;
+  return {
+    id: randomUUID(),
+    timestamp: new Date(),
+    type: 'llm.call',
+    sourceLayer: 'agent',
+    payload: rest,
+    parentEventId,
+  };
+}
+
+export function createHumanDecision(
+  // parentEventId is required — every decision must trace back to the event that triggered the gate.
+  payload: HumanDecisionPayload & { parentEventId: string },
+): HumanDecisionEvent {
+  const { parentEventId, ...rest } = payload;
+  return {
+    id: randomUUID(),
+    timestamp: new Date(),
+    type: 'human.decision',
+    sourceLayer: 'dispatch',
+    payload: rest,
+    parentEventId,
   };
 }

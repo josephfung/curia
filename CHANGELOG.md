@@ -14,6 +14,17 @@ bus event types) are noted explicitly even in the `0.x` range.
 ## [Unreleased]
 
 ### Added
+- **Bus layer enforcement: `llm.call` and `human.decision` event types** — Added the two new
+  event types from spec 10 (audit log hardening) to the bus: `llm.call` (published by the agent
+  layer after every LLM API call; carries model provenance, token accounting, timing, and content
+  hashes) and `human.decision` (published by the dispatch layer when a human resolves an approval
+  gate; carries full decision context for EU AI Act Article 14 compliance). Both are added to
+  `src/bus/events.ts` (payload interfaces, event interfaces, factory functions, `BusEvent` union)
+  and `src/bus/permissions.ts` (layer allowlists, including `system` layer full access for audit
+  logging). Unit tests added for all new event type permission cases; integration test added
+  confirming bus throws on unauthorized publish/subscribe in a wired-system context (issue #187).
+
+### Added
 - **Context summarization** — When active conversation history in working memory exceeds a
   configurable threshold (default: 20 turns), the oldest turns are condensed into a synthetic
   summary turn via an LLM call and the originals are archived (`archived = true`) in Postgres.
