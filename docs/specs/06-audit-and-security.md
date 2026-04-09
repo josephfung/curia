@@ -350,7 +350,7 @@ These are non-negotiable for launch.
 | Inbound message sanitization active (injection pattern detection) | Done |
 | Error strings scrubbed before LLM injection | Not Done |
 | Agent config validation blocks malformed YAML at startup | Not Done |
-| HTTP API channel requires token authentication | Not Done |
+| HTTP API channel requires token authentication | Done |
 | Rate limiting active at dispatch layer | Not Done |
 | Intent drift detection pauses tasks (not just logs) | Not Done |
 | Email channel exposes provider-level SPF/DKIM/DMARC validation via Nylas message metadata | Not Done |

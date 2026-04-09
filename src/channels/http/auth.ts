@@ -25,6 +25,9 @@ export function validateBearerToken(
   if (!authHeader || !authHeader.startsWith('Bearer ')) return false;
 
   const provided = authHeader.slice('Bearer '.length);
+  // Reject empty token immediately — "Bearer " with no value is always invalid
+  // and avoids a misleading length-match if configuredToken were ever empty.
+  if (!provided) return false;
 
   // Timing-safe comparison to prevent timing attacks
   if (provided.length !== configuredToken.length) return false;

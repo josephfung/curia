@@ -13,6 +13,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Security
+
+- **HTTP API token authentication** — failed auth attempts are now audit-logged (IP, route, reason); authenticated messages carry `trustLevel: 'medium'` in bus event metadata; integration tests verify 401 on missing/invalid token and 200 on valid token (spec 06, issue #189)
+
 ### Added
 - **Bus layer enforcement: `llm.call` and `human.decision` event types** — Added the two new
   event types from spec 10 (audit log hardening) to the bus: `llm.call` (published by the agent
