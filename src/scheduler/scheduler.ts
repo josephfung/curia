@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import type { Pool } from 'pg';
 import type { EventBus } from '../bus/bus.js';
 import type { Logger } from '../logger.js';
@@ -26,6 +27,32 @@ const DEFAULT_EXPECTED_DURATION_SECONDS = 600; // 10 minutes
 //   2m expected → 15m timeout;  30m expected → 90m timeout.
 const RECOVERY_TIMEOUT_MULTIPLIER = 7.5;
 const RECOVERY_TIMEOUT_CAP_SECONDS = 3600;
+
+/**
+ * Build a structured text block summarising the previous run's outcome.
+ * Injected into the agent.task content so the agent can avoid repeating work
+ * or adjust its approach based on what happened last time.
+ *
+ * Returns an empty string when there is no prior-run data (first run ever).
+ */
+function buildPriorRunBlock(job: JobRow): string {
+  if (!job.lastRunOutcome) return '';
+
+  const parts: string[] = [
+    `[Prior run context — last ran ${job.lastRunAt ?? 'unknown'}]`,
+    `outcome: ${job.lastRunOutcome}`,
+  ];
+
+  if (job.lastRunSummary) {
+    parts.push(`summary: ${job.lastRunSummary}`);
+  }
+
+  if (job.lastRunContext) {
+    parts.push(`context: ${JSON.stringify(job.lastRunContext, null, 2)}`);
+  }
+
+  return parts.join('\n');
+}
 
 /**
  * Compute the recovery timeout for a job given its expected duration.
@@ -168,6 +195,9 @@ export class Scheduler {
           progress: row.progress ?? null,
           runStartedAt: row.run_started_at ?? null,
           expectedDurationSeconds: row.expected_duration_seconds ?? null,
+          lastRunOutcome: row.last_run_outcome ?? null,
+          lastRunSummary: row.last_run_summary ?? null,
+          lastRunContext: row.last_run_context ?? null,
         };
         try {
           await this.fireJob(job);
@@ -225,6 +255,13 @@ export class Scheduler {
       });
     }
 
+    // Prepend prior-run context so the agent knows what happened last time
+    // and can avoid repeating work or adjust its approach accordingly.
+    const priorRunBlock = buildPriorRunBlock(job);
+    if (priorRunBlock) {
+      content = `${priorRunBlock}\n\n${content}`;
+    }
+
     // Publish schedule.fired for audit trail.
     const firedEvent = createScheduleFired({
       jobId: job.id,
@@ -233,10 +270,15 @@ export class Scheduler {
     });
     await this.bus.publish('system', firedEvent);
 
+    // Use a unique per-run conversationId so that each scheduler invocation gets
+    // its own conversation thread. Re-using just the job ID would let unrelated
+    // runs bleed into the same conversation history.
+    const runId = randomUUID();
+
     // Publish agent.task so the coordinator picks up the work.
     const taskEvent = createAgentTask({
       agentId: job.agentId,
-      conversationId: `scheduler:${job.id}`,
+      conversationId: `scheduler:${job.id}:${runId}`,
       channelId: 'scheduler',
       senderId: 'scheduler',
       content,
