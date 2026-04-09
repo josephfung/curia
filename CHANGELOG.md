@@ -18,6 +18,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **README.md** — removed Project Status & Documentation table; status is now consolidated in `docs/specs/00-overview.md`.
 
 ### Added
+- **Spec 11 implementation status table** — added Implementation Status section to `docs/specs/11-entity-context-enrichment.md` documenting what's done and what's outstanding across all three phases.
 - **Conversation checkpoint pipeline** — Dispatch publishes a `conversation.checkpoint` event after 10 minutes of inactivity per conversation–agent pair. A new System Layer `ConversationCheckpointProcessor` subscribes, concatenates new turns since the last watermark, fans out to background memory skills (`extract-relationships`; extensible to future skills), then advances the per-(conversationId, agentId) watermark in the new `conversation_checkpoints` table. Adds migration 017. **Breaking change:** `conversation.checkpoint` added to the bus event type discriminated union.
 
 ### Changed
