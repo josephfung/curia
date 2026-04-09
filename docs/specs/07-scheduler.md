@@ -30,7 +30,12 @@ CREATE TABLE scheduled_jobs (
   consecutive_failures  INTEGER NOT NULL DEFAULT 0,
   created_by    TEXT NOT NULL,
   created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
-  timezone      TEXT NOT NULL DEFAULT 'UTC'
+  timezone      TEXT NOT NULL DEFAULT 'UTC',
+
+  -- Prior run context (see Prior Run Context section below)
+  last_run_outcome  TEXT CHECK (last_run_outcome IN ('completed', 'failed', 'timed_out')),
+  last_run_summary  TEXT,
+  last_run_context  JSONB
 );
 
 CHECK (cron_expr IS NOT NULL OR run_at IS NOT NULL)
@@ -120,6 +125,39 @@ The agent doesn't stay running between bursts. State lives entirely in Postgres.
 
 ---
 
+## Prior Run Context
+
+Scheduled jobs should receive **memory** (stable facts the next run needs), not **history** (the raw turn sequence from a prior execution). Raw history carries execution state — if a prior run died mid-loop, replaying those turns causes the next run to continue the bad loop rather than execute the task fresh.
+
+### No conversation history on scheduled job runs
+
+When the scheduler fires a job, the emitted `agent.task` event carries no conversation history. The agent always starts from zero turns. This is distinct from interactive agent tasks, which do carry conversation context.
+
+### How prior-run context is injected
+
+If the job has prior-run data (`last_run_outcome IS NOT NULL`), the scheduler injects a structured system message as the first content of the new execution — before the task payload, alongside the agent's persona and date/timezone context:
+
+```
+[Prior run context — 2026-04-08 07:30 ET]
+Outcome: completed
+Summary: Sent schedule for 6 events to joseph@josephfung.ca
+Agent context: {"events_sent": 6}
+```
+
+If the job has never run, no prior-run block is injected.
+
+### What gets written and by whom
+
+| Field | Written by | When |
+|---|---|---|
+| `last_run_outcome` | Scheduler | On `completeJobRun()` success/failure; stuck-job recovery writes `timed_out` |
+| `last_run_summary` | Agent (via `scheduler-report` skill) | At the end of a successful run |
+| `last_run_context` | Agent (via `scheduler-report` skill) | At the end of a successful run |
+
+Agents are not required to call `scheduler-report`. Stateless jobs (e.g. a daily email that simply reads the calendar and sends) can skip it — `last_run_context` stays `NULL` and the next run starts with only the outcome/summary from the scheduler.
+
+---
+
 ## Creating Scheduled Jobs
 
 ### From Agent Config (declarative)
@@ -153,6 +191,17 @@ Users can manage jobs directly:
 - `GET /api/jobs` — list all jobs
 - `PATCH /api/jobs/:id` — update (e.g., unsuspend)
 - `DELETE /api/jobs/:id` — cancel
+
+---
+
+## Skills
+
+Four skills available to agents:
+
+- **`scheduler-create`** — create a cron or one-shot job, optionally with a linked persistent task (`intent_anchor`)
+- **`scheduler-list`** — list jobs with optional status/agent_id filters
+- **`scheduler-cancel`** — cancel a job by ID
+- **`scheduler-report`** — write prior-run context at the end of a run. Input: `{ job_id, summary, context? }`. Action risk: `none`. The scheduler writes `last_run_outcome` itself; this skill writes `last_run_summary` and `last_run_context`.
 
 ---
 
