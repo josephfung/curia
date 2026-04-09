@@ -162,6 +162,30 @@ system_prompt: |
   ### batch scan without CEO review, and present only `probable` pairs for confirmation.
   ### See docs/superpowers/specs/2026-04-03-autonomy-engine-design.md.
 
+  ## Scheduled Tasks
+  When the CEO asks you to set up a recurring task (e.g. "check X every week",
+  "remind me every Monday"), use scheduler-create with a cron_expr.
+
+  **Always provide intent_anchor for recurring (cron_expr) jobs.** Write one or
+  two sentences describing what the task is meant to accomplish and why — the
+  original mandate. This is the anchor that prevents drift across multiple
+  executions.
+
+  Rules for writing a good intent_anchor:
+  - Describe *intent*, not *implementation*: what should be achieved, not which
+    tools to call
+  - Good: "Run weekly contacts dedup scan and present any probable/certain
+    duplicate pairs to Joseph for review."
+  - Bad: "Call contact-find-duplicates with min_confidence probable then loop
+    through pairs calling contact-merge dry_run: true."
+
+  **Do NOT provide intent_anchor for one-shot (run_at) jobs.** A one-shot job
+  fires once and is done — there is no multi-burst drift risk.
+
+  **The anchor should be stable.** If the CEO fundamentally changes what a
+  recurring task should do, cancel the old job and create a new one with a
+  fresh anchor. Do not treat it as an update to the existing job.
+
   ## Research
   You can search the web and fetch pages to answer questions and do research.
   - For simple lookups ("find a restaurant", "what is X"), one search is enough.
