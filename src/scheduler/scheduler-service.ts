@@ -46,7 +46,7 @@ export interface JobRow {
   progress: Record<string, unknown> | null;
   runStartedAt: string | null;
   expectedDurationSeconds: number | null;
-  lastRunOutcome: string | null;
+  lastRunOutcome: 'completed' | 'failed' | 'timed_out' | null;
   lastRunSummary: string | null;
   lastRunContext: Record<string, unknown> | null;
 }
@@ -77,7 +77,7 @@ interface DbJobRow {
   progress: Record<string, unknown> | null;
   run_started_at: string | null;          // set when job enters 'running'; cleared on completion
   expected_duration_seconds: number | null; // per-job timeout hint; NULL → system default (600s)
-  last_run_outcome: string | null;   // 'completed' | 'failed' | 'timed_out' | null
+  last_run_outcome: 'completed' | 'failed' | 'timed_out' | null;
   last_run_summary: string | null;   // agent-written summary; null until first scheduler-report call
   last_run_context: Record<string, unknown> | null; // opaque agent context; null until first scheduler-report call
 }
@@ -593,8 +593,10 @@ export class SchedulerService {
     summary: string,
     context?: Record<string, unknown>,
   ): Promise<void> {
+    let result: { rowCount: number | null };
+
     if (context !== undefined) {
-      await this.pool.query(
+      result = await this.pool.query(
         `UPDATE scheduled_jobs
             SET last_run_summary = $1,
                 last_run_context = $2
@@ -602,13 +604,18 @@ export class SchedulerService {
         [summary, JSON.stringify(context), jobId],
       );
     } else {
-      await this.pool.query(
+      result = await this.pool.query(
         `UPDATE scheduled_jobs
             SET last_run_summary = $1
           WHERE id = $2`,
         [summary, jobId],
       );
     }
+
+    if (!result.rowCount) {
+      throw new Error(`reportJobRun: no job found with id "${jobId}" — report not written`);
+    }
+
     this.logger.info({ jobId }, 'scheduler-report written');
   }
 }

@@ -38,8 +38,14 @@ const RECOVERY_TIMEOUT_CAP_SECONDS = 3600;
 function buildPriorRunBlock(job: JobRow): string {
   if (!job.lastRunOutcome) return '';
 
+  const lastRanStr = job.lastRunAt
+    ? new Date(job.lastRunAt).toLocaleString('en-CA', { timeZone: job.timezone, dateStyle: 'short', timeStyle: 'short' })
+    : job.lastRunOutcome === 'timed_out'
+      ? 'no completion recorded (timed out)'
+      : 'no completion recorded';
+
   const parts: string[] = [
-    `[Prior run context — last ran ${job.lastRunAt ?? 'unknown'}]`,
+    `[Prior run context — ${lastRanStr}]`,
     `Outcome: ${job.lastRunOutcome}`,
   ];
 
