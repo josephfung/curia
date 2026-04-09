@@ -46,6 +46,9 @@ export interface JobRow {
   progress: Record<string, unknown> | null;
   runStartedAt: string | null;
   expectedDurationSeconds: number | null;
+  lastRunOutcome: string | null;
+  lastRunSummary: string | null;
+  lastRunContext: Record<string, unknown> | null;
 }
 
 export interface ListJobsFilters {
@@ -74,6 +77,9 @@ interface DbJobRow {
   progress: Record<string, unknown> | null;
   run_started_at: string | null;          // set when job enters 'running'; cleared on completion
   expected_duration_seconds: number | null; // per-job timeout hint; NULL → system default (600s)
+  last_run_outcome: string | null;   // 'completed' | 'failed' | 'timed_out' | null
+  last_run_summary: string | null;   // agent-written summary; null until first scheduler-report call
+  last_run_context: Record<string, unknown> | null; // opaque agent context; null until first scheduler-report call
 }
 
 // Threshold for auto-suspending jobs after consecutive failures.
@@ -593,5 +599,8 @@ function mapJobRow(row: DbJobRow): JobRow {
     progress: row.progress,
     runStartedAt: row.run_started_at,
     expectedDurationSeconds: row.expected_duration_seconds,
+    lastRunOutcome: row.last_run_outcome,
+    lastRunSummary: row.last_run_summary,
+    lastRunContext: row.last_run_context,
   };
 }
