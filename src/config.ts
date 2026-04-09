@@ -114,24 +114,27 @@ export function loadYamlConfig(configDir: string): YamlConfig {
       );
     }
 
-    const summarizationThreshold = config.workingMemory?.summarization?.threshold;
-    if (summarizationThreshold !== undefined && (!Number.isInteger(summarizationThreshold) || summarizationThreshold < 2)) {
-      throw new Error(`workingMemory.summarization.threshold must be an integer >= 2, got: ${summarizationThreshold}`);
-    }
+    if (config.workingMemory?.summarization !== undefined) {
+      const summarizationThreshold = config.workingMemory.summarization.threshold;
+      if (summarizationThreshold !== undefined && (!Number.isInteger(summarizationThreshold) || summarizationThreshold < 2)) {
+        throw new Error(`workingMemory.summarization.threshold must be an integer >= 2, got: ${summarizationThreshold}`);
+      }
 
-    const summarizationKeepWindow = config.workingMemory?.summarization?.keepWindow;
-    if (summarizationKeepWindow !== undefined && (!Number.isInteger(summarizationKeepWindow) || summarizationKeepWindow < 1)) {
-      throw new Error(`workingMemory.summarization.keepWindow must be a positive integer, got: ${summarizationKeepWindow}`);
-    }
+      const summarizationKeepWindow = config.workingMemory.summarization.keepWindow;
+      if (summarizationKeepWindow !== undefined && (!Number.isInteger(summarizationKeepWindow) || summarizationKeepWindow < 1)) {
+        throw new Error(`workingMemory.summarization.keepWindow must be a positive integer, got: ${summarizationKeepWindow}`);
+      }
 
-    if (
-      summarizationThreshold !== undefined &&
-      summarizationKeepWindow !== undefined &&
-      summarizationKeepWindow >= summarizationThreshold
-    ) {
-      throw new Error(
-        `workingMemory.summarization.keepWindow (${summarizationKeepWindow}) must be less than threshold (${summarizationThreshold})`,
-      );
+      // Cross-validate using effective values (same defaults as index.ts bootstrap) so a
+      // config like { keepWindow: 25 } (no explicit threshold) is caught here rather than
+      // silently passing validation and failing at runtime.
+      const effectiveThreshold = summarizationThreshold ?? 20;
+      const effectiveKeepWindow = summarizationKeepWindow ?? 10;
+      if (effectiveKeepWindow >= effectiveThreshold) {
+        throw new Error(
+          `workingMemory.summarization.keepWindow (${effectiveKeepWindow}) must be less than threshold (${effectiveThreshold})`,
+        );
+      }
     }
 
     return config;

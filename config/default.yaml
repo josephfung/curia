@@ -30,7 +30,7 @@ workingMemory:
   # Summarization is best-effort — a failed LLM call is logged at error level and
   # skipped; the turn is still written and the next add() will retry automatically.
   #
-  # Constraints: keepWindow must be less than threshold, both must be >= 1.
+  # Constraints: threshold must be >= 2, keepWindow must be >= 1, keepWindow < threshold.
   summarization:
     threshold: 20   # turns that trigger a summarization pass
     keepWindow: 10  # most-recent turns to retain as active after summarization

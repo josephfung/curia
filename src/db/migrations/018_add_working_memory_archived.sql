@@ -4,8 +4,9 @@
 
 ALTER TABLE working_memory ADD COLUMN archived BOOLEAN NOT NULL DEFAULT false;
 
--- Partial index covering only active (non-archived) rows — the hot query path.
--- Replaces the full-table idx_wm_conversation for the primary SELECT in get().
+-- Partial index covering only active (non-archived) rows — the hot query path for get().
+-- Coexists with idx_wm_conversation (added in migration 002); the planner will prefer
+-- idx_wm_active for queries that filter archived = false.
 CREATE INDEX idx_wm_active ON working_memory (conversation_id, agent_id, created_at)
   WHERE archived = false;
 

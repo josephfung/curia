@@ -13,7 +13,7 @@
  *   - get() loads the summary instead of archived originals
  *   - Failed LLM call: skips summarization without aborting the agent turn
  */
-import { describe, it, expect, vi, beforeEach, type MockedFunction } from 'vitest';
+import { describe, it, expect, vi, type MockedFunction } from 'vitest';
 import { WorkingMemory, type SummarizationConfig } from '../../../src/memory/working-memory.js';
 import type { LLMProvider } from '../../../src/agents/llm/provider.js';
 import type { DbPool } from '../../../src/db/connection.js';
@@ -72,9 +72,7 @@ describe('WorkingMemory — context summarization', () => {
   const CONV = 'conv-summarize';
   const AGENT = 'coordinator';
 
-  // Fixed UUIDs for archived turns (16 oldest) and kept turns (10 newest)
   const makeId = (i: number) => `00000000-0000-0000-0000-${String(i).padStart(12, '0')}`;
-  const allTurnIds = Array.from({ length: 26 }, (_, i) => makeId(i));
 
   /**
    * Build a pool that simulates:
