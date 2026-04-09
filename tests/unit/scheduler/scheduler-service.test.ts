@@ -526,8 +526,9 @@ describe('SchedulerService', () => {
 
       expect(id).toBe('job-decl');
       const [sql] = pool.query.mock.calls[0] as [string];
-      expect(sql).toContain('ON CONFLICT');
-      expect(sql).toContain('scheduled_jobs_declarative_uq');
+      // Column-based conflict syntax — matches the partial unique index definition.
+      // ON CONFLICT ON CONSTRAINT only works with named CONSTRAINTs, not named indexes.
+      expect(sql).toContain('ON CONFLICT (agent_id, cron_expr, (task_payload::text)) WHERE created_by = \'system\'');
     });
 
     it('writes expectedDurationSeconds when provided', async () => {

@@ -13,6 +13,12 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Fixed
+- **Declarative job upsert** — `ON CONFLICT ON CONSTRAINT` only works with named
+  constraints, not named indexes. Switched to column-based conflict syntax matching
+  the `scheduled_jobs_declarative_uq` partial unique index definition, fixing
+  startup failures when declarative schedule entries are present.
+
 ### Added
 - **Schedule `agent_id` field** — Declarative schedule entries now support an optional
   `agent_id` field to fire the job at a different agent (e.g. the coordinator) rather

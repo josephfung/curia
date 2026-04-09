@@ -365,7 +365,10 @@ export class SchedulerService {
 
   /**
    * Upsert a declarative job (system-created, idempotent on restart).
-   * Uses ON CONFLICT on the unique index for (agent_id, cron_expr, task_payload) WHERE created_by = 'system'.
+   * Uses ON CONFLICT with the column list matching the partial unique index
+   * scheduled_jobs_declarative_uq (agent_id, cron_expr, task_payload::text WHERE created_by = 'system').
+   * Note: ON CONFLICT ON CONSTRAINT only works with named CONSTRAINTS, not named indexes —
+   * so we use the column-based syntax here to match the CREATE UNIQUE INDEX definition.
    */
   async upsertDeclarativeJob(
     agentId: string,
@@ -391,7 +394,7 @@ export class SchedulerService {
     const sql = `
       INSERT INTO scheduled_jobs (agent_id, cron_expr, task_payload, status, next_run_at, created_by, timezone${hasExpectedDuration ? ', expected_duration_seconds' : ''})
       VALUES ($1, $2, $3, $4, $5, $6, $7${hasExpectedDuration ? ', $8' : ''})
-      ON CONFLICT ON CONSTRAINT scheduled_jobs_declarative_uq
+      ON CONFLICT (agent_id, cron_expr, (task_payload::text)) WHERE created_by = 'system'
       DO UPDATE SET next_run_at = $5,
                     timezone = $7${hasExpectedDuration ? ',\n                    expected_duration_seconds = $8' : ''}
       RETURNING id
