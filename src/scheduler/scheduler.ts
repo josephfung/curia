@@ -195,8 +195,10 @@ export class Scheduler {
   /**
    * Fire a single job: set status to running, publish schedule.fired + agent.task.
    *
-   * For persistent tasks (linked agent_task), injects intent_anchor and progress
-   * into the agent.task content so the agent has context about the ongoing task.
+   * For persistent tasks (linked agent_task), includes progress and task_payload
+   * in content for agent context. The intent anchor is passed separately in the
+   * event payload so the runtime can inject it into the system prompt as a
+   * non-negotiable behavioral instruction.
    */
   private async fireJob(job: JobRow): Promise<void> {
     // Atomically claim the job by setting status to 'running' only if it's still
@@ -211,15 +213,16 @@ export class Scheduler {
       return;
     }
 
-    // Build the agent.task content, injecting persistent task context if available.
+    // Build the agent.task content. For persistent tasks, include progress and
+    // the original task payload so the agent has execution context. Intent anchor
+    // is passed in the event payload (not content) so the runtime can inject it
+    // into the system prompt as a non-negotiable behavioral instruction.
     let content = JSON.stringify(job.taskPayload);
-    if (job.agentTaskId && job.intentAnchor) {
-      const context = {
-        intent_anchor: job.intentAnchor,
+    if (job.agentTaskId) {
+      content = JSON.stringify({
         progress: job.progress ?? {},
         task_payload: job.taskPayload,
-      };
-      content = JSON.stringify(context);
+      });
     }
 
     // Publish schedule.fired for audit trail.
@@ -237,6 +240,9 @@ export class Scheduler {
       channelId: 'scheduler',
       senderId: 'scheduler',
       content,
+      // Pass the anchor in the payload so the runtime injects it into the system
+      // prompt. null (no linked agent_task) becomes undefined (field omitted).
+      intentAnchor: job.intentAnchor ?? undefined,
       parentEventId: firedEvent.id,
     });
     await this.bus.publish('system', taskEvent);

@@ -208,25 +208,48 @@ describe('Scheduler', () => {
       expect(event2.payload.conversationId).toBe('scheduler:job-1');
     });
 
-    it('injects persistent task context when agent_task is linked', async () => {
+    it('passes intentAnchor in event payload for persistent tasks', async () => {
       const row = fakeDbRow({
         agent_task_id: 'task-aaa',
         intent_anchor: 'weekly-report',
         progress: { step: 3 },
       });
-      // SELECT due jobs
       pool.query.mockResolvedValueOnce({ rows: [row] });
-      // UPDATE status to running
-      pool.query.mockResolvedValueOnce({ rows: [] });
+      pool.query.mockResolvedValueOnce({ rowCount: 1, rows: [] }); // claim
 
       await scheduler.pollDueJobs();
 
-      // The agent.task event content should include intent_anchor + progress
+      const [, taskEvent] = bus.publish.mock.calls[1] as [string, { payload: { intentAnchor?: string } }];
+      expect(taskEvent.payload.intentAnchor).toBe('weekly-report');
+    });
+
+    it('does NOT include intent_anchor in content bundle for persistent tasks', async () => {
+      const row = fakeDbRow({
+        agent_task_id: 'task-aaa',
+        intent_anchor: 'weekly-report',
+        progress: { step: 3 },
+      });
+      pool.query.mockResolvedValueOnce({ rows: [row] });
+      pool.query.mockResolvedValueOnce({ rowCount: 1, rows: [] });
+
+      await scheduler.pollDueJobs();
+
       const [, taskEvent] = bus.publish.mock.calls[1] as [string, { payload: { content: string } }];
       const content = JSON.parse(taskEvent.payload.content);
-      expect(content.intent_anchor).toBe('weekly-report');
+      expect(content.intent_anchor).toBeUndefined();
       expect(content.progress).toEqual({ step: 3 });
       expect(content.task_payload).toEqual({ skill: 'morning-brief' });
+    });
+
+    it('does not pass intentAnchor for jobs without a linked agent_task', async () => {
+      const row = fakeDbRow(); // no agent_task_id
+      pool.query.mockResolvedValueOnce({ rows: [row] });
+      pool.query.mockResolvedValueOnce({ rowCount: 1, rows: [] });
+
+      await scheduler.pollDueJobs();
+
+      const [, taskEvent] = bus.publish.mock.calls[1] as [string, { payload: { intentAnchor?: string } }];
+      expect(taskEvent.payload.intentAnchor).toBeUndefined();
     });
 
     it('logs and swallows errors during polling', async () => {
