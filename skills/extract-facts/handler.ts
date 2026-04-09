@@ -67,7 +67,7 @@ export class ExtractFactsHandler implements SkillHandler {
         max_tokens: 10,
         messages: [{
           role: 'user',
-          content: `Does the following text assert an attribute, fact, or characteristic about a single person or organisation (for example: where they live, their role, their preferences, their location)? Answer only 'yes' or 'no'.\n\n${text}`,
+          content: `Does the following text assert an attribute, fact, or characteristic about a single entity (for example: a person, organisation, project, event, or other entity — such as where they are located, their role, their status, or their preferences)? Answer only 'yes' or 'no'.\n\n${text}`,
         }],
       });
 
@@ -179,6 +179,12 @@ ${text}`,
             continue;
           }
 
+          // Trim validated fields so lookups, labels, and stored properties are
+          // idempotent for inputs with leading/trailing whitespace.
+          const subject = fact.subject.trim();
+          const attribute = fact.attribute.trim();
+          const value = fact.value.trim();
+
           // Normalise subject type — fall back to 'person' for unknown or non-entity types.
           const subjectType: NodeType = ENTITY_NODE_TYPES.has(fact.subjectType)
             ? fact.subjectType as NodeType
@@ -197,11 +203,11 @@ ${text}`,
           // Resolve entity node — require a type match to avoid attaching facts to a
           // same-label entity of the wrong type (e.g. a person named the same as an org).
           // If no same-type match exists, create a new entity node.
-          const matches = await ctx.entityMemory.findEntities(fact.subject);
+          const matches = await ctx.entityMemory.findEntities(subject);
           const match = matches.find(n => n.type === subjectType);
           const entityNode = match ?? (await ctx.entityMemory.createEntity({
             type: subjectType,
-            label: fact.subject,
+            label: subject,
             properties: {},
             source,
             confidence: 0.6,
@@ -209,12 +215,12 @@ ${text}`,
 
           // Label format: "<attribute>: <value>" — human-readable and dedup-stable.
           // The validator uses semantic similarity on this label for near-duplicate detection.
-          const label = `${fact.attribute}: ${fact.value}`;
+          const label = `${attribute}: ${value}`;
 
           const result = await ctx.entityMemory.storeFact({
             entityNodeId: entityNode.id,
             label,
-            properties: { attribute: fact.attribute, value: fact.value },
+            properties: { attribute, value },
             confidence,
             decayClass,
             source,
@@ -225,12 +231,12 @@ ${text}`,
           } else {
             // storeFact returns stored:false on rate-limit rejection or contradiction.
             // Log at warn (not error) — these are expected semantic outcomes, not infra failures.
-            ctx.log.warn({ subject: fact.subject, attribute: fact.attribute, conflict: result.conflict, source }, 'extract-facts: fact rejected or conflicted');
+            ctx.log.warn({ subject, attribute, conflict: result.conflict, source }, 'extract-facts: fact rejected or conflicted');
           }
         } catch (err) {
           // Log at error — persistence failures are infrastructure errors (DB outage,
           // connection loss) that must surface in Sentry, not soft warnings.
-          ctx.log.error({ err, subject: fact.subject, attribute: fact.attribute }, 'extract-facts: failed to persist fact, skipping');
+          ctx.log.error({ err, subject, attribute }, 'extract-facts: failed to persist fact, skipping');
           failed++;
         }
       }

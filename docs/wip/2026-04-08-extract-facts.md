@@ -551,7 +551,7 @@ If running after Task 2, all tests should pass. If they fail for unexpected reas
 npm --prefix /path/to/worktree test skills/extract-facts/handler.test.ts
 ```
 
-Expected: all 8 tests pass.
+Expected: all 9 tests pass.
 
 - [ ] **Step 4: Commit**
 
