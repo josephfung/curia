@@ -38,6 +38,10 @@ interface AgentTaskPayload {
   /** Original task intent for persistent scheduler tasks. Undefined for one-shot and direct tasks.
    *  Injected into effectiveSystemPrompt by the runtime to prevent multi-burst drift. */
   intentAnchor?: string;
+  /** Computed message trust score (0.0–1.0). Present when trust scoring is configured.
+   *  Combines channel trust, contact confidence, and content risk signal.
+   *  Not present on tasks created without a contact resolver (e.g. bullpen tasks). */
+  messageTrustScore?: number;
 }
 
 interface AgentResponsePayload {
@@ -123,8 +127,10 @@ interface ContactResolvedPayload {
 interface ContactUnknownPayload {
   channel: string;
   senderId: string;
-  /** Channel trust level. Optional in Phase A; Phase B will make it required. */
-  channelTrustLevel?: 'low' | 'medium' | 'high';
+  /** Channel trust level — required for trust score audit trail. */
+  channelTrustLevel: 'low' | 'medium' | 'high';
+  /** Computed message trust score for this unknown sender's message. */
+  messageTrustScore: number;
 }
 
 // contact.duplicate_detected — published when a newly-created contact scores above
