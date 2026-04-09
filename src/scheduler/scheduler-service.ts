@@ -593,19 +593,23 @@ export class SchedulerService {
     summary: string,
     context?: Record<string, unknown>,
   ): Promise<void> {
-    const { rowCount } = await this.pool.query(
-      `UPDATE scheduled_jobs
-          SET last_run_summary = $1,
-              last_run_context = $2
-        WHERE id = $3`,
-      [summary, context !== undefined ? JSON.stringify(context) : null, jobId],
-    );
-
-    if (rowCount === 0) {
-      throw new Error(`reportJobRun: job not found: ${jobId}`);
+    if (context !== undefined) {
+      await this.pool.query(
+        `UPDATE scheduled_jobs
+            SET last_run_summary = $1,
+                last_run_context = $2
+          WHERE id = $3`,
+        [summary, JSON.stringify(context), jobId],
+      );
+    } else {
+      await this.pool.query(
+        `UPDATE scheduled_jobs
+            SET last_run_summary = $1
+          WHERE id = $2`,
+        [summary, jobId],
+      );
     }
-
-    this.logger.info({ jobId }, 'Job run report written');
+    this.logger.info({ jobId }, 'scheduler-report written');
   }
 }
 
