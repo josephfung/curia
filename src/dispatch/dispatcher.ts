@@ -381,21 +381,22 @@ export class Dispatcher {
       });
 
       // Trust floor: if score is below the floor, apply hold_and_notify unless channel is 'ignore'.
-      // This overrides per-channel 'allow' policies for very low-trust messages.
+      // This overrides per-channel 'allow' policies for very low-trust messages — including unknown
+      // senders on 'allow' channels. Unknown senders on 'hold_and_notify' and 'ignore' channels
+      // already returned early above, so there is no risk of double-holding here.
       const policy = this.channelPolicies[payload.channelId];
       if (
         messageTrustScore < this.trustScoreFloor &&
         policy?.unknownSender !== 'ignore' &&
-        this.heldMessages &&
-        // Don't re-hold messages that already went through the unknown-sender hold/reject path above
-        senderContext?.resolved !== false
+        this.heldMessages
       ) {
         this.logger.warn(
           { channelId: payload.channelId, senderId: payload.senderId, messageTrustScore, floor: this.trustScoreFloor },
           'Message trust score below floor — holding regardless of channel policy',
         );
+        const subject = (payload.metadata as Record<string, unknown> | undefined)?.subject as string | null ?? null;
+        let held = false;
         try {
-          const subject = (payload.metadata as Record<string, unknown> | undefined)?.subject as string | null ?? null;
           const heldId = await this.heldMessages.hold({
             channel: payload.channelId,
             senderId: payload.senderId,
@@ -404,15 +405,23 @@ export class Dispatcher {
             subject,
             metadata: payload.metadata ?? {},
           });
-          await this.bus.publish('dispatch', createMessageHeld({
-            heldMessageId: heldId,
-            channel: payload.channelId,
-            senderId: payload.senderId,
-            subject,
-            parentEventId: event.id,
-          }));
-          // Hold succeeded — message is held, don't proceed to coordinator.
-          return;
+          held = true; // hold succeeded — message is now in held_messages; must not reach coordinator
+          // Publish the audit event separately. A failure here does not un-hold the message,
+          // so we catch it independently and never fall through to the coordinator.
+          try {
+            await this.bus.publish('dispatch', createMessageHeld({
+              heldMessageId: heldId,
+              channel: payload.channelId,
+              senderId: payload.senderId,
+              subject,
+              parentEventId: event.id,
+            }));
+          } catch (publishErr) {
+            this.logger.error(
+              { err: publishErr, channelId: payload.channelId, senderId: payload.senderId, heldMessageId: heldId },
+              'Failed to publish message.held audit event — message is held but CEO notification may be delayed',
+            );
+          }
         } catch (holdErr) {
           this.logger.error(
             { err: holdErr, channelId: payload.channelId, senderId: payload.senderId },
@@ -422,6 +431,8 @@ export class Dispatcher {
           // a low-trust score from a known contact should not silently drop the message.
           // The coordinator still receives it with the low score visible.
         }
+        // Always return if the hold succeeded — a publish failure is not a reason to forward to the coordinator.
+        if (held) return;
       }
     }
 

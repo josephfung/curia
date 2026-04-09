@@ -402,4 +402,38 @@ describe('Dispatcher — messageTrustScore', () => {
     expect(held).toHaveLength(0);
     expect(tasks).toHaveLength(1);
   });
+
+  it('trust floor holds unknown sender on allow channel (score below floor)', async () => {
+    // Regression: unknown senders on 'allow' channels must still be subject to the trust floor.
+    // Previously, the senderContext?.resolved !== false guard incorrectly exempted them.
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+    const heldMessages = makeInMemoryHeldMessages();
+    const resolver = makeResolverWithNoContact(); // unknown sender → contactConfidence = 0.0
+    const dispatcher = new Dispatcher({
+      bus,
+      logger,
+      contactResolver: resolver,
+      heldMessages,
+      channelPolicies: { email: { trust: 'low', unknownSender: 'allow' } },
+      trustScoreFloor: 0.2,
+    });
+    dispatcher.register();
+
+    const held: MessageHeldEvent[] = [];
+    const tasks: AgentTaskEvent[] = [];
+    bus.subscribe('message.held', 'channel', (e) => { held.push(e as MessageHeldEvent); });
+    bus.subscribe('agent.task', 'agent', (e) => { tasks.push(e as AgentTaskEvent); });
+
+    await bus.publish('channel', createInboundMessage({
+      conversationId: 'conv-floor-unknown-allow',
+      channelId: 'email',
+      senderId: 'stranger@example.com',
+      content: 'Hello',
+    }));
+
+    // email low=0.3*0.4=0.12, below floor of 0.2 → should be held even though channel is 'allow'
+    expect(held).toHaveLength(1);
+    expect(tasks).toHaveLength(0);
+  });
 });
