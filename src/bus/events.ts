@@ -35,6 +35,9 @@ interface AgentTaskPayload {
   metadata?: Record<string, unknown>;
   /** Resolved sender context from the contact resolver. Undefined if contacts not configured. */
   senderContext?: import('../contacts/types.js').InboundSenderContext;
+  /** Original task intent for persistent scheduler tasks. Undefined for one-shot and direct tasks.
+   *  Injected into effectiveSystemPrompt by the runtime to prevent multi-burst drift. */
+  intentAnchor?: string;
 }
 
 interface AgentResponsePayload {

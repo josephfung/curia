@@ -188,6 +188,14 @@ export class AgentRuntime {
       }
     }
 
+    // Append intent anchor — present only for persistent scheduler tasks that have a
+    // linked agent_task record. Injected last so it sits closest to the conversation,
+    // making it maximally salient. It is non-negotiable: the agent may evolve its
+    // approach across bursts, but cannot abandon the original mandate.
+    if (taskEvent.payload.intentAnchor) {
+      effectiveSystemPrompt += '\n\n## Original Task Intent\n' + taskEvent.payload.intentAnchor;
+    }
+
     // Initialize the error budget for this task.
     // Config values override defaults; budget tracks runtime counters.
     const budgetConfig = this.config.errorBudget;

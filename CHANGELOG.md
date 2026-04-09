@@ -34,6 +34,11 @@ bus event types) are noted explicitly even in the `0.x` range.
   than the agent whose YAML contains the schedule. Defaults to the source agent's name
   for backward compatibility. A startup warning is logged if two agents form a targeting
   cycle. Public API surface: agent YAML schema.
+- **Intent anchor** — `intentAnchor` field on `AgentTaskEvent` payload; the scheduler
+  passes the anchor from `agent_tasks.intent_anchor` through the event, and the runtime
+  injects a `## Original Task Intent` block into `effectiveSystemPrompt` on every burst
+  for persistent tasks. Prevents multi-burst drift (spec 01). Coordinator YAML updated
+  with guidance on when and how to provide `intent_anchor` to `scheduler-create`.
 
 ---
 

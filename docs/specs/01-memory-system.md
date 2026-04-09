@@ -172,5 +172,5 @@ When a persistent task is created, the original task description is stored as an
 | `src/memory/bullpen.ts` — thread management and context formatting | Done |
 | `src/memory/entity-memory.ts` — high-level query layer over knowledge graph | Done |
 | `src/memory/knowledge-graph.ts` — full graph store with traversal and semantic search | Done |
-| Context summarization — rolling window condensing at 20 turns with archival | Not Done |
-| Intent anchor — stored on task creation, injected into system prompt each burst | Not Done |
+| Context summarization — rolling window condensing at 20 turns with archival | Done |
+| Intent anchor — stored on task creation, injected into system prompt each burst | Done |

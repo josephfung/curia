@@ -325,6 +325,68 @@ describe('AgentRuntime', () => {
     const systemMsg = callArgs?.messages?.[0];
     expect(systemMsg?.content).toBe('Base prompt.');
   });
+
+  it('appends intent anchor to system prompt when intentAnchor is present', async () => {
+    const provider = createMockProvider('Done.');
+    const runtime = new AgentRuntime({
+      agentId: 'coordinator',
+      systemPrompt: 'You are helpful.',
+      provider,
+      bus,
+      logger: createLogger('error'),
+    });
+    runtime.register();
+
+    const task = createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'conv-1',
+      channelId: 'scheduler',
+      senderId: 'scheduler',
+      content: JSON.stringify({ progress: {}, task_payload: { task: 'dedup scan' } }),
+      intentAnchor: 'Run weekly contacts dedup scan and present duplicates to Joseph.',
+      parentEventId: 'parent-1',
+    });
+    await bus.publish('dispatch', task);
+
+    expect(provider.chat).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messages: expect.arrayContaining([
+          expect.objectContaining({
+            role: 'system',
+            content: expect.stringContaining(
+              '## Original Task Intent\nRun weekly contacts dedup scan and present duplicates to Joseph.',
+            ),
+          }),
+        ]),
+      }),
+    );
+  });
+
+  it('does not append intent anchor when intentAnchor is absent', async () => {
+    const provider = createMockProvider('Hello back!');
+    const runtime = new AgentRuntime({
+      agentId: 'coordinator',
+      systemPrompt: 'You are helpful.',
+      provider,
+      bus,
+      logger: createLogger('error'),
+    });
+    runtime.register();
+
+    const task = createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'conv-1',
+      channelId: 'cli',
+      senderId: 'user',
+      content: 'Hello',
+      parentEventId: 'parent-1',
+    });
+    await bus.publish('dispatch', task);
+
+    const chatCall = (provider.chat as ReturnType<typeof vi.fn>).mock.calls[0][0] as { messages: Array<{ role: string; content: string }> };
+    const systemMsg = chatCall.messages.find(m => m.role === 'system');
+    expect(systemMsg?.content).not.toContain('## Original Task Intent');
+  });
 });
 
 // Helper: mock LLM that returns tool_use on first call, text on second

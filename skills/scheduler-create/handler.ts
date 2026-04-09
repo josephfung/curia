@@ -32,6 +32,11 @@ export class SchedulerCreateHandler implements SkillHandler {
     if (!cron_expr && !run_at) {
       return { success: false, error: 'At least one of cron_expr or run_at must be provided' };
     }
+    // Reject blank intent_anchor — a blank string would be stored in the DB and then silently
+    // skipped by the runtime's truthiness guard, giving the illusion of drift prevention with none.
+    if (intent_anchor !== undefined && typeof intent_anchor === 'string' && intent_anchor.trim() === '') {
+      return { success: false, error: 'intent_anchor must not be blank — provide a meaningful description or omit the field' };
+    }
 
     const agentId = agent_id ?? 'coordinator';
 
