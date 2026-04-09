@@ -13,28 +13,28 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
-### Changed
-- **`docs/specs/00-overview.md` spec index** — added Status column, rows 12–16 (Knowledge Graph Web Explorer, Office Identity, Autonomy Engine, Outbound Safety, Smoke Test Framework), and unified Scope notes with README Area column (channels named explicitly, cron/one-shot in scheduler, unknown sender policy in contacts, KG-backed profiles in entity context enrichment).
-- **README.md** — removed Project Status & Documentation table; status is now consolidated in `docs/specs/00-overview.md`.
+---
+
+## [0.14.0] — 2026-04-08
 
 ### Added
-- **Spec 11 implementation status table** — added Implementation Status section to `docs/specs/11-entity-context-enrichment.md` documenting what's done and what's outstanding across all three phases.
-- **`extract-facts` skill** — automatic extraction of single-entity attribute facts (home city, job title, preferences, etc.) from conversation transcripts; persists as `fact` nodes in the knowledge graph via `EntityMemory.storeFact()`. Runs at every conversation checkpoint alongside `extract-relationships`. Implements issue #151.
-- **Conversation checkpoint pipeline** — Dispatch publishes a `conversation.checkpoint` event after 10 minutes of inactivity per conversation–agent pair. A new System Layer `ConversationCheckpointProcessor` subscribes, concatenates new turns since the last watermark, fans out to background memory skills (`extract-relationships`; extensible to future skills), then advances the per-(conversationId, agentId) watermark in the new `conversation_checkpoints` table. Adds migration 017. **Breaking change:** `conversation.checkpoint` added to the bus event type discriminated union.
+- **Conversation checkpoint pipeline** — `ConversationCheckpointProcessor` fires after 10 min inactivity per conversation–agent pair; fans out to background memory skills and advances a per-(conversationId, agentId) watermark in `conversation_checkpoints`. Adds migration 017. **Breaking change:** `conversation.checkpoint` added to the bus event discriminated union.
+- **`extract-facts` skill** — extracts single-entity attribute facts (home city, job title, preferences, etc.) from transcripts and persists as `fact` nodes via `EntityMemory.storeFact()`; runs at each conversation checkpoint alongside `extract-relationships`. Closes #151.
+- **`KnowledgeGraphStore.upsertNode()`** — idempotent node creation; raises confidence on conflict. Returns `{ node, created }`.
+- **`EntityMemory.updateNode()`** — new public method; label changes that collide with an existing node of the same type automatically merge nodes. Returns `{ node, merged }`.
+- **`kg_nodes` uniqueness constraint** — `idx_kg_nodes_unique` on `(lower(label), type) WHERE type != 'fact'` prevents future duplicate entity nodes.
+- **Spec 11 implementation status** — added Implementation Status section to `docs/specs/11-entity-context-enrichment.md`.
 
 ### Changed
-- **`extract-relationships` moved to checkpoint pipeline** — extraction now runs once per conversation–agent pair (after 10 min of inactivity) rather than as an LLM tool call on every message. Fixes the coordinator confabulation bugs (see PR #221).
+- **`extract-relationships`** — moved from per-message LLM tool loop to conversation checkpoint pipeline; runs once per conversation–agent pair after 10 min inactivity.
+- **`EntityMemory.createEntity()`** — returns `{ entity, created }` instead of `KgNode`; delegates to `upsertNode` for race-safe creation. **Breaking change** for callers (all internal call sites updated).
+- **`mergeEntities` Phase 2** — re-points secondary entity edges to primary and deletes the secondary node (was previously deferred).
+- **Spec index** (`docs/specs/00-overview.md`) — added Status column and rows 12–16; unified Scope notes with README Area column.
+- **README** — removed redundant Project Status table; status consolidated in spec index.
 
 ### Fixed
-- **Coordinator confabulation bug** — removed `extract-relationships` from the coordinator's LLM tool loop. The per-message tool call caused empty-text turns that triggered the empty-response recovery mechanism, which confabulated "I already provided my response" in Signal group chats and the web UI. Relationship extraction moves to the conversation checkpoint pipeline (forthcoming).
+- **Coordinator confabulation** — removing `extract-relationships` from the coordinator's LLM tool loop eliminated empty-text turns that triggered confabulated "I already provided my response" replies in Signal group chats and the web UI.
 - **KG node deduplication** — one-time migration deduplicates existing `kg_nodes` rows with matching `(lower(label), type)`, re-pointing edges and contacts to canonical nodes before removing duplicates.
-
-### Added
-- **`kg_nodes` uniqueness constraint** — `idx_kg_nodes_unique` on `(lower(label), type) WHERE type != 'fact'` prevents future duplicate entity nodes.
-- **`KnowledgeGraphStore.upsertNode()`** — idempotent node creation; raises confidence on conflict, never creates duplicates. Returns `{ node, created }`.
-- **`EntityMemory.createEntity()`** — now returns `{ entity, created }` instead of `KgNode`. Delegates to `upsertNode` for race-safe creation. **Breaking change** for callers (all internal call sites updated).
-- **`EntityMemory.updateNode()`** — new public method. Label changes that collide with an existing node of the same type automatically merge the nodes. Returns `{ node, merged }` — callers must use the returned `node.id`, which may differ from the input id when `merged: true`.
-- **`mergeEntities` Phase 2** — re-points secondary entity edges to primary and deletes the secondary node (was previously deferred with a TODO).
 
 ---
 
@@ -236,7 +236,9 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Bootstrap orchestrator** — `src/index.ts` wires all layers in dependency order
 - Architecture specs 00–08, contributor docs (CONTRIBUTING.md, CODE_OF_CONDUCT.md, SECURITY.md)
 
-[Unreleased]: https://github.com/josephfung/curia/compare/v0.11.0...HEAD
+[Unreleased]: https://github.com/josephfung/curia/compare/v0.14.0...HEAD
+[0.14.0]: https://github.com/josephfung/curia/compare/v0.12.1...v0.14.0
+[0.12.1]: https://github.com/josephfung/curia/compare/v0.11.0...v0.12.1
 [0.11.0]: https://github.com/josephfung/curia/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/josephfung/curia/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/josephfung/curia/compare/v0.8.0...v0.9.0
