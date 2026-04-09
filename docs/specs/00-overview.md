@@ -15,7 +15,7 @@
 | 05 | [Error Recovery](05-error-recovery.md) | Error budgets, state continuity, pattern detection, failure model | ✅ Implemented |
 | 06 | [Audit & Security](06-audit-and-security.md) | Audit log, redaction, tool sanitization, intent drift, security | Partial — basic audit logging in place; redaction & hardening planned |
 | 07 | [Scheduler](07-scheduler.md) | Job model, cron, one-shot, persistent tasks, burst execution | ✅ Implemented |
-| 08 | [Operations](08-operations.md) | Config, deployment, health checks, logging, project structure | Planned |
+| 08 | [Operations](08-operations.md) | Config, deployment, health checks, logging, project structure | Partial - config validation & onboarding planned |
 | 09 | [Contacts & Identity](09-contacts-and-identity.md) | Contact resolution, identity verification, unknown sender policy, authorization, channel identity linking | ✅ Implemented |
 | 10 | [Audit Log Hardening](10-audit-log-hardening.md) | Structured audit fields, LLM provenance, tamper evidence, source attribution, HITL records | Planned |
 | 11 | [Entity Context Enrichment](11-entity-context-enrichment.md) | Entity model, KG-backed sender/entity profiles, context assembly, agent self-identity, skill convention for entity-scoped operations | Partial - Phase 1 done, Phase 2 and 3 pending  |
