@@ -167,7 +167,7 @@ Known contacts are stored across two tables (`contacts` + `contact_channel_ident
 `contacts` holds the person record. Two new columns are added via migration to support trust scoring:
 
 ```sql
--- New columns added to existing contacts table (migration 019):
+-- New columns added to existing contacts table (migration 020):
 ALTER TABLE contacts ADD COLUMN contact_confidence NUMERIC(3,2) NOT NULL DEFAULT 0.0;  -- 0.0–1.0
 ALTER TABLE contacts ADD COLUMN trust_level        TEXT;           -- nullable per-contact override: 'high' | 'medium' | 'low'
 ALTER TABLE contacts ADD COLUMN last_seen_at       TIMESTAMPTZ;   -- timestamp of most recent inbound message from this contact
@@ -356,7 +356,7 @@ These are non-negotiable for launch.
 | Intent drift detection pauses tasks (not just logs) | Not Done |
 | Email channel exposes provider-level SPF/DKIM/DMARC validation via Nylas message metadata | Not Done |
 | Anti-injection system prompt hardening and architectural containment (Layers 2 & 3) | Not Done |
-| Migration 019 adds `contact_confidence`, `trust_level`, `last_seen_at` columns to existing `contacts` table | Done |
+| Migration 020 adds `contact_confidence`, `trust_level`, `last_seen_at` columns to existing `contacts` table | Done |
 | All `agent.task` events carry `messageTrustScore` (computed float); `trustLevel` and `contactConfidence` are inputs only, not propagated to bus events | Done |
 | Unknown sender lookup targets `contact_channel_identities (channel, channel_identifier)` | Done |
 | Unknown sender routing configured in `config/channel-trust.yaml` using `allow` / `hold_and_notify` / `ignore` | Done |
