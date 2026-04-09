@@ -288,15 +288,15 @@ You also need to add `validateBearerToken` to the imports at the top of the test
 import { validateBearerToken } from '../../src/channels/http/auth.js';
 ```
 
-- [ ] **Step 2: Run the new tests to verify they fail (not yet — they should pass since impl is done)**
+- [ ] **Step 2: Run the new tests and verify they pass**
 
-Actually: since Tasks 1 and 2 are already committed before this task, the tests should pass on first run. Run them to confirm:
+Tasks 1 and 2 are already committed before this task, so the tests should pass on first run:
 
 ```bash
 npm --prefix $WORKTREE run test -- tests/integration/http-api.test.ts 2>&1 | tail -20
 ```
 
-Expected: all 10 tests pass (5 existing + 5 new).
+Expected: all 11 tests pass (5 existing + 6 new).
 
 - [ ] **Step 3: Commit**
 
