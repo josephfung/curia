@@ -8,6 +8,7 @@ import { messageRoutes } from '../../src/channels/http/routes/messages.js';
 import { healthRoutes } from '../../src/channels/http/routes/health.js';
 import { agentRoutes } from '../../src/channels/http/routes/agents.js';
 import { Dispatcher } from '../../src/dispatch/dispatcher.js';
+import { validateBearerToken } from '../../src/channels/http/auth.js';
 import type { LLMProvider } from '../../src/agents/llm/provider.js';
 import type { ContactResolver } from '../../src/contacts/contact-resolver.js';
 import type { InboundSenderContext } from '../../src/contacts/types.js';
@@ -176,5 +177,153 @@ describe('HTTP API — unknown_sender: reject policy', () => {
     expect(response.statusCode).toBe(403);
     const body = JSON.parse(response.body);
     expect(body.error).toContain('sender not authorized');
+  });
+});
+
+// Issue #189: HTTP API channel must require token-based authentication.
+// This suite exercises the auth middleware (onRequest hook) end-to-end.
+// It builds a minimal Fastify app with the same hook as HttpAdapter
+// to test auth independently from the message flow.
+describe('HTTP API — bearer token authentication', () => {
+  const TEST_TOKEN = 'test-secret-token-abc123';
+
+  // Build a minimal Fastify app with the same onRequest hook as HttpAdapter.
+  // We test auth in isolation here — message routing is covered by other suites.
+  async function buildApp(token: string | undefined) {
+    const app = Fastify();
+    const bus = new EventBus(logger);
+    const eventRouter = new EventRouter(logger);
+    const mockPool = {
+      query: async () => ({ rows: [{ '?column?': 1 }] }),
+    } as unknown as Pool;
+
+    eventRouter.setupSubscriptions(bus);
+
+    // Register a minimal agent so POST /api/messages can return a response.
+    const mockProvider: LLMProvider = {
+      id: 'mock',
+      chat: async () => ({
+        type: 'text' as const,
+        content: 'auth test response',
+        usage: { inputTokens: 1, outputTokens: 1 },
+      }),
+    };
+    const coordinator = new AgentRuntime({
+      agentId: 'coordinator',
+      systemPrompt: 'You are a test agent.',
+      provider: mockProvider,
+      bus,
+      logger,
+    });
+    coordinator.register();
+    const dispatcher = new Dispatcher({ bus, logger });
+    dispatcher.register();
+
+    // Auth hook — same logic as HttpAdapter.start()
+    app.addHook('onRequest', async (request, reply) => {
+      const routeUrl = request.routeOptions.url ?? '';
+      if (routeUrl === '/api/health') return;
+      // Mirror the full HttpAdapter exemption list — these routes use their own auth mechanisms.
+      // None are registered in this test app, but the hook must match production exactly.
+      if (
+        routeUrl === '/' ||
+        routeUrl === '/auth' ||
+        routeUrl.startsWith('/assets') ||
+        routeUrl.startsWith('/api/kg') ||
+        routeUrl.startsWith('/api/identity') ||
+        routeUrl.startsWith('/api/jobs')
+      ) return;
+      if (!validateBearerToken(request.headers.authorization, token)) {
+        const reason = request.headers.authorization ? 'invalid_token' : 'missing_token';
+        logger.warn({ ip: request.ip, route: routeUrl, reason }, 'HTTP auth failed');
+        return reply.status(401).send({ error: 'Unauthorized — provide a valid Bearer token' });
+      }
+    });
+
+    app.register(messageRoutes, { bus, logger, eventRouter });
+    app.register(healthRoutes, { pool: mockPool, logger, agentNames: ['coordinator'], skillNames: [] });
+
+    await app.ready();
+    return app;
+  }
+
+  it('rejects POST /api/messages with no Authorization header (401)', async () => {
+    const app = await buildApp(TEST_TOKEN);
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/messages',
+        payload: { content: 'hello' },
+        // No headers — no Authorization
+      });
+      expect(response.statusCode).toBe(401);
+      const body = JSON.parse(response.body);
+      expect(body.error).toContain('Unauthorized');
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('rejects POST /api/messages with a wrong token (401)', async () => {
+    const app = await buildApp(TEST_TOKEN);
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/messages',
+        payload: { content: 'hello' },
+        headers: { authorization: 'Bearer wrong-token' },
+      });
+      expect(response.statusCode).toBe(401);
+      const body = JSON.parse(response.body);
+      expect(body.error).toContain('Unauthorized');
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('accepts POST /api/messages with a valid token (200)', async () => {
+    const app = await buildApp(TEST_TOKEN);
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/messages',
+        payload: { content: 'hello', conversation_id: 'auth-test-conv-1' },
+        headers: { authorization: `Bearer ${TEST_TOKEN}` },
+      });
+      expect(response.statusCode).toBe(200);
+      const body = JSON.parse(response.body);
+      expect(body.conversation_id).toBe('auth-test-conv-1');
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('allows GET /api/health with no token (health is auth-exempt)', async () => {
+    const app = await buildApp(TEST_TOKEN);
+    try {
+      const response = await app.inject({
+        method: 'GET',
+        url: '/api/health',
+        // No Authorization header
+      });
+      expect(response.statusCode).toBe(200);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('accepts POST /api/messages when no token is configured (auth disabled)', async () => {
+    const app = await buildApp(undefined); // auth disabled
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/messages',
+        payload: { content: 'hello', conversation_id: 'auth-disabled-conv-1' },
+        // No Authorization header
+      });
+      expect(response.statusCode).toBe(200);
+    } finally {
+      await app.close();
+    }
   });
 });
