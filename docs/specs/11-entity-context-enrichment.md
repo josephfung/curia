@@ -498,3 +498,38 @@ Calendars, email accounts, and CRM connections have fundamentally different sche
 - [ ] `entity-lookup` skill for broad KG entity search (orgs, events, places)
 - [ ] Knowledge skills adoption (travel-preferences, loyalty-programs, etc.)
 - [ ] Email skills adoption (when email connected accounts are added)
+
+---
+
+## Implementation Status
+
+### Phase 1: Foundation
+
+| Item | Status |
+|---|---|
+| Agent self-identity: KG node + contact record, bootstrap seeding | Done |
+| Agent contactId injection into coordinator system prompt | Done |
+| Entity-context assembly module (`src/entity-context/`) | Done |
+| `entity-context` skill (manifest + handler) | Done |
+| `ctx.entityContext` field on `SkillContext` | Done |
+| `entity_enrichment` manifest declaration support in execution layer | Done |
+| TTL cache for entity context payloads | Done |
+| Cache invalidation on contact/KG mutations | Done |
+| Proactive account discovery (`discoveredAccounts` field) | Not done |
+| Unit tests: entity-context assembly, execution layer pre-enrichment, cache | Not done |
+
+### Phase 2: Calendar adoption
+
+| Item | Status |
+|---|---|
+| Calendar skills declare `entity_enrichment` in their manifests | Not done |
+| Remove `calendarId` from LLM-visible tool definitions | Not done |
+| Integration test: end-to-end "What's on Jenna's calendar?" flow | Not done |
+
+### Phase 3: Broader adoption
+
+| Item | Status |
+|---|---|
+| `entity-lookup` skill for broad KG entity search (orgs, events, places) | Not done |
+| Knowledge skills adoption (travel-preferences, loyalty-programs, etc.) | Not done |
+| Email skills adoption (when email connected accounts are added) | Not done |
