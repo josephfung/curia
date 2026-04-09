@@ -315,27 +315,51 @@ export class Scheduler {
    * so they're always present in the DB on startup.
    */
   async loadDeclarativeJobs(agentConfigs: AgentYamlConfig[]): Promise<void> {
+    // Collect all (source → target) schedule edges for cycle detection after upserts.
+    const edges: Array<{ source: string; target: string }> = [];
+
     for (const config of agentConfigs) {
       if (!config.schedule || config.schedule.length === 0) {
         continue;
       }
 
       for (const schedule of config.schedule) {
+        // agent_id lets a specialist declare its schedule fires at a different agent
+        // (e.g. coordinator). Defaults to the agent's own name if omitted.
+        const targetAgentId = schedule.agent_id ?? config.name;
+        edges.push({ source: config.name, target: targetAgentId });
+
         try {
           const jobId = await this.schedulerService.upsertDeclarativeJob(
-            config.name,
+            targetAgentId,
             schedule,
           );
           this.logger.info(
-            { agentId: config.name, cron: schedule.cron, task: schedule.task, jobId },
+            { agentId: targetAgentId, sourceAgent: config.name, cron: schedule.cron, task: schedule.task, jobId },
             'Declarative job upserted',
           );
         } catch (err) {
           this.logger.error(
-            { err, agentId: config.name, schedule },
+            { err, agentId: targetAgentId, sourceAgent: config.name, schedule },
             'Failed to upsert declarative job',
           );
         }
+      }
+    }
+
+    // Detect two-agent targeting cycles and warn loudly. A cycle means agent A's schedule
+    // targets agent B, and agent B's schedule targets agent A — this will cause infinite
+    // task loops at runtime. Self-targeting (source === target) is intentional and fine.
+    for (const edge of edges) {
+      if (edge.source === edge.target) continue; // self-targeting is fine
+      const hasCycle = edges.some(
+        e => e.source === edge.target && e.target === edge.source,
+      );
+      if (hasCycle) {
+        this.logger.warn(
+          { agentA: edge.source, agentB: edge.target },
+          'Declarative schedule cycle detected — agents target each other; this will cause infinite task loops',
+        );
       }
     }
   }
