@@ -12,6 +12,7 @@ import { validateBearerToken } from '../../src/channels/http/auth.js';
 import type { LLMProvider } from '../../src/agents/llm/provider.js';
 import type { ContactResolver } from '../../src/contacts/contact-resolver.js';
 import type { InboundSenderContext } from '../../src/contacts/types.js';
+import type { AgentTaskEvent } from '../../src/bus/events.js';
 import type { Pool } from 'pg';
 import pino from 'pino';
 
@@ -120,9 +121,9 @@ describe('HTTP API integration', () => {
 });
 
 // Issue #47: HTTP callers hang on rejected unknown-sender messages.
-// This suite verifies that the reject policy returns 403 immediately
+// This suite verifies that the ignore policy returns 403 immediately
 // instead of hanging until the 120-second response timeout (504).
-describe('HTTP API — unknown_sender: reject policy', () => {
+describe('HTTP API — unknown_sender: ignore policy', () => {
   const app = Fastify();
   const bus = new EventBus(logger);
   const eventRouter = new EventRouter(logger);
@@ -143,12 +144,12 @@ describe('HTTP API — unknown_sender: reject policy', () => {
       } satisfies InboundSenderContext),
     } as unknown as ContactResolver;
 
-    // Dispatcher configured with reject policy for the http channel
+    // Dispatcher configured with ignore policy for the http channel
     const dispatcher = new Dispatcher({
       bus,
       logger,
       contactResolver: mockResolver,
-      channelPolicies: { http: { trust: 'low', unknownSender: 'reject' } },
+      channelPolicies: { http: { trust: 'low', unknownSender: 'ignore' } },
     });
     dispatcher.register();
 
@@ -208,6 +209,7 @@ describe('HTTP API — bearer token authentication', () => {
         usage: { inputTokens: 1, outputTokens: 1 },
       }),
     };
+
     const coordinator = new AgentRuntime({
       agentId: 'coordinator',
       systemPrompt: 'You are a test agent.',
@@ -342,5 +344,93 @@ describe('HTTP API — bearer token authentication', () => {
     } finally {
       await app.close();
     }
+  });
+});
+
+// Verifies that the Dispatcher attaches messageTrustScore to agent.task events
+// for unknown HTTP senders when the channel policy is 'allow'.
+//
+// Expected score: http medium (0.6) × channelWeight (0.4) + unknown confidence (0.0) × contactWeight (0.4) = 0.24
+describe('Trust scoring — unknown sender via HTTP', () => {
+  const app = Fastify();
+  const bus = new EventBus(logger);
+  const eventRouter = new EventRouter(logger);
+
+  const mockProvider: LLMProvider = {
+    id: 'mock',
+    chat: async () => ({
+      type: 'text' as const,
+      content: 'Trust test response',
+      usage: { inputTokens: 5, outputTokens: 3 },
+    }),
+  };
+
+  // Resolver always returns an unknown sender — simulates a fresh HTTP caller
+  // with no corresponding contact record in the DB.
+  const mockResolver: ContactResolver = {
+    resolve: vi.fn().mockResolvedValue({
+      resolved: false,
+      channel: 'http',
+      senderId: 'unknown-api-caller',
+    } satisfies InboundSenderContext),
+  } as unknown as ContactResolver;
+
+  beforeAll(async () => {
+    eventRouter.setupSubscriptions(bus);
+
+    const coordinator = new AgentRuntime({
+      agentId: 'coordinator',
+      systemPrompt: 'You are a test agent.',
+      provider: mockProvider,
+      bus,
+      logger,
+    });
+    coordinator.register();
+
+    // Channel policy: medium trust, allow unknown senders so the message reaches
+    // the coordinator (and trust score is computed). Without 'allow', unknown
+    // senders would be dropped at the policy gate and no agent.task would fire.
+    const dispatcher = new Dispatcher({
+      bus,
+      logger,
+      contactResolver: mockResolver,
+      channelPolicies: { http: { trust: 'medium', unknownSender: 'allow' } },
+    });
+    dispatcher.register();
+
+    app.register(messageRoutes, { bus, logger, eventRouter });
+
+    await app.ready();
+  });
+
+  afterAll(async () => {
+    await app.close();
+  });
+
+  it('agent.task carries messageTrustScore for unknown HTTP sender', async () => {
+    const tasks: AgentTaskEvent[] = [];
+
+    // Subscribe before injecting the request so we don't miss a fast delivery.
+    // bus.subscribe() returns void (no unsubscribe) — the subscription is scoped
+    // to this describe block's bus instance which is discarded after afterAll.
+    bus.subscribe('agent.task', 'agent', (e) => { tasks.push(e as AgentTaskEvent); });
+
+    await app.inject({
+      method: 'POST',
+      url: '/api/messages',
+      payload: {
+        content: 'What time is it?',
+        conversation_id: 'trust-int-test-1',
+        sender_id: 'unknown-api-caller',
+      },
+    });
+
+    // The inject() call awaits the agent response, so by the time we reach this
+    // line the agent.task event has already been delivered to our subscriber.
+    expect(tasks.length).toBeGreaterThan(0);
+
+    // http medium=0.6, unknown contact confidence=0.0
+    // score = (0.6 × 0.4) + (0.0 × 0.4) − (0 × 0.2) = 0.24
+    expect(tasks[0]!.payload.messageTrustScore).toBeCloseTo(0.24, 1);
   });
 });

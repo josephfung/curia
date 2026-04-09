@@ -6,6 +6,10 @@ export interface Contact {
   displayName: string;
   role: string | null;
   status: ContactStatus;
+  // Trust scoring fields (migration 020)
+  contactConfidence: number;         // 0.0–1.0; accumulated over time
+  trustLevel: TrustLevel | null;     // nullable per-contact override
+  lastSeenAt: Date | null;
   notes: string | null;
   createdAt: Date;
   updatedAt: Date;
@@ -83,6 +87,8 @@ export interface ResolvedSender {
   status: ContactStatus;
   kgNodeId: string | null;
   verified: boolean;
+  contactConfidence: number;      // 0.0–1.0
+  trustLevel: TrustLevel | null;  // per-contact override, or null
 }
 
 /** Enriched context about a sender, assembled for the coordinator's prompt */
@@ -97,6 +103,9 @@ export interface SenderContext {
   /** Facts from the KG about this person, formatted for prompt inclusion */
   knowledgeSummary: string;
   authorization: AuthorizationResult | null;
+  // Trust scoring inputs — available when contact was found in DB. Not propagated to bus events.
+  contactConfidence: number;      // 0.0–1.0
+  trustLevel: TrustLevel | null;  // per-contact override, or null
 }
 
 export interface UnknownSenderContext {
@@ -143,7 +152,7 @@ export interface AuthConfig {
 
 // -- Unknown sender policy --
 
-export type UnknownSenderPolicy = 'allow' | 'hold_and_notify' | 'reject';
+export type UnknownSenderPolicy = 'allow' | 'hold_and_notify' | 'ignore';
 
 export type HeldMessageStatus = 'pending' | 'processed' | 'discarded';
 

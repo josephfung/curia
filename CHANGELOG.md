@@ -13,66 +13,38 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+---
+
+## [0.15.0] — 2026-04-09
+
 ### Security
-- **Secrets isolation audit trail** — Every `ctx.secret()` call now emits a `secret.accessed`
-  bus event (skill name, secret name, agentId, taskEventId — never the secret value), giving a
-  durable write-ahead audit record for all secret access through the execution layer (spec 06,
-  Secrets Isolation). Pino loggers now redact fields named `password`, `token`, `secret`, and
-  `api_key` as a last-resort safety net against accidental leakage into structured logs. A new
-  static analysis Vitest test (`secret-manifest-coverage`) scans every skill handler for
-  `ctx.secret()` calls and fails CI if any accessed secret name is not declared in that skill's
-  `skill.json` manifest, catching both missed declarations and cross-skill secret access attempts.
-- **HTTP API token authentication** — failed auth attempts are now audit-logged (IP, route,
-  reason); authenticated messages carry `trustLevel: 'medium'` in bus event metadata; integration
-  tests verify 401 on missing/invalid token and 200 on valid token (spec 06, issue #189)
+- **Secrets isolation audit trail** — `ctx.secret()` calls now emit a `secret.accessed` bus event (skill name, secret name, agentId, taskEventId — never the value). Pino loggers redact `password`, `token`, `secret`, `api_key` fields. Static-analysis test (`secret-manifest-coverage`) fails CI if an accessed secret name is not declared in the skill manifest (spec 06).
+- **HTTP API token authentication** — failed auth attempts audit-logged (IP, route, reason); authenticated messages carry `trustLevel: 'medium'` in bus event metadata (spec 06, issue #189).
 
 ### Added
-- **Scheduler prior run context** — three new DB columns (`last_run_outcome`, `last_run_summary`, `last_run_context`) on `scheduled_jobs` give agents structured facts about prior runs without replaying raw conversation history (spec 07)
-- **`scheduler-report` skill** — agents call this at the end of a scheduled run to write a summary and optional continuity context for the next run
-- **Migration 019** — `last_run_outcome`, `last_run_summary`, `last_run_context` columns on `scheduled_jobs`
-- **`secret.accessed` bus event type** — New event type published by the `execution` layer
-  (added to `src/bus/events.ts` and `src/bus/permissions.ts`). System layer can subscribe for
-  monitoring; audit logger persists it write-ahead like all bus events. Payload carries
-  `skillName`, `secretName`, `agentId`, and `taskEventId` — never the resolved secret value.
-- **Bus layer enforcement: `llm.call` and `human.decision` event types** — Added the two new
-  event types from spec 10 (audit log hardening) to the bus: `llm.call` (published by the agent
-  layer after every LLM API call; carries model provenance, token accounting, timing, and content
-  hashes) and `human.decision` (published by the dispatch layer when a human resolves an approval
-  gate; carries full decision context for EU AI Act Article 14 compliance). Both are added to
-  `src/bus/events.ts` (payload interfaces, event interfaces, factory functions, `BusEvent` union)
-  and `src/bus/permissions.ts` (layer allowlists, including `system` layer full access for audit
-  logging). Unit tests added for all new event type permission cases; integration test added
-  confirming bus throws on unauthorized publish/subscribe in a wired-system context (issue #187).
-- **Context summarization** — When active conversation history in working memory exceeds a
-  configurable threshold (default: 20 turns), the oldest turns are condensed into a synthetic
-  summary turn via an LLM call and the originals are archived (`archived = true`) in Postgres.
-  Active context assembly loads the summary instead of archived originals, preventing silent
-  context-window overflow on long-running tasks (spec §01-memory-system.md).
-  `WorkingMemory.createWithPostgres()` accepts an optional `SummarizationConfig` (threshold,
-  keepWindow, provider). Migration 018 adds the `archived` column to `working_memory`.
-- **Spec 06 security completion table** — replaced implementation checklist in `docs/specs/06-audit-and-security.md` with a Done/Not Done completion table; reconciled against open `audit`-labeled GitHub issues (13 open, 3 closed); added missing row for issue #194 (anti-injection system prompt hardening).
-- **Spec 10 audit log hardening completion table** — replaced implementation checklist in `docs/specs/10-audit-log-hardening.md` with a Done/Not Done completion table; `config.change` event type is the only completed item.
-- **Schedule `agent_id` field** — Declarative schedule entries now support an optional
-  `agent_id` field to fire the job at a different agent (e.g. the coordinator) rather
-  than the agent whose YAML contains the schedule. Defaults to the source agent's name
-  for backward compatibility. A startup warning is logged if two agents form a targeting
-  cycle. Public API surface: agent YAML schema.
-- **Intent anchor** — `intentAnchor` field on `AgentTaskEvent` payload; the scheduler
-  passes the anchor from `agent_tasks.intent_anchor` through the event, and the runtime
-  injects a `## Original Task Intent` block into `effectiveSystemPrompt` on every burst
-  for persistent tasks. Prevents multi-burst drift (spec 01). Coordinator YAML updated
-  with guidance on when and how to provide `intent_anchor` to `scheduler-create`.
-
-### Fixed
-- **Scheduler history poisoning** — scheduled job runs now use a unique per-run `conversationId`, preventing working memory from loading turns from prior runs (root cause of 2026-04-09 production incident where the daily schedule job called `scheduler-create` instead of executing its task)
-- **Declarative job upsert** — `ON CONFLICT ON CONSTRAINT` only works with named
-  constraints, not named indexes. Switched to column-based conflict syntax matching
-  the `scheduled_jobs_declarative_uq` partial unique index definition, fixing
-  startup failures when declarative schedule entries are present.
+- **Message trust scoring** — `messageTrustScore` (0.0–1.0) computed in the dispatch layer from channel trust, contact confidence, and injection risk; attached to every `agent.task` event. Configurable weights under `security.trust_score` in `config/default.yaml` (spec 06).
+- **Trust-gated action thresholds** — `trust_policy` config block; Coordinator system prompt enforces per-category minimums: information queries 0.2, scheduling 0.5, data export/financial 0.8.
+- **Contact trust fields** — `contact_confidence`, `trust_level`, `last_seen_at` columns on `contacts` (migration 020).
+- **Trust score floor** — messages scoring below `security.trust_score_floor` (default 0.2) are held regardless of per-channel unknown-sender policy.
+- **Scheduler prior run context** — `last_run_outcome`, `last_run_summary`, `last_run_context` columns on `scheduled_jobs` give agents structured facts about prior runs without replaying raw history (spec 07, migration 019).
+- **`scheduler-report` skill** — agents call this at end of a scheduled run to write a summary and continuity context for the next run.
+- **`secret.accessed` bus event type** — published by the execution layer; payload carries `skillName`, `secretName`, `agentId`, `taskEventId` — never the resolved value.
+- **Bus layer: `llm.call` and `human.decision` event types** — `llm.call` published after every LLM API call (model, tokens, timing, content hashes); `human.decision` published when a human resolves an approval gate (EU AI Act Article 14 context). Both added to `src/bus/events.ts` and `src/bus/permissions.ts` (spec 10, issue #187).
+- **Context summarization** — when active conversation history exceeds a threshold (default: 20 turns), oldest turns are condensed into a synthetic summary via LLM and archived. Prevents silent context-window overflow. Migration 018 adds `archived` column to `working_memory` (spec 01).
+- **Schedule `agent_id` field** — declarative schedule entries now support `agent_id` to target a different agent. Defaults to source agent for backward compatibility. Startup warning logged on targeting cycles.
+- **Intent anchor** — `intentAnchor` on `AgentTaskPayload`; scheduler passes it through; runtime injects `## Original Task Intent` block on every burst to prevent multi-burst drift (spec 01).
+- **Spec 06 security completion table** — replaced implementation checklist in `docs/specs/06-audit-and-security.md` with Done/Not Done table; reconciled against open `audit`-labeled issues.
+- **Spec 10 audit log hardening completion table** — replaced implementation checklist in `docs/specs/10-audit-log-hardening.md` with Done/Not Done table.
 
 ### Changed
-- **`completeJobRun`** — now writes `last_run_outcome = 'completed'` or `'failed'` on completion
-- **`recoverStuckJob`** — now writes `last_run_outcome = 'timed_out'` on recovery
+- **`unknown_sender: reject` renamed to `unknown_sender: ignore`** — behaviour unchanged (silent drop + audit event); new name clarifies no rejection notice is sent to the sender.
+- **`contact.unknown` event** — `channelTrustLevel` is now required (was optional); `messageTrustScore` field added.
+- **`completeJobRun`** — writes `last_run_outcome = 'completed'` or `'failed'` on completion.
+- **`recoverStuckJob`** — writes `last_run_outcome = 'timed_out'` on recovery.
+
+### Fixed
+- **Scheduler history poisoning** — scheduled job runs now use a unique per-run `conversationId`, preventing working memory from loading turns from prior runs (root cause of 2026-04-09 incident where the daily schedule job called `scheduler-create` instead of executing its task).
+- **Declarative job upsert** — switched from `ON CONFLICT ON CONSTRAINT` (requires named constraints) to column-based conflict syntax matching the `scheduled_jobs_declarative_uq` partial unique index.
 
 ---
 
@@ -298,7 +270,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Bootstrap orchestrator** — `src/index.ts` wires all layers in dependency order
 - Architecture specs 00–08, contributor docs (CONTRIBUTING.md, CODE_OF_CONDUCT.md, SECURITY.md)
 
-[Unreleased]: https://github.com/josephfung/curia/compare/v0.14.0...HEAD
+[Unreleased]: https://github.com/josephfung/curia/compare/v0.15.0...HEAD
+[0.15.0]: https://github.com/josephfung/curia/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/josephfung/curia/compare/v0.12.1...v0.14.0
 [0.12.1]: https://github.com/josephfung/curia/compare/v0.11.0...v0.12.1
 [0.11.0]: https://github.com/josephfung/curia/compare/v0.10.0...v0.11.0

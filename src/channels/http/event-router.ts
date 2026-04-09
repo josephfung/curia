@@ -16,7 +16,7 @@ import type { ServerResponse } from 'node:http';
 
 /**
  * Thrown by the event router when the dispatcher rejects a message via the
- * `unknown_sender: reject` policy. Typed separately from Error so the route
+ * `unknown_sender: ignore` policy. Typed separately from Error so the route
  * handler can detect the rejection case and return 403 without brittle string
  * matching on the error message.
  */

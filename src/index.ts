@@ -56,6 +56,7 @@ import { OutboundContentFilter } from './dispatch/outbound-filter.js';
 import { OutboundGateway } from './skills/outbound-gateway.js';
 import { InboundScanner } from './dispatch/inbound-scanner.js';
 import { loadExtraInjectionPatterns, type ExtraInjectionPattern } from './dispatch/security-config-loader.js';
+import type { TrustScorerWeights } from './dispatch/trust-scorer.js';
 import { SchedulerService } from './scheduler/scheduler-service.js';
 import { Scheduler } from './scheduler/scheduler.js';
 import { EntityContextAssembler } from './entity-context/assembler.js';
@@ -680,6 +681,17 @@ async function main(): Promise<void> {
     'Inbound injection scanner initialized',
   );
 
+  // Parse trust scorer weights from config (security.trust_score section in default.yaml).
+  // Falls back to DEFAULT_TRUST_WEIGHTS (0.4/0.4/0.2) if the section is absent.
+  const trustScoreConfig = yamlConfig.security?.trust_score;
+  const trustScorerWeights: TrustScorerWeights | undefined = trustScoreConfig ? {
+    channelWeight: trustScoreConfig.channel_weight ?? 0.4,
+    contactWeight: trustScoreConfig.contact_weight ?? 0.4,
+    maxRiskPenalty: trustScoreConfig.max_risk_penalty ?? 0.2,
+  } : undefined;
+
+  const trustScoreFloor = yamlConfig.security?.trust_score_floor ?? 0.2;
+
   // 7. Dispatcher — subscribes to inbound.message + agent.response.
   // Registered after the coordinator so agent.task already has a handler
   // when the dispatcher fans the first inbound message out.
@@ -694,6 +706,8 @@ async function main(): Promise<void> {
     injectionScanner,
     pool,
     conversationCheckpointDebounceMs: yamlConfig.dispatch?.conversationCheckpointDebounceMs,
+    trustScorerWeights,
+    trustScoreFloor,
   });
   dispatcher.register();
 

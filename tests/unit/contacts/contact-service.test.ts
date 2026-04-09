@@ -246,6 +246,29 @@ describe('ContactService', () => {
       const resolved = await service.resolveByChannelIdentity('email', 'nobody@example.com');
       expect(resolved).toBeNull();
     });
+
+    it('resolveByChannelIdentity returns contactConfidence and trustLevel', async () => {
+      // Create a contact with non-default confidence
+      const contactId = (await service.createContact({
+        displayName: 'Trust Test',
+        source: 'ceo_stated',
+        status: 'confirmed',
+      })).id;
+      await service.linkIdentity({
+        contactId,
+        channel: 'email',
+        channelIdentifier: 'trust@example.com',
+        source: 'ceo_stated',
+      });
+
+      // In-memory backend: verify the trust fields are plumbed through with default values.
+      // The Postgres backend integration tests cover non-zero confidence values via pool.query.
+      const resolved = await service.resolveByChannelIdentity('email', 'trust@example.com');
+      expect(resolved).not.toBeNull();
+      expect(typeof resolved!.contactConfidence).toBe('number');
+      expect(resolved!.contactConfidence).toBe(0);
+      expect(resolved!.trustLevel).toBeNull();
+    });
   });
 
   describe('getContactWithIdentities', () => {

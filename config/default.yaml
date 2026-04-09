@@ -69,3 +69,27 @@ security:
   # "forget\s+everything" rather than "(forget.+)+"). These patterns run in the
   # main process on every inbound message, so keep them efficient.
   extra_injection_patterns: []
+
+  # Message trust score computation weights (spec §06-audit-and-security.md).
+  # messageTrustScore = (channelWeight × channelNormalized) + (contactWeight × contactConfidence)
+  #                     − (maxRiskPenalty × injectionRiskScore), clamped to [0.0, 1.0]
+  #
+  # Channel trust normalized weights: high=1.0, medium=0.6, low=0.3
+  trust_score:
+    channel_weight: 0.4
+    contact_weight: 0.4
+    max_risk_penalty: 0.2
+
+  # Minimum trust score floor — messages scoring below this threshold trigger
+  # hold_and_notify routing regardless of the per-channel unknown_sender policy,
+  # unless the channel is configured as 'ignore'.
+  trust_score_floor: 0.2
+
+# Trust-gated action thresholds (spec §06-audit-and-security.md).
+# The Coordinator checks messageTrustScore against these thresholds before
+# taking actions on behalf of a sender. Enforced via the Coordinator's system prompt.
+trust_policy:
+  financial_actions: 0.8
+  data_export: 0.8
+  scheduling: 0.5
+  information_queries: 0.2

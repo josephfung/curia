@@ -4,9 +4,11 @@ import { createAgentTask, createOutboundMessage, createContactResolved, createCo
 import type { Logger } from '../logger.js';
 import type { ContactResolver } from '../contacts/contact-resolver.js';
 import type { HeldMessageService } from '../contacts/held-messages.js';
-import type { InboundSenderContext, ChannelPolicyConfig } from '../contacts/types.js';
+import type { InboundSenderContext, ChannelPolicyConfig, TrustLevel } from '../contacts/types.js';
 import type { InboundScanner } from './inbound-scanner.js';
 import type { DbPool } from '../db/connection.js';
+import { computeTrustScore, DEFAULT_TRUST_WEIGHTS } from './trust-scorer.js';
+import type { TrustScorerWeights } from './trust-scorer.js';
 
 export interface DispatcherConfig {
   bus: EventBus;
@@ -22,6 +24,11 @@ export interface DispatcherConfig {
   pool?: DbPool;
   /** Milliseconds of inactivity before conversation.checkpoint fires. Default: 600000. */
   conversationCheckpointDebounceMs?: number;
+  /** Weights for messageTrustScore computation. Defaults to DEFAULT_TRUST_WEIGHTS if omitted. */
+  trustScorerWeights?: TrustScorerWeights;
+  /** Messages scoring below this floor trigger hold_and_notify regardless of per-channel policy
+   *  (unless channel is 'ignore'). Default: 0.2 */
+  trustScoreFloor?: number;
 }
 
 /**
@@ -41,6 +48,8 @@ export class Dispatcher {
   private heldMessages?: HeldMessageService;
   private channelPolicies?: Record<string, ChannelPolicyConfig>;
   private injectionScanner?: InboundScanner;
+  private trustScorerWeights: TrustScorerWeights;
+  private trustScoreFloor: number;
   /**
    * Maps agent.task event ID → channel routing info.
    * When the agent publishes agent.response (with parentEventId pointing to the task),
@@ -64,6 +73,17 @@ export class Dispatcher {
     this.injectionScanner = config.injectionScanner;
     this.pool = config.pool;
     this.conversationCheckpointDebounceMs = config.conversationCheckpointDebounceMs ?? 600_000;
+    this.trustScorerWeights = config.trustScorerWeights ?? DEFAULT_TRUST_WEIGHTS;
+    this.trustScoreFloor = config.trustScoreFloor ?? 0.2;
+
+    // Warn if the trust floor is active but no held-message service was provided — the floor
+    // silently becomes a no-op in that case, which is a security-relevant degradation.
+    if (this.trustScoreFloor > 0 && !this.heldMessages) {
+      this.logger.warn(
+        { trustScoreFloor: this.trustScoreFloor },
+        'Dispatcher: trustScoreFloor is configured but heldMessages service is not available — floor enforcement is disabled',
+      );
+    }
   }
 
   /** Clear all pending checkpoint timers. Call during graceful shutdown. */
@@ -189,7 +209,7 @@ export class Dispatcher {
                 return;
               }
 
-              if (policy?.unknownSender === 'reject') {
+              if (policy?.unknownSender === 'ignore') {
                 this.logger.info(
                   { channel: payload.channelId, senderId: payload.senderId },
                   'Rejected message from provisional sender',
@@ -213,10 +233,23 @@ export class Dispatcher {
             }
           }
         } else {
-          // Unknown sender — publish audit event and check channel policy
+          // Unknown sender — publish audit event and check channel policy.
+          // Compute a preliminary trust score for the audit event (injection risk not yet
+          // available at this point — the unknown-sender branch returns early before the
+          // scanner runs).
+          const prelimChannelTrust = (this.channelPolicies?.[payload.channelId]?.trust ?? 'low') as TrustLevel;
+          const prelimScore = computeTrustScore({
+            channelTrustLevel: prelimChannelTrust,
+            contactConfidence: 0.0,  // unknown sender has no confidence
+            injectionRiskScore: 0,
+            trustLevel: null,
+            weights: this.trustScorerWeights,
+          });
           await this.bus.publish('dispatch', createContactUnknown({
             channel: senderContext.channel,
             senderId: senderContext.senderId,
+            channelTrustLevel: prelimChannelTrust,
+            messageTrustScore: prelimScore,
             parentEventId: event.id,
           }));
 
@@ -260,7 +293,7 @@ export class Dispatcher {
             return; // Always return — whether hold succeeded or failed
           }
 
-          if (policy?.unknownSender === 'reject') {
+          if (policy?.unknownSender === 'ignore') {
             this.logger.info(
               { channel: payload.channelId, senderId: payload.senderId },
               'Rejected message from unknown sender',
@@ -334,6 +367,94 @@ export class Dispatcher {
       }
     }
 
+    // Compute messageTrustScore from channel trust, contact confidence, and injection risk.
+    // contactConfidence: from resolved sender context (0.0 for unknown senders)
+    // channelTrustLevel: from channel policy config (default 'low' if not configured)
+    // trustLevel override: per-contact field from DB (null means use channel default)
+    let messageTrustScore: number | undefined;
+    if (this.channelPolicies) {
+      const channelTrust = (this.channelPolicies[payload.channelId]?.trust ?? 'low') as TrustLevel;
+      const contactConfidence =
+        senderContext?.resolved ? senderContext.contactConfidence : 0.0;
+      const trustLevelOverride =
+        senderContext?.resolved ? senderContext.trustLevel : null;
+      // Validate the injection risk score before use — a non-finite value (NaN, ±Infinity)
+      // from a buggy scanner implementation would propagate through the formula and silently
+      // produce a NaN trust score, which bypasses the floor check (NaN < floor = false).
+      const rawRiskScore = injectionMetadata?.risk_score;
+      const injectionRiskScore =
+        typeof rawRiskScore === 'number' && isFinite(rawRiskScore) ? rawRiskScore : 0;
+      if (rawRiskScore !== undefined && injectionRiskScore !== rawRiskScore) {
+        this.logger.error(
+          { rawRiskScore, channelId: payload.channelId },
+          'Injection scanner returned non-finite risk score — defaulting to 0',
+        );
+      }
+
+      messageTrustScore = computeTrustScore({
+        channelTrustLevel: channelTrust,
+        contactConfidence,
+        injectionRiskScore,
+        trustLevel: trustLevelOverride,
+        weights: this.trustScorerWeights,
+      });
+
+      // Trust floor: if score is below the floor, apply hold_and_notify unless channel is 'ignore'.
+      // This overrides per-channel 'allow' policies for very low-trust messages — including unknown
+      // senders on 'allow' channels. Unknown senders on 'hold_and_notify' and 'ignore' channels
+      // already returned early above, so there is no risk of double-holding here.
+      const policy = this.channelPolicies[payload.channelId];
+      if (
+        messageTrustScore < this.trustScoreFloor &&
+        policy?.unknownSender !== 'ignore' &&
+        this.heldMessages
+      ) {
+        this.logger.warn(
+          { channelId: payload.channelId, senderId: payload.senderId, messageTrustScore, floor: this.trustScoreFloor },
+          'Message trust score below floor — holding regardless of channel policy',
+        );
+        const subject = (payload.metadata as Record<string, unknown> | undefined)?.subject as string | null ?? null;
+        let held = false;
+        try {
+          const heldId = await this.heldMessages.hold({
+            channel: payload.channelId,
+            senderId: payload.senderId,
+            conversationId: payload.conversationId,
+            content: payload.content,
+            subject,
+            metadata: payload.metadata ?? {},
+          });
+          held = true; // hold succeeded — message is now in held_messages; must not reach coordinator
+          // Publish the audit event separately. A failure here does not un-hold the message,
+          // so we catch it independently and never fall through to the coordinator.
+          try {
+            await this.bus.publish('dispatch', createMessageHeld({
+              heldMessageId: heldId,
+              channel: payload.channelId,
+              senderId: payload.senderId,
+              subject,
+              parentEventId: event.id,
+            }));
+          } catch (publishErr) {
+            this.logger.error(
+              { err: publishErr, channelId: payload.channelId, senderId: payload.senderId, heldMessageId: heldId },
+              'Failed to publish message.held audit event — message is held but CEO notification may be delayed',
+            );
+          }
+        } catch (holdErr) {
+          this.logger.error(
+            { err: holdErr, channelId: payload.channelId, senderId: payload.senderId },
+            'Failed to hold low-trust message — proceeding to coordinator (fail-open for trust floor)',
+          );
+          // Fail-open for trust floor only: unlike the unknown-sender security gate,
+          // a low-trust score from a known contact should not silently drop the message.
+          // The coordinator still receives it with the low score visible.
+        }
+        // Always return if the hold succeeded — a publish failure is not a reason to forward to the coordinator.
+        if (held) return;
+      }
+    }
+
     const taskEvent = createAgentTask({
       agentId: 'coordinator',
       conversationId: payload.conversationId,
@@ -341,6 +462,7 @@ export class Dispatcher {
       senderId: payload.senderId,
       content: taskContent,
       senderContext,
+      messageTrustScore,
       // Merge: preserve any pre-existing inbound metadata (e.g. email subject from
       // the email adapter) and layer injection findings on top. When there are no
       // injection findings, pass through the original metadata object unchanged

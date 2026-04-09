@@ -38,7 +38,7 @@ describe('loadAuthConfig', () => {
     expect(config.channelPolicies).toBeDefined();
     expect(config.channelPolicies.cli.unknownSender).toBe('allow');
     expect(config.channelPolicies.email.unknownSender).toBe('hold_and_notify');
-    expect(config.channelPolicies.http.unknownSender).toBe('reject');
+    expect(config.channelPolicies.http.unknownSender).toBe('ignore');
   });
 
   it('preserves trust levels alongside policies', () => {

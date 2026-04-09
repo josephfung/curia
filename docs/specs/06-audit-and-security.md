@@ -167,9 +167,10 @@ Known contacts are stored across two tables (`contacts` + `contact_channel_ident
 `contacts` holds the person record. Two new columns are added via migration to support trust scoring:
 
 ```sql
--- New columns added to existing contacts table:
-ALTER TABLE contacts ADD COLUMN trust_level        TEXT;           -- nullable per-contact override: 'high' | 'medium' | 'low'
+-- New columns added to existing contacts table (migration 020):
 ALTER TABLE contacts ADD COLUMN contact_confidence NUMERIC(3,2) NOT NULL DEFAULT 0.0;  -- 0.0–1.0
+ALTER TABLE contacts ADD COLUMN trust_level        TEXT;           -- nullable per-contact override: 'high' | 'medium' | 'low'
+ALTER TABLE contacts ADD COLUMN last_seen_at       TIMESTAMPTZ;   -- timestamp of most recent inbound message from this contact
 ```
 
 `contact_channel_identities` maps `(channel, channel_identifier)` → `contact_id` and is the lookup target when classifying an inbound sender:
@@ -188,24 +189,24 @@ Neither `contact_confidence` nor `trustLevel` is propagated directly to bus even
 
 ### Unknown Sender Routing
 
-Unknown senders — those not found in `contact_channel_identities` for the given `(channel, channel_identifier)` — are not silently rejected. The channel adapter performs this lookup, yields `contactConfidence: 0.0` if absent, computes `messageTrustScore`, and publishes the event. The dispatch layer routes based on per-channel configuration in `config/channel-trust.yaml`:
+Unknown senders — those not found in `contact_channel_identities` for the given `(channel, channel_identifier)` — are not silently dropped. The dispatch layer (Dispatcher) performs the contact lookup, yields `contactConfidence: 0.0` if absent, computes `messageTrustScore`, and routes based on per-channel configuration in `config/channel-trust.yaml`:
 
 ```yaml
 # config/channel-trust.yaml
 channels:
   email:
-    unknown_sender: hold_and_notify   # 'allow' | 'hold_and_notify' | 'reject'
+    unknown_sender: hold_and_notify   # 'allow' | 'hold_and_notify' | 'ignore'
   signal:
     unknown_sender: hold_and_notify
   http:
-    unknown_sender: reject            # unauthenticated requests are dropped
+    unknown_sender: ignore            # unauthenticated requests are silently dropped
   cli:
     unknown_sender: allow             # all CLI sessions are the CEO
 ```
 
 - **`allow`** — message proceeds normally. Used for channels where the auth mechanism already guarantees sender identity (CLI, web app with bootstrap secret).
 - **`hold_and_notify`** — event is queued in the held messages table and the CEO is notified. No action taken until reviewed.
-- **`reject`** — event is audit-logged and discarded. No response sent.
+- **`ignore`** — event is audit-logged and discarded. No response or rejection notice is sent to the sender.
 
 All unknown sender events are audit-logged regardless of routing decision, including sender identifier, channel, and the routing action taken.
 
@@ -225,15 +226,15 @@ Spam/bot detection patterns are configurable in `config/default.yaml`. The Coord
 
 ### Message Trust Score
 
-Every `inbound.message` event carries a single synthesized trust signal:
+Every `agent.task` event carries a single synthesized trust signal:
 
 | Field | Type | Meaning |
 |---|---|---|
 | `messageTrustScore` | `0.0–1.0` float | Computed confidence in this specific message's trustworthiness |
 
-This is the primary signal consumed by agents and the dispatch layer. `trustLevel` and `contactConfidence` are inputs to the computation — they are not propagated to the event.
+This is the primary signal consumed by agents. `trustLevel` and `contactConfidence` are inputs to the computation — they are not propagated to bus events. Channel adapters do not perform contact lookups, so `messageTrustScore` is not on `inbound.message` events.
 
-**Computation at ingestion (channel adapter):**
+**Computation in the dispatch layer (Dispatcher), after contact resolution and injection scanning:**
 
 | Input | Weight | Notes |
 |---|---|---|
@@ -249,7 +250,7 @@ Result is clamped to `[0.0, 1.0]`. The weights and normalization values are conf
 
 - The dispatch layer compares `messageTrustScore` against policy thresholds when enforcing trust-gated actions (see below)
 - The Coordinator receives `messageTrustScore` as structured metadata and can reference it when deciding how much latitude to extend to a request
-- A score below a configurable floor (default: 0.2) triggers escalation regardless of per-channel routing config
+- A score below a configurable floor (default: 0.2, `security.trust_score_floor` in `config/default.yaml`) triggers `hold_and_notify` routing regardless of per-channel policy, unless the channel is configured as `ignore`
 
 ### Email-Specific Defenses
 
@@ -272,7 +273,7 @@ trust_policy:
   information_queries: 0.2      # any authenticated message is fine
 ```
 
-When a request's `messageTrustScore` falls below the required threshold, the Coordinator responds: "I received this request via a lower-trust channel. For security, I need you to confirm via Signal or the CLI before I proceed."
+When a request's `messageTrustScore` falls below the required threshold, the Coordinator declines the action: "I'm not able to do that without a higher level of verified trust with you. If you'd like, I can let [CEO name] know you reached out." The Coordinator may still respond in a general, non-action way (introductions, pleasantries, clarifying questions). It never explains the trust system or mentions scores to external senders. Trust thresholds do not apply to the CEO (role: `ceo` or channel: `cli`).
 
 ### Cross-Channel Verification (Future)
 
@@ -355,10 +356,11 @@ These are non-negotiable for launch.
 | Intent drift detection pauses tasks (not just logs) | Not Done |
 | Email channel exposes provider-level SPF/DKIM/DMARC validation via Nylas message metadata | Not Done |
 | Anti-injection system prompt hardening and architectural containment (Layers 2 & 3) | Not Done |
-| Migration adds `trust_level` and `contact_confidence` columns to existing `contacts` table | Not Done |
-| All `inbound.message` events carry `messageTrustScore` (computed float); `trustLevel` and `contactConfidence` are inputs only, not propagated | Not Done |
+| Migration 020 adds `contact_confidence`, `trust_level`, `last_seen_at` columns to existing `contacts` table | Done |
+| All `agent.task` events carry `messageTrustScore` (computed float); `trustLevel` and `contactConfidence` are inputs only, not propagated to bus events | Done |
 | Unknown sender lookup targets `contact_channel_identities (channel, channel_identifier)` | Done |
-| Unknown sender routing configured in `config/channel-trust.yaml` using `allow` / `hold_and_notify` / `reject` | Done |
-| Trust-gated action thresholds use `messageTrustScore` numeric values, not trust level enum strings | Not Done |
+| Unknown sender routing configured in `config/channel-trust.yaml` using `allow` / `hold_and_notify` / `ignore` | Done |
+| Trust score floor: messages below `security.trust_score_floor` (default 0.2) trigger `hold_and_notify` regardless of per-channel policy | Done |
+| Trust-gated action thresholds use `messageTrustScore` numeric values, enforced via Coordinator system prompt | Done |
 | Data sensitivity tags on knowledge graph entities | Not Done |
 | Bulk export gates active for confidential+ data | Not Done |
