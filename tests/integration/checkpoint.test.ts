@@ -92,11 +92,14 @@ describeIf('ConversationCheckpointProcessor — integration', () => {
       const handler = (bus.subscribe as ReturnType<typeof vi.fn>).mock.calls[0][2] as (e: unknown) => Promise<void>;
       await handler(event);
 
-      // Skill was invoked with concatenated transcript
-      expect(invokedArgs).toHaveLength(1);
+      // Both checkpoint skills were invoked with the same transcript
+      expect(invokedArgs).toHaveLength(2);
       expect(invokedArgs[0]!.name).toBe('extract-relationships');
+      expect(invokedArgs[1]!.name).toBe('extract-facts');
       expect(invokedArgs[0]!.input['text']).toContain('Xiaopu Fung');
       expect(invokedArgs[0]!.input['source']).toContain(conversationId);
+      expect(invokedArgs[1]!.input['text']).toContain('Xiaopu Fung');
+      expect(invokedArgs[1]!.input['source']).toContain(conversationId);
 
       // Watermark was created at the batch's upper bound
       const watermark = await pool.query(
@@ -190,10 +193,13 @@ describeIf('ConversationCheckpointProcessor — integration', () => {
         ],
       }));
 
-      // Only the two new turns in the transcript — not the original wife turns
-      expect(invokedTexts).toHaveLength(1);
-      expect(invokedTexts[0]).toContain('Ada Chen');
-      expect(invokedTexts[0]).not.toContain('Xiaopu');
+      // Both checkpoint skills received only the new turns — not the original wife turns.
+      // Each skill receives the same transcript, so we get 2 entries (one per skill).
+      expect(invokedTexts).toHaveLength(2);
+      for (const txt of invokedTexts) {
+        expect(txt).toContain('Ada Chen');
+        expect(txt).not.toContain('Xiaopu');
+      }
 
       // Watermark was advanced past the first checkpoint
       const after = await pool.query(
