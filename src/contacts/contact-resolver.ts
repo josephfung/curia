@@ -56,6 +56,8 @@ export class ContactResolver {
             kgNodeId: ceo.kgNodeId,
             knowledgeSummary: '',
             authorization: null,
+            contactConfidence: 1.0,   // CEO always gets max confidence
+            trustLevel: null,
           };
         }
         // DB call succeeded but no CEO contact row exists yet (fresh install before seeding).
@@ -83,6 +85,8 @@ export class ContactResolver {
         kgNodeId: null,
         knowledgeSummary: '',
         authorization: null,
+        contactConfidence: 1.0,   // CEO always gets max confidence
+        trustLevel: null,
       };
     }
 
@@ -151,6 +155,8 @@ export class ContactResolver {
       kgNodeId: resolved.kgNodeId,
       knowledgeSummary,
       authorization,
+      contactConfidence: resolved.contactConfidence,
+      trustLevel: resolved.trustLevel,
     };
   }
 }

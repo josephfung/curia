@@ -29,6 +29,7 @@ import type {
   MergeResult,
   ResolvedSender,
   IdentitySource,
+  TrustLevel,
 } from './types.js';
 import type { DedupService } from './dedup-service.js';
 import type { ContactCalendar, CreateCalendarLinkOptions, ResolvedCalendar } from './calendar-types.js';
@@ -188,6 +189,10 @@ export class ContactService {
       displayName: safeName,
       role: options.role ?? null,
       status: options.status ?? 'confirmed',
+      // Trust scoring fields default to zero/null on creation; updated by the scoring pipeline
+      contactConfidence: 0,
+      trustLevel: null,
+      lastSeenAt: null,
       notes: options.notes ?? null,
       createdAt: now,
       updatedAt: now,
@@ -722,11 +727,14 @@ class PostgresContactBackend implements ContactServiceBackend {
       display_name: string;
       role: string | null;
       status: string;
+      contact_confidence: string;
+      trust_level: string | null;
+      last_seen_at: Date | null;
       notes: string | null;
       created_at: Date;
       updated_at: Date;
     }>(
-      `SELECT id, kg_node_id, display_name, role, status, notes, created_at, updated_at
+      `SELECT id, kg_node_id, display_name, role, status, contact_confidence, trust_level, last_seen_at, notes, created_at, updated_at
        FROM contacts WHERE id = $1`,
       [id],
     );
@@ -748,11 +756,14 @@ class PostgresContactBackend implements ContactServiceBackend {
       display_name: string;
       role: string | null;
       status: string;
+      contact_confidence: string;
+      trust_level: string | null;
+      last_seen_at: Date | null;
       notes: string | null;
       created_at: Date;
       updated_at: Date;
     }>(
-      `SELECT id, kg_node_id, display_name, role, status, notes, created_at, updated_at
+      `SELECT id, kg_node_id, display_name, role, status, contact_confidence, trust_level, last_seen_at, notes, created_at, updated_at
        FROM contacts WHERE display_name ILIKE $1`,
       [`%${name}%`],
     );
@@ -767,11 +778,14 @@ class PostgresContactBackend implements ContactServiceBackend {
       display_name: string;
       role: string | null;
       status: string;
+      contact_confidence: string;
+      trust_level: string | null;
+      last_seen_at: Date | null;
       notes: string | null;
       created_at: Date;
       updated_at: Date;
     }>(
-      `SELECT id, kg_node_id, display_name, role, status, notes, created_at, updated_at
+      `SELECT id, kg_node_id, display_name, role, status, contact_confidence, trust_level, last_seen_at, notes, created_at, updated_at
        FROM contacts WHERE role = $1 ORDER BY created_at ASC`,
       [role],
     );
@@ -786,11 +800,14 @@ class PostgresContactBackend implements ContactServiceBackend {
       display_name: string;
       role: string | null;
       status: string;
+      contact_confidence: string;
+      trust_level: string | null;
+      last_seen_at: Date | null;
       notes: string | null;
       created_at: Date;
       updated_at: Date;
     }>(
-      `SELECT id, kg_node_id, display_name, role, status, notes, created_at, updated_at
+      `SELECT id, kg_node_id, display_name, role, status, contact_confidence, trust_level, last_seen_at, notes, created_at, updated_at
        FROM contacts ORDER BY created_at ASC`,
     );
 
@@ -862,8 +879,11 @@ class PostgresContactBackend implements ContactServiceBackend {
       status: string;
       kg_node_id: string | null;
       verified: boolean;
+      contact_confidence: string;  // NUMERIC returned as string by node-pg
+      trust_level: string | null;
     }>(
-      `SELECT c.id, c.display_name, c.role, c.status, c.kg_node_id, cci.verified
+      `SELECT c.id, c.display_name, c.role, c.status, c.kg_node_id, cci.verified,
+              c.contact_confidence, c.trust_level
        FROM contact_channel_identities cci
        JOIN contacts c ON c.id = cci.contact_id
        WHERE cci.channel = $1 AND cci.channel_identifier = $2`,
@@ -880,6 +900,9 @@ class PostgresContactBackend implements ContactServiceBackend {
       status: row.status as ContactStatus,
       kgNodeId: row.kg_node_id,
       verified: row.verified,
+      // PostgreSQL returns NUMERIC as a string via node-pg
+      contactConfidence: parseFloat(row.contact_confidence),
+      trustLevel: row.trust_level as TrustLevel | null,
     };
   }
 
@@ -1063,6 +1086,9 @@ class PostgresContactBackend implements ContactServiceBackend {
     display_name: string;
     role: string | null;
     status: string;
+    contact_confidence: string;  // NUMERIC returned as string by node-pg
+    trust_level: string | null;
+    last_seen_at: Date | null;
     notes: string | null;
     created_at: Date;
     updated_at: Date;
@@ -1073,6 +1099,10 @@ class PostgresContactBackend implements ContactServiceBackend {
       displayName: row.display_name,
       role: row.role,
       status: row.status as ContactStatus,
+      // PostgreSQL returns NUMERIC as a string via node-pg
+      contactConfidence: parseFloat(row.contact_confidence),
+      trustLevel: row.trust_level as TrustLevel | null,
+      lastSeenAt: row.last_seen_at,
       notes: row.notes,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
@@ -1230,6 +1260,8 @@ class InMemoryContactBackend implements ContactServiceBackend {
             status: contact.status,
             kgNodeId: contact.kgNodeId,
             verified: identity.verified,
+            contactConfidence: contact.contactConfidence ?? 0,
+            trustLevel: contact.trustLevel ?? null,
           };
         }
       }
