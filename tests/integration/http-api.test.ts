@@ -281,6 +281,23 @@ describe('HTTP API — bearer token authentication', () => {
     }
   });
 
+  it('rejects POST /api/messages with empty bearer value (401)', async () => {
+    const app = await buildApp(TEST_TOKEN);
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/messages',
+        payload: { content: 'hello' },
+        headers: { authorization: 'Bearer ' }, // Empty token value — "Bearer " with no value
+      });
+      expect(response.statusCode).toBe(401);
+      const body = JSON.parse(response.body);
+      expect(body.error).toContain('Unauthorized');
+    } finally {
+      await app.close();
+    }
+  });
+
   it('accepts POST /api/messages with a valid token (200)', async () => {
     const app = await buildApp(TEST_TOKEN);
     try {

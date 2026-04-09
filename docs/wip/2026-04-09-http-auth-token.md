@@ -8,7 +8,9 @@
 
 **Tech Stack:** TypeScript/ESM, Fastify, Vitest, pino
 
-**Worktree:** `/Users/josephfung/Projects/office-of-the-ceo/worktrees/curia-http-auth-token`
+**Worktree:** `<repo-root>/worktrees/curia-http-auth-token`
+
+> Commands below use `$WORKTREE` as a placeholder for the full worktree path (e.g. `export WORKTREE=/path/to/worktrees/curia-http-auth-token`).
 
 ---
 
@@ -54,7 +56,7 @@ Replace it with:
 - [ ] **Step 2: Verify TypeScript compiles**
 
 ```bash
-npm --prefix /Users/josephfung/Projects/office-of-the-ceo/worktrees/curia-http-auth-token run build 2>&1 | tail -10
+npm --prefix $WORKTREE run build 2>&1 | tail -10
 ```
 
 Expected: exits 0, no type errors.
@@ -62,8 +64,8 @@ Expected: exits 0, no type errors.
 - [ ] **Step 3: Commit**
 
 ```bash
-git -C /Users/josephfung/Projects/office-of-the-ceo/worktrees/curia-http-auth-token add src/channels/http/http-adapter.ts
-git -C /Users/josephfung/Projects/office-of-the-ceo/worktrees/curia-http-auth-token commit -m "feat: log failed HTTP auth attempts (issue #189)"
+git -C $WORKTREE add src/channels/http/http-adapter.ts
+git -C $WORKTREE commit -m "feat: log failed HTTP auth attempts (issue #189)"
 ```
 
 ---
@@ -105,7 +107,7 @@ Replace it with:
 - [ ] **Step 2: Verify TypeScript compiles**
 
 ```bash
-npm --prefix /Users/josephfung/Projects/office-of-the-ceo/worktrees/curia-http-auth-token run build 2>&1 | tail -10
+npm --prefix $WORKTREE run build 2>&1 | tail -10
 ```
 
 Expected: exits 0, no type errors.
@@ -113,7 +115,7 @@ Expected: exits 0, no type errors.
 - [ ] **Step 3: Run the existing integration tests to confirm nothing broke**
 
 ```bash
-npm --prefix /Users/josephfung/Projects/office-of-the-ceo/worktrees/curia-http-auth-token run test -- tests/integration/http-api.test.ts 2>&1 | tail -15
+npm --prefix $WORKTREE run test -- tests/integration/http-api.test.ts 2>&1 | tail -15
 ```
 
 Expected: 5 tests pass.
@@ -121,8 +123,8 @@ Expected: 5 tests pass.
 - [ ] **Step 4: Commit**
 
 ```bash
-git -C /Users/josephfung/Projects/office-of-the-ceo/worktrees/curia-http-auth-token add src/channels/http/routes/messages.ts
-git -C /Users/josephfung/Projects/office-of-the-ceo/worktrees/curia-http-auth-token commit -m "feat: tag HTTP messages with trustLevel medium (issue #189)"
+git -C $WORKTREE add src/channels/http/routes/messages.ts
+git -C $WORKTREE commit -m "feat: tag HTTP messages with trustLevel medium (issue #189)"
 ```
 
 ---
@@ -200,67 +202,82 @@ describe('HTTP API — bearer token authentication', () => {
 
   it('rejects POST /api/messages with no Authorization header (401)', async () => {
     const app = await buildApp(TEST_TOKEN);
-    const response = await app.inject({
-      method: 'POST',
-      url: '/api/messages',
-      payload: { content: 'hello' },
-      // No headers — no Authorization
-    });
-    await app.close();
-    expect(response.statusCode).toBe(401);
-    const body = JSON.parse(response.body);
-    expect(body.error).toContain('Unauthorized');
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/messages',
+        payload: { content: 'hello' },
+        // No headers — no Authorization
+      });
+      expect(response.statusCode).toBe(401);
+      const body = JSON.parse(response.body);
+      expect(body.error).toContain('Unauthorized');
+    } finally {
+      await app.close();
+    }
   });
 
   it('rejects POST /api/messages with a wrong token (401)', async () => {
     const app = await buildApp(TEST_TOKEN);
-    const response = await app.inject({
-      method: 'POST',
-      url: '/api/messages',
-      payload: { content: 'hello' },
-      headers: { authorization: 'Bearer wrong-token' },
-    });
-    await app.close();
-    expect(response.statusCode).toBe(401);
-    const body = JSON.parse(response.body);
-    expect(body.error).toContain('Unauthorized');
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/messages',
+        payload: { content: 'hello' },
+        headers: { authorization: 'Bearer wrong-token' },
+      });
+      expect(response.statusCode).toBe(401);
+      const body = JSON.parse(response.body);
+      expect(body.error).toContain('Unauthorized');
+    } finally {
+      await app.close();
+    }
   });
 
   it('accepts POST /api/messages with a valid token (200)', async () => {
     const app = await buildApp(TEST_TOKEN);
-    const response = await app.inject({
-      method: 'POST',
-      url: '/api/messages',
-      payload: { content: 'hello', conversation_id: 'auth-test-conv-1' },
-      headers: { authorization: `Bearer ${TEST_TOKEN}` },
-    });
-    await app.close();
-    expect(response.statusCode).toBe(200);
-    const body = JSON.parse(response.body);
-    expect(body.conversation_id).toBe('auth-test-conv-1');
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/messages',
+        payload: { content: 'hello', conversation_id: 'auth-test-conv-1' },
+        headers: { authorization: `Bearer ${TEST_TOKEN}` },
+      });
+      expect(response.statusCode).toBe(200);
+      const body = JSON.parse(response.body);
+      expect(body.conversation_id).toBe('auth-test-conv-1');
+    } finally {
+      await app.close();
+    }
   });
 
   it('allows GET /api/health with no token (health is auth-exempt)', async () => {
     const app = await buildApp(TEST_TOKEN);
-    const response = await app.inject({
-      method: 'GET',
-      url: '/api/health',
-      // No Authorization header
-    });
-    await app.close();
-    expect(response.statusCode).toBe(200);
+    try {
+      const response = await app.inject({
+        method: 'GET',
+        url: '/api/health',
+        // No Authorization header
+      });
+      expect(response.statusCode).toBe(200);
+    } finally {
+      await app.close();
+    }
   });
 
   it('accepts POST /api/messages when no token is configured (auth disabled)', async () => {
     const app = await buildApp(undefined); // auth disabled
-    const response = await app.inject({
-      method: 'POST',
-      url: '/api/messages',
-      payload: { content: 'hello', conversation_id: 'auth-disabled-conv-1' },
-      // No Authorization header
-    });
-    await app.close();
-    expect(response.statusCode).toBe(200);
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/messages',
+        payload: { content: 'hello', conversation_id: 'auth-disabled-conv-1' },
+        // No Authorization header
+      });
+      expect(response.statusCode).toBe(200);
+    } finally {
+      await app.close();
+    }
   });
 });
 ```
@@ -276,7 +293,7 @@ import { validateBearerToken } from '../../src/channels/http/auth.js';
 Actually: since Tasks 1 and 2 are already committed before this task, the tests should pass on first run. Run them to confirm:
 
 ```bash
-npm --prefix /Users/josephfung/Projects/office-of-the-ceo/worktrees/curia-http-auth-token run test -- tests/integration/http-api.test.ts 2>&1 | tail -20
+npm --prefix $WORKTREE run test -- tests/integration/http-api.test.ts 2>&1 | tail -20
 ```
 
 Expected: all 10 tests pass (5 existing + 5 new).
@@ -284,8 +301,8 @@ Expected: all 10 tests pass (5 existing + 5 new).
 - [ ] **Step 3: Commit**
 
 ```bash
-git -C /Users/josephfung/Projects/office-of-the-ceo/worktrees/curia-http-auth-token add tests/integration/http-api.test.ts
-git -C /Users/josephfung/Projects/office-of-the-ceo/worktrees/curia-http-auth-token commit -m "test: integration tests for HTTP bearer token auth (issue #189)"
+git -C $WORKTREE add tests/integration/http-api.test.ts
+git -C $WORKTREE commit -m "test: integration tests for HTTP bearer token auth (issue #189)"
 ```
 
 ---
@@ -301,7 +318,7 @@ This is completing a partially-shipped spec (HTTP auth was stubbed, now it's com
 - [ ] **Step 1: Check current version**
 
 ```bash
-grep '"version"' /Users/josephfung/Projects/office-of-the-ceo/worktrees/curia-http-auth-token/package.json
+grep '"version"' $WORKTREE/package.json
 ```
 
 - [ ] **Step 2: Update CHANGELOG.md**
@@ -325,8 +342,8 @@ If current version is `0.14.4`, change to `0.14.5`. Edit `package.json`:
 - [ ] **Step 4: Commit**
 
 ```bash
-git -C /Users/josephfung/Projects/office-of-the-ceo/worktrees/curia-http-auth-token add CHANGELOG.md package.json
-git -C /Users/josephfung/Projects/office-of-the-ceo/worktrees/curia-http-auth-token commit -m "chore: bump to 0.14.5, changelog for HTTP auth (issue #189)"
+git -C $WORKTREE add CHANGELOG.md package.json
+git -C $WORKTREE commit -m "chore: bump to 0.14.5, changelog for HTTP auth (issue #189)"
 ```
 
 ---
@@ -336,7 +353,7 @@ git -C /Users/josephfung/Projects/office-of-the-ceo/worktrees/curia-http-auth-to
 - [ ] **Step 1: Run the full test suite**
 
 ```bash
-npm --prefix /Users/josephfung/Projects/office-of-the-ceo/worktrees/curia-http-auth-token run test 2>&1 | tail -20
+npm --prefix $WORKTREE run test 2>&1 | tail -20
 ```
 
 Expected: all tests pass, no failures.
@@ -344,7 +361,7 @@ Expected: all tests pass, no failures.
 - [ ] **Step 2: Confirm build is clean**
 
 ```bash
-npm --prefix /Users/josephfung/Projects/office-of-the-ceo/worktrees/curia-http-auth-token run build 2>&1 | tail -10
+npm --prefix $WORKTREE run build 2>&1 | tail -10
 ```
 
 Expected: exits 0.
@@ -375,6 +392,6 @@ Change it to:
 - [ ] **Step 2: Commit**
 
 ```bash
-git -C /Users/josephfung/Projects/office-of-the-ceo/worktrees/curia-http-auth-token add docs/specs/06-audit-and-security.md
-git -C /Users/josephfung/Projects/office-of-the-ceo/worktrees/curia-http-auth-token commit -m "docs: mark HTTP API token auth complete in spec 06 checklist"
+git -C $WORKTREE add docs/specs/06-audit-and-security.md
+git -C $WORKTREE commit -m "docs: mark HTTP API token auth complete in spec 06 checklist"
 ```

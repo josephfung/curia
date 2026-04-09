@@ -19,7 +19,7 @@ Most of the implementation already exists: `validateBearerToken()` with timing-s
 
 The `onRequest` hook in `http-adapter.ts` returns 401 silently — no log entry. The issue requires auth failures to be audit-logged with source IP, timestamp, and the failure reason (not the token value).
 
-**Implementation:** Add a `logger.warn` call before the 401 reply with `{ ip: request.ip, reason: 'missing_token' | 'invalid_token' }`. Timestamp comes from pino automatically.
+**Implementation:** Add a `logger.warn` call before the 401 reply with `{ ip: request.ip, route: routeUrl, reason: 'missing_token' | 'invalid_token' }`. Timestamp comes from pino automatically.
 
 ### 2. `trustLevel: 'medium'` in message metadata
 
@@ -42,7 +42,7 @@ The test should skip `/api/health` (exempt from auth per existing code) to confi
 
 ## What's NOT changing
 
-- `validateBearerToken()` — already correct, no changes
+- `validateBearerToken()` — one change: added an empty-token guard (`if (!provided) return false`) to explicitly reject `"Bearer "` with no token value
 - Token config — `API_TOKEN` env var already works; `config/default.yaml` doesn't store secrets (it's committed to git), so env var is the correct and only mechanism
 - Auth-disabled path when `API_TOKEN` is unset — stays as-is for local dev
 - No changes to `InboundMessagePayload` type or `createInboundMessage` factory — `metadata` already accepts arbitrary key/value pairs
