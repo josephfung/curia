@@ -281,9 +281,12 @@ export class OutboundContentFilter {
    */
   private checkContactDataLeak(content: string, recipientEmail: string): FilterFinding[] {
     const findings: FilterFinding[] = [];
+    // Only add ceoEmail if it is actually configured — an empty string (missing
+    // CEO_PRIMARY_EMAIL env var) would be a no-op entry that never matches but
+    // obscures the fact that the config is incomplete.
     const allowedEmails = new Set([
       recipientEmail.toLowerCase(),
-      this.config.ceoEmail.toLowerCase(),
+      ...(this.config.ceoEmail ? [this.config.ceoEmail.toLowerCase()] : []),
     ]);
 
     // Reset regex before use (global regex maintains lastIndex state between calls)

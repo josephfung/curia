@@ -200,6 +200,17 @@ export class EmailAdapter {
         return;
       }
 
+      // Guard: if the resolved recipient is still our own address (e.g. a self-addressed
+      // thread or malformed to[] list), bail out rather than looping a reply to our own
+      // inbox. This would produce a misleading "sent" log with no human ever receiving it.
+      if (recipientEmail.toLowerCase() === this.config.selfEmail.toLowerCase()) {
+        logger.error(
+          { threadId, messageId: threadMessage.id, latestIsOurs },
+          'Cannot reply — resolved recipient is selfEmail; thread may be self-addressed or to[] is malformed',
+        );
+        return;
+      }
+
       // Strip any existing "Re:" prefix before prepending our own to avoid
       // "Re: Re: Re: ..." chains when replying to already-replied threads.
       const baseSubject = threadMessage.subject.replace(/^Re:\s*/i, '');
@@ -215,9 +226,9 @@ export class EmailAdapter {
       });
 
       if (result.success) {
-        logger.info({ to: recipientEmail, threadId }, 'Email reply sent via gateway');
+        logger.info({ to: recipientEmail, threadId, latestIsOurs }, 'Email reply sent via gateway');
       } else {
-        logger.warn({ to: recipientEmail, threadId, reason: result.blockedReason }, 'Email reply blocked by gateway');
+        logger.warn({ to: recipientEmail, threadId, latestIsOurs, reason: result.blockedReason }, 'Email reply blocked by gateway');
       }
     } catch (err) {
       logger.error({ err, threadId }, 'Failed to send email reply');

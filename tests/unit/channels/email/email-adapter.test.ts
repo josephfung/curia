@@ -180,6 +180,20 @@ describe('EmailAdapter — sendOutboundReply', () => {
     expect(mocks.outboundGateway.send).not.toHaveBeenCalled();
   });
 
+  it('skips send when the resolved recipient from to[] is still selfEmail', async () => {
+    // Edge case: a self-addressed thread where both from and to are Curia.
+    // Must bail out rather than delivering the reply to our own inbox.
+    const selfAddressedMessage = makeMockMessage({
+      from: [{ email: SELF_EMAIL }],
+      to: [{ email: SELF_EMAIL }],
+    });
+    (mocks.outboundGateway.listEmailMessages as ReturnType<typeof vi.fn>).mockResolvedValue([selfAddressedMessage]);
+
+    await triggerOutbound(makeOutboundEvent('email:thread-abc'));
+
+    expect(mocks.outboundGateway.send).not.toHaveBeenCalled();
+  });
+
   it('ignores outbound events for non-email channels', async () => {
     const event = createOutboundMessage({
       conversationId: 'signal:convo-1',
