@@ -46,6 +46,9 @@ export interface JobRow {
   progress: Record<string, unknown> | null;
   runStartedAt: string | null;
   expectedDurationSeconds: number | null;
+  lastRunOutcome: 'completed' | 'failed' | 'timed_out' | null;
+  lastRunSummary: string | null;
+  lastRunContext: Record<string, unknown> | null;
 }
 
 export interface ListJobsFilters {
@@ -74,6 +77,9 @@ interface DbJobRow {
   progress: Record<string, unknown> | null;
   run_started_at: string | null;          // set when job enters 'running'; cleared on completion
   expected_duration_seconds: number | null; // per-job timeout hint; NULL → system default (600s)
+  last_run_outcome: 'completed' | 'failed' | 'timed_out' | null;
+  last_run_summary: string | null;   // agent-written summary; null until first scheduler-report call
+  last_run_context: Record<string, unknown> | null; // opaque agent context; null until first scheduler-report call
 }
 
 // Threshold for auto-suspending jobs after consecutive failures.
@@ -452,10 +458,11 @@ export class SchedulerService {
                  consecutive_failures = 0,
                  last_error = NULL,
                  run_started_at = NULL,
-                 status = $2
+                 status = $2,
+                 last_run_outcome = $4
            WHERE id = $3
         `;
-        await this.pool.query(updateSql, [nextRunAt, 'pending', jobId]);
+        await this.pool.query(updateSql, [nextRunAt, 'pending', jobId, 'completed']);
       } else {
         // One-shot job: mark as completed.
         const updateSql = `
@@ -464,10 +471,11 @@ export class SchedulerService {
                  status = $1,
                  consecutive_failures = 0,
                  last_error = NULL,
-                 run_started_at = NULL
+                 run_started_at = NULL,
+                 last_run_outcome = $3
            WHERE id = $2
         `;
-        await this.pool.query(updateSql, ['completed', jobId]);
+        await this.pool.query(updateSql, ['completed', jobId, 'completed']);
       }
 
       this.logger.info({ jobId }, 'Job run completed successfully');
@@ -485,10 +493,11 @@ export class SchedulerService {
              consecutive_failures = $1,
              last_error = $2,
              run_started_at = NULL,
-             status = $3
+             status = $3,
+             last_run_outcome = $5
        WHERE id = $4
     `;
-    await this.pool.query(updateSql, [newFailures, error ?? null, newStatus, jobId]);
+    await this.pool.query(updateSql, [newFailures, error ?? null, newStatus, jobId, 'failed']);
 
     if (shouldSuspend) {
       this.logger.warn({ jobId, consecutiveFailures: newFailures }, 'Job auto-suspended after consecutive failures');
@@ -548,10 +557,11 @@ export class SchedulerService {
               consecutive_failures = $2,
               last_error = $3,
               run_started_at = NULL,
-              next_run_at = $4
+              next_run_at = $4,
+              last_run_outcome = $6
         WHERE id = $5
           AND status = 'running'`,
-      [newStatus, newFailures, lastError, nextRunAt, jobId],
+      [newStatus, newFailures, lastError, nextRunAt, jobId, 'timed_out'],
     );
 
     if (result.rowCount === 0) {
@@ -567,6 +577,46 @@ export class SchedulerService {
     }
 
     return { noOp: false, suspended: shouldSuspend, consecutiveFailures: newFailures };
+  }
+
+  /**
+   * Write an agent-authored summary and optional structured context to the job's
+   * last-run record. Called by the scheduler-report skill at the end of each job
+   * execution so operators and agents can inspect what happened without trawling logs.
+   *
+   * @param jobId    The job to update.
+   * @param summary  Human-readable description of what the run accomplished.
+   * @param context  Optional opaque structured data (e.g. counts, entity IDs, errors).
+   */
+  async reportJobRun(
+    jobId: string,
+    summary: string,
+    context?: Record<string, unknown>,
+  ): Promise<void> {
+    let result: { rowCount: number | null };
+
+    if (context !== undefined) {
+      result = await this.pool.query(
+        `UPDATE scheduled_jobs
+            SET last_run_summary = $1,
+                last_run_context = $2
+          WHERE id = $3`,
+        [summary, JSON.stringify(context), jobId],
+      );
+    } else {
+      result = await this.pool.query(
+        `UPDATE scheduled_jobs
+            SET last_run_summary = $1
+          WHERE id = $2`,
+        [summary, jobId],
+      );
+    }
+
+    if (!result.rowCount) {
+      throw new Error(`reportJobRun: no job found with id "${jobId}" — report not written`);
+    }
+
+    this.logger.info({ jobId }, 'scheduler-report written');
   }
 }
 
@@ -593,5 +643,8 @@ function mapJobRow(row: DbJobRow): JobRow {
     progress: row.progress,
     runStartedAt: row.run_started_at,
     expectedDurationSeconds: row.expected_duration_seconds,
+    lastRunOutcome: row.last_run_outcome,
+    lastRunSummary: row.last_run_summary,
+    lastRunContext: row.last_run_context,
   };
 }

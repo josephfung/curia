@@ -387,6 +387,71 @@ describe('SchedulerService', () => {
       const [updateSql] = pool.query.mock.calls[1] as [string, unknown[]];
       expect(updateSql).toContain('run_started_at = NULL');
     });
+
+    it('writes last_run_outcome = completed on success (recurring)', async () => {
+      const jobId = 'job-complete-success';
+      // First query: fetchSql — returns a recurring job
+      pool.query.mockResolvedValueOnce({
+        rows: [{ id: jobId, cron_expr: '0 9 * * *', status: 'running', consecutive_failures: 0, timezone: 'UTC' }],
+      });
+      // Second query: updateSql
+      pool.query.mockResolvedValueOnce({ rows: [] });
+
+      await svc.completeJobRun(jobId, true);
+
+      const updateCall = pool.query.mock.calls[1];
+      const sql: string = updateCall[0];
+      const params: unknown[] = updateCall[1];
+      expect(sql).toContain('last_run_outcome');
+      expect(params).toContain('completed');
+    });
+
+    it('writes last_run_outcome = completed on success (one-shot)', async () => {
+      const jobId = 'job-complete-oneshot';
+      pool.query.mockResolvedValueOnce({
+        rows: [{ id: jobId, cron_expr: null, status: 'running', consecutive_failures: 0, timezone: 'UTC' }],
+      });
+      pool.query.mockResolvedValueOnce({ rows: [] });
+
+      await svc.completeJobRun(jobId, true);
+
+      const updateCall = pool.query.mock.calls[1];
+      const sql: string = updateCall[0];
+      const params: unknown[] = updateCall[1];
+      expect(sql).toContain('last_run_outcome');
+      expect(params).toContain('completed');
+    });
+
+    it('writes last_run_outcome = failed on failure', async () => {
+      const jobId = 'job-complete-fail';
+      pool.query.mockResolvedValueOnce({
+        rows: [{ id: jobId, cron_expr: '0 9 * * *', status: 'running', consecutive_failures: 0, timezone: 'UTC' }],
+      });
+      pool.query.mockResolvedValueOnce({ rows: [] });
+
+      await svc.completeJobRun(jobId, false, 'something went wrong');
+
+      const updateCall = pool.query.mock.calls[1];
+      const sql: string = updateCall[0];
+      const params: unknown[] = updateCall[1];
+      expect(sql).toContain('last_run_outcome');
+      expect(params).toContain('failed');
+    });
+
+    it('does not overwrite last_run_summary or last_run_context in completeJobRun', async () => {
+      const jobId = 'job-no-overwrite';
+      pool.query.mockResolvedValueOnce({
+        rows: [{ id: jobId, cron_expr: null, status: 'running', consecutive_failures: 0, timezone: 'UTC' }],
+      });
+      pool.query.mockResolvedValueOnce({ rows: [] });
+
+      await svc.completeJobRun(jobId, true);
+
+      const updateCall = pool.query.mock.calls[1];
+      const sql: string = updateCall[0];
+      expect(sql).not.toContain('last_run_summary');
+      expect(sql).not.toContain('last_run_context');
+    });
   });
 
   // -- recoverStuckJob --
@@ -510,6 +575,23 @@ describe('SchedulerService', () => {
     it('throws when job not found', async () => {
       pool.query.mockResolvedValueOnce({ rows: [] });
       await expect(svc.recoverStuckJob('missing-job', 600)).rejects.toThrow('Job not found');
+    });
+
+    it('writes last_run_outcome = timed_out on recovery', async () => {
+      const jobId = 'job-stuck';
+      pool.query
+        .mockResolvedValueOnce({
+          rows: [{ id: jobId, cron_expr: null, run_at: null, consecutive_failures: 0, timezone: 'UTC' }],
+        })
+        .mockResolvedValueOnce({ rowCount: 1, rows: [] });
+
+      await svc.recoverStuckJob(jobId, 600);
+
+      const updateCall = pool.query.mock.calls[1];
+      const sql: string = updateCall[0];
+      const params: unknown[] = updateCall[1];
+      expect(sql).toContain('last_run_outcome');
+      expect(params).toContain('timed_out');
     });
   });
 

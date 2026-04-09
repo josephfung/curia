@@ -205,7 +205,8 @@ describe('Scheduler', () => {
       expect(event2.type).toBe('agent.task');
       expect(event2.payload.channelId).toBe('scheduler');
       expect(event2.payload.senderId).toBe('scheduler');
-      expect(event2.payload.conversationId).toBe('scheduler:job-1');
+      // conversationId format is scheduler:<jobId>:<runUUID> — unique per run
+      expect(event2.payload.conversationId).toMatch(/^scheduler:job-1:[0-9a-f-]{36}$/);
     });
 
     it('passes intentAnchor in event payload for persistent tasks', async () => {
@@ -272,6 +273,105 @@ describe('Scheduler', () => {
       expect(claimSql).toContain('run_started_at');
       expect(claimSql).toContain('now()');
       expect(claimParams).toContain('job-1');
+    });
+
+    it('uses a unique conversationId per run (not job ID)', async () => {
+      const jobId = 'job-unique-conv';
+      const firedEvent = { id: 'fired-evt-1' };
+      const taskEvent = { id: 'task-evt-1' };
+
+      pool.query
+        .mockResolvedValueOnce({
+          rows: [{
+            id: jobId, agent_id: 'coordinator', cron_expr: '0 9 * * *',
+            run_at: null, task_payload: { task: 'do work' }, status: 'pending',
+            last_run_at: null, next_run_at: new Date(), last_error: null,
+            consecutive_failures: 0, created_by: 'system', created_at: new Date(),
+            timezone: 'UTC', agent_task_id: null, intent_anchor: null, progress: null,
+            run_started_at: null, expected_duration_seconds: null,
+            last_run_outcome: null, last_run_summary: null, last_run_context: null,
+          }],
+        })
+        .mockResolvedValueOnce({ rowCount: 1 }); // claim update
+
+      bus.publish.mockResolvedValue(undefined);
+      bus.publish.mockImplementation((_layer: unknown, event: { id: string; type: string }) => {
+        if (event.type === 'schedule.fired') Object.assign(firedEvent, event);
+        if (event.type === 'agent.task') Object.assign(taskEvent, event);
+        return Promise.resolve();
+      });
+
+      await scheduler.pollDueJobs();
+
+      // The conversationId must NOT be just `scheduler:<jobId>`
+      const taskPayload = (taskEvent as { payload?: { conversationId?: string } }).payload;
+      expect(taskPayload?.conversationId).not.toBe(`scheduler:${jobId}`);
+      expect(taskPayload?.conversationId).toMatch(new RegExp(`^scheduler:${jobId}:`));
+    });
+
+    it('injects prior-run context block when last_run_outcome is set', async () => {
+      const jobId = 'job-prior-run';
+      const taskEvent = { payload: { content: '' } };
+
+      pool.query
+        .mockResolvedValueOnce({
+          rows: [{
+            id: jobId, agent_id: 'coordinator', cron_expr: '0 9 * * *',
+            run_at: null, task_payload: { task: 'do work' }, status: 'pending',
+            last_run_at: new Date('2026-04-08T11:30:00Z'), next_run_at: new Date(),
+            last_error: null, consecutive_failures: 0, created_by: 'system',
+            created_at: new Date(), timezone: 'America/Toronto',
+            agent_task_id: null, intent_anchor: null, progress: null,
+            run_started_at: null, expected_duration_seconds: null,
+            last_run_outcome: 'completed',
+            last_run_summary: 'Sent schedule',
+            last_run_context: { events_sent: 6 },
+          }],
+        })
+        .mockResolvedValueOnce({ rowCount: 1 });
+
+      bus.publish.mockImplementation((_layer: unknown, event: { type: string; payload?: unknown }) => {
+        if (event.type === 'agent.task') Object.assign(taskEvent, event);
+        return Promise.resolve();
+      });
+
+      await scheduler.pollDueJobs();
+
+      const content: string = (taskEvent as { payload: { content: string } }).payload.content;
+      expect(content).toContain('[Prior run context');
+      expect(content).toContain('Outcome: completed');
+      expect(content).toContain('Summary: Sent schedule');
+      expect(content).toContain('Agent context:');
+      expect(content).toContain('"events_sent": 6');
+    });
+
+    it('does not inject prior-run block when last_run_outcome is null (first run)', async () => {
+      const jobId = 'job-first-run';
+      const taskEvent = { payload: { content: '' } };
+
+      pool.query
+        .mockResolvedValueOnce({
+          rows: [{
+            id: jobId, agent_id: 'coordinator', cron_expr: '0 9 * * *',
+            run_at: null, task_payload: { task: 'do work' }, status: 'pending',
+            last_run_at: null, next_run_at: new Date(), last_error: null,
+            consecutive_failures: 0, created_by: 'system', created_at: new Date(),
+            timezone: 'UTC', agent_task_id: null, intent_anchor: null, progress: null,
+            run_started_at: null, expected_duration_seconds: null,
+            last_run_outcome: null, last_run_summary: null, last_run_context: null,
+          }],
+        })
+        .mockResolvedValueOnce({ rowCount: 1 });
+
+      bus.publish.mockImplementation((_layer: unknown, event: { type: string; payload?: unknown }) => {
+        if (event.type === 'agent.task') Object.assign(taskEvent, event);
+        return Promise.resolve();
+      });
+
+      await scheduler.pollDueJobs();
+
+      const content: string = (taskEvent as { payload: { content: string } }).payload.content;
+      expect(content).not.toContain('[Prior run context');
     });
   });
 
