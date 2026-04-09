@@ -348,3 +348,33 @@ npm --prefix /Users/josephfung/Projects/office-of-the-ceo/worktrees/curia-http-a
 ```
 
 Expected: exits 0.
+
+---
+
+## Task 6: Mark spec checklist item as done
+
+**Files:**
+- Modify: `docs/specs/06-audit-and-security.md`
+
+The security checklist in the spec tracks implementation status. Mark the HTTP auth item as complete.
+
+- [ ] **Step 1: Check the item**
+
+Open `docs/specs/06-audit-and-security.md`. Find line 351:
+
+```markdown
+- [ ] HTTP API channel requires token authentication
+```
+
+Change it to:
+
+```markdown
+- [x] HTTP API channel requires token authentication
+```
+
+- [ ] **Step 2: Commit**
+
+```bash
+git -C /Users/josephfung/Projects/office-of-the-ceo/worktrees/curia-http-auth-token add docs/specs/06-audit-and-security.md
+git -C /Users/josephfung/Projects/office-of-the-ceo/worktrees/curia-http-auth-token commit -m "docs: mark HTTP API token auth complete in spec 06 checklist"
+```
