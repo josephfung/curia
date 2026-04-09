@@ -143,7 +143,8 @@ Bump `package.json` version in the same PR as the changelog entry. If the versio
 | Change type | Bump | Examples |
 |---|---|---|
 | New skill, agent, or channel | **minor** (`0.X.0`) | Adding `web-search`, adding Signal channel |
-| Completed spec / major feature | **minor** (`0.X.0`) | Autonomy engine shipped, entity context enrichment |
+| New spec shipped for the first time (brand-new capability) | **minor** (`0.X.0`) | Autonomy engine shipped, entity context enrichment |
+| Completing a partially-shipped spec or feature | **patch** (`0.x.Y`) | Context summarization completing §01-memory-system.md |
 | Bug fix, small improvement, doc-only | **patch** (`0.x.Y`) | Fixing a skill error path, updating a guide |
 | Breaking change to public API surface | **minor** + note in changelog | Renaming a `SkillContext` field, changing `skill.json` schema |
 

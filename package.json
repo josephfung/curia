@@ -1,6 +1,6 @@
 {
   "name": "curia",
-  "version": "0.15.0",
+  "version": "0.14.3",
   "description": "The AI executive staff your C-Suite will use and your Board will trust",
   "type": "module",
   "engines": {
