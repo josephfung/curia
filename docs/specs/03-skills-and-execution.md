@@ -178,3 +178,26 @@ These are not bundled but documented as recommended integrations:
 | **Fetch** | Web fetching with robots.txt compliance | [modelcontextprotocol/servers/fetch](https://github.com/modelcontextprotocol/servers/tree/main/src/fetch) |
 
 Custom MCP servers will be needed for Google Calendar and expense platforms (Expensify, QuickBooks). These can be built as local skills initially and promoted to MCP servers when the protocol stabilizes for those APIs.
+
+---
+
+## Implementation Status
+
+| Item | Status |
+|---|---|
+| Local skill directory structure — `skill.json` manifest + `handler.ts` loading | Done |
+| Execution layer — resolve, validate permissions, validate secrets, execute, sanitize, publish `skill.result` | Done |
+| Output sanitization — tag stripping, secret redaction, truncation, error wrapping | Done |
+| Resource boundaries — per-invocation timeout enforcement from manifest | Done |
+| Built-in skill: `web-fetch` | Done |
+| Built-in skill: `scheduler` (create, list, cancel) | Done |
+| MCP skills — MCP client, stdio/SSE transport, `tools/list` discovery | Not Done |
+| Safety gate for first-time elevated skill use — `skill_approvals` table and approval workflow | Not Done |
+| Built-in skill: `skill-registry` (agent-invocable search) | Not Done |
+| Built-in skill: `memory-query` | Not Done |
+| Built-in skill: `memory-store` | Not Done |
+| Built-in skill: `file-reader` | Not Done |
+| Built-in skill: `file-writer` | Not Done |
+| Skill discovery — `allow_discovery` agent config field wired to registry search | Not Done |
+| Secrets access — `ctx.secret()` accessor backed by env vars, validated against manifest `secrets` array | Not Done |
+| Resource boundaries — max 5 concurrent skill invocations per agent task | Not Done |

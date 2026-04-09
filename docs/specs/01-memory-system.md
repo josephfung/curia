@@ -155,3 +155,22 @@ When conversation history in working memory exceeds a configurable threshold (de
 *Lesson from Zora's ASI gaps: agents drift from their original task during extended operations.*
 
 When a persistent task is created, the original task description is stored as an **intent anchor** in the task record. On each burst execution, the intent anchor is included in the system prompt as a grounding reference. The agent can evolve its approach, but the anchor prevents wholesale drift from the original goal.
+
+---
+
+## Implementation Status
+
+| Item | Status |
+|---|---|
+| `working_memory` table and migration | Done |
+| `bullpen_threads` and `bullpen_messages` tables and migration | Done |
+| `kg_nodes` and `kg_edges` tables and migration | Done |
+| Embedding layer — pgvector HNSW index + OpenAI `text-embedding-3-small` generation | Done |
+| Memory validation gates — deduplication (cosine similarity), contradiction detection, rate limiting | Done |
+| Context management — priority-ordered context budget assembly | Done |
+| `src/memory/working-memory.ts` — Postgres + in-memory backends | Done |
+| `src/memory/bullpen.ts` — thread management and context formatting | Done |
+| `src/memory/entity-memory.ts` — high-level query layer over knowledge graph | Done |
+| `src/memory/knowledge-graph.ts` — full graph store with traversal and semantic search | Done |
+| Context summarization — rolling window condensing at 20 turns with archival | Not Done |
+| Intent anchor — stored on task creation, injected into system prompt each burst | Not Done |
