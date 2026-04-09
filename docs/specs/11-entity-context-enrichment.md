@@ -516,7 +516,9 @@ Calendars, email accounts, and CRM connections have fundamentally different sche
 | TTL cache for entity context payloads | Done |
 | Cache invalidation on contact/KG mutations | Done |
 | Proactive account discovery (`discoveredAccounts` field) | Not done |
-| Unit tests: entity-context assembly, execution layer pre-enrichment, cache | Not done |
+| Unit tests: entity-context assembly | Done |
+| Unit tests: execution layer pre-enrichment | Done |
+| Unit tests: cache behavior (hit, miss, invalidation) | Done |
 
 ### Phase 2: Calendar adoption
 
