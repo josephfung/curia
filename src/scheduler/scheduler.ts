@@ -339,13 +339,14 @@ export class Scheduler {
           continue;
         }
 
-        edges.push({ source: config.name, target: targetAgentId });
-
         try {
           const jobId = await this.schedulerService.upsertDeclarativeJob(
             targetAgentId,
             schedule,
           );
+          // Only record the edge after a successful upsert — a failed upsert means
+          // the job doesn't exist in the DB, so it shouldn't influence cycle detection.
+          edges.push({ source: config.name, target: targetAgentId });
           this.logger.info(
             { agentId: targetAgentId, sourceAgent: config.name, cron: schedule.cron, task: schedule.task, jobId },
             'Declarative job upserted',
