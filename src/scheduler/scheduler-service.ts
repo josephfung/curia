@@ -557,10 +557,11 @@ export class SchedulerService {
               consecutive_failures = $2,
               last_error = $3,
               run_started_at = NULL,
-              next_run_at = $4
+              next_run_at = $4,
+              last_run_outcome = $6
         WHERE id = $5
           AND status = 'running'`,
-      [newStatus, newFailures, lastError, nextRunAt, jobId],
+      [newStatus, newFailures, lastError, nextRunAt, jobId, 'timed_out'],
     );
 
     if (result.rowCount === 0) {

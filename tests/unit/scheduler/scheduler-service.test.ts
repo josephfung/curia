@@ -576,6 +576,23 @@ describe('SchedulerService', () => {
       pool.query.mockResolvedValueOnce({ rows: [] });
       await expect(svc.recoverStuckJob('missing-job', 600)).rejects.toThrow('Job not found');
     });
+
+    it('writes last_run_outcome = timed_out on recovery', async () => {
+      const jobId = 'job-stuck';
+      pool.query
+        .mockResolvedValueOnce({
+          rows: [{ id: jobId, cron_expr: null, run_at: null, consecutive_failures: 0, timezone: 'UTC' }],
+        })
+        .mockResolvedValueOnce({ rowCount: 1, rows: [] });
+
+      await svc.recoverStuckJob(jobId, 600);
+
+      const updateCall = pool.query.mock.calls[1];
+      const sql: string = updateCall[0];
+      const params: unknown[] = updateCall[1];
+      expect(sql).toContain('last_run_outcome');
+      expect(params).toContain('timed_out');
+    });
   });
 
   // -- upsertDeclarativeJob --
