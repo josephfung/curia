@@ -34,7 +34,7 @@ export class SchedulerCreateHandler implements SkillHandler {
     }
     // Reject blank intent_anchor — a blank string would be stored in the DB and then silently
     // skipped by the runtime's truthiness guard, giving the illusion of drift prevention with none.
-    if (intent_anchor !== undefined && intent_anchor.trim() === '') {
+    if (intent_anchor !== undefined && typeof intent_anchor === 'string' && intent_anchor.trim() === '') {
       return { success: false, error: 'intent_anchor must not be blank — provide a meaningful description or omit the field' };
     }
 
