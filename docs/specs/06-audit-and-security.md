@@ -355,7 +355,7 @@ These are non-negotiable for launch.
 | Intent drift detection pauses tasks (not just logs) | Not Done |
 | Email channel exposes provider-level SPF/DKIM/DMARC validation via Nylas message metadata | Not Done |
 | Anti-injection system prompt hardening and architectural containment (Layers 2 & 3) | Not Done |
-| Migration adds `trust_level` and `contact_confidence` columns to existing `contacts` table | Done |
+| Migration adds `trust_level` and `contact_confidence` columns to existing `contacts` table | Not Done |
 | All `inbound.message` events carry `messageTrustScore` (computed float); `trustLevel` and `contactConfidence` are inputs only, not propagated | Not Done |
 | Unknown sender lookup targets `contact_channel_identities (channel, channel_identifier)` | Done |
 | Unknown sender routing configured in `config/channel-trust.yaml` using `allow` / `hold_and_notify` / `reject` | Done |
