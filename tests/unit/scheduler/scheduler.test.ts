@@ -422,6 +422,12 @@ describe('Scheduler', () => {
             { cron: '30 8 * * 2', task: 'Run the writing scout', agent_id: 'coordinator' },
           ],
         },
+        // coordinator must be in the config list so the unknown-agent guard allows the target
+        {
+          name: 'coordinator',
+          model: { provider: 'anthropic', model: 'claude-3' },
+          system_prompt: 'Coord.',
+        },
       ];
 
       await scheduler.loadDeclarativeJobs(configs);
@@ -498,6 +504,28 @@ describe('Scheduler', () => {
       await scheduler.loadDeclarativeJobs(configs);
 
       expect(logger.warn).not.toHaveBeenCalled();
+    });
+
+    it('skips and logs error when agent_id targets an unknown agent', async () => {
+      const configs: AgentYamlConfig[] = [
+        {
+          name: 'my-agent',
+          model: { provider: 'anthropic', model: 'claude-3' },
+          system_prompt: 'Agent.',
+          schedule: [
+            { cron: '0 9 * * 1', task: 'weekly task', agent_id: 'nonexistent-agent' },
+          ],
+        },
+      ];
+
+      await scheduler.loadDeclarativeJobs(configs);
+
+      // Should not attempt to upsert — unknown target is rejected before the try block
+      expect(schedulerService.upsertDeclarativeJob).not.toHaveBeenCalled();
+      expect(logger.error).toHaveBeenCalledWith(
+        expect.objectContaining({ sourceAgent: 'my-agent', targetAgentId: 'nonexistent-agent' }),
+        expect.stringContaining('not a known agent'),
+      );
     });
 
     it('logs and continues on upsert failure', async () => {
