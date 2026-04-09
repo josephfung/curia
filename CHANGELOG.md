@@ -22,6 +22,9 @@ bus event types) are noted explicitly even in the `0.x` range.
   static analysis Vitest test (`secret-manifest-coverage`) scans every skill handler for
   `ctx.secret()` calls and fails CI if any accessed secret name is not declared in that skill's
   `skill.json` manifest, catching both missed declarations and cross-skill secret access attempts.
+- **HTTP API token authentication** — failed auth attempts are now audit-logged (IP, route,
+  reason); authenticated messages carry `trustLevel: 'medium'` in bus event metadata; integration
+  tests verify 401 on missing/invalid token and 200 on valid token (spec 06, issue #189)
 
 ### Added
 - **`secret.accessed` bus event type** — New event type published by the `execution` layer

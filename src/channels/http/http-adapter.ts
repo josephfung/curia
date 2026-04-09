@@ -123,6 +123,10 @@ export class HttpAdapter {
       ) return;
 
       if (!validateBearerToken(request.headers.authorization, apiToken)) {
+        // Audit-log the failure: IP, route, and whether a token was even provided.
+        // Never log the token value — only that it was present and wrong vs absent.
+        const reason = request.headers.authorization ? 'invalid_token' : 'missing_token';
+        logger.warn({ ip: request.ip, route: routeUrl, reason }, 'HTTP auth failed');
         return reply.status(401).send({ error: 'Unauthorized — provide a valid Bearer token' });
       }
     });

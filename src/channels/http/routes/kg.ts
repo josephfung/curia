@@ -3551,6 +3551,9 @@ export async function knowledgeGraphRoutes(
         channelId: WEB_CHANNEL_ID,
         senderId: WEB_SENDER_ID,
         content: body.message,
+        // Tag with structural channel trust level — session-cookie auth earns medium trust,
+        // same as bearer token auth on the API channel. Required for messageTrustScore computation.
+        metadata: { trustLevel: 'medium' },
       }));
     } catch (publishErr) {
       // Publish failed synchronously — cancel our pending waiter (still ours, nothing
