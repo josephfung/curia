@@ -190,7 +190,7 @@ describe('ExtractFactsHandler', () => {
     expect(anthropic.messages.create).not.toHaveBeenCalled();
   });
 
-  it('returns success with empty stored when extraction returns non-array', async () => {
+  it('returns failure when extraction returns non-array — distinguishable from legitimate no-facts run', async () => {
     const entityMemory = makeEntityMemory();
     const anthropic = makeMockAnthropicClient(['yes', 'null']);
     const handler = new ExtractFactsHandler(anthropic as never);
@@ -201,7 +201,7 @@ describe('ExtractFactsHandler', () => {
 
     const result = await handler.execute(ctx);
 
-    expect(result).toEqual({ success: true, data: { stored: 0, skipped: false, failed: 0 } });
+    expect(result).toEqual({ success: false, error: 'Extraction returned non-array response' });
   });
 
   it('handles storeFact returning stored:false (rate-limit or contradiction) — not counted as failed', async () => {

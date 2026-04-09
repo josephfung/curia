@@ -75,8 +75,11 @@ export class ExtractFactsHandler implements SkillHandler {
         (c): c is { type: 'text'; text: string } => c.type === 'text',
       );
       if (!classifierTextBlock) {
-        ctx.log.warn({ textPreview: text.slice(0, 80) }, 'extract-facts: classifier returned no text block, skipping');
-        return { success: true, data: { stored: 0, skipped: true, failed: 0 } };
+        // Unexpected: the model returned no text block at all. Treat as an infrastructure
+        // error so the checkpoint processor logs a warning rather than silently advancing
+        // the watermark as if extraction succeeded.
+        ctx.log.warn({ textPreview: text.slice(0, 80) }, 'extract-facts: classifier returned no text block');
+        return { success: false, error: 'Classifier returned no text block' };
       }
       const classifierAnswer = classifierTextBlock.text.toLowerCase().trim();
 
@@ -122,8 +125,10 @@ ${text}`,
         (c): c is { type: 'text'; text: string } => c.type === 'text',
       );
       if (!extractionTextBlock) {
-        ctx.log.warn('extract-facts: extraction returned no text block, treating as empty');
-        return { success: true, data: { stored: 0, skipped: false, failed: 0 } };
+        // Unexpected: model returned no text block — surface as failure so this
+        // is distinguishable from a genuine "no facts found" outcome.
+        ctx.log.warn('extract-facts: extraction returned no text block');
+        return { success: false, error: 'Extraction returned no text block' };
       }
       // Strip optional markdown code fences the model may include despite instructions.
       const rawText = extractionTextBlock.text.trim();
@@ -133,14 +138,16 @@ ${text}`,
       try {
         const parsed = JSON.parse(jsonText) as unknown;
         if (!Array.isArray(parsed)) {
-          // Log length only — rawText may contain extracted facts (PII)
-          ctx.log.warn({ responseLength: rawText.length }, 'extract-facts: extraction returned non-array, treating as empty');
-          return { success: true, data: { stored: 0, skipped: false, failed: 0 } };
+          // Log length only — rawText may contain extracted facts (PII).
+          // Return failure so the checkpoint processor distinguishes this from a
+          // legitimate "no facts" run and logs it for operational visibility.
+          ctx.log.warn({ responseLength: rawText.length }, 'extract-facts: extraction returned non-array');
+          return { success: false, error: 'Extraction returned non-array response' };
         }
         facts = parsed as ExtractedFact[];
       } catch (err) {
-        ctx.log.warn({ err, responseLength: rawText.length }, 'extract-facts: failed to parse extraction JSON, treating as empty');
-        return { success: true, data: { stored: 0, skipped: false, failed: 0 } };
+        ctx.log.warn({ err, responseLength: rawText.length }, 'extract-facts: failed to parse extraction JSON');
+        return { success: false, error: 'Failed to parse extraction JSON' };
       }
 
       // -- Steps 3 & 4: Entity resolution + fact storage --
@@ -159,12 +166,13 @@ ${text}`,
 
       for (const fact of facts) {
         try {
-          // Guard: skip malformed entries where required string fields are absent.
+          // Guard: skip malformed entries where required string fields are absent or blank.
+          // Blank strings would create empty-label entities or facts labelled ": ".
           if (
             !fact ||
-            typeof fact.subject !== 'string' ||
-            typeof fact.attribute !== 'string' ||
-            typeof fact.value !== 'string'
+            typeof fact.subject !== 'string' || !fact.subject.trim() ||
+            typeof fact.attribute !== 'string' || !fact.attribute.trim() ||
+            typeof fact.value !== 'string' || !fact.value.trim()
           ) {
             ctx.log.warn({ fact }, 'extract-facts: skipping malformed fact');
             failed++;
