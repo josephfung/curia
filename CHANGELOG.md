@@ -28,8 +28,7 @@ bus event types) are noted explicitly even in the `0.x` range.
   (added to `src/bus/events.ts` and `src/bus/permissions.ts`). System layer can subscribe for
   monitoring; audit logger persists it write-ahead like all bus events. Payload carries
   `skillName`, `secretName`, `agentId`, and `taskEventId` — never the resolved secret value.
-
-### Added
+- **Bus layer enforcement: `llm.call` and `human.decision` event types** — Added the two new
 - **Bus layer enforcement: `llm.call` and `human.decision` event types** — Added the two new
   event types from spec 10 (audit log hardening) to the bus: `llm.call` (published by the agent
   layer after every LLM API call; carries model provenance, token accounting, timing, and content
