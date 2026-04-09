@@ -42,11 +42,12 @@ export class ExtractFactsHandler implements SkillHandler {
     const { text, source } = ctx.input as { text?: string; source?: string };
 
     if (!text || typeof text !== 'string') {
-      ctx.log.error({ input: ctx.input }, 'extract-facts: missing required input "text"');
+      // Log only safe metadata — never log ctx.input directly (contains full transcript)
+      ctx.log.error({ hasText: typeof text === 'string', hasSource: typeof source === 'string' }, 'extract-facts: missing required input "text"');
       return { success: false, error: 'Missing required input: text (string)' };
     }
     if (!source || typeof source !== 'string') {
-      ctx.log.error({ input: ctx.input }, 'extract-facts: missing required input "source"');
+      ctx.log.error({ hasText: typeof text === 'string', hasSource: typeof source === 'string' }, 'extract-facts: missing required input "source"');
       return { success: false, error: 'Missing required input: source (string)' };
     }
     if (!ctx.entityMemory) {
@@ -54,9 +55,10 @@ export class ExtractFactsHandler implements SkillHandler {
       return { success: false, error: 'Entity memory not available — database not configured' };
     }
 
-    const client = this.anthropicClient ?? new Anthropic({ apiKey: ctx.secret('ANTHROPIC_API_KEY') });
-
     try {
+      // Construct client inside the try so a missing/invalid secret returns { success: false }
+      // rather than throwing — skills must never throw (CLAUDE.md: "Skills return... never throw").
+      const client = this.anthropicClient ?? new Anthropic({ apiKey: ctx.secret('ANTHROPIC_API_KEY') });
       // -- Step 1: Classifier gate --
       // Cheap haiku call — exits early on messages that carry no facts about a
       // single entity (e.g. action requests, scheduling, relationship-only text).
@@ -131,12 +133,13 @@ ${text}`,
       try {
         const parsed = JSON.parse(jsonText) as unknown;
         if (!Array.isArray(parsed)) {
-          ctx.log.warn({ rawText }, 'extract-facts: extraction returned non-array, treating as empty');
+          // Log length only — rawText may contain extracted facts (PII)
+          ctx.log.warn({ responseLength: rawText.length }, 'extract-facts: extraction returned non-array, treating as empty');
           return { success: true, data: { stored: 0, skipped: false, failed: 0 } };
         }
         facts = parsed as ExtractedFact[];
       } catch (err) {
-        ctx.log.warn({ err, rawText }, 'extract-facts: failed to parse extraction JSON, treating as empty');
+        ctx.log.warn({ err, responseLength: rawText.length }, 'extract-facts: failed to parse extraction JSON, treating as empty');
         return { success: true, data: { stored: 0, skipped: false, failed: 0 } };
       }
 
@@ -183,10 +186,11 @@ ${text}`,
             ? Math.min(1, Math.max(0, fact.confidence))
             : 0.7;
 
-          // Resolve entity node — prefer a node whose type matches the extraction.
-          // Create a new entity node if none exists.
+          // Resolve entity node — require a type match to avoid attaching facts to a
+          // same-label entity of the wrong type (e.g. a person named the same as an org).
+          // If no same-type match exists, create a new entity node.
           const matches = await ctx.entityMemory.findEntities(fact.subject);
-          const match = matches.find(n => n.type === subjectType) ?? matches[0];
+          const match = matches.find(n => n.type === subjectType);
           const entityNode = match ?? (await ctx.entityMemory.createEntity({
             type: subjectType,
             label: fact.subject,
