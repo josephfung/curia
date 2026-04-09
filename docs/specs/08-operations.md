@@ -291,3 +291,21 @@ curia/
 - `src/index.ts` — Bootstrap orchestrator. Initializes all services in dependency order: DB → migrations → bus → audit → memory → scheduler → execution → agents → channels → dispatch. This is the single place where everything is wired together.
 - `src/bus/events.ts` — The event type registry. All event types as a TypeScript discriminated union. This file is the source of truth for what flows through the system.
 - `src/bus/permissions.ts` — The layer-to-event authorization map. Defines the hard security boundary.
+
+---
+
+## Implementation Status
+
+| Item | Status |
+|---|---|
+| Layered YAML config — `default.yaml` / `local.yaml` / `production.yaml` with env var interpolation | Done |
+| `docker-compose.yml` — postgres (pgvector) + curia services with healthchecks | Done |
+| `Dockerfile` — multi-stage build, Node 22, tsx at runtime | Done |
+| `GET /health` endpoint — database, agents, skills, uptime | Done |
+| Structured logging via pino — correct log levels, no `console.log` | Done |
+| No-`console.log` lint rule (ESLint `no-console: error`) | Done |
+| Graceful shutdown — SIGTERM/SIGINT handler with ordered cleanup sequence | Done |
+| DB migrations via `node-pg-migrate` — auto-run on startup | Done |
+| Project directory structure — matches spec layout | Done |
+| Config validation against JSON Schema at startup | Not Done |
+| `curia setup` CLI — guided onboarding wizard for credentials and channel setup | Not Done |
