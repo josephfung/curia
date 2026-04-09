@@ -324,7 +324,7 @@ describe('Scheduler', () => {
             agent_task_id: null, intent_anchor: null, progress: null,
             run_started_at: null, expected_duration_seconds: null,
             last_run_outcome: 'completed',
-            last_run_summary: 'Sent schedule for 6 events to joseph@josephfung.ca',
+            last_run_summary: 'Sent schedule',
             last_run_context: { events_sent: 6 },
           }],
         })
@@ -339,8 +339,9 @@ describe('Scheduler', () => {
 
       const content: string = (taskEvent as { payload: { content: string } }).payload.content;
       expect(content).toContain('[Prior run context');
-      expect(content).toContain('completed');
-      expect(content).toContain('Sent schedule for 6 events');
+      expect(content).toContain('Outcome: completed');
+      expect(content).toContain('Summary: Sent schedule');
+      expect(content).toContain('Agent context:');
       expect(content).toContain('"events_sent": 6');
     });
 

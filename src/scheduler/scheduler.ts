@@ -40,15 +40,15 @@ function buildPriorRunBlock(job: JobRow): string {
 
   const parts: string[] = [
     `[Prior run context — last ran ${job.lastRunAt ?? 'unknown'}]`,
-    `outcome: ${job.lastRunOutcome}`,
+    `Outcome: ${job.lastRunOutcome}`,
   ];
 
   if (job.lastRunSummary) {
-    parts.push(`summary: ${job.lastRunSummary}`);
+    parts.push(`Summary: ${job.lastRunSummary}`);
   }
 
   if (job.lastRunContext) {
-    parts.push(`context: ${JSON.stringify(job.lastRunContext, null, 2)}`);
+    parts.push(`Agent context: ${JSON.stringify(job.lastRunContext, null, 2)}`);
   }
 
   return parts.join('\n');
