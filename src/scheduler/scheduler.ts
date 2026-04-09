@@ -355,7 +355,9 @@ export class Scheduler {
       const hasCycle = edges.some(
         e => e.source === edge.target && e.target === edge.source,
       );
-      if (hasCycle) {
+      // Deduplicate: only warn once per pair by requiring lexicographic ordering.
+      // Without this, a mutual cycle A→B and B→A produces two nearly identical warnings.
+      if (hasCycle && edge.source < edge.target) {
         this.logger.warn(
           { agentA: edge.source, agentB: edge.target },
           'Declarative schedule cycle detected — agents target each other; this will cause infinite task loops',

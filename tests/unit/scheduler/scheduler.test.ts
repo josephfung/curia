@@ -475,6 +475,8 @@ describe('Scheduler', () => {
 
       await scheduler.loadDeclarativeJobs(configs);
 
+      // Exactly one warning per cycle pair (deduped by lexicographic ordering)
+      expect(logger.warn).toHaveBeenCalledTimes(1);
       expect(logger.warn).toHaveBeenCalledWith(
         expect.objectContaining({ agentA: 'agent-a', agentB: 'agent-b' }),
         expect.stringContaining('cycle'),
