@@ -55,6 +55,14 @@ export interface YamlConfig {
   agents?: {
     coordinator?: { config_path?: string };
   };
+  workingMemory?: {
+    summarization?: {
+      /** Active turn count that triggers a summarization pass. Default: 20. Must be >= 2. */
+      threshold?: number;
+      /** Most-recent turns to retain as active after summarization. Default: 10. Must be < threshold. */
+      keepWindow?: number;
+    };
+  };
   skillOutput?: {
     /** Max character length for skill results before truncation. Default: 200_000. */
     maxLength?: number;
@@ -103,6 +111,26 @@ export function loadYamlConfig(configDir: string): YamlConfig {
     if (checkpointDebounceMs !== undefined && (!Number.isInteger(checkpointDebounceMs) || checkpointDebounceMs <= 0)) {
       throw new Error(
         `dispatch.conversationCheckpointDebounceMs must be a positive integer, got: ${checkpointDebounceMs}`,
+      );
+    }
+
+    const summarizationThreshold = config.workingMemory?.summarization?.threshold;
+    if (summarizationThreshold !== undefined && (!Number.isInteger(summarizationThreshold) || summarizationThreshold < 2)) {
+      throw new Error(`workingMemory.summarization.threshold must be an integer >= 2, got: ${summarizationThreshold}`);
+    }
+
+    const summarizationKeepWindow = config.workingMemory?.summarization?.keepWindow;
+    if (summarizationKeepWindow !== undefined && (!Number.isInteger(summarizationKeepWindow) || summarizationKeepWindow < 1)) {
+      throw new Error(`workingMemory.summarization.keepWindow must be a positive integer, got: ${summarizationKeepWindow}`);
+    }
+
+    if (
+      summarizationThreshold !== undefined &&
+      summarizationKeepWindow !== undefined &&
+      summarizationKeepWindow >= summarizationThreshold
+    ) {
+      throw new Error(
+        `workingMemory.summarization.keepWindow (${summarizationKeepWindow}) must be less than threshold (${summarizationThreshold})`,
       );
     }
 

@@ -155,7 +155,18 @@ async function main(): Promise<void> {
 
   // Working memory — created after the pool is confirmed healthy so we know
   // the working_memory table is reachable before the first message arrives.
-  const memory = WorkingMemory.createWithPostgres(pool, logger);
+  // Summarization config is read from default.yaml (workingMemory.summarization).
+  // llmProvider is already initialized above (step 5) so we can pass it directly.
+  // If the config block is absent, summarization is disabled (no-op backend).
+  const summarizationCfg = yamlConfig.workingMemory?.summarization;
+  const memory = WorkingMemory.createWithPostgres(pool, logger, summarizationCfg
+    ? {
+        threshold: summarizationCfg.threshold ?? 20,
+        keepWindow: summarizationCfg.keepWindow ?? 10,
+        provider: llmProvider,
+      }
+    : undefined,
+  );
 
   // Entity memory — optional, requires OPENAI_API_KEY for embeddings.
   // If not configured, agents still work — they just don't have KG access.

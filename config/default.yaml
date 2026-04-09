@@ -20,6 +20,21 @@ dispatch:
   # event fires and background memory extraction (extract-relationships, etc.) runs.
   conversationCheckpointDebounceMs: 600000   # 10 minutes
 
+workingMemory:
+  # Rolling context summarization (spec §01-memory-system.md).
+  # When the active turn count for a conversation exceeds `threshold`, the oldest
+  # (count - keepWindow) turns are condensed into a synthetic summary turn via an
+  # LLM call and archived. Active context assembly sees the summary instead of the
+  # archived originals, preventing silent context-window overflow on long tasks.
+  #
+  # Summarization is best-effort — a failed LLM call is logged at error level and
+  # skipped; the turn is still written and the next add() will retry automatically.
+  #
+  # Constraints: keepWindow must be less than threshold, both must be >= 1.
+  summarization:
+    threshold: 20   # turns that trigger a summarization pass
+    keepWindow: 10  # most-recent turns to retain as active after summarization
+
 skillOutput:
   # Maximum character length of a sanitized skill result before truncation.
   # Skills that return more than this (search results, page crawls, long calendar
