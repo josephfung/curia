@@ -58,4 +58,50 @@ error_budget:
 
     fs.rmSync(tempDir, { recursive: true });
   });
+
+  it('parses schedule entry with agent_id field', () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'curia-test-'));
+    const yamlContent = `
+name: writing-scout
+model:
+  provider: anthropic
+  model: claude-sonnet-4-20250514
+system_prompt: "Scout agent"
+schedule:
+  - cron: "30 8 * * 2"
+    agent_id: coordinator
+    task: "Run the writing scout"
+`;
+    const filePath = path.join(tempDir, 'writing-scout.yaml');
+    fs.writeFileSync(filePath, yamlContent);
+
+    const config = loadAgentConfig(filePath);
+    expect(config.schedule).toHaveLength(1);
+    expect(config.schedule![0].agent_id).toBe('coordinator');
+    expect(config.schedule![0].cron).toBe('30 8 * * 2');
+    expect(config.schedule![0].task).toBe('Run the writing scout');
+
+    fs.rmSync(tempDir, { recursive: true });
+  });
+
+  it('schedule entry without agent_id has agent_id undefined', () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'curia-test-'));
+    const yamlContent = `
+name: test-sched
+model:
+  provider: anthropic
+  model: claude-sonnet-4-20250514
+system_prompt: "Test"
+schedule:
+  - cron: "0 9 * * 1"
+    task: "weekly task"
+`;
+    const filePath = path.join(tempDir, 'test-sched.yaml');
+    fs.writeFileSync(filePath, yamlContent);
+
+    const config = loadAgentConfig(filePath);
+    expect(config.schedule![0].agent_id).toBeUndefined();
+
+    fs.rmSync(tempDir, { recursive: true });
+  });
 });

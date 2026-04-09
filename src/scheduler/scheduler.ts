@@ -315,27 +315,70 @@ export class Scheduler {
    * so they're always present in the DB on startup.
    */
   async loadDeclarativeJobs(agentConfigs: AgentYamlConfig[]): Promise<void> {
+    const knownAgents = new Set(agentConfigs.map(config => config.name));
+    // Collect all (source → target) schedule edges for cycle detection after upserts.
+    const edges: Array<{ source: string; target: string }> = [];
+
     for (const config of agentConfigs) {
       if (!config.schedule || config.schedule.length === 0) {
         continue;
       }
 
       for (const schedule of config.schedule) {
+        // agent_id lets a specialist declare its schedule fires at a different agent
+        // (e.g. coordinator). Defaults to the agent's own name if omitted.
+        const targetAgentId = schedule.agent_id ?? config.name;
+
+        // Reject unknown targets early — a typo in agent_id would silently write a
+        // job that targets nobody. Fail loudly at startup instead.
+        if (!knownAgents.has(targetAgentId)) {
+          this.logger.error(
+            { sourceAgent: config.name, targetAgentId, cron: schedule.cron, task: schedule.task },
+            'Skipping declarative job — target agent_id is not a known agent',
+          );
+          continue;
+        }
+
         try {
           const jobId = await this.schedulerService.upsertDeclarativeJob(
-            config.name,
+            targetAgentId,
             schedule,
           );
+          // Only record the edge after a successful upsert — a failed upsert means
+          // the job doesn't exist in the DB, so it shouldn't influence cycle detection.
+          edges.push({ source: config.name, target: targetAgentId });
           this.logger.info(
-            { agentId: config.name, cron: schedule.cron, task: schedule.task, jobId },
+            { agentId: targetAgentId, sourceAgent: config.name, cron: schedule.cron, task: schedule.task, jobId },
             'Declarative job upserted',
           );
         } catch (err) {
           this.logger.error(
-            { err, agentId: config.name, schedule },
+            { err, agentId: targetAgentId, sourceAgent: config.name, schedule },
             'Failed to upsert declarative job',
           );
         }
+      }
+    }
+
+    // Detect two-agent targeting cycles and warn loudly. A cycle means agent A's schedule
+    // targets agent B, and agent B's schedule targets agent A — this will cause infinite
+    // task loops at runtime. Self-targeting (source === target) is intentional and fine.
+    //
+    // Use a Set keyed on the canonical (sorted) pair to warn exactly once per pair,
+    // even if one agent has multiple schedules targeting the other.
+    const warnedPairs = new Set<string>();
+    for (const edge of edges) {
+      if (edge.source === edge.target) continue; // self-targeting is fine
+      const hasCycle = edges.some(
+        e => e.source === edge.target && e.target === edge.source,
+      );
+      const pairKey = [edge.source, edge.target].sort().join('::');
+      if (hasCycle && !warnedPairs.has(pairKey)) {
+        warnedPairs.add(pairKey);
+        this.logger.warn(
+          { agentA: edge.source, agentB: edge.target },
+          'Declarative schedule cycle detected — agents target each other; this will cause infinite task loops',
+        );
       }
     }
   }

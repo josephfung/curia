@@ -39,6 +39,7 @@ export interface AgentYamlConfig {
   schedule?: Array<{
     cron: string;
     task: string;
+    agent_id?: string;             // target agent for this job (defaults to config.name if omitted)
     /** Expected wall-clock duration in seconds. Drives stuck-job recovery timeout. */
     expectedDurationSeconds?: number;
   }>;

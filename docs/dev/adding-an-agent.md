@@ -165,6 +165,16 @@ Current built-in skills include (see `skills/` for the full list):
 | **Templates** | `template-meeting-request`, `template-reschedule`, `template-cancel`, `template-doc-request` |
 | **Knowledge** | `knowledge-company-overview`, `knowledge-meeting-links`, `knowledge-travel-preferences`, `knowledge-loyalty-programs` |
 
+#### Specialists don't own outbound comms
+
+Do not pin `email-send`, `email-reply`, or `signal-send` on specialist agents. The
+coordinator owns all outbound communication — it applies persona, tone, and
+audience-awareness logic that specialists are not equipped to replicate. Return
+structured findings from your specialist; let the coordinator decide how to present them.
+
+If your specialist runs on a schedule and needs to send output, use `agent_id: coordinator`
+in the schedule block (see the schedule section below).
+
 ### `allow_discovery` (optional, default: `false`)
 
 When `true`, the agent can call the skill registry at runtime to find and request skills not in its `pinned_skills` list. The runtime handles the approval gate:
@@ -196,6 +206,30 @@ schedule:
 ```
 
 Uses standard UNIX cron syntax (5 fields). Times are in UTC unless a timezone is specified at the job level via the `scheduler-create` skill.
+
+#### Targeting the coordinator from a schedule
+
+If your specialist runs on a schedule and its output should be communicated to the CEO,
+declare `agent_id: coordinator` in the schedule entry. The coordinator receives the
+task, delegates to your specialist for the actual work, and handles sending in its own
+voice with its persona guardrails intact.
+
+```yaml
+# writing-scout.yaml — schedule fires at coordinator, not writing-scout
+schedule:
+  - cron: "30 8 * * 2"
+    agent_id: coordinator
+    task: >
+      The writing scout has run on schedule. Delegate to @writing-scout to research
+      and score 2 high-signal essay ideas for the CEO. Email findings to the CEO.
+```
+
+The `agent_id` field defaults to the agent's own name when omitted — existing schedules
+are unaffected.
+
+> **Warning:** If two agents declare schedules that target each other, Curia will log a
+> warning at startup. This creates an infinite task loop at runtime — fix it before
+> deploying.
 
 ### `error_budget` (optional)
 

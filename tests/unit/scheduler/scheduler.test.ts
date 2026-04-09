@@ -410,6 +410,124 @@ describe('Scheduler', () => {
       expect(schedulerService.upsertDeclarativeJob).not.toHaveBeenCalled();
     });
 
+    it('uses agent_id from schedule entry when present', async () => {
+      schedulerService.upsertDeclarativeJob.mockResolvedValue('job-decl-1');
+
+      const configs: AgentYamlConfig[] = [
+        {
+          name: 'writing-scout',
+          model: { provider: 'anthropic', model: 'claude-3' },
+          system_prompt: 'Scout.',
+          schedule: [
+            { cron: '30 8 * * 2', task: 'Run the writing scout', agent_id: 'coordinator' },
+          ],
+        },
+        // coordinator must be in the config list so the unknown-agent guard allows the target
+        {
+          name: 'coordinator',
+          model: { provider: 'anthropic', model: 'claude-3' },
+          system_prompt: 'Coord.',
+        },
+      ];
+
+      await scheduler.loadDeclarativeJobs(configs);
+
+      // Should be called with 'coordinator', not 'writing-scout'
+      expect(schedulerService.upsertDeclarativeJob).toHaveBeenCalledWith(
+        'coordinator',
+        { cron: '30 8 * * 2', task: 'Run the writing scout', agent_id: 'coordinator' },
+      );
+    });
+
+    it('defaults to config.name when agent_id is omitted', async () => {
+      schedulerService.upsertDeclarativeJob.mockResolvedValue('job-decl-2');
+
+      const configs: AgentYamlConfig[] = [
+        {
+          name: 'my-agent',
+          model: { provider: 'anthropic', model: 'claude-3' },
+          system_prompt: 'Agent.',
+          schedule: [
+            { cron: '0 9 * * 1', task: 'weekly task' },
+          ],
+        },
+      ];
+
+      await scheduler.loadDeclarativeJobs(configs);
+
+      expect(schedulerService.upsertDeclarativeJob).toHaveBeenCalledWith(
+        'my-agent',
+        { cron: '0 9 * * 1', task: 'weekly task' },
+      );
+    });
+
+    it('warns when two agents form a targeting cycle', async () => {
+      schedulerService.upsertDeclarativeJob.mockResolvedValue('job-1');
+
+      const configs: AgentYamlConfig[] = [
+        {
+          name: 'agent-a',
+          model: { provider: 'anthropic', model: 'claude-3' },
+          system_prompt: 'A.',
+          schedule: [{ cron: '0 9 * * 1', task: 'task', agent_id: 'agent-b' }],
+        },
+        {
+          name: 'agent-b',
+          model: { provider: 'anthropic', model: 'claude-3' },
+          system_prompt: 'B.',
+          schedule: [{ cron: '0 9 * * 1', task: 'task', agent_id: 'agent-a' }],
+        },
+      ];
+
+      await scheduler.loadDeclarativeJobs(configs);
+
+      // Exactly one warning per cycle pair (deduped by lexicographic ordering)
+      expect(logger.warn).toHaveBeenCalledTimes(1);
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ agentA: 'agent-a', agentB: 'agent-b' }),
+        expect.stringContaining('cycle'),
+      );
+    });
+
+    it('does not warn when agent targets itself (self-targeting is fine)', async () => {
+      schedulerService.upsertDeclarativeJob.mockResolvedValue('job-1');
+
+      const configs: AgentYamlConfig[] = [
+        {
+          name: 'coordinator',
+          model: { provider: 'anthropic', model: 'claude-3' },
+          system_prompt: 'Coord.',
+          schedule: [{ cron: '0 9 * * 1', task: 'task', agent_id: 'coordinator' }],
+        },
+      ];
+
+      await scheduler.loadDeclarativeJobs(configs);
+
+      expect(logger.warn).not.toHaveBeenCalled();
+    });
+
+    it('skips and logs error when agent_id targets an unknown agent', async () => {
+      const configs: AgentYamlConfig[] = [
+        {
+          name: 'my-agent',
+          model: { provider: 'anthropic', model: 'claude-3' },
+          system_prompt: 'Agent.',
+          schedule: [
+            { cron: '0 9 * * 1', task: 'weekly task', agent_id: 'nonexistent-agent' },
+          ],
+        },
+      ];
+
+      await scheduler.loadDeclarativeJobs(configs);
+
+      // Should not attempt to upsert — unknown target is rejected before the try block
+      expect(schedulerService.upsertDeclarativeJob).not.toHaveBeenCalled();
+      expect(logger.error).toHaveBeenCalledWith(
+        expect.objectContaining({ sourceAgent: 'my-agent', targetAgentId: 'nonexistent-agent' }),
+        expect.stringContaining('not a known agent'),
+      );
+    });
+
     it('logs and continues on upsert failure', async () => {
       schedulerService.upsertDeclarativeJob
         .mockRejectedValueOnce(new Error('db error'))
