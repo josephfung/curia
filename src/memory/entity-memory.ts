@@ -231,9 +231,9 @@ export class EntityMemory {
           type: FACT_TYPE,
           label: result.validated.label,
           properties: result.validated.properties,
-          confidence: result.validated.temporal.confidence,
-          decayClass: result.validated.temporal.decayClass,
-          source: result.validated.temporal.source,
+          confidence: result.validated.provenance.confidence,
+          decayClass: result.validated.provenance.decayClass,
+          source: result.validated.provenance.source,
           // Pass the pre-computed embedding from the validator's dedup check
           // to avoid a redundant OpenAI API call.
           embedding: result.validated.embedding,
