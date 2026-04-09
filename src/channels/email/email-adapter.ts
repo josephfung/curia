@@ -168,9 +168,14 @@ export class EmailAdapter {
     const threadId = conversationId.slice('email:'.length);
 
     try {
-      // Find the original message in this thread so we can reply to it.
-      // Pass threadId directly to Nylas so the API filters server-side —
-      // much cheaper than fetching 50 messages and scanning locally.
+      // Fetch the most recent message in this thread. We use it for two things:
+      //   1. The message ID — passed as replyToMessageId so Nylas threads the reply
+      //   2. The human's email address to send the reply to
+      //
+      // Nylas returns messages in most-recent-first order, so messages[0] is the
+      // latest. If Curia was the last sender (a prior turn in the conversation),
+      // messages[0].from is Curia's own address — we must NOT reply to ourselves.
+      // In that case, look at messages[0].to to find the human recipient.
       const messages = await outboundGateway.listEmailMessages({ limit: 1, threadId });
       const threadMessage = messages[0];
       if (!threadMessage) {
@@ -178,9 +183,20 @@ export class EmailAdapter {
         return;
       }
 
-      const fromEmail = threadMessage.from[0]?.email;
-      if (!fromEmail) {
-        logger.warn({ threadId, messageId: threadMessage.id }, 'Cannot reply — original message has no from address');
+      const latestFromEmail = threadMessage.from[0]?.email;
+
+      // If the latest message was sent BY us, the human's address is in 'to'.
+      // Comparing case-insensitively guards against inconsistent casing from mail servers.
+      const latestIsOurs = latestFromEmail?.toLowerCase() === this.config.selfEmail.toLowerCase();
+      const recipientEmail = latestIsOurs
+        ? threadMessage.to[0]?.email
+        : latestFromEmail;
+
+      if (!recipientEmail) {
+        logger.warn(
+          { threadId, messageId: threadMessage.id, latestIsOurs },
+          'Cannot reply — could not resolve human recipient from thread',
+        );
         return;
       }
 
@@ -192,16 +208,16 @@ export class EmailAdapter {
       // run on every outbound reply, not just those originating from skills.
       const result = await outboundGateway.send({
         channel: 'email',
-        to: fromEmail,
+        to: recipientEmail,
         subject: `Re: ${baseSubject}`,
         body: outbound.payload.content,
         replyToMessageId: threadMessage.id,
       });
 
       if (result.success) {
-        logger.info({ to: fromEmail, threadId }, 'Email reply sent via gateway');
+        logger.info({ to: recipientEmail, threadId }, 'Email reply sent via gateway');
       } else {
-        logger.warn({ to: fromEmail, threadId, reason: result.blockedReason }, 'Email reply blocked by gateway');
+        logger.warn({ to: recipientEmail, threadId, reason: result.blockedReason }, 'Email reply blocked by gateway');
       }
     } catch (err) {
       logger.error({ err, threadId }, 'Failed to send email reply');
