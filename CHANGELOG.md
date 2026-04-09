@@ -21,6 +21,8 @@ bus event types) are noted explicitly even in the `0.x` range.
   context-window overflow on long-running tasks (spec §01-memory-system.md).
   `WorkingMemory.createWithPostgres()` accepts an optional `SummarizationConfig` (threshold,
   keepWindow, provider). Migration 018 adds the `archived` column to `working_memory`.
+- **Spec 06 security completion table** — replaced implementation checklist in `docs/specs/06-audit-and-security.md` with a Done/Not Done completion table; reconciled against open `audit`-labeled GitHub issues (13 open, 3 closed); added missing row for issue #194 (anti-injection system prompt hardening).
+- **Spec 10 audit log hardening completion table** — replaced implementation checklist in `docs/specs/10-audit-log-hardening.md` with a Done/Not Done completion table; `config.change` event type is the only completed item.
 
 ### Fixed
 - **Declarative job upsert** — `ON CONFLICT ON CONSTRAINT` only works with named

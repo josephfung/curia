@@ -337,25 +337,28 @@ Even if all preventive layers fail, the audit trail enables full post-incident f
 
 ---
 
-## Security Checklist (for implementation)
+## Security Completion Status
 
-These are non-negotiable for launch:
+These are non-negotiable for launch.
 
-- [ ] Bus layer enforcement tested (channel cannot publish skill.invoke)
-- [ ] Audit log append-only verified (no UPDATE/DELETE code paths)
-- [ ] Secret values never appear in logs, audit, or LLM context
-- [ ] Tool output sanitization active for all skill results
-- [ ] Inbound message sanitization active (injection pattern detection)
-- [ ] Error strings scrubbed before LLM injection
-- [ ] Agent config validation blocks malformed YAML at startup
-- [ ] HTTP API channel requires token authentication
-- [ ] Rate limiting active at dispatch layer
-- [ ] Intent drift detection pauses tasks (not just logs)
-- [ ] Email channel exposes provider-level SPF/DKIM/DMARC validation via Nylas message metadata
-- [ ] Migration adds `trust_level` and `contact_confidence` columns to existing `contacts` table
-- [ ] All `inbound.message` events carry `messageTrustScore` (computed float); `trustLevel` and `contactConfidence` are inputs only, not propagated
-- [ ] Unknown sender lookup targets `contact_channel_identities (channel, channel_identifier)`
-- [ ] Unknown sender routing configured in `config/channel-trust.yaml` using `allow` / `hold_and_notify` / `reject`
-- [ ] Trust-gated action thresholds use `messageTrustScore` numeric values, not trust level enum strings
-- [ ] Data sensitivity tags on knowledge graph entities
-- [ ] Bulk export gates active for confidential+ data
+| Item | Status |
+|---|---|
+| Bus layer enforcement tested (channel cannot publish `skill.invoke`) | Not Done |
+| Audit log append-only verified (no UPDATE or DELETE code paths) | Not Done |
+| Secret values never appear in logs, audit, or LLM context | Not Done |
+| Tool output sanitization active for all skill results | Done |
+| Inbound message sanitization active (injection pattern detection) | Done |
+| Error strings scrubbed before LLM injection | Not Done |
+| Agent config validation blocks malformed YAML at startup | Not Done |
+| HTTP API channel requires token authentication | Not Done |
+| Rate limiting active at dispatch layer | Not Done |
+| Intent drift detection pauses tasks (not just logs) | Not Done |
+| Email channel exposes provider-level SPF/DKIM/DMARC validation via Nylas message metadata | Not Done |
+| Anti-injection system prompt hardening and architectural containment (Layers 2 & 3) | Not Done |
+| Migration adds `trust_level` and `contact_confidence` columns to existing `contacts` table | Done |
+| All `inbound.message` events carry `messageTrustScore` (computed float); `trustLevel` and `contactConfidence` are inputs only, not propagated | Done |
+| Unknown sender lookup targets `contact_channel_identities (channel, channel_identifier)` | Done |
+| Unknown sender routing configured in `config/channel-trust.yaml` using `allow` / `hold_and_notify` / `reject` | Done |
+| Trust-gated action thresholds use `messageTrustScore` numeric values, not trust level enum strings | Not Done |
+| Data sensitivity tags on knowledge graph entities | Not Done |
+| Bulk export gates active for confidential+ data | Not Done |
