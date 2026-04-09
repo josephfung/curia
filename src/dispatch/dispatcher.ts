@@ -440,14 +440,17 @@ export class Dispatcher {
       // the batch read and the upsert where new turns could otherwise be silently skipped.
       // Two explicit query strings rather than a conditional template fragment — avoids
       // the risk of a parameter slot ($3) drifting out of sync with the array when edited.
+      // Exclude archived rows — they were summarized and their content is preserved
+      // in the synthetic summary turn. Including them would feed stale/duplicate
+      // turns to the relationship-extraction processor.
       const turnsQuery = since
         ? `SELECT role, content, created_at FROM working_memory
            WHERE conversation_id = $1 AND agent_id = $2
-             AND role IN ('user', 'assistant') AND created_at > $3
+             AND role IN ('user', 'assistant') AND archived = false AND created_at > $3
            ORDER BY created_at ASC`
         : `SELECT role, content, created_at FROM working_memory
            WHERE conversation_id = $1 AND agent_id = $2
-             AND role IN ('user', 'assistant')
+             AND role IN ('user', 'assistant') AND archived = false
            ORDER BY created_at ASC`;
       const turnsResult = await this.pool!.query<{ role: string; content: string; created_at: string }>(
         turnsQuery,

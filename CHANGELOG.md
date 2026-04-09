@@ -13,6 +13,15 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Added
+- **Context summarization** — When active conversation history in working memory exceeds a
+  configurable threshold (default: 20 turns), the oldest turns are condensed into a synthetic
+  summary turn via an LLM call and the originals are archived (`archived = true`) in Postgres.
+  Active context assembly loads the summary instead of archived originals, preventing silent
+  context-window overflow on long-running tasks (spec §01-memory-system.md).
+  `WorkingMemory.createWithPostgres()` accepts an optional `SummarizationConfig` (threshold,
+  keepWindow, provider). Migration 018 adds the `archived` column to `working_memory`.
+
 ### Fixed
 - **Declarative job upsert** — `ON CONFLICT ON CONSTRAINT` only works with named
   constraints, not named indexes. Switched to column-based conflict syntax matching
