@@ -578,6 +578,35 @@ export class SchedulerService {
 
     return { noOp: false, suspended: shouldSuspend, consecutiveFailures: newFailures };
   }
+
+  /**
+   * Write an agent-authored summary and optional structured context to the job's
+   * last-run record. Called by the scheduler-report skill at the end of each job
+   * execution so operators and agents can inspect what happened without trawling logs.
+   *
+   * @param jobId    The job to update.
+   * @param summary  Human-readable description of what the run accomplished.
+   * @param context  Optional opaque structured data (e.g. counts, entity IDs, errors).
+   */
+  async reportJobRun(
+    jobId: string,
+    summary: string,
+    context?: Record<string, unknown>,
+  ): Promise<void> {
+    const { rowCount } = await this.pool.query(
+      `UPDATE scheduled_jobs
+          SET last_run_summary = $1,
+              last_run_context = $2
+        WHERE id = $3`,
+      [summary, context !== undefined ? JSON.stringify(context) : null, jobId],
+    );
+
+    if (rowCount === 0) {
+      throw new Error(`reportJobRun: job not found: ${jobId}`);
+    }
+
+    this.logger.info({ jobId }, 'Job run report written');
+  }
 }
 
 // -- Row mapping --

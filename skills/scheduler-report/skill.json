@@ -1,0 +1,17 @@
+{
+  "name": "scheduler-report",
+  "description": "Report the outcome of a scheduled job run. Writes a summary and optional structured context to the job's run record so the CEO and agents can review what happened on the last execution.",
+  "version": "1.0.0",
+  "sensitivity": "elevated",
+  "action_risk": "low",
+  "infrastructure": true,
+  "inputs": {
+    "job_id": "string",
+    "summary": "string",
+    "context": "object?"
+  },
+  "outputs": { "success": "boolean" },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 15000
+}
