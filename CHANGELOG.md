@@ -13,6 +13,23 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Fixed
+- **Outbound content filter: wrong `ceoEmail` causing false-positive blocks** — The
+  `OutboundContentFilter` and `OutboundGateway` were initialized with `nylasSelfEmail`
+  (Curia's own Gmail address) instead of `ceoPrimaryEmail` (Joseph's address). This had
+  two consequences: (1) the contact-data-leak rule treated Joseph's email as a
+  third-party address and blocked legitimate outbound content; (2) blocked-content
+  notifications were delivered to Curia's own inbox rather than to Joseph. Fixed by
+  using `CEO_PRIMARY_EMAIL` (env var) for both `OutboundContentFilter.ceoEmail` and
+  `OutboundGateway.ceoEmail` in `src/index.ts` (issue #244).
+- **Email reply routing: self-addressed replies when Curia was the last sender** — In
+  multi-turn email threads, `sendOutboundReply` fetched the most recent thread message
+  from Nylas and used its `from` address as the reply-to. Since Nylas returns messages
+  newest-first, if Curia had sent the prior turn the `from` address was Curia's own
+  address, routing the reply to itself. Fixed by checking whether the latest message is
+  from `selfEmail`; if so, the recipient is taken from the first non-self address in
+  the message's `to` field instead (issue #244).
+
 ---
 
 ## [0.15.0] — 2026-04-09
