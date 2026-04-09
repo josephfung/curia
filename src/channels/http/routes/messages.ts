@@ -58,6 +58,9 @@ export async function messageRoutes(
       channelId: 'http',
       senderId,
       content: body.content,
+      // Tag with structural channel trust level. Future work will compute
+      // messageTrustScore from trustLevel + contactConfidence + content risk.
+      metadata: { trustLevel: 'medium' },
     });
 
     // Publish failure: bus.publish() threw synchronously. Cancel our pending entry
