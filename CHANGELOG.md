@@ -13,6 +13,13 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Added
+- **Schedule `agent_id` field** — Declarative schedule entries now support an optional
+  `agent_id` field to fire the job at a different agent (e.g. the coordinator) rather
+  than the agent whose YAML contains the schedule. Defaults to the source agent's name
+  for backward compatibility. A startup warning is logged if two agents form a targeting
+  cycle. Public API surface: agent YAML schema.
+
 ---
 
 ## [0.14.0] — 2026-04-08
