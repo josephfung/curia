@@ -589,7 +589,7 @@ function mapJobRow(row: DbJobRow): JobRow {
     createdAt: row.created_at,
     timezone: row.timezone,
     agentTaskId: row.agent_task_id,
-    intentAnchor: row.intent_anchor,
+    intentAnchor: row.intent_anchor ?? null,
     progress: row.progress,
     runStartedAt: row.run_started_at,
     expectedDurationSeconds: row.expected_duration_seconds,
