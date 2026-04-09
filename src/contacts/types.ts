@@ -6,7 +6,7 @@ export interface Contact {
   displayName: string;
   role: string | null;
   status: ContactStatus;
-  // Trust scoring fields (migration 019)
+  // Trust scoring fields (migration 020)
   contactConfidence: number;         // 0.0–1.0; accumulated over time
   trustLevel: TrustLevel | null;     // nullable per-contact override
   lastSeenAt: Date | null;

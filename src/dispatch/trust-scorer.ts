@@ -60,6 +60,12 @@ export function computeTrustScore(input: ComputeTrustScoreInput): number {
   const effectiveTrustLevel = trustLevel ?? channelTrustLevel;
   const channelNormalized = CHANNEL_TRUST_NORMALIZED[effectiveTrustLevel];
 
+  // Guard against unexpected trust level values (e.g. a future DB value that bypasses
+  // the CHECK constraint). An undefined lookup produces NaN which propagates silently.
+  if (channelNormalized === undefined) {
+    throw new Error(`computeTrustScore: unknown trust level '${effectiveTrustLevel}'`);
+  }
+
   const channelComponent = channelNormalized * weights.channelWeight;
   const contactComponent = contactConfidence * weights.contactWeight;
   const riskPenalty = injectionRiskScore * weights.maxRiskPenalty;

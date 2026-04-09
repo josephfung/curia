@@ -816,6 +816,9 @@ class PostgresContactBackend implements ContactServiceBackend {
 
   async updateContact(contact: Contact): Promise<void> {
     this.logger.debug({ contactId: contact.id }, 'contacts: updating contact');
+    // TODO: extend this UPDATE to include contact_confidence, trust_level, and last_seen_at
+    // once the trust scoring pipeline has a write-back mechanism. Currently these fields are
+    // only set at row creation (via migration 020 defaults) and by future scoring infrastructure.
     await this.pool.query(
       `UPDATE contacts SET kg_node_id = $2, display_name = $3, role = $4, status = $5, notes = $6, updated_at = $7
        WHERE id = $1`,
@@ -900,9 +903,19 @@ class PostgresContactBackend implements ContactServiceBackend {
       status: row.status as ContactStatus,
       kgNodeId: row.kg_node_id,
       verified: row.verified,
-      // PostgreSQL returns NUMERIC as a string via node-pg
-      contactConfidence: parseFloat(row.contact_confidence),
-      trustLevel: row.trust_level as TrustLevel | null,
+      // PostgreSQL returns NUMERIC as a string via node-pg.
+      // Guard against NaN — if migration 020 hasn't run, the column is absent and
+      // parseFloat(undefined) = NaN, which would silently corrupt trust score computation.
+      contactConfidence: (() => {
+        const v = parseFloat(row.contact_confidence);
+        return isFinite(v) ? v : 0.0;
+      })(),
+      // Validate trust_level against the allowed enum — the DB CHECK constraint prevents
+      // invalid values under normal operation, but a direct DB edit or future migration
+      // could introduce an unexpected value that produces NaN via an undefined lookup.
+      trustLevel: (['high', 'medium', 'low'] as TrustLevel[]).includes(row.trust_level as TrustLevel)
+        ? row.trust_level as TrustLevel
+        : null,
     };
   }
 
@@ -1099,9 +1112,16 @@ class PostgresContactBackend implements ContactServiceBackend {
       displayName: row.display_name,
       role: row.role,
       status: row.status as ContactStatus,
-      // PostgreSQL returns NUMERIC as a string via node-pg
-      contactConfidence: parseFloat(row.contact_confidence),
-      trustLevel: row.trust_level as TrustLevel | null,
+      // PostgreSQL returns NUMERIC as a string via node-pg.
+      // Guard against NaN — if migration 020 hasn't run, the column is absent and
+      // parseFloat(undefined) = NaN, which would silently corrupt trust score computation.
+      contactConfidence: (() => {
+        const v = parseFloat(row.contact_confidence);
+        return isFinite(v) ? v : 0.0;
+      })(),
+      trustLevel: (['high', 'medium', 'low'] as TrustLevel[]).includes(row.trust_level as TrustLevel)
+        ? row.trust_level as TrustLevel
+        : null,
       lastSeenAt: row.last_seen_at,
       notes: row.notes,
       createdAt: row.created_at,

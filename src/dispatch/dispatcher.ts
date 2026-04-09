@@ -75,6 +75,15 @@ export class Dispatcher {
     this.conversationCheckpointDebounceMs = config.conversationCheckpointDebounceMs ?? 600_000;
     this.trustScorerWeights = config.trustScorerWeights ?? DEFAULT_TRUST_WEIGHTS;
     this.trustScoreFloor = config.trustScoreFloor ?? 0.2;
+
+    // Warn if the trust floor is active but no held-message service was provided — the floor
+    // silently becomes a no-op in that case, which is a security-relevant degradation.
+    if (this.trustScoreFloor > 0 && !this.heldMessages) {
+      this.logger.warn(
+        { trustScoreFloor: this.trustScoreFloor },
+        'Dispatcher: trustScoreFloor is configured but heldMessages service is not available — floor enforcement is disabled',
+      );
+    }
   }
 
   /** Clear all pending checkpoint timers. Call during graceful shutdown. */
@@ -369,8 +378,18 @@ export class Dispatcher {
         senderContext?.resolved ? senderContext.contactConfidence : 0.0;
       const trustLevelOverride =
         senderContext?.resolved ? senderContext.trustLevel : null;
+      // Validate the injection risk score before use — a non-finite value (NaN, ±Infinity)
+      // from a buggy scanner implementation would propagate through the formula and silently
+      // produce a NaN trust score, which bypasses the floor check (NaN < floor = false).
+      const rawRiskScore = injectionMetadata?.risk_score;
       const injectionRiskScore =
-        injectionMetadata ? (injectionMetadata.risk_score as number) : 0;
+        typeof rawRiskScore === 'number' && isFinite(rawRiskScore) ? rawRiskScore : 0;
+      if (rawRiskScore !== undefined && injectionRiskScore !== rawRiskScore) {
+        this.logger.error(
+          { rawRiskScore, channelId: payload.channelId },
+          'Injection scanner returned non-finite risk score — defaulting to 0',
+        );
+      }
 
       messageTrustScore = computeTrustScore({
         channelTrustLevel: channelTrust,
