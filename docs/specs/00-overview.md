@@ -8,7 +8,7 @@
 | # | Document | Scope | Status |
 |---|----------|-------|--------|
 | 00 | This file | Architecture, layers, bus, message flow, design principles | ✅ Implemented |
-| 01 | [Memory System](01-memory-system.md) | Knowledge graph, entity memory, working memory, Bullpen, embeddings | Partial — core and Bullpen implemented; context management, decay engine planned |
+| 01 | [Memory System](01-memory-system.md) | Knowledge graph, entity memory, working memory, Bullpen, embeddings | ✅ Implemented |
 | 02 | [Agent System](02-agent-system.md) | Agent definition, lifecycle, state, execution modes, LLM providers | ✅ Implemented |
 | 03 | [Skills & Execution](03-skills-and-execution.md) | Local skills, MCP, discovery, secrets, permissions | Partial — local skills implemented; MCP discovery planned |
 | 04 | [Channels](04-channels.md) | Adapter interface, CLI, HTTP, Signal, Email channels, message normalization | ✅ Implemented |
