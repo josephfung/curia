@@ -1,22 +1,22 @@
-// Integration test: bus hard layer separation enforcement
+// Bus layer enforcement — EventBus throw-at-call-time contract
 //
 // Confirms that unauthorized publish/subscribe attempts are rejected at the bus level —
 // not silently dropped, not deferred, but thrown synchronously at call time.
 //
-// The enforcement is in bus.ts (canPublish / canSubscribe checks), backed by permissions.ts.
-// These tests prove the contract holds with a real EventBus instance, complementing the
-// canPublish/canSubscribe unit tests in tests/unit/bus/permissions.test.ts.
+// These tests exercise EventBus directly (no DB, no external services) and prove that
+// the throw-at-call-time contract holds for a real EventBus instance, complementing the
+// canPublish/canSubscribe lookup tests in permissions.test.ts.
 
 import { describe, it, expect, vi } from 'vitest';
-import { EventBus } from '../../src/bus/bus.js';
+import { EventBus } from '../../../src/bus/bus.js';
 import {
   createAgentTask,
   createInboundMessage,
   createSkillResult,
   createLlmCall,
   createHumanDecision,
-} from '../../src/bus/events.js';
-import { createLogger } from '../../src/logger.js';
+} from '../../../src/bus/events.js';
+import { createLogger } from '../../../src/logger.js';
 
 describe('Bus Layer Enforcement (integration)', () => {
   // Use 'error' log level to suppress debug noise in test output.

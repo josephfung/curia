@@ -80,11 +80,7 @@ describe('Bus Permissions', () => {
 
   // Explicit cross-layer violation cases called out in issue #187.
   // These confirm the hard boundaries between layers are enforced correctly.
-
-  it('channel layer cannot publish skill.invoke', () => {
-    // channel layer is only allowed to publish inbound.message
-    expect(canPublish('channel', 'skill.invoke')).toBe(false);
-  });
+  // (channel/skill.invoke and channel/agent.task are already covered above.)
 
   it('dispatch layer cannot publish skill.result', () => {
     // skill.result is owned by execution (and agent on its behalf); dispatch has no publish right
@@ -94,11 +90,6 @@ describe('Bus Permissions', () => {
   it('dispatch layer cannot publish skill.invoke', () => {
     // skill.invoke is an agent-layer responsibility; dispatch cannot trigger skills directly
     expect(canPublish('dispatch', 'skill.invoke')).toBe(false);
-  });
-
-  it('channel layer cannot publish agent.task', () => {
-    // only dispatch routes inbound messages into agent tasks
-    expect(canPublish('channel', 'agent.task')).toBe(false);
   });
 
   it('execution layer cannot publish agent.task', () => {
