@@ -1,43 +1,26 @@
 // Integration test: bus hard layer separation enforcement
 //
-// This test wires up a real EventBus with the Dispatcher and AgentRuntime (the same components
-// used in production) and confirms that unauthorized publish/subscribe attempts are rejected
-// at the bus level — not silently dropped, not deferred, but thrown synchronously.
+// Confirms that unauthorized publish/subscribe attempts are rejected at the bus level —
+// not silently dropped, not deferred, but thrown synchronously at call time.
 //
 // The enforcement is in bus.ts (canPublish / canSubscribe checks), backed by permissions.ts.
-// These tests prove the contract holds in a wired system context, not just in unit isolation.
+// These tests prove the contract holds with a real EventBus instance, complementing the
+// canPublish/canSubscribe unit tests in tests/unit/bus/permissions.test.ts.
 
 import { describe, it, expect, vi } from 'vitest';
 import { EventBus } from '../../src/bus/bus.js';
-import { createAgentTask, createInboundMessage, createLlmCall, createHumanDecision } from '../../src/bus/events.js';
+import {
+  createAgentTask,
+  createInboundMessage,
+  createSkillResult,
+  createLlmCall,
+  createHumanDecision,
+} from '../../src/bus/events.js';
 import { createLogger } from '../../src/logger.js';
 
 describe('Bus Layer Enforcement (integration)', () => {
   // Use 'error' log level to suppress debug noise in test output.
   const logger = createLogger('error');
-
-  it('channel layer cannot publish skill.invoke — throws at call time', async () => {
-    const bus = new EventBus(logger);
-    const event = createLlmCall({
-      agentId: 'coordinator',
-      conversationId: 'conv-1',
-      requestedModel: 'claude-sonnet-4-20250514',
-      actualModel: 'claude-sonnet-4-20250514',
-      provider: 'anthropic',
-      inputTokens: 100,
-      outputTokens: 50,
-      estimatedCostUsd: 0.001,
-      latencyMs: 800,
-      providerRequestId: 'req-abc123',
-      promptHash: 'aabbcc',
-      responseHash: 'ddeeff',
-      parentEventId: 'task-1',
-    });
-    // channel layer is not allowed to publish llm.call (that's agent layer)
-    await expect(bus.publish('channel', event)).rejects.toThrow(
-      /not authorized to publish/,
-    );
-  });
 
   it('channel layer cannot publish agent.task — throws at call time', async () => {
     const bus = new EventBus(logger);
@@ -49,7 +32,7 @@ describe('Bus Layer Enforcement (integration)', () => {
       content: 'Hello',
       parentEventId: 'inbound-1',
     });
-    // Only dispatch can publish agent.task; channel routing inbound events is not enough
+    // Only dispatch can publish agent.task; the channel layer routes inbound messages, not tasks
     await expect(bus.publish('channel', event)).rejects.toThrow(
       /not authorized to publish/,
     );
@@ -57,36 +40,16 @@ describe('Bus Layer Enforcement (integration)', () => {
 
   it('dispatch layer cannot publish skill.result — throws at call time', async () => {
     const bus = new EventBus(logger);
-    // skill.result is owned by execution (or agent on its behalf); dispatch has no publish right
-    // We test using a createLlmCall as a stand-in for an event with the wrong layer claim.
-    // For skill.result specifically, we construct an event directly since createSkillResult
-    // sets sourceLayer: 'execution' (which is correct), but we need to test the dispatch claim.
-    const inbound = createInboundMessage({
-      conversationId: 'conv-1',
-      channelId: 'cli',
-      senderId: 'user',
-      content: 'Hello',
-    });
-    // A dispatch layer component cannot claim to publish human.decision on behalf of channel
-    await expect(bus.publish('channel', inbound)).resolves.toBeUndefined();
-
-    // Now confirm dispatch cannot publish llm.call (which is agent-layer only)
-    const llmCallEvent = createLlmCall({
+    // skill.result is owned by execution (and agent on its behalf); dispatch has no publish right
+    const event = createSkillResult({
       agentId: 'coordinator',
       conversationId: 'conv-1',
-      requestedModel: 'claude-sonnet-4-20250514',
-      actualModel: 'claude-sonnet-4-20250514',
-      provider: 'anthropic',
-      inputTokens: 100,
-      outputTokens: 50,
-      estimatedCostUsd: 0.001,
-      latencyMs: 800,
-      providerRequestId: 'req-abc123',
-      promptHash: 'aabbcc',
-      responseHash: 'ddeeff',
-      parentEventId: 'task-1',
+      skillName: 'send-email',
+      result: { success: true, data: {} },
+      durationMs: 120,
+      parentEventId: 'invoke-1',
     });
-    await expect(bus.publish('dispatch', llmCallEvent)).rejects.toThrow(
+    await expect(bus.publish('dispatch', event)).rejects.toThrow(
       /not authorized to publish/,
     );
   });
@@ -109,7 +72,7 @@ describe('Bus Layer Enforcement (integration)', () => {
 
   it('agent layer cannot subscribe to inbound.message — throws at registration', () => {
     const bus = new EventBus(logger);
-    // agents receive tasks via agent.task, not raw inbound messages
+    // Agents receive tasks via agent.task, not raw inbound messages
     expect(() =>
       bus.subscribe('inbound.message', 'agent', vi.fn()),
     ).toThrow(/not authorized to subscribe/);
@@ -131,10 +94,10 @@ describe('Bus Layer Enforcement (integration)', () => {
       parentEventId: 'outbound-1',
     });
 
-    // dispatch can publish human.decision
+    // dispatch can publish human.decision (approval gates are enforced at the dispatch layer)
     await expect(bus.publish('dispatch', decisionEvent)).resolves.toBeUndefined();
 
-    // agent cannot publish human.decision
+    // agent cannot — approval decisions are not the agent's responsibility
     await expect(bus.publish('agent', decisionEvent)).rejects.toThrow(
       /not authorized to publish/,
     );
@@ -158,24 +121,24 @@ describe('Bus Layer Enforcement (integration)', () => {
       parentEventId: 'task-2',
     });
 
-    // agent can publish llm.call
+    // agent can publish llm.call (the agent runtime makes LLM calls)
     await expect(bus.publish('agent', llmEvent)).resolves.toBeUndefined();
 
-    // dispatch cannot — dispatch routes messages, it doesn't make LLM calls
+    // dispatch cannot — dispatch routes messages, it doesn't invoke the LLM directly
     await expect(bus.publish('dispatch', llmEvent)).rejects.toThrow(
       /not authorized to publish/,
     );
   });
 
-  it('system layer can publish any event type (no restrictions)', async () => {
+  it('system layer can publish events from any other layer (no restrictions)', async () => {
     const bus = new EventBus(logger);
+    // system layer is unrestricted — audit logger and scheduler publish as system
     const inbound = createInboundMessage({
       conversationId: 'conv-sys',
       channelId: 'cli',
       senderId: 'local-user',
       content: 'System test',
     });
-    // system layer is unrestricted — audit logger and scheduler publish as system
     await expect(bus.publish('system', inbound)).resolves.toBeUndefined();
   });
 });

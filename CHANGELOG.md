@@ -23,8 +23,6 @@ bus event types) are noted explicitly even in the `0.x` range.
   and `src/bus/permissions.ts` (layer allowlists, including `system` layer full access for audit
   logging). Unit tests added for all new event type permission cases; integration test added
   confirming bus throws on unauthorized publish/subscribe in a wired-system context (issue #187).
-
-### Added
 - **Context summarization** — When active conversation history in working memory exceeds a
   configurable threshold (default: 20 turns), the oldest turns are condensed into a synthetic
   summary turn via an LLM call and the originals are archived (`archived = true`) in Postgres.
