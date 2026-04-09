@@ -27,11 +27,13 @@ bus event types) are noted explicitly even in the `0.x` range.
   tests verify 401 on missing/invalid token and 200 on valid token (spec 06, issue #189)
 
 ### Added
+- **Scheduler prior run context** — three new DB columns (`last_run_outcome`, `last_run_summary`, `last_run_context`) on `scheduled_jobs` give agents structured facts about prior runs without replaying raw conversation history (spec 07)
+- **`scheduler-report` skill** — agents call this at the end of a scheduled run to write a summary and optional continuity context for the next run
+- **Migration 019** — `last_run_outcome`, `last_run_summary`, `last_run_context` columns on `scheduled_jobs`
 - **`secret.accessed` bus event type** — New event type published by the `execution` layer
   (added to `src/bus/events.ts` and `src/bus/permissions.ts`). System layer can subscribe for
   monitoring; audit logger persists it write-ahead like all bus events. Payload carries
   `skillName`, `secretName`, `agentId`, and `taskEventId` — never the resolved secret value.
-- **Bus layer enforcement: `llm.call` and `human.decision` event types** — Added the two new
 - **Bus layer enforcement: `llm.call` and `human.decision` event types** — Added the two new
   event types from spec 10 (audit log hardening) to the bus: `llm.call` (published by the agent
   layer after every LLM API call; carries model provenance, token accounting, timing, and content
@@ -50,14 +52,6 @@ bus event types) are noted explicitly even in the `0.x` range.
   keepWindow, provider). Migration 018 adds the `archived` column to `working_memory`.
 - **Spec 06 security completion table** — replaced implementation checklist in `docs/specs/06-audit-and-security.md` with a Done/Not Done completion table; reconciled against open `audit`-labeled GitHub issues (13 open, 3 closed); added missing row for issue #194 (anti-injection system prompt hardening).
 - **Spec 10 audit log hardening completion table** — replaced implementation checklist in `docs/specs/10-audit-log-hardening.md` with a Done/Not Done completion table; `config.change` event type is the only completed item.
-
-### Fixed
-- **Declarative job upsert** — `ON CONFLICT ON CONSTRAINT` only works with named
-  constraints, not named indexes. Switched to column-based conflict syntax matching
-  the `scheduled_jobs_declarative_uq` partial unique index definition, fixing
-  startup failures when declarative schedule entries are present.
-
-### Added
 - **Schedule `agent_id` field** — Declarative schedule entries now support an optional
   `agent_id` field to fire the job at a different agent (e.g. the coordinator) rather
   than the agent whose YAML contains the schedule. Defaults to the source agent's name
@@ -68,6 +62,17 @@ bus event types) are noted explicitly even in the `0.x` range.
   injects a `## Original Task Intent` block into `effectiveSystemPrompt` on every burst
   for persistent tasks. Prevents multi-burst drift (spec 01). Coordinator YAML updated
   with guidance on when and how to provide `intent_anchor` to `scheduler-create`.
+
+### Fixed
+- **Scheduler history poisoning** — scheduled job runs now use a unique per-run `conversationId`, preventing working memory from loading turns from prior runs (root cause of 2026-04-09 production incident where the daily schedule job called `scheduler-create` instead of executing its task)
+- **Declarative job upsert** — `ON CONFLICT ON CONSTRAINT` only works with named
+  constraints, not named indexes. Switched to column-based conflict syntax matching
+  the `scheduled_jobs_declarative_uq` partial unique index definition, fixing
+  startup failures when declarative schedule entries are present.
+
+### Changed
+- **`completeJobRun`** — now writes `last_run_outcome = 'completed'` or `'failed'` on completion
+- **`recoverStuckJob`** — now writes `last_run_outcome = 'timed_out'` on recovery
 
 ---
 
