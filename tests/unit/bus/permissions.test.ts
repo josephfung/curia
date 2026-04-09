@@ -77,4 +77,71 @@ describe('Bus Permissions', () => {
   it('channel layer cannot publish agent.error', () => {
     expect(canPublish('channel', 'agent.error')).toBe(false);
   });
+
+  // Explicit cross-layer violation cases called out in issue #187.
+  // These confirm the hard boundaries between layers are enforced correctly.
+  // (channel/skill.invoke and channel/agent.task are already covered above.)
+
+  it('dispatch layer cannot publish skill.result', () => {
+    // skill.result is owned by execution (and agent on its behalf); dispatch has no publish right
+    expect(canPublish('dispatch', 'skill.result')).toBe(false);
+  });
+
+  it('dispatch layer cannot publish skill.invoke', () => {
+    // skill.invoke is an agent-layer responsibility; dispatch cannot trigger skills directly
+    expect(canPublish('dispatch', 'skill.invoke')).toBe(false);
+  });
+
+  it('execution layer cannot publish agent.task', () => {
+    // execution only emits skill.result; it has no routing authority
+    expect(canPublish('execution', 'agent.task')).toBe(false);
+  });
+
+  // llm.call — spec 10, published by agent layer only
+
+  it('agent layer can publish llm.call', () => {
+    expect(canPublish('agent', 'llm.call')).toBe(true);
+  });
+
+  it('dispatch layer cannot publish llm.call', () => {
+    // LLM calls are made by the agent runtime, not the dispatch layer
+    expect(canPublish('dispatch', 'llm.call')).toBe(false);
+  });
+
+  it('channel layer cannot publish llm.call', () => {
+    expect(canPublish('channel', 'llm.call')).toBe(false);
+  });
+
+  it('execution layer cannot publish llm.call', () => {
+    expect(canPublish('execution', 'llm.call')).toBe(false);
+  });
+
+  it('system layer can publish and subscribe to llm.call', () => {
+    expect(canPublish('system', 'llm.call')).toBe(true);
+    expect(canSubscribe('system', 'llm.call')).toBe(true);
+  });
+
+  // human.decision — spec 10, published by dispatch layer only
+
+  it('dispatch layer can publish human.decision', () => {
+    expect(canPublish('dispatch', 'human.decision')).toBe(true);
+  });
+
+  it('agent layer cannot publish human.decision', () => {
+    // approval gates are enforced at the dispatch layer, not by agents
+    expect(canPublish('agent', 'human.decision')).toBe(false);
+  });
+
+  it('channel layer cannot publish human.decision', () => {
+    expect(canPublish('channel', 'human.decision')).toBe(false);
+  });
+
+  it('execution layer cannot publish human.decision', () => {
+    expect(canPublish('execution', 'human.decision')).toBe(false);
+  });
+
+  it('system layer can publish and subscribe to human.decision', () => {
+    expect(canPublish('system', 'human.decision')).toBe(true);
+    expect(canSubscribe('system', 'human.decision')).toBe(true);
+  });
 });

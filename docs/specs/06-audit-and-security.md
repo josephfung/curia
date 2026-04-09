@@ -343,7 +343,7 @@ These are non-negotiable for launch.
 
 | Item | Status |
 |---|---|
-| Bus layer enforcement tested (channel cannot publish `skill.invoke`) | Not Done |
+| Bus layer enforcement tested (channel cannot publish `skill.invoke`) | Done (#187) |
 | Audit log append-only verified (no UPDATE or DELETE code paths) | Not Done |
 | Secret values never appear in logs, audit, or LLM context | Not Done |
 | Tool output sanitization active for all skill results | Done |
