@@ -286,32 +286,6 @@ The web app requires `WEB_APP_BOOTSTRAP_SECRET` in `.env` — set this to any lo
 
 ---
 
-## Project Status & Documentation
-
-| Spec | Area | Status |
-|---|---|---|
-| [00](docs/specs/00-overview.md) | Architecture & message bus | ✅ Implemented |
-| [01](docs/specs/01-memory-system.md) | Memory system (working memory + knowledge graph) | Partial — core implemented; Bullpen, context management, decay engine planned |
-| [02](docs/specs/02-agent-system.md) | Agent system (config, delegation, registry) | ✅ Implemented |
-| [03](docs/specs/03-skills-and-execution.md) | Skills & execution layer | Partial — local skills implemented; MCP discovery planned |
-| [04](docs/specs/04-channels.md) | Channels (CLI, HTTP, Email) | Partial — CLI, HTTP, Email done; Signal planned |
-| [05](docs/specs/05-error-recovery.md) | Error recovery (budgets, patterns, continuity) | ✅ Implemented |
-| [06](docs/specs/06-audit-and-security.md) | Audit & security | Partial — basic audit logging in place; redaction & hardening planned |
-| [07](docs/specs/07-scheduler.md) | Scheduler (cron, one-shot, persistent tasks) | ✅ Implemented |
-| [08](docs/specs/08-operations.md) | Operations (deployment, health, monitoring) | Planned |
-| [09](docs/specs/09-contacts-and-identity.md) | Contacts & identity (auth, unknown sender policy) | ✅ Implemented |
-| [10](docs/specs/10-audit-log-hardening.md) | Audit log hardening (hash-chain, HITL, provenance) | Planned |
-| [11](docs/specs/11-entity-context-enrichment.md) | Entity context enrichment (KG-backed sender/entity profiles) | Planned — spec drafted |
-| [12](docs/specs/12-knowledge-graph-web-explorer.md) | Knowledge graph web explorer | ✅ Implemented |
-| [13](docs/specs/13-office-identity.md) | Office identity (persona, voice, runtime config) |  ✅ Implemented |
-| [14](docs/specs/14-autonomy-engine.md) | Autonomy engine (global score, CEO controls, per-task prompt injection) | Partial: core implemented; self-monitoring & tuning planned |
-| [15](docs/specs/15-outbound-safety.md) | Outbound safety (content filter, gateway, display name sanitization, caller verification) | Partial — deterministic rules done; LLM-as-judge planned |
-| [16](docs/specs/16-smoke-test-framework.md) | Smoke test framework (chat-based cases, LLM-as-judge, HTML reports) | ✅ Implemented |
-| — | Web dashboard | Partial |
-| — | Additional channels: Voice, Slack, Telegram | Future |
-
----
-
 ## Contributing
 
 Curia is in early development and welcomes contributions — including AI-assisted ones.
