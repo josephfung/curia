@@ -258,6 +258,16 @@ interface LlmCallPayload {
   responseHash: string;
 }
 
+// SecretAccessedPayload — emitted by the execution layer whenever a skill calls ctx.secret().
+// Records which skill accessed which secret, from which agent/task — never the secret value.
+// This is the primary audit trail for secrets isolation (spec 06, Secrets Isolation).
+interface SecretAccessedPayload {
+  skillName: string;
+  secretName: string;     // the declared key name — never the resolved value
+  agentId?: string;       // agent that invoked the skill
+  taskEventId?: string;   // causal chain: the agent.task that triggered this invocation
+}
+
 // HumanDecisionPayload — emitted by the dispatch layer when a human approves, denies, or
 // reviews an agent action. Captures the full decision context for compliance and audit.
 // Spec 10 (audit log hardening): required by EU AI Act Article 14, HITL audit standards.
@@ -449,6 +459,15 @@ export interface HumanDecisionEvent extends BaseEvent {
   payload: HumanDecisionPayload;
 }
 
+// SecretAccessedEvent — published by the execution layer for every ctx.secret() call.
+// Goes through the write-ahead audit logger like all bus events, giving a durable
+// record of which skill accessed which secret without the value ever leaving the process.
+export interface SecretAccessedEvent extends BaseEvent {
+  type: 'secret.accessed';
+  sourceLayer: 'execution';
+  payload: SecretAccessedPayload;
+}
+
 interface ConversationCheckpointPayload {
   conversationId: string;
   agentId: string;
@@ -494,7 +513,8 @@ export type BusEvent =
   | ConfigChangeEvent        // System: config object changed (office identity, etc.)
   | ConversationCheckpointEvent // Checkpoint pipeline: Dispatch fires after inactivity window
   | LlmCallEvent             // Spec 10: LLM API call provenance (model, tokens, cost, hashes)
-  | HumanDecisionEvent;      // Spec 10: human-in-the-loop decision record (approve/deny/etc.)
+  | HumanDecisionEvent       // Spec 10: human-in-the-loop decision record (approve/deny/etc.)
+  | SecretAccessedEvent;     // Spec 06: secrets isolation audit trail (name only, never value)
 
 // Convenience alias for use in handler maps / switch statements.
 export type EventType = BusEvent['type'];
@@ -862,6 +882,20 @@ export function createHumanDecision(
     type: 'human.decision',
     sourceLayer: 'dispatch',
     payload: rest,
+    parentEventId,
+  };
+}
+
+export function createSecretAccessed(
+  payload: SecretAccessedPayload,
+  parentEventId?: string,
+): SecretAccessedEvent {
+  return {
+    id: randomUUID(),
+    timestamp: new Date(),
+    type: 'secret.accessed',
+    sourceLayer: 'execution',
+    payload,
     parentEventId,
   };
 }

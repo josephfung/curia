@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { ExecutionLayer } from '../../../src/skills/execution.js';
 import { SkillRegistry } from '../../../src/skills/registry.js';
+import { EventBus } from '../../../src/bus/bus.js';
+import type { BusEvent } from '../../../src/bus/events.js';
 import type { SkillManifest, SkillHandler, SkillContext } from '../../../src/skills/types.js';
 import pino from 'pino';
 
@@ -401,6 +403,132 @@ describe('ExecutionLayer', () => {
         expect(result.error).not.toContain('ignore all rules');
         expect(result.error).toContain('real error');
       }
+    });
+  });
+
+  describe('secret.accessed audit events', () => {
+    it('publishes a secret.accessed event with secret name but not value', async () => {
+      process.env.AUDIT_TEST_SECRET = 'do-not-log-this-value';
+
+      const publishedEvents: BusEvent[] = [];
+      const bus = new EventBus(logger);
+      // System layer can subscribe to secret.accessed for audit purposes
+      bus.subscribe('secret.accessed', 'system', (event) => { publishedEvents.push(event); });
+
+      const handler: SkillHandler = {
+        execute: async (ctx: SkillContext) => {
+          ctx.secret('audit_test_secret');
+          return { success: true, data: 'ok' };
+        },
+      };
+      const reg = new SkillRegistry();
+      reg.register(makeManifest({ name: 'audited-skill', secrets: ['audit_test_secret'] }), handler);
+      const exec = new ExecutionLayer(reg, logger, { bus });
+
+      await exec.invoke('audited-skill', {});
+
+      // Fire-and-forget — give the event loop a tick to resolve the publish promise
+      await new Promise(resolve => setTimeout(resolve, 0));
+
+      expect(publishedEvents).toHaveLength(1);
+      const event = publishedEvents[0];
+      if (event.type === 'secret.accessed') {
+        // Name is present
+        expect(event.payload.secretName).toBe('audit_test_secret');
+        expect(event.payload.skillName).toBe('audited-skill');
+        // Value must never appear in the event payload
+        expect(JSON.stringify(event.payload)).not.toContain('do-not-log-this-value');
+      } else {
+        expect.fail('Expected a secret.accessed event');
+      }
+
+      delete process.env.AUDIT_TEST_SECRET;
+    });
+
+    it('publishes separate secret.accessed events for multiple ctx.secret() calls', async () => {
+      process.env.SECRET_ONE = 'val-one';
+      process.env.SECRET_TWO = 'val-two';
+
+      const publishedEvents: BusEvent[] = [];
+      const bus = new EventBus(logger);
+      bus.subscribe('secret.accessed', 'system', (event) => { publishedEvents.push(event); });
+
+      const handler: SkillHandler = {
+        execute: async (ctx: SkillContext) => {
+          ctx.secret('secret_one');
+          ctx.secret('secret_two');
+          return { success: true, data: 'ok' };
+        },
+      };
+      const reg = new SkillRegistry();
+      reg.register(makeManifest({ name: 'multi-secret-skill', secrets: ['secret_one', 'secret_two'] }), handler);
+      const exec = new ExecutionLayer(reg, logger, { bus });
+
+      await exec.invoke('multi-secret-skill', {});
+      await new Promise(resolve => setTimeout(resolve, 0));
+
+      expect(publishedEvents).toHaveLength(2);
+      const names = publishedEvents
+        .filter(e => e.type === 'secret.accessed')
+        .map(e => e.type === 'secret.accessed' ? e.payload.secretName : '');
+      expect(names).toContain('secret_one');
+      expect(names).toContain('secret_two');
+
+      delete process.env.SECRET_ONE;
+      delete process.env.SECRET_TWO;
+    });
+
+    it('does not publish secret.accessed when no bus is wired', async () => {
+      // Ensures the fire-and-forget silently skips when bus is absent (test environments)
+      process.env.NO_BUS_SECRET = 'secret-val';
+
+      const handler: SkillHandler = {
+        execute: async (ctx: SkillContext) => {
+          ctx.secret('no_bus_secret');
+          return { success: true, data: 'ok' };
+        },
+      };
+      const reg = new SkillRegistry();
+      reg.register(makeManifest({ name: 'no-bus-skill', secrets: ['no_bus_secret'] }), handler);
+      // ExecutionLayer without bus — should not throw
+      const exec = new ExecutionLayer(reg, logger);
+
+      const result = await exec.invoke('no-bus-skill', {});
+      expect(result.success).toBe(true);
+
+      delete process.env.NO_BUS_SECRET;
+    });
+
+    it('propagates agentId and taskEventId into secret.accessed payload', async () => {
+      process.env.TRACED_SECRET = 'traced-val';
+
+      const publishedEvents: BusEvent[] = [];
+      const bus = new EventBus(logger);
+      bus.subscribe('secret.accessed', 'system', (event) => { publishedEvents.push(event); });
+
+      const handler: SkillHandler = {
+        execute: async (ctx: SkillContext) => {
+          ctx.secret('traced_secret');
+          return { success: true, data: 'ok' };
+        },
+      };
+      const reg = new SkillRegistry();
+      reg.register(makeManifest({ name: 'traced-skill', secrets: ['traced_secret'] }), handler);
+      const exec = new ExecutionLayer(reg, logger, { bus });
+
+      await exec.invoke('traced-skill', {}, undefined, { agentId: 'agent-123', taskEventId: 'task-456' });
+      await new Promise(resolve => setTimeout(resolve, 0));
+
+      expect(publishedEvents).toHaveLength(1);
+      const event = publishedEvents[0];
+      if (event.type === 'secret.accessed') {
+        expect(event.payload.agentId).toBe('agent-123');
+        expect(event.payload.taskEventId).toBe('task-456');
+      } else {
+        expect.fail('Expected a secret.accessed event');
+      }
+
+      delete process.env.TRACED_SECRET;
     });
   });
 

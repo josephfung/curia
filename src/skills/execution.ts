@@ -21,6 +21,7 @@ import type { SkillResult, SkillContext, CallerContext, AgentPersona } from './t
 import { normalizeTimestamp } from '../time/timestamp.js';
 import type { SkillRegistry } from './registry.js';
 import { sanitizeOutput } from './sanitize.js';
+import { createSecretAccessed } from '../bus/events.js';
 import type { Logger } from '../logger.js';
 import type { EventBus } from '../bus/bus.js';
 import type { AgentRegistry } from '../agents/agent-registry.js';
@@ -222,7 +223,25 @@ export class ExecutionLayer {
         if (!value) {
           throw new Error(`Secret '${name}' is declared but not set in the environment`);
         }
-        // Log at debug level — info is too noisy for every secret access
+        // Audit log — fire-and-forget so ctx.secret() stays synchronous.
+        // Records skill name, secret name, and causal IDs — never the secret value.
+        // Falls back to debug-only logging if the bus is not wired (e.g. test environments).
+        if (this.bus) {
+          this.bus.publish('execution', createSecretAccessed({
+            skillName,
+            secretName: name,
+            agentId: options?.agentId,
+            taskEventId: options?.taskEventId,
+          })).catch((err) => {
+            // Error (not warn) — a dropped audit event on a security-critical path must
+            // surface at error level so it reaches SIEM/alerting dashboards. The debug
+            // log below still fires, but it is not a durable audit record.
+            skillLogger.error(
+              { err, secretName: name, skillName, agentId: options?.agentId, taskEventId: options?.taskEventId },
+              'AUDIT FAILURE: secret.accessed event could not be published — secret was returned but access may not be recorded',
+            );
+          });
+        }
         skillLogger.debug({ secretName: name }, 'Secret accessed');
         return value;
       },

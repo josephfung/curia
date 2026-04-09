@@ -14,10 +14,24 @@ bus event types) are noted explicitly even in the `0.x` range.
 ## [Unreleased]
 
 ### Security
-
-- **HTTP API token authentication** — failed auth attempts are now audit-logged (IP, route, reason); authenticated messages carry `trustLevel: 'medium'` in bus event metadata; integration tests verify 401 on missing/invalid token and 200 on valid token (spec 06, issue #189)
+- **Secrets isolation audit trail** — Every `ctx.secret()` call now emits a `secret.accessed`
+  bus event (skill name, secret name, agentId, taskEventId — never the secret value), giving a
+  durable write-ahead audit record for all secret access through the execution layer (spec 06,
+  Secrets Isolation). Pino loggers now redact fields named `password`, `token`, `secret`, and
+  `api_key` as a last-resort safety net against accidental leakage into structured logs. A new
+  static analysis Vitest test (`secret-manifest-coverage`) scans every skill handler for
+  `ctx.secret()` calls and fails CI if any accessed secret name is not declared in that skill's
+  `skill.json` manifest, catching both missed declarations and cross-skill secret access attempts.
+- **HTTP API token authentication** — failed auth attempts are now audit-logged (IP, route,
+  reason); authenticated messages carry `trustLevel: 'medium'` in bus event metadata; integration
+  tests verify 401 on missing/invalid token and 200 on valid token (spec 06, issue #189)
 
 ### Added
+- **`secret.accessed` bus event type** — New event type published by the `execution` layer
+  (added to `src/bus/events.ts` and `src/bus/permissions.ts`). System layer can subscribe for
+  monitoring; audit logger persists it write-ahead like all bus events. Payload carries
+  `skillName`, `secretName`, `agentId`, and `taskEventId` — never the resolved secret value.
+- **Bus layer enforcement: `llm.call` and `human.decision` event types** — Added the two new
 - **Bus layer enforcement: `llm.call` and `human.decision` event types** — Added the two new
   event types from spec 10 (audit log hardening) to the bus: `llm.call` (published by the agent
   layer after every LLM API call; carries model provenance, token accounting, timing, and content
