@@ -422,22 +422,24 @@ This spec is designed to be implemented incrementally. Each phase is independent
 
 ---
 
-## Implementation Checklist
+## Implementation Completion Status
 
-- [ ] Migration: structured columns on `audit_log` (action, outcome, target, initiator)
-- [ ] Field extraction logic in `AuditLogger.log()`
-- [ ] `llm.call` event type added to `events.ts`
-- [ ] LLM providers emit `llm.call` events with provenance fields
-- [ ] `llm_call_archive` table created and populated
-- [ ] Redaction applied to prompt/response archive writes
-- [ ] `entry_hash` column added and hash chain computed on every write
-- [ ] `curia audit verify` CLI command implemented and tested
-- [ ] `MemoryQueryPayload` extended with `results` array (id + optional score)
-- [ ] `sourcesAccessed` convention documented and adopted in existing skills
-- [ ] `human.decision` event type added and emitted from approval gates
-- [ ] `config.change` event type added and emitted at startup
-- [ ] Retention tiers defined in `config/default.yaml`
-- [ ] All new event types covered by tests
-- [ ] Hash chain verification tested (insert, verify, detect tamper)
-- [ ] Monitoring query: detect `[EXTRACTION_FAILED]` values in structured columns
-- [ ] Monitoring query: detect `llm.call` audit rows with no corresponding `llm_call_archive` row (within hot retention window)
+| Item | Status |
+|---|---|
+| Migration: structured columns on `audit_log` (`action`, `outcome`, `target_type`, `target_id`, `initiator_type`, `initiator_id`) | Not Done |
+| Field extraction logic in `AuditLogger.log()` | Not Done |
+| `llm.call` event type added to `events.ts` | Not Done |
+| LLM providers emit `llm.call` events with provenance fields | Not Done |
+| `llm_call_archive` table created and populated | Not Done |
+| Redaction applied to prompt/response archive writes | Not Done |
+| `entry_hash` column added and hash chain computed on every write | Not Done |
+| `curia audit verify` CLI command implemented and tested | Not Done |
+| `MemoryQueryPayload` extended with `results` array (id + optional score) | Not Done |
+| `sourcesAccessed` convention documented and adopted in existing skills | Not Done |
+| `human.decision` event type added and emitted from approval gates | Not Done |
+| `config.change` event type added and emitted at startup | Done |
+| Retention tiers defined in `config/default.yaml` | Not Done |
+| All new event types covered by tests | Not Done |
+| Hash chain verification tested (insert, verify, detect tamper) | Not Done |
+| Monitoring query: detect `[EXTRACTION_FAILED]` values in structured columns | Not Done |
+| Monitoring query: detect `llm.call` audit rows with no corresponding `llm_call_archive` row | Not Done |
