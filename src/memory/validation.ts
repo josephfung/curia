@@ -121,16 +121,15 @@ export class MemoryValidator {
     //    The caller owns ID generation and the store write so that it can coordinate
     //    with edge creation atomically. We only provide what we've computed here:
     //    the validated inputs plus the embedding from the dedup scan above.
-    const now = new Date();
+    //    Timestamps are intentionally omitted — the store always stamps its own
+    //    createdAt/lastConfirmedAt on INSERT; any value we set here would be ignored.
     return {
       action: 'create',
       validated: {
         label: options.label,
         properties: options.properties ?? {},
         embedding: newEmbedding,
-        temporal: {
-          createdAt: now,
-          lastConfirmedAt: now,
+        provenance: {
           confidence: options.confidence ?? 0.7,
           decayClass: options.decayClass ?? 'slow_decay',
           // Full provenance chain: "agent:<name>/task:<id>/channel:<name>"

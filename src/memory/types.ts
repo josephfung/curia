@@ -85,14 +85,20 @@ export interface StoreFactOptions {
 }
 
 // -- Validated data for a new fact node, produced by MemoryValidator --
-// Intentionally excludes `id` and `type`: the store owns ID generation and persistence.
-// The validator's job is to validate inputs and compute the embedding; the store's job
-// is to mint a UUID and write the row. Keeping these responsibilities separate prevents
-// callers from accidentally relying on a pre-computed ID that is never persisted.
+// Intentionally excludes `id`, `type`, `createdAt`, and `lastConfirmedAt`:
+//   - The store owns ID generation and persistence.
+//   - The store always stamps its own timestamps on INSERT — caller-supplied
+//     timestamps would be silently ignored, so they are not part of this type.
+//     (see KnowledgeGraphStore.createNode())
+// Only the provenance fields the store actually honours are included here.
 export interface ValidatedFactData {
   label: string;
   properties: Record<string, unknown>;
-  temporal: TemporalMetadata;
+  provenance: {
+    confidence: number;
+    decayClass: DecayClass;
+    source: string;
+  };
   // Pre-computed embedding from the dedup scan — passed through so the store
   // can skip a redundant embed() call when persisting the new node.
   embedding: number[];

@@ -40,6 +40,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **README** — removed redundant Project Status table; status consolidated in spec index.
 
 ### Fixed
+- **`ValidatedFactData.temporal` misleading type** — replaced `temporal: TemporalMetadata` (which included `createdAt`/`lastConfirmedAt`) with a narrower `provenance: { confidence, decayClass, source }`. The store always stamps its own timestamps on INSERT; the old type falsely implied the caller-set timestamps would survive to the persisted node. Closes #183.
 - **Coordinator confabulation** — removing `extract-relationships` from the coordinator's LLM tool loop eliminated empty-text turns that triggered confabulated "I already provided my response" replies in Signal group chats and the web UI.
 - **KG node deduplication** — one-time migration deduplicates existing `kg_nodes` rows with matching `(lower(label), type)`, re-pointing edges and contacts to canonical nodes before removing duplicates.
 
