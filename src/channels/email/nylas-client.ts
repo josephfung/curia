@@ -108,6 +108,10 @@ export class NylasClient {
 
   /**
    * List recent messages, optionally filtered by time / read-state / count.
+   *
+   * Results are ordered newest-first (most-recent-first) per the Nylas API
+   * default. Callers that rely on messages[0] being the latest message in a
+   * thread (e.g. email-adapter's sendOutboundReply) depend on this guarantee.
    */
   async listMessages(options?: ListMessagesOptions): Promise<NylasMessage[]> {
     const queryParams: ListMessagesQueryParams = {};

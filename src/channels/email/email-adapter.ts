@@ -188,8 +188,16 @@ export class EmailAdapter {
       // If the latest message was sent BY us, the human's address is in 'to'.
       // Comparing case-insensitively guards against inconsistent casing from mail servers.
       const latestIsOurs = latestFromEmail?.toLowerCase() === this.config.selfEmail.toLowerCase();
+
+      // When the latest message is ours, find the first non-self address in 'to'.
+      // to[] can contain multiple recipients (e.g. a thread with a CC'd third party);
+      // picking the first non-self address is best-effort for 1:1 conversations.
+      // TODO: proper group-email support would need to track the original sender from
+      // the inbound message rather than inferring the recipient from the thread.
       const recipientEmail = latestIsOurs
-        ? threadMessage.to[0]?.email
+        ? threadMessage.to.find(
+            (r) => r.email.toLowerCase() !== this.config.selfEmail.toLowerCase(),
+          )?.email
         : latestFromEmail;
 
       if (!recipientEmail) {
