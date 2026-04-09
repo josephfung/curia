@@ -458,10 +458,11 @@ export class SchedulerService {
                  consecutive_failures = 0,
                  last_error = NULL,
                  run_started_at = NULL,
-                 status = $2
+                 status = $2,
+                 last_run_outcome = $4
            WHERE id = $3
         `;
-        await this.pool.query(updateSql, [nextRunAt, 'pending', jobId]);
+        await this.pool.query(updateSql, [nextRunAt, 'pending', jobId, 'completed']);
       } else {
         // One-shot job: mark as completed.
         const updateSql = `
@@ -470,10 +471,11 @@ export class SchedulerService {
                  status = $1,
                  consecutive_failures = 0,
                  last_error = NULL,
-                 run_started_at = NULL
+                 run_started_at = NULL,
+                 last_run_outcome = $3
            WHERE id = $2
         `;
-        await this.pool.query(updateSql, ['completed', jobId]);
+        await this.pool.query(updateSql, ['completed', jobId, 'completed']);
       }
 
       this.logger.info({ jobId }, 'Job run completed successfully');
@@ -491,10 +493,11 @@ export class SchedulerService {
              consecutive_failures = $1,
              last_error = $2,
              run_started_at = NULL,
-             status = $3
+             status = $3,
+             last_run_outcome = $5
        WHERE id = $4
     `;
-    await this.pool.query(updateSql, [newFailures, error ?? null, newStatus, jobId]);
+    await this.pool.query(updateSql, [newFailures, error ?? null, newStatus, jobId, 'failed']);
 
     if (shouldSuspend) {
       this.logger.warn({ jobId, consecutiveFailures: newFailures }, 'Job auto-suspended after consecutive failures');
