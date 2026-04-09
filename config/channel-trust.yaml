@@ -3,7 +3,7 @@
 # unknown_sender: what to do when a message arrives from an unrecognized sender
 #   allow - process normally (CLI is always the CEO)
 #   hold_and_notify - hold the message silently, notify CEO
-#   reject - silently drop the message
+#   ignore - silently drop the message (no rejection notice to sender)
 
 channels:
   cli:
@@ -21,7 +21,7 @@ channels:
     unknown_sender: hold_and_notify
   http:
     trust: medium
-    unknown_sender: reject
+    unknown_sender: ignore
   email:
     trust: low
     unknown_sender: hold_and_notify

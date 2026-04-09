@@ -189,7 +189,7 @@ export class Dispatcher {
                 return;
               }
 
-              if (policy?.unknownSender === 'reject') {
+              if (policy?.unknownSender === 'ignore') {
                 this.logger.info(
                   { channel: payload.channelId, senderId: payload.senderId },
                   'Rejected message from provisional sender',
@@ -260,7 +260,7 @@ export class Dispatcher {
             return; // Always return — whether hold succeeded or failed
           }
 
-          if (policy?.unknownSender === 'reject') {
+          if (policy?.unknownSender === 'ignore') {
             this.logger.info(
               { channel: payload.channelId, senderId: payload.senderId },
               'Rejected message from unknown sender',

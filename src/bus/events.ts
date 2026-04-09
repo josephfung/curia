@@ -152,7 +152,7 @@ interface MessageHeldPayload {
 }
 
 // MessageRejectedPayload — emitted by the dispatch layer when a message is rejected
-// due to an unknown_sender: reject policy (or a blocked sender). The conversationId
+// due to an unknown_sender: ignore policy (or a blocked sender). The conversationId
 // is included so the HTTP adapter can immediately resolve the pending response
 // with an error rather than hanging until the 120-second timeout.
 interface MessageRejectedPayload {

@@ -63,8 +63,8 @@ describe('Dispatcher', () => {
   });
 });
 
-describe('Dispatcher unknown_sender: reject policy', () => {
-  it('publishes message.rejected for unknown sender with reject policy', async () => {
+describe('Dispatcher unknown_sender: ignore policy', () => {
+  it('publishes message.rejected for unknown sender with ignore policy', async () => {
     const logger = createLogger('error');
     const bus = new EventBus(logger);
 
@@ -81,7 +81,7 @@ describe('Dispatcher unknown_sender: reject policy', () => {
       bus,
       logger,
       contactResolver: mockResolver,
-      channelPolicies: { http: { trust: 'low', unknownSender: 'reject' } },
+      channelPolicies: { http: { trust: 'low', unknownSender: 'ignore' } },
     });
     dispatcher.register();
 

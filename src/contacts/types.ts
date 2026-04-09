@@ -143,7 +143,7 @@ export interface AuthConfig {
 
 // -- Unknown sender policy --
 
-export type UnknownSenderPolicy = 'allow' | 'hold_and_notify' | 'reject';
+export type UnknownSenderPolicy = 'allow' | 'hold_and_notify' | 'ignore';
 
 export type HeldMessageStatus = 'pending' | 'processed' | 'discarded';
 

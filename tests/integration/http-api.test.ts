@@ -120,9 +120,9 @@ describe('HTTP API integration', () => {
 });
 
 // Issue #47: HTTP callers hang on rejected unknown-sender messages.
-// This suite verifies that the reject policy returns 403 immediately
+// This suite verifies that the ignore policy returns 403 immediately
 // instead of hanging until the 120-second response timeout (504).
-describe('HTTP API — unknown_sender: reject policy', () => {
+describe('HTTP API — unknown_sender: ignore policy', () => {
   const app = Fastify();
   const bus = new EventBus(logger);
   const eventRouter = new EventRouter(logger);
@@ -143,12 +143,12 @@ describe('HTTP API — unknown_sender: reject policy', () => {
       } satisfies InboundSenderContext),
     } as unknown as ContactResolver;
 
-    // Dispatcher configured with reject policy for the http channel
+    // Dispatcher configured with ignore policy for the http channel
     const dispatcher = new Dispatcher({
       bus,
       logger,
       contactResolver: mockResolver,
-      channelPolicies: { http: { trust: 'low', unknownSender: 'reject' } },
+      channelPolicies: { http: { trust: 'low', unknownSender: 'ignore' } },
     });
     dispatcher.register();
 
