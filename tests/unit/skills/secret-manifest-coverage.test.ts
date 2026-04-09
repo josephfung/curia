@@ -38,22 +38,37 @@ describe('secret manifest coverage', () => {
       if (!fs.existsSync(manifestPath) || !fs.existsSync(handlerPath)) continue;
 
       const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8')) as { secrets?: string[] };
-      const declaredSecrets = new Set<string>(manifest.secrets ?? []);
+      // Normalize to lowercase for matching — the runtime resolves secrets via
+      // name.toUpperCase() against process.env, so 'ANTHROPIC_API_KEY' and
+      // 'anthropic_api_key' are the same secret at runtime. The test must match
+      // that semantics so it does not produce false positives or false negatives.
+      const declaredSecrets = new Set<string>((manifest.secrets ?? []).map(s => s.toLowerCase()));
 
       const handlerSource = fs.readFileSync(handlerPath, 'utf-8');
 
-      // Match both single-quoted and double-quoted literal string arguments:
-      //   ctx.secret('tavily_api_key')
-      //   ctx.secret("ANTHROPIC_API_KEY")
-      // Template literals and variable arguments are not checked here — use code review.
-      const pattern = /ctx\.secret\(\s*['"]([^'"]+)['"]\s*\)/g;
-      for (const match of handlerSource.matchAll(pattern)) {
-        const secretName = match[1];
+      // Check literal string arguments: ctx.secret('name') and ctx.secret("name").
+      // Case-insensitive comparison matches the runtime's toUpperCase() normalization.
+      const literalPattern = /ctx\.secret\(\s*['"]([^'"]+)['"]\s*\)/g;
+      for (const match of handlerSource.matchAll(literalPattern)) {
+        const secretName = match[1].toLowerCase();
         if (!declaredSecrets.has(secretName)) {
           violations.push(
-            `${entry.name}/handler: ctx.secret('${secretName}') is not declared in skill.json secrets array`,
+            `${entry.name}/handler: ctx.secret('${match[1]}') is not declared in skill.json secrets array`,
           );
         }
+      }
+
+      // Detect dynamic ctx.secret() calls (template literals, variable arguments) that
+      // cannot be statically verified. Emit a visible warning to stderr so CI output
+      // never silently implies full coverage when dynamic patterns are present.
+      const dynamicPattern = /ctx\.secret\(\s*(?!['"])[^)]+\)/g;
+      const dynamicMatches = [...handlerSource.matchAll(dynamicPattern)];
+      if (dynamicMatches.length > 0) {
+        process.stderr.write(
+          `[secret-manifest-coverage] WARNING: ${entry.name}/handler has ${dynamicMatches.length} ` +
+          `dynamic ctx.secret() call(s) that cannot be statically verified — manual review required:\n` +
+          dynamicMatches.map(m => `  ${m[0].trim()}`).join('\n') + '\n',
+        );
       }
     }
 

@@ -15,9 +15,14 @@ export function createLogger(level: string = 'info'): pino.Logger {
   // Last-resort redaction for common secret field names. The primary defense is the
   // ctx.secret() interface — secret values should never reach the logger in the first
   // place. This catches accidental leakage (e.g. logging an object that happens to
-  // contain a 'token' field). Wildcard prefix covers one level of nesting.
+  // contain a 'token' field). The ** paths cover deep nesting (pino v8+ feature).
   const redact = {
-    paths: ['password', '*.password', 'token', '*.token', 'secret', '*.secret', 'api_key', '*.api_key'],
+    paths: [
+      'password', '*.password', '**.password',
+      'token', '*.token', '**.token',
+      'secret', '*.secret', '**.secret',
+      'api_key', '*.api_key', '**.api_key',
+    ],
     censor: '[REDACTED]',
   };
 

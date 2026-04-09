@@ -233,9 +233,13 @@ export class ExecutionLayer {
             agentId: options?.agentId,
             taskEventId: options?.taskEventId,
           })).catch((err) => {
-            // Warn but don't fail — a dropped audit event is bad, but it must not
-            // break the skill invocation. The pino debug log below is the fallback record.
-            skillLogger.warn({ err, secretName: name }, 'Failed to publish secret.accessed audit event');
+            // Error (not warn) — a dropped audit event on a security-critical path must
+            // surface at error level so it reaches SIEM/alerting dashboards. The debug
+            // log below still fires, but it is not a durable audit record.
+            skillLogger.error(
+              { err, secretName: name, skillName, agentId: options?.agentId, taskEventId: options?.taskEventId },
+              'AUDIT FAILURE: secret.accessed event could not be published — secret was returned but access may not be recorded',
+            );
           });
         }
         skillLogger.debug({ secretName: name }, 'Secret accessed');
