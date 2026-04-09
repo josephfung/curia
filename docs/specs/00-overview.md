@@ -18,7 +18,7 @@
 | 08 | [Operations](08-operations.md) | Config, deployment, health checks, logging, project structure | Planned |
 | 09 | [Contacts & Identity](09-contacts-and-identity.md) | Contact resolution, identity verification, unknown sender policy, authorization, channel identity linking | ✅ Implemented |
 | 10 | [Audit Log Hardening](10-audit-log-hardening.md) | Structured audit fields, LLM provenance, tamper evidence, source attribution, HITL records | Planned |
-| 11 | [Entity Context Enrichment](11-entity-context-enrichment.md) | Entity model, KG-backed sender/entity profiles, context assembly, agent self-identity, skill convention for entity-scoped operations | Planned — spec drafted |
+| 11 | [Entity Context Enrichment](11-entity-context-enrichment.md) | Entity model, KG-backed sender/entity profiles, context assembly, agent self-identity, skill convention for entity-scoped operations | Partial - Phase 1 done, Phase 2 and 3 pending  |
 | 12 | [Knowledge Graph Web Explorer](12-knowledge-graph-web-explorer.md) | Knowledge graph browser, relationship visualization, entity memory viewer | ✅ Implemented |
 | 13 | [Office Identity](13-office-identity.md) | Persona config, voice settings, runtime identity injection | ✅ Implemented |
 | 14 | [Autonomy Engine](14-autonomy-engine.md) | Global score, autonomy bands, skill action_risk, per-task prompt injection, CEO controls | Partial — core implemented; self-monitoring & tuning planned |
