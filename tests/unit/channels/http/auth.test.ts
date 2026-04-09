@@ -29,4 +29,8 @@ describe('validateBearerToken', () => {
   it('returns true for any header when no API token is configured', () => {
     expect(validateBearerToken('Bearer anything', undefined)).toBe(true);
   });
+
+  it('returns false for "Bearer " with no token value', () => {
+    expect(validateBearerToken('Bearer ', 'my-secret-token')).toBe(false);
+  });
 });
