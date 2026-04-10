@@ -215,6 +215,23 @@ describe('SchedulerService', () => {
     });
   });
 
+  // -- pauseJobForDrift --
+
+  describe('pauseJobForDrift', () => {
+    it('sets scheduled_jobs.status to paused and agent_tasks.status to paused', async () => {
+      pool.query.mockResolvedValue({ rows: [] });
+
+      await svc.pauseJobForDrift('job-drift-1');
+
+      expect(pool.query).toHaveBeenCalledTimes(1);
+      const [sql, params] = pool.query.mock.calls[0] as [string, unknown[]];
+      expect(sql).toContain("status = 'paused'");
+      expect(sql).toContain('scheduled_jobs');
+      expect(sql).toContain('agent_tasks');
+      expect(params).toContain('job-drift-1');
+    });
+  });
+
   // -- unsuspendJob --
 
   describe('unsuspendJob', () => {
