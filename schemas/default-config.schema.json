@@ -15,7 +15,7 @@
             "enabled": { "type": "boolean" }
           }
         },
-        "maxMessageBytes": { "type": "integer", "minimum": 1 }
+        "max_message_bytes": { "type": "integer", "minimum": 1 }
       }
     },
     "browser": {

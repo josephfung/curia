@@ -94,6 +94,9 @@ export async function runStartupValidation(opts: {
     for (const file of agentFiles) {
       const filePath = path.join(agentsDir, file);
       const raw = yaml.load(fs.readFileSync(filePath, 'utf-8'));
+      if (raw == null) {
+        throw new Error(`Startup validation failed: agent config file is empty: ${filePath}`);
+      }
       if (!validateAgent(raw)) {
         throw new Error(
           `Startup validation failed for ${filePath}:\n  - ${formatErrors(validateAgent.errors ?? [])}`,
