@@ -148,7 +148,7 @@ export class ExecutionLayer {
     skillName: string,
     input: Record<string, unknown>,
     caller?: CallerContext,
-    options?: { taskEventId?: string; agentId?: string; triggerSource?: 'routine' | 'user-initiated' },
+    options?: { taskEventId?: string; agentId?: string },
   ): Promise<SkillResult> {
     const skill = this.registry.get(skillName);
 
@@ -256,11 +256,6 @@ export class ExecutionLayer {
       // skills (bullpen) need these for event publishing; harmless for others.
       agentId: options?.agentId,
       taskEventId: options?.taskEventId,
-      // triggerSource is required by outbound skills to populate OutboundSendRequest.triggerSource.
-      // Default to 'routine' (fail-closed) if not provided — any unrecognised call path is
-      // treated conservatively so the contact-data-leak rule blocks rather than allows.
-      // Callers that know they are responding to a user request must set this explicitly.
-      triggerSource: options?.triggerSource ?? 'routine',
     };
 
     // Infrastructure skills get bus and agent registry access.

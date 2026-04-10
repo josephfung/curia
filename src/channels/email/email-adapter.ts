@@ -245,10 +245,6 @@ export class EmailAdapter {
         subject: `Re: ${baseSubject}`,
         body: outbound.payload.content,
         replyToMessageId: threadMessage.id,
-        // The outbound.message bus event is only emitted by the dispatcher for
-        // inbound-email-triggered responses (the scheduler path never registers
-        // in taskRouting, so its responses never reach this adapter).
-        triggerSource: 'user-initiated',
       });
 
       if (result.success) {

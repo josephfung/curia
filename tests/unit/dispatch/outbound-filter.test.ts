@@ -16,10 +16,6 @@ const BASE_INPUT = {
   recipientEmail: 'recipient@external.com',
   conversationId: 'conv-123',
   channelId: 'email',
-  // Default to user-initiated so existing tests that don't exercise trigger-source
-  // behaviour continue to work unchanged. Tests that specifically exercise the
-  // contact-data-leak policy construct their own input.
-  triggerSource: 'user-initiated' as const,
   recipientTrustLevel: null,
 };
 
@@ -220,7 +216,6 @@ describe('OutboundContentFilter', () => {
         recipientEmail: 'alice@example.com',
         conversationId: 'email:thread-1',
         channelId: 'email',
-        triggerSource: 'user-initiated',
         recipientTrustLevel: null,
       });
       expect(result.passed).toBe(false);
@@ -263,7 +258,6 @@ describe('OutboundContentFilter', () => {
         recipientEmail: 'alice@example.com',
         conversationId: 'email:thread-1',
         channelId: 'email',
-        triggerSource: 'user-initiated',
         recipientTrustLevel: null,
       });
       // "Nathan Curia" alone is fine — only "You are Nathan Curia" triggers
@@ -277,7 +271,6 @@ describe('OutboundContentFilter', () => {
         recipientEmail: 'alice@example.com',
         conversationId: 'email:thread-1',
         channelId: 'email',
-        triggerSource: 'user-initiated',
         recipientTrustLevel: null,
       });
       expect(result.passed).toBe(true);
@@ -290,7 +283,6 @@ describe('OutboundContentFilter', () => {
         recipientEmail: 'alice@example.com',
         conversationId: 'email:thread-1',
         channelId: 'email',
-        triggerSource: 'user-initiated',
         recipientTrustLevel: null,
       });
       expect(result.passed).toBe(true);
@@ -303,7 +295,6 @@ describe('OutboundContentFilter', () => {
         recipientEmail: 'alice@example.com',
         conversationId: 'email:thread-1',
         channelId: 'email',
-        triggerSource: 'user-initiated',
         recipientTrustLevel: null,
       });
       expect(result.passed).toBe(true);
@@ -316,7 +307,6 @@ describe('OutboundContentFilter', () => {
         recipientEmail: 'alice@example.com',
         conversationId: 'email:thread-1',
         channelId: 'email',
-        triggerSource: 'user-initiated',
         recipientTrustLevel: null,
       });
       expect(result.passed).toBe(true);
@@ -329,7 +319,6 @@ describe('OutboundContentFilter', () => {
         recipientEmail: 'alice@example.com',
         conversationId: 'email:thread-1',
         channelId: 'email',
-        triggerSource: 'user-initiated',
         recipientTrustLevel: null,
       });
       expect(result.passed).toBe(true);
@@ -374,33 +363,34 @@ describe('OutboundContentFilter', () => {
     });
   });
 
-  describe('contact-data-leak trigger source and trust level policy', () => {
-    // These tests exercise the refined contact-data-leak rule introduced in issue #210.
-    // The rule uses two axes:
-    //   1. trigger source: 'routine' (scheduler) vs 'user-initiated'
-    //   2. recipient trust: ceoEmail match OR trustLevel === 'high'
+  describe('contact-data-leak recipient trust level policy', () => {
+    // These tests exercise the contact-data-leak rule introduced in issue #210.
+    // The rule uses a single axis: recipient trust level.
     //
-    // Block condition: third-party email AND (!recipientIsTrusted OR triggerSource === 'routine')
-    // Allow condition: no third-party email OR (recipientIsTrusted AND triggerSource === 'user-initiated')
+    // Block condition: third-party email AND !recipientIsTrusted
+    // Allow condition: no third-party email OR recipientIsTrusted (ceoEmail match OR trustLevel='high')
+    //
+    // The trigger source (routine vs user-initiated) is irrelevant — trusted recipients
+    // may receive third-party contact data in both scheduled routines (daily briefing with
+    // attendees) and user-initiated requests ("what is Hamilton's email?").
 
     const THIRD_PARTY_EMAIL = 'hamilton.petropoulos@generationcapital.com';
 
-    it('blocks a routine message to the CEO that contains a third-party email (original incident)', async () => {
+    it('allows a routine message to the CEO containing a third-party email (daily briefing)', async () => {
       const filter = createTestFilter();
-      // Mirrors block_283f554d: daily briefing to CEO included a calendar attendee's email.
+      // Daily briefing to CEO lists a calendar attendee's email — allowed (CEO is trusted).
       const result = await filter.check({
         content: `Here is your daily briefing. Your 2pm meeting includes ${THIRD_PARTY_EMAIL}.`,
         recipientEmail: 'ceo@example.com',
         conversationId: 'scheduler:job-1:run-1',
         channelId: 'email',
-        triggerSource: 'routine',
         recipientTrustLevel: null,
       });
-      expect(result.passed).toBe(false);
-      expect(result.findings.some((f) => f.rule === 'contact-data-leak')).toBe(true);
+      expect(result.passed).toBe(true);
+      expect(result.findings.some((f) => f.rule === 'contact-data-leak')).toBe(false);
     });
 
-    it('allows a user-initiated response to the CEO containing a third-party email when explicitly requested', async () => {
+    it('allows a user-initiated response to the CEO containing a third-party email', async () => {
       const filter = createTestFilter();
       // CEO asked "what is Hamilton's email?" — should be allowed.
       const result = await filter.check({
@@ -408,26 +398,24 @@ describe('OutboundContentFilter', () => {
         recipientEmail: 'ceo@example.com',
         conversationId: 'conv-123',
         channelId: 'email',
-        triggerSource: 'user-initiated',
         recipientTrustLevel: null,
       });
       expect(result.passed).toBe(true);
       expect(result.findings.some((f) => f.rule === 'contact-data-leak')).toBe(false);
     });
 
-    it('blocks a routine message to a high-trust contact that contains a third-party email', async () => {
+    it('allows a routine message to a high-trust contact containing a third-party email', async () => {
       const filter = createTestFilter();
-      // Even a trusted recipient should not receive contact data via an automated routine.
+      // Trusted EA receives a scheduled report with attendee emails — allowed.
       const result = await filter.check({
         content: `Scheduled report: attendees include ${THIRD_PARTY_EMAIL}.`,
         recipientEmail: 'ea@example.com',
         conversationId: 'scheduler:job-2:run-1',
         channelId: 'email',
-        triggerSource: 'routine',
         recipientTrustLevel: 'high',
       });
-      expect(result.passed).toBe(false);
-      expect(result.findings.some((f) => f.rule === 'contact-data-leak')).toBe(true);
+      expect(result.passed).toBe(true);
+      expect(result.findings.some((f) => f.rule === 'contact-data-leak')).toBe(false);
     });
 
     it('allows a user-initiated response to a high-trust contact containing a third-party email', async () => {
@@ -438,29 +426,27 @@ describe('OutboundContentFilter', () => {
         recipientEmail: 'ea@example.com',
         conversationId: 'conv-456',
         channelId: 'email',
-        triggerSource: 'user-initiated',
         recipientTrustLevel: 'high',
       });
       expect(result.passed).toBe(true);
       expect(result.findings.some((f) => f.rule === 'contact-data-leak')).toBe(false);
     });
 
-    it('blocks a user-initiated response to an untrusted external recipient containing a third-party email', async () => {
+    it('blocks a response to an untrusted external recipient containing a third-party email', async () => {
       const filter = createTestFilter();
-      // Even if the user asked, we never send third-party contact data to an untrusted external party.
+      // We never send third-party contact data to an untrusted external party.
       const result = await filter.check({
         content: `You can also reach ${THIRD_PARTY_EMAIL} for follow-ups.`,
         recipientEmail: 'untrusted@external.com',
         conversationId: 'conv-789',
         channelId: 'email',
-        triggerSource: 'user-initiated',
         recipientTrustLevel: null,
       });
       expect(result.passed).toBe(false);
       expect(result.findings.some((f) => f.rule === 'contact-data-leak')).toBe(true);
     });
 
-    it('blocks a user-initiated response to a medium-trust contact containing a third-party email', async () => {
+    it('blocks a response to a medium-trust contact containing a third-party email', async () => {
       const filter = createTestFilter();
       // trustLevel='medium' does not qualify — only 'high' is trusted for this purpose.
       const result = await filter.check({
@@ -468,7 +454,6 @@ describe('OutboundContentFilter', () => {
         recipientEmail: 'medium@example.com',
         conversationId: 'conv-999',
         channelId: 'email',
-        triggerSource: 'user-initiated',
         recipientTrustLevel: 'medium',
       });
       expect(result.passed).toBe(false);

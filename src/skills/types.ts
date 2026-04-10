@@ -143,13 +143,6 @@ export interface SkillContext {
   agentId?: string;
   /** ID of the originating agent.task event — for causal chain tracing in event payloads */
   taskEventId?: string;
-  /** Whether this invocation was triggered by a user-initiated request or a scheduled routine.
-   *  Derived by the runtime from the originating agent.task's channelId:
-   *    channelId === 'scheduler'  → 'routine'
-   *    anything else              → 'user-initiated'
-   *  Required by outbound skills: must be forwarded to OutboundSendRequest.triggerSource
-   *  so the content filter can apply the correct contact-data-leak policy. */
-  triggerSource: 'routine' | 'user-initiated';
   /** Caller identity — populated from the task event's sender context.
    *  Guaranteed to be defined for elevated skills (execution layer rejects without it).
    *  Available but optional for normal skills. */

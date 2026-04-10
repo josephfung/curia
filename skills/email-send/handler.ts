@@ -101,7 +101,6 @@ export class EmailSendHandler implements SkillHandler {
         subject,
         body,
         cc: ccAddresses,
-        triggerSource: ctx.triggerSource,
       });
 
       if (!result.success) {

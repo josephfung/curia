@@ -58,7 +58,6 @@ export class EmailReplyHandler implements SkillHandler {
         subject: replySubject,
         body,
         replyToMessageId,
-        triggerSource: ctx.triggerSource,
       });
 
       if (!result.success) {

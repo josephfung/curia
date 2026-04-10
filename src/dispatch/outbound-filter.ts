@@ -19,14 +19,10 @@ export interface FilterCheckInput {
   recipientEmail: string;
   conversationId: string;
   channelId: string;
-  // Whether this message was triggered by a user-initiated request or a scheduled routine.
-  // Required: callers must explicitly classify the trigger source so the contact-data-leak
-  // rule can apply the correct policy. No silent default — omitting this field is a type error.
-  triggerSource: 'routine' | 'user-initiated';
   // Trust level of the recipient contact as resolved from the contact DB.
   // null means the recipient was not found in the DB or has no per-contact override.
-  // Used by the contact-data-leak rule to allow trusted contacts to receive contact
-  // data when the request was user-initiated (e.g. CEO's EA asking for a phone number).
+  // Used by the contact-data-leak rule to allow trusted contacts to receive third-party
+  // contact data (e.g. CEO asking "what is Hamilton's email?", daily briefing with attendees).
   recipientTrustLevel: TrustLevel | null;
 }
 
@@ -158,7 +154,7 @@ export class OutboundContentFilter {
       ...this.checkSystemPromptFragments(normalizedContent),
       ...this.checkInternalStructure(normalizedContent),
       ...this.checkSecretPatterns(normalizedContent),
-      ...this.checkContactDataLeak(normalizedContent, input.recipientEmail, input.triggerSource, input.recipientTrustLevel),
+      ...this.checkContactDataLeak(normalizedContent, input.recipientEmail, input.recipientTrustLevel),
     ];
 
     if (findings.length > 0) {
@@ -287,30 +283,27 @@ export class OutboundContentFilter {
    * Rule: contact-data-leak
    *
    * Finds any email address in the content that is not the recipient or CEO,
-   * then decides whether to block based on trigger source and recipient trust level.
+   * then decides whether to block based solely on recipient trust level.
    *
    * Block condition:
-   *   third-party email present AND (!recipientIsTrusted OR triggerSource === 'routine')
+   *   third-party email present AND !recipientIsTrusted
    *
-   * This means:
-   *   - Automated routines (daily briefings, scheduled reports): always block third-party
-   *     emails regardless of recipient — the agent should never incidentally include
-   *     contact data in an automated message.
-   *   - User-initiated requests to a trusted recipient (CEO or high-trust contact):
-   *     allow — e.g. the CEO asking "what is Hamilton's email?" or the CFO asking for
-   *     a board member's contact. The CEO has explicitly requested the information.
-   *   - User-initiated requests to an untrusted recipient: still block — we never send
-   *     third-party contact data to an external party who has not been explicitly trusted.
+   * Allow condition:
+   *   no third-party email OR recipientIsTrusted
    *
    * recipientIsTrusted is true when:
    *   - recipientEmail matches ceoEmail (the principal always qualifies), OR
    *   - the recipient contact has trustLevel === 'high' in the contact DB
    *     (e.g. the CEO's EA or CFO, explicitly elevated by the CEO)
+   *
+   * Trusted recipients can receive third-party contact data regardless of whether
+   * the message was triggered by a user request or a scheduled routine — this
+   * covers both "CEO asked for Hamilton's email" and "daily briefing lists meeting
+   * attendees". Untrusted recipients never receive third-party contact data.
    */
   private checkContactDataLeak(
     content: string,
     recipientEmail: string,
-    triggerSource: 'routine' | 'user-initiated',
     recipientTrustLevel: TrustLevel | null,
   ): FilterFinding[] {
     // Only add ceoEmail if it is actually configured — an empty string (missing
@@ -328,16 +321,16 @@ export class OutboundContentFilter {
       (this.config.ceoEmail !== '' && recipientEmail.toLowerCase() === this.config.ceoEmail.toLowerCase()) ||
       recipientTrustLevel === 'high';
 
-    // If the recipient is trusted and this is a user-initiated request, the CEO has
-    // explicitly requested contact data — allow the message through without scanning.
-    // This short-circuit avoids false positives (e.g. "what is Hamilton's email?").
-    if (recipientIsTrusted && triggerSource === 'user-initiated') {
+    // Trusted recipient: allow third-party emails in content without scanning.
+    // This handles both user-initiated requests ("what is Hamilton's email?") and
+    // automated routines (daily briefing listing calendar attendees) to trusted recipients.
+    if (recipientIsTrusted) {
       return [];
     }
 
-    // For all other cases (routine trigger, or untrusted recipient): scan for third-party
-    // emails and block any that appear. The allowedEmails set still permits the recipient
-    // and CEO email addresses to appear in content without triggering a finding.
+    // Untrusted recipient: scan for third-party emails and block any that appear.
+    // The allowedEmails set still permits the recipient and CEO email addresses to
+    // appear in content without triggering a finding.
     const findings: FilterFinding[] = [];
     const seen = new Set<string>();
 

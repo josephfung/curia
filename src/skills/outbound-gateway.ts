@@ -43,10 +43,6 @@ export interface EmailSendRequest {
   cc?: string[];
   /** When set, Nylas threads the outbound message as a reply */
   replyToMessageId?: string;
-  /** Whether this send was triggered by a user-initiated request or a scheduled routine.
-   *  Required — the content filter's contact-data-leak rule uses this to apply the
-   *  correct policy. Derive from ctx.triggerSource in skill handlers. */
-  triggerSource: 'routine' | 'user-initiated';
 }
 
 export interface SignalOutboundRequest {
@@ -62,10 +58,6 @@ export interface SignalOutboundRequest {
    */
   groupId?: string;
   message: string;
-  /** Whether this send was triggered by a user-initiated request or a scheduled routine.
-   *  Required — the content filter's contact-data-leak rule uses this to apply the
-   *  correct policy. Derive from ctx.triggerSource in skill handlers. */
-  triggerSource: 'routine' | 'user-initiated';
 }
 
 /**
@@ -253,7 +245,6 @@ export class OutboundGateway {
         recipientEmail: recipientId,
         conversationId: '',
         channelId: request.channel,
-        triggerSource: request.triggerSource,
         recipientTrustLevel,
       });
       filterPassed = filterResult.passed;
@@ -314,14 +305,11 @@ export class OutboundGateway {
       if (this.ceoEmail && this.nylasClient) {
         // dispatchEmail bypasses this.send() to avoid infinite recursion.
         // The notification body is a hardcoded template — no user-supplied content.
-        // triggerSource is required on EmailSendRequest but dispatchEmail skips the
-        // content filter entirely, so the value is irrelevant here; 'routine' is
-        // used as the semantically correct classification for a system alert.
+        // dispatchEmail skips the content filter entirely, so triggerSource is irrelevant.
         const notifyResult = await this.dispatchEmail({
           channel: 'email',
           to: this.ceoEmail,
           subject: 'Action needed — blocked outbound reply',
-          triggerSource: 'routine',
           body: [
             'An outbound message was blocked by the content filter.',
             '',

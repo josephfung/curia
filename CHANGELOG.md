@@ -17,21 +17,17 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **ADR-014: Capability-tier model routing** — Documents the decision to replace per-agent model declarations with a capability-tier system (`fast | standard | powerful`) mapped by the operator, with optional modality/capability needs flags (`vision`, `large_context`, `reasoning`, `coding`, `audio`, `image_generation`). Implementation tracked in the linked issue.
 
 ### Fixed
-- **contact-data-leak false positives on routine outbound messages** — The `contact-data-leak`
-  deterministic filter rule now applies a two-axis policy instead of blocking all third-party
-  email addresses unconditionally. A third-party email is now blocked only when the recipient
-  is not trusted **or** the message was triggered by a scheduled routine. Trusted recipients
-  are the CEO (matched by `CEO_PRIMARY_EMAIL`) and any contact with `trustLevel = 'high'`
-  in the contact DB. Routine messages (originating from `channelId: 'scheduler'`) are always
-  blocked regardless of recipient. User-initiated requests to a trusted recipient are now
-  allowed, fixing the false positive on "what is Hamilton's email?" responses to the CEO. The
-  trigger source is derived in `AgentRuntime` from `channelId` and threaded through
-  `ExecutionLayer` → `SkillContext` → `OutboundSendRequest` → `FilterCheckInput`. Closes #210.
-  **Breaking changes**: `FilterCheckInput`, `EmailSendRequest`, and `SignalOutboundRequest`
-  each gained a required `triggerSource` field; `FilterCheckInput` also gained a required
-  `recipientTrustLevel` field. The `SkillContext` interface gained a required `triggerSource`
-  field. Callers of `OutboundGateway.send()` and `OutboundContentFilter.check()` must supply
-  these values.
+- **contact-data-leak false positives** — The `contact-data-leak` deterministic filter rule
+  now uses a single-axis policy based solely on recipient trust level, instead of blocking all
+  third-party email addresses unconditionally. A third-party email is blocked only when the
+  recipient is not trusted. Trusted recipients are the CEO (matched by `CEO_PRIMARY_EMAIL`) and
+  any contact with `trustLevel = 'high'` in the contact DB. Trusted recipients may receive
+  third-party contact data regardless of how the message was triggered — this correctly handles
+  both "CEO asked for Hamilton's email" (user-initiated) and "daily briefing lists meeting
+  attendees" (scheduled routine). Closes #210.
+  **Breaking changes**: `FilterCheckInput` gained a required `recipientTrustLevel` field.
+  `FilterCheckInput`, `EmailSendRequest`, `SignalOutboundRequest`, and `SkillContext` no longer
+  have a `triggerSource` field — callers must remove it.
 
 ### Security
 - **SPF/DKIM/DMARC sender verification via Nylas headers** — Email channel adapter now
