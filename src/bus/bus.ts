@@ -9,15 +9,22 @@ type EventHandler = (event: BusEvent) => void | Promise<void>;
 // throws or the process crashes mid-delivery, the event is already persisted.
 type OnEventHook = (event: BusEvent) => void | Promise<void>;
 
+// The onDelivered hook runs after all subscribers have been attempted (regardless
+// of per-subscriber errors). The audit logger uses it to flip acknowledged = true,
+// signalling that delivery was attempted for all registered handlers.
+type OnDeliveredHook = (eventId: string) => void | Promise<void>;
+
 export class EventBus {
   // Keyed by EventType so dispatch is O(1) lookup rather than scanning all subscribers.
   private subscribers = new Map<EventType, EventHandler[]>();
   private logger: Logger;
   private onEvent?: OnEventHook;
+  private onDelivered?: OnDeliveredHook;
 
-  constructor(logger: Logger, onEvent?: OnEventHook) {
+  constructor(logger: Logger, onEvent?: OnEventHook, onDelivered?: OnDeliveredHook) {
     this.logger = logger;
     this.onEvent = onEvent;
+    this.onDelivered = onDelivered;
   }
 
   subscribe(eventType: EventType, layer: Layer, handler: EventHandler): void {
@@ -72,6 +79,23 @@ export class EventBus {
         this.logger.error(
           { err, eventType: event.type, eventId: event.id },
           'Subscriber error',
+        );
+      }
+    }
+
+    // Delivery confirmation hook — runs after all handlers have been attempted.
+    // "Delivery attempted" (not "all succeeded") is the guarantee: per-subscriber
+    // errors are swallowed above, but the event was dispatched to every registered
+    // handler. The audit logger uses this to flip acknowledged = true.
+    // Errors here are logged but not re-thrown — a failed acknowledgement write
+    // should not roll back a completed delivery.
+    if (this.onDelivered) {
+      try {
+        await this.onDelivered(event.id);
+      } catch (err) {
+        this.logger.error(
+          { err, eventType: event.type, eventId: event.id },
+          'Delivery acknowledgement failed',
         );
       }
     }

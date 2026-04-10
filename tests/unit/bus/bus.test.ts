@@ -80,4 +80,80 @@ describe('EventBus', () => {
 
     expect(onEvent).toHaveBeenCalledWith(event);
   });
+
+  it('calls onDelivered hook strictly after all subscribers have been attempted', async () => {
+    // The onDelivered hook is used by the audit logger to flip acknowledged = true
+    // after all handlers have been dispatched (regardless of per-subscriber errors).
+    // Verify ordering by tracking invocation sequence across two subscribers.
+    const callOrder: string[] = [];
+    const subscriber1 = vi.fn(() => { callOrder.push('subscriber1'); });
+    const subscriber2 = vi.fn(() => { callOrder.push('subscriber2'); });
+    const onDelivered = vi.fn(() => { callOrder.push('onDelivered'); });
+
+    bus = new EventBus(createLogger('error'), undefined, onDelivered);
+    bus.subscribe('inbound.message', 'dispatch', subscriber1);
+    bus.subscribe('inbound.message', 'dispatch', subscriber2);
+
+    const event = createInboundMessage({
+      conversationId: 'conv-1',
+      channelId: 'cli',
+      senderId: 'user',
+      content: 'Hello',
+    });
+    await bus.publish('channel', event);
+
+    expect(subscriber1).toHaveBeenCalledWith(event);
+    expect(subscriber2).toHaveBeenCalledWith(event);
+    expect(onDelivered).toHaveBeenCalledWith(event.id);
+    // onDelivered must come last — both subscribers were attempted first.
+    expect(callOrder).toEqual(['subscriber1', 'subscriber2', 'onDelivered']);
+  });
+
+  it('calls onDelivered even when a subscriber throws', async () => {
+    // A failing subscriber must not prevent acknowledgement — the event was
+    // dispatched and the audit record should reflect that. Verify ordering:
+    // both subscribers are attempted before onDelivered fires.
+    const callOrder: string[] = [];
+    const failingSubscriber = vi.fn(() => {
+      callOrder.push('failingSubscriber');
+      throw new Error('subscriber failure');
+    });
+    const successSubscriber = vi.fn(() => { callOrder.push('successSubscriber'); });
+    const onDelivered = vi.fn(() => { callOrder.push('onDelivered'); });
+
+    bus = new EventBus(createLogger('error'), undefined, onDelivered);
+    bus.subscribe('inbound.message', 'dispatch', failingSubscriber);
+    bus.subscribe('inbound.message', 'dispatch', successSubscriber);
+
+    const event = createInboundMessage({
+      conversationId: 'conv-1',
+      channelId: 'cli',
+      senderId: 'user',
+      content: 'Hello',
+    });
+    await bus.publish('channel', event);
+
+    expect(onDelivered).toHaveBeenCalledWith(event.id);
+    // onDelivered must fire after both subscribers — even the failing one.
+    expect(callOrder).toEqual(['failingSubscriber', 'successSubscriber', 'onDelivered']);
+  });
+
+  it('resolves publish() even when onDelivered throws', async () => {
+    // A failed acknowledgement write must not roll back a completed delivery.
+    // The publisher's view of the event (published successfully) must remain
+    // stable regardless of whether the post-delivery audit flip succeeded.
+    const failingOnDelivered = vi.fn().mockRejectedValue(new Error('ack write failed'));
+    bus = new EventBus(createLogger('error'), undefined, failingOnDelivered);
+    bus.subscribe('inbound.message', 'dispatch', vi.fn());
+
+    const event = createInboundMessage({
+      conversationId: 'conv-1',
+      channelId: 'cli',
+      senderId: 'user',
+      content: 'Hello',
+    });
+
+    // Must resolve — not reject — even though onDelivered threw.
+    await expect(bus.publish('channel', event)).resolves.toBeUndefined();
+  });
 });
