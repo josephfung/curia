@@ -780,6 +780,7 @@ async function main(): Promise<void> {
     conversationCheckpointDebounceMs: yamlConfig.dispatch?.conversationCheckpointDebounceMs,
     trustScorerWeights,
     trustScoreFloor,
+    maxMessageBytes: yamlConfig.channels?.maxMessageBytes ?? 102_400,
   });
   dispatcher.register();
 
