@@ -374,6 +374,30 @@ export class ContactService {
   }
 
   /**
+   * Set or clear a contact's per-contact trust level override.
+   *
+   * trust_level = 'high' grants the contact access to third-party contact data
+   * in outbound responses (same as the CEO). Use for the CEO's EA, CFO, or any
+   * other party the CEO explicitly trusts with contact information.
+   *
+   * Pass null to remove the override and revert to the channel default.
+   */
+  async setTrustLevel(contactId: string, trustLevel: TrustLevel | null): Promise<Contact> {
+    const contact = await this.backend.getContact(contactId);
+    if (!contact) {
+      throw new Error(`Contact not found: ${contactId}`);
+    }
+
+    const updated: Contact = {
+      ...contact,
+      trustLevel,
+      updatedAt: new Date(),
+    };
+
+    return this.updateStoredContact(updated);
+  }
+
+  /**
    * Link a channel identity to a contact.
    *
    * Auto-verification logic: sources ceo_stated, email_participant, crm_import,
