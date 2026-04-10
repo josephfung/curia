@@ -13,6 +13,18 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Security
+- **Input validation** — startup validator (`src/startup/validator.ts`) validates `config/default.yaml`, all `agents/*.yaml`, and all `skills/*/skill.json` against JSON Schema (Ajv) at boot time. Invalid configs cause a descriptive `process.exit(1)` before any service initializes (spec §06).
+- **Message size limiting** — dispatcher rejects inbound messages exceeding `channels.max_message_bytes` (default 100KB) before routing; rejection is audit-logged as `message.rejected` with causal `parentEventId` (spec §06).
+
+### Added
+- **`schemas/` directory** — JSON Schema files for agent configs, skill manifests, and `config/default.yaml`. Schemas are legible without TypeScript and can be validated with third-party tools.
+- **`channels.max_message_bytes`** in `config/default.yaml` — configures the inbound message size limit (default `102400`).
+
+### Changed
+- **`MessageRejectedPayload.reason`** extended with `'message_too_large'` — bus event API surface change.
+- **Agent and skill loaders** — manual field checks removed; validation is now handled by the startup validator schema.
+
 ### Fixed
 - **Null byte crash in audit logger** — `AuditLogger.log()` now strips U+0000 from all
   string values in event payloads before writing to `audit_log.payload`. Previously, binary
