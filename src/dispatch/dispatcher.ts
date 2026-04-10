@@ -33,6 +33,9 @@ export interface DispatcherConfig {
   /** In-memory rate limiter. When provided, enforces global and per-sender message rate limits.
    *  When omitted, rate limiting is disabled (e.g. in unit tests that don't exercise it). */
   rateLimiter?: RateLimiter;
+  /** Maximum inbound message content size in bytes. Messages exceeding this are
+   *  rejected before routing. Default: 102400 (100KB). */
+  maxMessageBytes?: number;
 }
 
 /**
@@ -68,6 +71,7 @@ export class Dispatcher {
   private checkpointTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private pool: DbPool | undefined;
   private conversationCheckpointDebounceMs: number;
+  private maxMessageBytes: number;
 
   constructor(config: DispatcherConfig) {
     this.bus = config.bus;
@@ -81,6 +85,7 @@ export class Dispatcher {
     this.conversationCheckpointDebounceMs = config.conversationCheckpointDebounceMs ?? 600_000;
     this.trustScorerWeights = config.trustScorerWeights ?? DEFAULT_TRUST_WEIGHTS;
     this.trustScoreFloor = config.trustScoreFloor ?? 0.2;
+    this.maxMessageBytes = config.maxMessageBytes ?? 102_400;
 
     // Warn if the trust floor is active but no held-message service was provided — the floor
     // silently becomes a no-op in that case, which is a security-relevant degradation.
@@ -121,6 +126,28 @@ export class Dispatcher {
 
   private async handleInbound(event: InboundMessageEvent): Promise<void> {
     const { payload } = event;
+
+    // Reject oversized messages before any processing — no routing, no contact
+    // lookup, no LLM cost. The inbound.message event is already in the audit log
+    // (write-ahead); this rejection creates a causal chain via parentEventId.
+    const contentByteSize = Buffer.byteLength(payload.content, 'utf-8');
+    if (contentByteSize > this.maxMessageBytes) {
+      this.logger.warn(
+        { channelId: payload.channelId, senderId: payload.senderId, contentByteSize, maxBytes: this.maxMessageBytes },
+        'Inbound message exceeded size limit — rejected',
+      );
+      await this.bus.publish('dispatch', createMessageRejected({
+        conversationId: payload.conversationId,
+        channelId: payload.channelId,
+        senderId: payload.senderId,
+        reason: 'message_too_large',
+        size: contentByteSize,
+        limit: this.maxMessageBytes,
+        parentEventId: event.id,
+      }));
+      return;
+    }
+
     this.logger.info(
       { channelId: payload.channelId, senderId: payload.senderId },
       'Dispatching to coordinator',

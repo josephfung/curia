@@ -47,6 +47,9 @@ export interface Config {
 export interface YamlConfig {
   channels?: {
     cli?: { enabled?: boolean };
+    /** Max inbound message content size in bytes. Default: 102400 (100KB).
+     *  Messages exceeding this are rejected by the dispatcher before routing. */
+    max_message_bytes?: number;
   };
   browser?: {
     sessionTtlMs?: number;

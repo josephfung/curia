@@ -1,0 +1,11 @@
+security:
+  trust_score_floor: 0.2
+  trust_score:
+    channel_weight: 0.4
+    contact_weight: 0.4
+    max_risk_penalty: 0.2
+trust_policy:
+  financial_actions: 0.8
+  data_export: 0.8
+  scheduling: 0.5
+  information_queries: 0.2

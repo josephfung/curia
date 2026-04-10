@@ -3570,12 +3570,13 @@ export async function knowledgeGraphRoutes(
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       logger.error({ err, conversationId }, 'KG chat message handling failed');
-      // instanceof check for rejection — string matching would silently break if the
+      // instanceof + reason check for rejection — string matching would silently break if the
       // error wording changes. Timeout still falls back to substring because the event
       // router doesn't expose a dedicated TimeoutError class.
       const isRejected = err instanceof MessageRejectedError;
+      const isTooLarge = isRejected && err.reason === 'message_too_large';
       const isTimeout = message.includes('timeout') || message.includes('Timeout');
-      const status = isRejected ? 403 : isTimeout ? 504 : 500;
+      const status = isTooLarge ? 413 : isRejected ? 403 : isTimeout ? 504 : 500;
       return reply.status(status).send({ error: message });
     }
   });

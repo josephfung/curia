@@ -743,3 +743,146 @@ describe('Dispatcher — rate limiting', () => {
     expect(rejected.every(r => r.payload.reason === 'blocked_sender')).toBe(true);
   });
 });
+
+describe('Dispatcher message size limit', () => {
+  /**
+   * Creates a Dispatcher with the given maxMessageBytes config and registers it.
+   * The coordinator agent must be set up separately by tests that need a full routing path.
+   */
+  function makeDispatcher(bus: EventBus, maxMessageBytes: number) {
+    const logger = createLogger('error');
+    const dispatcher = new Dispatcher({ bus, logger, maxMessageBytes });
+    dispatcher.register();
+    return dispatcher;
+  }
+
+  it('routes normally when content is at the size limit', async () => {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+
+    const mockProvider: LLMProvider = {
+      id: 'mock',
+      chat: vi.fn().mockResolvedValue({
+        type: 'text' as const,
+        content: 'ok',
+        usage: { inputTokens: 1, outputTokens: 1 },
+      }),
+    };
+    const coordinator = new AgentRuntime({
+      agentId: 'coordinator',
+      systemPrompt: 'You are a helpful assistant.',
+      provider: mockProvider,
+      bus,
+      logger,
+    });
+    coordinator.register();
+
+    const outbound: OutboundMessageEvent[] = [];
+    bus.subscribe('outbound.message', 'channel', (e) => outbound.push(e as OutboundMessageEvent));
+
+    // 10 bytes exactly — at limit
+    makeDispatcher(bus, 10);
+
+    const event = createInboundMessage({
+      conversationId: 'conv-size-ok',
+      channelId: 'cli',
+      senderId: 'user',
+      content: '1234567890', // exactly 10 bytes
+    });
+    await bus.publish('channel', event);
+
+    expect(outbound).toHaveLength(1);
+  });
+
+  it('publishes message.rejected when content exceeds the size limit', async () => {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+
+    const rejected: MessageRejectedEvent[] = [];
+    bus.subscribe('message.rejected', 'channel', (e) => rejected.push(e as MessageRejectedEvent));
+
+    makeDispatcher(bus, 5); // 5 byte limit
+
+    const event = createInboundMessage({
+      conversationId: 'conv-size-exceeded',
+      channelId: 'email',
+      senderId: 'spammer@example.com',
+      content: 'This message is definitely longer than 5 bytes',
+    });
+    await bus.publish('channel', event);
+
+    expect(rejected).toHaveLength(1);
+    expect(rejected[0]?.payload.reason).toBe('message_too_large');
+    expect(rejected[0]?.payload.conversationId).toBe('conv-size-exceeded');
+    expect(rejected[0]?.payload.channelId).toBe('email');
+    expect(rejected[0]?.payload.senderId).toBe('spammer@example.com');
+  });
+
+  it('does not publish agent.task when content exceeds the size limit', async () => {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+
+    const tasks: AgentTaskEvent[] = [];
+    bus.subscribe('agent.task', 'agent', (e) => tasks.push(e as AgentTaskEvent));
+
+    makeDispatcher(bus, 5);
+
+    const event = createInboundMessage({
+      conversationId: 'conv-no-task',
+      channelId: 'email',
+      senderId: 'spammer@example.com',
+      content: 'Way more than 5 bytes here',
+    });
+    await bus.publish('channel', event);
+
+    expect(tasks).toHaveLength(0);
+  });
+
+  it('sets parentEventId on the rejection event to the original inbound message id', async () => {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+
+    const rejected: MessageRejectedEvent[] = [];
+    bus.subscribe('message.rejected', 'channel', (e) => rejected.push(e as MessageRejectedEvent));
+
+    makeDispatcher(bus, 1); // absurdly low limit
+
+    const event = createInboundMessage({
+      conversationId: 'conv-causal-chain',
+      channelId: 'cli',
+      senderId: 'user',
+      content: 'ab', // 2 bytes > 1 byte limit
+    });
+    await bus.publish('channel', event);
+
+    expect(rejected[0]?.parentEventId).toBe(event.id);
+  });
+
+  it('enforces byte length not char length for multibyte UTF-8 content', async () => {
+    // The emoji '😀' is 1 character but 4 UTF-8 bytes.
+    // With a limit of 3, char-length check (content.length === 1) would pass,
+    // but byte-length check (Buffer.byteLength === 4) should reject it.
+    const emoji = '😀';
+    expect(emoji.length).toBe(2); // surrogate pair in JS: 2 code units, not 1
+    expect(Buffer.byteLength(emoji, 'utf-8')).toBe(4); // 4 bytes in UTF-8
+
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+
+    const rejected: MessageRejectedEvent[] = [];
+    bus.subscribe('message.rejected', 'channel', (e) => rejected.push(e as MessageRejectedEvent));
+
+    makeDispatcher(bus, 3); // 3-byte limit — passes char-length check but fails byte-length
+
+    const event = createInboundMessage({
+      conversationId: 'conv-multibyte',
+      channelId: 'cli',
+      senderId: 'user',
+      content: emoji,
+    });
+    await bus.publish('channel', event);
+
+    expect(rejected).toHaveLength(1);
+    expect(rejected[0]?.payload.reason).toBe('message_too_large');
+  });
+});

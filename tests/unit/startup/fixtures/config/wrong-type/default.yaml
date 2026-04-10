@@ -1,0 +1,2 @@
+channels:
+  max_message_bytes: "not-a-number"

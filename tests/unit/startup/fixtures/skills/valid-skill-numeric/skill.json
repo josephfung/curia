@@ -1,0 +1,6 @@
+{
+  "name": "valid-skill-numeric",
+  "description": "A test skill with a numeric action_risk value",
+  "version": "1.0.0",
+  "action_risk": 75
+}

@@ -1,0 +1,6 @@
+{
+  "name": "bad-action-risk-skill",
+  "description": "Has an invalid action_risk string",
+  "version": "1.0.0",
+  "action_risk": "super-dangerous"
+}

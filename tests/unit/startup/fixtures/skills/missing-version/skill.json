@@ -1,0 +1,5 @@
+{
+  "name": "missing-version-skill",
+  "description": "Missing the version field",
+  "action_risk": "none"
+}
