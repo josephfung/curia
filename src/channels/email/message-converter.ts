@@ -26,7 +26,49 @@ export interface ConvertedEmail {
     nylasThreadId: string;
     participants: EmailParticipant[];
     receivedAt: Date;
+    /**
+     * True if SPF, DKIM, and DMARC all passed in the provider's Authentication-Results
+     * header. False if any check failed or the headers were absent.
+     * Defense-in-depth: email From headers are trivially spoofable; this surfaces
+     * provider-level validation results so the Coordinator can apply extra skepticism
+     * to messages that failed sender verification.
+     */
+    senderVerified: boolean;
   };
+}
+
+/**
+ * Parse the Authentication-Results header (RFC 7601) and return true only if
+ * SPF, DKIM, and DMARC all carry a "pass" result.
+ *
+ * Returns false when:
+ * - headers are absent (listMessages was not called with fields: 'include_headers')
+ * - the Authentication-Results header is missing (provider didn't include it)
+ * - any of SPF, DKIM, or DMARC are absent from the header
+ * - any of SPF, DKIM, or DMARC report a non-pass result (fail, softfail, neutral, etc.)
+ *
+ * Fails closed: absent information is treated as unverified, not as verified.
+ */
+export function parseSenderVerified(headers?: Array<{ name: string; value: string }>): boolean {
+  if (!headers || headers.length === 0) return false;
+
+  // RFC 7601 allows multiple Authentication-Results headers — each MTA in the relay chain
+  // may add one. Collect ALL of them rather than stopping at the first (find()), since an
+  // attacker who controls an intermediate relay could prepend a forged header before the
+  // legitimate provider's header. Header names are case-insensitive (RFC 7601 §2.2).
+  const authHeaders = headers.filter((h) => h.name.toLowerCase() === 'authentication-results');
+  if (authHeaders.length === 0) return false;
+
+  // Return true if ANY Authentication-Results header shows all three mechanisms passing.
+  // The final receiving MTA (Gmail, Outlook) prepends its header, making it appear first
+  // in the list; checking all headers with some() ensures we find it regardless of ordering.
+  //
+  // Match each mechanism as `mechname=pass`. \b after "pass" guards against hypothetical
+  // future tokens like "spf=passthrough", though RFC 7601 result tokens don't include any.
+  return authHeaders.some((h) => {
+    const v = h.value;
+    return /\bspf=pass\b/i.test(v) && /\bdkim=pass\b/i.test(v) && /\bdmarc=pass\b/i.test(v);
+  });
 }
 
 /**
@@ -40,6 +82,7 @@ export interface ConvertedEmail {
  *   was formatted.
  * - All participants (from/to/cc) are surfaced so the contact system can
  *   upsert or update relationship records in one pass.
+ * - senderVerified is derived from the Authentication-Results header (if present).
  */
 export function convertNylasMessage(msg: NylasMessage): ConvertedEmail {
   // Use ?? 'unknown' so an empty from array doesn't throw
@@ -82,6 +125,7 @@ export function convertNylasMessage(msg: NylasMessage): ConvertedEmail {
       participants,
       // Nylas stores timestamps as Unix seconds; Date expects milliseconds
       receivedAt: new Date(msg.date * 1000),
+      senderVerified: parseSenderVerified(msg.headers),
     },
   };
 }

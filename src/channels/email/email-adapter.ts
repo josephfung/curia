@@ -84,6 +84,10 @@ export class EmailAdapter {
         receivedAfter: this.lastSeenTimestamp,
         unread: true,
         limit: 25,
+        // Request raw headers so the converter can extract Authentication-Results
+        // and compute senderVerified (SPF/DKIM/DMARC). Without this flag, Nylas
+        // omits headers from the response entirely and senderVerified will be false.
+        fields: 'include_headers',
       });
     } catch (err) {
       this.config.logger.error({ err }, 'Email polling failed — will retry');
@@ -134,8 +138,18 @@ export class EmailAdapter {
           });
           await this.config.bus.publish('channel', event);
 
+          // Warn when the provider's SPF/DKIM/DMARC checks did not all pass.
+          // This is an audit signal — the message is still processed, but the
+          // Coordinator's system prompt instructs it to apply extra skepticism.
+          if (!converted.metadata.senderVerified) {
+            this.config.logger.warn(
+              { senderEmail: converted.senderId, messageId: msg.id },
+              'Email received with senderVerified: false — SPF/DKIM/DMARC did not all pass or headers were absent',
+            );
+          }
+
           this.config.logger.info(
-            { senderEmail: fromEmail, subject: msg.subject, threadId: msg.threadId },
+            { senderEmail: converted.senderId, subject: msg.subject, threadId: msg.threadId, senderVerified: converted.metadata.senderVerified },
             'Email received and published to bus',
           );
         } catch (err) {

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { convertNylasMessage } from '../../../../src/channels/email/message-converter.js';
+import { convertNylasMessage, parseSenderVerified } from '../../../../src/channels/email/message-converter.js';
 import type { NylasMessage } from '../../../../src/channels/email/nylas-client.js';
 
 // ---------------------------------------------------------------------------
@@ -161,5 +161,138 @@ describe('convertNylasMessage', () => {
     expect(fromParticipant?.email).toBe('noreply@example.com');
     // name may be undefined — that's acceptable
     expect(fromParticipant?.name).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// parseSenderVerified — Authentication-Results header parsing
+// ---------------------------------------------------------------------------
+
+describe('parseSenderVerified', () => {
+  it('returns true when SPF, DKIM, and DMARC all pass', () => {
+    const headers = [{
+      name: 'Authentication-Results',
+      value: 'mx.google.com; spf=pass smtp.mailfrom=sender@example.com; dkim=pass header.i=@example.com; dmarc=pass',
+    }];
+    expect(parseSenderVerified(headers)).toBe(true);
+  });
+
+  it('returns false when SPF fails', () => {
+    const headers = [{
+      name: 'Authentication-Results',
+      value: 'mx.google.com; spf=fail smtp.mailfrom=sender@example.com; dkim=pass; dmarc=pass',
+    }];
+    expect(parseSenderVerified(headers)).toBe(false);
+  });
+
+  it('returns false when DKIM fails', () => {
+    const headers = [{
+      name: 'Authentication-Results',
+      value: 'mx.google.com; spf=pass; dkim=fail; dmarc=pass',
+    }];
+    expect(parseSenderVerified(headers)).toBe(false);
+  });
+
+  it('returns false when DMARC fails', () => {
+    const headers = [{
+      name: 'Authentication-Results',
+      value: 'mx.google.com; spf=pass; dkim=pass; dmarc=fail',
+    }];
+    expect(parseSenderVerified(headers)).toBe(false);
+  });
+
+  it('returns false when Authentication-Results header is absent', () => {
+    const headers = [{ name: 'Content-Type', value: 'text/html' }];
+    expect(parseSenderVerified(headers)).toBe(false);
+  });
+
+  it('returns false when headers array is empty', () => {
+    expect(parseSenderVerified([])).toBe(false);
+  });
+
+  it('returns false when headers is undefined (no fields: include_headers in request)', () => {
+    expect(parseSenderVerified(undefined)).toBe(false);
+  });
+
+  it('returns false when DKIM is missing from the header (only SPF and DMARC)', () => {
+    const headers = [{
+      name: 'Authentication-Results',
+      value: 'mx.google.com; spf=pass; dmarc=pass',
+    }];
+    expect(parseSenderVerified(headers)).toBe(false);
+  });
+
+  it('is case-insensitive on the header name', () => {
+    const headers = [{
+      name: 'authentication-results',
+      value: 'mx.google.com; spf=pass; dkim=pass; dmarc=pass',
+    }];
+    expect(parseSenderVerified(headers)).toBe(true);
+  });
+
+  it('is case-insensitive on the header value', () => {
+    const headers = [{
+      name: 'Authentication-Results',
+      value: 'mx.google.com; SPF=PASS; DKIM=PASS; DMARC=PASS',
+    }];
+    expect(parseSenderVerified(headers)).toBe(true);
+  });
+
+  it('returns false when SPF is softfail', () => {
+    const headers = [{
+      name: 'Authentication-Results',
+      value: 'mx.google.com; spf=softfail; dkim=pass; dmarc=pass',
+    }];
+    expect(parseSenderVerified(headers)).toBe(false);
+  });
+
+  it('returns true when a second Authentication-Results header (e.g. from final MTA) has all passing', () => {
+    // Multiple headers are common in relay scenarios. Each hop prepends its own.
+    // The final receiving MTA's header (last added, first in array) should be
+    // authoritative. Checking with some() means true if any header has all three passing.
+    const headers = [
+      // Final MTA header — all pass (this is the authoritative one)
+      { name: 'Authentication-Results', value: 'mx.google.com; spf=pass; dkim=pass; dmarc=pass' },
+      // Intermediate relay header — only SPF (no DKIM/DMARC in scope)
+      { name: 'Authentication-Results', value: 'relay.isp.com; spf=pass' },
+    ];
+    expect(parseSenderVerified(headers)).toBe(true);
+  });
+
+  it('returns false when all Authentication-Results headers are present but none has all three passing', () => {
+    const headers = [
+      { name: 'Authentication-Results', value: 'mx.google.com; spf=pass; dkim=fail; dmarc=fail' },
+      { name: 'Authentication-Results', value: 'relay.isp.com; spf=pass' },
+    ];
+    expect(parseSenderVerified(headers)).toBe(false);
+  });
+});
+
+describe('convertNylasMessage — senderVerified in metadata', () => {
+  it('includes senderVerified: true when all auth checks pass', () => {
+    const msg = mockMessage({
+      headers: [{
+        name: 'Authentication-Results',
+        value: 'mx.google.com; spf=pass; dkim=pass; dmarc=pass',
+      }],
+    });
+    const result = convertNylasMessage(msg);
+    expect(result.metadata.senderVerified).toBe(true);
+  });
+
+  it('includes senderVerified: false when headers are absent', () => {
+    const result = convertNylasMessage(mockMessage({ headers: undefined }));
+    expect(result.metadata.senderVerified).toBe(false);
+  });
+
+  it('includes senderVerified: false when any check fails', () => {
+    const msg = mockMessage({
+      headers: [{
+        name: 'Authentication-Results',
+        value: 'mx.google.com; spf=fail; dkim=pass; dmarc=pass',
+      }],
+    });
+    const result = convertNylasMessage(msg);
+    expect(result.metadata.senderVerified).toBe(false);
   });
 });

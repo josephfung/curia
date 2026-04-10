@@ -14,6 +14,15 @@ bus event types) are noted explicitly even in the `0.x` range.
 ## [Unreleased]
 
 ### Security
+- **SPF/DKIM/DMARC sender verification via Nylas headers** — Email channel adapter now
+  requests `Authentication-Results` headers from Nylas (`fields: include_headers`) and
+  parses them into a `senderVerified: boolean` field on every inbound message event.
+  Messages where any check fails (or headers are absent) are logged at `warn` level with
+  sender address and message ID. The Coordinator's system prompt now includes an
+  unverified-sender handling instruction: messages flagged `senderVerified: false` must
+  not trigger financial, data, or access changes without confirmation via Signal or CLI.
+  Implements spec 06 *Sender Authentication & Channel Trust → Email-Specific Defenses*.
+  Closes #195.
 - **Anti-injection system prompt hardening and architectural containment** — Implements
   spec 06 Layers 2 & 3. Layer 2: added explicit anti-injection directives to the
   Coordinator's system prompt (`agents/coordinator.yaml`) instructing the LLM to treat
