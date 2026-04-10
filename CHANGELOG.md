@@ -16,6 +16,19 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Added
 - **ADR-014: Capability-tier model routing** — Documents the decision to replace per-agent model declarations with a capability-tier system (`fast | standard | powerful`) mapped by the operator, with optional modality/capability needs flags (`vision`, `large_context`, `reasoning`, `coding`, `audio`, `image_generation`). Implementation tracked in the linked issue.
 
+### Fixed
+- **contact-data-leak false positives** — The `contact-data-leak` deterministic filter rule
+  now uses a single-axis policy based solely on recipient trust level, instead of blocking all
+  third-party email addresses unconditionally. A third-party email is blocked only when the
+  recipient is not trusted. Trusted recipients are the CEO (matched by `CEO_PRIMARY_EMAIL`) and
+  any contact with `trustLevel = 'high'` in the contact DB. Trusted recipients may receive
+  third-party contact data regardless of how the message was triggered — this correctly handles
+  both "CEO asked for Hamilton's email" (user-initiated) and "daily briefing lists meeting
+  attendees" (scheduled routine). Closes #210.
+  **Breaking changes**: `FilterCheckInput` gained a required `recipientTrustLevel` field.
+  `FilterCheckInput`, `EmailSendRequest`, `SignalOutboundRequest`, and `SkillContext` no longer
+  have a `triggerSource` field — callers must remove it.
+
 ### Security
 - **SPF/DKIM/DMARC sender verification via Nylas headers** — Email channel adapter now
   requests `Authentication-Results` headers from Nylas (`fields: include_headers`) and

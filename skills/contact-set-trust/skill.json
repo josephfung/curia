@@ -1,0 +1,20 @@
+{
+  "name": "contact-set-trust",
+  "description": "Set or clear a contact's trust level override. trust_level='high' allows the contact to receive third-party contact data in outbound responses (same as the CEO). Use when the CEO explicitly trusts someone with contact information — e.g. their EA, CFO, or a board member. Pass trust_level=null to remove the override. contact_id must be a UUID from contact-lookup.",
+  "version": "1.0.0",
+  "sensitivity": "elevated",
+  "action_risk": "low",
+  "infrastructure": true,
+  "inputs": {
+    "contact_id": "string (UUID from contact-lookup or contact-create)",
+    "trust_level": "string? — 'high', 'medium', 'low', or null to clear the override"
+  },
+  "outputs": {
+    "contact_id": "string",
+    "display_name": "string",
+    "trust_level": "string or null"
+  },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 15000
+}

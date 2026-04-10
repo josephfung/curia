@@ -374,6 +374,30 @@ export class ContactService {
   }
 
   /**
+   * Set or clear a contact's per-contact trust level override.
+   *
+   * trust_level = 'high' grants the contact access to third-party contact data
+   * in outbound responses (same as the CEO). Use for the CEO's EA, CFO, or any
+   * other party the CEO explicitly trusts with contact information.
+   *
+   * Pass null to remove the override and revert to the channel default.
+   */
+  async setTrustLevel(contactId: string, trustLevel: TrustLevel | null): Promise<Contact> {
+    const contact = await this.backend.getContact(contactId);
+    if (!contact) {
+      throw new Error(`Contact not found: ${contactId}`);
+    }
+
+    const updated: Contact = {
+      ...contact,
+      trustLevel,
+      updatedAt: new Date(),
+    };
+
+    return this.updateStoredContact(updated);
+  }
+
+  /**
    * Link a channel identity to a contact.
    *
    * Auto-verification logic: sources ceo_stated, email_participant, crm_import,
@@ -816,13 +840,12 @@ class PostgresContactBackend implements ContactServiceBackend {
 
   async updateContact(contact: Contact): Promise<void> {
     this.logger.debug({ contactId: contact.id }, 'contacts: updating contact');
-    // TODO: extend this UPDATE to include contact_confidence, trust_level, and last_seen_at
-    // once the trust scoring pipeline has a write-back mechanism. Currently these fields are
-    // only set at row creation (via migration 020 defaults) and by future scoring infrastructure.
+    // trust_level is included because ContactService.setTrustLevel writes through this path.
+    // contact_confidence and last_seen_at remain scoring-owned and are not updated here.
     await this.pool.query(
-      `UPDATE contacts SET kg_node_id = $2, display_name = $3, role = $4, status = $5, notes = $6, updated_at = $7
+      `UPDATE contacts SET kg_node_id = $2, display_name = $3, role = $4, status = $5, notes = $6, trust_level = $7, updated_at = $8
        WHERE id = $1`,
-      [contact.id, contact.kgNodeId, contact.displayName, contact.role, contact.status, contact.notes, contact.updatedAt],
+      [contact.id, contact.kgNodeId, contact.displayName, contact.role, contact.status, contact.notes, contact.trustLevel, contact.updatedAt],
     );
   }
 
