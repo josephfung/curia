@@ -353,7 +353,7 @@ These are non-negotiable for launch.
 | Agent config validation blocks malformed YAML at startup | Done (#263) |
 | HTTP API channel requires token authentication | Done |
 | Rate limiting active at dispatch layer | Done (#198) |
-| Intent drift detection pauses tasks (not just logs) | Not Done |
+| Intent drift detection pauses tasks (not just logs) | Done (#199) |
 | Email channel exposes provider-level SPF/DKIM/DMARC validation via Nylas message metadata | Done (#195) |
 | Anti-injection system prompt hardening and architectural containment (Layers 2 & 3) | Done (#194) |
 | Migration 020 adds `contact_confidence`, `trust_level`, `last_seen_at` columns to existing `contacts` table | Done |
