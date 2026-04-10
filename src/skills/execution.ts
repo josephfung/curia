@@ -479,10 +479,13 @@ function buildEntityMemoryObserver(
   observer.storeFact = async (options: StoreFactOptions): Promise<StoreFactResult> => {
     const result = await entityMemory.storeFact(options);
     if (result.stored && result.nodeId && result.sensitivity) {
+      // sensitivityFallback means the stored node was unreadable after the update —
+      // the audit event sensitivity is re-classified from incoming content and may
+      // not match what is on the stored node. Log so operators can investigate.
       if (result.sensitivityFallback) {
         logger.warn(
-          { nodeId: result.nodeId },
-          'storeFact: sensitivity fallback used — node could not be read back after update; audit event sensitivity may differ from stored value',
+          { nodeId: result.nodeId, fallbackSensitivity: result.sensitivity },
+          'memory.store: sensitivity in audit event may be inaccurate — stored node was unreadable after update (race/transient error)',
         );
       }
       try {

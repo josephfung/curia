@@ -319,15 +319,11 @@ export class EntityMemory {
         this.validator.recordWrite(options.source);
 
         // Read the existing node's sensitivity for the audit event.
-        // If the node is unexpectedly missing (race condition or transient DB error),
-        // fall back to re-classifying from the incoming options rather than returning
-        // undefined — a missing sensitivity would silently suppress the audit event.
-        // Read the existing node's sensitivity for the audit event.
         // A successful updateNode followed by a missing getNode is unexpected — flag it
-        // via sensitivityFallback so the caller (execution layer observer) can log a warning.
-        // We still emit the audit event rather than dropping it, but the sensitivity is
-        // re-classified from the incoming options and may differ from the node's original
-        // classification.
+        // via sensitivityFallback so the caller (execution layer observer) can log a
+        // warning. We still emit the audit event rather than dropping it, but the
+        // sensitivity is re-classified from the incoming options and may differ from
+        // the node's original classification.
         const existingNode = await this.store.getNode(result.existingNodeId);
         const sensitivityFallback = existingNode === undefined;
         const sensitivity: Sensitivity = existingNode?.sensitivity

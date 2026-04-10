@@ -207,25 +207,27 @@ async function main(): Promise<void> {
   // If not configured, agents still work — they just don't have KG access.
   let entityMemory: EntityMemory | undefined;
   if (config.openaiApiKey) {
-    const embeddingService = EmbeddingService.createWithOpenAI(config.openaiApiKey, logger);
-    const kgStore = KnowledgeGraphStore.createWithPostgres(pool, embeddingService, logger);
-    const validator = new MemoryValidator(kgStore, embeddingService);
-
     // Sensitivity classifier — loads rules from config/default.yaml at startup (#200).
-    // Used by EntityMemory to auto-classify KG nodes based on content. Rules are
-    // loaded once here so YAML parsing doesn't happen on every node creation.
-    // Scoped inside the openai block so deployments without KG don't fail on a
-    // missing or misconfigured config file.
-    let sensitivityClassifier: SensitivityClassifier | undefined;
+    // Resolved from __dirname so the path is stable regardless of which directory the
+    // process was launched from (systemd, Docker, worktree, test harness, etc.).
+    // Fail fast with a structured log if the file is missing or malformed — the service
+    // cannot safely protect sensitive data without classification rules.
+    let sensitivityClassifier: SensitivityClassifier;
+    const sensitivityConfigPath = path.resolve(import.meta.dirname, '../config/default.yaml');
     try {
-      const sensitivityConfigPath = path.resolve(import.meta.dirname, '../config/default.yaml');
       sensitivityClassifier = SensitivityClassifier.fromYaml(sensitivityConfigPath);
-      logger.info('Sensitivity classifier loaded');
+      logger.info({ configPath: sensitivityConfigPath }, 'Sensitivity classifier loaded');
     } catch (err) {
-      logger.fatal({ err, configPath: 'config/default.yaml' }, 'Failed to load sensitivity classifier — check config/default.yaml syntax and sensitivity_rules section');
+      logger.fatal(
+        { err, configPath: sensitivityConfigPath },
+        'Failed to load sensitivity classifier — check that config/default.yaml exists and contains a valid sensitivity_rules array',
+      );
       process.exit(1);
     }
 
+    const embeddingService = EmbeddingService.createWithOpenAI(config.openaiApiKey, logger);
+    const kgStore = KnowledgeGraphStore.createWithPostgres(pool, embeddingService, logger);
+    const validator = new MemoryValidator(kgStore, embeddingService);
     entityMemory = new EntityMemory(kgStore, validator, embeddingService, logger, sensitivityClassifier);
     logger.info('Entity memory initialized with knowledge graph');
   } else {
