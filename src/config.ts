@@ -115,6 +115,14 @@ export interface YamlConfig {
      */
     extra_patterns?: Array<{ regex: string; replacement: string }>;
   };
+  intentDrift?: {
+    /** Enable intent drift detection. Default: false. */
+    enabled?: boolean;
+    /** Check every N bursts. Must be >= 1. Default: 1. */
+    checkEveryNBursts?: number;
+    /** Minimum LLM confidence required to pause the task. Default: 'high'. */
+    minConfidenceToPause?: 'high' | 'medium' | 'low';
+  };
 }
 
 /**
@@ -201,6 +209,26 @@ export function loadYamlConfig(configDir: string): YamlConfig {
       if (effectiveKeepWindow >= effectiveThreshold) {
         throw new Error(
           `workingMemory.summarization.keepWindow (${effectiveKeepWindow}) must be less than threshold (${effectiveThreshold})`,
+        );
+      }
+    }
+
+    const drift = config.intentDrift;
+    if (drift !== undefined) {
+      if (drift.checkEveryNBursts !== undefined) {
+        if (!Number.isInteger(drift.checkEveryNBursts) || drift.checkEveryNBursts < 1) {
+          throw new Error(
+            `intentDrift.checkEveryNBursts must be a positive integer, got: ${drift.checkEveryNBursts}`,
+          );
+        }
+      }
+      const validConfidences = ['high', 'medium', 'low'];
+      if (
+        drift.minConfidenceToPause !== undefined &&
+        !validConfidences.includes(drift.minConfidenceToPause)
+      ) {
+        throw new Error(
+          `intentDrift.minConfidenceToPause must be one of: ${validConfidences.join(', ')}, got: "${drift.minConfidenceToPause}"`,
         );
       }
     }

@@ -145,3 +145,23 @@ trust_policy:
   data_export: 0.8
   scheduling: 0.5
   information_queries: 0.2
+
+# Intent drift detection (spec §06-audit-and-security.md — Intent Drift Detection).
+# After each burst of a persistent scheduled task, the LLM compares the current
+# task_payload against the original intent_anchor. If the task has drifted
+# significantly with sufficient confidence, the job is paused and the CEO is notified.
+#
+# minConfidenceToPause controls the sensitivity:
+#   "high"   — pause only on egregious, unambiguous deviations (default; fewest false positives)
+#   "medium" — pause on probable deviations; some false positives expected
+#   "low"    — pause whenever any drift is detected regardless of LLM confidence
+#
+# checkEveryNBursts: 1 checks on every burst. Set higher to reduce LLM call frequency
+# for jobs that run very frequently and where occasional missed checks are acceptable.
+#
+# TODO: When multi-model support is added, add a provider field here so the drift
+# judge can use a cheaper/faster model independently of the coordinator.
+intentDrift:
+  enabled: true
+  checkEveryNBursts: 1
+  minConfidenceToPause: high
