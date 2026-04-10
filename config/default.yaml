@@ -20,6 +20,25 @@ dispatch:
   # event fires and background memory extraction (extract-relationships, etc.) runs.
   conversationCheckpointDebounceMs: 600000   # 10 minutes
 
+  # In-memory rate limiting for the dispatch layer (spec §06-audit-and-security.md).
+  # Protects against message flooding from malfunctioning channels, abusive senders,
+  # or compromised integrations. Two independent limits are enforced:
+  #
+  #   global     — total messages per window across all senders; enforced before any
+  #                policy-gate processing (guards against aggregate DoS flooding).
+  #   per-sender — messages per sender per window; enforced after policy gates
+  #                (blocked/held senders are already dropped before this check).
+  #
+  # Excess messages are dropped silently — no response is sent to the sender.
+  # Violations are audit-logged as message.rejected events with reason
+  # 'global_rate_limited' or 'sender_rate_limited', and logged at warn level.
+  #
+  # Changes take effect on restart.
+  rate_limit:
+    window_ms: 60000        # 1-minute fixed window
+    max_per_sender: 15      # messages per sender per window (15 allows for an active chat burst)
+    max_global: 100         # total messages per window across all senders
+
 workingMemory:
   # Rolling context summarization (spec §01-memory-system.md).
   # When the active turn count for a conversation exceeds `threshold`, the oldest

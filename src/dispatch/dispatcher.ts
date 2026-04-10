@@ -6,6 +6,7 @@ import type { ContactResolver } from '../contacts/contact-resolver.js';
 import type { HeldMessageService } from '../contacts/held-messages.js';
 import type { InboundSenderContext, ChannelPolicyConfig, TrustLevel, UnknownSenderPolicy } from '../contacts/types.js';
 import type { InboundScanner } from './inbound-scanner.js';
+import type { RateLimiter } from './rate-limiter.js';
 import type { DbPool } from '../db/connection.js';
 import { computeTrustScore, DEFAULT_TRUST_WEIGHTS } from './trust-scorer.js';
 import type { TrustScorerWeights } from './trust-scorer.js';
@@ -29,6 +30,9 @@ export interface DispatcherConfig {
   /** Messages scoring below this floor trigger hold_and_notify regardless of per-channel policy
    *  (unless channel is 'ignore'). Default: 0.2 */
   trustScoreFloor?: number;
+  /** In-memory rate limiter. When provided, enforces global and per-sender message rate limits.
+   *  When omitted, rate limiting is disabled (e.g. in unit tests that don't exercise it). */
+  rateLimiter?: RateLimiter;
 }
 
 /**
@@ -48,6 +52,7 @@ export class Dispatcher {
   private heldMessages?: HeldMessageService;
   private channelPolicies?: Record<string, ChannelPolicyConfig>;
   private injectionScanner?: InboundScanner;
+  private rateLimiter?: RateLimiter;
   private trustScorerWeights: TrustScorerWeights;
   private trustScoreFloor: number;
   /**
@@ -71,6 +76,7 @@ export class Dispatcher {
     this.heldMessages = config.heldMessages;
     this.channelPolicies = config.channelPolicies;
     this.injectionScanner = config.injectionScanner;
+    this.rateLimiter = config.rateLimiter;
     this.pool = config.pool;
     this.conversationCheckpointDebounceMs = config.conversationCheckpointDebounceMs ?? 600_000;
     this.trustScorerWeights = config.trustScorerWeights ?? DEFAULT_TRUST_WEIGHTS;
@@ -119,6 +125,31 @@ export class Dispatcher {
       { channelId: payload.channelId, senderId: payload.senderId },
       'Dispatching to coordinator',
     );
+
+    // Global rate limit — checked before any policy-gate processing so that aggregate
+    // flooding (e.g. a DoS attack across many senders) is stopped as early as possible.
+    // Intentionally fail-open: if publish throws, we log and still drop the message.
+    if (this.rateLimiter && !this.rateLimiter.checkGlobal()) {
+      this.logger.warn(
+        { channelId: payload.channelId, senderId: payload.senderId },
+        'Global rate limit exceeded — dropping message',
+      );
+      try {
+        await this.bus.publish('dispatch', createMessageRejected({
+          conversationId: payload.conversationId,
+          channelId: payload.channelId,
+          senderId: payload.senderId,
+          reason: 'global_rate_limited',
+          parentEventId: event.id,
+        }));
+      } catch (publishErr) {
+        this.logger.error(
+          { err: publishErr, channelId: payload.channelId, senderId: payload.senderId },
+          'Failed to publish global-rate-limit rejection event — dropping (fail-closed)',
+        );
+      }
+      return;
+    }
 
     // Resolve sender if contact resolver is available.
     // Wrapped in try/catch so DB errors degrade gracefully (no sender context)
@@ -345,6 +376,38 @@ export class Dispatcher {
           'Contact resolution failed — proceeding without sender context',
         );
       }
+    }
+
+    // Per-sender rate limit — checked after policy gates so blocked/held senders
+    // (already dropped above) don't consume quota for legitimate senders.
+    // Uses the raw senderId from the inbound payload — no stable contactId needed
+    // because unknown senders are more likely to flood from a single address, and
+    // the global limit covers multi-address abuse.
+    //
+    // Note: the global counter above was already incremented for this message. If the
+    // per-sender check drops it here, the global quota is still consumed. This is
+    // intentional: global tracks message arrivals at the dispatch layer (a DoS signal),
+    // not messages that survive both checks and reach the coordinator.
+    if (this.rateLimiter && !this.rateLimiter.checkSender(payload.senderId)) {
+      this.logger.warn(
+        { channelId: payload.channelId, senderId: payload.senderId },
+        'Per-sender rate limit exceeded — dropping message',
+      );
+      try {
+        await this.bus.publish('dispatch', createMessageRejected({
+          conversationId: payload.conversationId,
+          channelId: payload.channelId,
+          senderId: payload.senderId,
+          reason: 'sender_rate_limited',
+          parentEventId: event.id,
+        }));
+      } catch (publishErr) {
+        this.logger.error(
+          { err: publishErr, channelId: payload.channelId, senderId: payload.senderId },
+          'Failed to publish sender-rate-limit rejection event — dropping (fail-closed)',
+        );
+      }
+      return;
     }
 
     // Layer 1 prompt injection scan — runs after policy gates so blocked/held

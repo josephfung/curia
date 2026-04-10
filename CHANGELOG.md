@@ -13,6 +13,17 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Security
+- **Rate limiting at the dispatch layer** — the dispatch layer now enforces two independent
+  in-memory fixed-window rate limits: a global limit (default 100 msg/min across all senders)
+  checked before any policy-gate processing to stop aggregate DoS floods early, and a per-sender
+  limit (default 15 msg/min) checked after policy gates so blocked/held senders don't consume
+  quota for legitimate senders. Excess messages are dropped silently; violations are audit-logged
+  as `message.rejected` events with reason `global_rate_limited` or `sender_rate_limited` and
+  logged at `warn` level. Both limits and the window duration are configurable in
+  `config/default.yaml` under `dispatch.rate_limit`. Completes the rate-limiting item in the
+  spec §06 security checklist. Closes #198.
+
 ### Fixed
 - **Delegate skill timeout now wired to `expected_duration_seconds`** — the delegate skill
   previously used a hardcoded 90-second timeout regardless of job type, causing long-running

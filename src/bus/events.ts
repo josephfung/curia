@@ -173,7 +173,7 @@ interface MessageRejectedPayload {
   channelId: string;
   senderId: string;
   /** Why the message was rejected — used by the HTTP adapter to select the status code. */
-  reason: 'unknown_sender' | 'provisional_sender' | 'blocked_sender';
+  reason: 'unknown_sender' | 'provisional_sender' | 'blocked_sender' | 'global_rate_limited' | 'sender_rate_limited';
 }
 
 // Memory event payloads — used for the knowledge graph audit trail (Phase 6).
