@@ -91,6 +91,19 @@ export interface YamlConfig {
     scheduling?: number;
     information_queries?: number;
   };
+  pii?: {
+    /**
+     * Extra PII patterns to scrub from LLM-facing error strings, beyond the
+     * built-in defaults (email, phone, credit card, SSN).
+     *
+     * Each entry must have:
+     *   regex       — a valid JavaScript regex string (gi flags applied automatically)
+     *   replacement — the placeholder to substitute, e.g. "[EMPLOYEE_ID]"
+     *
+     * Changes take effect on restart.
+     */
+    extra_patterns?: Array<{ regex: string; replacement: string }>;
+  };
 }
 
 /**

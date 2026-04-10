@@ -56,6 +56,8 @@ import { OutboundContentFilter } from './dispatch/outbound-filter.js';
 import { OutboundGateway } from './skills/outbound-gateway.js';
 import { InboundScanner } from './dispatch/inbound-scanner.js';
 import { loadExtraInjectionPatterns, type ExtraInjectionPattern } from './dispatch/security-config-loader.js';
+import { parseExtraPiiPatterns, getMissingBuiltInPatterns, getBuiltInPatternCount } from './pii/scrubber.js';
+import { setErrorPiiPatterns } from './errors/classify.js';
 import type { TrustScorerWeights } from './dispatch/trust-scorer.js';
 import { SchedulerService } from './scheduler/scheduler-service.js';
 import { Scheduler } from './scheduler/scheduler.js';
@@ -679,6 +681,41 @@ async function main(): Promise<void> {
   }
   scheduler.start();
   logger.info('Scheduler started');
+
+  // PII scrubbing for LLM-facing error strings — loads extra patterns from
+  // config/default.yaml pii.extra_patterns and injects them into classify.ts.
+  // An invalid extra pattern is treated as fatal: the operator's intent was to
+  // protect a specific PII type and silently ignoring their config would mean
+  // that data flows unredacted to the LLM without any warning.
+  const piiPatternEntries = yamlConfig.pii?.extra_patterns ?? [];
+  let extraPiiPatternCount = 0;
+  if (piiPatternEntries.length > 0) {
+    // Errors here are intentionally not caught — parseExtraPiiPatterns throws on
+    // invalid regex or missing fields, which is treated as a startup-blocking misconfiguration.
+    const extraPiiPatterns = parseExtraPiiPatterns(
+      piiPatternEntries,
+      path.join(configDir, 'default.yaml'),
+    );
+    setErrorPiiPatterns(extraPiiPatterns);
+    extraPiiPatternCount = extraPiiPatterns.length;
+  }
+
+  // Log the scrubber status after the logger is available (patterns are loaded at module
+  // init time, before pino exists, so any load-time failures are deferred to here).
+  const missingBuiltInPatterns = getMissingBuiltInPatterns();
+  if (missingBuiltInPatterns.length > 0) {
+    // Library version drift — one or more built-in PII pattern types were not found
+    // in @openredaction/openredaction. These PII types will NOT be scrubbed from
+    // LLM-facing error messages. Log at error so alerting catches this.
+    logger.error(
+      { missingPatterns: missingBuiltInPatterns },
+      'PII scrubber: built-in pattern types missing from @openredaction/openredaction — check library version',
+    );
+  }
+  logger.info(
+    { builtInPatterns: getBuiltInPatternCount(), extraPatterns: extraPiiPatternCount },
+    'PII scrubber active',
+  );
 
   // Layer 1 inbound injection scanner — loads extra patterns from config/default.yaml
   // and constructs the scanner. Non-fatal on loader error: a broken custom pattern

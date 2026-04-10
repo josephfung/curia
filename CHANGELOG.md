@@ -14,6 +14,16 @@ bus event types) are noted explicitly even in the `0.x` range.
 ## [Unreleased]
 
 ### Security
+- **PII scrubbing for LLM-facing error strings** — Error messages that enter the LLM's
+  context window (via `classifyError` / `classifySkillError`) are now scrubbed of email
+  addresses, US/CA/UK phone numbers, credit card numbers, and keyword-prefixed SSNs before
+  reaching the model. The audit log retains the full unredacted error for debugging. Patterns
+  are sourced from `@openredaction/openredaction` and applied synchronously via a thin
+  extraction layer (`src/pii/scrubber.ts`). Operator-configurable extra patterns via
+  `pii.extra_patterns` in `config/default.yaml` (spec 06, issue #197).
+- **Pino logger PII redaction** — Added `senderId`, `email`, `from`, and `phoneNumber` to
+  pino's structured-field redact list (at 0/1/2 nesting levels) as a last-resort safety net
+  against sender identifiers appearing in stdout log output (spec 06, issue #197).
 - **Audit log append-only enforcement** (spec 06) — Added a PostgreSQL trigger
   (`021_audit_log_append_only`) that raises an exception on any UPDATE or DELETE to
   `audit_log`, with the single permitted exception of flipping `acknowledged` from
