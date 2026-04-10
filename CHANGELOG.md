@@ -87,6 +87,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Spec 10 audit log hardening completion table** — replaced implementation checklist in `docs/specs/10-audit-log-hardening.md` with Done/Not Done table.
 
 ### Changed
+- **Sender trust routing** (spec §06): `contact.unknown` event now includes `routingDecision` field (`allow` | `hold_and_notify` | `ignore`), making the unknown-sender audit trail self-contained. The dispatcher now determines routing policy before publishing the event so the intent is always recorded accurately.
 - **`unknown_sender: reject` renamed to `unknown_sender: ignore`** — behaviour unchanged (silent drop + audit event); new name clarifies no rejection notice is sent to the sender.
 - **`contact.unknown` event** — `channelTrustLevel` is now required (was optional); `messageTrustScore` field added.
 - **`completeJobRun`** — writes `last_run_outcome = 'completed'` or `'failed'` on completion.
