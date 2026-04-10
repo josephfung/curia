@@ -53,10 +53,6 @@ export async function loadSkillsFromDirectory(
       const raw = fs.readFileSync(manifestPath, 'utf-8');
       const manifest = JSON.parse(raw) as SkillManifest;
 
-      if (!manifest.name || !manifest.description) {
-        throw new Error('Manifest missing required fields: name, description');
-      }
-
       // Set defaults for optional fields
       manifest.timeout ??= 30000;
       manifest.sensitivity ??= 'normal';

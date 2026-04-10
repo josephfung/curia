@@ -69,17 +69,6 @@ export function loadAgentConfig(filePath: string): AgentYamlConfig {
     throw new Error(`Invalid YAML in agent config at ${filePath}: ${err instanceof Error ? err.message : String(err)}`);
   }
 
-  // Validate required fields
-  if (!config.name) {
-    throw new Error(`Agent config at ${filePath} is missing required field: name`);
-  }
-  if (!config.model?.provider || !config.model?.model) {
-    throw new Error(`Agent config '${config.name}' at ${filePath} is missing model.provider or model.model`);
-  }
-  if (!config.system_prompt) {
-    throw new Error(`Agent config '${config.name}' at ${filePath} is missing system_prompt`);
-  }
-
   // Interpolate ${persona.*} placeholders in the system prompt.
   // The persona section is the single source of truth for display name, tone, etc.
   // Keeping them as references in system_prompt avoids duplication and makes
