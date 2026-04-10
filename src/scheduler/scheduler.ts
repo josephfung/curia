@@ -406,6 +406,8 @@ export class Scheduler {
                 );
 
                 // Do NOT call completeJobRun — the job is paused, not completed.
+                // Clean up burst counter: paused jobs don't burst again.
+                this.burstCounts.delete(jobId);
                 return;
               }
             }
@@ -586,6 +588,7 @@ export class Scheduler {
           for (const [eventId, pendingJobId] of this.pendingJobs) {
             if (pendingJobId === row.id) {
               this.pendingJobs.delete(eventId);
+              this.burstCounts.delete(row.id);
               this.logger.debug({ jobId: row.id, eventId }, 'Removed stale pendingJobs entry for recovered job');
               break; // At most one entry per job
             }

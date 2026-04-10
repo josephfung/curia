@@ -116,7 +116,7 @@ export interface YamlConfig {
     extra_patterns?: Array<{ regex: string; replacement: string }>;
   };
   intentDrift?: {
-    /** Enable intent drift detection. Default: false. */
+    /** Enable intent drift detection. Default: true. */
     enabled?: boolean;
     /** Check every N bursts. Must be >= 1. Default: 1. */
     checkEveryNBursts?: number;
