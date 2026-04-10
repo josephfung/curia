@@ -17,6 +17,7 @@ import type {
   NylasResponse,
   NylasListResponse,
   SendMessageRequest,
+  MessageFields,
 } from 'nylas';
 import type { Logger } from '../../logger.js';
 
@@ -69,6 +70,11 @@ export interface NylasMessage {
   date: number;
   unread: boolean;
   folders: string[];
+  /**
+   * Email headers — only present when listMessages was called with fields: 'include_headers'.
+   * Used by the email adapter to extract Authentication-Results for SPF/DKIM/DMARC validation.
+   */
+  headers?: Array<{ name: string; value: string }>;
 }
 
 export interface SendEmailOptions {
@@ -88,6 +94,11 @@ export interface ListMessagesOptions {
   limit?: number;
   /** Filter messages to a specific thread ID — used when looking up a reply target */
   threadId?: string;
+  /**
+   * When set to 'include_headers', the Nylas API returns raw email headers in the response.
+   * Required to access Authentication-Results for SPF/DKIM/DMARC sender verification.
+   */
+  fields?: 'include_headers';
 }
 
 // ---------------------------------------------------------------------------
@@ -127,6 +138,11 @@ export class NylasClient {
     }
     if (options?.threadId !== undefined) {
       queryParams.threadId = options.threadId;
+    }
+    if (options?.fields !== undefined) {
+      // Cast needed: our interface uses a string literal to avoid leaking the SDK's
+      // MessageFields enum type into the broader codebase.
+      queryParams.fields = options.fields as MessageFields;
     }
 
     this.log.debug({ queryParams }, 'listing messages');
@@ -216,6 +232,8 @@ export class NylasClient {
       date: msg.date,
       unread: msg.unread ?? false,
       folders: msg.folders,
+      // headers is only present when the request included fields: 'include_headers'
+      headers: msg.headers?.map((h) => ({ name: h.name, value: h.value })),
     };
   }
 }

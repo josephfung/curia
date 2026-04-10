@@ -26,7 +26,46 @@ export interface ConvertedEmail {
     nylasThreadId: string;
     participants: EmailParticipant[];
     receivedAt: Date;
+    /**
+     * True if SPF, DKIM, and DMARC all passed in the provider's Authentication-Results
+     * header. False if any check failed or the headers were absent.
+     * Defense-in-depth: email From headers are trivially spoofable; this surfaces
+     * provider-level validation results so the Coordinator can apply extra skepticism
+     * to messages that failed sender verification.
+     */
+    senderVerified: boolean;
   };
+}
+
+/**
+ * Parse the Authentication-Results header (RFC 7601) and return true only if
+ * SPF, DKIM, and DMARC all carry a "pass" result.
+ *
+ * Returns false when:
+ * - headers are absent (listMessages was not called with fields: 'include_headers')
+ * - the Authentication-Results header is missing (provider didn't include it)
+ * - any of SPF, DKIM, or DMARC are absent from the header
+ * - any of SPF, DKIM, or DMARC report a non-pass result (fail, softfail, neutral, etc.)
+ *
+ * Fails closed: absent information is treated as unverified, not as verified.
+ */
+export function parseSenderVerified(headers?: Array<{ name: string; value: string }>): boolean {
+  if (!headers || headers.length === 0) return false;
+
+  // Header names are case-insensitive per RFC 7601 §2.2 and RFC 5322 §2.2.
+  const authHeader = headers.find((h) => h.name.toLowerCase() === 'authentication-results');
+  if (!authHeader) return false;
+
+  const value = authHeader.value;
+
+  // Match each mechanism as `spf=pass`, `dkim=pass`, `dmarc=pass`.
+  // \b after "pass" ensures we don't match "spf=passthrough" or similar future tokens,
+  // though RFC 7601 result tokens don't currently include such values.
+  const spfPass = /\bspf=pass\b/i.test(value);
+  const dkimPass = /\bdkim=pass\b/i.test(value);
+  const dmarcPass = /\bdmarc=pass\b/i.test(value);
+
+  return spfPass && dkimPass && dmarcPass;
 }
 
 /**
@@ -40,6 +79,7 @@ export interface ConvertedEmail {
  *   was formatted.
  * - All participants (from/to/cc) are surfaced so the contact system can
  *   upsert or update relationship records in one pass.
+ * - senderVerified is derived from the Authentication-Results header (if present).
  */
 export function convertNylasMessage(msg: NylasMessage): ConvertedEmail {
   // Use ?? 'unknown' so an empty from array doesn't throw
@@ -82,6 +122,7 @@ export function convertNylasMessage(msg: NylasMessage): ConvertedEmail {
       participants,
       // Nylas stores timestamps as Unix seconds; Date expects milliseconds
       receivedAt: new Date(msg.date * 1000),
+      senderVerified: parseSenderVerified(msg.headers),
     },
   };
 }
