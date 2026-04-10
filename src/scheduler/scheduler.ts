@@ -8,9 +8,11 @@ import {
   createScheduleFired,
   createScheduleSuspended,
   createScheduleRecovered,
+  createScheduleDriftPaused,
   createAgentTask,
 } from '../bus/events.js';
 import type { AgentResponseEvent, AgentErrorEvent } from '../bus/events.js';
+import type { DriftDetector } from './drift-detector.js';
 import type { JobRow } from './scheduler-service.js';
 
 // Poll every 30 seconds for due jobs.
@@ -76,6 +78,8 @@ export interface SchedulerConfig {
   bus: EventBus;
   logger: Logger;
   schedulerService: SchedulerService;
+  /** Optional drift detector — when absent, the drift check is skipped entirely. */
+  driftDetector?: DriftDetector;
 }
 
 export class Scheduler {
@@ -83,6 +87,7 @@ export class Scheduler {
   private bus: EventBus;
   private logger: Logger;
   private schedulerService: SchedulerService;
+  private driftDetector?: DriftDetector;
   private intervalHandle: ReturnType<typeof setInterval> | null = null;
   private watchdogHandle: ReturnType<typeof setInterval> | null = null;
 
@@ -90,11 +95,16 @@ export class Scheduler {
   // agent.response / agent.error events to the originating scheduled job.
   private pendingJobs = new Map<string, string>();
 
+  // Tracks burst counts per job for checkEveryNBursts support.
+  // In-memory only — resets on process restart (a missed check is not a security failure).
+  private burstCounts = new Map<string, number>();
+
   constructor(config: SchedulerConfig) {
     this.pool = config.pool;
     this.bus = config.bus;
     this.logger = config.logger;
     this.schedulerService = config.schedulerService;
+    this.driftDetector = config.driftDetector;
   }
 
   /**
@@ -326,6 +336,83 @@ export class Scheduler {
     this.pendingJobs.delete(parentEventId);
 
     try {
+      // Run the drift check on the success path for persistent tasks only.
+      // Skip on the failure path — the error handling flow takes over.
+      if (success && this.driftDetector) {
+        const job = await this.schedulerService.getJob(jobId);
+
+        if (job?.agentTaskId && job.intentAnchor) {
+          // Enforce checkEveryNBursts: only check on the Nth burst.
+          const burstCount = (this.burstCounts.get(jobId) ?? 0) + 1;
+          this.burstCounts.set(jobId, burstCount);
+
+          const shouldCheck = burstCount % this.driftDetector.checkEveryNBursts === 0;
+
+          if (shouldCheck) {
+            const verdict = await this.driftDetector.check({
+              intentAnchor: job.intentAnchor,
+              taskPayload: job.taskPayload,
+              lastRunSummary: job.lastRunSummary ?? null,
+            });
+
+            if (verdict !== null) {
+              this.logger.info(
+                { jobId, agentTaskId: job.agentTaskId, drifted: verdict.drifted, confidence: verdict.confidence, reason: verdict.reason },
+                'drift-detector: verdict',
+              );
+
+              if (this.driftDetector.shouldPause(verdict)) {
+                // Hard pause: set status to paused, publish the drift event, notify CEO.
+                await this.schedulerService.pauseJobForDrift(jobId);
+
+                const driftEvent = createScheduleDriftPaused({
+                  jobId,
+                  agentId: job.agentId,
+                  agentTaskId: job.agentTaskId,
+                  intentAnchor: job.intentAnchor,
+                  taskPayload: job.taskPayload,
+                  lastRunSummary: job.lastRunSummary ?? null,
+                  verdict,
+                  parentEventId,
+                });
+                await this.bus.publish('system', driftEvent);
+
+                // Notify the CEO via the coordinator (same pattern as schedule.suspended).
+                const notifyContent = [
+                  `Task has been paused because its current instructions may have drifted from its original goal.`,
+                  ``,
+                  `Original intent: ${job.intentAnchor}`,
+                  ``,
+                  `Current task: ${JSON.stringify(job.taskPayload)}`,
+                  ``,
+                  `Reason: ${verdict.reason} (confidence: ${verdict.confidence})`,
+                  ``,
+                  `Please review the task and either resume it with corrected instructions or cancel it.`,
+                ].join('\n');
+
+                const notifyEvent = createAgentTask({
+                  agentId: 'coordinator',
+                  conversationId: `scheduler:${jobId}`,
+                  channelId: 'scheduler',
+                  senderId: 'scheduler',
+                  content: notifyContent,
+                  parentEventId: driftEvent.id,
+                });
+                await this.bus.publish('system', notifyEvent);
+
+                this.logger.warn(
+                  { jobId, agentTaskId: job.agentTaskId, reason: verdict.reason, confidence: verdict.confidence },
+                  'Job paused due to intent drift detection',
+                );
+
+                // Do NOT call completeJobRun — the job is paused, not completed.
+                return;
+              }
+            }
+          }
+        }
+      }
+
       const result = await this.schedulerService.completeJobRun(jobId, success, error);
 
       if (result.suspended) {
