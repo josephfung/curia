@@ -4,7 +4,7 @@ import { createAgentTask, createOutboundMessage, createContactResolved, createCo
 import type { Logger } from '../logger.js';
 import type { ContactResolver } from '../contacts/contact-resolver.js';
 import type { HeldMessageService } from '../contacts/held-messages.js';
-import type { InboundSenderContext, ChannelPolicyConfig, TrustLevel } from '../contacts/types.js';
+import type { InboundSenderContext, ChannelPolicyConfig, TrustLevel, UnknownSenderPolicy } from '../contacts/types.js';
 import type { InboundScanner } from './inbound-scanner.js';
 import type { DbPool } from '../db/connection.js';
 import { computeTrustScore, DEFAULT_TRUST_WEIGHTS } from './trust-scorer.js';
@@ -233,10 +233,9 @@ export class Dispatcher {
             }
           }
         } else {
-          // Unknown sender — publish audit event and check channel policy.
-          // Compute a preliminary trust score for the audit event (injection risk not yet
-          // available at this point — the unknown-sender branch returns early before the
-          // scanner runs).
+          // Unknown sender — determine routing decision first so the audit event is self-contained.
+          // Compute a preliminary trust score (injection risk not yet available — the unknown-sender
+          // branch returns early before the scanner runs).
           const prelimChannelTrust = (this.channelPolicies?.[payload.channelId]?.trust ?? 'low') as TrustLevel;
           const prelimScore = computeTrustScore({
             channelTrustLevel: prelimChannelTrust,
@@ -245,15 +244,25 @@ export class Dispatcher {
             trustLevel: null,
             weights: this.trustScorerWeights,
           });
+
+          const policy = this.channelPolicies?.[payload.channelId];
+
+          // Routing decision reflects the configured policy intent. When hold_and_notify is
+          // configured but heldMessages is not wired, the decision still says 'hold_and_notify'
+          // so the audit trail is accurate — execution may degrade but the intent is recorded.
+          const routingDecision: UnknownSenderPolicy =
+            policy?.unknownSender === 'hold_and_notify' ? 'hold_and_notify'
+            : policy?.unknownSender === 'ignore' ? 'ignore'
+            : 'allow';
+
           await this.bus.publish('dispatch', createContactUnknown({
             channel: senderContext.channel,
             senderId: senderContext.senderId,
             channelTrustLevel: prelimChannelTrust,
             messageTrustScore: prelimScore,
+            routingDecision,
             parentEventId: event.id,
           }));
-
-          const policy = this.channelPolicies?.[payload.channelId];
 
           if (policy?.unknownSender === 'hold_and_notify' && this.heldMessages) {
             try {
