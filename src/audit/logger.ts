@@ -24,7 +24,11 @@ function stripNullBytes(value: unknown): unknown {
   if (Array.isArray(value)) {
     return value.map(stripNullBytes);
   }
-  if (value !== null && typeof value === 'object') {
+  // Only recurse into plain objects. Non-plain objects (Date, Buffer, RegExp, etc.)
+  // must pass through untouched — Object.entries() on a Date returns [] which would
+  // silently replace the Date with {}, corrupting timestamp fields like mergedAt.
+  // JSON.stringify handles non-plain objects correctly on its own (e.g. Date.toISOString()).
+  if (value !== null && typeof value === 'object' && Object.getPrototypeOf(value) === Object.prototype) {
     return Object.fromEntries(
       Object.entries(value as Record<string, unknown>).map(([k, v]) => [k, stripNullBytes(v)]),
     );
@@ -74,6 +78,19 @@ export class AuditLogger {
     const conversationId =
       typeof payload.conversationId === 'string' ? payload.conversationId : null;
 
+    // Sanitize before the DB write in a separate try/catch so a sanitization
+    // failure is logged with its own distinct message — not conflated with a
+    // DB connectivity or schema error from the INSERT below.
+    // TODO: JSON.stringify can also throw on circular references (pre-existing,
+    // not introduced here). If that becomes a live issue, wrap it separately too.
+    let serializedPayload: string;
+    try {
+      serializedPayload = JSON.stringify(stripNullBytes(event.payload));
+    } catch (err) {
+      this.logger.error({ err, eventId: event.id, eventType: event.type }, 'Audit log payload sanitization failed — event not written');
+      throw err;
+    }
+
     try {
       await this.pool.query(
         // All columns are explicitly listed so schema additions don't silently
@@ -87,7 +104,7 @@ export class AuditLogger {
           event.type,
           event.sourceLayer,
           sourceId,
-          JSON.stringify(stripNullBytes(event.payload)),
+          serializedPayload,
           conversationId,
           event.parentEventId ?? null,
         ],

@@ -107,4 +107,30 @@ describe('AuditLogger.log — null byte sanitization', () => {
 
     await expect(logger.log(event)).resolves.toBeUndefined();
   });
+
+  it('passes Date values through without mangling them to {}', async () => {
+    // Date fields exist on live payload types (e.g. ContactMergedPayload.mergedAt,
+    // HumanDecisionPayload.presentedAt/decidedAt). Object.entries(new Date()) returns []
+    // which would cause Object.fromEntries to produce {} — silently destroying the value.
+    const event = createInboundMessage({
+      conversationId: 'conv-5',
+      channelId: 'test',
+      senderId: 'sender',
+      content: 'check',
+    });
+
+    const ts = new Date('2026-04-10T08:30:00.000Z');
+    (event.payload as Record<string, unknown>)['mergedAt'] = ts;
+
+    await logger.log(event);
+
+    const payloadParam = pool.written.find(
+      (p) => typeof p === 'string' && (p as string).includes('mergedAt'),
+    ) as string;
+
+    expect(payloadParam).toBeDefined();
+    const parsed = JSON.parse(payloadParam);
+    // Must serialize as ISO string, not {}
+    expect(parsed.mergedAt).toBe('2026-04-10T08:30:00.000Z');
+  });
 });
