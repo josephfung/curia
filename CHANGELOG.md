@@ -17,6 +17,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **ADR-014: Capability-tier model routing** — Documents the decision to replace per-agent model declarations with a capability-tier system (`fast | standard | powerful`) mapped by the operator, with optional modality/capability needs flags (`vision`, `large_context`, `reasoning`, `coding`, `audio`, `image_generation`). Implementation tracked in the linked issue.
 
 ### Fixed
+- **Null byte crash in audit logger** — `AuditLogger.log()` now strips U+0000 from all
+  string values in event payloads before writing to `audit_log.payload`. Previously, binary
+  content returned by `web-fetch` could embed null bytes that PostgreSQL rejects with
+  `22P05`, causing the agent task to crash mid-run. Fixes josephfung/curia#257.
 - **contact-data-leak false positives** — The `contact-data-leak` deterministic filter rule
   now uses a single-axis policy based solely on recipient trust level, instead of blocking all
   third-party email addresses unconditionally. A third-party email is blocked only when the

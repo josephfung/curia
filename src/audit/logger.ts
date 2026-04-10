@@ -3,6 +3,36 @@ import type { BusEvent } from '../bus/events.js';
 import type { Logger } from '../logger.js';
 
 /**
+ * Recursively strip null bytes (U+0000) from all string values in an object.
+ *
+ * PostgreSQL cannot store U+0000 in text or JSONB columns — it rejects the
+ * write with error 22P05 ("unsupported Unicode escape sequence"). Skill
+ * payloads (especially web-fetch results) can carry null bytes when the
+ * fetched URL returns binary or mixed-encoding content. Stripping them here,
+ * at the single write-path into audit_log, is the correct choke point: it
+ * covers all event types regardless of which skill produced the payload.
+ *
+ * Null bytes are replaced with '' (empty string) rather than a placeholder
+ * like '<0x00>' to keep payloads clean for downstream consumers. The loss of
+ * the byte is acceptable — audit payloads are diagnostic records, not
+ * faithful binary stores.
+ */
+function stripNullBytes(value: unknown): unknown {
+  if (typeof value === 'string') {
+    return value.replace(/\u0000/g, '');
+  }
+  if (Array.isArray(value)) {
+    return value.map(stripNullBytes);
+  }
+  if (value !== null && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).map(([k, v]) => [k, stripNullBytes(v)]),
+    );
+  }
+  return value;
+}
+
+/**
  * Write-ahead audit logger. Persists every bus event to the audit_log table
  * BEFORE the event is delivered to other subscribers. This ensures audit
  * completeness even if the process crashes mid-delivery.
@@ -57,7 +87,7 @@ export class AuditLogger {
           event.type,
           event.sourceLayer,
           sourceId,
-          JSON.stringify(event.payload),
+          JSON.stringify(stripNullBytes(event.payload)),
           conversationId,
           event.parentEventId ?? null,
         ],
