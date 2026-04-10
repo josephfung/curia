@@ -86,6 +86,12 @@ describe('startup validator — skill manifests', () => {
       runWith({ skills: path.join(F, 'skills/bad-action-risk-numeric') }),
     ).rejects.toThrow(/action_risk/);
   });
+
+  it('passes for a valid numeric action_risk (75)', async () => {
+    await expect(
+      runWith({ skills: path.join(F, 'skills/valid-skill-numeric') }),
+    ).resolves.toBeUndefined();
+  });
 });
 
 // ── default-config.yaml validation ──────────────────────────────────────────

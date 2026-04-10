@@ -80,7 +80,7 @@ Handler path is not a schema field — the loader verifies `handler.ts`/`handler
 JSON Schema for `config/default.yaml`. All fields are optional (the file is intentionally partial — defaults are applied in code). When fields are present, types and ranges are enforced.
 
 Key constraints:
-- `channels.maxMessageBytes`: integer, minimum 1
+- `channels.max_message_bytes`: integer, minimum 1
 - `security.trust_score.channel_weight`: number, minimum 0, maximum 1
 - `security.trust_score.contact_weight`: number, minimum 0, maximum 1
 - `security.trust_score.max_risk_penalty`: number, minimum 0, maximum 1
@@ -124,23 +124,23 @@ The Ajv instance is created once and schemas are compiled once — not recreated
 
 ### `config/default.yaml`
 
-Add `maxMessageBytes` to the `channels` section:
+Add `max_message_bytes` to the `channels` section:
 
 ```yaml
 channels:
   cli:
     enabled: true
-  maxMessageBytes: 102400   # 100KB — inbound messages exceeding this are rejected before routing
+  max_message_bytes: 102400   # 100KB — inbound messages exceeding this are rejected before routing
 ```
 
 ### `src/config.ts`
 
-Add `maxMessageBytes` to the `YamlConfig.channels` type:
+Add `max_message_bytes` to the `YamlConfig.channels` type:
 
 ```typescript
 channels?: {
   cli?: { enabled?: boolean };
-  maxMessageBytes?: number;
+  max_message_bytes?: number;
 };
 ```
 
@@ -157,10 +157,10 @@ await runStartupValidation({
 });
 ```
 
-2. Pass `maxMessageBytes` into `DispatcherConfig`:
+2. Pass `max_message_bytes` into `DispatcherConfig`:
 
 ```typescript
-maxMessageBytes: yamlConfig.channels?.maxMessageBytes ?? 102_400,
+maxMessageBytes: yamlConfig.channels?.max_message_bytes ?? 102_400,
 ```
 
 ### `src/agents/loader.ts`
@@ -213,7 +213,7 @@ The `message.rejected` event is already in the dispatch layer's publish permissi
 - **All channels:** silent drop — no response sent to the sender
 - **Email specifically:** consistent with the unknown sender policy (`ignore`) — no auto-reply
 - **Audit trail:** the `inbound.message` event is written to audit_log before dispatch (write-ahead), and the `message.rejected` event follows with `parentEventId` pointing to the oversized `inbound.message`. Both records are in the audit log.
-- **Configurable:** `channels.maxMessageBytes` in `config/default.yaml`. Default: `102400` (100KB). The schema enforces this is an integer ≥ 1.
+- **Configurable:** `channels.max_message_bytes` in `config/default.yaml`. Default: `102400` (100KB). The schema enforces this is an integer ≥ 1.
 
 ---
 
@@ -233,12 +233,12 @@ The `message.rejected` event is already in the dispatch layer's publish permissi
 - Skill manifest with invalid `action_risk` value → throws
 - Valid `default.yaml` → no error
 - `default.yaml` with `trust_score_floor: 1.5` → throws (out of range)
-- `default.yaml` with `maxMessageBytes: "big"` → throws (wrong type)
+- `default.yaml` with `max_message_bytes: "big"` → throws (wrong type)
 - `default.yaml` with unknown key → throws (additionalProperties)
 
 **`tests/unit/dispatch/dispatcher.test.ts`** (additions to existing file)
-- Message with content ≤ maxMessageBytes → routes normally
-- Message with content > maxMessageBytes → publishes `message.rejected`, does not publish `agent.task`
+- Message with content ≤ `max_message_bytes` → routes normally
+- Message with content > `max_message_bytes` → publishes `message.rejected`, does not publish `agent.task`
 - Rejection event has correct `parentEventId` pointing to the inbound message
 
 ### Manual verification at startup
@@ -255,7 +255,7 @@ Fatal: Startup validation failed for agents/coordinator.yaml:
 ## Acceptance Criteria (from issue #196)
 
 - [x] Inbound messages exceeding 100KB are rejected before bus routing; rejection is audit-logged
-- [x] Max message size is configurable in `config/default.yaml` as `channels.maxMessageBytes`
+- [x] Max message size is configurable in `config/default.yaml` as `channels.max_message_bytes`
 - [x] Bootstrap orchestrator validates all `agents/*.yaml` files against JSON Schema at startup
 - [x] Bootstrap orchestrator validates all `skills/*/skill.json` manifests against JSON Schema at startup
 - [x] Invalid config or manifest causes process exit with a descriptive error (not a silent failure)

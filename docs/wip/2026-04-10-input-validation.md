@@ -4,7 +4,7 @@
 
 **Goal:** Add fail-fast startup validation for agent configs, skill manifests, and `config/default.yaml` using JSON Schema + Ajv, and reject oversized inbound messages in the dispatcher before routing.
 
-**Architecture:** A centralized `src/startup/validator.ts` runs before the DB connection and validates all config files against JSON Schema files in `schemas/` at the project root. The dispatcher gets a `maxMessageBytes` guard that publishes `message.rejected` (already a dispatch-layer event) for oversized content.
+**Architecture:** A centralized `src/startup/validator.ts` runs before the DB connection and validates all config files against JSON Schema files in `schemas/` at the project root. The dispatcher gets a `max_message_bytes` guard that publishes `message.rejected` (already a dispatch-layer event) for oversized content.
 
 **Tech Stack:** Ajv v8 (JSON Schema validation), Vitest (tests), existing `js-yaml` for YAML parsing
 
@@ -269,7 +269,7 @@ All fields optional — the file is intentionally partial. Types and ranges are 
             "enabled": { "type": "boolean" }
           }
         },
-        "maxMessageBytes": { "type": "integer", "minimum": 1 }
+        "max_message_bytes": { "type": "integer", "minimum": 1 }
       }
     },
     "browser": {
@@ -562,7 +562,7 @@ security:
 **`tests/unit/startup/fixtures/config/wrong-type.yaml`:**
 ```yaml
 channels:
-  maxMessageBytes: "not-a-number"
+  max_message_bytes: "not-a-number"
 ```
 
 **`tests/unit/startup/fixtures/config/unknown-key.yaml`:**
@@ -717,7 +717,7 @@ security:
 **`tests/unit/startup/fixtures/config/wrong-type/default.yaml`:**
 ```yaml
 channels:
-  maxMessageBytes: "not-a-number"
+  max_message_bytes: "not-a-number"
 ```
 
 **`tests/unit/startup/fixtures/config/unknown-key/default.yaml`:**
@@ -833,10 +833,10 @@ describe('startup validator — default config', () => {
     ).rejects.toThrow(/trust_score_floor/);
   });
 
-  it('throws when maxMessageBytes is the wrong type (string)', async () => {
+  it('throws when max_message_bytes is the wrong type (string)', async () => {
     await expect(
       runWith({ config: path.join(F, 'config/wrong-type') }),
-    ).rejects.toThrow(/maxMessageBytes/);
+    ).rejects.toThrow(/max_message_bytes/);
   });
 
   it('throws for unknown top-level keys (e.g. trust-policy typo)', async () => {
@@ -1097,21 +1097,21 @@ git -C /Users/josephfung/Projects/office-of-the-ceo/worktrees/curia-input-valida
 
 ---
 
-### Task 7: Add `maxMessageBytes` to config
+### Task 7: Add `max_message_bytes` to config
 
 **Files:**
 - Modify: `config/default.yaml`
 - Modify: `src/config.ts`
 
-- [ ] **Step 1: Add `maxMessageBytes` to `config/default.yaml`**
+- [ ] **Step 1: Add `max_message_bytes` to `config/default.yaml`**
 
-The `channels` section currently has `cli.enabled`. Add `maxMessageBytes` as a sibling of `cli` (not nested inside it):
+The `channels` section currently has `cli.enabled`. Add `max_message_bytes` as a sibling of `cli` (not nested inside it):
 
 ```yaml
 channels:
   cli:
     enabled: true
-  maxMessageBytes: 102400   # 100KB — inbound messages exceeding this are rejected before routing
+  max_message_bytes: 102400   # 100KB — inbound messages exceeding this are rejected before routing
 ```
 
 - [ ] **Step 2: Update `YamlConfig.channels` in `src/config.ts`**
@@ -1123,7 +1123,7 @@ Find the `YamlConfig` interface and update the `channels` property:
     cli?: { enabled?: boolean };
     /** Max inbound message content size in bytes. Default: 102400 (100KB).
      *  Messages exceeding this are rejected by the dispatcher before routing. */
-    maxMessageBytes?: number;
+    max_message_bytes?: number;
   };
 ```
 
@@ -1131,7 +1131,7 @@ Find the `YamlConfig` interface and update the `channels` property:
 
 ```bash
 git -C /Users/josephfung/Projects/office-of-the-ceo/worktrees/curia-input-validation add config/default.yaml src/config.ts
-git -C /Users/josephfung/Projects/office-of-the-ceo/worktrees/curia-input-validation commit -m "feat: add channels.maxMessageBytes config (default 100KB)"
+git -C /Users/josephfung/Projects/office-of-the-ceo/worktrees/curia-input-validation commit -m "feat: add channels.max_message_bytes config (default 100KB)"
 ```
 
 ---
@@ -1365,7 +1365,7 @@ In `src/index.ts`, find where `new Dispatcher(...)` is called. Add `maxMessageBy
     conversationCheckpointDebounceMs: yamlConfig.dispatch?.conversationCheckpointDebounceMs,
     trustScorerWeights,
     trustScoreFloor: yamlConfig.security?.trust_score_floor,
-    maxMessageBytes: yamlConfig.channels?.maxMessageBytes ?? 102_400,
+    maxMessageBytes: yamlConfig.channels?.max_message_bytes ?? 102_400,
   });
 ```
 
@@ -1407,11 +1407,11 @@ Under `## [Unreleased]` in `CHANGELOG.md`, add:
 ```markdown
 ### Security
 - **Input validation** — startup validator (`src/startup/validator.ts`) validates `config/default.yaml`, all `agents/*.yaml`, and all `skills/*/skill.json` against JSON Schema (Ajv) at boot time. Invalid configs cause a descriptive `process.exit(1)` before any service initializes (spec §06).
-- **Message size limiting** — dispatcher rejects inbound messages exceeding `channels.maxMessageBytes` (default 100KB) before routing; rejection is audit-logged as `message.rejected` with causal `parentEventId` (spec §06).
+- **Message size limiting** — dispatcher rejects inbound messages exceeding `channels.max_message_bytes` (default 100KB) before routing; rejection is audit-logged as `message.rejected` with causal `parentEventId` (spec §06).
 
 ### Added
 - **`schemas/` directory** — JSON Schema files for agent configs, skill manifests, and `config/default.yaml`. Schemas are legible without TypeScript and can be validated with third-party tools.
-- **`channels.maxMessageBytes`** in `config/default.yaml` — configures the inbound message size limit (default `102400`).
+- **`channels.max_message_bytes`** in `config/default.yaml` — configures the inbound message size limit (default `102400`).
 
 ### Changed
 - **`MessageRejectedPayload.reason`** extended with `'message_too_large'` — bus event API surface change.
@@ -1444,7 +1444,7 @@ git -C /Users/josephfung/Projects/office-of-the-ceo/worktrees/curia-input-valida
 | Spec requirement | Task that implements it |
 |---|---|
 | Inbound messages exceeding 100KB rejected before bus routing | Task 9 |
-| Max size configurable as `channels.maxMessageBytes` | Task 7 |
+| Max size configurable as `channels.max_message_bytes` | Task 7 |
 | Rejection audit-logged via `message.rejected` with `parentEventId` | Task 9 |
 | Agent YAML validated against JSON Schema at startup | Tasks 3, 5, 6 |
 | Skill manifests validated against JSON Schema at startup | Tasks 3, 5, 6 |
