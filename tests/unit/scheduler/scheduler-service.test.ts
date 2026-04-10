@@ -677,20 +677,23 @@ describe('SchedulerService', () => {
       expect(params).toContain(60);
     });
 
-    it('omits expected_duration_seconds when not provided (preserves existing DB value)', async () => {
+    it('writes NULL for expected_duration_seconds when not provided, clearing any stale DB value', async () => {
       pool.query.mockResolvedValueOnce({ rows: [{ id: 'job-decl-2' }] });
 
       await svc.upsertDeclarativeJob('coordinator', {
         cron: '0 9 * * 1',
         task: 'Weekly standup',
-        // no expectedDurationSeconds
+        // no expectedDurationSeconds — should write NULL, not omit the column
       });
 
-      const [sql] = pool.query.mock.calls[0] as [string];
-      expect(sql).not.toContain('expected_duration_seconds');
+      const [sql, params] = pool.query.mock.calls[0] as [string, unknown[]];
+      // Column is always present so DO UPDATE can clear a stale value
+      expect(sql).toContain('expected_duration_seconds');
+      // NULL (not a number) is written
+      expect(params[params.length - 1]).toBeNull();
     });
 
-    it('ignores invalid expectedDurationSeconds values (0, negative, NaN, non-integer)', async () => {
+    it('writes NULL for invalid expectedDurationSeconds values (0, negative, NaN, non-integer)', async () => {
       const invalids = [0, -1, NaN, Infinity, 1.5, -0.5];
 
       for (const invalid of invalids) {
@@ -702,8 +705,10 @@ describe('SchedulerService', () => {
           expectedDurationSeconds: invalid,
         });
 
-        const [sql] = pool.query.mock.calls[pool.query.mock.calls.length - 1] as [string];
-        expect(sql).not.toContain('expected_duration_seconds');
+        const [sql, params] = pool.query.mock.calls[pool.query.mock.calls.length - 1] as [string, unknown[]];
+        // Column is always included — invalid value falls back to NULL
+        expect(sql).toContain('expected_duration_seconds');
+        expect(params[params.length - 1]).toBeNull();
       }
     });
   });

@@ -419,17 +419,24 @@ export class SchedulerService {
       );
     }
 
-    const hasExpectedDuration = validDuration;
+    // NULL when absent or invalid — always written to DO UPDATE so that removing
+    // expectedDurationSeconds from the YAML clears the stale DB value on the next restart,
+    // rather than leaving a now-wrong watchdog threshold silently in place.
+    const durationToWrite = validDuration ? rawDuration : null;
 
     // Include timezone so completeJobRun() re-advances next_run_at in the same zone.
     // Without this, the DB column would default to 'UTC' while next_run_at was computed
     // using this.timezone — causing every post-completion firing to be offset by the UTC delta.
+    // expected_duration_seconds is always included (as $8) so the DO UPDATE can clear it to NULL
+    // when the field is removed from the YAML — the conditional-column pattern would leave a
+    // stale value in place.
     const sql = `
-      INSERT INTO scheduled_jobs (agent_id, cron_expr, task_payload, status, next_run_at, created_by, timezone${hasExpectedDuration ? ', expected_duration_seconds' : ''})
-      VALUES ($1, $2, $3, $4, $5, $6, $7${hasExpectedDuration ? ', $8' : ''})
+      INSERT INTO scheduled_jobs (agent_id, cron_expr, task_payload, status, next_run_at, created_by, timezone, expected_duration_seconds)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
       ON CONFLICT (agent_id, cron_expr, (task_payload::text)) WHERE created_by = 'system'
       DO UPDATE SET next_run_at = $5,
-                    timezone = $7${hasExpectedDuration ? ',\n                    expected_duration_seconds = $8' : ''}
+                    timezone = $7,
+                    expected_duration_seconds = $8
       RETURNING id
     `;
     const params: unknown[] = [
@@ -440,10 +447,8 @@ export class SchedulerService {
       nextRunAt,
       'system',
       this.timezone,
+      durationToWrite,
     ];
-    if (hasExpectedDuration) {
-      params.push(rawDuration);
-    }
 
     const { rows } = await this.pool.query(sql, params);
     return (rows[0] as { id: string }).id;
