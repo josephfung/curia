@@ -94,13 +94,13 @@ export async function messageRoutes(
       const message = err instanceof Error ? err.message : String(err);
       logger.error({ err, conversationId }, 'HTTP message handling failed');
 
-      // Distinguish oversized (413), other rejections (403), timeout (504), internal (500).
-      // Use instanceof + reason check rather than string matching so wording changes can't
-      // silently break the status code.
+      // Distinguish oversized (413), rate-limited (429), other rejections (403),
+      // timeout (504), and internal errors (500). Use instanceof + err.statusCode
+      // rather than string matching so wording changes can't silently break status codes.
       const isRejected = err instanceof MessageRejectedError;
       const isTooLarge = isRejected && err.reason === 'message_too_large';
       const isTimeout = message.includes('timeout') || message.includes('Timeout');
-      const status = isTooLarge ? 413 : isRejected ? 403 : isTimeout ? 504 : 500;
+      const status = isTooLarge ? 413 : isRejected ? err.statusCode : isTimeout ? 504 : 500;
       return reply.status(status).send({ error: message });
     }
   });
