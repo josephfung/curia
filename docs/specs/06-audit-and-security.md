@@ -352,7 +352,7 @@ These are non-negotiable for launch.
 | Error strings scrubbed before LLM injection | Done (#250) |
 | Agent config validation blocks malformed YAML at startup | Not Done |
 | HTTP API channel requires token authentication | Done |
-| Rate limiting active at dispatch layer | Not Done |
+| Rate limiting active at dispatch layer | Done (#198) |
 | Intent drift detection pauses tasks (not just logs) | Not Done |
 | Email channel exposes provider-level SPF/DKIM/DMARC validation via Nylas message metadata | Done (#195) |
 | Anti-injection system prompt hardening and architectural containment (Layers 2 & 3) | Done (#194) |
