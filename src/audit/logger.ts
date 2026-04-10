@@ -3,6 +3,40 @@ import type { BusEvent } from '../bus/events.js';
 import type { Logger } from '../logger.js';
 
 /**
+ * Recursively strip null bytes (U+0000) from all string values in an object.
+ *
+ * PostgreSQL cannot store U+0000 in text or JSONB columns — it rejects the
+ * write with error 22P05 ("unsupported Unicode escape sequence"). Skill
+ * payloads (especially web-fetch results) can carry null bytes when the
+ * fetched URL returns binary or mixed-encoding content. Stripping them here,
+ * at the single write-path into audit_log, is the correct choke point: it
+ * covers all event types regardless of which skill produced the payload.
+ *
+ * Null bytes are replaced with '' (empty string) rather than a placeholder
+ * like '<0x00>' to keep payloads clean for downstream consumers. The loss of
+ * the byte is acceptable — audit payloads are diagnostic records, not
+ * faithful binary stores.
+ */
+function stripNullBytes(value: unknown): unknown {
+  if (typeof value === 'string') {
+    return value.replace(/\u0000/g, '');
+  }
+  if (Array.isArray(value)) {
+    return value.map(stripNullBytes);
+  }
+  // Only recurse into plain objects. Non-plain objects (Date, Buffer, RegExp, etc.)
+  // must pass through untouched — Object.entries() on a Date returns [] which would
+  // silently replace the Date with {}, corrupting timestamp fields like mergedAt.
+  // JSON.stringify handles non-plain objects correctly on its own (e.g. Date.toISOString()).
+  if (value !== null && typeof value === 'object' && Object.getPrototypeOf(value) === Object.prototype) {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).map(([k, v]) => [k, stripNullBytes(v)]),
+    );
+  }
+  return value;
+}
+
+/**
  * Write-ahead audit logger. Persists every bus event to the audit_log table
  * BEFORE the event is delivered to other subscribers. This ensures audit
  * completeness even if the process crashes mid-delivery.
@@ -44,6 +78,19 @@ export class AuditLogger {
     const conversationId =
       typeof payload.conversationId === 'string' ? payload.conversationId : null;
 
+    // Sanitize before the DB write in a separate try/catch so a sanitization
+    // failure is logged with its own distinct message — not conflated with a
+    // DB connectivity or schema error from the INSERT below.
+    // TODO: JSON.stringify can also throw on circular references (pre-existing,
+    // not introduced here). If that becomes a live issue, wrap it separately too.
+    let serializedPayload: string;
+    try {
+      serializedPayload = JSON.stringify(stripNullBytes(event.payload));
+    } catch (err) {
+      this.logger.error({ err, eventId: event.id, eventType: event.type }, 'Audit log payload sanitization failed — event not written');
+      throw err;
+    }
+
     try {
       await this.pool.query(
         // All columns are explicitly listed so schema additions don't silently
@@ -57,7 +104,7 @@ export class AuditLogger {
           event.type,
           event.sourceLayer,
           sourceId,
-          JSON.stringify(event.payload),
+          serializedPayload,
           conversationId,
           event.parentEventId ?? null,
         ],
