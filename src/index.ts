@@ -672,9 +672,6 @@ async function main(): Promise<void> {
 
   // PII scrubbing for LLM-facing error strings — loads extra patterns from
   // config/default.yaml pii.extra_patterns and injects them into classify.ts.
-  // Non-fatal on loader error: warn and fall back to built-in defaults.
-  // PII scrubbing for LLM-facing error strings — loads extra patterns from
-  // config/default.yaml pii.extra_patterns and injects them into classify.ts.
   // An invalid extra pattern is treated as fatal: the operator's intent was to
   // protect a specific PII type and silently ignoring their config would mean
   // that data flows unredacted to the LLM without any warning.
@@ -685,7 +682,7 @@ async function main(): Promise<void> {
     // invalid regex or missing fields, which is treated as a startup-blocking misconfiguration.
     const extraPiiPatterns = parseExtraPiiPatterns(
       piiPatternEntries,
-      configDir + '/default.yaml',
+      path.join(configDir, 'default.yaml'),
     );
     setErrorPiiPatterns(extraPiiPatterns);
     extraPiiPatternCount = extraPiiPatterns.length;
