@@ -23,6 +23,7 @@ import { randomUUID } from 'node:crypto';
 import type { NylasClient, NylasMessage, ListMessagesOptions, SendEmailOptions } from '../channels/email/nylas-client.js';
 import type { SignalRpcClient } from '../channels/signal/signal-rpc-client.js';
 import type { ContactService } from '../contacts/contact-service.js';
+import type { TrustLevel } from '../contacts/types.js';
 import type { OutboundContentFilter } from '../dispatch/outbound-filter.js';
 import type { EventBus } from '../bus/bus.js';
 import type { Logger } from '../logger.js';
@@ -42,6 +43,10 @@ export interface EmailSendRequest {
   cc?: string[];
   /** When set, Nylas threads the outbound message as a reply */
   replyToMessageId?: string;
+  /** Whether this send was triggered by a user-initiated request or a scheduled routine.
+   *  Required — the content filter's contact-data-leak rule uses this to apply the
+   *  correct policy. Derive from ctx.triggerSource in skill handlers. */
+  triggerSource: 'routine' | 'user-initiated';
 }
 
 export interface SignalOutboundRequest {
@@ -57,6 +62,10 @@ export interface SignalOutboundRequest {
    */
   groupId?: string;
   message: string;
+  /** Whether this send was triggered by a user-initiated request or a scheduled routine.
+   *  Required — the content filter's contact-data-leak rule uses this to apply the
+   *  correct policy. Derive from ctx.triggerSource in skill handlers. */
+  triggerSource: 'routine' | 'user-initiated';
 }
 
 /**
@@ -191,24 +200,33 @@ export class OutboundGateway {
     const messageBody = request.channel === 'email' ? request.body : request.message;
 
     // ------------------------------------------------------------------
-    // Step 1: Contact blocked check
+    // Step 1: Contact blocked check + trust level capture
     // ------------------------------------------------------------------
     // Resolve the recipient to a known contact. If they are explicitly blocked
     // by the CEO, reject immediately without touching the transport layer or filter.
+    // We also capture the contact's trust level here for the content filter's
+    // contact-data-leak rule — no extra DB call needed.
     //
     // Fail-open on DB errors: an infra failure should not silently prevent
     // sending. We warn so the anomaly is visible in logs/alerting.
+    let recipientTrustLevel: TrustLevel | null = null;
     try {
       const contact = await this.contactService.resolveByChannelIdentity(request.channel, recipientId);
-      if (contact !== null && contact.status === 'blocked') {
-        this.log.warn(
-          { channel: request.channel, recipientId: redactId(recipientId), contactId: contact.contactId },
-          'outbound-gateway: send blocked — recipient is blocked',
-        );
-        return { success: false, blockedReason: 'Recipient is blocked' };
+      if (contact !== null) {
+        if (contact.status === 'blocked') {
+          this.log.warn(
+            { channel: request.channel, recipientId: redactId(recipientId), contactId: contact.contactId },
+            'outbound-gateway: send blocked — recipient is blocked',
+          );
+          return { success: false, blockedReason: 'Recipient is blocked' };
+        }
+        // Capture trust level for the content filter — used to allow contact data
+        // in user-initiated responses to explicitly trusted recipients (e.g. CEO's EA).
+        recipientTrustLevel = contact.trustLevel;
       }
     } catch (err) {
       // DB or service error — log at warn and proceed.
+      // recipientTrustLevel stays null, which is the safe/conservative fallback.
       this.log.warn(
         { err, channel: request.channel, recipientId: redactId(recipientId) },
         'outbound-gateway: contact resolution failed, proceeding without blocked check',
@@ -235,6 +253,8 @@ export class OutboundGateway {
         recipientEmail: recipientId,
         conversationId: '',
         channelId: request.channel,
+        triggerSource: request.triggerSource,
+        recipientTrustLevel,
       });
       filterPassed = filterResult.passed;
       filterFindings = filterResult.findings;
@@ -294,10 +314,14 @@ export class OutboundGateway {
       if (this.ceoEmail && this.nylasClient) {
         // dispatchEmail bypasses this.send() to avoid infinite recursion.
         // The notification body is a hardcoded template — no user-supplied content.
+        // triggerSource is required on EmailSendRequest but dispatchEmail skips the
+        // content filter entirely, so the value is irrelevant here; 'routine' is
+        // used as the semantically correct classification for a system alert.
         const notifyResult = await this.dispatchEmail({
           channel: 'email',
           to: this.ceoEmail,
           subject: 'Action needed — blocked outbound reply',
+          triggerSource: 'routine',
           body: [
             'An outbound message was blocked by the content filter.',
             '',

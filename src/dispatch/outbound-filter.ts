@@ -12,11 +12,22 @@
 // The outbound filter is a separate security boundary — sharing code would couple
 // the two boundaries and risk one change silently weakening the other.
 
+import type { TrustLevel } from '../contacts/types.js';
+
 export interface FilterCheckInput {
   content: string;
   recipientEmail: string;
   conversationId: string;
   channelId: string;
+  // Whether this message was triggered by a user-initiated request or a scheduled routine.
+  // Required: callers must explicitly classify the trigger source so the contact-data-leak
+  // rule can apply the correct policy. No silent default — omitting this field is a type error.
+  triggerSource: 'routine' | 'user-initiated';
+  // Trust level of the recipient contact as resolved from the contact DB.
+  // null means the recipient was not found in the DB or has no per-contact override.
+  // Used by the contact-data-leak rule to allow trusted contacts to receive contact
+  // data when the request was user-initiated (e.g. CEO's EA asking for a phone number).
+  recipientTrustLevel: TrustLevel | null;
 }
 
 export interface FilterFinding {
@@ -147,7 +158,7 @@ export class OutboundContentFilter {
       ...this.checkSystemPromptFragments(normalizedContent),
       ...this.checkInternalStructure(normalizedContent),
       ...this.checkSecretPatterns(normalizedContent),
-      ...this.checkContactDataLeak(normalizedContent, input.recipientEmail),
+      ...this.checkContactDataLeak(normalizedContent, input.recipientEmail, input.triggerSource, input.recipientTrustLevel),
     ];
 
     if (findings.length > 0) {
@@ -275,12 +286,33 @@ export class OutboundContentFilter {
   /**
    * Rule: contact-data-leak
    *
-   * Finds any email address in the content that is not the recipient or CEO.
-   * Third-party emails appearing in outbound messages risk leaking contacts
-   * from the CEO's address book to unintended recipients.
+   * Finds any email address in the content that is not the recipient or CEO,
+   * then decides whether to block based on trigger source and recipient trust level.
+   *
+   * Block condition:
+   *   third-party email present AND (!recipientIsTrusted OR triggerSource === 'routine')
+   *
+   * This means:
+   *   - Automated routines (daily briefings, scheduled reports): always block third-party
+   *     emails regardless of recipient — the agent should never incidentally include
+   *     contact data in an automated message.
+   *   - User-initiated requests to a trusted recipient (CEO or high-trust contact):
+   *     allow — e.g. the CEO asking "what is Hamilton's email?" or the CFO asking for
+   *     a board member's contact. The CEO has explicitly requested the information.
+   *   - User-initiated requests to an untrusted recipient: still block — we never send
+   *     third-party contact data to an external party who has not been explicitly trusted.
+   *
+   * recipientIsTrusted is true when:
+   *   - recipientEmail matches ceoEmail (the principal always qualifies), OR
+   *   - the recipient contact has trustLevel === 'high' in the contact DB
+   *     (e.g. the CEO's EA or CFO, explicitly elevated by the CEO)
    */
-  private checkContactDataLeak(content: string, recipientEmail: string): FilterFinding[] {
-    const findings: FilterFinding[] = [];
+  private checkContactDataLeak(
+    content: string,
+    recipientEmail: string,
+    triggerSource: 'routine' | 'user-initiated',
+    recipientTrustLevel: TrustLevel | null,
+  ): FilterFinding[] {
     // Only add ceoEmail if it is actually configured — an empty string (missing
     // CEO_PRIMARY_EMAIL env var) would be a no-op entry that never matches but
     // obscures the fact that the config is incomplete.
@@ -289,11 +321,28 @@ export class OutboundContentFilter {
       ...(this.config.ceoEmail ? [this.config.ceoEmail.toLowerCase()] : []),
     ]);
 
-    // Reset regex before use (global regex maintains lastIndex state between calls)
-    EMAIL_REGEX.lastIndex = 0;
-    let match: RegExpExecArray | null;
+    // Determine if the recipient qualifies as trusted.
+    // The CEO's own email always qualifies (checked via config.ceoEmail comparison).
+    // A high-trust contact also qualifies — trustLevel='high' is an explicit CEO designation.
+    const recipientIsTrusted =
+      (this.config.ceoEmail !== '' && recipientEmail.toLowerCase() === this.config.ceoEmail.toLowerCase()) ||
+      recipientTrustLevel === 'high';
+
+    // If the recipient is trusted and this is a user-initiated request, the CEO has
+    // explicitly requested contact data — allow the message through without scanning.
+    // This short-circuit avoids false positives (e.g. "what is Hamilton's email?").
+    if (recipientIsTrusted && triggerSource === 'user-initiated') {
+      return [];
+    }
+
+    // For all other cases (routine trigger, or untrusted recipient): scan for third-party
+    // emails and block any that appear. The allowedEmails set still permits the recipient
+    // and CEO email addresses to appear in content without triggering a finding.
+    const findings: FilterFinding[] = [];
     const seen = new Set<string>();
 
+    EMAIL_REGEX.lastIndex = 0;
+    let match: RegExpExecArray | null;
     while ((match = EMAIL_REGEX.exec(content)) !== null) {
       const email = match[0].toLowerCase();
       if (!allowedEmails.has(email) && !seen.has(email)) {

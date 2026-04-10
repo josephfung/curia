@@ -131,6 +131,7 @@ export class SignalSendHandler implements SkillHandler {
           channel: 'signal',
           groupId: group_id,
           message,
+          triggerSource: ctx.triggerSource,
         });
 
         if (!result.success) {
@@ -154,6 +155,7 @@ export class SignalSendHandler implements SkillHandler {
         channel: 'signal',
         recipient: recipient,
         message,
+        triggerSource: ctx.triggerSource,
       });
 
       if (!result.success) {

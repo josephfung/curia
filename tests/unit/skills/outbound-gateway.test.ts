@@ -47,6 +47,7 @@ describe('OutboundGateway', () => {
     to: 'recipient@example.com',
     subject: 'Hello',
     body: 'Hi there!',
+    triggerSource: 'user-initiated' as const,
   };
 
   it('rejects sends to blocked contacts without calling nylasClient or contentFilter', async () => {
@@ -316,6 +317,8 @@ describe('OutboundGateway', () => {
         recipientEmail: baseRequest.to,
         conversationId: '',
         channelId: baseRequest.channel,
+        triggerSource: baseRequest.triggerSource,
+        recipientTrustLevel: null,
       });
     });
   });

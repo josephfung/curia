@@ -409,6 +409,18 @@ export class AgentRuntime {
       ? { contactId: callerSenderCtx.contactId, role: callerSenderCtx.role, channel: taskEvent.payload.channelId }
       : undefined;
 
+    // Derive trigger source from the task's channel. Scheduler tasks set channelId='scheduler'
+    // to indicate an automated routine; everything else is user-initiated (a human sent a message).
+    // This is passed to each skill invocation so outbound skills can forward it to the content
+    // filter, which uses it to decide whether contact data may appear in the response.
+    //
+    // @TODO (#210 follow-up): tasks originating from the scheduler that fan out via the bullpen
+    // will carry channelId='bullpen' (set by BullpenDispatcher), not 'scheduler'. Those will be
+    // incorrectly classified as 'user-initiated' here. Fix: propagate triggerSource through the
+    // agent.task payload so downstream tasks in a scheduler-originated chain inherit it.
+    const triggerSource: 'routine' | 'user-initiated' =
+      taskEvent.payload.channelId === 'scheduler' ? 'routine' : 'user-initiated';
+
     while (response.type === 'tool_use' && executionLayer) {
       // Check turn budget before processing this round of tool calls
       budget.turnsUsed++;
@@ -460,6 +472,7 @@ export class AgentRuntime {
         const result = await executionLayer.invoke(toolCall.name, toolCall.input, caller, {
           taskEventId: taskEvent.id,
           agentId,
+          triggerSource,
         });
         const durationMs = Date.now() - startTime;
 

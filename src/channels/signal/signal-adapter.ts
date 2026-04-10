@@ -273,6 +273,9 @@ export class SignalAdapter {
       recipient,
       groupId,
       message: outbound.payload.content,
+      // The outbound.message bus event is only emitted by the dispatcher for
+      // inbound-Signal-triggered responses — same reasoning as the email adapter.
+      triggerSource: 'user-initiated',
     });
 
     if (result.success) {
@@ -408,6 +411,11 @@ export class SignalAdapter {
         to: ceoEmail,
         subject: 'Signal group message held — member verification needed',
         body,
+        // System-generated notification with a hardcoded template — classify as
+        // routine so it is subject to the same contact-data-leak policy as
+        // automated messages (the body contains no third-party emails, but the
+        // conservative classification is correct semantically).
+        triggerSource: 'routine',
       });
     } catch (err) {
       // Non-fatal — the message is still held. Log at error so it's visible in alerting.
