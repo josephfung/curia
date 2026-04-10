@@ -81,12 +81,18 @@ describe('EventBus', () => {
     expect(onEvent).toHaveBeenCalledWith(event);
   });
 
-  it('calls onDelivered hook after all subscribers have been attempted', async () => {
+  it('calls onDelivered hook strictly after all subscribers have been attempted', async () => {
     // The onDelivered hook is used by the audit logger to flip acknowledged = true
     // after all handlers have been dispatched (regardless of per-subscriber errors).
-    const onDelivered = vi.fn();
+    // Verify ordering by tracking invocation sequence across two subscribers.
+    const callOrder: string[] = [];
+    const subscriber1 = vi.fn(() => { callOrder.push('subscriber1'); });
+    const subscriber2 = vi.fn(() => { callOrder.push('subscriber2'); });
+    const onDelivered = vi.fn(() => { callOrder.push('onDelivered'); });
+
     bus = new EventBus(createLogger('error'), undefined, onDelivered);
-    bus.subscribe('inbound.message', 'dispatch', vi.fn());
+    bus.subscribe('inbound.message', 'dispatch', subscriber1);
+    bus.subscribe('inbound.message', 'dispatch', subscriber2);
 
     const event = createInboundMessage({
       conversationId: 'conv-1',
@@ -96,15 +102,28 @@ describe('EventBus', () => {
     });
     await bus.publish('channel', event);
 
+    expect(subscriber1).toHaveBeenCalledWith(event);
+    expect(subscriber2).toHaveBeenCalledWith(event);
     expect(onDelivered).toHaveBeenCalledWith(event.id);
+    // onDelivered must come last — both subscribers were attempted first.
+    expect(callOrder).toEqual(['subscriber1', 'subscriber2', 'onDelivered']);
   });
 
   it('calls onDelivered even when a subscriber throws', async () => {
     // A failing subscriber must not prevent acknowledgement — the event was
-    // dispatched and the audit record should reflect that.
-    const onDelivered = vi.fn();
+    // dispatched and the audit record should reflect that. Verify ordering:
+    // both subscribers are attempted before onDelivered fires.
+    const callOrder: string[] = [];
+    const failingSubscriber = vi.fn(() => {
+      callOrder.push('failingSubscriber');
+      throw new Error('subscriber failure');
+    });
+    const successSubscriber = vi.fn(() => { callOrder.push('successSubscriber'); });
+    const onDelivered = vi.fn(() => { callOrder.push('onDelivered'); });
+
     bus = new EventBus(createLogger('error'), undefined, onDelivered);
-    bus.subscribe('inbound.message', 'dispatch', () => { throw new Error('subscriber failure'); });
+    bus.subscribe('inbound.message', 'dispatch', failingSubscriber);
+    bus.subscribe('inbound.message', 'dispatch', successSubscriber);
 
     const event = createInboundMessage({
       conversationId: 'conv-1',
@@ -115,6 +134,8 @@ describe('EventBus', () => {
     await bus.publish('channel', event);
 
     expect(onDelivered).toHaveBeenCalledWith(event.id);
+    // onDelivered must fire after both subscribers — even the failing one.
+    expect(callOrder).toEqual(['failingSubscriber', 'successSubscriber', 'onDelivered']);
   });
 
   it('resolves publish() even when onDelivered throws', async () => {

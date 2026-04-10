@@ -116,43 +116,60 @@ export class AuditLogger {
    * This scan is diagnostic only.
    */
   async scanForUnacknowledged(): Promise<void> {
-    type ScanRow = { id: string; event_type: string; timestamp: Date };
-    let rows: ScanRow[];
-    try {
-      const result = await this.pool.query<ScanRow>(
-        `SELECT id, event_type, timestamp FROM audit_log WHERE acknowledged = false ORDER BY timestamp ASC`,
-      );
-      rows = result.rows;
-    } catch (err) {
-      // Log at error — by the time this scan runs, the DB connection and schema are
-      // already confirmed healthy (the migration runner would have exited the process
-      // on any DB error). A failure here indicates a permissions problem, schema
-      // mismatch, or query bug — not a transient connection blip. Startup continues
-      // regardless (the scan is diagnostic only), but the error is surfaced at the
-      // correct severity.
-      this.logger.error({ err }, 'Audit log startup scan failed — could not query unacknowledged rows');
-      return;
-    }
-
-    if (rows.length === 0) {
-      this.logger.debug('Audit log startup scan: no unacknowledged events');
-      return;
-    }
-
     // Cap the number of events included in the log entry to avoid overflowing
     // log aggregator per-entry size limits (typically 64KB–256KB). The total
     // count is always logged so operators know whether rows were omitted.
     const LOG_LIMIT = 50;
-    const shown = rows.slice(0, LOG_LIMIT);
+
+    // Query the total count first — avoids materialising potentially millions
+    // of rows into application memory (e.g. after a crash loop). Only if
+    // unacknowledged rows exist do we fetch the first LOG_LIMIT details.
+    //
+    // Log at error — by the time this scan runs, the DB connection and schema
+    // are already confirmed healthy (the migration runner would have exited on
+    // any DB error). A failure here indicates a permissions problem, schema
+    // mismatch, or query bug — not a transient connection blip. Startup
+    // continues regardless (the scan is diagnostic only), but the error is
+    // surfaced at the correct severity.
+    let count: number;
+    try {
+      const countResult = await this.pool.query<{ count: string }>(
+        `SELECT COUNT(*) AS count FROM audit_log WHERE acknowledged = false`,
+      );
+      count = parseInt(countResult.rows[0].count, 10);
+    } catch (err) {
+      this.logger.error({ err }, 'Audit log startup scan failed — could not query unacknowledged rows');
+      return;
+    }
+
+    if (count === 0) {
+      this.logger.debug('Audit log startup scan: no unacknowledged events');
+      return;
+    }
+
+    // Fetch only the first LOG_LIMIT rows for the log entry — the total count
+    // already tells operators the full scale of the problem.
+    type ScanRow = { id: string; event_type: string; timestamp: Date };
+    let shown: ScanRow[];
+    try {
+      const result = await this.pool.query<ScanRow>(
+        `SELECT id, event_type, timestamp FROM audit_log WHERE acknowledged = false ORDER BY timestamp ASC LIMIT $1`,
+        [LOG_LIMIT],
+      );
+      shown = result.rows;
+    } catch (err) {
+      this.logger.error({ err }, 'Audit log startup scan failed — could not fetch unacknowledged row details');
+      return;
+    }
 
     // Log at warn level — unacknowledged rows mean delivery may have been
     // incomplete on the previous run. This is not an error (crash recovery
     // is expected), but it warrants operator attention.
     this.logger.warn(
       {
-        count: rows.length,
+        count,
         shown: shown.length,
-        truncated: rows.length > LOG_LIMIT,
+        truncated: count > LOG_LIMIT,
         events: shown.map(r => ({ id: r.id, eventType: r.event_type, timestamp: r.timestamp })),
       },
       'Audit log startup scan: unacknowledged events detected — delivery may have been incomplete on previous run',

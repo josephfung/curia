@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
 import pg from 'pg';
 import { AuditLogger } from '../../src/audit/logger.js';
 import { EventBus } from '../../src/bus/bus.js';
@@ -22,6 +22,25 @@ describeIf('audit_log append-only enforcement', () => {
 
     // Sanity check: migrations have run and the table exists.
     await pool.query('SELECT 1 FROM audit_log LIMIT 0');
+
+    // Fast-fail if migration 021 (append-only trigger) hasn't been applied.
+    // Without the trigger the "rejects" assertions below would fail with
+    // misleading "expected to throw but didn't" errors instead of surfacing
+    // the real problem: a missing migration.
+    const triggerResult = await pool.query<{ exists: boolean }>(
+      `SELECT EXISTS (
+         SELECT 1
+         FROM   pg_trigger  t
+         JOIN   pg_class    c ON c.oid = t.tgrelid
+         WHERE  c.relname = 'audit_log'
+         AND    t.tgname  = 'audit_log_immutable_trigger'
+       ) AS exists`,
+    );
+    if (!triggerResult.rows[0].exists) {
+      throw new Error(
+        'audit_log_immutable_trigger not found — run migration 021 before running integration tests',
+      );
+    }
   });
 
   afterAll(async () => {
@@ -166,20 +185,45 @@ describeIf('audit_log append-only enforcement', () => {
 
   // ---- AuditLogger.scanForUnacknowledged ----
 
-  it('scanForUnacknowledged returns without error when all rows are acknowledged', async () => {
+  it('scanForUnacknowledged resolves without throwing when called', async () => {
     // Insert a row and immediately acknowledge it.
     const id = await insertTestRow();
     await auditLogger.markAcknowledged(id);
 
-    // Should resolve without throwing. (Silent logger swallows output.)
-    await expect(auditLogger.scanForUnacknowledged()).resolves.toBeUndefined();
+    // The append-only table means prior tests left unacknowledged rows — we
+    // cannot guarantee the "no unacked rows" branch. What we CAN assert: the
+    // function always resolves regardless of DB state, and no spurious debug
+    // call is emitted for the row this test inserted (it's already acked).
+    //
+    // Use a spy logger to confirm no unexpected error-level calls occur.
+    const spyLogger = createSilentLogger();
+    const errorSpy = vi.spyOn(spyLogger, 'error');
+    const scanLogger = new AuditLogger(pool, spyLogger);
+
+    await expect(scanLogger.scanForUnacknowledged()).resolves.toBeUndefined();
+
+    // The scan query itself must not fail — any error would surface here.
+    expect(errorSpy).not.toHaveBeenCalled();
   });
 
-  it('scanForUnacknowledged resolves without error even when unacknowledged rows exist', async () => {
-    // Insert a row and leave it unacknowledged.
+  it('scanForUnacknowledged logs a warn with pending count when unacknowledged rows exist', async () => {
+    // Insert a row and leave it unacknowledged so the scan definitely finds it.
     await insertTestRow();
 
+    const spyLogger = createSilentLogger();
+    const warnSpy = vi.spyOn(spyLogger, 'warn');
+    const scanLogger = new AuditLogger(pool, spyLogger);
+
     // The scan logs a warning but does NOT throw — it's diagnostic only.
-    await expect(auditLogger.scanForUnacknowledged()).resolves.toBeUndefined();
+    await expect(scanLogger.scanForUnacknowledged()).resolves.toBeUndefined();
+
+    // Assert the observable logging contract: at least one warn call with a
+    // numeric count field > 0.
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ count: expect.any(Number) }),
+      expect.any(String),
+    );
+    const [payload] = warnSpy.mock.calls[0];
+    expect((payload as { count: number }).count).toBeGreaterThan(0);
   });
 });
