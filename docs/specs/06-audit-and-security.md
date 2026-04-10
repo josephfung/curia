@@ -94,9 +94,9 @@ For persistent tasks:
 
 ### PII Handling
 
-- Error strings surfaced to the LLM are scrubbed of PII patterns (email addresses, phone numbers) using configurable regex
+- Error strings surfaced to the LLM are scrubbed of PII patterns (email addresses, phone numbers, credit cards, SSNs) via `src/pii/scrubber.ts`, which extracts regexes from `@openredaction/openredaction` at startup. Operators can add extra patterns via `pii.extra_patterns` in `config/default.yaml`.
 - The audit log retains the full error (PII included) for debugging — the redaction is only for LLM-facing context
-- No PII is logged to stdout/pino — only to the audit log
+- No PII is logged to stdout/pino — field-level redaction via pino's `redact` config covers known PII field names (`senderId`, `email`, `senderEmail`, `phoneNumber`) as a last-resort safety net
 
 ---
 
@@ -349,7 +349,7 @@ These are non-negotiable for launch.
 | Secret values never appear in logs, audit, or LLM context | Not Done |
 | Tool output sanitization active for all skill results | Done |
 | Inbound message sanitization active (injection pattern detection) | Done |
-| Error strings scrubbed before LLM injection | Not Done |
+| Error strings scrubbed before LLM injection | Done (#250) |
 | Agent config validation blocks malformed YAML at startup | Not Done |
 | HTTP API channel requires token authentication | Done |
 | Rate limiting active at dispatch layer | Not Done |
