@@ -24,7 +24,11 @@ export class MessageRejectedError extends Error {
   readonly reason: 'unknown_sender' | 'provisional_sender' | 'blocked_sender' | 'message_too_large';
 
   constructor(reason: 'unknown_sender' | 'provisional_sender' | 'blocked_sender' | 'message_too_large') {
-    super(`Message rejected — sender not authorized (${reason})`);
+    super(
+      reason === 'message_too_large'
+        ? 'Message too large — inbound content exceeds the configured size limit'
+        : `Message rejected — sender not authorized (${reason})`,
+    );
     this.name = 'MessageRejectedError';
     this.reason = reason;
   }

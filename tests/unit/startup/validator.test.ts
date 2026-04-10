@@ -48,6 +48,12 @@ describe('startup validator — agent configs', () => {
       runWith({ agents: path.join(F, 'agents/unknown-key') }),
     ).rejects.toThrow(/typo_key/);
   });
+
+  it('throws when agent YAML is empty', async () => {
+    await expect(
+      runWith({ agents: path.join(F, 'agents/empty') }),
+    ).rejects.toThrow(/empty/);
+  });
 });
 
 // ── Skill manifest validation ────────────────────────────────────────────────
@@ -74,6 +80,12 @@ describe('startup validator — skill manifests', () => {
       runWith({ skills: path.join(F, 'skills/bad-action-risk') }),
     ).rejects.toThrow(/action_risk/);
   });
+
+  it('throws for an out-of-range numeric action_risk (150)', async () => {
+    await expect(
+      runWith({ skills: path.join(F, 'skills/bad-action-risk-numeric') }),
+    ).rejects.toThrow(/action_risk/);
+  });
 });
 
 // ── default-config.yaml validation ──────────────────────────────────────────
@@ -93,10 +105,10 @@ describe('startup validator — default config', () => {
     ).rejects.toThrow(/trust_score_floor/);
   });
 
-  it('throws when maxMessageBytes is the wrong type (string)', async () => {
+  it('throws when max_message_bytes is the wrong type (string)', async () => {
     await expect(
       runWith({ config: path.join(F, 'config/wrong-type') }),
-    ).rejects.toThrow(/maxMessageBytes/);
+    ).rejects.toThrow(/max_message_bytes/);
   });
 
   it('throws for unknown top-level keys (e.g. trust-policy typo)', async () => {

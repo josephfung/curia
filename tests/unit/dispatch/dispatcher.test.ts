@@ -661,4 +661,32 @@ describe('Dispatcher message size limit', () => {
 
     expect(rejected[0]?.parentEventId).toBe(event.id);
   });
+
+  it('enforces byte length not char length for multibyte UTF-8 content', async () => {
+    // The emoji '😀' is 1 character but 4 UTF-8 bytes.
+    // With a limit of 3, char-length check (content.length === 1) would pass,
+    // but byte-length check (Buffer.byteLength === 4) should reject it.
+    const emoji = '😀';
+    expect(emoji.length).toBe(2); // surrogate pair in JS: 2 code units, not 1
+    expect(Buffer.byteLength(emoji, 'utf-8')).toBe(4); // 4 bytes in UTF-8
+
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+
+    const rejected: MessageRejectedEvent[] = [];
+    bus.subscribe('message.rejected', 'channel', (e) => rejected.push(e as MessageRejectedEvent));
+
+    makeDispatcher(bus, 3); // 3-byte limit — passes char-length check but fails byte-length
+
+    const event = createInboundMessage({
+      conversationId: 'conv-multibyte',
+      channelId: 'cli',
+      senderId: 'user',
+      content: emoji,
+    });
+    await bus.publish('channel', event);
+
+    expect(rejected).toHaveLength(1);
+    expect(rejected[0]?.payload.reason).toBe('message_too_large');
+  });
 });

@@ -28,7 +28,7 @@ All schema-based validation is orchestrated by a single `src/startup/validator.t
 
 ### JSON Schema with Ajv + dedicated schema files
 
-Schema definitions live in `src/schemas/` as `.schema.json` files. Ajv is used for validation with `allErrors: true` so all violations in a file are reported at once.
+Schema definitions live in `schemas/` (project root) as `.schema.json` files. Ajv is used for validation with `allErrors: true` so all violations in a file are reported at once.
 
 **Why schema files over inline constants:**
 - Schema files are legible without reading TypeScript
@@ -245,7 +245,7 @@ The `message.rejected` event is already in the dispatch layer's publish permissi
 
 With a deliberately broken `agents/coordinator.yaml` (remove `description` field), startup should exit with a message like:
 
-```
+```text
 Fatal: Startup validation failed for agents/coordinator.yaml:
   - /description: must have required property 'description'
 ```

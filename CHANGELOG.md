@@ -13,16 +13,22 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- **Agent YAML schema now enforced at startup** — previously-ignored unknown keys and missing required fields now cause a descriptive `process.exit(1)`. Any `agents/*.yaml` that was silently tolerated must be fixed before upgrading. This is a change to the agent YAML public API surface (minor bump required per versioning policy).
+- **Skill manifest schema now enforced at startup** — same as above for `skills/*/skill.json`. Invalid manifests (missing `version`, `action_risk`, unknown keys) cause startup failure.
+- **`MessageRejectedPayload.reason`** extended with `'message_too_large'` (bus event type, public API surface) — exhaustive handlers over the `reason` union must add this case. The payload also gains optional `size` and `limit` fields populated when the reason is `message_too_large`.
+- **HTTP 413 for oversized messages** — inbound messages that exceed `channels.max_message_bytes` now receive HTTP 413 (Payload Too Large) instead of 403.
+
 ### Security
 - **Input validation** — startup validator (`src/startup/validator.ts`) validates `config/default.yaml`, all `agents/*.yaml`, and all `skills/*/skill.json` against JSON Schema (Ajv) at boot time. Invalid configs cause a descriptive `process.exit(1)` before any service initializes (spec §06).
-- **Message size limiting** — dispatcher rejects inbound messages exceeding `channels.max_message_bytes` (default 100KB) before routing; rejection is audit-logged as `message.rejected` with causal `parentEventId` (spec §06).
+- **Message size limiting** — dispatcher rejects inbound messages exceeding `channels.max_message_bytes` (default 100KB) before routing; rejection is audit-logged as `message.rejected` with causal `parentEventId` and includes the message byte size and configured limit (spec §06).
 
 ### Added
 - **`schemas/` directory** — JSON Schema files for agent configs, skill manifests, and `config/default.yaml`. Schemas are legible without TypeScript and can be validated with third-party tools.
 - **`channels.max_message_bytes`** in `config/default.yaml` — configures the inbound message size limit (default `102400`).
 
 ### Changed
-- **`MessageRejectedPayload.reason`** extended with `'message_too_large'` — bus event API surface change.
 - **Agent and skill loaders** — manual field checks removed; validation is now handled by the startup validator schema.
 
 ### Fixed

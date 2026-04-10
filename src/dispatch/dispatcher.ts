@@ -135,6 +135,8 @@ export class Dispatcher {
         channelId: payload.channelId,
         senderId: payload.senderId,
         reason: 'message_too_large',
+        size: contentByteSize,
+        limit: this.maxMessageBytes,
         parentEventId: event.id,
       }));
       return;

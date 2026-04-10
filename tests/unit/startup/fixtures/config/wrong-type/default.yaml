@@ -1,2 +1,2 @@
 channels:
-  maxMessageBytes: "not-a-number"
+  max_message_bytes: "not-a-number"
