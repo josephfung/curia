@@ -13,81 +13,25 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
-### Added
-- **ADR-014: Capability-tier model routing** — Documents the decision to replace per-agent model declarations with a capability-tier system (`fast | standard | powerful`) mapped by the operator, with optional modality/capability needs flags (`vision`, `large_context`, `reasoning`, `coding`, `audio`, `image_generation`). Implementation tracked in the linked issue.
+---
 
-### Fixed
-- **contact-data-leak false positives** — The `contact-data-leak` deterministic filter rule
-  now uses a single-axis policy based solely on recipient trust level, instead of blocking all
-  third-party email addresses unconditionally. A third-party email is blocked only when the
-  recipient is not trusted. Trusted recipients are the CEO (matched by `CEO_PRIMARY_EMAIL`) and
-  any contact with `trustLevel = 'high'` in the contact DB. Trusted recipients may receive
-  third-party contact data regardless of how the message was triggered — this correctly handles
-  both "CEO asked for Hamilton's email" (user-initiated) and "daily briefing lists meeting
-  attendees" (scheduled routine). Closes #210.
-  **Breaking changes**: `FilterCheckInput` gained a required `recipientTrustLevel` field.
-  `FilterCheckInput`, `EmailSendRequest`, `SignalOutboundRequest`, and `SkillContext` no longer
-  have a `triggerSource` field — callers must remove it.
+## [0.16.0] — 2026-04-10
 
 ### Security
-- **SPF/DKIM/DMARC sender verification via Nylas headers** — Email channel adapter now
-  requests `Authentication-Results` headers from Nylas (`fields: include_headers`) and
-  parses them into a `senderVerified: boolean` field on every inbound message event.
-  Messages where any check fails (or headers are absent) are logged at `warn` level with
-  sender address and message ID. The Coordinator's system prompt now includes an
-  unverified-sender handling instruction: messages flagged `senderVerified: false` must
-  not trigger financial, data, or access changes without confirmation via Signal or CLI.
-  Implements spec 06 *Sender Authentication & Channel Trust → Email-Specific Defenses*.
-  Closes #195.
-- **Anti-injection system prompt hardening and architectural containment** — Implements
-  spec 06 Layers 2 & 3. Layer 2: added explicit anti-injection directives to the
-  Coordinator's system prompt (`agents/coordinator.yaml`) instructing the LLM to treat
-  user messages as data, not commands, and to apply extra skepticism to messages with
-  elevated `risk_score`. The `messageTrustScore` and raw injection `risk_score` from
-  message metadata are now injected into the sender context system message by the agent
-  runtime so the Coordinator can reason about message trustworthiness. Layer 3: added an
-  architectural containment comment to `AgentRuntime` documenting that the runtime has no
-  direct filesystem, database, or external API access by design. Also fixed a pre-existing
-  bug where the Anthropic provider was silently dropping all but the first `role: 'system'`
-  message (sender context, bullpen context) — all system messages are now concatenated
-  before the API call. Closes #194.
-- **PII scrubbing for LLM-facing error strings** — Error messages that enter the LLM's
-  context window (via `classifyError` / `classifySkillError`) are now scrubbed of email
-  addresses, US/CA/UK phone numbers, credit card numbers, and keyword-prefixed SSNs before
-  reaching the model. The audit log retains the full unredacted error for debugging. Patterns
-  are sourced from `@openredaction/openredaction` and applied synchronously via a thin
-  extraction layer (`src/pii/scrubber.ts`). Operator-configurable extra patterns via
-  `pii.extra_patterns` in `config/default.yaml` (spec 06, issue #197).
-- **Pino logger PII redaction** — Added `senderId`, `email`, `from`, and `phoneNumber` to
-  pino's structured-field redact list (at 0/1/2 nesting levels) as a last-resort safety net
-  against sender identifiers appearing in stdout log output (spec 06, issue #197).
-- **Audit log append-only enforcement** (spec 06) — Added a PostgreSQL trigger
-  (`021_audit_log_append_only`) that raises an exception on any UPDATE or DELETE to
-  `audit_log`, with the single permitted exception of flipping `acknowledged` from
-  false to true. Code-level grep confirms no other UPDATE/DELETE paths exist.
-  `EventBus` now accepts an `onDelivered` hook that fires after all subscribers have
-  been attempted; `AuditLogger` uses it to set `acknowledged = true`, completing the
-  delivery lifecycle record. A startup scan (`scanForUnacknowledged`) logs a warning
-  for any rows that were written but never acknowledged, indicating delivery may have
-  been incomplete on a prior crash. Closes #202.
-- **Dispatcher fail-closed on audit publish failure** (spec §06): the `contact.unknown` publish is now wrapped in its own try/catch with an explicit return, so a failing audit hook cannot fall through the outer resolver catch and bypass `hold_and_notify` / `ignore` policy. Closes #192.
+- **SPF/DKIM/DMARC sender verification** — email adapter parses `Authentication-Results` headers from Nylas into `senderVerified` on every inbound message; unverified senders logged at `warn`; Coordinator instructed not to act on financial/data/access changes without Signal or CLI confirmation. Closes #195.
+- **Anti-injection system prompt hardening** — explicit anti-injection directives added to the Coordinator's system prompt; `messageTrustScore` and raw `risk_score` injected into sender context so the Coordinator can reason about message trustworthiness. Fixed pre-existing bug where the Anthropic provider silently dropped all but the first `role: 'system'` message. Closes #194.
+- **PII scrubbing for LLM-facing errors** — error messages routed to the LLM are scrubbed of email addresses, phone numbers, credit card numbers, and SSNs via `src/pii/scrubber.ts`; audit log retains full unredacted errors. Operator-configurable extra patterns via `pii.extra_patterns` in `config/default.yaml`. Closes #197.
+- **Pino logger PII redaction** — added `senderId`, `email`, `from`, `phoneNumber` to pino's structured-field redact list as a last-resort safety net against sender identifiers in stdout.
+- **Audit log append-only enforcement** — PostgreSQL trigger (`021_audit_log_append_only`) blocks UPDATE/DELETE on `audit_log` except `acknowledged` flips. `EventBus` gains `onDelivered` hook; `AuditLogger` uses it to set `acknowledged = true`. Startup scan warns on unacknowledged rows from prior crashes. Closes #202.
+- **Dispatcher fail-closed on audit publish failure** — `contact.unknown` publish wrapped in its own try/catch so a failing audit hook cannot bypass `hold_and_notify`/`ignore` policy. Closes #192.
+
+### Added
+- **ADR-014: Capability-tier model routing** — decision to replace per-agent model declarations with a `fast | standard | powerful` tier system, with optional modality flags (`vision`, `large_context`, `reasoning`, etc.). Implementation tracked in linked issue.
 
 ### Fixed
-- **Outbound content filter: wrong `ceoEmail` causing false-positive blocks** — The
-  `OutboundContentFilter` and `OutboundGateway` were initialized with `nylasSelfEmail`
-  (Curia's own Gmail address) instead of `ceoPrimaryEmail` (Joseph's address). This had
-  two consequences: (1) the contact-data-leak rule treated Joseph's email as a
-  third-party address and blocked legitimate outbound content; (2) blocked-content
-  notifications were delivered to Curia's own inbox rather than to Joseph. Fixed by
-  using `CEO_PRIMARY_EMAIL` (env var) for both `OutboundContentFilter.ceoEmail` and
-  `OutboundGateway.ceoEmail` in `src/index.ts` (issue #244).
-- **Email reply routing: self-addressed replies when Curia was the last sender** — In
-  multi-turn email threads, `sendOutboundReply` fetched the most recent thread message
-  from Nylas and used its `from` address as the reply-to. Since Nylas returns messages
-  newest-first, if Curia had sent the prior turn the `from` address was Curia's own
-  address, routing the reply to itself. Fixed by checking whether the latest message is
-  from `selfEmail`; if so, the recipient is taken from the first non-self address in
-  the message's `to` field instead (issue #244).
+- **contact-data-leak false positives** — rule now uses a single-axis trust policy: third-party email is blocked only when the recipient is untrusted. **Breaking:** `FilterCheckInput` gained a required `recipientTrustLevel` field; `triggerSource` removed from `FilterCheckInput`, `EmailSendRequest`, `SignalOutboundRequest`, and `SkillContext`. Closes #210.
+- **Outbound content filter `ceoEmail`** — `OutboundContentFilter` and `OutboundGateway` now use `CEO_PRIMARY_EMAIL` instead of `nylasSelfEmail`, fixing false-positive blocks and misdirected blocked-content notifications. Closes #244.
+- **Email reply self-routing** — `sendOutboundReply` no longer replies to Curia's own address when Curia sent the prior turn; falls back to first non-self address in the `to` field. Closes #244.
 
 ---
 
@@ -347,7 +291,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Bootstrap orchestrator** — `src/index.ts` wires all layers in dependency order
 - Architecture specs 00–08, contributor docs (CONTRIBUTING.md, CODE_OF_CONDUCT.md, SECURITY.md)
 
-[Unreleased]: https://github.com/josephfung/curia/compare/v0.15.0...HEAD
+[Unreleased]: https://github.com/josephfung/curia/compare/v0.16.0...HEAD
+[0.16.0]: https://github.com/josephfung/curia/compare/v0.15.0...v0.16.0
 [0.15.0]: https://github.com/josephfung/curia/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/josephfung/curia/compare/v0.12.1...v0.14.0
 [0.12.1]: https://github.com/josephfung/curia/compare/v0.11.0...v0.12.1
