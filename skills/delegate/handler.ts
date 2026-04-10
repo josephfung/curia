@@ -35,14 +35,22 @@ export class DelegateHandler implements SkillHandler {
     }
 
     // Use caller-supplied timeout if it's a valid positive finite integer; fall back to default.
-    // Invalid values are silently ignored so a bad LLM-supplied timeout never breaks the call.
-    const specialistTimeoutMs =
+    // Invalid values fall back silently so a bad LLM-supplied value never breaks the call.
+    // When the runtime injects timeout_ms from expectedDurationSeconds (scheduled tasks), the
+    // value should always be valid — a warn here helps distinguish LLM garbage from a runtime bug.
+    const isValidTimeout =
       typeof timeout_ms === 'number' &&
       Number.isInteger(timeout_ms) &&
       timeout_ms > 0 &&
-      Number.isFinite(timeout_ms)
-        ? timeout_ms
-        : DEFAULT_SPECIALIST_TIMEOUT_MS;
+      Number.isFinite(timeout_ms);
+    const specialistTimeoutMs = isValidTimeout ? (timeout_ms as number) : DEFAULT_SPECIALIST_TIMEOUT_MS;
+
+    if (timeout_ms !== undefined && !isValidTimeout) {
+      ctx.log.warn(
+        { targetAgent: agent, providedTimeoutMs: timeout_ms },
+        'timeout_ms was provided but is not a valid positive integer — using default timeout',
+      );
+    }
 
     // Infrastructure skills need bus and agent registry
     if (!ctx.bus || !ctx.agentRegistry) {

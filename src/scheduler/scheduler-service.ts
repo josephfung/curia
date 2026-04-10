@@ -402,14 +402,23 @@ export class SchedulerService {
     const nextRunAt = this.nextRunFromCron(schedule.cron);
 
     // Validate expectedDurationSeconds: must be a finite positive integer.
-    // Invalid values (0, negative, NaN, Infinity, non-integer) are silently treated
-    // as absent so the system default applies rather than breaking recovery.
+    // Invalid values fall back to absent (NULL in DB) so the watchdog default applies.
+    // Unlike createJob() which throws, startup must not abort for a misconfigured hint —
+    // but we warn loudly so operators can identify and fix the YAML config.
     const rawDuration = schedule.expectedDurationSeconds;
     const validDuration =
       rawDuration !== undefined &&
       Number.isInteger(rawDuration) &&
       rawDuration > 0 &&
       Number.isFinite(rawDuration);
+
+    if (rawDuration !== undefined && !validDuration) {
+      this.logger.warn(
+        { agentId, cron: schedule.cron, expectedDurationSeconds: rawDuration },
+        'upsertDeclarativeJob: expectedDurationSeconds is invalid (must be a positive finite integer) — falling back to system default watchdog threshold; check the agent YAML config',
+      );
+    }
+
     const hasExpectedDuration = validDuration;
 
     // Include timezone so completeJobRun() re-advances next_run_at in the same zone.
