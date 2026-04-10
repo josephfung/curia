@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { Dispatcher } from '../../../src/dispatch/dispatcher.js';
 import { EventBus } from '../../../src/bus/bus.js';
 import { AgentRuntime } from '../../../src/agents/runtime.js';
-import { createInboundMessage, createAgentError, type OutboundMessageEvent, type MessageRejectedEvent, type AgentTaskEvent, type MessageHeldEvent } from '../../../src/bus/events.js';
+import { createInboundMessage, createAgentError, type OutboundMessageEvent, type MessageRejectedEvent, type AgentTaskEvent, type MessageHeldEvent, type ContactUnknownEvent } from '../../../src/bus/events.js';
 import type { LLMProvider } from '../../../src/agents/llm/provider.js';
 import type { ContactResolver } from '../../../src/contacts/contact-resolver.js';
 import type { InboundSenderContext, ContactStatus, TrustLevel } from '../../../src/contacts/types.js';
@@ -435,5 +435,115 @@ describe('Dispatcher — messageTrustScore', () => {
     // email low=0.3*0.4=0.12, below floor of 0.2 → should be held even though channel is 'allow'
     expect(held).toHaveLength(1);
     expect(tasks).toHaveLength(0);
+  });
+});
+
+describe('Dispatcher — contact.unknown event payload', () => {
+  it('contact.unknown includes routingDecision: hold_and_notify for email channel', async () => {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+    const heldMessages = makeInMemoryHeldMessages();
+    const resolver = makeResolverWithNoContact();
+    const dispatcher = new Dispatcher({
+      bus,
+      logger,
+      contactResolver: resolver,
+      heldMessages,
+      channelPolicies: { email: { trust: 'low', unknownSender: 'hold_and_notify' } },
+    });
+    dispatcher.register();
+
+    const unknownEvents: ContactUnknownEvent[] = [];
+    bus.subscribe('contact.unknown', 'system', (e) => { unknownEvents.push(e as ContactUnknownEvent); });
+
+    await bus.publish('channel', createInboundMessage({
+      conversationId: 'conv-cu-hold',
+      channelId: 'email',
+      senderId: 'stranger@example.com',
+      content: 'Hello',
+    }));
+
+    expect(unknownEvents).toHaveLength(1);
+    expect(unknownEvents[0]!.payload.channel).toBe('email');
+    expect(unknownEvents[0]!.payload.senderId).toBe('stranger@example.com');
+    expect(unknownEvents[0]!.payload.channelTrustLevel).toBe('low');
+    // email low=0.3*0.4=0.12, unknown=0.0 → 0.12
+    expect(unknownEvents[0]!.payload.messageTrustScore).toBeCloseTo(0.12);
+    expect(unknownEvents[0]!.payload.routingDecision).toBe('hold_and_notify');
+  });
+
+  it('contact.unknown includes routingDecision: ignore for http channel', async () => {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+    const resolver = makeResolverWithNoContact();
+    const dispatcher = new Dispatcher({
+      bus,
+      logger,
+      contactResolver: resolver,
+      channelPolicies: { http: { trust: 'medium', unknownSender: 'ignore' } },
+    });
+    dispatcher.register();
+
+    const unknownEvents: ContactUnknownEvent[] = [];
+    bus.subscribe('contact.unknown', 'system', (e) => { unknownEvents.push(e as ContactUnknownEvent); });
+
+    await bus.publish('channel', createInboundMessage({
+      conversationId: 'conv-cu-ignore',
+      channelId: 'http',
+      senderId: 'api-caller',
+      content: 'Hello',
+    }));
+
+    expect(unknownEvents).toHaveLength(1);
+    expect(unknownEvents[0]!.payload.channelTrustLevel).toBe('medium');
+    // http medium=0.6*0.4=0.24, unknown=0.0 → 0.24
+    expect(unknownEvents[0]!.payload.messageTrustScore).toBeCloseTo(0.24);
+    expect(unknownEvents[0]!.payload.routingDecision).toBe('ignore');
+  });
+
+  it('contact.unknown includes routingDecision: allow for high-trust allow channel', async () => {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+    const resolver = makeResolverWithNoContact();
+    // Use a mock provider so the agent.task that flows through does not error
+    const mockProvider: LLMProvider = {
+      id: 'mock',
+      chat: vi.fn().mockResolvedValue({
+        type: 'text' as const,
+        content: 'OK',
+        usage: { inputTokens: 1, outputTokens: 1 },
+      }),
+    };
+    const coordinator = new AgentRuntime({
+      agentId: 'coordinator',
+      systemPrompt: 'You are a helpful assistant.',
+      provider: mockProvider,
+      bus,
+      logger,
+    });
+    coordinator.register();
+    const dispatcher = new Dispatcher({
+      bus,
+      logger,
+      contactResolver: resolver,
+      channelPolicies: { signal: { trust: 'high', unknownSender: 'allow' } },
+    });
+    dispatcher.register();
+
+    const unknownEvents: ContactUnknownEvent[] = [];
+    bus.subscribe('contact.unknown', 'system', (e) => { unknownEvents.push(e as ContactUnknownEvent); });
+
+    await bus.publish('channel', createInboundMessage({
+      conversationId: 'conv-cu-allow',
+      channelId: 'signal',
+      senderId: '+15550001234',
+      content: 'Hello',
+    }));
+
+    expect(unknownEvents).toHaveLength(1);
+    expect(unknownEvents[0]!.payload.channelTrustLevel).toBe('high');
+    // signal high=1.0*0.4=0.40, unknown=0.0 → 0.40
+    expect(unknownEvents[0]!.payload.messageTrustScore).toBeCloseTo(0.40);
+    expect(unknownEvents[0]!.payload.routingDecision).toBe('allow');
   });
 });
