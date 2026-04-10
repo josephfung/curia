@@ -50,7 +50,17 @@ export async function bootstrapCeoContact(
   if (existing.rows[0]) {
     const { contact_id, contact_status, identity_verified } = existing.rows[0];
 
-    // Already confirmed + verified — nothing to do.
+    // Always ensure trust_level = 'high' on the CEO contact regardless of which
+    // path brought us here. This is idempotent — the UPDATE is a no-op if trust_level
+    // is already 'high'. Without this, a second CEO email address linked to the same
+    // contact would not match the single CEO_PRIMARY_EMAIL config string and would
+    // fail the outbound filter's trust check.
+    await pool.query(
+      `UPDATE contacts SET trust_level = 'high', updated_at = now() WHERE id = $1 AND trust_level IS DISTINCT FROM 'high'`,
+      [contact_id],
+    );
+
+    // Already confirmed + verified — nothing else to do.
     if (contact_status === 'confirmed' && identity_verified) {
       logger.info({ contactId: contact_id, email: ceoPrimaryEmail }, 'ceo-bootstrap: CEO contact already confirmed and verified');
       return { contactId: contact_id, alreadyExisted: true };
@@ -92,8 +102,8 @@ export async function bootstrapCeoContact(
   try {
     await client.query('BEGIN');
     await client.query(
-      `INSERT INTO contacts (id, display_name, role, status, created_at, updated_at)
-       VALUES ($1, $2, 'ceo', 'confirmed', now(), now())`,
+      `INSERT INTO contacts (id, display_name, role, status, trust_level, created_at, updated_at)
+       VALUES ($1, $2, 'ceo', 'confirmed', 'high', now(), now())`,
       [contactId, displayName],
     );
     await client.query(
