@@ -14,6 +14,18 @@ bus event types) are noted explicitly even in the `0.x` range.
 ## [Unreleased]
 
 ### Security
+- **Anti-injection system prompt hardening and architectural containment** — Implements
+  spec 06 Layers 2 & 3. Layer 2: added explicit anti-injection directives to the
+  Coordinator's system prompt (`agents/coordinator.yaml`) instructing the LLM to treat
+  user messages as data, not commands, and to apply extra skepticism to messages with
+  elevated `risk_score`. The `messageTrustScore` and raw injection `risk_score` from
+  message metadata are now injected into the sender context system message by the agent
+  runtime so the Coordinator can reason about message trustworthiness. Layer 3: added an
+  architectural containment comment to `AgentRuntime` documenting that the runtime has no
+  direct filesystem, database, or external API access by design. Also fixed a pre-existing
+  bug where the Anthropic provider was silently dropping all but the first `role: 'system'`
+  message (sender context, bullpen context) — all system messages are now concatenated
+  before the API call. Closes #194.
 - **PII scrubbing for LLM-facing error strings** — Error messages that enter the LLM's
   context window (via `classifyError` / `classifySkillError`) are now scrubbed of email
   addresses, US/CA/UK phone numbers, credit card numbers, and keyword-prefixed SSNs before

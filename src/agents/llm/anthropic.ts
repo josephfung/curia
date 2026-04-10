@@ -4,6 +4,9 @@
 //   1. System messages are extracted and passed as the top-level `system`
 //      parameter, which is what the Anthropic API requires. If we left them
 //      in the messages array the API would return a validation error.
+//      The runtime injects multiple role:'system' entries (main prompt,
+//      sender context, bullpen context) — we concatenate all of them here
+//      rather than silently dropping everything after the first one.
 //   2. Errors are caught here and returned as LLMResponse { type: 'error' }
 //      so callers never have to wrap chat() in try/catch.
 //   3. Model is configurable via options.model so a single provider instance
@@ -39,7 +42,27 @@ export class AnthropicProvider implements LLMProvider {
     // Anthropic requires the system prompt as a separate top-level parameter,
     // not as an element in the messages array. We extract it here so agent
     // code can use a uniform Message[] convention without knowing this detail.
-    const systemMessage = messages.find((m) => m.role === 'system');
+    //
+    // The runtime injects multiple role:'system' entries into the messages array
+    // (main system prompt, sender context block, bullpen context block). We
+    // concatenate them all here so none are silently dropped.
+    const systemContent = messages
+      .filter((m) => m.role === 'system')
+      .map((m) => {
+        if (typeof m.content !== 'string') {
+          // System messages must be plain strings. ContentBlock[] in a system role
+          // is not supported by the Anthropic API. Log at error so this is
+          // discoverable if a future caller passes structured content here.
+          this.logger.error(
+            { contentType: typeof m.content },
+            'System message has non-string content — skipping; caller must pass plain strings for system role',
+          );
+          return '';
+        }
+        return m.content;
+      })
+      .filter(Boolean)
+      .join('\n\n');
 
     // Build the Anthropic message array from our provider-neutral Message type.
     // Messages with string content are simple text; messages with ContentBlock[]
@@ -86,8 +109,9 @@ export class AnthropicProvider implements LLMProvider {
       const createParams: Anthropic.Messages.MessageCreateParamsNonStreaming = {
         model,
         max_tokens: 4096,
-        // System messages are always plain strings (never content blocks)
-        system: typeof systemMessage?.content === 'string' ? systemMessage.content : undefined,
+        // System messages are concatenated into a single string above.
+        // Omit the key entirely when there are no system messages.
+        system: systemContent || undefined,
         messages: conversationMessages,
       };
 
