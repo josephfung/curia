@@ -9,10 +9,10 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-// Ajv v6 is a plain CJS module: `module.exports = Ajv`. Under ESM (nodenext),
-// the constructor is the default export — the named destructured form
-// `import { Ajv }` returns undefined and causes "Ajv is not a constructor".
-import Ajv from 'ajv';
+// Ajv v8 is a CJS module with __esModule:true and named exports (exports.Ajv = class).
+// Under ESM (nodenext), the named import `{ Ajv }` is the constructor; the default
+// import gives a non-constructable value in TypeScript 6 strict mode.
+import { Ajv, type ErrorObject } from 'ajv';
 import yaml from 'js-yaml';
 import type { Logger } from '../logger.js';
 
@@ -31,10 +31,10 @@ function loadSchema(name: string): object {
  * values. Handles `additionalProperties` violations specially to surface the
  * offending property name (which lives in `params.additionalProperty`).
  */
-function formatErrors(errors: Ajv.ErrorObject[]): string {
+function formatErrors(errors: ErrorObject[]): string {
   return errors
     .map(e => {
-      const fieldPath = e.dataPath || '(root)';  // Ajv v6 uses dataPath; v8+ renamed it instancePath
+      const fieldPath = e.instancePath || '(root)';
       // additionalProperties errors put the unknown key in params.additionalProperty —
       // standard errorsText() omits it, so we add it explicitly here.
       const extra =
