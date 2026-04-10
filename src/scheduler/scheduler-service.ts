@@ -17,6 +17,10 @@ export interface CreateJobParams {
   errorBudget?: Record<string, unknown>;
   /** IANA timezone for cron wall-clock interpretation. Defaults to the service's timezone. */
   timezone?: string;
+  /** Expected duration of the job in seconds. Used to widen the delegate skill timeout for
+   *  long-running jobs and to compute the watchdog recovery threshold. Must be a positive
+   *  finite integer; non-integer, zero, negative, and non-finite values are rejected. */
+  expectedDurationSeconds?: number;
 }
 
 export interface CreateJobResult {
@@ -163,16 +167,27 @@ export class SchedulerService {
       this.validateCronFrequency(cronExpr, jobTimezone);
     }
 
+    // Validate expectedDurationSeconds: must be a positive finite integer.
+    // Reject invalid values explicitly so callers get a clear error rather than
+    // silently falling back to the 10-minute watchdog default.
+    const rawDuration = params.expectedDurationSeconds;
+    if (rawDuration !== undefined) {
+      if (!Number.isInteger(rawDuration) || rawDuration <= 0 || !Number.isFinite(rawDuration)) {
+        throw new Error(`expectedDurationSeconds must be a positive finite integer, got: ${rawDuration}`);
+      }
+    }
+    const hasExpectedDuration = rawDuration !== undefined;
+
     // Calculate next_run_at: for cron jobs use the parser (respecting per-job timezone),
     // for one-shot jobs use runAt directly (already UTC from timestamp normalization).
     const nextRunAt = cronExpr ? this.nextRunFromCron(cronExpr, jobTimezone) : runAt!;
 
     const insertSql = `
-      INSERT INTO scheduled_jobs (agent_id, cron_expr, run_at, task_payload, status, next_run_at, created_by, timezone)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      INSERT INTO scheduled_jobs (agent_id, cron_expr, run_at, task_payload, status, next_run_at, created_by, timezone${hasExpectedDuration ? ', expected_duration_seconds' : ''})
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8${hasExpectedDuration ? ', $9' : ''})
       RETURNING id
     `;
-    const insertParams = [
+    const insertParams: unknown[] = [
       agentId,
       cronExpr ?? null,
       runAt ?? null,
@@ -182,6 +197,9 @@ export class SchedulerService {
       createdBy,
       jobTimezone,
     ];
+    if (hasExpectedDuration) {
+      insertParams.push(rawDuration);
+    }
 
     const { rows } = await this.pool.query(insertSql, insertParams);
     const jobId = (rows[0] as { id: string }).id;
@@ -384,25 +402,41 @@ export class SchedulerService {
     const nextRunAt = this.nextRunFromCron(schedule.cron);
 
     // Validate expectedDurationSeconds: must be a finite positive integer.
-    // Invalid values (0, negative, NaN, Infinity, non-integer) are silently treated
-    // as absent so the system default applies rather than breaking recovery.
+    // Invalid values fall back to absent (NULL in DB) so the watchdog default applies.
+    // Unlike createJob() which throws, startup must not abort for a misconfigured hint —
+    // but we warn loudly so operators can identify and fix the YAML config.
     const rawDuration = schedule.expectedDurationSeconds;
     const validDuration =
       rawDuration !== undefined &&
       Number.isInteger(rawDuration) &&
       rawDuration > 0 &&
       Number.isFinite(rawDuration);
-    const hasExpectedDuration = validDuration;
+
+    if (rawDuration !== undefined && !validDuration) {
+      this.logger.warn(
+        { agentId, cron: schedule.cron, expectedDurationSeconds: rawDuration },
+        'upsertDeclarativeJob: expectedDurationSeconds is invalid (must be a positive finite integer) — falling back to system default watchdog threshold; check the agent YAML config',
+      );
+    }
+
+    // NULL when absent or invalid — always written to DO UPDATE so that removing
+    // expectedDurationSeconds from the YAML clears the stale DB value on the next restart,
+    // rather than leaving a now-wrong watchdog threshold silently in place.
+    const durationToWrite = validDuration ? rawDuration : null;
 
     // Include timezone so completeJobRun() re-advances next_run_at in the same zone.
     // Without this, the DB column would default to 'UTC' while next_run_at was computed
     // using this.timezone — causing every post-completion firing to be offset by the UTC delta.
+    // expected_duration_seconds is always included (as $8) so the DO UPDATE can clear it to NULL
+    // when the field is removed from the YAML — the conditional-column pattern would leave a
+    // stale value in place.
     const sql = `
-      INSERT INTO scheduled_jobs (agent_id, cron_expr, task_payload, status, next_run_at, created_by, timezone${hasExpectedDuration ? ', expected_duration_seconds' : ''})
-      VALUES ($1, $2, $3, $4, $5, $6, $7${hasExpectedDuration ? ', $8' : ''})
+      INSERT INTO scheduled_jobs (agent_id, cron_expr, task_payload, status, next_run_at, created_by, timezone, expected_duration_seconds)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
       ON CONFLICT (agent_id, cron_expr, (task_payload::text)) WHERE created_by = 'system'
       DO UPDATE SET next_run_at = $5,
-                    timezone = $7${hasExpectedDuration ? ',\n                    expected_duration_seconds = $8' : ''}
+                    timezone = $7,
+                    expected_duration_seconds = $8
       RETURNING id
     `;
     const params: unknown[] = [
@@ -413,10 +447,8 @@ export class SchedulerService {
       nextRunAt,
       'system',
       this.timezone,
+      durationToWrite,
     ];
-    if (hasExpectedDuration) {
-      params.push(rawDuration);
-    }
 
     const { rows } = await this.pool.query(sql, params);
     return (rows[0] as { id: string }).id;

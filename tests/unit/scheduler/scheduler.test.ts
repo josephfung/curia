@@ -253,6 +253,28 @@ describe('Scheduler', () => {
       expect(taskEvent.payload.intentAnchor).toBeUndefined();
     });
 
+    it('forwards expectedDurationSeconds in agent.task payload when set on the job', async () => {
+      const row = fakeDbRow({ expected_duration_seconds: 300 });
+      pool.query.mockResolvedValueOnce({ rows: [row] });
+      pool.query.mockResolvedValueOnce({ rowCount: 1, rows: [] });
+
+      await scheduler.pollDueJobs();
+
+      const [, taskEvent] = bus.publish.mock.calls[1] as [string, { payload: { expectedDurationSeconds?: number } }];
+      expect(taskEvent.payload.expectedDurationSeconds).toBe(300);
+    });
+
+    it('omits expectedDurationSeconds from agent.task payload when null on the job', async () => {
+      const row = fakeDbRow({ expected_duration_seconds: null });
+      pool.query.mockResolvedValueOnce({ rows: [row] });
+      pool.query.mockResolvedValueOnce({ rowCount: 1, rows: [] });
+
+      await scheduler.pollDueJobs();
+
+      const [, taskEvent] = bus.publish.mock.calls[1] as [string, { payload: { expectedDurationSeconds?: number } }];
+      expect(taskEvent.payload.expectedDurationSeconds).toBeUndefined();
+    });
+
     it('logs and swallows errors during polling', async () => {
       pool.query.mockRejectedValueOnce(new Error('db down'));
 

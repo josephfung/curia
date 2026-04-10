@@ -71,6 +71,62 @@ describe('DelegateHandler', () => {
     }
   });
 
+  it('uses timeout_ms when provided as a valid positive integer', async () => {
+    const agentRegistry = new AgentRegistry();
+    agentRegistry.register('coordinator', { role: 'coordinator', description: 'Main' });
+    agentRegistry.register('research-analyst', { role: 'specialist', description: 'Research' });
+    const bus = new EventBus(logger);
+
+    bus.subscribe('agent.task', 'agent', async (event) => {
+      if (event.type === 'agent.task' && event.payload.agentId === 'research-analyst') {
+        const { createAgentResponse } = await import('../../../src/bus/events.js');
+        const response = createAgentResponse({
+          agentId: 'research-analyst',
+          conversationId: event.payload.conversationId,
+          content: 'Done',
+          parentEventId: event.id,
+        });
+        await bus.publish('agent', response);
+      }
+    });
+
+    // Should succeed with an explicit timeout_ms of 5 minutes (300000ms)
+    const result = await handler.execute(makeCtx(
+      { agent: 'research-analyst', task: 'Long task', timeout_ms: 300000 },
+      { bus, agentRegistry },
+    ));
+    expect(result.success).toBe(true);
+  });
+
+  it('falls back to default timeout when timeout_ms is invalid', async () => {
+    const agentRegistry = new AgentRegistry();
+    agentRegistry.register('coordinator', { role: 'coordinator', description: 'Main' });
+    agentRegistry.register('research-analyst', { role: 'specialist', description: 'Research' });
+    const bus = new EventBus(logger);
+
+    bus.subscribe('agent.task', 'agent', async (event) => {
+      if (event.type === 'agent.task' && event.payload.agentId === 'research-analyst') {
+        const { createAgentResponse } = await import('../../../src/bus/events.js');
+        const response = createAgentResponse({
+          agentId: 'research-analyst',
+          conversationId: event.payload.conversationId,
+          content: 'Done',
+          parentEventId: event.id,
+        });
+        await bus.publish('agent', response);
+      }
+    });
+
+    // Invalid values (0, negative, non-integer) should fall back to default and still succeed
+    for (const badTimeout of [0, -1, 1.5, NaN, Infinity, 'not-a-number', null]) {
+      const result = await handler.execute(makeCtx(
+        { agent: 'research-analyst', task: 'Task', timeout_ms: badTimeout },
+        { bus, agentRegistry },
+      ));
+      expect(result.success).toBe(true);
+    }
+  });
+
   it('delegates to specialist and returns its response', async () => {
     const agentRegistry = new AgentRegistry();
     agentRegistry.register('coordinator', { role: 'coordinator', description: 'Main' });

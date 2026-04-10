@@ -291,6 +291,9 @@ export class Scheduler {
       // Pass the anchor in the payload so the runtime injects it into the system
       // prompt. null (no linked agent_task) becomes undefined (field omitted).
       intentAnchor: job.intentAnchor ?? undefined,
+      // Pass the duration hint so the runtime can widen the delegate timeout for
+      // long-running scheduled tasks. null (no explicit duration) becomes undefined.
+      expectedDurationSeconds: job.expectedDurationSeconds ?? undefined,
       parentEventId: firedEvent.id,
     });
     await this.bus.publish('system', taskEvent);
