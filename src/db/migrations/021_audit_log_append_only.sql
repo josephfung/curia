@@ -1,9 +1,7 @@
 -- Up Migration
 --
--- Down Migration (rollback):
---   DROP TRIGGER IF EXISTS audit_log_immutable_trigger ON audit_log;
---   DROP FUNCTION IF EXISTS audit_log_immutable();
---
+-- To rollback: DROP TRIGGER IF EXISTS audit_log_immutable_trigger ON audit_log;
+--              DROP FUNCTION IF EXISTS audit_log_immutable();
 --
 -- Enforce audit_log append-only at the database level.
 --
