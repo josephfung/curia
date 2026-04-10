@@ -471,9 +471,12 @@ function buildEntityMemoryObserver(
   invokeOptions: { agentId?: string; conversationId?: string; parentEventId?: string; taskEventId?: string },
   logger: Logger,
 ): EntityMemory {
-  // Callers must ensure parentEventId is truthy before calling this function (see line 297).
-  // Capturing it here narrows the type from string | undefined to string so TypeScript
-  // can verify that createMemoryStore (which requires parentEventId: string) is satisfied.
+  // All three fields are required strings in MemoryStorePayload. The call site (line 297)
+  // guards on conversationId and parentEventId being truthy before entering here, and
+  // agentId is always set from the agent config. Capture as locals so TypeScript can
+  // verify the createMemoryStore call sites rather than seeing string | undefined.
+  const agentId = invokeOptions.agentId as string;
+  const conversationId = invokeOptions.conversationId as string;
   const parentEventId = invokeOptions.parentEventId as string;
 
   // Object.create(instance) produces an object whose [[Prototype]] is the EntityMemory
@@ -495,8 +498,8 @@ function buildEntityMemoryObserver(
       }
       try {
         await bus.publish('agent', createMemoryStore({
-          agentId: invokeOptions.agentId,
-          conversationId: invokeOptions.conversationId,
+          agentId,
+          conversationId,
           nodeId: result.nodeId,
           nodeType: 'fact',
           label: options.label,
@@ -517,14 +520,14 @@ function buildEntityMemoryObserver(
     const { entity } = result;
     try {
       await bus.publish('agent', createMemoryStore({
-        agentId: invokeOptions.agentId,
-        conversationId: invokeOptions.conversationId,
+        agentId,
+        conversationId,
         nodeId: entity.id,
         nodeType: entity.type,
         label: entity.label,
         source: entity.temporal.source,
         sensitivity: entity.sensitivity,
-        parentEventId: invokeOptions.parentEventId,
+        parentEventId,
       }));
     } catch (err) {
       logger.warn({ err, nodeId: entity.id }, 'memory.store audit event failed to emit');
