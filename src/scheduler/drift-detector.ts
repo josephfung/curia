@@ -122,7 +122,8 @@ export class DriftDetector {
       parsed = JSON.parse(raw);
     } catch {
       this.logger.warn(
-        { raw },
+        // Log a preview only — raw may contain sensitive task context from the prompt echo.
+        { provider: this.provider.id, rawLength: raw.length, rawPreview: raw.slice(0, 300) },
         'drift-detector: LLM returned malformed JSON verdict; treating as no-drift',
       );
       return null;
@@ -130,7 +131,8 @@ export class DriftDetector {
 
     if (!isValidVerdict(parsed)) {
       this.logger.warn(
-        { raw },
+        // Log a preview only — raw may contain sensitive task context from the prompt echo.
+        { provider: this.provider.id, rawLength: raw.length, rawPreview: raw.slice(0, 300) },
         'drift-detector: LLM returned invalid verdict shape; treating as no-drift',
       );
       return null;

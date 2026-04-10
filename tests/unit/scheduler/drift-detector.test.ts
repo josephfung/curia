@@ -122,7 +122,7 @@ describe('DriftDetector', () => {
 
       expect(result).toBeNull();
       expect(logger.warn).toHaveBeenCalledWith(
-        expect.objectContaining({ raw: 'Sorry, I cannot evaluate this.' }),
+        expect.objectContaining({ rawPreview: 'Sorry, I cannot evaluate this.' }),
         expect.stringContaining('malformed'),
       );
     });

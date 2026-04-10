@@ -215,6 +215,16 @@ export function loadYamlConfig(configDir: string): YamlConfig {
 
     const drift = config.intentDrift;
     if (drift !== undefined) {
+      // Reject non-object roots (e.g. `intentDrift: false`, `intentDrift: "off"`, `intentDrift: []`).
+      // Without this check, those values would pass the leaf validations below, then reach
+      // index.ts where `yamlConfig.intentDrift?.enabled !== false` evaluates truthy-by-default,
+      // silently enabling drift detection despite a clearly invalid config.
+      if (typeof drift !== 'object' || drift === null || Array.isArray(drift)) {
+        throw new Error('intentDrift must be a YAML mapping');
+      }
+      if (drift.enabled !== undefined && typeof drift.enabled !== 'boolean') {
+        throw new Error(`intentDrift.enabled must be a boolean, got: ${String(drift.enabled)}`);
+      }
       if (drift.checkEveryNBursts !== undefined) {
         if (!Number.isInteger(drift.checkEveryNBursts) || drift.checkEveryNBursts < 1) {
           throw new Error(

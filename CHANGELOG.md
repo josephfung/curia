@@ -34,7 +34,7 @@ bus event types) are noted explicitly even in the `0.x` range.
   spec §06 security checklist. Closes #198.
 
 ### Added
-- **Intent drift detection** — after each burst of a persistent scheduled task, an LLM judge compares the current `task_payload` against the original `intent_anchor`. Tasks that drift with sufficient confidence are paused and the CEO is notified (spec §06-audit-and-security.md). Configured via `intentDrift:` block in `config/default.yaml`.
+- **Intent drift detection** — after each burst of a persistent scheduled task, an LLM judge compares the current `task_payload` against the original `intent_anchor`. Tasks that drift with sufficient confidence are paused, and a follow-up `agent.task` is dispatched to the coordinator to notify the CEO (spec §06-audit-and-security.md). Configured via `intentDrift:` block in `config/default.yaml`.
 - **`schemas/` directory** — JSON Schema files for agent configs, skill manifests, and `config/default.yaml`. Schemas are legible without TypeScript and can be validated with third-party tools.
 - **`channels.max_message_bytes`** in `config/default.yaml` — configures the inbound message size limit (default `102400`).
 

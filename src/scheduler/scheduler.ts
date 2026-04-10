@@ -363,52 +363,64 @@ export class Scheduler {
 
               if (this.driftDetector.shouldPause(verdict)) {
                 // Hard pause: set status to paused, publish the drift event, notify CEO.
-                await this.schedulerService.pauseJobForDrift(jobId);
+                // Wrapped in its own try/catch so a failure here falls back to normal
+                // completion — preventing the job from being left in 'running' state.
+                let pauseSucceeded = false;
+                try {
+                  await this.schedulerService.pauseJobForDrift(jobId);
 
-                const driftEvent = createScheduleDriftPaused({
-                  jobId,
-                  agentId: job.agentId,
-                  agentTaskId: job.agentTaskId,
-                  intentAnchor: job.intentAnchor,
-                  taskPayload: job.taskPayload,
-                  lastRunSummary: job.lastRunSummary ?? null,
-                  verdict,
-                  parentEventId,
-                });
-                await this.bus.publish('system', driftEvent);
+                  const driftEvent = createScheduleDriftPaused({
+                    jobId,
+                    agentId: job.agentId,
+                    agentTaskId: job.agentTaskId,
+                    intentAnchor: job.intentAnchor,
+                    taskPayload: job.taskPayload,
+                    lastRunSummary: job.lastRunSummary ?? null,
+                    verdict,
+                    parentEventId,
+                  });
+                  await this.bus.publish('system', driftEvent);
 
-                // Notify the CEO via the coordinator (same pattern as schedule.suspended).
-                const notifyContent = [
-                  `Task has been paused because its current instructions may have drifted from its original goal.`,
-                  ``,
-                  `Original intent: ${job.intentAnchor}`,
-                  ``,
-                  `Current task: ${JSON.stringify(job.taskPayload)}`,
-                  ``,
-                  `Reason: ${verdict.reason} (confidence: ${verdict.confidence})`,
-                  ``,
-                  `Please review the task and either resume it with corrected instructions or cancel it.`,
-                ].join('\n');
+                  // Notify the CEO via the coordinator (same pattern as schedule.suspended).
+                  const notifyContent = [
+                    `Task has been paused because its current instructions may have drifted from its original goal.`,
+                    ``,
+                    `Original intent: ${job.intentAnchor}`,
+                    ``,
+                    `Current task: ${JSON.stringify(job.taskPayload)}`,
+                    ``,
+                    `Reason: ${verdict.reason} (confidence: ${verdict.confidence})`,
+                    ``,
+                    `Please review the task and either resume it with corrected instructions or cancel it.`,
+                  ].join('\n');
 
-                const notifyEvent = createAgentTask({
-                  agentId: 'coordinator',
-                  conversationId: `scheduler:${jobId}`,
-                  channelId: 'scheduler',
-                  senderId: 'scheduler',
-                  content: notifyContent,
-                  parentEventId: driftEvent.id,
-                });
-                await this.bus.publish('system', notifyEvent);
+                  const notifyEvent = createAgentTask({
+                    agentId: 'coordinator',
+                    conversationId: `scheduler:${jobId}`,
+                    channelId: 'scheduler',
+                    senderId: 'scheduler',
+                    content: notifyContent,
+                    parentEventId: driftEvent.id,
+                  });
+                  await this.bus.publish('system', notifyEvent);
 
-                this.logger.warn(
-                  { jobId, agentTaskId: job.agentTaskId, reason: verdict.reason, confidence: verdict.confidence },
-                  'Job paused due to intent drift detection',
-                );
+                  this.logger.warn(
+                    { jobId, agentTaskId: job.agentTaskId, reason: verdict.reason, confidence: verdict.confidence },
+                    'Job paused due to intent drift detection',
+                  );
 
-                // Do NOT call completeJobRun — the job is paused, not completed.
-                // Clean up burst counter: paused jobs don't burst again.
-                this.burstCounts.delete(jobId);
-                return;
+                  // Do NOT call completeJobRun — the job is paused, not completed.
+                  // Clean up burst counter: paused jobs don't burst again.
+                  this.burstCounts.delete(jobId);
+                  pauseSucceeded = true;
+                } catch (pauseErr) {
+                  this.logger.error(
+                    { err: pauseErr, jobId, agentTaskId: job.agentTaskId },
+                    'drift-detector: pause-and-notify failed — falling back to normal completion',
+                  );
+                }
+
+                if (pauseSucceeded) return;
               }
             }
           }

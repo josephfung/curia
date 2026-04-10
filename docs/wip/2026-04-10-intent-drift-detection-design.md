@@ -135,7 +135,7 @@ The `check()` method builds a system + user prompt, calls the LLM with `max_toke
 
 The judge prompt structure:
 
-```
+```text
 [system]
 You are a task integrity auditor. Your job is to determine whether a scheduled
 task has drifted significantly from its original mandate.
@@ -202,7 +202,7 @@ The `agent.response` subscriber is updated to also pass `job.intentAnchor` and `
 
 **Drift check flow in `handleCompletion` (success path only):**
 
-```
+```text
 1. Look up the job via schedulerService.getJob(jobId)
 2. If job has agentTaskId AND intentAnchor AND driftDetector is configured:
    a. Call driftDetector.check({ intentAnchor, taskPayload, lastRunSummary })
@@ -219,7 +219,7 @@ The `agent.response` subscriber is updated to also pass `job.intentAnchor` and `
 
 **Coordinator notification message:**
 
-```
+```text
 Task "[job.agentId]" has been paused because its current instructions may have 
 drifted from its original goal.
 

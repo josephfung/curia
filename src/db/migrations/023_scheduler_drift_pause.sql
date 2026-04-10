@@ -15,4 +15,4 @@ CREATE INDEX idx_scheduled_jobs_paused
   WHERE status = 'paused';
 
 -- Down Migration
--- DROP INDEX IF EXISTS idx_scheduled_jobs_paused;
+DROP INDEX IF EXISTS idx_scheduled_jobs_paused;

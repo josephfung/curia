@@ -65,8 +65,8 @@ CREATE INDEX idx_scheduled_jobs_paused
 - [ ] **Step 2: Commit**
 
 ```bash
-git -C /Users/josephfung/Projects/office-of-the-ceo/worktrees/curia-intent-drift add src/db/migrations/023_scheduler_drift_pause.sql
-git -C /Users/josephfung/Projects/office-of-the-ceo/worktrees/curia-intent-drift commit -m "chore: add migration 023 for drift-paused partial index"
+git add src/db/migrations/023_scheduler_drift_pause.sql
+git commit -m "chore: add migration 023 for drift-paused partial index"
 ```
 
 ---
