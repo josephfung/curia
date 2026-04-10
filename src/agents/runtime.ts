@@ -456,8 +456,27 @@ export class AgentRuntime {
         });
         await bus.publish('agent', invokeEvent);
 
+        // For delegate calls from scheduled tasks: inject timeout_ms from the task event's
+        // expectedDurationSeconds so the specialist gets an appropriate wait window.
+        // Only injected when: (a) the skill is 'delegate', (b) the task carries a duration
+        // hint from the scheduler, and (c) the LLM hasn't already supplied a timeout_ms.
+        // This is transparent to the LLM — it doesn't need to know about scheduling internals.
+        let skillInput = toolCall.input;
+        if (
+          toolCall.name === 'delegate' &&
+          taskEvent.payload.expectedDurationSeconds !== undefined
+        ) {
+          const inputRecord = skillInput as Record<string, unknown>;
+          if (!('timeout_ms' in inputRecord) || inputRecord['timeout_ms'] === undefined) {
+            skillInput = {
+              ...inputRecord,
+              timeout_ms: taskEvent.payload.expectedDurationSeconds * 1000,
+            };
+          }
+        }
+
         const startTime = Date.now();
-        const result = await executionLayer.invoke(toolCall.name, toolCall.input, caller, {
+        const result = await executionLayer.invoke(toolCall.name, skillInput, caller, {
           taskEventId: taskEvent.id,
           agentId,
         });

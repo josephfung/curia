@@ -17,6 +17,10 @@ export interface CreateJobParams {
   errorBudget?: Record<string, unknown>;
   /** IANA timezone for cron wall-clock interpretation. Defaults to the service's timezone. */
   timezone?: string;
+  /** Expected duration of the job in seconds. Used to widen the delegate skill timeout for
+   *  long-running jobs and to compute the watchdog recovery threshold. Must be a positive
+   *  finite integer; non-integer, zero, negative, and non-finite values are rejected. */
+  expectedDurationSeconds?: number;
 }
 
 export interface CreateJobResult {
@@ -163,16 +167,27 @@ export class SchedulerService {
       this.validateCronFrequency(cronExpr, jobTimezone);
     }
 
+    // Validate expectedDurationSeconds: must be a positive finite integer.
+    // Reject invalid values explicitly so callers get a clear error rather than
+    // silently falling back to the 10-minute watchdog default.
+    const rawDuration = params.expectedDurationSeconds;
+    if (rawDuration !== undefined) {
+      if (!Number.isInteger(rawDuration) || rawDuration <= 0 || !Number.isFinite(rawDuration)) {
+        throw new Error(`expectedDurationSeconds must be a positive finite integer, got: ${rawDuration}`);
+      }
+    }
+    const hasExpectedDuration = rawDuration !== undefined;
+
     // Calculate next_run_at: for cron jobs use the parser (respecting per-job timezone),
     // for one-shot jobs use runAt directly (already UTC from timestamp normalization).
     const nextRunAt = cronExpr ? this.nextRunFromCron(cronExpr, jobTimezone) : runAt!;
 
     const insertSql = `
-      INSERT INTO scheduled_jobs (agent_id, cron_expr, run_at, task_payload, status, next_run_at, created_by, timezone)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      INSERT INTO scheduled_jobs (agent_id, cron_expr, run_at, task_payload, status, next_run_at, created_by, timezone${hasExpectedDuration ? ', expected_duration_seconds' : ''})
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8${hasExpectedDuration ? ', $9' : ''})
       RETURNING id
     `;
-    const insertParams = [
+    const insertParams: unknown[] = [
       agentId,
       cronExpr ?? null,
       runAt ?? null,
@@ -182,6 +197,9 @@ export class SchedulerService {
       createdBy,
       jobTimezone,
     ];
+    if (hasExpectedDuration) {
+      insertParams.push(rawDuration);
+    }
 
     const { rows } = await this.pool.query(insertSql, insertParams);
     const jobId = (rows[0] as { id: string }).id;

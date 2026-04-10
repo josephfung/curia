@@ -42,6 +42,11 @@ interface AgentTaskPayload {
    *  Combines channel trust, contact confidence, and content risk signal.
    *  Not present on tasks created without a contact resolver (e.g. bullpen tasks). */
   messageTrustScore?: number;
+  /** Expected duration hint from the scheduler, in seconds. Set when the originating
+   *  scheduled_job has an explicit expected_duration_seconds value. The runtime uses this
+   *  to automatically widen the delegate skill timeout for long-running scheduled tasks.
+   *  Absent for interactive tasks (direct messages, bullpen, etc.). */
+  expectedDurationSeconds?: number;
 }
 
 interface AgentResponsePayload {
