@@ -74,6 +74,14 @@ export interface YamlConfig {
     /** Milliseconds of inactivity before a conversation.checkpoint event is published.
      *  Defaults to 600000 (10 minutes). */
     conversationCheckpointDebounceMs?: number;
+    rate_limit?: {
+      /** Duration of each rate-limit window in milliseconds. Default: 60000 (1 minute). */
+      window_ms?: number;
+      /** Maximum messages allowed per sender per window. Default: 15. */
+      max_per_sender?: number;
+      /** Maximum total messages allowed per window across all senders. Default: 100. */
+      max_global?: number;
+    };
   };
   security?: {
     extra_injection_patterns?: Array<{ regex: string; label: string }>;
@@ -147,6 +155,31 @@ export function loadYamlConfig(configDir: string): YamlConfig {
       throw new Error(
         `dispatch.conversationCheckpointDebounceMs must be a positive integer, got: ${checkpointDebounceMs}`,
       );
+    }
+
+    const rateLimit = config.dispatch?.rate_limit;
+    if (rateLimit !== undefined) {
+      const { window_ms, max_per_sender, max_global } = rateLimit;
+      if (window_ms !== undefined && (!Number.isInteger(window_ms) || window_ms <= 0)) {
+        throw new Error(`dispatch.rate_limit.window_ms must be a positive integer, got: ${window_ms}`);
+      }
+      if (max_per_sender !== undefined && (!Number.isInteger(max_per_sender) || max_per_sender <= 0)) {
+        throw new Error(`dispatch.rate_limit.max_per_sender must be a positive integer, got: ${max_per_sender}`);
+      }
+      if (max_global !== undefined && (!Number.isInteger(max_global) || max_global <= 0)) {
+        throw new Error(`dispatch.rate_limit.max_global must be a positive integer, got: ${max_global}`);
+      }
+      // Cross-validate: global must be at least as large as per-sender, otherwise no single
+      // sender can ever reach their per-sender quota — the global becomes the effective ceiling
+      // for everyone, making per-sender meaningless. This is almost certainly a misconfiguration.
+      // Uses effective values (same defaults as index.ts) so a partial config is also caught.
+      const effectiveMaxPerSender = max_per_sender ?? 15;
+      const effectiveMaxGlobal = max_global ?? 100;
+      if (effectiveMaxGlobal < effectiveMaxPerSender) {
+        throw new Error(
+          `dispatch.rate_limit.max_global (${effectiveMaxGlobal}) must be >= max_per_sender (${effectiveMaxPerSender})`,
+        );
+      }
     }
 
     if (config.workingMemory?.summarization !== undefined) {

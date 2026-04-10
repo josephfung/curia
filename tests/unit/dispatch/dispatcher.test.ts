@@ -548,6 +548,202 @@ describe('Dispatcher — contact.unknown event payload', () => {
   });
 });
 
+describe('Dispatcher — rate limiting', () => {
+  it('drops messages once per-sender limit is exceeded and publishes message.rejected (sender_rate_limited)', async () => {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+
+    // Limit each sender to 2 messages per window; global is generous so it doesn't interfere.
+    const { RateLimiter } = await import('../../../src/dispatch/rate-limiter.js');
+    const rateLimiter = new RateLimiter({ windowMs: 60_000, maxPerSender: 2, maxGlobal: 1000 });
+
+    const dispatcher = new Dispatcher({ bus, logger, rateLimiter });
+    dispatcher.register();
+
+    const tasks: AgentTaskEvent[] = [];
+    const rejected: MessageRejectedEvent[] = [];
+    bus.subscribe('agent.task', 'agent', (e) => { tasks.push(e as AgentTaskEvent); });
+    bus.subscribe('message.rejected', 'channel', (e) => { rejected.push(e as MessageRejectedEvent); });
+
+    const send = (n: number) => bus.publish('channel', createInboundMessage({
+      conversationId: `conv-rl-sender-${n}`,
+      channelId: 'cli',
+      senderId: 'alice',
+      content: `Message ${n}`,
+    }));
+
+    // First two messages are within limit
+    await send(1);
+    await send(2);
+    // Third message exceeds the per-sender limit of 2
+    await send(3);
+
+    // Only 2 tasks dispatched to coordinator; 3rd was dropped
+    expect(tasks).toHaveLength(2);
+    expect(rejected).toHaveLength(1);
+    expect(rejected[0]!.payload.reason).toBe('sender_rate_limited');
+    expect(rejected[0]!.payload.channelId).toBe('cli');
+  });
+
+  it('a different sender is not blocked by another sender hitting their limit', async () => {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+
+    const { RateLimiter } = await import('../../../src/dispatch/rate-limiter.js');
+    const rateLimiter = new RateLimiter({ windowMs: 60_000, maxPerSender: 1, maxGlobal: 1000 });
+
+    const mockProvider: LLMProvider = {
+      id: 'mock',
+      chat: vi.fn().mockResolvedValue({
+        type: 'text' as const,
+        content: 'OK',
+        usage: { inputTokens: 1, outputTokens: 1 },
+      }),
+    };
+    const coordinator = new AgentRuntime({
+      agentId: 'coordinator',
+      systemPrompt: 'You are a helpful assistant.',
+      provider: mockProvider,
+      bus,
+      logger,
+    });
+    coordinator.register();
+
+    const dispatcher = new Dispatcher({ bus, logger, rateLimiter });
+    dispatcher.register();
+
+    const tasks: AgentTaskEvent[] = [];
+    const rejected: MessageRejectedEvent[] = [];
+    bus.subscribe('agent.task', 'agent', (e) => { tasks.push(e as AgentTaskEvent); });
+    bus.subscribe('message.rejected', 'channel', (e) => { rejected.push(e as MessageRejectedEvent); });
+
+    // alice sends 2 messages — only 1 allowed per window
+    await bus.publish('channel', createInboundMessage({ conversationId: 'c1', channelId: 'cli', senderId: 'alice', content: 'Hi' }));
+    await bus.publish('channel', createInboundMessage({ conversationId: 'c2', channelId: 'cli', senderId: 'alice', content: 'Hi again' }));
+
+    // bob sends 1 message — his window is independent of alice's
+    await bus.publish('channel', createInboundMessage({ conversationId: 'c3', channelId: 'cli', senderId: 'bob', content: 'Hello' }));
+
+    // 1 from alice + 1 from bob reach the coordinator; alice's second is dropped
+    expect(tasks).toHaveLength(2);
+    expect(tasks.map(t => t.payload.senderId)).toEqual(expect.arrayContaining(['alice', 'bob']));
+    expect(rejected).toHaveLength(1);
+    expect(rejected[0]!.payload.reason).toBe('sender_rate_limited');
+  });
+
+  it('drops messages from all senders once global limit is exceeded and publishes message.rejected (global_rate_limited)', async () => {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+
+    // Global limit of 2, sender limit generous so it doesn't interfere.
+    const { RateLimiter } = await import('../../../src/dispatch/rate-limiter.js');
+    const rateLimiter = new RateLimiter({ windowMs: 60_000, maxPerSender: 1000, maxGlobal: 2 });
+
+    const dispatcher = new Dispatcher({ bus, logger, rateLimiter });
+    dispatcher.register();
+
+    const tasks: AgentTaskEvent[] = [];
+    const rejected: MessageRejectedEvent[] = [];
+    bus.subscribe('agent.task', 'agent', (e) => { tasks.push(e as AgentTaskEvent); });
+    bus.subscribe('message.rejected', 'channel', (e) => { rejected.push(e as MessageRejectedEvent); });
+
+    // Three different senders — global fills after 2
+    const senders = ['alice', 'bob', 'carol'];
+    for (const sender of senders) {
+      await bus.publish('channel', createInboundMessage({
+        conversationId: `conv-global-${sender}`,
+        channelId: 'cli',
+        senderId: sender,
+        content: 'Hello',
+      }));
+    }
+
+    // Only 2 tasks dispatched; carol's message was dropped by the global limit
+    expect(tasks).toHaveLength(2);
+    expect(rejected).toHaveLength(1);
+    expect(rejected[0]!.payload.reason).toBe('global_rate_limited');
+  });
+
+  it('global rate limit fires before contact resolution — second message from any sender is dropped', async () => {
+    // Verifies the global check runs at the very start of handleInbound, before contact
+    // resolution or policy gates. No contact resolver is wired here — the test isolates
+    // the global counter behaviour from all other dispatch logic.
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+
+    const { RateLimiter } = await import('../../../src/dispatch/rate-limiter.js');
+    // Global limit of 1 — second message (from any sender) hits the global limit
+    const rateLimiter = new RateLimiter({ windowMs: 60_000, maxPerSender: 1000, maxGlobal: 1 });
+
+    const dispatcher = new Dispatcher({ bus, logger, rateLimiter });
+    dispatcher.register();
+
+    const rejected: MessageRejectedEvent[] = [];
+    bus.subscribe('message.rejected', 'channel', (e) => { rejected.push(e as MessageRejectedEvent); });
+
+    // First message — allowed by global limit
+    await bus.publish('channel', createInboundMessage({
+      conversationId: 'conv-global-first',
+      channelId: 'cli',
+      senderId: 'alice',
+      content: 'First',
+    }));
+
+    // Second message from a different sender — global is exhausted
+    await bus.publish('channel', createInboundMessage({
+      conversationId: 'conv-global-second',
+      channelId: 'cli',
+      senderId: 'bob',
+      content: 'Second',
+    }));
+
+    // The second rejection is due to global rate limit, not any other policy
+    const globalRejected = rejected.filter(r => r.payload.reason === 'global_rate_limited');
+    expect(globalRejected).toHaveLength(1);
+  });
+
+  it('per-sender limit fires after policy gates — does not block blocked senders twice', async () => {
+    // Blocked senders are already dropped at the policy gate and never reach the
+    // per-sender rate limiter. This test verifies that a blocked sender's drop
+    // produces a blocked_sender rejection, not a sender_rate_limited one.
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+
+    const { RateLimiter } = await import('../../../src/dispatch/rate-limiter.js');
+    // Per-sender limit of 1 — if the blocked sender were to reach the rate limiter,
+    // their second message would produce a sender_rate_limited rejection instead.
+    const rateLimiter = new RateLimiter({ windowMs: 60_000, maxPerSender: 1, maxGlobal: 1000 });
+
+    const mockResolver = {
+      resolve: vi.fn().mockResolvedValue({
+        resolved: true,
+        contactId: 'blocked-id',
+        displayName: 'Bad Actor',
+        role: null,
+        status: 'blocked',
+        verified: false,
+        kgNodeId: null,
+        knowledgeSummary: '',
+        authorization: null,
+      } satisfies InboundSenderContext),
+    } as unknown as ContactResolver;
+
+    const dispatcher = new Dispatcher({ bus, logger, contactResolver: mockResolver, rateLimiter });
+    dispatcher.register();
+
+    const rejected: MessageRejectedEvent[] = [];
+    bus.subscribe('message.rejected', 'channel', (e) => { rejected.push(e as MessageRejectedEvent); });
+
+    // Send two messages from the blocked sender
+    await bus.publish('channel', createInboundMessage({ conversationId: 'c1', channelId: 'cli', senderId: 'bad-actor', content: 'Hi' }));
+    await bus.publish('channel', createInboundMessage({ conversationId: 'c2', channelId: 'cli', senderId: 'bad-actor', content: 'Hi again' }));
+
+    // Both rejections must come from the blocked-sender gate, not the rate limiter
+    expect(rejected).toHaveLength(2);
+    expect(rejected.every(r => r.payload.reason === 'blocked_sender')).toBe(true);
+  });
+});
+
 describe('Dispatcher message size limit', () => {
   /**
    * Creates a Dispatcher with the given maxMessageBytes config and registers it.

@@ -55,6 +55,7 @@ import { DEFAULT_ERROR_BUDGET } from './errors/types.js';
 import { OutboundContentFilter } from './dispatch/outbound-filter.js';
 import { OutboundGateway } from './skills/outbound-gateway.js';
 import { InboundScanner } from './dispatch/inbound-scanner.js';
+import { RateLimiter } from './dispatch/rate-limiter.js';
 import { loadExtraInjectionPatterns, type ExtraInjectionPattern } from './dispatch/security-config-loader.js';
 import { parseExtraPiiPatterns, getMissingBuiltInPatterns, getBuiltInPatternCount } from './pii/scrubber.js';
 import { setErrorPiiPatterns } from './errors/classify.js';
@@ -764,6 +765,23 @@ async function main(): Promise<void> {
 
   const trustScoreFloor = yamlConfig.security?.trust_score_floor ?? 0.2;
 
+  // Rate limiter — enforces global and per-sender message rate limits at the dispatch layer.
+  // Constructed from config/default.yaml dispatch.rate_limit section; falls back to safe defaults
+  // if the section is absent (same pattern as other optional dispatch config).
+  const rateLimitConfig = yamlConfig.dispatch?.rate_limit;
+  const rateLimiterWindowMs = rateLimitConfig?.window_ms ?? 60_000;
+  const rateLimiterMaxPerSender = rateLimitConfig?.max_per_sender ?? 15;
+  const rateLimiterMaxGlobal = rateLimitConfig?.max_global ?? 100;
+  const rateLimiter = new RateLimiter({
+    windowMs: rateLimiterWindowMs,
+    maxPerSender: rateLimiterMaxPerSender,
+    maxGlobal: rateLimiterMaxGlobal,
+  });
+  logger.info(
+    { windowMs: rateLimiterWindowMs, maxPerSender: rateLimiterMaxPerSender, maxGlobal: rateLimiterMaxGlobal },
+    'Dispatch rate limiter initialized',
+  );
+
   // 7. Dispatcher — subscribes to inbound.message + agent.response.
   // Registered after the coordinator so agent.task already has a handler
   // when the dispatcher fans the first inbound message out.
@@ -776,6 +794,7 @@ async function main(): Promise<void> {
     heldMessages,
     channelPolicies: authConfig?.channelPolicies,
     injectionScanner,
+    rateLimiter,
     pool,
     conversationCheckpointDebounceMs: yamlConfig.dispatch?.conversationCheckpointDebounceMs,
     trustScorerWeights,

@@ -173,8 +173,9 @@ interface MessageRejectedPayload {
   channelId: string;
   senderId: string;
   /** Why the message was rejected — used by the HTTP adapter to select the status code.
-   * 'message_too_large' is set when the message body exceeds the configured size limit. */
-  reason: 'unknown_sender' | 'provisional_sender' | 'blocked_sender' | 'message_too_large';
+   * 'message_too_large' is set when the message body exceeds the configured size limit.
+   * 'global_rate_limited' / 'sender_rate_limited' are set when rate limits are exceeded. */
+  reason: 'unknown_sender' | 'provisional_sender' | 'blocked_sender' | 'message_too_large' | 'global_rate_limited' | 'sender_rate_limited';
   /** UTF-8 byte size of the rejected message content. Present when reason is 'message_too_large'. */
   size?: number;
   /** Configured max_message_bytes limit at the time of rejection. Present when reason is 'message_too_large'. */

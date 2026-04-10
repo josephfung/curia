@@ -15,22 +15,32 @@ import type { Logger } from '../../logger.js';
 import type { ServerResponse } from 'node:http';
 
 /**
- * Thrown by the event router when the dispatcher rejects a message via the
- * `unknown_sender: ignore` policy. Typed separately from Error so the route
- * handler can detect the rejection case and return 403 without brittle string
- * matching on the error message.
+ * Thrown by the event router when the dispatcher rejects a message. Typed
+ * separately from Error so the route handler can detect the rejection case and
+ * return 403/413/429 without brittle string matching on the error message.
+ *
+ * reason values:
+ *   unknown_sender / provisional_sender / blocked_sender — policy-gate rejections (403)
+ *   message_too_large — inbound content exceeded the configured size limit (413, spec §06)
+ *   global_rate_limited / sender_rate_limited — rate limit rejections (429, spec §06)
  */
 export class MessageRejectedError extends Error {
-  readonly reason: 'unknown_sender' | 'provisional_sender' | 'blocked_sender' | 'message_too_large';
+  readonly reason: 'unknown_sender' | 'provisional_sender' | 'blocked_sender' | 'message_too_large' | 'global_rate_limited' | 'sender_rate_limited';
+  /** HTTP status code for this rejection — use this instead of hardcoding per reason. */
+  readonly statusCode: 403 | 429;
 
-  constructor(reason: 'unknown_sender' | 'provisional_sender' | 'blocked_sender' | 'message_too_large') {
+  constructor(reason: 'unknown_sender' | 'provisional_sender' | 'blocked_sender' | 'message_too_large' | 'global_rate_limited' | 'sender_rate_limited') {
+    const isRateLimited = reason === 'global_rate_limited' || reason === 'sender_rate_limited';
     super(
       reason === 'message_too_large'
         ? 'Message too large — inbound content exceeds the configured size limit'
-        : `Message rejected — sender not authorized (${reason})`,
+        : isRateLimited
+          ? `Message rejected — rate limit exceeded (${reason})`
+          : `Message rejected — sender not authorized (${reason})`,
     );
     this.name = 'MessageRejectedError';
     this.reason = reason;
+    this.statusCode = isRateLimited ? 429 : 403;
   }
 }
 
