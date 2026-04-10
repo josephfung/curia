@@ -1,6 +1,6 @@
 {
   "name": "curia",
-  "version": "0.15.1",
+  "version": "0.15.2",
   "description": "The AI executive staff your C-Suite will use and your Board will trust",
   "type": "module",
   "engines": {
@@ -27,6 +27,7 @@
     "@fastify/cors": "^11.2.0",
     "@fastify/rate-limit": "^10.3.0",
     "@ghostery/adblocker-playwright": "^2.14.1",
+    "@openredaction/openredaction": "^1.0.4",
     "chokidar": "^5.0.0",
     "cron-parser": "^5.5.0",
     "cytoscape": "^3.33.1",

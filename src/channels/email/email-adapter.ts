@@ -135,14 +135,14 @@ export class EmailAdapter {
           await this.config.bus.publish('channel', event);
 
           this.config.logger.info(
-            { from: fromEmail, subject: msg.subject, threadId: msg.threadId },
+            { senderEmail: fromEmail, subject: msg.subject, threadId: msg.threadId },
             'Email received and published to bus',
           );
         } catch (err) {
           // Log and skip — the high-water mark was already advanced above,
           // so this message will not be retried on the next poll cycle.
           this.config.logger.error(
-            { err, messageId: msg.id, threadId: msg.threadId, from: fromEmail },
+            { err, messageId: msg.id, threadId: msg.threadId, senderEmail: fromEmail },
             'Failed to process inbound email — skipping message',
           );
         }

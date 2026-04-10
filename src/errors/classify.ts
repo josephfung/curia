@@ -10,6 +10,21 @@
 import type { AgentError, ErrorType } from './types.js';
 import { isRetryable } from './types.js';
 import { sanitizeOutput } from '../skills/sanitize.js';
+import { scrubPii, type PiiPattern } from '../pii/scrubber.js';
+
+// Extra PII patterns loaded from config/default.yaml at startup.
+// Injected via setErrorPiiPatterns() in index.ts after config is parsed.
+// Using module-level state avoids threading extra parameters through every
+// classifyError / classifySkillError call in the codebase.
+let _extraPiiPatterns: PiiPattern[] = [];
+
+/**
+ * Configure additional PII patterns for LLM-facing error messages.
+ * Call once at startup after loading pii.extra_patterns from default.yaml.
+ */
+export function setErrorPiiPatterns(patterns: PiiPattern[]): void {
+  _extraPiiPatterns = patterns;
+}
 
 // HTTP status code → ErrorType mapping.
 // Checked first (most reliable signal).
@@ -58,10 +73,17 @@ function extractMessage(err: unknown): string {
 
 /**
  * Sanitize an error message for safe inclusion in LLM context.
- * Reuses the existing sanitizeOutput() from skills/sanitize.ts for consistency.
+ *
+ * Two-pass pipeline:
+ * 1. scrubPii() — remove email addresses, phone numbers, credit card numbers,
+ *    and other PII before the message reaches the LLM's context window.
+ *    The audit log retains the original unredacted error separately.
+ * 2. sanitizeOutput() — strip XML injection tags, redact API key patterns,
+ *    and truncate to the 400-char limit.
  */
 function sanitizeMessage(message: string): string {
-  return sanitizeOutput(message, { maxLength: MAX_MESSAGE_LENGTH });
+  const piiScrubbed = scrubPii(message, _extraPiiPatterns);
+  return sanitizeOutput(piiScrubbed, { maxLength: MAX_MESSAGE_LENGTH });
 }
 
 /**

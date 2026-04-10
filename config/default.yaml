@@ -85,6 +85,38 @@ security:
   # unless the channel is configured as 'ignore'.
   trust_score_floor: 0.2
 
+pii:
+  # Extra PII patterns to scrub from LLM-facing error strings, beyond the built-in
+  # defaults (spec §06-audit-and-security.md — PII Handling).
+  #
+  # Built-in defaults (sourced from @openredaction/openredaction):
+  #   - Email addresses       → [EMAIL]
+  #   - US-format phone numbers (also matches CA)   → [PHONE]
+  #   - UK phone numbers      → [PHONE]
+  #   - Credit card numbers   → [CREDIT_CARD]
+  #   - US SSNs (keyword-prefixed, e.g. "SSN: 123-45-6789") → [SSN]
+  #
+  # Add custom patterns here for any PII types specific to your deployment
+  # (employee IDs, account numbers, national IDs, etc.).
+  #
+  # Each entry must have:
+  #   regex       — a valid JavaScript regex string (gi flags applied automatically)
+  #   replacement — the placeholder to substitute, e.g. "[EMPLOYEE_ID]"
+  #
+  # Example:
+  #   extra_patterns:
+  #     - regex: "EMP-\\d{6}"
+  #       replacement: "[EMPLOYEE_ID]"
+  #     - regex: "\\b\\d{3}[-\\s]?\\d{3}[-\\s]?\\d{3}\\b"
+  #       replacement: "[CA_SIN]"
+  #
+  # Changes take effect on restart — no code changes required.
+  #
+  # ⚠️  ReDoS warning: avoid patterns with unbounded nested quantifiers such as
+  # (a+)+ or (.+)+ — these can cause catastrophic backtracking on adversarial input.
+  # These patterns run on every LLM-facing error message.
+  extra_patterns: []
+
 # Trust-gated action thresholds (spec §06-audit-and-security.md).
 # The Coordinator checks messageTrustScore against these thresholds before
 # taking actions on behalf of a sender. Enforced via the Coordinator's system prompt.
