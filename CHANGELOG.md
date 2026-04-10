@@ -41,6 +41,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Agent and skill loaders** — manual field checks removed; validation is now handled by the startup validator schema.
 
 ### Fixed
+- **`dispatch.rate_limit` missing from `default-config.schema.json`** — the rate-limit config block added in this release was not declared in the schema, causing startup validation to reject the config with `additionalProperties` on every deploy. Schema now allows `window_ms`, `max_per_sender`, and `max_global` under `dispatch.rate_limit`.
 - **Delegate skill timeout now wired to `expected_duration_seconds`** — the delegate skill
   previously used a hardcoded 90-second timeout regardless of job type, causing long-running
   scheduled specialists (e.g. writing-scout doing many web-fetch calls) to time out and retry
