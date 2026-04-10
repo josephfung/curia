@@ -2,9 +2,11 @@ import { describe, it, expect, vi } from 'vitest';
 import { EventBus } from '../../src/bus/bus.js';
 import { Dispatcher } from '../../src/dispatch/dispatcher.js';
 import { AgentRuntime } from '../../src/agents/runtime.js';
-import { createInboundMessage, type OutboundMessageEvent } from '../../src/bus/events.js';
+import { createInboundMessage, type OutboundMessageEvent, type ContactUnknownEvent, type MessageHeldEvent, type AgentTaskEvent } from '../../src/bus/events.js';
 import type { LLMProvider } from '../../src/agents/llm/provider.js';
 import { createLogger } from '../../src/logger.js';
+import type { ContactResolver } from '../../src/contacts/contact-resolver.js';
+import { HeldMessageService } from '../../src/contacts/held-messages.js';
 
 describe('Vertical Slice: CLI → Dispatch → Coordinator → Response', () => {
   it('routes an inbound message through the full pipeline', async () => {
@@ -110,5 +112,74 @@ describe('Vertical Slice: CLI → Dispatch → Coordinator → Response', () => 
         { role: 'user', content: 'Good morning!' },
       ],
     });
+  });
+});
+
+describe('Vertical Slice: Unknown sender email → hold_and_notify', () => {
+  it('holds the message, fires contact.unknown with correct routingDecision and score, suppresses agent.task', async () => {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+
+    // In-memory held messages — same interface as the real Postgres backend.
+    const heldMessages = HeldMessageService.createInMemory();
+
+    // Mock resolver: always returns unknown sender.
+    // We test the dispatcher + HeldMessageService interaction here, not contact resolution.
+    // ContactResolver is a class, not an interface — cast via unknown to satisfy TypeScript.
+    const mockResolver: ContactResolver = {
+      resolve: vi.fn().mockResolvedValue({
+        resolved: false,
+        channel: 'email',
+        senderId: 'stranger@example.com',
+      }),
+    } as unknown as ContactResolver;
+
+    const dispatcher = new Dispatcher({
+      bus,
+      logger,
+      contactResolver: mockResolver,
+      heldMessages,
+      channelPolicies: { email: { trust: 'low', unknownSender: 'hold_and_notify' } },
+    });
+    dispatcher.register();
+
+    // Capture events
+    const unknownEvents: ContactUnknownEvent[] = [];
+    const heldEvents: MessageHeldEvent[] = [];
+    const taskEvents: AgentTaskEvent[] = [];
+
+    bus.subscribe('contact.unknown', 'system', (e) => { unknownEvents.push(e as ContactUnknownEvent); });
+    bus.subscribe('message.held', 'channel', (e) => { heldEvents.push(e as MessageHeldEvent); });
+    bus.subscribe('agent.task', 'agent', (e) => { taskEvents.push(e as AgentTaskEvent); });
+
+    await bus.publish('channel', createInboundMessage({
+      conversationId: 'email:stranger:1',
+      channelId: 'email',
+      senderId: 'stranger@example.com',
+      content: 'Hey, can we talk?',
+    }));
+
+    // Message must NOT reach the coordinator
+    expect(taskEvents).toHaveLength(0);
+
+    // contact.unknown event must carry the correct audit fields
+    expect(unknownEvents).toHaveLength(1);
+    expect(unknownEvents[0]!.payload.channel).toBe('email');
+    expect(unknownEvents[0]!.payload.senderId).toBe('stranger@example.com');
+    expect(unknownEvents[0]!.payload.channelTrustLevel).toBe('low');
+    // email low channel (0.3 * 0.4 = 0.12) + unknown sender (0.0 * 0.4 = 0.0) = 0.12
+    expect(unknownEvents[0]!.payload.messageTrustScore).toBeCloseTo(0.12);
+    expect(unknownEvents[0]!.payload.routingDecision).toBe('hold_and_notify');
+
+    // message.held event must fire with correct identifiers
+    expect(heldEvents).toHaveLength(1);
+    expect(heldEvents[0]!.payload.channel).toBe('email');
+    expect(heldEvents[0]!.payload.senderId).toBe('stranger@example.com');
+
+    // The message must be retrievable from the held messages store
+    const pending = await heldMessages.listPending('email');
+    expect(pending).toHaveLength(1);
+    expect(pending[0]!.senderId).toBe('stranger@example.com');
+    expect(pending[0]!.content).toBe('Hey, can we talk?');
   });
 });
