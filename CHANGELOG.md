@@ -13,6 +13,9 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Added
+- **ADR-014: Capability-tier model routing** — Documents the decision to replace per-agent model declarations with a capability-tier system (`fast | standard | powerful`) mapped by the operator, with optional modality/capability needs flags (`vision`, `large_context`, `reasoning`, `coding`, `audio`, `image_generation`). Implementation tracked in the linked issue.
+
 ### Security
 - **Anti-injection system prompt hardening and architectural containment** — Implements
   spec 06 Layers 2 & 3. Layer 2: added explicit anti-injection directives to the

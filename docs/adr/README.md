@@ -35,6 +35,7 @@ Each ADR follows the [Nygard format](https://adr.github.io/):
 | [011](011-score-based-autonomy-engine.md) | Score-based autonomy engine over capability-based permissions | Accepted |
 | [012](012-llm-as-judge-evaluation.md) | LLM-as-judge for outbound safety and smoke test evaluation | Accepted |
 | [013](013-signal-cli-daemon-mode.md) | signal-cli daemon socket mode for Signal integration | Accepted |
+| [014](014-capability-tier-model-routing.md) | Capability-tier model routing over per-agent model declarations | Accepted |
 
 ## Adding new ADRs
 
