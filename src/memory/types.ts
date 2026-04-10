@@ -1,5 +1,11 @@
 import { randomUUID } from 'node:crypto';
 
+// -- Sensitivity levels from spec (06-audit-and-security.md) --
+// Four levels in ascending order of restriction. Used by export gates (#201)
+// to decide whether bulk export requires approval or is blocked outright.
+export const SENSITIVITY_LEVELS = ['public', 'internal', 'confidential', 'restricted'] as const;
+export type Sensitivity = (typeof SENSITIVITY_LEVELS)[number];
+
 // -- Node types from spec (01-memory-system.md line 61) --
 export const NODE_TYPES = [
   'person',
@@ -62,6 +68,9 @@ export interface KgNode {
   properties: Record<string, unknown>;
   embedding?: number[]; // VECTOR(1536) — undefined until embedded
   temporal: TemporalMetadata;
+  // Sensitivity classification assigned at creation time (#200).
+  // Immutable after creation — changing sensitivity requires a manual data migration.
+  sensitivity: Sensitivity;
 }
 
 // -- Knowledge Graph Edge --
@@ -82,6 +91,12 @@ export interface StoreFactOptions {
   confidence?: number; // defaults to 0.7
   decayClass?: DecayClass; // defaults to 'slow_decay'
   source: string; // provenance: "agent:coordinator/task:abc123/channel:cli"
+  // Explicit sensitivity override. When omitted, EntityMemory auto-classifies
+  // the content using SensitivityClassifier and defaults to 'internal'.
+  sensitivity?: Sensitivity;
+  // Optional category hint passed to the classifier (e.g. 'financial').
+  // Allows skills that know the category of their data to skip keyword scanning.
+  sensitivityCategory?: string;
 }
 
 // -- Validated data for a new fact node, produced by MemoryValidator --

@@ -70,6 +70,7 @@ import { bootstrapCeoContact } from './contacts/ceo-bootstrap.js';
 import { AutonomyService } from './autonomy/autonomy-service.js';
 import { BrowserService } from './browser/browser-service.js';
 import { OfficeIdentityService } from './identity/service.js';
+import { SensitivityClassifier } from './memory/sensitivity.js';
 import type { AgentPersona } from './skills/types.js';
 import type { ConfigChangeEvent } from './bus/events.js';
 import { BullpenService } from './memory/bullpen.js';
@@ -209,7 +210,23 @@ async function main(): Promise<void> {
     const embeddingService = EmbeddingService.createWithOpenAI(config.openaiApiKey, logger);
     const kgStore = KnowledgeGraphStore.createWithPostgres(pool, embeddingService, logger);
     const validator = new MemoryValidator(kgStore, embeddingService);
-    entityMemory = new EntityMemory(kgStore, validator, embeddingService, logger);
+
+    // Sensitivity classifier — loads rules from config/default.yaml at startup (#200).
+    // Used by EntityMemory to auto-classify KG nodes based on content. Rules are
+    // loaded once here so YAML parsing doesn't happen on every node creation.
+    // Scoped inside the openai block so deployments without KG don't fail on a
+    // missing or misconfigured config file.
+    let sensitivityClassifier: SensitivityClassifier | undefined;
+    try {
+      const sensitivityConfigPath = path.resolve(import.meta.dirname, '../config/default.yaml');
+      sensitivityClassifier = SensitivityClassifier.fromYaml(sensitivityConfigPath);
+      logger.info('Sensitivity classifier loaded');
+    } catch (err) {
+      logger.fatal({ err, configPath: 'config/default.yaml' }, 'Failed to load sensitivity classifier — check config/default.yaml syntax and sensitivity_rules section');
+      process.exit(1);
+    }
+
+    entityMemory = new EntityMemory(kgStore, validator, embeddingService, logger, sensitivityClassifier);
     logger.info('Entity memory initialized with knowledge graph');
   } else {
     logger.warn('OPENAI_API_KEY not set — entity memory disabled (knowledge graph unavailable)');

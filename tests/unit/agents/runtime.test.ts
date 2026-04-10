@@ -452,12 +452,13 @@ describe('AgentRuntime tool-use loop', () => {
     await bus.publish('dispatch', task);
 
     // caller is undefined because the task payload has no senderContext;
-    // agentId and taskEventId are threaded through for infrastructure skills
+    // agentId, taskEventId, conversationId, and parentEventId are threaded through
+    // for infrastructure skills and memory.store audit events (#200)
     expect(mockExecution.invoke).toHaveBeenCalledWith(
       'web-fetch',
       { url: 'https://example.com' },
       undefined,
-      expect.objectContaining({ agentId: 'coordinator', taskEventId: expect.any(String) }),
+      expect.objectContaining({ agentId: 'coordinator', taskEventId: expect.any(String), conversationId: 'conv-1' }),
     );
     expect(responseContent).toContain('Call count: 2');
   });

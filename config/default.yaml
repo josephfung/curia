@@ -165,3 +165,126 @@ intentDrift:
   enabled: true
   checkEveryNBursts: 1
   minConfidenceToPause: high
+
+# Sensitivity classification rules for KG nodes (issue #200).
+# Rules are evaluated in descending sensitivity order — 'restricted' rules are
+# checked before 'confidential', so the most protective rule always wins.
+# Add patterns in lowercase; matching is case-insensitive substring search across
+# the node label and all string property values.
+sensitivity_rules:
+  # Credentials — blocked from bulk export entirely
+  - category: credentials
+    sensitivity: restricted
+    patterns:
+      - password
+      - api key
+      - api_key
+      - secret key
+      - private key
+      - access token
+      - credential
+      - ssh key
+      - client secret
+
+  # Board-level materials — blocked from bulk export
+  - category: board
+    sensitivity: restricted
+    patterns:
+      - board meeting
+      - board decision
+      - board of directors
+      - shareholder
+      - equity grant
+      - executive compensation
+      - option grant
+      - cap table
+
+  # Litigation — blocked from bulk export
+  - category: litigation
+    sensitivity: restricted
+    patterns:
+      - lawsuit
+      - litigation
+      - legal hold
+      - court order
+      - subpoena
+      - deposition
+      - opposing counsel
+      - legal dispute
+
+  # Corporate strategy — blocked from bulk export
+  - category: strategy
+    sensitivity: restricted
+    patterns:
+      - acquisition
+      - divestiture
+      - investment banker
+      - ipo
+      - merger
+      - strategic review
+      - takeover
+      - going public
+
+  # Financial data — requires approval to export
+  - category: financial
+    sensitivity: confidential
+    patterns:
+      - salary
+      - compensation
+      - budget
+      - revenue
+      - invoice
+      - payment
+      - profit
+      - loss
+      - financial statement
+      - bank account
+      - payroll
+      - expense report
+      - annual report
+
+  # Contracts and legal agreements — requires approval to export
+  - category: contract
+    sensitivity: confidential
+    patterns:
+      - contract
+      - nda
+      - non-disclosure
+      - statement of work
+      - sow
+      - master service agreement
+      - msa
+      - agreement signed
+      - binding agreement
+
+  # HR matters — requires approval to export
+  - category: hr
+    sensitivity: confidential
+    patterns:
+      - performance review
+      - performance improvement plan
+      - pip
+      - termination
+      - resignation
+      - headcount
+      - layoff
+      - reduction in force
+      - rif
+      - compensation band
+      - hiring plan
+      - offer letter
+
+  # Personal identifiers — requires approval to export
+  - category: personal
+    sensitivity: confidential
+    patterns:
+      - sin number
+      - social insurance
+      - ssn
+      - social security
+      - passport number
+      - date of birth
+      - health condition
+      - medical record
+      - home address
+      - personal phone
