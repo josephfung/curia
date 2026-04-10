@@ -1,6 +1,7 @@
 channels:
   cli:
     enabled: true
+  max_message_bytes: 102400   # 100KB — inbound messages exceeding this are rejected before routing
   # Signal channel activation is controlled by env vars, not this file.
   # Set SIGNAL_SOCKET_PATH + SIGNAL_PHONE_NUMBER at runtime to enable the Signal adapter.
   # Trust level and unknown-sender policy live in config/channel-trust.yaml.

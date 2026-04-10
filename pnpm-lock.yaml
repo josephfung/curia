@@ -26,6 +26,9 @@ importers:
       '@openredaction/openredaction':
         specifier: ^1.0.4
         version: 1.0.4
+      ajv:
+        specifier: ^8.18.0
+        version: 8.18.0
       chokidar:
         specifier: ^5.0.0
         version: 5.0.0

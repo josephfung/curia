@@ -1,0 +1,127 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "default-config",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "channels": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "cli": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean" }
+          }
+        },
+        "max_message_bytes": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "browser": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "sessionTtlMs": { "type": "integer", "minimum": 1 },
+        "sweepIntervalMs": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "agents": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "coordinator": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "config_path": { "type": "string" }
+          }
+        }
+      }
+    },
+    "dispatch": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "conversationCheckpointDebounceMs": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "workingMemory": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "summarization": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "threshold": { "type": "integer", "minimum": 2 },
+            "keepWindow": { "type": "integer", "minimum": 1 }
+          }
+        }
+      }
+    },
+    "skillOutput": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "maxLength": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "security": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "extra_injection_patterns": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["regex", "label"],
+            "additionalProperties": false,
+            "properties": {
+              "regex": { "type": "string", "minLength": 1 },
+              "label": { "type": "string", "minLength": 1 }
+            }
+          }
+        },
+        "trust_score": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "channel_weight": { "type": "number", "minimum": 0, "maximum": 1 },
+            "contact_weight": { "type": "number", "minimum": 0, "maximum": 1 },
+            "max_risk_penalty": { "type": "number", "minimum": 0, "maximum": 1 }
+          }
+        },
+        "trust_score_floor": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    },
+    "trust_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "financial_actions": { "type": "number", "minimum": 0, "maximum": 1 },
+        "data_export": { "type": "number", "minimum": 0, "maximum": 1 },
+        "scheduling": { "type": "number", "minimum": 0, "maximum": 1 },
+        "information_queries": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    },
+    "pii": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "extra_patterns": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["regex", "replacement"],
+            "additionalProperties": false,
+            "properties": {
+              "regex": { "type": "string", "minLength": 1 },
+              "replacement": { "type": "string", "minLength": 1 }
+            }
+          }
+        }
+      }
+    }
+  }
+}

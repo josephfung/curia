@@ -350,7 +350,7 @@ These are non-negotiable for launch.
 | Tool output sanitization active for all skill results | Done |
 | Inbound message sanitization active (injection pattern detection) | Done |
 | Error strings scrubbed before LLM injection | Done (#250) |
-| Agent config validation blocks malformed YAML at startup | Not Done |
+| Agent config validation blocks malformed YAML at startup | Done (#263) |
 | HTTP API channel requires token authentication | Done |
 | Rate limiting active at dispatch layer | Not Done |
 | Intent drift detection pauses tasks (not just logs) | Not Done |

@@ -172,8 +172,13 @@ interface MessageRejectedPayload {
   conversationId: string;
   channelId: string;
   senderId: string;
-  /** Why the message was rejected — used by the HTTP adapter to select the status code. */
-  reason: 'unknown_sender' | 'provisional_sender' | 'blocked_sender';
+  /** Why the message was rejected — used by the HTTP adapter to select the status code.
+   * 'message_too_large' is set when the message body exceeds the configured size limit. */
+  reason: 'unknown_sender' | 'provisional_sender' | 'blocked_sender' | 'message_too_large';
+  /** UTF-8 byte size of the rejected message content. Present when reason is 'message_too_large'. */
+  size?: number;
+  /** Configured max_message_bytes limit at the time of rejection. Present when reason is 'message_too_large'. */
+  limit?: number;
 }
 
 // Memory event payloads — used for the knowledge graph audit trail (Phase 6).

@@ -1,0 +1,7 @@
+name: test-agent
+description: Has a typo key
+model:
+  provider: anthropic
+  model: claude-sonnet-4-6
+system_prompt: You are a test agent.
+typo_key: this should not be here

@@ -1,0 +1,5 @@
+name: test-agent
+model:
+  provider: anthropic
+  model: claude-sonnet-4-6
+system_prompt: You are a test agent.

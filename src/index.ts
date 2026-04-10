@@ -72,6 +72,7 @@ import type { ConfigChangeEvent } from './bus/events.js';
 import { BullpenService } from './memory/bullpen.js';
 import { BullpenDispatcher } from './dispatch/bullpen-dispatcher.js';
 import { ConversationCheckpointProcessor } from './checkpoint/processor.js';
+import { runStartupValidation } from './startup/validator.js';
 
 async function main(): Promise<void> {
   // 1. Config & logging — no dependencies, must come first.
@@ -82,6 +83,21 @@ async function main(): Promise<void> {
   const yamlConfig = loadYamlConfig(configDir);
   const logger = createLogger(config.logLevel);
   logger.info('Curia starting...');
+
+  // 1b. Startup validation — fail fast before any I/O if configs are malformed.
+  // Validates config/default.yaml, agents/*.yaml, and skills/*/skill.json against
+  // JSON Schema. Any failure exits the process before the DB connection is attempted.
+  try {
+    await runStartupValidation({
+      configDir,
+      agentsDir: path.resolve(import.meta.dirname, '../agents'),
+      skillsDir: path.resolve(import.meta.dirname, '../skills'),
+      logger,
+    });
+  } catch (err) {
+    logger.fatal({ err }, 'Startup validation failed — fix the config errors above and restart');
+    process.exit(1);
+  }
 
   // 2. Database — needed by audit logger before the bus can accept events.
   // We probe with SELECT 1 to distinguish a misconfigured URL (fast fail)
@@ -764,6 +780,7 @@ async function main(): Promise<void> {
     conversationCheckpointDebounceMs: yamlConfig.dispatch?.conversationCheckpointDebounceMs,
     trustScorerWeights,
     trustScoreFloor,
+    maxMessageBytes: yamlConfig.channels?.max_message_bytes ?? 102_400,
   });
   dispatcher.register();
 

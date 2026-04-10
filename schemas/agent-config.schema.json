@@ -1,0 +1,79 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "agent-config",
+  "type": "object",
+  "required": ["name", "description", "model", "system_prompt"],
+  "additionalProperties": false,
+  "properties": {
+    "name": { "type": "string", "minLength": 1 },
+    "description": { "type": "string", "minLength": 1 },
+    "role": { "type": "string" },
+    "persona": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "display_name": { "type": "string" },
+        "tone": { "type": "string" },
+        "title": { "type": "string" },
+        "email_signature": { "type": "string" }
+      }
+    },
+    "model": {
+      "type": "object",
+      "required": ["provider", "model"],
+      "additionalProperties": false,
+      "properties": {
+        "provider": { "type": "string", "minLength": 1 },
+        "model": { "type": "string", "minLength": 1 },
+        "fallback": {
+          "type": "object",
+          "required": ["provider", "model"],
+          "additionalProperties": false,
+          "properties": {
+            "provider": { "type": "string", "minLength": 1 },
+            "model": { "type": "string", "minLength": 1 }
+          }
+        }
+      }
+    },
+    "system_prompt": { "type": "string", "minLength": 1 },
+    "pinned_skills": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "allow_discovery": { "type": "boolean" },
+    "memory": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "scopes": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "schedule": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["cron", "task"],
+        "additionalProperties": false,
+        "properties": {
+          "cron": { "type": "string", "minLength": 1 },
+          "task": { "type": "string", "minLength": 1 },
+          "agent_id": { "type": "string" },
+          "expectedDurationSeconds": { "type": "number", "minimum": 0 }
+        }
+      }
+    },
+    "error_budget": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "max_turns": { "type": "integer", "minimum": 1 },
+        "max_cost_usd": { "type": "number", "minimum": 0 },
+        "max_errors": { "type": "integer", "minimum": 1 }
+      }
+    }
+  }
+}
