@@ -45,6 +45,7 @@ bus event types) are noted explicitly even in the `0.x` range.
   delivery lifecycle record. A startup scan (`scanForUnacknowledged`) logs a warning
   for any rows that were written but never acknowledged, indicating delivery may have
   been incomplete on a prior crash. Closes #202.
+- **Dispatcher fail-closed on audit publish failure** (spec §06): the `contact.unknown` publish is now wrapped in its own try/catch with an explicit return, so a failing audit hook cannot fall through the outer resolver catch and bypass `hold_and_notify` / `ignore` policy. Closes #192.
 
 ### Fixed
 - **Outbound content filter: wrong `ceoEmail` causing false-positive blocks** — The
@@ -87,6 +88,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Spec 10 audit log hardening completion table** — replaced implementation checklist in `docs/specs/10-audit-log-hardening.md` with Done/Not Done table.
 
 ### Changed
+- **Sender trust routing** (spec §06): `contact.unknown` event now includes `routingDecision` field (`allow` | `hold_and_notify` | `ignore`), making the unknown-sender audit trail self-contained. The dispatcher now determines routing policy before publishing the event so the intent is always recorded accurately. Closes #192.
 - **`unknown_sender: reject` renamed to `unknown_sender: ignore`** — behaviour unchanged (silent drop + audit event); new name clarifies no rejection notice is sent to the sender.
 - **`contact.unknown` event** — `channelTrustLevel` is now required (was optional); `messageTrustScore` field added.
 - **`completeJobRun`** — writes `last_run_outcome = 'completed'` or `'failed'` on completion.

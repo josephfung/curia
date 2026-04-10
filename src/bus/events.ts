@@ -131,6 +131,8 @@ interface ContactUnknownPayload {
   channelTrustLevel: 'low' | 'medium' | 'high';
   /** Computed message trust score for this unknown sender's message. */
   messageTrustScore: number;
+  /** Routing decision applied to this unknown sender — mirrors the configured per-channel policy. */
+  routingDecision: 'allow' | 'hold_and_notify' | 'ignore';
 }
 
 // contact.duplicate_detected — published when a newly-created contact scores above

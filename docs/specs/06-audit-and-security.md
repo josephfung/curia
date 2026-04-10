@@ -360,6 +360,8 @@ These are non-negotiable for launch.
 | All `agent.task` events carry `messageTrustScore` (computed float); `trustLevel` and `contactConfidence` are inputs only, not propagated to bus events | Done |
 | Unknown sender lookup targets `contact_channel_identities (channel, channel_identifier)` | Done |
 | Unknown sender routing configured in `config/channel-trust.yaml` using `allow` / `hold_and_notify` / `ignore` | Done |
+| `contact.unknown` event includes `routingDecision` field so audit trail is self-contained without downstream correlation | Done (#254) |
+| Unknown sender → `hold_and_notify` path covered by integration test (in-memory `HeldMessageService`, verifies score, event payload, and store write) | Done (#254) |
 | Trust score floor: messages below `security.trust_score_floor` (default 0.2) trigger `hold_and_notify` regardless of per-channel policy | Done |
 | Trust-gated action thresholds use `messageTrustScore` numeric values, enforced via Coordinator system prompt | Done |
 | Data sensitivity tags on knowledge graph entities | Not Done |
