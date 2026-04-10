@@ -239,6 +239,20 @@ interface ScheduleRecoveredPayload {
   suspended: boolean;
 }
 
+interface ScheduleDriftPausedPayload {
+  jobId: string;
+  agentId: string;
+  agentTaskId: string;
+  intentAnchor: string;
+  taskPayload: Record<string, unknown>;
+  lastRunSummary: string | null;
+  verdict: {
+    drifted: boolean;
+    reason: string;
+    confidence: 'high' | 'medium' | 'low';
+  };
+}
+
 // ConfigChangePayload — emitted by the System layer whenever a config object changes.
 // Currently only used by OfficeIdentityService (config_type: 'office_identity').
 // The diff_summary is a human-readable description of what changed; it is not machine-parseable.
@@ -456,6 +470,12 @@ export interface ScheduleRecoveredEvent extends BaseEvent {
   payload: ScheduleRecoveredPayload;
 }
 
+export interface ScheduleDriftPausedEvent extends BaseEvent {
+  type: 'schedule.drift_paused';
+  sourceLayer: 'system';
+  payload: ScheduleDriftPausedPayload;
+}
+
 export interface ConfigChangeEvent extends BaseEvent {
   type: 'config.change';
   sourceLayer: 'system';
@@ -529,6 +549,7 @@ export type BusEvent =
   | ScheduleFiredEvent     // Scheduler: job fired
   | ScheduleSuspendedEvent   // Scheduler: job auto-suspended
   | ScheduleRecoveredEvent   // Scheduler: stuck job auto-recovered
+  | ScheduleDriftPausedEvent  // Scheduler: job paused due to intent drift detection
   | ConfigChangeEvent        // System: config object changed (office identity, etc.)
   | ConversationCheckpointEvent // Checkpoint pipeline: Dispatch fires after inactivity window
   | LlmCallEvent             // Spec 10: LLM API call provenance (model, tokens, cost, hashes)
@@ -843,6 +864,20 @@ export function createScheduleRecovered(
     id: randomUUID(),
     timestamp: new Date(),
     type: 'schedule.recovered',
+    sourceLayer: 'system',
+    payload: rest,
+    parentEventId,
+  };
+}
+
+export function createScheduleDriftPaused(
+  payload: ScheduleDriftPausedPayload & { parentEventId?: string },
+): ScheduleDriftPausedEvent {
+  const { parentEventId, ...rest } = payload;
+  return {
+    id: randomUUID(),
+    timestamp: new Date(),
+    type: 'schedule.drift_paused',
     sourceLayer: 'system',
     payload: rest,
     parentEventId,

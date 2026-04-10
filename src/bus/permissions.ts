@@ -22,7 +22,7 @@ const publishAllowlist: Record<Layer, Set<EventType>> = {
   dispatch: new Set(['agent.task', 'outbound.message', 'outbound.blocked', 'contact.resolved', 'contact.unknown', 'message.held', 'message.rejected', 'contact.duplicate_detected', 'contact.merged', 'conversation.checkpoint', 'human.decision']),
   agent: new Set(['agent.response', 'agent.error', 'skill.invoke', 'skill.result', 'memory.store', 'memory.query', 'agent.discuss', 'llm.call']),
   execution: new Set(['skill.result', 'secret.accessed']),
-  system: new Set(['inbound.message', 'agent.task', 'agent.response', 'agent.error', 'outbound.message', 'outbound.blocked', 'skill.invoke', 'skill.result', 'memory.store', 'memory.query', 'contact.resolved', 'contact.unknown', 'message.held', 'message.rejected', 'schedule.created', 'schedule.fired', 'schedule.suspended', 'schedule.recovered', 'config.change', 'contact.duplicate_detected', 'contact.merged', 'agent.discuss', 'conversation.checkpoint', 'llm.call', 'human.decision', 'secret.accessed']),
+  system: new Set(['inbound.message', 'agent.task', 'agent.response', 'agent.error', 'outbound.message', 'outbound.blocked', 'skill.invoke', 'skill.result', 'memory.store', 'memory.query', 'contact.resolved', 'contact.unknown', 'message.held', 'message.rejected', 'schedule.created', 'schedule.fired', 'schedule.suspended', 'schedule.recovered', 'schedule.drift_paused', 'config.change', 'contact.duplicate_detected', 'contact.merged', 'agent.discuss', 'conversation.checkpoint', 'llm.call', 'human.decision', 'secret.accessed']),
 };
 
 // agent.discuss subscribe for 'dispatch': used by BullpenDispatcher (wired in index.ts after agent registration).
@@ -31,7 +31,7 @@ const subscribeAllowlist: Record<Layer, Set<EventType>> = {
   dispatch: new Set(['inbound.message', 'agent.response', 'agent.error', 'agent.discuss']),
   agent: new Set(['agent.task', 'skill.result']),
   execution: new Set(['skill.invoke']),
-  system: new Set(['inbound.message', 'agent.task', 'agent.response', 'agent.error', 'outbound.message', 'outbound.blocked', 'skill.invoke', 'skill.result', 'memory.store', 'memory.query', 'contact.resolved', 'contact.unknown', 'message.held', 'message.rejected', 'schedule.created', 'schedule.fired', 'schedule.suspended', 'schedule.recovered', 'config.change', 'contact.duplicate_detected', 'contact.merged', 'agent.discuss', 'conversation.checkpoint', 'llm.call', 'human.decision', 'secret.accessed']),
+  system: new Set(['inbound.message', 'agent.task', 'agent.response', 'agent.error', 'outbound.message', 'outbound.blocked', 'skill.invoke', 'skill.result', 'memory.store', 'memory.query', 'contact.resolved', 'contact.unknown', 'message.held', 'message.rejected', 'schedule.created', 'schedule.fired', 'schedule.suspended', 'schedule.recovered', 'schedule.drift_paused', 'config.change', 'contact.duplicate_detected', 'contact.merged', 'agent.discuss', 'conversation.checkpoint', 'llm.call', 'human.decision', 'secret.accessed']),
 };
 
 export function canPublish(layer: Layer, eventType: EventType): boolean {
