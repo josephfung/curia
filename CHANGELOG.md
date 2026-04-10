@@ -19,7 +19,7 @@ bus event types) are noted explicitly even in the `0.x` range.
   parses them into a `senderVerified: boolean` field on every inbound message event.
   Messages where any check fails (or headers are absent) are logged at `warn` level with
   sender address and message ID. The Coordinator's system prompt now includes an
-  unverified-sender handling instruction: messages flagged `sender_verified: false` must
+  unverified-sender handling instruction: messages flagged `senderVerified: false` must
   not trigger financial, data, or access changes without confirmation via Signal or CLI.
   Implements spec 06 *Sender Authentication & Channel Trust → Email-Specific Defenses*.
   Closes #195.

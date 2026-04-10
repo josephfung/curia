@@ -143,13 +143,13 @@ export class EmailAdapter {
           // Coordinator's system prompt instructs it to apply extra skepticism.
           if (!converted.metadata.senderVerified) {
             this.config.logger.warn(
-              { senderEmail: fromEmail, messageId: msg.id },
+              { senderEmail: converted.senderId, messageId: msg.id },
               'Email received with senderVerified: false — SPF/DKIM/DMARC did not all pass or headers were absent',
             );
           }
 
           this.config.logger.info(
-            { senderEmail: fromEmail, subject: msg.subject, threadId: msg.threadId, senderVerified: converted.metadata.senderVerified },
+            { senderEmail: converted.senderId, subject: msg.subject, threadId: msg.threadId, senderVerified: converted.metadata.senderVerified },
             'Email received and published to bus',
           );
         } catch (err) {
