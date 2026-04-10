@@ -123,3 +123,48 @@ describe('startup validator — default config', () => {
     ).rejects.toThrow(/trust-policy/);
   });
 });
+
+// ── Real project files ───────────────────────────────────────────────────────
+//
+// Validates the actual config/default.yaml, agents/*.yaml, and skills/*/skill.json
+// against the schemas. This catches schema/config drift before it reaches prod —
+// the incident that prompted this test: dispatch.rate_limit was added to default.yaml
+// but not to the schema, causing every deploy to fail on startup validation.
+
+const ROOT = path.resolve(import.meta.dirname, '../../..');
+
+describe('startup validator — real project files', () => {
+  it('config/default.yaml passes schema validation', async () => {
+    await expect(
+      runStartupValidation({
+        configDir: path.join(ROOT, 'config'),
+        // Point agents/skills at valid fixtures so only the config is under test.
+        agentsDir: path.join(F, 'agents/valid'),
+        skillsDir: path.join(F, 'skills/valid-skill'),
+        logger,
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it('all agents/*.yaml pass schema validation', async () => {
+    await expect(
+      runStartupValidation({
+        agentsDir: path.join(ROOT, 'agents'),
+        configDir: path.join(F, 'config/empty'),
+        skillsDir: path.join(F, 'skills/valid-skill'),
+        logger,
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it('all skills/*/skill.json pass schema validation', async () => {
+    await expect(
+      runStartupValidation({
+        skillsDir: path.join(ROOT, 'skills'),
+        configDir: path.join(F, 'config/empty'),
+        agentsDir: path.join(F, 'agents/valid'),
+        logger,
+      }),
+    ).resolves.toBeUndefined();
+  });
+});

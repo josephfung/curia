@@ -36,6 +36,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Added
 - **`schemas/` directory** — JSON Schema files for agent configs, skill manifests, and `config/default.yaml`. Schemas are legible without TypeScript and can be validated with third-party tools.
 - **`channels.max_message_bytes`** in `config/default.yaml` — configures the inbound message size limit (default `102400`).
+- **Real-config validator tests** — `tests/unit/startup/validator.test.ts` now validates the actual `config/default.yaml`, `agents/*.yaml`, and `skills/*/skill.json` against their schemas. Catches schema/config drift in CI before it reaches prod.
 
 ### Changed
 - **Agent and skill loaders** — manual field checks removed; validation is now handled by the startup validator schema.
