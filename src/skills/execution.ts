@@ -471,6 +471,11 @@ function buildEntityMemoryObserver(
   invokeOptions: { agentId?: string; conversationId?: string; parentEventId?: string; taskEventId?: string },
   logger: Logger,
 ): EntityMemory {
+  // Callers must ensure parentEventId is truthy before calling this function (see line 297).
+  // Capturing it here narrows the type from string | undefined to string so TypeScript
+  // can verify that createMemoryStore (which requires parentEventId: string) is satisfied.
+  const parentEventId = invokeOptions.parentEventId as string;
+
   // Object.create(instance) produces an object whose [[Prototype]] is the EntityMemory
   // instance, so all non-overridden methods are inherited and run with correct 'this'
   // binding (they find store, validator, etc. on the prototype).
@@ -497,7 +502,7 @@ function buildEntityMemoryObserver(
           label: options.label,
           source: options.source,
           sensitivity: result.sensitivity,
-          parentEventId: invokeOptions.parentEventId,
+          parentEventId,
         }));
       } catch (err) {
         // Audit event failure must not fail the skill — log and continue.

@@ -12,7 +12,6 @@
 // sensitivity get a conservative default that still allows normal operations.
 
 import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 import yaml from 'js-yaml';
 import type { Sensitivity } from './types.js';
 import { SENSITIVITY_LEVELS } from './types.js';

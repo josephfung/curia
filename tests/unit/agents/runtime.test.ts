@@ -458,7 +458,12 @@ describe('AgentRuntime tool-use loop', () => {
       'web-fetch',
       { url: 'https://example.com' },
       undefined,
-      expect.objectContaining({ agentId: 'coordinator', taskEventId: expect.any(String), conversationId: 'conv-1' }),
+      expect.objectContaining({
+        agentId: 'coordinator',
+        taskEventId: expect.any(String),
+        conversationId: 'conv-1',
+        parentEventId: expect.any(String),
+      }),
     );
     expect(responseContent).toContain('Call count: 2');
   });
