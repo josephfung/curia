@@ -115,6 +115,14 @@ export interface YamlConfig {
      */
     extra_patterns?: Array<{ regex: string; replacement: string }>;
   };
+  intentDrift?: {
+    /** Enable intent drift detection. Default: true. */
+    enabled?: boolean;
+    /** Check every N bursts. Must be >= 1. Default: 1. */
+    checkEveryNBursts?: number;
+    /** Minimum LLM confidence required to pause the task. Default: 'high'. */
+    minConfidenceToPause?: 'high' | 'medium' | 'low';
+  };
 }
 
 /**
@@ -201,6 +209,36 @@ export function loadYamlConfig(configDir: string): YamlConfig {
       if (effectiveKeepWindow >= effectiveThreshold) {
         throw new Error(
           `workingMemory.summarization.keepWindow (${effectiveKeepWindow}) must be less than threshold (${effectiveThreshold})`,
+        );
+      }
+    }
+
+    const drift = config.intentDrift;
+    if (drift !== undefined) {
+      // Reject non-object roots (e.g. `intentDrift: false`, `intentDrift: "off"`, `intentDrift: []`).
+      // Without this check, those values would pass the leaf validations below, then reach
+      // index.ts where `yamlConfig.intentDrift?.enabled !== false` evaluates truthy-by-default,
+      // silently enabling drift detection despite a clearly invalid config.
+      if (typeof drift !== 'object' || drift === null || Array.isArray(drift)) {
+        throw new Error('intentDrift must be a YAML mapping');
+      }
+      if (drift.enabled !== undefined && typeof drift.enabled !== 'boolean') {
+        throw new Error(`intentDrift.enabled must be a boolean, got: ${String(drift.enabled)}`);
+      }
+      if (drift.checkEveryNBursts !== undefined) {
+        if (!Number.isInteger(drift.checkEveryNBursts) || drift.checkEveryNBursts < 1) {
+          throw new Error(
+            `intentDrift.checkEveryNBursts must be a positive integer, got: ${drift.checkEveryNBursts}`,
+          );
+        }
+      }
+      const validConfidences = ['high', 'medium', 'low'];
+      if (
+        drift.minConfidenceToPause !== undefined &&
+        !validConfidences.includes(drift.minConfidenceToPause)
+      ) {
+        throw new Error(
+          `intentDrift.minConfidenceToPause must be one of: ${validConfidences.join(', ')}, got: "${drift.minConfidenceToPause}"`,
         );
       }
     }

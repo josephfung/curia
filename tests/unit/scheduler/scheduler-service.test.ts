@@ -215,30 +215,55 @@ describe('SchedulerService', () => {
     });
   });
 
+  // -- pauseJobForDrift --
+
+  describe('pauseJobForDrift', () => {
+    it('sets scheduled_jobs.status to paused and agent_tasks.status to paused', async () => {
+      pool.query.mockResolvedValue({ rows: [] });
+
+      await svc.pauseJobForDrift('job-drift-1');
+
+      expect(pool.query).toHaveBeenCalledTimes(1);
+      const [sql, params] = pool.query.mock.calls[0] as [string, unknown[]];
+      expect(sql).toContain("status = 'paused'");
+      expect(sql).toContain('scheduled_jobs');
+      expect(sql).toContain('agent_tasks');
+      expect(params).toContain('job-drift-1');
+    });
+  });
+
   // -- unsuspendJob --
 
   describe('unsuspendJob', () => {
     it('fetches the job, recalculates next_run_at, and resets status', async () => {
-      // First query: fetch the suspended job
+      // First query: fetch the suspended/paused job
       pool.query.mockResolvedValueOnce({
         rows: [{ cron_expr: '0 9 * * 1', run_at: null }],
       });
-      // Second query: the UPDATE
+      // Second query: UPDATE scheduled_jobs
+      pool.query.mockResolvedValueOnce({ rows: [] });
+      // Third query: UPDATE agent_tasks (resume drift-paused tasks; no-op for suspended jobs)
       pool.query.mockResolvedValueOnce({ rows: [] });
 
       await svc.unsuspendJob('job-unsuspend');
 
-      expect(pool.query).toHaveBeenCalledTimes(2);
-      // First call fetches the job
+      expect(pool.query).toHaveBeenCalledTimes(3);
+      // First call fetches the job (accepts both suspended and paused)
       const [sql1] = pool.query.mock.calls[0] as [string, unknown[]];
       expect(sql1).toContain('suspended');
-      // Second call updates with recalculated next_run_at
+      expect(sql1).toContain('paused');
+      // Second call updates scheduled_jobs with recalculated next_run_at
       const [sql2, params2] = pool.query.mock.calls[1] as [string, unknown[]];
       expect(sql2).toContain('next_run_at');
       expect(sql2).toContain('pending');
       expect(params2[0]).toBe('job-unsuspend');
       // params2[1] should be a Date (the recalculated next_run_at)
       expect(params2[1]).toBeInstanceOf(Date);
+      // Third call resumes any drift-paused agent_tasks
+      const [sql3, params3] = pool.query.mock.calls[2] as [string, unknown[]];
+      expect(sql3).toContain('agent_tasks');
+      expect(sql3).toContain('active');
+      expect(params3[0]).toBe('job-unsuspend');
     });
 
     it('throws when job is not found or not suspended', async () => {

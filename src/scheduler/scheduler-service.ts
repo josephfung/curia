@@ -304,10 +304,35 @@ export class SchedulerService {
     this.logger.info({ jobId }, 'Scheduled job cancelled');
   }
 
+  /**
+   * Pause a job and its linked agent_task due to intent drift detection.
+   * Sets status = 'paused' on both tables in a single query.
+   * The CEO must review and resume or cancel the job manually.
+   */
+  async pauseJobForDrift(jobId: string): Promise<void> {
+    // Update both tables atomically: pause the job and its linked agent_task.
+    // Uses a CTE so both updates happen in one round-trip and stay consistent.
+    await this.pool.query(
+      `WITH paused_job AS (
+         UPDATE scheduled_jobs
+            SET status = 'paused'
+          WHERE id = $1
+       )
+       UPDATE agent_tasks
+          SET status     = 'paused',
+              updated_at = now()
+        WHERE scheduled_job_id = $1`,
+      [jobId],
+    );
+
+    this.logger.info({ jobId }, 'Job paused due to intent drift detection');
+  }
+
   async unsuspendJob(jobId: string): Promise<void> {
-    // Fetch the job to get cron_expr or run_at for recalculating next_run_at
+    // Accept both 'suspended' (failure-threshold path) and 'paused' (drift-detection path) —
+    // both are operator-hold states that the resume endpoint should release.
     const { rows } = await this.pool.query(
-      `SELECT cron_expr, run_at, timezone FROM scheduled_jobs WHERE id = $1 AND status = 'suspended'`,
+      `SELECT cron_expr, run_at, timezone FROM scheduled_jobs WHERE id = $1 AND status IN ('suspended', 'paused')`,
       [jobId],
     );
     if (rows.length === 0) {
@@ -333,6 +358,17 @@ export class SchedulerService {
        WHERE id = $1`,
       [jobId, nextRunAt],
     );
+
+    // Also resume any agent_tasks that were paused by the drift-detection path.
+    // Suspended jobs (failure-threshold path) don't set agent_tasks.status, so this
+    // UPDATE is a no-op for them — it only affects drift-paused jobs.
+    await this.pool.query(
+      `UPDATE agent_tasks
+          SET status = 'active', updated_at = now()
+        WHERE scheduled_job_id = $1 AND status = 'paused'`,
+      [jobId],
+    );
+
     this.logger.info({ jobId }, 'Scheduled job unsuspended');
   }
 

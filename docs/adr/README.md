@@ -36,6 +36,7 @@ Each ADR follows the [Nygard format](https://adr.github.io/):
 | [012](012-llm-as-judge-evaluation.md) | LLM-as-judge for outbound safety and smoke test evaluation | Accepted |
 | [013](013-signal-cli-daemon-mode.md) | signal-cli daemon socket mode for Signal integration | Accepted |
 | [014](014-capability-tier-model-routing.md) | Capability-tier model routing over per-agent model declarations | Accepted |
+| [015](015-llm-as-judge-intent-drift.md) | LLM-as-judge for intent drift detection | Accepted |
 
 ## Adding new ADRs
 

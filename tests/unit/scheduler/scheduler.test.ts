@@ -32,6 +32,15 @@ function mockSchedulerService() {
     getJob: vi.fn(),
     nextRunFromCron: vi.fn(),
     recoverStuckJob: vi.fn(),
+    pauseJobForDrift: vi.fn(),
+  };
+}
+
+function mockDriftDetector() {
+  return {
+    check: vi.fn(),
+    shouldPause: vi.fn(),
+    checkEveryNBursts: 1,
   };
 }
 
@@ -485,6 +494,255 @@ describe('Scheduler', () => {
 
       // completeJobRun should NOT have been called
       expect(schedulerService.completeJobRun).not.toHaveBeenCalled();
+    });
+  });
+
+  // -- drift detection --
+
+  describe('drift detection in handleCompletion', () => {
+    let driftScheduler: Scheduler;
+    let driftPool: ReturnType<typeof mockPool>;
+    let driftBus: ReturnType<typeof mockBus>;
+    let driftLogger: ReturnType<typeof mockLogger>;
+    let driftSchedulerService: ReturnType<typeof mockSchedulerService>;
+    let driftDetector: ReturnType<typeof mockDriftDetector>;
+
+    // A job row that looks like a persistent task (has agentTaskId + intentAnchor)
+    const persistentRow = fakeDbRow({
+      agent_task_id: 'task-99',
+      intent_anchor: 'Research AI safety articles weekly.',
+      task_payload: { skill: 'web-search', query: 'AI safety' },
+      last_run_summary: 'Found 5 articles on AI safety.',
+    });
+
+    beforeEach(() => {
+      driftPool = mockPool();
+      driftBus = mockBus();
+      driftLogger = mockLogger();
+      driftSchedulerService = mockSchedulerService();
+      driftDetector = mockDriftDetector();
+
+      driftScheduler = new Scheduler({
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        pool: driftPool as any,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        bus: driftBus as any,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        logger: driftLogger as any,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        schedulerService: driftSchedulerService as any,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        driftDetector: driftDetector as any,
+      });
+    });
+
+    afterEach(() => {
+      driftScheduler.stop();
+    });
+
+    it('runs drift check and calls completeJobRun when no drift detected', async () => {
+      // Fire the job to populate pendingJobs
+      driftPool.query.mockResolvedValueOnce({ rows: [persistentRow] });
+      driftPool.query.mockResolvedValueOnce({ rows: [] });
+      await driftScheduler.pollDueJobs();
+      const [, taskEvent] = driftBus.publish.mock.calls[1] as [string, { id: string }];
+
+      // Mock drift check: no drift
+      driftSchedulerService.getJob.mockResolvedValueOnce({
+        id: 'job-1',
+        agentId: 'agent-1',
+        agentTaskId: 'task-99',
+        intentAnchor: 'Research AI safety articles weekly.',
+        taskPayload: { skill: 'web-search', query: 'AI safety' },
+        lastRunSummary: 'Found 5 articles on AI safety.',
+      });
+      driftDetector.check.mockResolvedValueOnce({ drifted: false, reason: 'Aligned.', confidence: 'high' });
+      driftDetector.shouldPause.mockReturnValueOnce(false);
+      driftSchedulerService.completeJobRun.mockResolvedValueOnce({ suspended: false });
+
+      driftScheduler.start();
+      const responseHandler = driftBus.subscribe.mock.calls[0]?.[2] as (event: unknown) => Promise<void>;
+      await responseHandler({
+        id: 'resp-drift-1',
+        type: 'agent.response',
+        sourceLayer: 'agent',
+        parentEventId: taskEvent.id,
+        timestamp: new Date(),
+        payload: { agentId: 'agent-1', conversationId: 'c1', content: 'Here are the articles.' },
+      });
+
+      // Use waitFor because handleCompletion is async and launched via .catch() —
+      // the response handler doesn't return a promise so we must wait for microtasks.
+      await vi.waitFor(() => {
+        expect(driftDetector.check).toHaveBeenCalledWith({
+          intentAnchor: 'Research AI safety articles weekly.',
+          taskPayload: { skill: 'web-search', query: 'AI safety' },
+          lastRunSummary: 'Found 5 articles on AI safety.',
+        });
+        expect(driftSchedulerService.pauseJobForDrift).not.toHaveBeenCalled();
+        expect(driftSchedulerService.completeJobRun).toHaveBeenCalledWith('job-1', true, undefined);
+      });
+    });
+
+    it('pauses job, publishes drift event, notifies coordinator, and skips completeJobRun when drift detected', async () => {
+      driftPool.query.mockResolvedValueOnce({ rows: [persistentRow] });
+      driftPool.query.mockResolvedValueOnce({ rows: [] });
+      await driftScheduler.pollDueJobs();
+      const [, taskEvent] = driftBus.publish.mock.calls[1] as [string, { id: string }];
+
+      const driftVerdict = { drifted: true, reason: 'Task shifted to writing marketing copy.', confidence: 'high' as const };
+      driftSchedulerService.getJob.mockResolvedValueOnce({
+        id: 'job-1',
+        agentId: 'agent-1',
+        agentTaskId: 'task-99',
+        intentAnchor: 'Research AI safety articles weekly.',
+        taskPayload: { skill: 'web-search', query: 'AI safety' },
+        lastRunSummary: 'Found 5 articles on AI safety.',
+      });
+      driftDetector.check.mockResolvedValueOnce(driftVerdict);
+      driftDetector.shouldPause.mockReturnValueOnce(true);
+      driftSchedulerService.pauseJobForDrift.mockResolvedValueOnce(undefined);
+
+      driftScheduler.start();
+      const responseHandler = driftBus.subscribe.mock.calls[0]?.[2] as (event: unknown) => Promise<void>;
+      await responseHandler({
+        id: 'resp-drift-2',
+        type: 'agent.response',
+        sourceLayer: 'agent',
+        parentEventId: taskEvent.id,
+        timestamp: new Date(),
+        payload: { agentId: 'agent-1', conversationId: 'c1', content: 'Here is your marketing copy.' },
+      });
+
+      // Use waitFor because handleCompletion is async and launched via .catch() —
+      // the response handler doesn't return a promise so we must wait for microtasks.
+      await vi.waitFor(() => {
+        // pauseJobForDrift called
+        expect(driftSchedulerService.pauseJobForDrift).toHaveBeenCalledWith('job-1');
+      });
+
+      // schedule.drift_paused published
+      const publishedTypes = (driftBus.publish.mock.calls as [string, { type: string }][])
+        .map(([, ev]) => ev.type);
+      expect(publishedTypes).toContain('schedule.drift_paused');
+
+      // Coordinator notification published (agent.task to 'coordinator')
+      const notifyCall = (driftBus.publish.mock.calls as [string, { type: string; payload: { agentId: string } }][])
+        .find(([, ev]) => ev.type === 'agent.task' && ev.payload.agentId === 'coordinator');
+      expect(notifyCall).toBeDefined();
+
+      // completeJobRun NOT called
+      expect(driftSchedulerService.completeJobRun).not.toHaveBeenCalled();
+    });
+
+    it('calls completeJobRun when drift detected but below confidence threshold', async () => {
+      driftPool.query.mockResolvedValueOnce({ rows: [persistentRow] });
+      driftPool.query.mockResolvedValueOnce({ rows: [] });
+      await driftScheduler.pollDueJobs();
+      const [, taskEvent] = driftBus.publish.mock.calls[1] as [string, { id: string }];
+
+      driftSchedulerService.getJob.mockResolvedValueOnce({
+        id: 'job-1',
+        agentId: 'agent-1',
+        agentTaskId: 'task-99',
+        intentAnchor: 'Research AI safety articles weekly.',
+        taskPayload: { skill: 'web-search', query: 'AI safety' },
+        lastRunSummary: null,
+      });
+      driftDetector.check.mockResolvedValueOnce({ drifted: true, reason: 'Possibly drifted.', confidence: 'low' });
+      driftDetector.shouldPause.mockReturnValueOnce(false);  // below threshold
+      driftSchedulerService.completeJobRun.mockResolvedValueOnce({ suspended: false });
+
+      driftScheduler.start();
+      const responseHandler = driftBus.subscribe.mock.calls[0]?.[2] as (event: unknown) => Promise<void>;
+      await responseHandler({
+        id: 'resp-drift-3',
+        type: 'agent.response',
+        sourceLayer: 'agent',
+        parentEventId: taskEvent.id,
+        timestamp: new Date(),
+        payload: { agentId: 'agent-1', conversationId: 'c1', content: 'done' },
+      });
+
+      // Use waitFor because handleCompletion is async and launched via .catch() —
+      // the response handler doesn't return a promise so we must wait for microtasks.
+      await vi.waitFor(() => {
+        expect(driftSchedulerService.pauseJobForDrift).not.toHaveBeenCalled();
+        expect(driftSchedulerService.completeJobRun).toHaveBeenCalledWith('job-1', true, undefined);
+      });
+    });
+
+    it('calls completeJobRun normally when drift check returns null (skipped)', async () => {
+      driftPool.query.mockResolvedValueOnce({ rows: [persistentRow] });
+      driftPool.query.mockResolvedValueOnce({ rows: [] });
+      await driftScheduler.pollDueJobs();
+      const [, taskEvent] = driftBus.publish.mock.calls[1] as [string, { id: string }];
+
+      driftSchedulerService.getJob.mockResolvedValueOnce({
+        id: 'job-1',
+        agentId: 'agent-1',
+        agentTaskId: 'task-99',
+        intentAnchor: 'Research AI safety articles weekly.',
+        taskPayload: { skill: 'web-search', query: 'AI safety' },
+        lastRunSummary: null,
+      });
+      driftDetector.check.mockResolvedValueOnce(null);  // disabled/skipped
+      driftSchedulerService.completeJobRun.mockResolvedValueOnce({ suspended: false });
+
+      driftScheduler.start();
+      const responseHandler = driftBus.subscribe.mock.calls[0]?.[2] as (event: unknown) => Promise<void>;
+      await responseHandler({
+        id: 'resp-drift-4',
+        type: 'agent.response',
+        sourceLayer: 'agent',
+        parentEventId: taskEvent.id,
+        timestamp: new Date(),
+        payload: { agentId: 'agent-1', conversationId: 'c1', content: 'done' },
+      });
+
+      // Use waitFor because handleCompletion is async and launched via .catch() —
+      // the response handler doesn't return a promise so we must wait for microtasks.
+      await vi.waitFor(() => {
+        expect(driftSchedulerService.pauseJobForDrift).not.toHaveBeenCalled();
+        expect(driftSchedulerService.completeJobRun).toHaveBeenCalledWith('job-1', true, undefined);
+      });
+    });
+
+    it('skips drift check for jobs without agentTaskId', async () => {
+      // Non-persistent job (no agent_task_id)
+      const simpleRow = fakeDbRow({ agent_task_id: null, intent_anchor: null });
+      driftPool.query.mockResolvedValueOnce({ rows: [simpleRow] });
+      driftPool.query.mockResolvedValueOnce({ rows: [] });
+      await driftScheduler.pollDueJobs();
+      const [, taskEvent] = driftBus.publish.mock.calls[1] as [string, { id: string }];
+
+      driftSchedulerService.getJob.mockResolvedValueOnce({
+        id: 'job-1',
+        agentId: 'agent-1',
+        agentTaskId: null,
+        intentAnchor: null,
+        taskPayload: { skill: 'morning-brief' },
+        lastRunSummary: null,
+      });
+      driftSchedulerService.completeJobRun.mockResolvedValueOnce({ suspended: false });
+
+      driftScheduler.start();
+      const responseHandler = driftBus.subscribe.mock.calls[0]?.[2] as (event: unknown) => Promise<void>;
+      await responseHandler({
+        id: 'resp-drift-5',
+        type: 'agent.response',
+        sourceLayer: 'agent',
+        parentEventId: taskEvent.id,
+        timestamp: new Date(),
+        payload: { agentId: 'agent-1', conversationId: 'c1', content: 'done' },
+      });
+
+      // Use waitFor because handleCompletion is async and launched via .catch() —
+      // the response handler doesn't return a promise so we must wait for microtasks.
+      await vi.waitFor(() => {
+        expect(driftDetector.check).not.toHaveBeenCalled();
+        expect(driftSchedulerService.completeJobRun).toHaveBeenCalledWith('job-1', true, undefined);
+      });
     });
   });
 
