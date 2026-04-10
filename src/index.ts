@@ -62,6 +62,8 @@ import { setErrorPiiPatterns } from './errors/classify.js';
 import type { TrustScorerWeights } from './dispatch/trust-scorer.js';
 import { SchedulerService } from './scheduler/scheduler-service.js';
 import { Scheduler } from './scheduler/scheduler.js';
+import { DriftDetector } from './scheduler/drift-detector.js';
+import type { DriftConfig } from './scheduler/drift-detector.js';
 import { EntityContextAssembler } from './entity-context/assembler.js';
 import { bootstrapAgentIdentity } from './entity-context/bootstrap.js';
 import { bootstrapCeoContact } from './contacts/ceo-bootstrap.js';
@@ -579,7 +581,27 @@ async function main(): Promise<void> {
   // SchedulerService is the shared service; Scheduler is the polling loop.
   // Constructed early so it can be passed to ExecutionLayer and HttpAdapter.
   const schedulerService = new SchedulerService(pool, bus, logger, config.timezone);
-  const scheduler = new Scheduler({ pool, bus, logger, schedulerService });
+
+  // Build the drift detector if enabled in config. Requires the LLM provider
+  // (already created above). If enabled but no provider is available, the config
+  // is still valid — drift checks will simply never trigger.
+  //
+  // TODO: When multi-model support is added, make this provider independently configurable.
+  let driftDetector: DriftDetector | undefined;
+  if (yamlConfig.intentDrift?.enabled !== false) {
+    // Resolve effective drift config with defaults.
+    const driftConfig: DriftConfig = {
+      enabled: yamlConfig.intentDrift?.enabled ?? true,
+      checkEveryNBursts: yamlConfig.intentDrift?.checkEveryNBursts ?? 1,
+      minConfidenceToPause: yamlConfig.intentDrift?.minConfidenceToPause ?? 'high',
+    };
+    driftDetector = new DriftDetector(llmProvider, driftConfig, logger);
+    logger.info({ driftConfig }, 'Intent drift detection enabled');
+  } else {
+    logger.info('Intent drift detection disabled via config');
+  }
+
+  const scheduler = new Scheduler({ pool, bus, logger, schedulerService, driftDetector });
 
   // Execution layer — now with bus, agent registry, and outbound gateway for
   // infrastructure skills. outboundGateway gives email skills their send path.
