@@ -319,6 +319,46 @@ describe('OutboundGateway', () => {
         recipientTrustLevel: null,
       });
     });
+
+    it('forwards recipientTrustLevel=high to contentFilter when contact has trust_level=high', async () => {
+      // Verify that a resolved contact with trust_level='high' propagates to the
+      // content filter. This is the policy boundary that allows trusted recipients
+      // (CEO's EA, CFO, board members) to receive third-party contact data.
+      (mocks.contactService.resolveByChannelIdentity as ReturnType<typeof vi.fn>).mockResolvedValue({
+        contactId: 'contact-ea',
+        displayName: "CEO's EA",
+        role: null,
+        status: 'confirmed',
+        kgNodeId: null,
+        verified: true,
+        trustLevel: 'high',
+      });
+      (mocks.contentFilter.check as ReturnType<typeof vi.fn>).mockResolvedValue({
+        passed: true,
+        findings: [],
+      });
+
+      const gateway = new OutboundGateway({
+        nylasClient: mocks.nylasClient,
+        contactService: mocks.contactService,
+        contentFilter: mocks.contentFilter,
+        bus: mocks.bus,
+        ceoEmail: 'ceo@example.com',
+        logger: mocks.logger,
+      });
+
+      const result = await gateway.send(baseRequest);
+
+      expect(result.success).toBe(true);
+      expect(mocks.contentFilter.check).toHaveBeenCalledOnce();
+      expect(mocks.contentFilter.check).toHaveBeenCalledWith({
+        content: baseRequest.body,
+        recipientEmail: baseRequest.to,
+        conversationId: '',
+        channelId: baseRequest.channel,
+        recipientTrustLevel: 'high',
+      });
+    });
   });
 });
 

@@ -50,13 +50,19 @@ export async function bootstrapCeoContact(
   if (existing.rows[0]) {
     const { contact_id, contact_status, identity_verified } = existing.rows[0];
 
-    // Always ensure trust_level = 'high' on the CEO contact regardless of which
-    // path brought us here. This is idempotent — the UPDATE is a no-op if trust_level
-    // is already 'high'. Without this, a second CEO email address linked to the same
-    // contact would not match the single CEO_PRIMARY_EMAIL config string and would
-    // fail the outbound filter's trust check.
+    // Always ensure role = 'ceo' and trust_level = 'high' on the CEO contact regardless
+    // of which path brought us here. This is idempotent — the UPDATE is a no-op when both
+    // are already correct. Without trust_level = 'high', a second CEO email address linked
+    // to the same contact would not match the single CEO_PRIMARY_EMAIL config string and
+    // would fail the outbound filter's trust check. Setting role keeps metadata consistent
+    // even if the contact was initially auto-created without a role.
     await pool.query(
-      `UPDATE contacts SET trust_level = 'high', updated_at = now() WHERE id = $1 AND trust_level IS DISTINCT FROM 'high'`,
+      `UPDATE contacts
+       SET role = 'ceo',
+           trust_level = 'high',
+           updated_at = now()
+       WHERE id = $1
+         AND (role IS DISTINCT FROM 'ceo' OR trust_level IS DISTINCT FROM 'high')`,
       [contact_id],
     );
 

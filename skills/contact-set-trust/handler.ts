@@ -51,6 +51,17 @@ export class ContactSetTrustHandler implements SkillHandler {
     // Normalise: undefined input → null (clear the override)
     const level: TrustLevel | null = (trust_level as TrustLevel) ?? null;
 
+    // Pre-check contact existence so we can return a structured not-found response
+    // without relying on error-message string matching to distinguish not-found from
+    // unexpected errors (per project convention: use structured checks, not error text).
+    const existing = await ctx.contactService.getContact(contact_id);
+    if (!existing) {
+      return {
+        success: false,
+        error: `No contact exists with id ${contact_id}. Use contact-lookup to verify the UUID.`,
+      };
+    }
+
     ctx.log.info({ contact_id, trust_level: level }, 'Setting contact trust level');
 
     try {
@@ -70,15 +81,8 @@ export class ContactSetTrustHandler implements SkillHandler {
         },
       };
     } catch (err) {
-      if (err instanceof Error && err.message.startsWith('Contact not found:')) {
-        return {
-          success: false,
-          error: `No contact exists with id ${contact_id}. Use contact-lookup to verify the UUID.`,
-        };
-      }
-      const message = err instanceof Error ? err.message : String(err);
       ctx.log.error({ err, contact_id }, 'Failed to set contact trust level');
-      return { success: false, error: `Failed to set contact trust level: ${message}` };
+      return { success: false, error: 'Failed to set contact trust level. See logs for details.' };
     }
   }
 }
