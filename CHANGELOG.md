@@ -15,7 +15,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Breaking Changes
 
-- **Agent YAML schema now enforced at startup** — previously-ignored unknown keys and missing required fields now cause a descriptive `process.exit(1)`. Any `agents/*.yaml` that was silently tolerated must be fixed before upgrading. This is a change to the agent YAML public API surface (minor bump required per versioning policy).
+- **Agent YAML schema now enforced at startup** — previously-ignored unknown keys and missing required fields now cause a descriptive `process.exit(1)`. Any `agents/*.yaml` that was silently tolerated must be fixed before upgrading.
 - **Skill manifest schema now enforced at startup** — same as above for `skills/*/skill.json`. Invalid manifests (missing `version`, `action_risk`, unknown keys) cause startup failure.
 - **`MessageRejectedPayload.reason`** extended with `'message_too_large'` (bus event type, public API surface) — exhaustive handlers over the `reason` union must add this case. The payload also gains optional `size` and `limit` fields populated when the reason is `message_too_large`.
 - **HTTP 413 for oversized messages** — inbound messages that exceed `channels.max_message_bytes` now receive HTTP 413 (Payload Too Large) instead of 403.
