@@ -136,7 +136,10 @@ export class AuditLogger {
       const countResult = await this.pool.query<{ count: string }>(
         `SELECT COUNT(*) AS count FROM audit_log WHERE acknowledged = false`,
       );
-      count = parseInt(countResult.rows[0].count, 10);
+      // COUNT(*) always returns exactly one row, but TypeScript's pg typings
+      // type rows as T[] (no tuple inference), so rows[0] is technically T|undefined.
+      // The `?? '0'` fallback satisfies the type checker without altering behaviour.
+      count = parseInt(countResult.rows[0]?.count ?? '0', 10);
     } catch (err) {
       this.logger.error({ err }, 'Audit log startup scan failed — could not query unacknowledged rows');
       return;
