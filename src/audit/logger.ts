@@ -85,13 +85,19 @@ export class AuditLogger {
    */
   async markAcknowledged(eventId: string): Promise<void> {
     try {
-      await this.pool.query(
+      const result = await this.pool.query(
         // The WHERE clause guards against double-acknowledgement. The DB trigger
         // also rejects acknowledged = true → true flips, but the WHERE makes
         // the intent explicit in the application layer.
         `UPDATE audit_log SET acknowledged = true WHERE id = $1 AND acknowledged = false`,
         [eventId],
       );
+      if ((result.rowCount ?? 0) === 0) {
+        // 0 rows updated — either the row is already acknowledged (acceptable) or
+        // the eventId was never inserted (would indicate the write-ahead INSERT
+        // silently failed, leaving a gap in the audit trail).
+        this.logger.warn({ eventId }, 'markAcknowledged matched 0 rows — row may already be acknowledged or eventId not found in audit_log');
+      }
     } catch (err) {
       this.logger.error({ err, eventId }, 'Failed to mark audit log row as acknowledged');
       throw err;
@@ -118,9 +124,13 @@ export class AuditLogger {
       );
       rows = result.rows;
     } catch (err) {
-      // Diagnostic scan failure — log and continue. Startup must not be blocked by a
-      // transient DB error here; the scan is observability-only, not a hard requirement.
-      this.logger.warn({ err }, 'Audit log startup scan failed — could not query unacknowledged rows');
+      // Log at error — by the time this scan runs, the DB connection and schema are
+      // already confirmed healthy (the migration runner would have exited the process
+      // on any DB error). A failure here indicates a permissions problem, schema
+      // mismatch, or query bug — not a transient connection blip. Startup continues
+      // regardless (the scan is diagnostic only), but the error is surfaced at the
+      // correct severity.
+      this.logger.error({ err }, 'Audit log startup scan failed — could not query unacknowledged rows');
       return;
     }
 
@@ -129,13 +139,21 @@ export class AuditLogger {
       return;
     }
 
+    // Cap the number of events included in the log entry to avoid overflowing
+    // log aggregator per-entry size limits (typically 64KB–256KB). The total
+    // count is always logged so operators know whether rows were omitted.
+    const LOG_LIMIT = 50;
+    const shown = rows.slice(0, LOG_LIMIT);
+
     // Log at warn level — unacknowledged rows mean delivery may have been
     // incomplete on the previous run. This is not an error (crash recovery
     // is expected), but it warrants operator attention.
     this.logger.warn(
       {
         count: rows.length,
-        events: rows.map(r => ({ id: r.id, eventType: r.event_type, timestamp: r.timestamp })),
+        shown: shown.length,
+        truncated: rows.length > LOG_LIMIT,
+        events: shown.map(r => ({ id: r.id, eventType: r.event_type, timestamp: r.timestamp })),
       },
       'Audit log startup scan: unacknowledged events detected — delivery may have been incomplete on previous run',
     );

@@ -116,4 +116,23 @@ describe('EventBus', () => {
 
     expect(onDelivered).toHaveBeenCalledWith(event.id);
   });
+
+  it('resolves publish() even when onDelivered throws', async () => {
+    // A failed acknowledgement write must not roll back a completed delivery.
+    // The publisher's view of the event (published successfully) must remain
+    // stable regardless of whether the post-delivery audit flip succeeded.
+    const failingOnDelivered = vi.fn().mockRejectedValue(new Error('ack write failed'));
+    bus = new EventBus(createLogger('error'), undefined, failingOnDelivered);
+    bus.subscribe('inbound.message', 'dispatch', vi.fn());
+
+    const event = createInboundMessage({
+      conversationId: 'conv-1',
+      channelId: 'cli',
+      senderId: 'user',
+      content: 'Hello',
+    });
+
+    // Must resolve — not reject — even though onDelivered threw.
+    await expect(bus.publish('channel', event)).resolves.toBeUndefined();
+  });
 });
