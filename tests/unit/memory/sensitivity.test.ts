@@ -69,11 +69,23 @@ function makeClassifier(): SensitivityClassifier {
   return SensitivityClassifier.fromRules(TEST_RULES);
 }
 
+// Minimal no-op logger — EntityMemory now requires a Logger as the 4th arg.
+const noopLogger = {
+  info: () => {},
+  warn: () => {},
+  error: () => {},
+  debug: () => {},
+  fatal: () => {},
+  trace: () => {},
+  child: () => noopLogger,
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+} as any;
+
 function makeEntityMemory(classifier?: SensitivityClassifier): EntityMemory {
   const embeddingService = EmbeddingService.createForTesting();
   const store = KnowledgeGraphStore.createInMemory(embeddingService);
   const validator = new MemoryValidator(store, embeddingService);
-  return new EntityMemory(store, validator, embeddingService, classifier);
+  return new EntityMemory(store, validator, embeddingService, noopLogger, classifier);
 }
 
 // -- SensitivityClassifier unit tests --
@@ -215,7 +227,7 @@ describe('EntityMemory sensitivity integration', () => {
     });
 
     it('AC: new entity without explicit sensitivity defaults to internal', async () => {
-      const node = await em.createEntity({
+      const { entity: node } = await em.createEntity({
         type: 'concept',
         label: 'Q3 planning notes',
         properties: {},
@@ -225,7 +237,7 @@ describe('EntityMemory sensitivity integration', () => {
     });
 
     it('AC: new fact without explicit sensitivity defaults to internal', async () => {
-      const entity = await em.createEntity({ type: 'concept', label: 'anchor', properties: {}, source: 'test' });
+      const { entity } = await em.createEntity({ type: 'concept', label: 'anchor', properties: {}, source: 'test' });
       const result = await em.storeFact({
         entityNodeId: entity.id,
         label: 'some meeting note',
@@ -244,7 +256,7 @@ describe('EntityMemory sensitivity integration', () => {
     });
 
     it('AC: new node without explicit sensitivity → defaults to internal (non-sensitive content)', async () => {
-      const node = await em.createEntity({
+      const { entity: node } = await em.createEntity({
         type: 'concept',
         label: 'Q3 planning notes',
         properties: {},
@@ -254,7 +266,7 @@ describe('EntityMemory sensitivity integration', () => {
     });
 
     it('AC: financial fact auto-tagged as confidential', async () => {
-      const entity = await em.createEntity({ type: 'concept', label: 'anchor', properties: {}, source: 'test' });
+      const { entity } = await em.createEntity({ type: 'concept', label: 'anchor', properties: {}, source: 'test' });
       const result = await em.storeFact({
         entityNodeId: entity.id,
         label: 'Q4 salary budget approved',
@@ -265,7 +277,7 @@ describe('EntityMemory sensitivity integration', () => {
     });
 
     it('restricted content auto-tagged as restricted', async () => {
-      const entity = await em.createEntity({ type: 'concept', label: 'anchor', properties: {}, source: 'test' });
+      const { entity } = await em.createEntity({ type: 'concept', label: 'anchor', properties: {}, source: 'test' });
       const result = await em.storeFact({
         entityNodeId: entity.id,
         label: 'Board meeting agenda for November',
@@ -276,7 +288,7 @@ describe('EntityMemory sensitivity integration', () => {
     });
 
     it('property values trigger classification', async () => {
-      const entity = await em.createEntity({ type: 'concept', label: 'anchor', properties: {}, source: 'test' });
+      const { entity } = await em.createEntity({ type: 'concept', label: 'anchor', properties: {}, source: 'test' });
       const result = await em.storeFact({
         entityNodeId: entity.id,
         label: 'Employee record',
@@ -288,7 +300,7 @@ describe('EntityMemory sensitivity integration', () => {
     });
 
     it('explicit override wins over classifier (public beats confidential content)', async () => {
-      const node = await em.createEntity({
+      const { entity: node } = await em.createEntity({
         type: 'concept',
         label: 'Annual budget summary',   // would normally be confidential
         properties: {},
@@ -299,7 +311,7 @@ describe('EntityMemory sensitivity integration', () => {
     });
 
     it('explicit override wins over classifier on storeFact', async () => {
-      const entity = await em.createEntity({ type: 'concept', label: 'anchor', properties: {}, source: 'test' });
+      const { entity } = await em.createEntity({ type: 'concept', label: 'anchor', properties: {}, source: 'test' });
       const result = await em.storeFact({
         entityNodeId: entity.id,
         label: 'Password reset policy',   // would be restricted
@@ -311,7 +323,7 @@ describe('EntityMemory sensitivity integration', () => {
     });
 
     it('category hint forces classification without keyword match', async () => {
-      const entity = await em.createEntity({ type: 'concept', label: 'anchor', properties: {}, source: 'test' });
+      const { entity } = await em.createEntity({ type: 'concept', label: 'anchor', properties: {}, source: 'test' });
       const result = await em.storeFact({
         entityNodeId: entity.id,
         label: 'Q4 planning session',     // no financial keywords
@@ -323,7 +335,7 @@ describe('EntityMemory sensitivity integration', () => {
     });
 
     it('sensitivity is preserved on the node returned by createEntity', async () => {
-      const node = await em.createEntity({
+      const { entity: node } = await em.createEntity({
         type: 'decision',
         label: 'litigation hold initiated',
         properties: {},
@@ -333,7 +345,7 @@ describe('EntityMemory sensitivity integration', () => {
     });
 
     it('storeFact result includes sensitivity for audit event emission', async () => {
-      const entity = await em.createEntity({ type: 'concept', label: 'anchor', properties: {}, source: 'test' });
+      const { entity } = await em.createEntity({ type: 'concept', label: 'anchor', properties: {}, source: 'test' });
       const result = await em.storeFact({
         entityNodeId: entity.id,
         label: 'NDA signed with partner',

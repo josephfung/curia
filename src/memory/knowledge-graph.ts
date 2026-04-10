@@ -166,6 +166,7 @@ export class KnowledgeGraphStore {
         decayClass: options.decayClass ?? 'slow_decay',
         source: options.source,
       },
+      sensitivity: options.sensitivity ?? 'internal',
     };
 
     return this.backend.upsertNode(node);
