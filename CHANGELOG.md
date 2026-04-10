@@ -24,6 +24,15 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Pino logger PII redaction** — Added `senderId`, `email`, `from`, and `phoneNumber` to
   pino's structured-field redact list (at 0/1/2 nesting levels) as a last-resort safety net
   against sender identifiers appearing in stdout log output (spec 06, issue #197).
+- **Audit log append-only enforcement** (spec 06) — Added a PostgreSQL trigger
+  (`021_audit_log_append_only`) that raises an exception on any UPDATE or DELETE to
+  `audit_log`, with the single permitted exception of flipping `acknowledged` from
+  false to true. Code-level grep confirms no other UPDATE/DELETE paths exist.
+  `EventBus` now accepts an `onDelivered` hook that fires after all subscribers have
+  been attempted; `AuditLogger` uses it to set `acknowledged = true`, completing the
+  delivery lifecycle record. A startup scan (`scanForUnacknowledged`) logs a warning
+  for any rows that were written but never acknowledged, indicating delivery may have
+  been incomplete on a prior crash. Closes #202.
 
 ### Fixed
 - **Outbound content filter: wrong `ceoEmail` causing false-positive blocks** — The

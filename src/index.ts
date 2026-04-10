@@ -129,10 +129,22 @@ async function main(): Promise<void> {
   // delivering to any subscriber, so this must exist when the bus is constructed.
   const auditLogger = new AuditLogger(pool, logger);
 
+  // 3b. Startup scan — flag any events that were written but never acknowledged.
+  // These indicate the process crashed between write-ahead and delivery on a
+  // previous run. Logged at warn level for operator visibility; replay is a
+  // separate future feature.
+  await auditLogger.scanForUnacknowledged();
+
   // 4. Message bus — the write-ahead hook ensures every event is durably
   // recorded before it reaches any subscriber. Losing a message is worse
   // than slowing down delivery, hence the synchronous-before-fanout design.
-  const bus = new EventBus(logger, (event) => auditLogger.log(event));
+  // The onDelivered hook flips acknowledged = true after all handlers have
+  // been attempted, completing the delivery lifecycle record.
+  const bus = new EventBus(
+    logger,
+    (event) => auditLogger.log(event),
+    (eventId) => auditLogger.markAcknowledged(eventId),
+  );
 
   // 4b. Office identity — System-layer service that owns the instance persona.
   // Must be initialized after migrations (schema) and bus (emits config.change events),
