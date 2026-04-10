@@ -355,7 +355,7 @@ These are non-negotiable for launch.
 | Rate limiting active at dispatch layer | Not Done |
 | Intent drift detection pauses tasks (not just logs) | Not Done |
 | Email channel exposes provider-level SPF/DKIM/DMARC validation via Nylas message metadata | Not Done |
-| Anti-injection system prompt hardening and architectural containment (Layers 2 & 3) | Not Done |
+| Anti-injection system prompt hardening and architectural containment (Layers 2 & 3) | Done (#194) |
 | Migration 020 adds `contact_confidence`, `trust_level`, `last_seen_at` columns to existing `contacts` table | Done |
 | All `agent.task` events carry `messageTrustScore` (computed float); `trustLevel` and `contactConfidence` are inputs only, not propagated to bus events | Done |
 | Unknown sender lookup targets `contact_channel_identities (channel, channel_identifier)` | Done |
