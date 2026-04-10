@@ -255,14 +255,25 @@ export class Dispatcher {
             : policy?.unknownSender === 'ignore' ? 'ignore'
             : 'allow';
 
-          await this.bus.publish('dispatch', createContactUnknown({
-            channel: senderContext.channel,
-            senderId: senderContext.senderId,
-            channelTrustLevel: prelimChannelTrust,
-            messageTrustScore: prelimScore,
-            routingDecision,
-            parentEventId: event.id,
-          }));
+          // Wrapped in its own try/catch so a publish failure (e.g. audit hook throws)
+          // cannot escape to the outer resolver catch and fall through to normal routing —
+          // which would bypass the hold/ignore policy. Fail-closed: drop the message.
+          try {
+            await this.bus.publish('dispatch', createContactUnknown({
+              channel: senderContext.channel,
+              senderId: senderContext.senderId,
+              channelTrustLevel: prelimChannelTrust,
+              messageTrustScore: prelimScore,
+              routingDecision,
+              parentEventId: event.id,
+            }));
+          } catch (publishErr) {
+            this.logger.error(
+              { err: publishErr, channel: payload.channelId, senderId: payload.senderId },
+              'Failed to publish contact.unknown event — dropping message (fail-closed)',
+            );
+            return;
+          }
 
           if (policy?.unknownSender === 'hold_and_notify' && this.heldMessages) {
             try {
