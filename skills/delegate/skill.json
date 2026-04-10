@@ -8,7 +8,8 @@
   "inputs": {
     "agent": "string",
     "task": "string",
-    "conversation_id": "string?"
+    "conversation_id": "string?",
+    "timeout_ms": "number?"
   },
   "outputs": {
     "response": "string",
@@ -16,5 +17,5 @@
   },
   "permissions": [],
   "secrets": [],
-  "timeout": 120000
+  "timeout": 660000
 }

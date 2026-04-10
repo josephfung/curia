@@ -12,15 +12,18 @@ import { randomUUID } from 'node:crypto';
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
 import { createAgentTask, type AgentResponseEvent } from '../../src/bus/events.js';
 
-// How long to wait for the specialist to respond before timing out.
-const SPECIALIST_TIMEOUT_MS = 90000;
+// Default wait for the specialist to respond — appropriate for interactive tasks.
+// Long-running scheduled tasks should pass timeout_ms explicitly (injected by the runtime
+// from the originating agent.task event's expectedDurationSeconds).
+const DEFAULT_SPECIALIST_TIMEOUT_MS = 90000;
 
 export class DelegateHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {
-    const { agent, task, conversation_id } = ctx.input as {
+    const { agent, task, conversation_id, timeout_ms } = ctx.input as {
       agent?: string;
       task?: string;
       conversation_id?: string;
+      timeout_ms?: unknown;
     };
 
     // Validate required inputs
@@ -29,6 +32,24 @@ export class DelegateHandler implements SkillHandler {
     }
     if (!task || typeof task !== 'string') {
       return { success: false, error: 'Missing required input: task (string)' };
+    }
+
+    // Use caller-supplied timeout if it's a valid positive finite integer; fall back to default.
+    // Invalid values fall back silently so a bad LLM-supplied value never breaks the call.
+    // When the runtime injects timeout_ms from expectedDurationSeconds (scheduled tasks), the
+    // value should always be valid — a warn here helps distinguish LLM garbage from a runtime bug.
+    const isValidTimeout =
+      typeof timeout_ms === 'number' &&
+      Number.isInteger(timeout_ms) &&
+      timeout_ms > 0 &&
+      Number.isFinite(timeout_ms);
+    const specialistTimeoutMs = isValidTimeout ? (timeout_ms as number) : DEFAULT_SPECIALIST_TIMEOUT_MS;
+
+    if (timeout_ms !== undefined && !isValidTimeout) {
+      ctx.log.warn(
+        { targetAgent: agent, providedTimeoutMs: timeout_ms },
+        'timeout_ms was provided but is not a valid positive integer — using default timeout',
+      );
     }
 
     // Infrastructure skills need bus and agent registry
@@ -58,7 +79,10 @@ export class DelegateHandler implements SkillHandler {
 
     const conversationId = conversation_id ?? `delegate-${randomUUID()}`;
 
-    ctx.log.info({ targetAgent: agent, task: task.slice(0, 100) }, 'Delegating task to specialist');
+    ctx.log.info(
+      { targetAgent: agent, task: task.slice(0, 100), timeoutMs: specialistTimeoutMs },
+      'Delegating task to specialist',
+    );
 
     // Publish an agent.task event for the specialist.
     // parentEventId uses a delegate-prefixed UUID. Ideally this would trace back
@@ -87,9 +111,9 @@ export class DelegateHandler implements SkillHandler {
       timeoutHandle = setTimeout(() => {
         if (!settled) {
           settled = true;
-          reject(new Error(`Specialist '${agent}' did not respond within ${SPECIALIST_TIMEOUT_MS}ms`));
+          reject(new Error(`Specialist '${agent}' did not respond within ${specialistTimeoutMs}ms`));
         }
-      }, SPECIALIST_TIMEOUT_MS);
+      }, specialistTimeoutMs);
 
       ctx.bus!.subscribe('agent.response', 'system', async (event) => {
         if (settled) return; // Skip processing after settlement — prevents double-resolve

@@ -445,19 +445,47 @@ export class AgentRuntime {
       for (const toolCall of response.toolCalls) {
         logger.info({ agentId, skill: toolCall.name, callId: toolCall.id }, 'Invoking skill');
 
-        // Publish skill.invoke for audit trail
+        // For delegate calls from scheduled tasks: inject timeout_ms from the task event's
+        // expectedDurationSeconds so the specialist gets an appropriate wait window.
+        // Only injected when: (a) the skill is 'delegate', (b) the task carries a duration
+        // hint from the scheduler, and (c) the LLM hasn't already supplied a timeout_ms.
+        // This is transparent to the LLM — it doesn't need to know about scheduling internals.
+        let skillInput = toolCall.input;
+        if (
+          toolCall.name === 'delegate' &&
+          taskEvent.payload.expectedDurationSeconds !== undefined
+        ) {
+          const inputRecord = skillInput as Record<string, unknown>;
+          if (!('timeout_ms' in inputRecord) || inputRecord['timeout_ms'] === undefined) {
+            const timeoutMs = taskEvent.payload.expectedDurationSeconds * 1000;
+            // Guard against non-integer results from floating-point expectedDurationSeconds
+            // stored via out-of-band DB writes — the delegate handler would silently fall back,
+            // but we log here so the root cause is visible in audit logs.
+            if (Number.isInteger(timeoutMs) && timeoutMs > 0) {
+              skillInput = { ...inputRecord, timeout_ms: timeoutMs };
+            } else {
+              logger.warn(
+                { agentId, taskEventId: taskEvent.id, expectedDurationSeconds: taskEvent.payload.expectedDurationSeconds, computedTimeoutMs: timeoutMs },
+                'Computed timeout_ms from expectedDurationSeconds is not a valid positive integer — skipping injection; delegate will use default timeout',
+              );
+            }
+          }
+        }
+
+        // Publish skill.invoke for audit trail — after injection so the recorded input
+        // reflects the actual values passed to the skill (including injected timeout_ms).
         const invokeEvent = createSkillInvoke({
           agentId,
           conversationId,
           skillName: toolCall.name,
-          input: toolCall.input,
+          input: skillInput,
           taskEventId: taskEvent.id,
           parentEventId: taskEvent.id,
         });
         await bus.publish('agent', invokeEvent);
 
         const startTime = Date.now();
-        const result = await executionLayer.invoke(toolCall.name, toolCall.input, caller, {
+        const result = await executionLayer.invoke(toolCall.name, skillInput, caller, {
           taskEventId: taskEvent.id,
           agentId,
         });

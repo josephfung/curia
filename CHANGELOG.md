@@ -14,6 +14,19 @@ bus event types) are noted explicitly even in the `0.x` range.
 ## [Unreleased]
 
 ### Fixed
+- **Delegate skill timeout now wired to `expected_duration_seconds`** — the delegate skill
+  previously used a hardcoded 90-second timeout regardless of job type, causing long-running
+  scheduled specialists (e.g. writing-scout doing many web-fetch calls) to time out and retry
+  unnecessarily. `expected_duration_seconds` from the scheduler job is now forwarded through the
+  `agent.task` event payload; the runtime injects it as `timeout_ms` on every `delegate` call so
+  the specialist gets appropriate headroom without any coordinator.yaml changes. The 90-second
+  default is preserved for interactive tasks that carry no scheduler hint. The delegate skill
+  outer execution timeout has been raised to 660 s to accommodate jobs up to 600 s. Closes #258.
+- **`CreateJobParams` now accepts `expectedDurationSeconds`** — dynamic job creation (HTTP API,
+  skills) previously could not set `expected_duration_seconds`; the field was only reachable via
+  declarative YAML. `CreateJobParams` now exposes the field with the same validation rules as the
+  YAML path (positive finite integer; non-integer/zero/negative values rejected with a clear
+  error). Part of #258.
 - **Null byte crash in audit logger** — `AuditLogger.log()` now strips U+0000 from all
   string values in event payloads before writing to `audit_log.payload`. Previously, binary
   content returned by `web-fetch` could embed null bytes that PostgreSQL rejects with
