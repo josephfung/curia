@@ -13,6 +13,17 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Security
+- **Audit log append-only enforcement** (spec 06) — Added a PostgreSQL trigger
+  (`021_audit_log_append_only`) that raises an exception on any UPDATE or DELETE to
+  `audit_log`, with the single permitted exception of flipping `acknowledged` from
+  false to true. Code-level grep confirms no other UPDATE/DELETE paths exist.
+  `EventBus` now accepts an `onDelivered` hook that fires after all subscribers have
+  been attempted; `AuditLogger` uses it to set `acknowledged = true`, completing the
+  delivery lifecycle record. A startup scan (`scanForUnacknowledged`) logs a warning
+  for any rows that were written but never acknowledged, indicating delivery may have
+  been incomplete on a prior crash. Closes #202.
+
 ### Fixed
 - **Outbound content filter: wrong `ceoEmail` causing false-positive blocks** — The
   `OutboundContentFilter` and `OutboundGateway` were initialized with `nylasSelfEmail`

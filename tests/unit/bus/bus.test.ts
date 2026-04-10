@@ -80,4 +80,40 @@ describe('EventBus', () => {
 
     expect(onEvent).toHaveBeenCalledWith(event);
   });
+
+  it('calls onDelivered hook after all subscribers have been attempted', async () => {
+    // The onDelivered hook is used by the audit logger to flip acknowledged = true
+    // after all handlers have been dispatched (regardless of per-subscriber errors).
+    const onDelivered = vi.fn();
+    bus = new EventBus(createLogger('error'), undefined, onDelivered);
+    bus.subscribe('inbound.message', 'dispatch', vi.fn());
+
+    const event = createInboundMessage({
+      conversationId: 'conv-1',
+      channelId: 'cli',
+      senderId: 'user',
+      content: 'Hello',
+    });
+    await bus.publish('channel', event);
+
+    expect(onDelivered).toHaveBeenCalledWith(event.id);
+  });
+
+  it('calls onDelivered even when a subscriber throws', async () => {
+    // A failing subscriber must not prevent acknowledgement — the event was
+    // dispatched and the audit record should reflect that.
+    const onDelivered = vi.fn();
+    bus = new EventBus(createLogger('error'), undefined, onDelivered);
+    bus.subscribe('inbound.message', 'dispatch', () => { throw new Error('subscriber failure'); });
+
+    const event = createInboundMessage({
+      conversationId: 'conv-1',
+      channelId: 'cli',
+      senderId: 'user',
+      content: 'Hello',
+    });
+    await bus.publish('channel', event);
+
+    expect(onDelivered).toHaveBeenCalledWith(event.id);
+  });
 });

@@ -7,7 +7,9 @@ import type { Logger } from '../logger.js';
  * BEFORE the event is delivered to other subscribers. This ensures audit
  * completeness even if the process crashes mid-delivery.
  *
- * The audit log is append-only — no UPDATE or DELETE operations.
+ * The audit log is append-only — no UPDATE or DELETE operations, with the
+ * single exception of flipping `acknowledged` from false to true after
+ * delivery has been attempted for all subscribers.
  */
 export class AuditLogger {
   constructor(
@@ -66,5 +68,76 @@ export class AuditLogger {
       this.logger.error({ err, eventId: event.id, eventType: event.type }, 'Audit log write failed');
       throw err;
     }
+  }
+
+  /**
+   * Mark an audit_log row as acknowledged after delivery has been attempted.
+   * This is the ONLY permitted UPDATE on audit_log — enforced by a database
+   * trigger (migration 021) that rejects all other mutations.
+   *
+   * Called as the onDelivered hook in EventBus after all subscribers have been
+   * attempted. Delivery is "attempted", not "succeeded" — per-subscriber errors
+   * are swallowed by the bus and don't prevent acknowledgement.
+   *
+   * Errors are logged and re-thrown. A failed acknowledgement write is not
+   * catastrophic — the row remains unacknowledged and surfaces in the startup
+   * scan — but it should not be silently swallowed.
+   */
+  async markAcknowledged(eventId: string): Promise<void> {
+    try {
+      await this.pool.query(
+        // The WHERE clause guards against double-acknowledgement. The DB trigger
+        // also rejects acknowledged = true → true flips, but the WHERE makes
+        // the intent explicit in the application layer.
+        `UPDATE audit_log SET acknowledged = true WHERE id = $1 AND acknowledged = false`,
+        [eventId],
+      );
+    } catch (err) {
+      this.logger.error({ err, eventId }, 'Failed to mark audit log row as acknowledged');
+      throw err;
+    }
+  }
+
+  /**
+   * Scan for audit_log rows that were written but never acknowledged.
+   * Called once at startup, after migrations run and before serving requests.
+   *
+   * Unacknowledged rows indicate the process crashed between writing the
+   * write-ahead record and completing subscriber delivery. They are flagged
+   * here so operators can identify which events may not have been delivered.
+   *
+   * Replay of unacknowledged events is a separate feature (not yet implemented).
+   * This scan is diagnostic only.
+   */
+  async scanForUnacknowledged(): Promise<void> {
+    type ScanRow = { id: string; event_type: string; timestamp: Date };
+    let rows: ScanRow[];
+    try {
+      const result = await this.pool.query<ScanRow>(
+        `SELECT id, event_type, timestamp FROM audit_log WHERE acknowledged = false ORDER BY timestamp ASC`,
+      );
+      rows = result.rows;
+    } catch (err) {
+      // Diagnostic scan failure — log and continue. Startup must not be blocked by a
+      // transient DB error here; the scan is observability-only, not a hard requirement.
+      this.logger.warn({ err }, 'Audit log startup scan failed — could not query unacknowledged rows');
+      return;
+    }
+
+    if (rows.length === 0) {
+      this.logger.debug('Audit log startup scan: no unacknowledged events');
+      return;
+    }
+
+    // Log at warn level — unacknowledged rows mean delivery may have been
+    // incomplete on the previous run. This is not an error (crash recovery
+    // is expected), but it warrants operator attention.
+    this.logger.warn(
+      {
+        count: rows.length,
+        events: rows.map(r => ({ id: r.id, eventType: r.event_type, timestamp: r.timestamp })),
+      },
+      'Audit log startup scan: unacknowledged events detected — delivery may have been incomplete on previous run',
+    );
   }
 }
