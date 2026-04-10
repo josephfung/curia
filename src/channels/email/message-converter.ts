@@ -52,20 +52,23 @@ export interface ConvertedEmail {
 export function parseSenderVerified(headers?: Array<{ name: string; value: string }>): boolean {
   if (!headers || headers.length === 0) return false;
 
-  // Header names are case-insensitive per RFC 7601 §2.2 and RFC 5322 §2.2.
-  const authHeader = headers.find((h) => h.name.toLowerCase() === 'authentication-results');
-  if (!authHeader) return false;
+  // RFC 7601 allows multiple Authentication-Results headers — each MTA in the relay chain
+  // may add one. Collect ALL of them rather than stopping at the first (find()), since an
+  // attacker who controls an intermediate relay could prepend a forged header before the
+  // legitimate provider's header. Header names are case-insensitive (RFC 7601 §2.2).
+  const authHeaders = headers.filter((h) => h.name.toLowerCase() === 'authentication-results');
+  if (authHeaders.length === 0) return false;
 
-  const value = authHeader.value;
-
-  // Match each mechanism as `spf=pass`, `dkim=pass`, `dmarc=pass`.
-  // \b after "pass" ensures we don't match "spf=passthrough" or similar future tokens,
-  // though RFC 7601 result tokens don't currently include such values.
-  const spfPass = /\bspf=pass\b/i.test(value);
-  const dkimPass = /\bdkim=pass\b/i.test(value);
-  const dmarcPass = /\bdmarc=pass\b/i.test(value);
-
-  return spfPass && dkimPass && dmarcPass;
+  // Return true if ANY Authentication-Results header shows all three mechanisms passing.
+  // The final receiving MTA (Gmail, Outlook) prepends its header, making it appear first
+  // in the list; checking all headers with some() ensures we find it regardless of ordering.
+  //
+  // Match each mechanism as `mechname=pass`. \b after "pass" guards against hypothetical
+  // future tokens like "spf=passthrough", though RFC 7601 result tokens don't include any.
+  return authHeaders.some((h) => {
+    const v = h.value;
+    return /\bspf=pass\b/i.test(v) && /\bdkim=pass\b/i.test(v) && /\bdmarc=pass\b/i.test(v);
+  });
 }
 
 /**

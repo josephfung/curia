@@ -245,6 +245,27 @@ describe('parseSenderVerified', () => {
     }];
     expect(parseSenderVerified(headers)).toBe(false);
   });
+
+  it('returns true when a second Authentication-Results header (e.g. from final MTA) has all passing', () => {
+    // Multiple headers are common in relay scenarios. Each hop prepends its own.
+    // The final receiving MTA's header (last added, first in array) should be
+    // authoritative. Checking with some() means true if any header has all three passing.
+    const headers = [
+      // Final MTA header — all pass (this is the authoritative one)
+      { name: 'Authentication-Results', value: 'mx.google.com; spf=pass; dkim=pass; dmarc=pass' },
+      // Intermediate relay header — only SPF (no DKIM/DMARC in scope)
+      { name: 'Authentication-Results', value: 'relay.isp.com; spf=pass' },
+    ];
+    expect(parseSenderVerified(headers)).toBe(true);
+  });
+
+  it('returns false when all Authentication-Results headers are present but none has all three passing', () => {
+    const headers = [
+      { name: 'Authentication-Results', value: 'mx.google.com; spf=pass; dkim=fail; dmarc=fail' },
+      { name: 'Authentication-Results', value: 'relay.isp.com; spf=pass' },
+    ];
+    expect(parseSenderVerified(headers)).toBe(false);
+  });
 });
 
 describe('convertNylasMessage — senderVerified in metadata', () => {
