@@ -99,7 +99,7 @@ Explicitly listed in agent config (`pinned_skills`). Always available to the age
 ### Discoverable Skills
 All registered skills (local + MCP) are searchable via the built-in `skill-registry` skill. Agents with `allow_discovery: true` in their YAML automatically receive `skill-registry` in their tool list. When the LLM determines it needs a capability not in its pinned skills, it invokes:
 
-```
+```text
 skill-registry({ query: "send email" })
 ```
 
