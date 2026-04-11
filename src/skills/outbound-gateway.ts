@@ -496,9 +496,8 @@ export class OutboundGateway {
       this.log.info({ messageId, accountId }, 'outbound-gateway: message archived');
       return { success: true };
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
       this.log.error({ err, messageId, accountId }, 'outbound-gateway: archiveEmailMessage failed');
-      return { success: false, error: `Archive failed: ${message}` };
+      return { success: false, error: 'Archive failed' };
     }
   }
 

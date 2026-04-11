@@ -116,19 +116,21 @@ describe('NylasClient.archiveMessage', () => {
     await expect(client.archiveMessage('msg-1')).rejects.toThrow('Nylas API 500');
   });
 
-  it('handles a message with no folders field gracefully (treats as already archived)', async () => {
-    // Some Nylas providers/draft objects return messages without a folders field.
-    // normalizeMessage defaults to [] in that case, so archiveMessage resolves
-    // cleanly with an empty update (no INBOX to remove).
+  it('skips update when message has no folders (INBOX already absent)', async () => {
+    // normalizeMessage defaults folders to [] when the field is absent.
+    // No INBOX → hadInbox is false → update is a no-op.
     const msgWithNoFolders = { ...mockMsg(), folders: undefined };
     mockMessages.find.mockResolvedValue({ data: msgWithNoFolders });
-    mockMessages.update.mockResolvedValue({ data: mockMsg({ folders: [] }) });
 
     await expect(client.archiveMessage('msg-1')).resolves.toBeUndefined();
-    expect(mockMessages.update).toHaveBeenCalledWith({
-      identifier: 'test-grant-id',
-      messageId: 'msg-1',
-      requestBody: { folders: [] },
-    });
+    expect(mockMessages.update).not.toHaveBeenCalled();
+  });
+
+  it('skips update when INBOX label is not present in folders', async () => {
+    // Message is already archived (INBOX absent) — no update should be issued.
+    mockMessages.find.mockResolvedValue({ data: mockMsg({ folders: ['STARRED', 'IMPORTANT'] }) });
+
+    await expect(client.archiveMessage('msg-1')).resolves.toBeUndefined();
+    expect(mockMessages.update).not.toHaveBeenCalled();
   });
 });

@@ -599,9 +599,11 @@ export class Dispatcher {
       const nylasMessageId = (payload.metadata as Record<string, unknown> | undefined)?.nylasMessageId as string | undefined;
       const observingAccountId = payload.accountId;
 
+      // Always include Account so the coordinator knows which mailbox to act on.
+      // Message ID is only present when the email adapter has surfaced it via metadata.
       const identifierBlock = nylasMessageId
         ? `Message ID: ${nylasMessageId}\nAccount: ${observingAccountId ?? 'primary'}\n\n`
-        : '';
+        : `Account: ${observingAccountId ?? 'primary'}\n\n`;
 
       taskContent =
         `[OBSERVATION MODE — monitored inbox]\n` +

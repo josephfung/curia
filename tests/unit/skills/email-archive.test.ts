@@ -42,17 +42,19 @@ describe('EmailArchiveHandler', () => {
 
   it('passes undefined accountId when account is absent', async () => {
     const gateway = { archiveEmailMessage: vi.fn().mockResolvedValue({ success: true }) };
-    await handler.execute(
+    const result = await handler.execute(
       makeCtx({ message_id: 'msg-1' }, { outboundGateway: gateway as never }),
     );
+    expect(result.success).toBe(true);
     expect(gateway.archiveEmailMessage).toHaveBeenCalledWith('msg-1', undefined);
   });
 
   it('passes undefined accountId when account is an empty string', async () => {
     const gateway = { archiveEmailMessage: vi.fn().mockResolvedValue({ success: true }) };
-    await handler.execute(
+    const result = await handler.execute(
       makeCtx({ message_id: 'msg-1', account: '' }, { outboundGateway: gateway as never }),
     );
+    expect(result.success).toBe(true);
     expect(gateway.archiveEmailMessage).toHaveBeenCalledWith('msg-1', undefined);
   });
 

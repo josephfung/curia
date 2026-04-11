@@ -282,13 +282,21 @@ export class NylasClient {
     // getMessage already logs its own error; re-throwing without a second log avoids
     // misleading 'archiveMessage failed' entries when it's actually a fetch failure.
     let currentFolders: string[];
+    let hadInbox: boolean;
     try {
       const current = await this.getMessage(messageId);
       // Filter by uppercase so we catch 'inbox', 'Inbox', 'INBOX' consistently
       currentFolders = current.folders.filter((f) => f.toUpperCase() !== 'INBOX');
+      // True if the filter actually removed something — avoids a no-op API call
+      hadInbox = currentFolders.length !== current.folders.length;
     } catch (err) {
       // getMessage already logged; re-throw without a second log line
       throw err;
+    }
+
+    if (!hadInbox) {
+      this.log.debug({ messageId }, 'archive skipped: INBOX label not present');
+      return;
     }
 
     try {

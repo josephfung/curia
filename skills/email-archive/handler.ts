@@ -11,12 +11,15 @@ import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/t
 
 export class EmailArchiveHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {
-    const { message_id: messageId, account } = ctx.input as {
+    const { message_id: rawMessageId, account } = ctx.input as {
       message_id?: string;
       account?: string;
     };
 
-    if (!messageId || typeof messageId !== 'string') {
+    // Trim to guard against accidental whitespace in the injected preamble values.
+    const messageId = typeof rawMessageId === 'string' ? rawMessageId.trim() : undefined;
+
+    if (!messageId) {
       return { success: false, error: 'Missing required input: message_id (string)' };
     }
 
@@ -28,12 +31,20 @@ export class EmailArchiveHandler implements SkillHandler {
       };
     }
 
-    // Treat an empty string as "no account specified" so the gateway uses the primary client.
-    const accountId = typeof account === 'string' && account.length > 0 ? account : undefined;
+    // Treat an empty or whitespace-only string as "no account specified".
+    const trimmedAccount = typeof account === 'string' ? account.trim() : '';
+    const accountId = trimmedAccount.length > 0 ? trimmedAccount : undefined;
 
     ctx.log.info({ messageId, accountId }, 'Archiving email');
 
-    const result = await ctx.outboundGateway.archiveEmailMessage(messageId, accountId);
+    let result: { success: boolean; error?: string };
+    try {
+      result = await ctx.outboundGateway.archiveEmailMessage(messageId, accountId);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      ctx.log.error({ err, messageId, accountId }, 'email-archive: unexpected error from gateway');
+      return { success: false, error: `Archive failed: ${msg}` };
+    }
 
     if (!result.success) {
       ctx.log.error({ messageId, accountId, error: result.error }, 'Failed to archive email');
