@@ -49,10 +49,11 @@ servers:
   #   3. Set GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_CLIENT_SECRET in .env
   #   4. Run the OAuth flow once locally to cache tokens (~/.workspace-mcp/cli-tokens/)
   #
-  # env: {} is intentional — it triggers the mcp-client.ts branch that passes
-  # { ...process.env, ...{} } to the child, so the Google OAuth credentials from
-  # Curia's .env are available to the subprocess. Without this block, the MCP SDK
-  # uses getDefaultEnvironment() which omits application-defined env vars.
+  # Empty-string env values are resolved from process.env at runtime by
+  # mcp-client.ts's buildChildEnv() — only these two keys are passed to the
+  # subprocess (plus a safe base set: PATH, HOME, USER, etc.). This enforces
+  # least-privilege: DB_PASSWORD, ANTHROPIC_API_KEY, etc. never reach the
+  # third-party process.
   - name: google-workspace
     transport: stdio
     command: uvx
@@ -60,7 +61,9 @@ servers:
       - workspace-mcp
       - --tool-tier
       - extended
-    env: {}
+    env:
+      GOOGLE_OAUTH_CLIENT_ID: ""
+      GOOGLE_OAUTH_CLIENT_SECRET: ""
     action_risk: low
     sensitivity: normal
     timeout_ms: 60000

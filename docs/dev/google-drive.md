@@ -89,7 +89,7 @@ ssh <vps-host> "cp -r /tmp/workspace-mcp-tokens /var/lib/docker/volumes/curia_go
 
 After copying, restart Curia and check the logs for:
 
-```
+```text
 INFO  MCP server tools registered  {"server":"google-workspace","registered":N,"total":N}
 ```
 
@@ -120,7 +120,7 @@ repeat Step 5 to re-authenticate and copy fresh tokens to the VPS.
 ### Verification
 
 1. **Startup log**: after Curia boots, look for:
-   ```
+   ```text
    INFO  MCP server tools registered  {"server":"google-workspace","registered":N}
    ```
    A non-zero `registered` count means the server connected and tools are available.
