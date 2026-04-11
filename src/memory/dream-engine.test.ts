@@ -41,6 +41,13 @@ describe('DreamEngine.runDecayPass', () => {
     // Should have executed: slow_decay nodes, fast_decay nodes, slow_decay edges, fast_decay edges, archive nodes, archive edges
     expect(queries.length).toBe(6);
     expect(result.durationMs).toBeGreaterThanOrEqual(0);
+    // Row counts from the mock: [5, 3, 2, 1, 4, 2]
+    // nodesDecayed = slow_decay nodes (5) + fast_decay nodes (3)
+    // edgesDecayed = slow_decay edges (2) + fast_decay edges (1)
+    expect(result.nodesDecayed).toBe(8);   // 5 + 3
+    expect(result.edgesDecayed).toBe(3);   // 2 + 1
+    expect(result.nodesArchived).toBe(4);
+    expect(result.edgesArchived).toBe(2);
   });
 
   it('does not run any SQL for permanent nodes (halfLifeDays.permanent is null)', async () => {

@@ -107,6 +107,16 @@ describeIf('DreamEngine integration', () => {
     expect(results.map(n => n.id)).not.toContain(node.id);
   });
 
+  it('archived node does not appear in findNodesByLabel', async () => {
+    const node = await store.createNode({
+      type: 'fact', label: 'archived-label-test', properties: {}, source: 'test',
+    });
+    await store.archiveNode(node.id);
+
+    const results = await store.findNodesByLabel('archived-label-test');
+    expect(results).toHaveLength(0);
+  });
+
   it('archived node does not appear in traverse', async () => {
     const a = await store.createNode({ type: 'person', label: 'traversal-source', properties: {}, source: 'test' });
     const b = await store.createNode({ type: 'project', label: 'traversal-archived-target', properties: {}, source: 'test' });

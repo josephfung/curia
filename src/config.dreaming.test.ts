@@ -57,6 +57,16 @@ dreaming:
     expect(() => loadYamlConfig(dir)).toThrow('dreaming.decay.halfLifeDays.slow_decay');
   });
 
+  it('rejects non-null permanent halfLifeDays', () => {
+    const dir = writeTempConfig(`
+dreaming:
+  decay:
+    halfLifeDays:
+      permanent: 365
+`);
+    expect(() => loadYamlConfig(dir)).toThrow('dreaming.decay.halfLifeDays.permanent');
+  });
+
   it('accepts absent dreaming block (uses defaults)', () => {
     const dir = writeTempConfig('agents: {}');
     const config = loadYamlConfig(dir);

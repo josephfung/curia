@@ -366,7 +366,7 @@ class PostgresBackend implements KnowledgeGraphBackend {
     const result = await this.pool.query<PgNodeRow & { is_new: boolean }>(
       `INSERT INTO kg_nodes (id, type, label, properties, embedding, confidence, decay_class, source, created_at, last_confirmed_at, sensitivity)
        VALUES ($1, $2, $3, $4, $5::vector, $6, $7, $8, $9, $9, $10)
-       ON CONFLICT (lower(label), type) WHERE type != 'fact'
+       ON CONFLICT (lower(label), type) WHERE type != 'fact' AND archived_at IS NULL
        DO UPDATE SET
          confidence = GREATEST(kg_nodes.confidence, EXCLUDED.confidence),
          last_confirmed_at = EXCLUDED.last_confirmed_at

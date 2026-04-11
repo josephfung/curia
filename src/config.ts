@@ -391,6 +391,12 @@ export function loadYamlConfig(configDir: string): YamlConfig {
               throw new Error(`dreaming.decay.halfLifeDays.${key} must be a positive integer, got: ${val}`);
             }
           }
+          // permanent must be null (meaning it never decays) — any non-null value
+          // would be silently ignored by the decay engine, which only loops over
+          // slow_decay and fast_decay, making a non-null permanent a misconfiguration.
+          if (halfLifeDays.permanent !== undefined && halfLifeDays.permanent !== null) {
+            throw new Error(`dreaming.decay.halfLifeDays.permanent must be null (permanent nodes never decay), got: ${String(halfLifeDays.permanent)}`);
+          }
         }
       }
     }
