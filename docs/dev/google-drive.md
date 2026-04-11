@@ -78,13 +78,13 @@ Then copy the token cache to the VPS:
 
 ```bash
 # Replace <vps-host> with your server (e.g. ceo-office)
-scp -r ~/.workspace-mcp/cli-tokens <vps-host>:/tmp/workspace-mcp-tokens
+scp -r ~/.workspace-mcp/cli-tokens <vps-host>:/tmp/cli-tokens
 
-# On the VPS: copy into the Docker volume
-# First find the volume mount path:
+# On the VPS: copy into the Docker volume at the path the server expects.
+# The volume is mounted at /root/.workspace-mcp; the server reads tokens from
+# /root/.workspace-mcp/cli-tokens/, so files must land at _data/cli-tokens/.
 ssh <vps-host> docker volume inspect curia_google_workspace_tokens
-# Then copy:
-ssh <vps-host> "cp -r /tmp/workspace-mcp-tokens /var/lib/docker/volumes/curia_google_workspace_tokens/_data/"
+ssh <vps-host> "cp -r /tmp/cli-tokens /var/lib/docker/volumes/curia_google_workspace_tokens/_data/"
 ```
 
 After copying, restart Curia and check the logs for:
@@ -139,8 +139,9 @@ repeat Step 5 to re-authenticate and copy fresh tokens to the VPS.
 
 **`ERROR Failed to connect to MCP server`**
 
-`uvx` is not on the PATH inside the container. Check that `uv` was installed in the
-Dockerfile and `PATH="/root/.local/bin:$PATH"` is set. Rebuild the image if needed.
+`uvx` is not on the PATH inside the container. The Dockerfile installs `uv`/`uvx` into
+`/usr/local/bin/` via `COPY --from=ghcr.io/astral-sh/uv`. Verify with
+`docker exec curia which uvx` — if missing, rebuild the image.
 
 **`INFO MCP server tools registered {"registered":0}`**
 
@@ -168,12 +169,11 @@ security settings, then repeat Step 5.
 ## Production Dockerfile (`curia-deploy`)
 
 The production image uses `curia-deploy/deploy/compose/Dockerfile.curia` (not the
-`curia/Dockerfile`). That file also needs `uv` installed. Add the same two lines
-after the `apt-get install` block:
+`curia/Dockerfile`). That file also needs `uv`/`uvx`. Use the same signed,
+version-pinned copy pattern as `curia/Dockerfile`:
 
 ```dockerfile
-RUN curl -LsSf https://astral.sh/uv/install.sh | sh
-ENV PATH="/root/.local/bin:$PATH"
+COPY --from=ghcr.io/astral-sh/uv:0.6.3 /uv /uvx /usr/local/bin/
 ```
 
 Also add the token volume to `compose.production.yaml` under the `curia` service:
