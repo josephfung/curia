@@ -13,9 +13,11 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
-### Changed
+### Added
 
 - **Google Workspace tools wired to coordinator** — Drive, Docs, Sheets, and Gmail read/search/write tools from the `google-workspace` MCP server are now pinned to the coordinator's skill list, making them available as LLM tools on every request. Gmail outbound (send/reply) continues to use the existing local skills; the MCP Gmail tools cover search, read, threads, labels, and drafts. Temporary measure until spec #274 (allow_discovery) is fully implemented.
+
+### Changed
 
 ### Fixed
 ### Fixed
