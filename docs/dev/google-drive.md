@@ -21,6 +21,7 @@ OAuth 2.0 as Curia's own Gmail user.
 #### Step 1 — Google Cloud Project
 
 1. Go to [console.cloud.google.com](https://console.cloud.google.com) and create a new project (e.g. `curia-workspace`).
+   Use an admin/developer Google account — not Curia's Gmail account.
 2. Enable these APIs (APIs & Services → Library):
    - Google Drive API
    - Google Sheets API
@@ -45,7 +46,7 @@ OAuth 2.0 as Curia's own Gmail user.
 1. APIs & Services → Credentials → Create Credentials → **OAuth client ID**.
 2. Application type: **Desktop app**.
 3. Name it (e.g. `curia-mcp-client`).
-4. Download the credentials JSON — you won't need the file, just the Client ID and Secret.
+4. Note the **Client ID** and **Client Secret** — you will need these in the next step.
 
 #### Step 4 — Set env vars
 
@@ -56,44 +57,40 @@ GOOGLE_OAUTH_CLIENT_ID=<your-client-id>.apps.googleusercontent.com
 GOOGLE_OAUTH_CLIENT_SECRET=GOCSPX-...
 ```
 
-#### Step 5 — Run the first OAuth flow (requires a browser)
+#### Step 5 — Run the first OAuth flow
 
-The MCP server prints an auth URL on its first run. You must open it in a browser
-signed in as Curia's Gmail.
+The OAuth flow must be completed locally (where you have a browser) and the resulting
+token cache copied to the VPS. There is no browser-accessible auth URL — authentication
+is initiated programmatically via the `start_google_auth` MCP tool.
 
-**Option A (recommended): auth locally, copy tokens to VPS**
+A script at `scripts/gdrive-auth.py` handles the full flow.
 
-Use `--transport streamable-http` to run the server as an HTTP process so the
-OAuth flow goes through the browser. Do NOT use the default stdio transport for
-this step — stdio mode expects a JSON-RPC client on stdin, not a human, and will
-log parse errors if run directly in a terminal (those errors are harmless but the
-OAuth flow won't complete).
+**Prerequisites:**
+- `uv` installed locally (`curl -LsSf https://astral.sh/uv/install.sh | sh`)
+
+**Run the script:**
 
 ```bash
-# Install uv locally if not already present
-curl -LsSf https://astral.sh/uv/install.sh | sh
-
-# Run the server in HTTP mode — this starts an OAuth callback listener
-GOOGLE_OAUTH_CLIENT_ID=<...> GOOGLE_OAUTH_CLIENT_SECRET=<...> uvx workspace-mcp --transport streamable-http
-
-# Open http://localhost:8000/mcp in a browser.
-# You will be redirected to Google's OAuth consent page.
-# (http://localhost:8000 is just a health check — use /mcp to trigger auth)
-# Log in as Curia's Gmail (nathancuria1@gmail.com) and approve access.
-# Tokens are saved to ~/.workspace-mcp/cli-tokens/ — you can then Ctrl-C the server.
+GOOGLE_OAUTH_CLIENT_ID=<...> GOOGLE_OAUTH_CLIENT_SECRET=<...> CURIA_GOOGLE_EMAIL=<curia-gmail> \
+  uv run --with mcp scripts/gdrive-auth.py
 ```
 
-Then copy the token cache to the VPS:
+The script connects to a single persistent `workspace-mcp` process (important — each
+service auth call must happen in the same process so the OAuth state survives the
+callback), opens your browser once per service, and waits for you to complete the login.
+
+Log in as **Curia's Gmail account** each time.
+
+After all five services are authenticated, tokens are saved to:
+```
+~/.google_workspace_mcp/credentials/<curia-gmail>.json
+```
+
+**Copy tokens to the VPS:**
 
 ```bash
-# Replace <vps-host> with your server (e.g. ceo-office)
-scp -r ~/.workspace-mcp/cli-tokens <vps-host>:/tmp/cli-tokens
-
-# On the VPS: copy into the Docker volume at the path the server expects.
-# The volume is mounted at /root/.workspace-mcp; the server reads tokens from
-# /root/.workspace-mcp/cli-tokens/, so files must land at _data/cli-tokens/.
-ssh <vps-host> docker volume inspect curia_google_workspace_tokens
-ssh <vps-host> "cp -r /tmp/cli-tokens /var/lib/docker/volumes/curia_google_workspace_tokens/_data/"
+scp -P 2222 -r ~/.google_workspace_mcp/credentials ceo-office:/tmp/google_workspace_credentials
+ssh -p 2222 ceo-office "sudo cp -r /tmp/google_workspace_credentials /var/lib/docker/volumes/curia_google-workspace-tokens/_data/credentials"
 ```
 
 After copying, restart Curia and check the logs for:
@@ -102,9 +99,7 @@ After copying, restart Curia and check the logs for:
 INFO  MCP server tools registered  {"server":"google-workspace","registered":N,"total":N}
 ```
 
-**Option B: auth directly on the VPS** (requires X11 forwarding or port tunneling)
-
-Not recommended for initial setup — Option A is simpler.
+A non-zero `registered` count confirms the server connected and auth is working.
 
 #### Step 6 — Share Drive content with Curia
 
@@ -155,13 +150,13 @@ repeat Step 5 to re-authenticate and copy fresh tokens to the VPS.
 **`INFO MCP server tools registered {"registered":0}`**
 
 The server connected but advertised no tools. This usually means the OAuth flow has
-not been completed — the token cache at `/root/.workspace-mcp/cli-tokens/` is empty
-or missing. Repeat Step 5.
+not been completed — the token cache at `/root/.google_workspace_mcp/credentials/` is
+empty or missing. Repeat Step 5.
 
 **Tools disappear after container restart**
 
-The `google_workspace_tokens` Docker volume is not being persisted. Confirm the volume
-is declared in `docker-compose.yml` and mounted at `/root/.workspace-mcp`.
+The `google-workspace-tokens` Docker volume is not being persisted. Confirm the volume
+is declared in `docker-compose.yml` and mounted at `/root/.google_workspace_mcp`.
 
 **Drive calls fail with 403 Forbidden**
 
@@ -191,16 +186,13 @@ Also add the token volume to `compose.production.yaml` under the `curia` service
 services:
   curia:
     volumes:
-      - google_workspace_tokens:/root/.workspace-mcp
+      - google-workspace-tokens:/root/.google_workspace_mcp
       # ... existing volumes ...
 
 volumes:
-  google_workspace_tokens:
+  google-workspace-tokens:
   # ... existing volumes ...
 ```
-
-> **TODO:** These `curia-deploy` changes are tracked as a follow-up. The community
-> server will not start in production until they are applied.
 
 ---
 
@@ -225,7 +217,7 @@ When it ships, the migration path is:
        Authorization: "Bearer <token>"
    ```
 4. Remove the `uv` install from the Dockerfile (no longer needed).
-5. Remove the `google_workspace_tokens` Docker volume (auth moves to the hosted side).
+5. Remove the `google-workspace-tokens` Docker volume (auth moves to the hosted side).
 
 > **Note on token injection**: `skills.yaml` headers are literal strings — no
 > env-var interpolation. Bearer tokens expire (~1 hour), so a static value isn't
