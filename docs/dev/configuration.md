@@ -149,8 +149,10 @@ servers:
     #   SOME_VAR: value       # vars already in .env are inherited automatically
 ```
 
-Connection failures at startup are warn-only — a missing MCP server won't
-take Curia down. The failed server's tools will be unavailable until restart.
+Connection failures at startup are non-fatal but logged at `error` level — a
+missing MCP server won't take Curia down. The failed server's tools will be
+unavailable until restart. Search logs for `ERROR Failed to connect to MCP server`
+to diagnose.
 
 After adding a server, pin its tools in `agents/coordinator.yaml` under
 `pinned_skills` so the coordinator's LLM can call them. Tool names come from
