@@ -14,6 +14,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 ## [Unreleased]
 
 ### Added
+- **Google Drive integration** (spec §03) — wires `@modelcontextprotocol/server-gdrive` via the MCP client layer. Curia can search, read, and create documents and spreadsheets in a designated Drive folder shared with a Google service account. Configure via `config/skills.yaml` and `GOOGLE_APPLICATION_CREDENTIALS` in `.env`. See `docs/dev/google-drive.md`. Closes #271.
 - **Multi-account email channel** (spec §03) — `channel_accounts.email` YAML block supports N named Nylas-backed email accounts, each with its own grant ID, `self_email`, and `outbound_policy` (`direct | draft_gate | autonomy_gated`). One `EmailAdapter` instance is constructed per account at startup; inbound events are stamped with the receiving `accountId` and replies are routed back through the same account. Closes #272.
 - **`draft_gate` outbound policy** — when set on an email account, the coordinator's reply is saved as a Nylas draft for human review instead of being sent immediately. The notification → approval → send flow is deferred to issue #278.
 - **`autonomy_gated` outbound policy** — checks the global autonomy score before each send; if the score meets `autonomy_threshold`, sends directly; otherwise falls back to `draft_gate`.

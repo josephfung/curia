@@ -1,0 +1,42 @@
+# MCP server configuration for Curia.
+#
+# Each entry under `servers` is an MCP server that Curia connects to at
+# startup. Tools discovered via tools/list are registered in the skill
+# registry alongside local skills — agents cannot tell them apart.
+#
+# Fields (all servers):
+#   name         Unique identifier used in logs and error messages.
+#   transport    "stdio" (spawn a local process) or "sse" (HTTP SSE endpoint).
+#   action_risk  Required. Applied to all tools from this server.
+#                none | low | medium | high | critical (or integer 0–100).
+#   sensitivity  Optional. "normal" (default) or "elevated" (CEO-only).
+#   timeout_ms   Optional. Per-invocation timeout in ms. Default: 30000.
+#
+# stdio-only fields:
+#   command      Executable to spawn (e.g. "npx", "node").
+#   args         Command-line arguments array.
+#   env          Extra env vars merged on top of process.env for the child.
+#                Use this for env vars that are NOT already in .env.
+#                Vars already set in .env are inherited automatically.
+#
+# sse-only fields:
+#   url          SSE endpoint URL.
+#
+# See docs/dev/google-drive.md for setup instructions.
+
+servers:
+  # Google Drive — read/write access to a designated shared folder.
+  # Auth: Google service account via GOOGLE_APPLICATION_CREDENTIALS (set in .env).
+  # The spawned process inherits all of process.env, so no env: block is needed.
+  #
+  # Tool names below are best-effort based on the server package source.
+  # Run `npx -y @modelcontextprotocol/server-gdrive` and call tools/list
+  # to confirm the exact names for your installed version, then update
+  # agents/coordinator.yaml pinned_skills to match.
+  - name: gdrive
+    transport: stdio
+    command: npx
+    args: ["-y", "@modelcontextprotocol/server-gdrive"]
+    action_risk: low
+    sensitivity: normal
+    timeout_ms: 30000
