@@ -13,26 +13,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
-### Fixed
-
-- **Coordinator always uses its own account for third-party tool calls** — added explicit
-  system prompt guidance instructing the coordinator to default to its own account identity
-  (not the CEO's) when any tool requires an email or account parameter. Prevents tools like
-  `user_google_email` from being populated with the CEO's address, which caused workspace-mcp
-  to request a new OAuth flow for an account it has no credentials for.
-
 ### Added
 
+- **Dream Engine** (spec 17): background KG maintenance system with memory decay pass. Confidence on `slow_decay` and `fast_decay` nodes/edges decays exponentially using configurable half-lives (180 days / 21 days). Rows at or below the archive threshold are soft-deleted via `archived_at`; edges cascade when their endpoints are archived. All KG read paths filter archived rows. Wired as an internal system job in the Scheduler. Config under `dreaming.decay.*` in `config/default.yaml`. Implements issue #27; decay warning (#280) deferred to a follow-up.
 - **Google Workspace tools wired to coordinator** — Drive, Docs, Sheets, and Gmail read/search/write tools from the `google-workspace` MCP server are now pinned to the coordinator's skill list, making them available as LLM tools on every request. Gmail outbound (send/reply) continues to use the existing local skills; the MCP Gmail tools cover search, read, threads, labels, and drafts. Temporary measure until spec #274 (allow_discovery) is fully implemented.
-
-### Changed
-
-### Fixed
-### Fixed
-
-- **Migration prefix conflicts** — resolved duplicate `014_*` and `015_*` migration prefixes that caused `node-pg-migrate` to throw an ordering error and blocked all integration tests. `014_add_kg_node_sensitivity.sql` renumbered to `024_`. PR `#284` incorrectly renamed `020_add_contact_trust_fields.sql` to `019_`, but prod's `pgmigrations` table records it as `020_`, causing a `checkOrder` startup failure. Renamed back to `020_add_contact_trust_fields.sql`. Closes `#284`, `#286`.
-
-### Added
 - **MCP HTTP transport migration** — the `sse` transport in `config/skills.yaml` now uses `StreamableHTTPClientTransport` (the recommended SDK transport for hosted MCP servers) instead of the deprecated `SSEClientTransport`. Behaviour is unchanged for existing configs. Resolves the ADR 016 migration note. Closes #271.
 - **MCP `headers` config field** — SSE server entries in `config/skills.yaml` now accept an optional `headers: Record<string, string>` field. Enables `Authorization: Bearer <token>` for authenticated hosted MCP servers (Google, etc.) without any code changes. See `docs/dev/google-drive.md` for the Google Workspace path forward.
 - **Multi-account email channel** (spec §03) — `channel_accounts.email` YAML block supports N named Nylas-backed email accounts, each with its own grant ID, `self_email`, and `outbound_policy` (`direct | draft_gate | autonomy_gated`). One `EmailAdapter` instance is constructed per account at startup; inbound events are stamped with the receiving `accountId` and replies are routed back through the same account. Closes #272.
@@ -41,6 +25,17 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **`accountId` on bus events** — optional `accountId` field added to `InboundMessagePayload`, `AgentTaskPayload`, and `OutboundMessagePayload`. Propagated through the dispatch routing table so replies are always sent from the account that received the original message. This is an additive change; existing handlers that do not destructure `accountId` are unaffected.
 - **`createEmailDraft` on `OutboundGateway`** — creates a Nylas draft without sending; runs the blocked-contact check but skips the content filter (drafts stay in the mailbox until explicitly sent by a human).
 - **Backward-compatible single-account fallback** — if `channel_accounts.email` is absent, the email channel falls back to the existing `NYLAS_GRANT_ID` / `NYLAS_SELF_EMAIL` env-var mode; no config changes needed for existing deployments.
+
+### Changed
+
+### Fixed
+
+- **Coordinator always uses its own account for third-party tool calls** — added explicit
+  system prompt guidance instructing the coordinator to default to its own account identity
+  (not the CEO's) when any tool requires an email or account parameter. Prevents tools like
+  `user_google_email` from being populated with the CEO's address, which caused workspace-mcp
+  to request a new OAuth flow for an account it has no credentials for.
+- **Migration prefix conflicts** — resolved duplicate `014_*` and `015_*` migration prefixes that caused `node-pg-migrate` to throw an ordering error and blocked all integration tests. `014_add_kg_node_sensitivity.sql` renumbered to `024_`. PR `#284` incorrectly renamed `020_add_contact_trust_fields.sql` to `019_`, but prod's `pgmigrations` table records it as `020_`, causing a `checkOrder` startup failure. Renamed back to `020_add_contact_trust_fields.sql`. Closes `#284`, `#286`.
 
 ---
 
