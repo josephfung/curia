@@ -165,6 +165,11 @@ export interface SkillContext {
    *  Provides a warm Playwright Chromium instance with session management.
    *  Skills use this to interact with JS-rendered pages and web forms. */
   browserService?: import('../browser/browser-service.js').BrowserService;
+  /** Skill search — injected only for the skill-registry built-in.
+   *  Searches all registered skills by keyword, excluding skill-registry itself.
+   *  Follows the same name-gated injection pattern as autonomyService and browserService.
+   *  When #119 lands, this will move into the SKILL_CAPABILITIES registry. */
+  skillSearch?: (query: string) => Array<{ name: string; description: string }>;
 }
 
 /**

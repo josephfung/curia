@@ -345,7 +345,9 @@ pinned_skills:
   - query-relationships
   - delete-relationship
   # Google Workspace MCP tools (taylorwilsdon/google_workspace_mcp, core+extended tier)
-  # TODO: remove manual pinning once spec #274 (allow_discovery) is fully implemented
+  # TODO: unpin once the invoke-discovered-skill path is built (spec §03 follow-up to #274).
+  # skill-registry can find these by name, but the LLM can only call tools in its tool list —
+  # dynamic tool-list expansion or an invoke-skill proxy is needed before unpinning is safe.
   # Drive
   - search_drive_files
   - get_drive_file_content
