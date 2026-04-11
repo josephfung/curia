@@ -13,6 +13,14 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Added
+- **Multi-account email channel** (spec §03) — `channel_accounts.email` YAML block supports N named Nylas-backed email accounts, each with its own grant ID, `self_email`, and `outbound_policy` (`direct | draft_gate | autonomy_gated`). One `EmailAdapter` instance is constructed per account at startup; inbound events are stamped with the receiving `accountId` and replies are routed back through the same account. Closes #272.
+- **`draft_gate` outbound policy** — when set on an email account, the coordinator's reply is saved as a Nylas draft for human review instead of being sent immediately. The notification → approval → send flow is deferred to issue #278.
+- **`autonomy_gated` outbound policy** — checks the global autonomy score before each send; if the score meets `autonomy_threshold`, sends directly; otherwise falls back to `draft_gate`.
+- **`accountId` on bus events** — optional `accountId` field added to `InboundMessagePayload`, `AgentTaskPayload`, and `OutboundMessagePayload`. Propagated through the dispatch routing table so replies are always sent from the account that received the original message. This is an additive change; existing handlers that do not destructure `accountId` are unaffected.
+- **`createEmailDraft` on `OutboundGateway`** — creates a Nylas draft without sending; runs the blocked-contact check but skips the content filter (drafts stay in the mailbox until explicitly sent by a human).
+- **Backward-compatible single-account fallback** — if `channel_accounts.email` is absent, the email channel falls back to the existing `NYLAS_GRANT_ID` / `NYLAS_SELF_EMAIL` env-var mode; no config changes needed for existing deployments.
+
 ---
 
 ## [0.17.0] — 2026-04-10
