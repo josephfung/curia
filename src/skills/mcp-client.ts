@@ -53,6 +53,35 @@ export interface McpSession {
 }
 
 /**
+ * Build a minimal child process environment for a stdio MCP server.
+ *
+ * Starts from the same safe base that the MCP SDK's getDefaultEnvironment()
+ * uses (HOME, LOGNAME, PATH, SHELL, TERM, USER) so spawned tools can locate
+ * binaries and their own config dirs. Then resolves each key declared in
+ * configEnv: an empty string means "inherit the value from process.env at
+ * runtime"; a non-empty string is used as a literal override.
+ *
+ * This enforces least-privilege — the full host environment (DB_PASSWORD,
+ * ANTHROPIC_API_KEY, etc.) is never passed to the third-party subprocess.
+ * Only keys explicitly declared in config/skills.yaml under env: reach it.
+ */
+function buildChildEnv(configEnv: Record<string, string>): Record<string, string> {
+  // Minimal base matching the MCP SDK's getDefaultEnvironment() key set.
+  const env: Record<string, string> = {};
+  for (const key of ['HOME', 'LOGNAME', 'PATH', 'SHELL', 'TERM', 'USER']) {
+    if (process.env[key] !== undefined) env[key] = process.env[key]!;
+  }
+
+  // Resolve declared keys: empty value = inherit from process.env.
+  for (const [key, value] of Object.entries(configEnv)) {
+    const resolved = value !== '' ? value : process.env[key];
+    if (resolved !== undefined) env[key] = resolved;
+  }
+
+  return env;
+}
+
+/**
  * Connect to a stdio MCP server.
  * Spawns the configured process and performs the MCP initialization handshake.
  * Throws on connection failure — callers decide whether to warn-and-continue
@@ -70,11 +99,13 @@ export async function connectStdio(
   const transport = new StdioClientTransport({
     command: config.command,
     args: config.args,
-    // Merge caller-supplied env vars on top of the defaults the SDK inherits.
-    // If no extra env is declared, the SDK's getDefaultEnvironment() applies.
-    env: config.env
-      ? { ...process.env as Record<string, string>, ...config.env }
-      : undefined,
+    // Build a minimal child env rather than spreading all of process.env.
+    // Passing the full host environment to a third-party subprocess violates
+    // least-privilege — DB_PASSWORD, API_TOKEN, etc. have no business there.
+    // buildChildEnv() starts from a safe base (PATH, HOME, USER, etc.) and
+    // resolves only the keys declared in config.env.
+    // If no env block is declared, the SDK's getDefaultEnvironment() applies.
+    env: config.env ? buildChildEnv(config.env) : undefined,
     // Pipe stderr so the spawned server's error output goes through our logger
     // rather than leaking to the parent process's stderr untagged.
     stderr: 'pipe',
@@ -85,7 +116,19 @@ export async function connectStdio(
     { capabilities: {} },
   );
 
-  await client.connect(transport);
+  try {
+    await client.connect(transport);
+  } catch (err) {
+    // Surface ENOENT as an actionable message — the generic "Failed to connect"
+    // log from mcp-loader gives no clue that the command simply isn't on PATH.
+    if (err instanceof Error && (err as NodeJS.ErrnoException).code === 'ENOENT') {
+      throw new Error(
+        `stdio MCP server '${config.name}': command '${config.command}' not found on PATH. ` +
+        `Ensure the tool is installed and accessible from the process environment.`,
+      );
+    }
+    throw err;
+  }
 
   logger.info(
     { server: config.name, serverInfo: client.getServerVersion() },

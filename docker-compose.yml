@@ -50,6 +50,13 @@ services:
       timeout: 5s
       start_period: 15s
       retries: 3
+    volumes:
+      # Persist OAuth token cache for the google-workspace MCP server.
+      # Tokens are written here on first OAuth login and auto-refreshed thereafter.
+      # Without this volume, re-authentication is required on every container restart.
+      # See docs/dev/google-drive.md for first-time OAuth setup.
+      - google_workspace_tokens:/root/.workspace-mcp
 
 volumes:
   pgdata:
+  google_workspace_tokens:

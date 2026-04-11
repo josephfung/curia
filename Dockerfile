@@ -21,6 +21,11 @@ RUN pnpm exec tsup src/index.ts --format esm --no-dts
 FROM node:22-slim
 
 # curl is needed for the HEALTHCHECK command
+# Copy uv/uvx binaries from the official signed image (Astral's recommended
+# Docker pattern — no curl|sh, cryptographically signed, version-pinned).
+# uvx is needed to spawn workspace-mcp as an MCP stdio subprocess.
+COPY --from=ghcr.io/astral-sh/uv:0.6.3 /uv /uvx /usr/local/bin/
+
 RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
