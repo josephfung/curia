@@ -147,6 +147,11 @@ export class AgentRuntime {
     const { agentId, systemPrompt, provider, bus, logger, memory, executionLayer, skillToolDefs, autonomyService, officeIdentityService } = this.config;
     const { content, conversationId } = taskEvent.payload;
 
+    // Per-task mutable working copy of the tool list so discovered skills can be
+    // appended mid-turn without mutating the shared startup list. Concurrent tasks
+    // each get their own copy and never see each other's expansions.
+    const workingToolDefs = skillToolDefs ? [...skillToolDefs] : undefined;
+
     // Replace the ${office_identity_block} placeholder with the freshly-compiled
     // identity block. This runs per-task (not at startup) so identity changes via
     // the API or file watcher take effect on the next coordinator turn without a restart.
@@ -398,7 +403,7 @@ export class AgentRuntime {
     // Budget-driven loop: each LLM round-trip consumes one turn from the budget.
     // The loop exits when: the LLM returns text, the budget is exhausted, or
     // consecutive errors exceed the threshold.
-    let response = await this.chatWithRetry(provider, { messages, tools: skillToolDefs }, budget, taskEvent);
+    let response = await this.chatWithRetry(provider, { messages, tools: workingToolDefs }, budget, taskEvent);
     if (!response) return; // chatWithRetry already published error events
 
     // Extract caller context once — it doesn't change between tool-use rounds.
@@ -512,6 +517,37 @@ export class AgentRuntime {
         if (result.success) {
           // Success: reset consecutive error counter
           budget.consecutiveErrors = 0;
+
+          // Dynamic tool-list expansion: when skill-registry returns successfully,
+          // append the discovered skills' full tool definitions to the working list
+          // so the LLM can call them in subsequent turns without pinning them upfront.
+          // Expansion is per-task (workingToolDefs is a local copy) — concurrent tasks
+          // never see each other's discovered tools.
+          if (toolCall.name === 'skill-registry' && workingToolDefs) {
+            try {
+              const data = typeof result.data === 'string'
+                ? JSON.parse(result.data) as unknown
+                : result.data;
+              const discovered = (data as { skills?: Array<{ name: string }> })?.skills ?? [];
+              const currentNames = new Set(workingToolDefs.map(t => t.name));
+              const newNames = discovered
+                .map(s => s.name)
+                .filter(name => !currentNames.has(name));
+              if (newNames.length > 0) {
+                workingToolDefs.push(...executionLayer.getToolDefinitions(newNames));
+                logger.info(
+                  { agentId, addedTools: newNames },
+                  'Expanded working tool list with discovered skills',
+                );
+              }
+            } catch (err) {
+              // Non-fatal: if we can't parse the skill-registry result, the LLM simply
+              // cannot call discovered skills this turn. Log at warn and continue —
+              // failing to expand the tool list must not abort the task.
+              logger.warn({ err, agentId }, 'Failed to expand tool list from skill-registry result');
+            }
+          }
+
           const resultContent = typeof result.data === 'string' ? result.data : JSON.stringify(result.data);
           toolResultBlocks.push({
             type: 'tool_result',
@@ -553,7 +589,7 @@ export class AgentRuntime {
       messages.push({ role: 'user', content: toolResultBlocks });
 
       // Continue the loop — the full conversation history is now in messages
-      response = await this.chatWithRetry(provider, { messages, tools: skillToolDefs }, budget, taskEvent);
+      response = await this.chatWithRetry(provider, { messages, tools: workingToolDefs }, budget, taskEvent);
       if (!response) return; // chatWithRetry already published error events
     }
 

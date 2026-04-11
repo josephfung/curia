@@ -103,7 +103,9 @@ All registered skills (local + MCP) are searchable via the built-in `skill-regis
 skill-registry({ query: "send email" })
 ```
 
-This returns a list of matching skill names and descriptions. **Discovery returns metadata only** — a skill returned by `skill-registry` is not automatically callable. The LLM can only invoke tools present in its tool list at the start of the turn; `skill-registry` results are informational. Making discovered-but-unpinned skills callable (dynamic tool-list expansion mid-task, or an `invoke-skill` proxy tool) is a follow-up tracked in #291 and is not yet implemented. Until then, agents must pin any tool they intend to call.
+This returns a list of matching skill names and descriptions. **Discovered skills are immediately callable** — after `skill-registry` succeeds, `AgentRuntime` calls `ExecutionLayer.getToolDefinitions()` with the returned names and appends the full tool schemas to the per-task working tool list before the next LLM call. The LLM can then call any discovered skill natively, with its real input schema, in the same or subsequent turns.
+
+Tool-list expansion is **per-task**: each task gets a local copy of the startup tool list, so concurrent tasks never see each other's discoveries. Multiple `skill-registry` calls within one task accumulate — the runtime deduplicates by name. Discovered skills flow through the same `ExecutionLayer.invoke()` path as pinned skills, including the existing elevation gate (`sensitivity: elevated` skills still require `caller.role === 'ceo'`).
 
 `skill-registry` itself is excluded from its own search results to avoid circular self-discovery.
 
@@ -215,7 +217,7 @@ These are not bundled but documented as recommended integrations:
 | MCP `headers` config field — per-server auth headers for hosted MCP servers | Done |
 | Built-in skill: `skill-registry` (agent-invocable search) | Done — `skills/skill-registry/`; closes #274 |
 | Skill discovery — `allow_discovery: true` wired to runtime tool-list builder | Done — closes #274 |
-| Skill discovery — make discovered-but-not-pinned skills callable (dynamic tool-list expansion or invoke-by-name proxy) | Not Done — follow-up to #274; until this lands, agents must still pin tools they intend to call |
+| Skill discovery — make discovered-but-not-pinned skills callable (dynamic tool-list expansion) | Done — `AgentRuntime` expands `workingToolDefs` per-task after each `skill-registry` success; `ExecutionLayer.getToolDefinitions()` provides schemas; closes #291 |
 | Safety gate for first-time elevated skill use — per-agent-skill `skill_approvals` table | Partial — role-based elevation gate exists (`caller.role === 'ceo'`); persist-once-ask-once flow not yet built |
 | Privilege scoping — per-skill capability assignments replacing `infrastructure` self-declaration | Partial — name-gated per-skill injection in `execution.ts`; full `capabilities.ts` registry pending (#119) |
 | Resource boundaries — max 5 concurrent skill invocations per agent task | Not Done |
