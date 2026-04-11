@@ -90,6 +90,21 @@ channel_accounts:
 `);
     expect(() => loadYamlConfig(tempDir)).toThrow('observation_mode must be a boolean');
   });
+
+  it('throws when observation_mode is true but outbound_policy is not draft_gate', () => {
+    writeLocalYaml(`
+channel_accounts:
+  email:
+    joseph:
+      nylas_grant_id: grant-2
+      self_email: joseph@example.com
+      outbound_policy: direct
+      observation_mode: true
+`);
+    expect(() => loadYamlConfig(tempDir)).toThrow(
+      "observation_mode requires outbound_policy 'draft_gate'",
+    );
+  });
 });
 
 describe('resolveChannelAccounts — excluded_sender_emails', () => {
@@ -125,6 +140,7 @@ channel_accounts:
   });
 
   it('resolves env: references in excluded_sender_emails', () => {
+    const prev = process.env['TEST_EXCLUDED_EMAIL'];
     process.env['TEST_EXCLUDED_EMAIL'] = 'curia@example.com';
     try {
       writeLocalYaml(`
@@ -141,7 +157,11 @@ channel_accounts:
       const accounts = resolveChannelAccounts(yamlConfig, baseConfig);
       expect(accounts[0]?.excludedSenderEmails).toEqual(['curia@example.com']);
     } finally {
-      delete process.env['TEST_EXCLUDED_EMAIL'];
+      if (prev === undefined) {
+        delete process.env['TEST_EXCLUDED_EMAIL'];
+      } else {
+        process.env['TEST_EXCLUDED_EMAIL'] = prev;
+      }
     }
   });
 

@@ -467,6 +467,13 @@ export function loadYamlConfig(configDir: string): YamlConfig {
           `channel_accounts.email.${accountName}.observation_mode must be a boolean, got: ${typeof rawAccount.observation_mode}`,
         );
       }
+      // Observation mode monitors someone else's inbox — replies must never be sent
+      // directly. Enforce draft_gate so a human always reviews before sending.
+      if (rawAccount.observation_mode === true && rawAccount.outbound_policy !== 'draft_gate') {
+        throw new Error(
+          `channel_accounts.email.${accountName}: observation_mode requires outbound_policy 'draft_gate'`,
+        );
+      }
       if (rawAccount.excluded_sender_emails !== undefined) {
         if (!Array.isArray(rawAccount.excluded_sender_emails)) {
           throw new Error(
