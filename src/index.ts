@@ -19,7 +19,7 @@
 
 import * as path from 'node:path';
 import { runner } from 'node-pg-migrate';
-import { loadConfig, loadYamlConfig } from './config.js';
+import { loadConfig, loadYamlConfig, resolveChannelAccounts } from './config.js';
 import { createLogger } from './logger.js';
 import { HttpAdapter } from './channels/http/http-adapter.js';
 import { createPool } from './db/connection.js';
@@ -361,20 +361,40 @@ async function main(): Promise<void> {
   const heldMessages = HeldMessageService.createWithPostgres(pool, logger);
   logger.info('Held message service initialized');
 
-  // Email channel — optional, requires NYLAS_API_KEY, NYLAS_GRANT_ID, and NYLAS_SELF_EMAIL.
-  // NylasClient is constructed here (needed by OutboundGateway), but EmailAdapter is
-  // started later after the gateway is fully wired (adapter needs the gateway, not raw client).
-  let nylasClient: NylasClient | undefined;
-  let emailAdapter: EmailAdapter | undefined;
-  if (config.nylasApiKey && config.nylasGrantId) {
-    nylasClient = new NylasClient(config.nylasApiKey, config.nylasGrantId, logger);
-    if (!config.nylasSelfEmail) {
-      logger.warn('NYLAS_SELF_EMAIL not set — email adapter disabled (required to filter self-sent messages)');
+  // Email channel — optional. Supports N named accounts via channel_accounts.email in
+  // config/default.yaml, or falls back to the legacy NYLAS_GRANT_ID + NYLAS_SELF_EMAIL
+  // env vars for single-account backward compatibility.
+  //
+  // One NylasClient is constructed per account (needed by OutboundGateway's client map).
+  // EmailAdapters are constructed further below, after OutboundGateway is ready,
+  // and started after the dispatcher is registered to avoid dropping inbound messages.
+  const resolvedEmailAccounts = resolveChannelAccounts(yamlConfig, config);
+  const nylasClientMap = new Map<string, NylasClient>();
+
+  if (!config.nylasApiKey) {
+    if (resolvedEmailAccounts.length > 0) {
+      logger.warn('NYLAS_API_KEY not set — email channel disabled despite accounts being configured');
+    } else {
+      logger.warn('NYLAS_API_KEY/NYLAS_GRANT_ID not set — email channel disabled');
     }
-    // EmailAdapter is started further below, after OutboundGateway is constructed.
+  } else if (resolvedEmailAccounts.length === 0) {
+    logger.warn('No email accounts resolved — email channel disabled. Set NYLAS_GRANT_ID + NYLAS_SELF_EMAIL, or configure channel_accounts.email in config/default.yaml');
   } else {
-    logger.warn('NYLAS_API_KEY/NYLAS_GRANT_ID not set — email channel disabled');
+    for (const account of resolvedEmailAccounts) {
+      nylasClientMap.set(account.name, new NylasClient(config.nylasApiKey, account.nylasGrantId, logger));
+    }
+    logger.info(
+      { accounts: [...nylasClientMap.keys()] },
+      `Email channel: ${nylasClientMap.size} account(s) configured`,
+    );
   }
+
+  // Keep a reference to the first client for backward-compat code paths that
+  // still use a single-client assumption (e.g. NylasCalendarClient setup below).
+  const primaryNylasClient = nylasClientMap.values().next().value as NylasClient | undefined;
+
+  // EmailAdapters are built later (post-gateway) and stored here.
+  const emailAdapters: EmailAdapter[] = [];
 
   // Signal channel — optional, requires SIGNAL_SOCKET_PATH and SIGNAL_PHONE_NUMBER.
   // SignalRpcClient is constructed here so it can be passed to OutboundGateway (the gateway
@@ -398,11 +418,13 @@ async function main(): Promise<void> {
     logger.warn('SIGNAL_SOCKET_PATH/SIGNAL_PHONE_NUMBER not set — Signal channel disabled');
   }
 
-  // Calendar client — uses the same Nylas credentials as email.
-  // Independent instance, no shared state with the email client.
+  // Calendar client — uses the primary email account's Nylas credentials.
+  // For multi-account deployments the calendar is always associated with the first
+  // (primary) account; a future spec can extend this to per-account calendars.
   let nylasCalendarClient: NylasCalendarClient | undefined;
-  if (config.nylasApiKey && config.nylasGrantId) {
-    nylasCalendarClient = new NylasCalendarClient(config.nylasApiKey, config.nylasGrantId, logger);
+  if (config.nylasApiKey && primaryNylasClient && resolvedEmailAccounts.length > 0) {
+    const primaryAccount = resolvedEmailAccounts[0]!;
+    nylasCalendarClient = new NylasCalendarClient(config.nylasApiKey, primaryAccount.nylasGrantId, logger);
     logger.info('Nylas calendar client initialized');
   }
 
@@ -564,10 +586,10 @@ async function main(): Promise<void> {
   //   In that mode, log.error is the fallback — see OutboundGateway.send() comments.
   //   For now we assume Nylas + Signal together, so this path is only for dev flexibility.
   let outboundGateway: OutboundGateway | undefined;
-  const hasAnyOutboundClient = !!(nylasClient || signalRpcClient);
+  const hasAnyOutboundClient = nylasClientMap.size > 0 || !!signalRpcClient;
   if (hasAnyOutboundClient && outboundFilter) {
     outboundGateway = new OutboundGateway({
-      nylasClient,
+      nylasClients: nylasClientMap.size > 0 ? nylasClientMap : undefined,
       signalClient: signalRpcClient,
       signalPhoneNumber: config.signalPhoneNumber,
       contactService,
@@ -581,27 +603,47 @@ async function main(): Promise<void> {
       logger,
     });
     logger.info({
-      hasEmail: !!nylasClient,
+      emailAccounts: [...nylasClientMap.keys()],
       hasSignal: !!signalRpcClient,
     }, 'Outbound gateway initialized');
-  } else if (nylasClient && !outboundFilter) {
-    // nylasClient is available but outboundFilter is missing (no coordinator config found).
+  } else if (nylasClientMap.size > 0 && !outboundFilter) {
+    // Nylas clients are available but outboundFilter is missing (no coordinator config found).
     // Email skills will be unavailable because they check ctx.outboundGateway before sending.
     logger.warn('Outbound gateway NOT initialized — outboundFilter not ready (coordinator config missing?). Outbound send skills will be unavailable.');
   }
 
-  // Construct the email adapter (but don't start it yet — it must not poll until
-  // the dispatcher is registered, otherwise inbound.message events have no subscriber
-  // and are permanently dropped because the adapter advances its high-water mark).
-  if (outboundGateway && nylasClient && config.nylasSelfEmail) {
-    emailAdapter = new EmailAdapter({
-      bus,
-      logger,
-      outboundGateway,
-      contactService,
-      pollingIntervalMs: config.nylasPollingIntervalMs,
-      selfEmail: config.nylasSelfEmail,
-    });
+  // Construct one EmailAdapter per resolved account (but don't start any yet —
+  // adapters must not poll until the dispatcher is registered, otherwise inbound.message
+  // events have no subscriber and are permanently dropped because each adapter advances
+  // its own high-water mark on poll).
+  if (outboundGateway) {
+    for (const account of resolvedEmailAccounts) {
+      if (!nylasClientMap.has(account.name)) continue; // skip accounts with no client (NYLAS_API_KEY missing)
+
+      if (account.outboundPolicy === 'autonomy_gated' && !account.autonomyThreshold) {
+        // This should be caught by config validation, but guard defensively at runtime too.
+        logger.warn(
+          { accountId: account.name },
+          'Email account has outbound_policy=autonomy_gated but no autonomy_threshold — skipping adapter',
+        );
+        continue;
+      }
+
+      emailAdapters.push(new EmailAdapter({
+        accountId: account.name,
+        outboundPolicy: account.outboundPolicy,
+        autonomyThreshold: account.autonomyThreshold,
+        // autonomyService is only injected when the policy actually needs it, to avoid
+        // passing a live service reference to adapters that will never call it.
+        autonomyService: account.outboundPolicy === 'autonomy_gated' ? autonomyService : undefined,
+        bus,
+        logger,
+        outboundGateway,
+        contactService,
+        pollingIntervalMs: config.nylasPollingIntervalMs,
+        selfEmail: account.selfEmail,
+      }));
+    }
   }
 
   // Construct the Signal adapter (but don't start it yet — same ordering rule as email:
@@ -875,13 +917,15 @@ async function main(): Promise<void> {
   const bullpenDispatcher = new BullpenDispatcher(bus, logger, bullpenService);
   bullpenDispatcher.register();
 
-  // Start the email adapter AFTER the dispatcher is registered so inbound.message
+  // Start all email adapters AFTER the dispatcher is registered so inbound.message
   // events always have a subscriber. Starting before registration would drop emails
-  // arriving during the startup window (the adapter advances its high-water mark
+  // arriving during the startup window (each adapter advances its own high-water mark
   // on poll, so dropped messages are never retried).
-  if (emailAdapter) {
-    await emailAdapter.start();
-    logger.info('Email channel adapter started');
+  for (const adapter of emailAdapters) {
+    await adapter.start();
+  }
+  if (emailAdapters.length > 0) {
+    logger.info({ count: emailAdapters.length }, 'Email channel adapter(s) started');
   }
 
   // Start the Signal adapter AFTER the dispatcher is registered — same ordering rule as email.
@@ -921,9 +965,9 @@ async function main(): Promise<void> {
   // Graceful shutdown — stop accepting new input first, then close connections.
   const shutdown = async () => {
     logger.info('Shutting down...');
-    if (emailAdapter) {
+    for (const adapter of emailAdapters) {
       try {
-        await emailAdapter.stop();
+        await adapter.stop();
       } catch (err) {
         logger.error({ err }, 'Error stopping email adapter during shutdown');
       }

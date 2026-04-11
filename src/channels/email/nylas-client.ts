@@ -18,6 +18,8 @@ import type {
   NylasListResponse,
   SendMessageRequest,
   MessageFields,
+  Draft as NylasDraft,
+  CreateDraftRequest,
 } from 'nylas';
 import type { Logger } from '../../logger.js';
 
@@ -42,6 +44,12 @@ interface NylasLike {
       identifier: string;
       requestBody: SendMessageRequest;
     }): Promise<NylasResponse<NylasSdkMessage>>;
+  };
+  drafts: {
+    create(params: {
+      identifier: string;
+      requestBody: CreateDraftRequest;
+    }): Promise<NylasResponse<NylasDraft>>;
   };
 }
 
@@ -205,6 +213,45 @@ export class NylasClient {
       this.log.error(
         { err, grantId: this.grantId, to: options.to, subject: options.subject, isReply: !!options.replyToMessageId },
         'Nylas sendMessage failed',
+      );
+      throw err;
+    }
+  }
+
+  /**
+   * Save an email as a draft (without sending). Used by the 'draft_gate' outbound
+   * policy to hold replies for human review before they leave Curia's mailbox.
+   *
+   * Draft and Message share the same BaseMessage shape in the Nylas SDK, so the
+   * response can be normalised with the same helper as a sent message.
+   *
+   * TODO(#273): wire up the CEO notification → approval → send flow that turns
+   * a draft created here into an actually-sent reply.
+   */
+  async createDraft(options: SendEmailOptions): Promise<NylasMessage> {
+    this.log.debug(
+      { to: options.to, subject: options.subject, isReply: !!options.replyToMessageId },
+      'creating draft',
+    );
+
+    try {
+      const response = await this.nylas.drafts.create({
+        identifier: this.grantId,
+        requestBody: {
+          to: options.to,
+          cc: options.cc,
+          subject: options.subject,
+          body: options.body,
+          replyToMessageId: options.replyToMessageId,
+        },
+      });
+      // Draft and NylasSdkMessage (Message) both extend BaseMessage — the fields we
+      // normalise (id, threadId, subject, from, to, cc, body, etc.) are present on both.
+      return this.normalizeMessage(response.data as unknown as NylasSdkMessage);
+    } catch (err) {
+      this.log.error(
+        { err, grantId: this.grantId, to: options.to, subject: options.subject, isReply: !!options.replyToMessageId },
+        'Nylas createDraft failed',
       );
       throw err;
     }

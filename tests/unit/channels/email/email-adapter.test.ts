@@ -61,6 +61,8 @@ function createMocks() {
 
 function makeAdapter(mocks: ReturnType<typeof createMocks>) {
   return new EmailAdapter({
+    accountId: 'curia',
+    outboundPolicy: 'direct',
     bus: mocks.bus,
     logger: mocks.logger,
     outboundGateway: mocks.outboundGateway,

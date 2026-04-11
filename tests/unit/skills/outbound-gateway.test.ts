@@ -61,7 +61,7 @@ describe('OutboundGateway', () => {
     });
 
     const gateway = new OutboundGateway({
-      nylasClient: mocks.nylasClient,
+      nylasClients: new Map([['curia', mocks.nylasClient]]),
       contactService: mocks.contactService,
       contentFilter: mocks.contentFilter,
       bus: mocks.bus,
@@ -90,7 +90,7 @@ describe('OutboundGateway', () => {
     });
 
     const gateway = new OutboundGateway({
-      nylasClient: mocks.nylasClient,
+      nylasClients: new Map([['curia', mocks.nylasClient]]),
       contactService: mocks.contactService,
       contentFilter: mocks.contentFilter,
       bus: mocks.bus,
@@ -110,7 +110,7 @@ describe('OutboundGateway', () => {
     (mocks.contactService.resolveByChannelIdentity as ReturnType<typeof vi.fn>).mockResolvedValue(null);
 
     const gateway = new OutboundGateway({
-      nylasClient: mocks.nylasClient,
+      nylasClients: new Map([['curia', mocks.nylasClient]]),
       contactService: mocks.contactService,
       contentFilter: mocks.contentFilter,
       bus: mocks.bus,
@@ -133,7 +133,7 @@ describe('OutboundGateway', () => {
     );
 
     const gateway = new OutboundGateway({
-      nylasClient: mocks.nylasClient,
+      nylasClients: new Map([['curia', mocks.nylasClient]]),
       contactService: mocks.contactService,
       contentFilter: mocks.contentFilter,
       bus: mocks.bus,
@@ -159,7 +159,7 @@ describe('OutboundGateway', () => {
       });
 
       const gateway = new OutboundGateway({
-        nylasClient: mocks.nylasClient,
+        nylasClients: new Map([['curia', mocks.nylasClient]]),
         contactService: mocks.contactService,
         contentFilter: mocks.contentFilter,
         bus: mocks.bus,
@@ -185,7 +185,7 @@ describe('OutboundGateway', () => {
       });
 
       const gateway = new OutboundGateway({
-        nylasClient: mocks.nylasClient,
+        nylasClients: new Map([['curia', mocks.nylasClient]]),
         contactService: mocks.contactService,
         contentFilter: mocks.contentFilter,
         bus: mocks.bus,
@@ -216,7 +216,7 @@ describe('OutboundGateway', () => {
       });
 
       const gateway = new OutboundGateway({
-        nylasClient: mocks.nylasClient,
+        nylasClients: new Map([['curia', mocks.nylasClient]]),
         contactService: mocks.contactService,
         contentFilter: mocks.contentFilter,
         bus: mocks.bus,
@@ -245,7 +245,7 @@ describe('OutboundGateway', () => {
       });
 
       const gateway = new OutboundGateway({
-        nylasClient: mocks.nylasClient,
+        nylasClients: new Map([['curia', mocks.nylasClient]]),
         contactService: mocks.contactService,
         contentFilter: mocks.contentFilter,
         bus: mocks.bus,
@@ -273,7 +273,7 @@ describe('OutboundGateway', () => {
       );
 
       const gateway = new OutboundGateway({
-        nylasClient: mocks.nylasClient,
+        nylasClients: new Map([['curia', mocks.nylasClient]]),
         contactService: mocks.contactService,
         contentFilter: mocks.contentFilter,
         bus: mocks.bus,
@@ -299,7 +299,7 @@ describe('OutboundGateway', () => {
       });
 
       const gateway = new OutboundGateway({
-        nylasClient: mocks.nylasClient,
+        nylasClients: new Map([['curia', mocks.nylasClient]]),
         contactService: mocks.contactService,
         contentFilter: mocks.contentFilter,
         bus: mocks.bus,
@@ -339,7 +339,7 @@ describe('OutboundGateway', () => {
       });
 
       const gateway = new OutboundGateway({
-        nylasClient: mocks.nylasClient,
+        nylasClients: new Map([['curia', mocks.nylasClient]]),
         contactService: mocks.contactService,
         contentFilter: mocks.contentFilter,
         bus: mocks.bus,
