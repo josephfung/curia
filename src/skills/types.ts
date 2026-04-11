@@ -212,9 +212,13 @@ export interface RegisteredSkill {
 export interface ToolDefinition {
   name: string;
   description: string;
+  // input_schema is a JSON Schema object. Properties are typed as Record<string, unknown>
+  // to accommodate both the simple shorthand used by local skills and the full JSON Schema
+  // objects returned by MCP servers (which may include allOf, oneOf, pattern, enum, etc.).
+  // required is optional because MCP tools may omit it for parameter-less tools.
   input_schema: {
     type: 'object';
-    properties: Record<string, { type: string; description?: string } | { type: 'array'; items: { type: string }; description?: string }>;
-    required: string[];
+    properties: Record<string, unknown>;
+    required?: string[];
   };
 }

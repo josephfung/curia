@@ -459,7 +459,14 @@ async function main(): Promise<void> {
   // take down the system. The failed server's tools are simply not available
   // until the next restart.
   let mcpSessions: McpSession[] = [];
-  mcpSessions = await loadMcpServers(configDir, skillRegistry, logger);
+  try {
+    mcpSessions = await loadMcpServers(configDir, skillRegistry, logger);
+  } catch (err) {
+    // Malformed skills.yaml or unexpected loader error — degrade gracefully rather
+    // than crashing. The startup validator catches schema violations, but a YAML
+    // parse error after the validator runs would otherwise crash here.
+    logger.error({ err }, 'MCP bootstrap failed; continuing without MCP tools');
+  }
   if (mcpSessions.length > 0) {
     logger.info({ mcpServers: mcpSessions.map(s => s.serverId) }, 'MCP servers connected');
   }
