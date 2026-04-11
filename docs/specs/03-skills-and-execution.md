@@ -215,6 +215,7 @@ These are not bundled but documented as recommended integrations:
 | MCP `headers` config field — per-server auth headers for hosted MCP servers | Done |
 | Built-in skill: `skill-registry` (agent-invocable search) | Done — `skills/skill-registry/`; closes #274 |
 | Skill discovery — `allow_discovery: true` wired to runtime tool-list builder | Done — closes #274 |
+| Skill discovery — make discovered-but-not-pinned skills callable (dynamic tool-list expansion or invoke-by-name proxy) | Not Done — follow-up to #274; until this lands, agents must still pin tools they intend to call |
 | Safety gate for first-time elevated skill use — per-agent-skill `skill_approvals` table | Partial — role-based elevation gate exists (`caller.role === 'ceo'`); persist-once-ask-once flow not yet built |
 | Privilege scoping — per-skill capability assignments replacing `infrastructure` self-declaration | Partial — name-gated per-skill injection in `execution.ts`; full `capabilities.ts` registry pending (#119) |
 | Resource boundaries — max 5 concurrent skill invocations per agent task | Not Done |

@@ -15,7 +15,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
-- **Skill discovery — `allow_discovery` + `skill-registry` built-in** (spec §03): agents with `allow_discovery: true` in their YAML now receive the `skill-registry` tool in their LLM tool list. Calling it searches all registered skills (local + MCP) by keyword and returns matching names and descriptions, enabling the coordinator to discover capabilities not in its pinned list. `SkillContext.skillSearch` closure is injected by the execution layer using the existing name-gated pattern (consistent with #119's direction). `skill-registry` excludes itself from results. Closes #274.
+- **Skill discovery — `allow_discovery` + `skill-registry` built-in** (spec §03): agents with `allow_discovery: true` in their YAML now receive the `skill-registry` tool in their LLM tool list. Calling it searches all registered skills (local + MCP) by keyword and returns matching names and descriptions. `SkillContext.skillSearch` closure is injected by the execution layer using the existing name-gated pattern (consistent with #119's direction). `skill-registry` excludes itself from results. Note: `skill-registry` enables discovery of available capabilities; making discovered-but-not-pinned skills directly callable (dynamic tool-list expansion or invoke-by-name proxy) is a follow-up to this PR. Closes #274.
 - **Dream Engine** (spec 17): background KG maintenance system with memory decay pass. Confidence on `slow_decay` and `fast_decay` nodes/edges decays exponentially using configurable half-lives (180 days / 21 days). Rows at or below the archive threshold are soft-deleted via `archived_at`; edges cascade when their endpoints are archived. All KG read paths filter archived rows. Wired as an internal system job in the Scheduler. Config under `dreaming.decay.*` in `config/default.yaml`. Implements issue #27; decay warning (#280) deferred to a follow-up.
 - **MCP HTTP transport migration** — the `sse` transport in `config/skills.yaml` now uses `StreamableHTTPClientTransport` (the recommended SDK transport for hosted MCP servers) instead of the deprecated `SSEClientTransport`. Behaviour is unchanged for existing configs. Resolves the ADR 016 migration note. Closes #271.
 - **MCP `headers` config field** — SSE server entries in `config/skills.yaml` now accept an optional `headers: Record<string, string>` field. Enables `Authorization: Bearer <token>` for authenticated hosted MCP servers (Google, etc.) without any code changes. See `docs/dev/google-drive.md` for the Google Workspace path forward.
@@ -27,8 +27,6 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Backward-compatible single-account fallback** — if `channel_accounts.email` is absent, the email channel falls back to the existing `NYLAS_GRANT_ID` / `NYLAS_SELF_EMAIL` env-var mode; no config changes needed for existing deployments.
 
 ### Changed
-
-- **Google Workspace MCP tools unpinned from coordinator** — Drive, Docs, Sheets, and Gmail tools are no longer statically pinned in `coordinator.yaml`. The coordinator discovers them at runtime via `skill-registry` using `allow_discovery: true`. The manual pinning was a temporary workaround; it has been removed now that discovery is implemented.
 
 ### Fixed
 
