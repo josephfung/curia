@@ -30,6 +30,8 @@ Cross-cutting: Audit Logger, Memory Engine, Scheduler.
 - Parameterized queries only — never interpolate variables into SQL strings
 - Migrations in `src/db/migrations/` using node-pg-migrate (plain SQL)
 
+**Migration numbering — rebase hazard:** Two branches landing at the same time will often pick the same next number (e.g. both create `019_*`). `node-pg-migrate` sorts alphabetically within a prefix, so a duplicate prefix causes a `checkOrder` error on startup and takes down prod. **After every rebase and before every merge, `ls src/db/migrations/ | sort` and verify every prefix is unique.** If there's a collision, renumber the newer migration to the next available slot — do not rename the one that prod has already applied.
+
 ### Error Handling
 - No empty `catch {}` blocks — every catch must log, audit, and propagate
 - Use structured `AgentError` types, not string matching

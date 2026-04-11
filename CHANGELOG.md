@@ -15,6 +15,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 - **Migration prefix conflicts** — resolved duplicate `014_*` and `015_*` migration prefixes that caused `node-pg-migrate` to throw an ordering error and blocked all integration tests. `014_add_kg_node_sensitivity.sql` renumbered to `024_`; `020_add_contact_trust_fields.sql` restored to `019_` to match its `pgmigrations` record and prevent a double-apply. Closes #284.
+- **`019_add_contact_trust_fields` mislabelled** — PR #284 incorrectly renamed `020_add_contact_trust_fields.sql` to `019_`; prod's `pgmigrations` table records it as `020_`, so the wrong filename caused a `checkOrder` startup failure on the next deploy. Renamed back to `020_add_contact_trust_fields.sql`.
 
 ### Added
 - **MCP HTTP transport migration** — the `sse` transport in `config/skills.yaml` now uses `StreamableHTTPClientTransport` (the recommended SDK transport for hosted MCP servers) instead of the deprecated `SSEClientTransport`. Behaviour is unchanged for existing configs. Resolves the ADR 016 migration note. Closes #271.
