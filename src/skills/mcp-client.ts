@@ -121,9 +121,9 @@ export async function connectSse(
 
   const transport = new StreamableHTTPClientTransport(
     new URL(config.url),
-    config.headers && Object.keys(config.headers).length > 0
-      ? { requestInit: { headers: config.headers } }
-      : undefined,
+    // Pass headers via requestInit so the SDK merges them into every request.
+    // SDK normalizes an empty or absent headers object cleanly — no need to guard.
+    config.headers ? { requestInit: { headers: config.headers } } : undefined,
   );
 
   const client = new Client(
@@ -143,7 +143,13 @@ export async function connectSse(
     client,
     close: async () => {
       logger.debug({ server: config.name }, 'Closing HTTP MCP session');
-      await client.close();
+      try {
+        await client.close();
+      } catch (err) {
+        // close() is best-effort — log but do not propagate, so the shutdown
+        // sequence continues regardless of transport teardown failures.
+        logger.error({ err, server: config.name }, 'Error closing HTTP MCP session');
+      }
     },
   };
 }

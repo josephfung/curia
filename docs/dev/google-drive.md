@@ -64,27 +64,17 @@ server use, generate tokens from a service account:
 GOOGLE_APPLICATION_CREDENTIALS=/path/to/gdrive-service-account.json
 ```
 
-**2c. Generate a bearer token at startup**
+**2c. Token injection (tracked as follow-up work)**
 
 `config/skills.yaml` headers are literal strings — no env-var interpolation is performed.
-The recommended pattern is to generate a short-lived token before starting Curia and
-inject it into the environment, then reference it via a startup wrapper script:
+Bearer tokens expire (typically after 1 hour), so a static value in `skills.yaml` isn't
+suitable for production use.
 
-```bash
-#!/usr/bin/env bash
-# scripts/start-with-gdrive.sh — generate a Drive bearer token and start Curia.
-# Requires: gcloud CLI authenticated as the service account, or ADC configured.
-GOOGLE_ACCESS_TOKEN=$(gcloud auth application-default print-access-token)
-export GOOGLE_ACCESS_TOKEN
-# Note: you'll still need literal header values in skills.yaml.
-# For now, write the token into a temp file that skills.yaml references,
-# or run envsubst on a skills.yaml.template before startup.
-pnpm local
-```
-
-> **Roadmap:** Env-var interpolation in `skills.yaml` header values (analogous to
-> `env:VAR_NAME` in `config/default.yaml`) is a natural follow-up. File a ticket when
-> the Workspace MCP server ships so this can be added alongside the Drive config.
+> **TODO:** Env-var interpolation for `skills.yaml` header values (analogous to
+> `env:VAR_NAME` in `config/default.yaml`) should be added when the Workspace MCP server
+> ships. File a ticket at that point so token generation and injection can be wired up
+> alongside the Drive config. Until then, a `skills.yaml.template` + `envsubst` wrapper
+> at startup is the recommended pattern for any deployment that needs this today.
 
 ### Step 3 — Update `config/skills.yaml`
 
