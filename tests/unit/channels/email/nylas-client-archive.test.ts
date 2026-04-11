@@ -115,4 +115,20 @@ describe('NylasClient.archiveMessage', () => {
 
     await expect(client.archiveMessage('msg-1')).rejects.toThrow('Nylas API 500');
   });
+
+  it('handles a message with no folders field gracefully (treats as already archived)', async () => {
+    // Some Nylas providers/draft objects return messages without a folders field.
+    // normalizeMessage defaults to [] in that case, so archiveMessage resolves
+    // cleanly with an empty update (no INBOX to remove).
+    const msgWithNoFolders = { ...mockMsg(), folders: undefined };
+    mockMessages.find.mockResolvedValue({ data: msgWithNoFolders });
+    mockMessages.update.mockResolvedValue({ data: mockMsg({ folders: [] }) });
+
+    await expect(client.archiveMessage('msg-1')).resolves.toBeUndefined();
+    expect(mockMessages.update).toHaveBeenCalledWith({
+      identifier: 'test-grant-id',
+      messageId: 'msg-1',
+      requestBody: { folders: [] },
+    });
+  });
 });

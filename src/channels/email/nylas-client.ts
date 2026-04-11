@@ -45,6 +45,7 @@ interface NylasLike {
       requestBody: SendMessageRequest;
     }): Promise<NylasResponse<NylasSdkMessage>>;
 
+    /** Used by archiveMessage() to remove the INBOX label when archiving a message. */
     update(params: {
       identifier: string;
       messageId: string;
@@ -316,7 +317,7 @@ export class NylasClient {
       snippet: msg.snippet ?? '',
       date: msg.date,
       unread: msg.unread ?? false,
-      folders: msg.folders,
+      folders: msg.folders ?? [],
       // headers is only present when the request included fields: 'include_headers'
       headers: msg.headers?.map((h) => ({ name: h.name, value: h.value })),
     };
