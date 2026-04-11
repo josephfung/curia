@@ -332,8 +332,4 @@ pinned_skills:
   - set-autonomy
   - query-relationships
   - delete-relationship
-  # Google Drive (MCP) — tool names are best-effort based on @modelcontextprotocol/server-gdrive
-  # source. Confirm exact names by running the server and calling tools/list, then update this list.
-  - search
-  - read_file
 allow_discovery: true

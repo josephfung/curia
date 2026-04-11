@@ -1,166 +1,147 @@
 # Google Drive Setup
 
-This guide wires Curia to a designated Google Drive folder via the
-`@modelcontextprotocol/server-gdrive` MCP server. Once configured, Curia can
-search, read, and create documents and spreadsheets in that folder —
-enabling persistent structured content like expense trackers and job
-application trackers.
-
-The integration uses a **Google service account** (not personal OAuth) so
-no browser-based consent flow is required. You share a specific Drive folder
-with the service account; Curia operates only within that scope.
+This guide documents the path to Google Drive integration via MCP and explains
+what to do today versus what to do once Google ships their hosted Workspace MCP server.
 
 ---
 
-## Prerequisites
+## Current status (April 2026)
 
-- A Google Cloud project (or access to create one)
-- A Google Drive folder you control (or can create)
-- `GOOGLE_APPLICATION_CREDENTIALS` added to your `.env`
+Google Drive is **not yet available** as an official Google-hosted MCP server.
+Google announced Workspace MCP support (Drive, Docs, Sheets, Calendar, Gmail) in
+late 2025 but has not shipped it as of April 2026. Track availability at:
 
----
+> https://docs.cloud.google.com/mcp/supported-products
 
-## Step 1 — Create a Google Cloud project
-
-Skip this step if you already have a project to use.
-
-1. Go to [console.cloud.google.com](https://console.cloud.google.com) and sign in.
-2. In the top bar, click the project selector → **New Project**.
-3. Give it a name (e.g. `curia-integrations`) and click **Create**.
+The previously referenced npm package (`@modelcontextprotocol/server-gdrive`) is
+deprecated and marked "no longer supported" — do not use it.
 
 ---
 
-## Step 2 — Enable the Google Drive API
+## What's already wired
 
-1. In the Cloud Console, open **APIs & Services → Library**.
-2. Search for **Google Drive API** and click it.
-3. Click **Enable**.
+The Curia MCP infrastructure is fully ready for Google Drive the moment Google ships it:
 
----
+- `config/skills.yaml` uses `transport: sse` which now routes through
+  `StreamableHTTPClientTransport` — the same transport Google's hosted MCP servers use
+- The `headers:` field in `skills.yaml` allows passing `Authorization: Bearer <token>`
+  to any authenticated hosted MCP endpoint
+- The coordinator's `allow_discovery: true` means Drive tools will be discoverable once
+  registered, and you can pin specific tool names in `pinned_skills` for consistent access
 
-## Step 3 — Create a service account
-
-1. In the Cloud Console, open **APIs & Services → Credentials**.
-2. Click **Create Credentials → Service account**.
-3. Fill in a name (e.g. `curia-drive`) and description, then click **Create and continue**.
-4. The role step is optional — skip it and click **Continue**, then **Done**.
+No code changes will be needed. Setup is purely a configuration step.
 
 ---
 
-## Step 4 — Create and download a service account key
+## When Google ships the Workspace MCP server
 
-1. On the **Credentials** page, click the service account you just created.
-2. Go to the **Keys** tab.
-3. Click **Add key → Create new key**.
-4. Choose **JSON** and click **Create**. A `.json` file downloads automatically.
-5. Move it to a secure location outside the repo (e.g. `~/.config/curia/gdrive-service-account.json`).
+### Step 1 — Confirm the endpoint URL
 
-> **Security:** Never commit this file or its contents to version control.
-> The key grants full Drive API access as the service account.
+Check `https://docs.cloud.google.com/mcp/supported-products` for the official endpoint.
+It will likely follow the pattern `https://workspaceapis.googleapis.com/mcp` or similar.
 
----
+### Step 2 — Provision a service account and generate a bearer token
 
-## Step 5 — Set the credential path in `.env`
+Google's hosted MCP servers authenticate via OAuth 2.0 bearer tokens. For unattended
+server use, generate tokens from a service account:
 
-Add the absolute path to your service account JSON file:
+**2a. Create a service account**
+
+1. Go to [console.cloud.google.com](https://console.cloud.google.com) → **IAM & Admin → Service Accounts**.
+2. Click **Create Service Account**. Name it (e.g. `curia-drive`) and click **Create and continue**.
+3. Grant it the minimum Drive scope needed (e.g. `roles/drive.file` to operate only on
+   files created by the service account, or `roles/drive.readonly` for read-only access).
+4. Click **Done**.
+
+**2b. Create and download a key**
+
+1. Click the service account → **Keys** tab → **Add key → Create new key → JSON**.
+2. Move the downloaded file somewhere secure outside the repo
+   (e.g. `~/.config/curia/gdrive-service-account.json`).
+3. Add to `.env`:
 
 ```env
 GOOGLE_APPLICATION_CREDENTIALS=/path/to/gdrive-service-account.json
 ```
 
-The MCP server process inherits all of `process.env` at startup, so the
-`googleapis` library picks this up automatically via application-default
-credentials. No `env:` block is needed in `config/skills.yaml`.
+**2c. Generate a bearer token at startup**
 
----
-
-## Step 6 — Share a Drive folder with the service account
-
-Curia's scope is determined entirely by which folders the service account
-can see — there is no code-level path restriction. Share exactly what you
-want Curia to access and nothing more.
-
-1. In Google Drive, navigate to (or create) the root folder for Curia —
-   e.g. `Curia Working Files`.
-2. Right-click the folder → **Share**.
-3. In the **Add people and groups** field, paste the service account's email
-   address. You'll find it on the service account detail page in the Cloud
-   Console — it looks like `curia-drive@your-project.iam.gserviceaccount.com`.
-4. Set the role to **Editor** (so Curia can both read and create files).
-5. Uncheck **Notify people** and click **Share**.
-
-> The service account does not receive notifications and has no Drive UI.
-> The share is immediate.
-
----
-
-## Step 7 — Verify `config/skills.yaml`
-
-Confirm the gdrive entry is present (it ships with the repo):
-
-```yaml
-servers:
-  - name: gdrive
-    transport: stdio
-    command: npx
-    args: ["-y", "@modelcontextprotocol/server-gdrive"]
-    action_risk: low
-    sensitivity: normal
-    timeout_ms: 30000
-```
-
-No changes needed here — `GOOGLE_APPLICATION_CREDENTIALS` is inherited from
-the environment, not declared in the `env:` block.
-
----
-
-## Step 8 — Confirm tool names and update `pinned_skills`
-
-The MCP server advertises its tool names at startup. The coordinator's
-`agents/coordinator.yaml` ships with best-effort names (`search`,
-`read_file`) based on the package source, but these may differ across
-versions. Confirm the actual names before going to production.
-
-**Start Curia and check the startup logs:**
+`config/skills.yaml` headers are literal strings — no env-var interpolation is performed.
+The recommended pattern is to generate a short-lived token before starting Curia and
+inject it into the environment, then reference it via a startup wrapper script:
 
 ```bash
+#!/usr/bin/env bash
+# scripts/start-with-gdrive.sh — generate a Drive bearer token and start Curia.
+# Requires: gcloud CLI authenticated as the service account, or ADC configured.
+GOOGLE_ACCESS_TOKEN=$(gcloud auth application-default print-access-token)
+export GOOGLE_ACCESS_TOKEN
+# Note: you'll still need literal header values in skills.yaml.
+# For now, write the token into a temp file that skills.yaml references,
+# or run envsubst on a skills.yaml.template before startup.
 pnpm local
 ```
 
-Look for lines like:
+> **Roadmap:** Env-var interpolation in `skills.yaml` header values (analogous to
+> `env:VAR_NAME` in `config/default.yaml`) is a natural follow-up. File a ticket when
+> the Workspace MCP server ships so this can be added alongside the Drive config.
+
+### Step 3 — Update `config/skills.yaml`
+
+Uncomment and fill in the template (already present in the file):
+
+```yaml
+servers:
+  - name: google-workspace
+    transport: sse
+    url: https://workspaceapis.googleapis.com/mcp   # confirm at launch
+    action_risk: low
+    headers:
+      Authorization: "Bearer <your-token>"          # inject at startup; see above
+```
+
+### Step 4 — Pin tools in `agents/coordinator.yaml`
+
+After startup, check the logs for lines like:
 
 ```
-INFO  MCP tool registered  {"server":"gdrive","tool":"search"}
-INFO  MCP tool registered  {"server":"gdrive","tool":"read_file"}
-INFO  MCP server tools registered  {"server":"gdrive","registered":2,"total":2}
+INFO  MCP tool registered  {"server":"google-workspace","tool":"drive.files.list"}
+INFO  MCP server tools registered  {"server":"google-workspace","registered":N,"total":N}
 ```
 
-If the tool names in the logs differ from what's in `pinned_skills`, update
-`agents/coordinator.yaml` to match:
+Add the tool names you want the coordinator to use by default to `pinned_skills` in
+`agents/coordinator.yaml`:
 
 ```yaml
 pinned_skills:
   # ... existing skills ...
-  # Replace with actual names from tools/list:
-  - search
-  - read_file
+  - drive.files.list
+  - drive.files.get
+  - drive.files.create
 ```
 
 Restart Curia after any `coordinator.yaml` change.
 
----
+### Step 5 — Share the target Drive folder
 
-## Step 9 — Smoke test
+Create or designate a root folder in Drive for Curia's use. Share it with the service
+account's email address (found on the service account detail page, looks like
+`curia-drive@your-project.iam.gserviceaccount.com`) with **Editor** access.
 
-Ask Curia something that requires a Drive lookup. For example:
+The service account can only access content explicitly shared with it — there's no need
+for code-level path restrictions.
+
+### Step 6 — Smoke test
+
+Ask Curia to list or search Drive files:
 
 > "Search Drive for our expense tracker and summarize the last few entries."
 
-If the integration is working, Curia calls the `search` tool and returns
-content from your shared folder. If Drive isn't responding, check the logs
-for `MCP server tools registered` — a connection failure at startup produces
-an `ERROR Failed to connect to MCP server` log entry and the tools will be
-unavailable until restart.
+Check the startup logs if tools don't respond — a connection failure produces:
+
+```
+ERROR  Failed to connect to MCP server — tools from this server will be unavailable until restart
+```
 
 ---
 
@@ -168,31 +149,23 @@ unavailable until restart.
 
 **`ERROR Failed to connect to MCP server`**
 
-The MCP server process failed to start. Common causes:
+Connection to the Google endpoint failed. Check:
+- The URL in `skills.yaml` is correct and the endpoint is live
+- The bearer token is valid and not expired (tokens typically last 1 hour)
 
-- `npx` not in `PATH` — confirm `which npx` works in the terminal where
-  Curia runs.
-- Network issue downloading the package — `npx -y @modelcontextprotocol/server-gdrive`
-  downloads on first run. Check connectivity.
+**Drive calls fail with 401 Unauthorized**
 
-**Drive calls fail with "insufficient permissions"**
+The token is missing, expired, or has insufficient scope. Regenerate via
+`gcloud auth application-default print-access-token` and restart.
 
-The service account lacks access to the target folder. Confirm the service
-account email is listed as Editor on the folder (Step 6). Changes take
-effect immediately — no restart needed on the Drive side.
+**Drive calls fail with 403 Forbidden**
 
-**Drive calls fail with "invalid_grant" or "could not refresh access token"**
+The service account doesn't have access to the target file or folder. Confirm the
+service account email has been shared on the folder with at least Viewer (read) or
+Editor (write) access.
 
-The service account key file is missing, corrupt, or at the wrong path.
-Confirm:
+**Tools not appearing in coordinator**
 
-```bash
-echo $GOOGLE_APPLICATION_CREDENTIALS  # should print the path
-cat $GOOGLE_APPLICATION_CREDENTIALS   # should print valid JSON
-```
-
-**Tools not showing in coordinator**
-
-If tool names in the startup logs don't match `pinned_skills` in
-`coordinator.yaml`, the LLM won't see the tools. Update `pinned_skills` to
-match the logged names (Step 8) and restart.
+Tool names in `pinned_skills` must exactly match what the server advertises via
+`tools/list`. Check startup logs for the registered names and update `coordinator.yaml`
+to match, then restart.

@@ -42,7 +42,7 @@
         "transport": {
           "type": "string",
           "enum": ["stdio", "sse"],
-          "description": "Transport type. 'stdio' spawns a local process; 'sse' connects to an HTTP SSE endpoint."
+          "description": "Transport type. 'stdio' spawns a local process; 'sse' connects to an HTTP MCP endpoint (uses StreamableHTTPClientTransport)."
         },
         "action_risk": {
           "$ref": "#/$defs/actionRisk",
@@ -72,9 +72,14 @@
           "additionalProperties": { "type": "string" },
           "description": "Extra environment variables to set in the spawned process. Used with stdio transport only."
         },
+        "headers": {
+          "type": "object",
+          "additionalProperties": { "type": "string" },
+          "description": "HTTP headers sent with every request to the MCP endpoint. Used with sse transport only. Useful for Authorization: Bearer <token>. Note: values are literal strings — no env-var interpolation is performed."
+        },
         "url": {
           "type": "string",
-          "description": "Required for sse transport. The SSE endpoint URL (e.g. https://mcp-github.example.com/sse)."
+          "description": "Required for sse transport. The HTTP MCP endpoint URL (e.g. https://bigquery.googleapis.com/mcp)."
         }
       }
     }

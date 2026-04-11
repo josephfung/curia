@@ -39,6 +39,7 @@ interface McpSseServerEntry {
   sensitivity?: 'normal' | 'elevated';
   timeout_ms?: number;
   url: string;
+  headers?: Record<string, string>;
 }
 
 type McpServerEntry = McpStdioServerEntry | McpSseServerEntry;

@@ -6,7 +6,7 @@
 #
 # Fields (all servers):
 #   name         Unique identifier used in logs and error messages.
-#   transport    "stdio" (spawn a local process) or "sse" (HTTP SSE endpoint).
+#   transport    "stdio" (spawn a local process) or "sse" (HTTP MCP endpoint).
 #   action_risk  Required. Applied to all tools from this server.
 #                none | low | medium | high | critical (or integer 0–100).
 #   sensitivity  Optional. "normal" (default) or "elevated" (CEO-only).
@@ -16,27 +16,25 @@
 #   command      Executable to spawn (e.g. "npx", "node").
 #   args         Command-line arguments array.
 #   env          Extra env vars merged on top of process.env for the child.
-#                Use this for env vars that are NOT already in .env.
-#                Vars already set in .env are inherited automatically.
 #
 # sse-only fields:
-#   url          SSE endpoint URL.
+#   url          HTTP MCP endpoint URL (uses StreamableHTTPClientTransport).
+#   headers      HTTP headers sent with every request — useful for auth.
+#                Values are literal strings; no env-var interpolation is done.
+#                Store tokens in .env and inject via a startup wrapper if needed.
+#                See docs/dev/google-drive.md for the recommended pattern.
 #
-# See docs/dev/google-drive.md for setup instructions.
+# Example (Google-hosted MCP server, when available):
+#
+# servers:
+#   - name: google-workspace
+#     transport: sse
+#     url: https://workspaceapis.googleapis.com/mcp   # confirm URL at launch
+#     action_risk: low
+#     headers:
+#       Authorization: "Bearer <token>"   # generate at startup; see runbook
+#
+# See docs/dev/google-drive.md for setup instructions and the path forward
+# for Google Drive / Workspace once Google ships their hosted MCP server.
 
-servers:
-  # Google Drive — read/write access to a designated shared folder.
-  # Auth: Google service account via GOOGLE_APPLICATION_CREDENTIALS (set in .env).
-  # The spawned process inherits all of process.env, so no env: block is needed.
-  #
-  # Tool names below are best-effort based on the server package source.
-  # Run `npx -y @modelcontextprotocol/server-gdrive` and call tools/list
-  # to confirm the exact names for your installed version, then update
-  # agents/coordinator.yaml pinned_skills to match.
-  - name: gdrive
-    transport: stdio
-    command: npx
-    args: ["-y", "@modelcontextprotocol/server-gdrive"]
-    action_risk: low
-    sensitivity: normal
-    timeout_ms: 30000
+servers: []
