@@ -123,6 +123,29 @@
         "minConfidenceToPause": { "type": "string", "enum": ["high", "medium", "low"] }
       }
     },
+    "dreaming": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "decay": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "intervalMs": { "type": "integer", "minimum": 1 },
+            "archiveThreshold": { "type": "number", "minimum": 0, "maximum": 1 },
+            "halfLifeDays": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "permanent": { "type": "null" },
+                "slow_decay": { "type": "integer", "minimum": 1 },
+                "fast_decay": { "type": "integer", "minimum": 1 }
+              }
+            }
+          }
+        }
+      }
+    },
     "sensitivity_rules": {
       "type": "array",
       "minItems": 1,

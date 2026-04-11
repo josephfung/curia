@@ -53,6 +53,10 @@ interface KnowledgeGraphBackend {
   getNode(id: string): Promise<KgNode | undefined>;
   updateNode(id: string, node: KgNode): Promise<void>;
   deleteNode(id: string): Promise<void>;
+  /** Soft-delete a node by setting archived_at = now(). Used by DreamEngine. */
+  archiveNode(id: string): Promise<void>;
+  /** Soft-delete an edge by setting archived_at = now(). Used by DreamEngine. */
+  archiveEdge(id: string): Promise<void>;
   findNodesByType(type: NodeType): Promise<KgNode[]>;
   findNodesByLabel(label: string): Promise<KgNode[]>;
   createEdge(edge: KgEdge): Promise<void>;
@@ -219,6 +223,16 @@ export class KnowledgeGraphStore {
     await this.backend.deleteNode(id);
   }
 
+  /** Soft-delete a node — sets archived_at, does not remove the row. */
+  async archiveNode(id: string): Promise<void> {
+    return this.backend.archiveNode(id);
+  }
+
+  /** Soft-delete an edge — sets archived_at, does not remove the row. */
+  async archiveEdge(id: string): Promise<void> {
+    return this.backend.archiveEdge(id);
+  }
+
   /** Find all nodes of a given type */
   async findNodesByType(type: NodeType): Promise<KgNode[]> {
     return this.backend.findNodesByType(type);
@@ -352,7 +366,7 @@ class PostgresBackend implements KnowledgeGraphBackend {
     const result = await this.pool.query<PgNodeRow & { is_new: boolean }>(
       `INSERT INTO kg_nodes (id, type, label, properties, embedding, confidence, decay_class, source, created_at, last_confirmed_at, sensitivity)
        VALUES ($1, $2, $3, $4, $5::vector, $6, $7, $8, $9, $9, $10)
-       ON CONFLICT (lower(label), type) WHERE type != 'fact'
+       ON CONFLICT (lower(label), type) WHERE type != 'fact' AND archived_at IS NULL
        DO UPDATE SET
          confidence = GREATEST(kg_nodes.confidence, EXCLUDED.confidence),
          last_confirmed_at = EXCLUDED.last_confirmed_at
@@ -383,7 +397,7 @@ class PostgresBackend implements KnowledgeGraphBackend {
 
   async getNode(id: string): Promise<KgNode | undefined> {
     const result = await this.pool.query<PgNodeRow>(
-      'SELECT * FROM kg_nodes WHERE id = $1',
+      'SELECT * FROM kg_nodes WHERE id = $1 AND archived_at IS NULL',
       [id],
     );
     const row = result.rows[0];
@@ -414,9 +428,26 @@ class PostgresBackend implements KnowledgeGraphBackend {
     await this.pool.query('DELETE FROM kg_nodes WHERE id = $1', [id]);
   }
 
+  async archiveNode(id: string): Promise<void> {
+    this.logger.debug({ nodeId: id }, 'kg: archiving node');
+    await this.pool.query('UPDATE kg_nodes SET archived_at = now() WHERE id = $1', [id]);
+    // Cascade: any active edge touching this node is also archived so it cannot
+    // be returned by getEdgesForNode before the next DreamEngine decay pass runs.
+    const edgeResult = await this.pool.query(
+      'UPDATE kg_edges SET archived_at = now() WHERE (source_node_id = $1 OR target_node_id = $1) AND archived_at IS NULL',
+      [id],
+    );
+    this.logger.debug({ nodeId: id, edgesArchived: edgeResult.rowCount ?? 0 }, 'kg: cascaded archive to incident edges');
+  }
+
+  async archiveEdge(id: string): Promise<void> {
+    this.logger.debug({ edgeId: id }, 'kg: archiving edge');
+    await this.pool.query('UPDATE kg_edges SET archived_at = now() WHERE id = $1', [id]);
+  }
+
   async findNodesByType(type: NodeType): Promise<KgNode[]> {
     const result = await this.pool.query<PgNodeRow>(
-      'SELECT * FROM kg_nodes WHERE type = $1',
+      'SELECT * FROM kg_nodes WHERE type = $1 AND archived_at IS NULL',
       [type],
     );
     return result.rows.map(pgRowToNode);
@@ -426,7 +457,7 @@ class PostgresBackend implements KnowledgeGraphBackend {
     // Case-insensitive exact match using lower() to leverage the idx_kg_nodes_label index.
     // ILIKE would require a pg_trgm index; lower() = lower() uses the btree on lower(label).
     const result = await this.pool.query<PgNodeRow>(
-      'SELECT * FROM kg_nodes WHERE lower(label) = lower($1)',
+      'SELECT * FROM kg_nodes WHERE lower(label) = lower($1) AND archived_at IS NULL',
       [label],
     );
     return result.rows.map(pgRowToNode);
@@ -454,7 +485,7 @@ class PostgresBackend implements KnowledgeGraphBackend {
 
   async getEdgesForNode(nodeId: string): Promise<KgEdge[]> {
     const result = await this.pool.query<PgEdgeRow>(
-      'SELECT * FROM kg_edges WHERE source_node_id = $1 OR target_node_id = $1',
+      'SELECT * FROM kg_edges WHERE (source_node_id = $1 OR target_node_id = $1) AND archived_at IS NULL',
       [nodeId],
     );
     return result.rows.map(pgRowToEdge);
@@ -478,7 +509,7 @@ class PostgresBackend implements KnowledgeGraphBackend {
          LEAST(source_node_id::text, target_node_id::text),
          GREATEST(source_node_id::text, target_node_id::text),
          type
-       ) DO UPDATE SET
+       ) WHERE archived_at IS NULL DO UPDATE SET
          confidence = GREATEST(kg_edges.confidence, EXCLUDED.confidence),
          last_confirmed_at = EXCLUDED.last_confirmed_at
        RETURNING *, (xmax = 0) AS is_new`,
@@ -524,7 +555,9 @@ class PostgresBackend implements KnowledgeGraphBackend {
   }
 
   async traverse(startNodeId: string, maxDepth: number): Promise<TraversalResult> {
-    // Step 1: Collect reachable nodes via recursive CTE (cycle-safe)
+    // Step 1: Collect reachable nodes via recursive CTE (cycle-safe).
+    // Both the edge join and the final node select filter out archived rows
+    // so that archived nodes and their edges are invisible to traversal.
     const nodesResult = await this.pool.query<PgNodeRow>(
       `WITH RECURSIVE reachable AS (
         SELECT $1::uuid AS node_id, 0 AS depth, ARRAY[$1::uuid] AS visited
@@ -536,9 +569,10 @@ class PostgresBackend implements KnowledgeGraphBackend {
         FROM reachable r
         JOIN kg_edges e ON (e.source_node_id = r.node_id OR e.target_node_id = r.node_id)
         WHERE r.depth < $2
+          AND e.archived_at IS NULL
           AND NOT (CASE WHEN e.source_node_id = r.node_id THEN e.target_node_id ELSE e.source_node_id END) = ANY(r.visited)
       )
-      SELECT DISTINCT n.* FROM reachable r JOIN kg_nodes n ON n.id = r.node_id`,
+      SELECT DISTINCT n.* FROM reachable r JOIN kg_nodes n ON n.id = r.node_id WHERE n.archived_at IS NULL`,
       [startNodeId, maxDepth],
     );
 
@@ -549,11 +583,12 @@ class PostgresBackend implements KnowledgeGraphBackend {
       return { nodes: [], edges: [] };
     }
 
-    // Step 2: Collect edges between reachable nodes
+    // Step 2: Collect edges between reachable nodes (archived edges excluded)
     const edgesResult = await this.pool.query<PgEdgeRow>(
       `SELECT e.* FROM kg_edges e
        WHERE e.source_node_id = ANY($1::uuid[])
-         AND e.target_node_id = ANY($1::uuid[])`,
+         AND e.target_node_id = ANY($1::uuid[])
+         AND e.archived_at IS NULL`,
       [nodeIds],
     );
 
@@ -567,6 +602,7 @@ class PostgresBackend implements KnowledgeGraphBackend {
       `SELECT *, 1 - (embedding <=> $1::vector) AS similarity
        FROM kg_nodes
        WHERE embedding IS NOT NULL
+         AND archived_at IS NULL
        ORDER BY embedding <=> $1::vector
        LIMIT $2`,
       [embeddingStr, limit],
@@ -594,6 +630,7 @@ interface PgNodeRow {
   created_at: Date;
   last_confirmed_at: Date;
   sensitivity: string;
+  archived_at: Date | null;
 }
 
 interface PgEdgeRow {
@@ -607,6 +644,7 @@ interface PgEdgeRow {
   source: string;
   created_at: Date;
   last_confirmed_at: Date;
+  archived_at: Date | null;
 }
 
 function pgRowToNode(row: PgNodeRow): KgNode {
@@ -671,6 +709,9 @@ function parseVector(vectorStr: string): number[] {
 class InMemoryBackend implements KnowledgeGraphBackend {
   private nodes = new Map<string, KgNode>();
   private edges = new Map<string, KgEdge>();
+  // Soft-deleted IDs — rows are retained but invisible to all read paths
+  private archivedNodes = new Set<string>();
+  private archivedEdges = new Set<string>();
 
   async createNode(node: KgNode): Promise<void> {
     this.nodes.set(node.id, node);
@@ -686,7 +727,8 @@ class InMemoryBackend implements KnowledgeGraphBackend {
     const lowerLabel = node.label.toLowerCase();
     let existing: KgNode | undefined;
     for (const n of this.nodes.values()) {
-      if (n.type !== 'fact' && n.label.toLowerCase() === lowerLabel && n.type === node.type) {
+      // Archived nodes are treated as non-existent — don't merge with them
+      if (n.type !== 'fact' && n.label.toLowerCase() === lowerLabel && n.type === node.type && !this.archivedNodes.has(n.id)) {
         existing = n;
         break;
       }
@@ -710,6 +752,7 @@ class InMemoryBackend implements KnowledgeGraphBackend {
   }
 
   async getNode(id: string): Promise<KgNode | undefined> {
+    if (this.archivedNodes.has(id)) return undefined;
     return this.nodes.get(id);
   }
 
@@ -727,10 +770,25 @@ class InMemoryBackend implements KnowledgeGraphBackend {
     }
   }
 
+  async archiveNode(id: string): Promise<void> {
+    this.archivedNodes.add(id);
+    // Cascade: archive all active edges touching this node so getEdgesForNode
+    // cannot return dangling edges to the newly archived node.
+    for (const edge of this.edges.values()) {
+      if ((edge.sourceNodeId === id || edge.targetNodeId === id) && !this.archivedEdges.has(edge.id)) {
+        this.archivedEdges.add(edge.id);
+      }
+    }
+  }
+
+  async archiveEdge(id: string): Promise<void> {
+    this.archivedEdges.add(id);
+  }
+
   async findNodesByType(type: NodeType): Promise<KgNode[]> {
     const results: KgNode[] = [];
     for (const node of this.nodes.values()) {
-      if (node.type === type) {
+      if (node.type === type && !this.archivedNodes.has(node.id)) {
         results.push(node);
       }
     }
@@ -741,7 +799,7 @@ class InMemoryBackend implements KnowledgeGraphBackend {
     const lowerLabel = label.toLowerCase();
     const results: KgNode[] = [];
     for (const node of this.nodes.values()) {
-      if (node.label.toLowerCase() === lowerLabel) {
+      if (node.label.toLowerCase() === lowerLabel && !this.archivedNodes.has(node.id)) {
         results.push(node);
       }
     }
@@ -753,10 +811,13 @@ class InMemoryBackend implements KnowledgeGraphBackend {
   }
 
   async upsertEdge(edge: KgEdge): Promise<{ edge: KgEdge; created: boolean }> {
-    // Check for an existing edge of the same type in either direction
+    // Check for an existing *active* edge of the same type in either direction.
+    // Archived edges are invisible for conflict detection — a new edge should be
+    // created fresh rather than reviving a soft-deleted row.
     let existing: KgEdge | undefined;
     for (const e of this.edges.values()) {
       if (
+        !this.archivedEdges.has(e.id) &&
         e.type === edge.type &&
         (
           (e.sourceNodeId === edge.sourceNodeId && e.targetNodeId === edge.targetNodeId) ||
@@ -789,7 +850,10 @@ class InMemoryBackend implements KnowledgeGraphBackend {
   async getEdgesForNode(nodeId: string): Promise<KgEdge[]> {
     const results: KgEdge[] = [];
     for (const edge of this.edges.values()) {
-      if (edge.sourceNodeId === nodeId || edge.targetNodeId === nodeId) {
+      if (
+        (edge.sourceNodeId === nodeId || edge.targetNodeId === nodeId) &&
+        !this.archivedEdges.has(edge.id)
+      ) {
         results.push(edge);
       }
     }
@@ -817,7 +881,8 @@ class InMemoryBackend implements KnowledgeGraphBackend {
 
   /**
    * BFS traversal from startNodeId, limited to maxDepth hops.
-   * Uses a visited set to prevent cycles.
+   * Uses a visited set to prevent cycles. Archived nodes and edges are
+   * invisible — traversal will not cross an archived edge or visit an archived node.
    */
   async traverse(startNodeId: string, maxDepth: number): Promise<TraversalResult> {
     const visited = new Set<string>();
@@ -832,8 +897,11 @@ class InMemoryBackend implements KnowledgeGraphBackend {
       // Don't explore neighbors if we're at the depth limit
       if (depth >= maxDepth) continue;
 
-      // Find all edges connected to this node
+      // Find all non-archived edges connected to this node
       for (const edge of this.edges.values()) {
+        // Skip archived edges — they must not contribute to traversal
+        if (this.archivedEdges.has(edge.id)) continue;
+
         let neighborId: string | undefined;
         if (edge.sourceNodeId === currentNodeId) {
           neighborId = edge.targetNodeId;
@@ -841,26 +909,32 @@ class InMemoryBackend implements KnowledgeGraphBackend {
           neighborId = edge.sourceNodeId;
         }
 
-        if (neighborId && !visited.has(neighborId)) {
+        // Skip archived neighbor nodes
+        if (neighborId && !visited.has(neighborId) && !this.archivedNodes.has(neighborId)) {
           visited.add(neighborId);
           queue.push([neighborId, depth + 1]);
         }
       }
     }
 
-    // Collect all visited nodes
+    // Collect all visited nodes, excluding any that were archived after being visited
     const nodes: KgNode[] = [];
     for (const nodeId of visited) {
+      if (this.archivedNodes.has(nodeId)) continue;
       const node = this.nodes.get(nodeId);
       if (node) {
         nodes.push(node);
       }
     }
 
-    // Collect edges where both endpoints are in the visited set
+    // Collect non-archived edges where both endpoints are in the visited set
     const edges: KgEdge[] = [];
     for (const edge of this.edges.values()) {
-      if (visited.has(edge.sourceNodeId) && visited.has(edge.targetNodeId)) {
+      if (
+        !this.archivedEdges.has(edge.id) &&
+        visited.has(edge.sourceNodeId) &&
+        visited.has(edge.targetNodeId)
+      ) {
         edges.push(edge);
       }
     }
@@ -871,12 +945,15 @@ class InMemoryBackend implements KnowledgeGraphBackend {
   /**
    * Semantic search: compute cosine similarity between the query embedding
    * and all node embeddings, return top results sorted by similarity.
+   * Archived nodes are excluded from results.
    */
   async semanticSearch(queryEmbedding: number[], limit: number): Promise<SearchResult[]> {
     const scored: SearchResult[] = [];
 
     for (const node of this.nodes.values()) {
       if (!node.embedding) continue;
+      // Archived nodes must not appear in semantic search results
+      if (this.archivedNodes.has(node.id)) continue;
       const score = EmbeddingService.cosineSimilarity(queryEmbedding, node.embedding);
       scored.push({ node, score, edges: [] });
     }

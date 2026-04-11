@@ -206,6 +206,25 @@ intentDrift:
   checkEveryNBursts: 1
   minConfidenceToPause: high
 
+# Dream engine — background knowledge graph maintenance (issue #27).
+# The decay pass runs on a configurable interval and reduces the confidence of
+# slow_decay and fast_decay nodes/edges using an exponential half-life model.
+# When confidence drops to or below archiveThreshold, the row is soft-deleted
+# (archived_at is set); it no longer appears in queries but is retained for audit.
+#
+# halfLifeDays: the number of days for a fact's confidence to halve.
+#   permanent: null — these nodes are never touched by the decay pass.
+#   slow_decay: 180  — employer, residence; reliable for months/years.
+#   fast_decay: 21   — coffee preference, current focus; unreliable after weeks.
+dreaming:
+  decay:
+    intervalMs: 86400000     # daily
+    archiveThreshold: 0.05
+    halfLifeDays:
+      permanent: null
+      slow_decay: 180
+      fast_decay: 21
+
 # Sensitivity classification rules for KG nodes (issue #200).
 # Rules are evaluated in descending sensitivity order — 'restricted' rules are
 # checked before 'confidential', so the most protective rule always wins.
