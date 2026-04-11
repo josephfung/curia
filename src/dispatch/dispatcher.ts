@@ -587,6 +587,24 @@ export class Dispatcher {
       }
     }
 
+    // Observation-mode preamble: prepend an explicit directive so the coordinator
+    // LLM cannot miss the context. Relying solely on the system prompt was
+    // insufficient — in testing the model replied as itself rather than
+    // summarising. The preamble is injected after the injection scanner so it
+    // is never treated as potentially hostile user content.
+    if (isObservationMode) {
+      taskContent =
+        `[OBSERVATION MODE — CEO's personal inbox]\n` +
+        `The following email arrived in the CEO's personal inbox. ` +
+        `You are monitoring on their behalf — you are NOT the recipient.\n` +
+        `Your role: summarise what arrived (sender, subject, key points). ` +
+        `Do NOT reply. Do NOT draft a response unless the CEO explicitly ` +
+        `instructs you to in this conversation. ` +
+        `Do NOT sign as yourself or mention your name or title.\n` +
+        `--- Original message ---\n` +
+        taskContent;
+    }
+
     const taskEvent = createAgentTask({
       agentId: 'coordinator',
       conversationId: payload.conversationId,

@@ -744,6 +744,60 @@ describe('Dispatcher — rate limiting', () => {
   });
 });
 
+describe('Dispatcher — observation mode preamble', () => {
+  it('prepends observation mode preamble to task content when observationMode is true', async () => {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+
+    const tasks: AgentTaskEvent[] = [];
+    bus.subscribe('agent.task', 'agent', (e) => tasks.push(e as AgentTaskEvent));
+
+    const dispatcher = new Dispatcher({ bus, logger });
+    dispatcher.register();
+
+    const event = createInboundMessage({
+      conversationId: 'email:thread-obs',
+      channelId: 'email',
+      senderId: 'sender@example.com',
+      content: 'testing if you read this',
+      metadata: { observationMode: true },
+    });
+
+    await bus.publish('channel', event);
+
+    expect(tasks).toHaveLength(1);
+    const content = tasks[0]!.payload.content;
+    expect(content).toContain('[OBSERVATION MODE');
+    expect(content).toContain('testing if you read this');
+    expect(content).toContain('Do NOT reply');
+    expect(content).toContain('Do NOT sign as yourself');
+  });
+
+  it('does not prepend preamble for normal (non-observation) messages', async () => {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+
+    const tasks: AgentTaskEvent[] = [];
+    bus.subscribe('agent.task', 'agent', (e) => tasks.push(e as AgentTaskEvent));
+
+    const dispatcher = new Dispatcher({ bus, logger });
+    dispatcher.register();
+
+    const event = createInboundMessage({
+      conversationId: 'email:thread-normal',
+      channelId: 'email',
+      senderId: 'sender@example.com',
+      content: 'a normal email',
+    });
+
+    await bus.publish('channel', event);
+
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0]!.payload.content).toBe('a normal email');
+    expect(tasks[0]!.payload.content).not.toContain('[OBSERVATION MODE');
+  });
+});
+
 describe('Dispatcher message size limit', () => {
   /**
    * Creates a Dispatcher with the given maxMessageBytes config and registers it.
