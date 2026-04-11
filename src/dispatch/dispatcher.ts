@@ -529,8 +529,14 @@ export class Dispatcher {
       // This overrides per-channel 'allow' policies for very low-trust messages — including unknown
       // senders on 'allow' channels. Unknown senders on 'hold_and_notify' and 'ignore' channels
       // already returned early above, so there is no risk of double-holding here.
+      //
+      // Observation-mode messages bypass the floor: we already skipped the contact-resolver path
+      // (isObservationMode check above), so senderContext is undefined and contactConfidence is 0.
+      // Without the bypass, observation-mode emails would always fall below the 0.2 floor and get
+      // silently held — making the entire observation-mode feature non-functional in production.
       const policy = this.channelPolicies[payload.channelId];
       if (
+        !isObservationMode &&
         messageTrustScore < this.trustScoreFloor &&
         policy?.unknownSender !== 'ignore' &&
         this.heldMessages
