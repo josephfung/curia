@@ -11,7 +11,7 @@ import * as path from 'node:path';
  *
  * - direct:          send immediately (default for Curia's own account)
  * - draft_gate:      create a Nylas draft; human must approve before the reply goes out
- *                    TODO(#273): wire up the notification → approval → send flow
+ *                    TODO(#278): wire up the notification → approval → send flow
  * - autonomy_gated:  send autonomously only when the global autonomy score meets or
  *                    exceeds the account's autonomy_threshold value
  */

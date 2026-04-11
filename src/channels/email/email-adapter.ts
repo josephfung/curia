@@ -29,7 +29,7 @@ export interface EmailAdapterConfig {
    *
    * - direct:          send immediately via OutboundGateway (current behavior)
    * - draft_gate:      save as a Nylas draft; human approves before sending
-   *                    TODO(#273): wire up notification → approval → send flow
+   *                    TODO(#278): wire up notification → approval → send flow
    * - autonomy_gated:  send only when autonomy score >= autonomyThreshold
    */
   outboundPolicy: OutboundPolicy;
@@ -205,7 +205,7 @@ export class EmailAdapter {
    *
    * The actual send behaviour is controlled by this account's outboundPolicy:
    *   - direct:         send immediately via OutboundGateway
-   *   - draft_gate:     save as Nylas draft for human approval (TODO(#273): full flow)
+   *   - draft_gate:     save as Nylas draft for human approval (TODO(#278): full flow)
    *   - autonomy_gated: check autonomy score before sending; hold as draft if below threshold
    */
   private async sendOutboundReply(outbound: OutboundMessageEvent): Promise<void> {
@@ -295,7 +295,7 @@ export class EmailAdapter {
    * - direct:         send immediately through the gateway (blocked-contact +
    *                   content filter run inside gateway.send)
    * - draft_gate:     save as a Nylas draft for human review; the notification +
-   *                   approval + send flow is deferred (TODO(#273))
+   *                   approval + send flow is deferred (TODO(#278))
    * - autonomy_gated: check the current global autonomy score; if it meets the
    *                   configured threshold, send directly; otherwise draft-gate
    */
@@ -351,12 +351,12 @@ export class EmailAdapter {
     }
 
     // draft_gate (and autonomy_gated fallback): save as draft for human approval.
-    // TODO(#273): after draft creation, notify the CEO and wire up the approval flow.
+    // TODO(#278): after draft creation, notify the CEO and wire up the approval flow.
     const draftResult = await outboundGateway.createEmailDraft(sendRequest);
     if (draftResult.success) {
       logger.info(
         { ...logCtx, accountId: this.config.accountId, draftId: draftResult.draftId },
-        'Email reply saved as draft pending human approval (TODO(#273): wire up notification+approval)',
+        'Email reply saved as draft pending human approval (TODO(#278): wire up notification+approval)',
       );
     } else if (draftResult.blockedReason === 'Recipient is blocked') {
       // Intentional block — not an infrastructure failure

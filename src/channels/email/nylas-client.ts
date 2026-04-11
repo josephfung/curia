@@ -225,7 +225,7 @@ export class NylasClient {
    * Draft and Message share the same BaseMessage shape in the Nylas SDK, so the
    * response can be normalised with the same helper as a sent message.
    *
-   * TODO(#273): wire up the CEO notification → approval → send flow that turns
+   * TODO(#278): wire up the CEO notification → approval → send flow that turns
    * a draft created here into an actually-sent reply.
    */
   async createDraft(options: SendEmailOptions): Promise<NylasMessage> {

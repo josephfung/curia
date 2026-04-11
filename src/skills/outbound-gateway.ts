@@ -409,7 +409,7 @@ export class OutboundGateway {
    * mailbox until explicitly sent). The reply goes through the full pipeline when the
    * draft is eventually approved and sent.
    *
-   * TODO(#273): after draft creation, notify the CEO and wire up the approval flow.
+   * TODO(#278): after draft creation, notify the CEO and wire up the approval flow.
    */
   async createEmailDraft(request: EmailSendRequest): Promise<OutboundDraftResult> {
     const recipientId = request.to;
