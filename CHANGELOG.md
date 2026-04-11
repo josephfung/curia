@@ -13,6 +13,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Changed
+
+- **Spec 03 implementation status** — corrected and annotated the implementation status table: secrets access (`ctx.secret()`) marked Done, safety gate and skill discovery marked Partial with detail, MCP and skill-registry cross-referenced to tracking issues (#270, #274).
+
 ### Breaking Changes
 
 - **Agent YAML schema now enforced at startup** — previously ignored unknown keys and missing required fields now cause a descriptive `process.exit(1)`. Any `agents/*.yaml` that was silently tolerated must be fixed before upgrading.

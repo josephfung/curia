@@ -47,7 +47,7 @@ interface SkillHandler {
 
 interface SkillContext {
   input: Record<string, unknown>;     // validated against manifest inputs
-  secret(name: string): Promise<string>;  // scoped secret access
+  secret(name: string): string;  // scoped secret access (synchronous — reads env vars)
   log: Logger;                         // scoped pino child logger
 }
 
@@ -191,13 +191,13 @@ Custom MCP servers will be needed for Google Calendar and expense platforms (Exp
 | Resource boundaries — per-invocation timeout enforcement from manifest | Done |
 | Built-in skill: `web-fetch` | Done |
 | Built-in skill: `scheduler` (create, list, cancel) | Done |
-| MCP skills — MCP client, stdio/SSE transport, `tools/list` discovery | Not Done |
-| Safety gate for first-time elevated skill use — `skill_approvals` table and approval workflow | Not Done |
-| Built-in skill: `skill-registry` (agent-invocable search) | Not Done |
+| MCP skills — MCP client, stdio/SSE transport, `tools/list` discovery | Not Done — tracked in #270 |
+| Safety gate for first-time elevated skill use — `skill_approvals` table and approval workflow | Partial — role-based elevation gate exists in execution layer (caller must have `role: ceo`); per-agent-skill `skill_approvals` table with persist-once-ask-once flow not yet built |
+| Built-in skill: `skill-registry` (agent-invocable search) | Not Done — `SkillRegistry.search()` exists; skill wrapper and runtime wiring pending (#274) |
 | Built-in skill: `memory-query` | Not Done |
 | Built-in skill: `memory-store` | Not Done |
 | Built-in skill: `file-reader` | Not Done |
 | Built-in skill: `file-writer` | Not Done |
-| Skill discovery — `allow_discovery` agent config field wired to registry search | Not Done |
-| Secrets access — `ctx.secret()` accessor backed by env vars, validated against manifest `secrets` array | Not Done |
+| Skill discovery — `allow_discovery` agent config field wired to registry search | Partial — field parsed by agent loader and set in agent YAMLs; not yet wired to runtime tool-list builder (#274) |
+| Secrets access — `ctx.secret()` accessor backed by env vars, validated against manifest `secrets` array | Done |
 | Resource boundaries — max 5 concurrent skill invocations per agent task | Not Done |
