@@ -285,9 +285,11 @@ export function loadYamlConfig(configDir: string): YamlConfig {
       `Failed to load config/default.yaml: ${err instanceof Error ? err.message : String(err)}`,
     );
   }
-  if (defaultParsed == null) {
+  if (defaultParsed === undefined) {
+    // Empty file (yaml.load returns undefined for '') — treat as no config.
     base = {};
-  } else if (typeof defaultParsed !== 'object' || Array.isArray(defaultParsed)) {
+  } else if (defaultParsed === null || typeof defaultParsed !== 'object' || Array.isArray(defaultParsed)) {
+    // Explicit YAML null, a scalar, or a sequence — all invalid for a config root.
     throw new Error('config/default.yaml must contain a YAML mapping at the root');
   } else {
     base = defaultParsed as Record<string, unknown>;
@@ -319,13 +321,14 @@ export function loadYamlConfig(configDir: string): YamlConfig {
         `Failed to load config/local.yaml: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
-    if (localParsed != null) {
-      if (typeof localParsed !== 'object' || Array.isArray(localParsed)) {
-        throw new Error('config/local.yaml must contain a YAML mapping at the root');
-      }
+    if (localParsed === undefined) {
+      // Empty file (yaml.load returns undefined for '') — treat as no override.
+    } else if (localParsed === null || typeof localParsed !== 'object' || Array.isArray(localParsed)) {
+      // Explicit YAML null, a scalar, or a sequence — all invalid for a config root.
+      throw new Error('config/local.yaml must contain a YAML mapping at the root');
+    } else {
       base = deepMerge(base, localParsed as Record<string, unknown>);
     }
-    // localParsed == null (null or undefined) means the file was empty — treat as no override.
   }
 
   // ── Step 3: validate the merged config ──────────────────────────────────

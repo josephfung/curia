@@ -169,4 +169,21 @@ describe('loadYamlConfig — local.yaml errors', () => {
     });
     expect(() => loadYamlConfig(dir)).toThrow('config/local.yaml must contain a YAML mapping');
   });
+
+  it('throws when local.yaml contains explicit YAML null (not the same as an empty file)', () => {
+    // yaml.load('') returns undefined (empty file → skip).
+    // yaml.load('null') returns null (explicit null document → error).
+    const dir = writeTempConfigDir({
+      defaultYaml: '',
+      localYaml: 'null\n',
+    });
+    expect(() => loadYamlConfig(dir)).toThrow('config/local.yaml must contain a YAML mapping');
+  });
+
+  it('throws when default.yaml contains explicit YAML null', () => {
+    const dir = writeTempConfigDir({
+      defaultYaml: 'null\n',
+    });
+    expect(() => loadYamlConfig(dir)).toThrow('config/default.yaml must contain a YAML mapping');
+  });
 });
