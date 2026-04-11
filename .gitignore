@@ -35,5 +35,5 @@ pgdata/
 tests/smoke/results/*.json
 tests/smoke/reports/*.html
 
-# Claude Code skill venvs
-.claude/skills/**/references/.venv/
+# Claude Code local skills (managed by trimkit, not committed)
+.claude/skills/
