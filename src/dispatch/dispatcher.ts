@@ -587,6 +587,48 @@ export class Dispatcher {
       }
     }
 
+    // Observation-mode preamble: prepend an explicit directive so the coordinator
+    // LLM cannot miss the context. Relying solely on the system prompt was
+    // insufficient — in testing the model replied as itself rather than
+    // summarising. The preamble is injected after the injection scanner so it
+    // is never treated as potentially hostile user content.
+    // The preamble also injects the 4-way triage protocol and surfaces identifiers
+    // (nylasMessageId, accountId) so the coordinator can call skills like email-archive.
+    if (isObservationMode) {
+      // Extract identifiers needed for skill calls (e.g. email-archive) from payload metadata.
+      const nylasMessageId = (payload.metadata as Record<string, unknown> | undefined)?.nylasMessageId as string | undefined;
+      const observingAccountId = payload.accountId;
+
+      // Always include Account so the coordinator knows which mailbox to act on.
+      // Message ID is only present when the email adapter has surfaced it via metadata.
+      const identifierBlock = nylasMessageId
+        ? `Message ID: ${nylasMessageId}\nAccount: ${observingAccountId ?? 'primary'}\n\n`
+        : `Account: ${observingAccountId ?? 'primary'}\n\n`;
+
+      taskContent =
+        `[OBSERVATION MODE — monitored inbox]\n` +
+        `This email arrived in a monitored inbox. You watch it on the CEO's behalf.\n` +
+        `You are NOT the recipient. NEVER reply to the sender as yourself or sign with your name.\n\n` +
+        identifierBlock +
+        `TRIAGE — evaluate in order:\n\n` +
+        `1. STANDING INSTRUCTIONS: use entity-context to look up the sender. If the CEO has\n` +
+        `   given you a standing instruction for this sender or email type, follow it.\n\n` +
+        `2. CLASSIFY and act:\n` +
+        `   - URGENT — time-sensitive, requires CEO decision, from a known contact:\n` +
+        `     Send the CEO a message on a high-urgency channel (e.g. Signal): sender, subject,\n` +
+        `     one-sentence summary, key ask. Do NOT reply to the sender.\n` +
+        `   - ACTIONABLE — calendar booking, add attendee, change location, clear task:\n` +
+        `     Do it using your existing skills. No notification. It will appear in the weekly log.\n` +
+        `   - NEEDS DRAFT — a reply is warranted and you can write it:\n` +
+        `     Save a draft with email-reply. The CEO will review before it sends.\n` +
+        `   - NOISE — receipt, newsletter, automated notification, no action needed:\n` +
+        `     Call email-archive. No notification.\n\n` +
+        `3. WHEN IN DOUBT: default to URGENT (notify) rather than acting silently.\n` +
+        `   It is better to surface something than to quietly act on it incorrectly.\n\n` +
+        `--- Original message ---\n` +
+        taskContent;
+    }
+
     const taskEvent = createAgentTask({
       agentId: 'coordinator',
       conversationId: payload.conversationId,

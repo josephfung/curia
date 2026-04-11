@@ -44,6 +44,13 @@ interface NylasLike {
       identifier: string;
       requestBody: SendMessageRequest;
     }): Promise<NylasResponse<NylasSdkMessage>>;
+
+    /** Used by archiveMessage() to remove the INBOX label when archiving a message. */
+    update(params: {
+      identifier: string;
+      messageId: string;
+      requestBody: { folders?: string[]; starred?: boolean; unread?: boolean };
+    }): Promise<NylasResponse<NylasSdkMessage>>;
   };
   drafts: {
     create(params: {
@@ -257,6 +264,54 @@ export class NylasClient {
     }
   }
 
+  /**
+   * Archive a message by removing it from the INBOX folder.
+   *
+   * For Gmail (via Nylas), removing INBOX moves the message to "All Mail" —
+   * the standard archive. Other providers remove the INBOX folder equivalently.
+   *
+   * Two API calls: getMessage (to read current folders) then messages.update
+   * (to write back folders without INBOX). The fetch-then-update approach
+   * preserves non-INBOX labels (STARRED, IMPORTANT, custom labels) that
+   * would be lost if we blindly set folders: [].
+   */
+  async archiveMessage(messageId: string): Promise<void> {
+    this.log.debug({ messageId }, 'archiving message');
+
+    // Split into two try blocks so log messages accurately identify which API call failed.
+    // getMessage already logs its own error; re-throwing without a second log avoids
+    // misleading 'archiveMessage failed' entries when it's actually a fetch failure.
+    let currentFolders: string[];
+    let hadInbox: boolean;
+    try {
+      const current = await this.getMessage(messageId);
+      // Filter by uppercase so we catch 'inbox', 'Inbox', 'INBOX' consistently
+      currentFolders = current.folders.filter((f) => f.toUpperCase() !== 'INBOX');
+      // True if the filter actually removed something — avoids a no-op API call
+      hadInbox = currentFolders.length !== current.folders.length;
+    } catch (err) {
+      // getMessage already logged; re-throw without a second log line
+      throw err;
+    }
+
+    if (!hadInbox) {
+      this.log.debug({ messageId }, 'archive skipped: INBOX label not present');
+      return;
+    }
+
+    try {
+      await this.nylas.messages.update({
+        identifier: this.grantId,
+        messageId,
+        requestBody: { folders: currentFolders },
+      });
+      this.log.info({ messageId, updatedFolders: currentFolders }, 'message archived successfully');
+    } catch (err) {
+      this.log.error({ err, grantId: this.grantId, messageId }, 'Nylas messages.update failed during archive');
+      throw err;
+    }
+  }
+
   // ---------------------------------------------------------------------------
   // Internal helpers
   // ---------------------------------------------------------------------------
@@ -278,7 +333,7 @@ export class NylasClient {
       snippet: msg.snippet ?? '',
       date: msg.date,
       unread: msg.unread ?? false,
-      folders: msg.folders,
+      folders: msg.folders ?? [],
       // headers is only present when the request included fields: 'include_headers'
       headers: msg.headers?.map((h) => ({ name: h.name, value: h.value })),
     };
