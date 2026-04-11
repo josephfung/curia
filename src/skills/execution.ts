@@ -291,11 +291,16 @@ export class ExecutionLayer {
         ctx.schedulerService = this.schedulerService;
       }
       // entityMemory is optional — only skills that read/write the knowledge graph need it.
-      // When memory audit context and bus are both available, wrap entityMemory in an observer
-      // that emits memory.store audit events after each node creation (Phase 6 / issue #200).
+      // When all three audit context fields and bus are available, wrap entityMemory in an
+      // observer that emits memory.store audit events after each node creation (#200).
+      // All three fields are required by createMemoryStore — guard all three together so the
+      // narrowed type flows into buildEntityMemoryObserver without unsafe casts.
       if (this.entityMemory) {
-        ctx.entityMemory = options?.conversationId && options?.parentEventId && this.bus
-          ? buildEntityMemoryObserver(this.entityMemory, this.bus, options, skillLogger)
+        const memAudit = options?.agentId && options?.conversationId && options?.parentEventId
+          ? { agentId: options.agentId, conversationId: options.conversationId, parentEventId: options.parentEventId, taskEventId: options.taskEventId }
+          : undefined;
+        ctx.entityMemory = memAudit && this.bus
+          ? buildEntityMemoryObserver(this.entityMemory, this.bus, memAudit, skillLogger)
           : this.entityMemory;
       }
       // nylasCalendarClient is optional — only calendar skills need it
@@ -468,16 +473,13 @@ export class ExecutionLayer {
 function buildEntityMemoryObserver(
   entityMemory: EntityMemory,
   bus: EventBus,
-  invokeOptions: { agentId?: string; conversationId?: string; parentEventId?: string; taskEventId?: string },
+  // All three audit fields are required by createMemoryStore. The call site guards
+  // all three before invoking this function, so requiring them here eliminates
+  // the unsafe `as string` casts that were needed when the type was optional.
+  invokeOptions: { agentId: string; conversationId: string; parentEventId: string; taskEventId?: string },
   logger: Logger,
 ): EntityMemory {
-  // All three fields are required strings in MemoryStorePayload. The call site (line 297)
-  // guards on conversationId and parentEventId being truthy before entering here, and
-  // agentId is always set from the agent config. Capture as locals so TypeScript can
-  // verify the createMemoryStore call sites rather than seeing string | undefined.
-  const agentId = invokeOptions.agentId as string;
-  const conversationId = invokeOptions.conversationId as string;
-  const parentEventId = invokeOptions.parentEventId as string;
+  const { agentId, conversationId, parentEventId } = invokeOptions;
 
   // Object.create(instance) produces an object whose [[Prototype]] is the EntityMemory
   // instance, so all non-overridden methods are inherited and run with correct 'this'
@@ -517,7 +519,11 @@ function buildEntityMemoryObserver(
 
   observer.createEntity = async (options: CreateEntityOptions) => {
     const result = await entityMemory.createEntity(options);
-    const { entity } = result;
+    const { entity, created } = result;
+    // Only emit for new nodes. On upsert (created === false), entity.temporal.source
+    // is the original creation provenance — emitting it here would point the audit
+    // log at the wrong task/channel. Callers can rely on the original creation event.
+    if (!created) return result;
     try {
       await bus.publish('agent', createMemoryStore({
         agentId,
@@ -525,7 +531,7 @@ function buildEntityMemoryObserver(
         nodeId: entity.id,
         nodeType: entity.type,
         label: entity.label,
-        source: entity.temporal.source,
+        source: options.source,
         sensitivity: entity.sensitivity,
         parentEventId,
       }));

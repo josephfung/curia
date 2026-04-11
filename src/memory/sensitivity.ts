@@ -36,6 +36,14 @@ const SENSITIVITY_ORDER: Record<Sensitivity, number> = {
 };
 
 /**
+ * Return whichever sensitivity level is more restrictive.
+ * Used when merging nodes to ensure content can only ratchet sensitivity upward.
+ */
+export function maxSensitivity(a: Sensitivity, b: Sensitivity): Sensitivity {
+  return SENSITIVITY_ORDER[a] >= SENSITIVITY_ORDER[b] ? a : b;
+}
+
+/**
  * Classifies KG node content into a Sensitivity level.
  *
  * Instantiate once at startup via SensitivityClassifier.fromYaml() or
@@ -102,9 +110,12 @@ export class SensitivityClassifier {
    */
   static fromYaml(configPath: string): SensitivityClassifier {
     const raw = readFileSync(configPath, 'utf-8');
-    const parsed = yaml.load(raw) as Record<string, unknown>;
+    const parsed = yaml.load(raw);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error(`SensitivityClassifier: invalid YAML root in ${configPath}`);
+    }
 
-    const rulesRaw = parsed['sensitivity_rules'];
+    const rulesRaw = (parsed as Record<string, unknown>)['sensitivity_rules'];
     if (!Array.isArray(rulesRaw)) {
       throw new Error(`SensitivityClassifier: 'sensitivity_rules' missing or not an array in ${configPath}`);
     }
@@ -123,11 +134,18 @@ export class SensitivityClassifier {
         throw new Error(`sensitivity_rules[${i}]: 'patterns' must be a non-empty array`);
       }
 
+      // Normalise to lowercase and trim at load time so classify() never needs to.
+      // Reject blank entries: searchText.includes('') is always true, which would
+      // make the rule match unconditionally and override all other classifications.
+      const normalizedPatterns = patterns.map((p: unknown) => String(p).trim().toLowerCase());
+      if (normalizedPatterns.some((p) => p.length === 0)) {
+        throw new Error(`sensitivity_rules[${i}]: patterns must not contain empty values`);
+      }
+
       return {
         category,
         sensitivity: sensitivity as Sensitivity,
-        // Normalise to lowercase at load time so classify() never needs to lowercase patterns.
-        patterns: patterns.map((p: unknown) => String(p).toLowerCase()),
+        patterns: normalizedPatterns,
       };
     });
 

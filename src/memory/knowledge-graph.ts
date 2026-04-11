@@ -183,7 +183,7 @@ export class KnowledgeGraphStore {
    */
   async updateNode(
     id: string,
-    updates: { label?: string; properties?: Record<string, unknown> },
+    updates: { label?: string; properties?: Record<string, unknown>; sensitivity?: Sensitivity },
   ): Promise<KgNode> {
     const existing = await this.backend.getNode(id);
     if (!existing) {
@@ -196,6 +196,7 @@ export class KnowledgeGraphStore {
       ...existing,
       label: updates.label ?? existing.label,
       properties: updates.properties ?? existing.properties,
+      sensitivity: updates.sensitivity ?? existing.sensitivity,
       // Re-embed if the label changed, otherwise keep existing embedding
       embedding: labelChanged
         ? await this.embeddingService.embed(updates.label!)

@@ -6,6 +6,7 @@ import type { KnowledgeGraphStore } from './knowledge-graph.js';
 import type { EmbeddingService } from './embedding.js';
 import type { MemoryValidator } from './validation.js';
 import type { Logger } from '../logger.js';
+import { maxSensitivity } from './sensitivity.js';
 import type { SensitivityClassifier } from './sensitivity.js';
 import type {
   KgNode,
@@ -312,28 +313,35 @@ export class EntityMemory {
 
       case 'update': {
         // Near-duplicate detected — merge properties into the existing node.
-        // Sensitivity is not updated on merge; the original classification stands.
         await this.store.updateNode(result.existingNodeId, {
           properties: result.mergedProperties,
         });
         this.validator.recordWrite(options.source);
 
-        // Read the existing node's sensitivity for the audit event.
+        // Read the existing node after the merge to get the current state.
         // A successful updateNode followed by a missing getNode is unexpected — flag it
         // via sensitivityFallback so the caller (execution layer observer) can log a
-        // warning. We still emit the audit event rather than dropping it, but the
-        // sensitivity is re-classified from the incoming options and may differ from
-        // the node's original classification.
+        // warning. We still emit the audit event rather than dropping it.
         const existingNode = await this.store.getNode(result.existingNodeId);
         const sensitivityFallback = existingNode === undefined;
-        const sensitivity: Sensitivity = existingNode?.sensitivity
-          ?? options.sensitivity
+        const existingSensitivity: Sensitivity = existingNode?.sensitivity ?? 'internal';
+
+        // Ratchet: merged content can only increase sensitivity, never decrease.
+        // A near-duplicate that adds PII or financial data must be persisted at the
+        // higher level — keeping the original classification would silently under-protect.
+        const incomingSensitivity: Sensitivity = options.sensitivity
           ?? this.sensitivityClassifier?.classify(
             options.label,
-            options.properties ?? {},
+            result.mergedProperties ?? options.properties ?? {},
             options.sensitivityCategory,
           )
           ?? 'internal';
+        const sensitivity = maxSensitivity(existingSensitivity, incomingSensitivity);
+
+        if (!sensitivityFallback && sensitivity !== existingSensitivity) {
+          await this.store.updateNode(result.existingNodeId, { sensitivity });
+        }
+
         return { stored: true, nodeId: result.existingNodeId, sensitivity, sensitivityFallback };
       }
 
