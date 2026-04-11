@@ -76,8 +76,9 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 # Run the server in HTTP mode — this starts an OAuth callback listener
 GOOGLE_OAUTH_CLIENT_ID=<...> GOOGLE_OAUTH_CLIENT_SECRET=<...> uvx workspace-mcp --transport streamable-http
 
-# Open http://localhost:8000 in a browser.
+# Open http://localhost:8000/mcp in a browser.
 # You will be redirected to Google's OAuth consent page.
+# (http://localhost:8000 is just a health check — use /mcp to trigger auth)
 # Log in as Curia's Gmail (nathancuria1@gmail.com) and approve access.
 # Tokens are saved to ~/.workspace-mcp/cli-tokens/ — you can then Ctrl-C the server.
 ```
