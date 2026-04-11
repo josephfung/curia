@@ -210,7 +210,11 @@ export async function loadMcpServers(
 
     const tools = toolList.tools ?? [];
     if (tools.length === 0) {
-      logger.warn({ server: serverEntry.name }, 'MCP server advertises no tools — nothing to register');
+      // Zero tools most commonly means the OAuth flow hasn't been completed yet.
+      // The server starts and handshakes successfully but won't expose tools until
+      // the user authenticates. Check docs/dev/google-drive.md Step 5 if this is
+      // the google-workspace server. Token cache: ~/.workspace-mcp/cli-tokens/
+      logger.warn({ server: serverEntry.name }, 'MCP server advertises no tools — nothing to register. If this is the google-workspace server, the OAuth flow may not have been completed (see docs/dev/google-drive.md Step 5).');
       // Keep the session open — the server might add tools in a future protocol version.
       sessions.push(session);
       continue;

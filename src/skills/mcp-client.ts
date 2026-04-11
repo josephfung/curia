@@ -85,7 +85,19 @@ export async function connectStdio(
     { capabilities: {} },
   );
 
-  await client.connect(transport);
+  try {
+    await client.connect(transport);
+  } catch (err) {
+    // Surface ENOENT as an actionable message — the generic "Failed to connect"
+    // log from mcp-loader gives no clue that the command simply isn't on PATH.
+    if (err instanceof Error && (err as NodeJS.ErrnoException).code === 'ENOENT') {
+      throw new Error(
+        `stdio MCP server '${config.name}': command '${config.command}' not found on PATH. ` +
+        `Ensure the tool is installed and accessible from the process environment.`,
+      );
+    }
+    throw err;
+  }
 
   logger.info(
     { server: config.name, serverInfo: client.getServerVersion() },
