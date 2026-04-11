@@ -41,9 +41,8 @@ export class EmailArchiveHandler implements SkillHandler {
     try {
       result = await ctx.outboundGateway.archiveEmailMessage(messageId, accountId);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
       ctx.log.error({ err, messageId, accountId }, 'email-archive: unexpected error from gateway');
-      return { success: false, error: `Archive failed: ${msg}` };
+      return { success: false, error: 'Archive failed' };
     }
 
     if (!result.success) {
