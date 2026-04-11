@@ -6,11 +6,14 @@ import type { KnowledgeGraphStore } from './knowledge-graph.js';
 import type { EmbeddingService } from './embedding.js';
 import type { MemoryValidator } from './validation.js';
 import type { Logger } from '../logger.js';
+import { maxSensitivity } from './sensitivity.js';
+import type { SensitivityClassifier } from './sensitivity.js';
 import type {
   KgNode,
   KgEdge,
   NodeType,
   EdgeType,
+  Sensitivity,
   StoreFactOptions,
   SearchResult,
 } from './types.js';
@@ -33,12 +36,24 @@ export interface CreateEntityOptions {
   // Pass a lower value (e.g. 0.6) when creating nodes from LLM extraction
   // output, where the entity may be a first-time mention with no prior context.
   confidence?: number;
+  // Explicit sensitivity override. When omitted, EntityMemory auto-classifies
+  // the content using SensitivityClassifier and defaults to 'internal'.
+  sensitivity?: Sensitivity;
+  // Optional category hint for the classifier (e.g. 'financial').
+  sensitivityCategory?: string;
 }
 
 export interface StoreFactResult {
   stored: boolean;
   /** The ID of the persisted (or existing) fact node, if stored is true. */
   nodeId?: string;
+  /** The sensitivity level that was assigned to the node (for audit event emission). */
+  sensitivity?: Sensitivity;
+  /** True when the sensitivity was re-classified from incoming content because the stored
+   *  node could not be read back after an update (race condition / transient DB error).
+   *  The emitted audit event sensitivity may differ from what is stored on the node.
+   *  The caller should log a warning when this is true. */
+  sensitivityFallback?: boolean;
   /** Human-readable reason for a conflict or rate-limit rejection. */
   conflict?: string;
 }
@@ -64,6 +79,9 @@ const FACT_TYPE: NodeType = 'fact';
  * Design: EntityMemory owns no storage — it delegates to store and validator.
  * This keeps it thin and testable. The store handles persistence and embeddings;
  * the validator handles rate limiting, deduplication, and contradiction detection.
+ *
+ * The optional SensitivityClassifier (issue #200) auto-assigns sensitivity to nodes
+ * when the caller does not specify one. Without a classifier, nodes default to 'internal'.
  */
 export class EntityMemory {
   constructor(
@@ -74,6 +92,7 @@ export class EntityMemory {
     // store (createNode embeds labels; semanticSearch embeds query strings internally).
     _embeddingService: EmbeddingService,
     private logger: Logger,
+    private sensitivityClassifier?: SensitivityClassifier,
   ) {}
 
   /**
@@ -85,14 +104,22 @@ export class EntityMemory {
    * a duplicate. The `created` flag lets callers distinguish first-insert
    * from re-assertion, which is useful for applying defaults (e.g. roles in
    * ContactService) without overwriting data set by a later, richer call.
+   *
+   * Sensitivity is auto-classified from the label + properties unless explicitly
+   * provided by the caller.
    */
   async createEntity(options: CreateEntityOptions): Promise<{ entity: KgNode; created: boolean }> {
+    const sensitivity: Sensitivity = options.sensitivity
+      ?? this.sensitivityClassifier?.classify(options.label, options.properties, options.sensitivityCategory)
+      ?? 'internal';
+
     const { node, created } = await this.store.upsertNode({
       type: options.type,
       label: options.label,
       properties: options.properties,
       source: options.source,
       confidence: options.confidence ?? 0.7,
+      sensitivity,
     });
     return { entity: node, created };
   }
@@ -210,9 +237,12 @@ export class EntityMemory {
    * rate limiting → deduplication → (optionally) contradiction detection.
    *
    * Returns:
-   * - { stored: true, nodeId } on create (new fact node + edge persisted)
-   * - { stored: true, nodeId } on update (duplicate merged into existing node)
+   * - { stored: true, nodeId, sensitivity } on create (new fact node + edge persisted)
+   * - { stored: true, nodeId, sensitivity } on update (duplicate merged into existing node)
    * - { stored: false, conflict } on rate-limit rejection or contradiction
+   *
+   * The sensitivity field in the result is what was actually assigned to the node —
+   * the execution layer uses this to populate memory.store audit events.
    *
    * Note: storeFact calls validator.validate(), which handles rate limiting and
    * deduplication but NOT contradiction detection. Contradiction detection
@@ -224,6 +254,17 @@ export class EntityMemory {
 
     switch (result.action) {
       case 'create': {
+        // Resolve sensitivity: caller override → classifier → default 'internal'.
+        // The classifier runs on the fact label and any provided properties so that
+        // content like "Q3 salary plan: $2.4M" is tagged 'confidential' automatically.
+        const sensitivity: Sensitivity = options.sensitivity
+          ?? this.sensitivityClassifier?.classify(
+            options.label,
+            options.properties ?? {},
+            options.sensitivityCategory,
+          )
+          ?? 'internal';
+
         // Persist the fact node, then link it to the entity with a 'relates_to' edge
         // so getFacts() can discover it. store.createNode() returns the persisted node
         // with its assigned ID, so we use that directly for the edge.
@@ -237,6 +278,7 @@ export class EntityMemory {
           // Pass the pre-computed embedding from the validator's dedup check
           // to avoid a redundant OpenAI API call.
           embedding: result.validated.embedding,
+          sensitivity,
         });
 
         // If edge creation fails, the node we just created becomes an orphan
@@ -266,7 +308,7 @@ export class EntityMemory {
         }
 
         this.validator.recordWrite(options.source);
-        return { stored: true, nodeId: persistedNode.id };
+        return { stored: true, nodeId: persistedNode.id, sensitivity };
       }
 
       case 'update': {
@@ -275,7 +317,32 @@ export class EntityMemory {
           properties: result.mergedProperties,
         });
         this.validator.recordWrite(options.source);
-        return { stored: true, nodeId: result.existingNodeId };
+
+        // Read the existing node after the merge to get the current state.
+        // A successful updateNode followed by a missing getNode is unexpected — flag it
+        // via sensitivityFallback so the caller (execution layer observer) can log a
+        // warning. We still emit the audit event rather than dropping it.
+        const existingNode = await this.store.getNode(result.existingNodeId);
+        const sensitivityFallback = existingNode === undefined;
+        const existingSensitivity: Sensitivity = existingNode?.sensitivity ?? 'internal';
+
+        // Ratchet: merged content can only increase sensitivity, never decrease.
+        // A near-duplicate that adds PII or financial data must be persisted at the
+        // higher level — keeping the original classification would silently under-protect.
+        const incomingSensitivity: Sensitivity = options.sensitivity
+          ?? this.sensitivityClassifier?.classify(
+            options.label,
+            result.mergedProperties ?? options.properties ?? {},
+            options.sensitivityCategory,
+          )
+          ?? 'internal';
+        const sensitivity = maxSensitivity(existingSensitivity, incomingSensitivity);
+
+        if (!sensitivityFallback && sensitivity !== existingSensitivity) {
+          await this.store.updateNode(result.existingNodeId, { sensitivity });
+        }
+
+        return { stored: true, nodeId: result.existingNodeId, sensitivity, sensitivityFallback };
       }
 
       case 'conflict':
@@ -457,7 +524,7 @@ export class EntityMemory {
     const secondaryFacts = await this.getFacts(secondaryId);
     for (const factNode of secondaryFacts) {
       // Fact content lives in the node label; extra attributes may be in properties.
-      // We propagate the original source so provenance is preserved.
+      // We propagate the original source and sensitivity so provenance is preserved.
       await this.storeFact({
         entityNodeId: primaryId,
         label: factNode.label,
@@ -465,6 +532,9 @@ export class EntityMemory {
         confidence: factNode.temporal.confidence,
         decayClass: factNode.temporal.decayClass,
         source: factNode.temporal.source,
+        // Carry the original sensitivity — don't re-classify on merge since the node's
+        // content hasn't changed.
+        sensitivity: factNode.sensitivity,
       });
     }
 

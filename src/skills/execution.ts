@@ -29,7 +29,9 @@ import type { ContactService } from '../contacts/contact-service.js';
 import type { OutboundGateway } from './outbound-gateway.js';
 import type { HeldMessageService } from '../contacts/held-messages.js';
 import type { SchedulerService } from '../scheduler/scheduler-service.js';
-import type { EntityMemory } from '../memory/entity-memory.js';
+import type { EntityMemory, CreateEntityOptions, StoreFactResult } from '../memory/entity-memory.js';
+import type { StoreFactOptions } from '../memory/types.js';
+import { createMemoryStore } from '../bus/events.js';
 import type { NylasCalendarClient } from '../channels/calendar/nylas-calendar-client.js';
 import type { EntityContextAssembler } from '../entity-context/assembler.js';
 import type { AutonomyService } from '../autonomy/autonomy-service.js';
@@ -148,7 +150,7 @@ export class ExecutionLayer {
     skillName: string,
     input: Record<string, unknown>,
     caller?: CallerContext,
-    options?: { taskEventId?: string; agentId?: string },
+    options?: { taskEventId?: string; agentId?: string; conversationId?: string; parentEventId?: string },
   ): Promise<SkillResult> {
     const skill = this.registry.get(skillName);
 
@@ -288,9 +290,18 @@ export class ExecutionLayer {
       if (this.schedulerService) {
         ctx.schedulerService = this.schedulerService;
       }
-      // entityMemory is optional — only skills that read/write the knowledge graph need it
+      // entityMemory is optional — only skills that read/write the knowledge graph need it.
+      // When all three audit context fields and bus are available, wrap entityMemory in an
+      // observer that emits memory.store audit events after each node creation (#200).
+      // All three fields are required by createMemoryStore — guard all three together so the
+      // narrowed type flows into buildEntityMemoryObserver without unsafe casts.
       if (this.entityMemory) {
-        ctx.entityMemory = this.entityMemory;
+        const memAudit = options?.agentId && options?.conversationId && options?.parentEventId
+          ? { agentId: options.agentId, conversationId: options.conversationId, parentEventId: options.parentEventId, taskEventId: options.taskEventId }
+          : undefined;
+        ctx.entityMemory = memAudit && this.bus
+          ? buildEntityMemoryObserver(this.entityMemory, this.bus, memAudit, skillLogger)
+          : this.entityMemory;
       }
       // nylasCalendarClient is optional — only calendar skills need it
       if (this.nylasCalendarClient) {
@@ -447,4 +458,88 @@ export class ExecutionLayer {
       clearTimeout(timer!);
     }
   }
+}
+
+/**
+ * Wrap an EntityMemory instance with an observer that emits memory.store audit
+ * events after each successful node creation (issue #200 / Phase 6).
+ *
+ * Uses prototype delegation: the returned object inherits all EntityMemory methods
+ * from the original instance and only overrides storeFact and createEntity.
+ *
+ * Audit event emission is best-effort — a bus failure logs a warning but does not
+ * fail the skill invocation. The skill's own result is always returned intact.
+ */
+function buildEntityMemoryObserver(
+  entityMemory: EntityMemory,
+  bus: EventBus,
+  // All three audit fields are required by createMemoryStore. The call site guards
+  // all three before invoking this function, so requiring them here eliminates
+  // the unsafe `as string` casts that were needed when the type was optional.
+  invokeOptions: { agentId: string; conversationId: string; parentEventId: string; taskEventId?: string },
+  logger: Logger,
+): EntityMemory {
+  const { agentId, conversationId, parentEventId } = invokeOptions;
+
+  // Object.create(instance) produces an object whose [[Prototype]] is the EntityMemory
+  // instance, so all non-overridden methods are inherited and run with correct 'this'
+  // binding (they find store, validator, etc. on the prototype).
+  const observer = Object.create(entityMemory) as EntityMemory;
+
+  observer.storeFact = async (options: StoreFactOptions): Promise<StoreFactResult> => {
+    const result = await entityMemory.storeFact(options);
+    if (result.stored && result.nodeId && result.sensitivity) {
+      // sensitivityFallback means the stored node was unreadable after the update —
+      // the audit event sensitivity is re-classified from incoming content and may
+      // not match what is on the stored node. Log so operators can investigate.
+      if (result.sensitivityFallback) {
+        logger.warn(
+          { nodeId: result.nodeId, fallbackSensitivity: result.sensitivity },
+          'memory.store: sensitivity in audit event may be inaccurate — stored node was unreadable after update (race/transient error)',
+        );
+      }
+      try {
+        await bus.publish('agent', createMemoryStore({
+          agentId,
+          conversationId,
+          nodeId: result.nodeId,
+          nodeType: 'fact',
+          label: options.label,
+          source: options.source,
+          sensitivity: result.sensitivity,
+          parentEventId,
+        }));
+      } catch (err) {
+        // Audit event failure must not fail the skill — log and continue.
+        logger.warn({ err, nodeId: result.nodeId }, 'memory.store audit event failed to emit');
+      }
+    }
+    return result;
+  };
+
+  observer.createEntity = async (options: CreateEntityOptions) => {
+    const result = await entityMemory.createEntity(options);
+    const { entity, created } = result;
+    // Only emit for new nodes. On upsert (created === false), entity.temporal.source
+    // is the original creation provenance — emitting it here would point the audit
+    // log at the wrong task/channel. Callers can rely on the original creation event.
+    if (!created) return result;
+    try {
+      await bus.publish('agent', createMemoryStore({
+        agentId,
+        conversationId,
+        nodeId: entity.id,
+        nodeType: entity.type,
+        label: entity.label,
+        source: options.source,
+        sensitivity: entity.sensitivity,
+        parentEventId,
+      }));
+    } catch (err) {
+      logger.warn({ err, nodeId: entity.id }, 'memory.store audit event failed to emit');
+    }
+    return result;
+  };
+
+  return observer;
 }

@@ -6,6 +6,7 @@ import type {
   NodeType,
   EdgeType,
   DecayClass,
+  Sensitivity,
   SearchResult,
   TraversalResult,
 } from './types.js';
@@ -25,6 +26,10 @@ export interface CreateNodeOptions {
    *  Used by EntityMemory.storeFact() to avoid double-embedding — the validator
    *  already embedded the label during dedup checks. */
   embedding?: number[];
+  /** Sensitivity classification assigned at creation (#200). EntityMemory resolves
+   *  this via SensitivityClassifier before calling createNode, so this should always
+   *  be set. Defaults to 'internal' if somehow omitted. */
+  sensitivity?: Sensitivity;
 }
 
 export interface CreateEdgeOptions {
@@ -125,6 +130,7 @@ export class KnowledgeGraphStore {
         decayClass: options.decayClass ?? 'slow_decay',
         source: options.source,
       },
+      sensitivity: options.sensitivity ?? 'internal',
     };
 
     await this.backend.createNode(node);
@@ -160,6 +166,7 @@ export class KnowledgeGraphStore {
         decayClass: options.decayClass ?? 'slow_decay',
         source: options.source,
       },
+      sensitivity: options.sensitivity ?? 'internal',
     };
 
     return this.backend.upsertNode(node);
@@ -176,7 +183,7 @@ export class KnowledgeGraphStore {
    */
   async updateNode(
     id: string,
-    updates: { label?: string; properties?: Record<string, unknown> },
+    updates: { label?: string; properties?: Record<string, unknown>; sensitivity?: Sensitivity },
   ): Promise<KgNode> {
     const existing = await this.backend.getNode(id);
     if (!existing) {
@@ -189,6 +196,7 @@ export class KnowledgeGraphStore {
       ...existing,
       label: updates.label ?? existing.label,
       properties: updates.properties ?? existing.properties,
+      sensitivity: updates.sensitivity ?? existing.sensitivity,
       // Re-embed if the label changed, otherwise keep existing embedding
       embedding: labelChanged
         ? await this.embeddingService.embed(updates.label!)
@@ -317,11 +325,11 @@ class PostgresBackend implements KnowledgeGraphBackend {
   constructor(private pool: DbPool, private logger: Logger) {}
 
   async createNode(node: KgNode): Promise<void> {
-    this.logger.debug({ nodeId: node.id, type: node.type }, 'kg: creating node');
+    this.logger.debug({ nodeId: node.id, type: node.type, sensitivity: node.sensitivity }, 'kg: creating node');
     const embeddingStr = node.embedding ? `[${node.embedding.join(',')}]` : null;
     await this.pool.query(
-      `INSERT INTO kg_nodes (id, type, label, properties, embedding, confidence, decay_class, source, created_at, last_confirmed_at)
-       VALUES ($1, $2, $3, $4, $5::vector, $6, $7, $8, $9, $10)`,
+      `INSERT INTO kg_nodes (id, type, label, properties, embedding, confidence, decay_class, source, created_at, last_confirmed_at, sensitivity)
+       VALUES ($1, $2, $3, $4, $5::vector, $6, $7, $8, $9, $10, $11)`,
       [
         node.id,
         node.type,
@@ -333,6 +341,7 @@ class PostgresBackend implements KnowledgeGraphBackend {
         node.temporal.source,
         node.temporal.createdAt,
         node.temporal.lastConfirmedAt,
+        node.sensitivity,
       ],
     );
   }
@@ -341,8 +350,8 @@ class PostgresBackend implements KnowledgeGraphBackend {
     this.logger.debug({ type: node.type, label: node.label }, 'kg: upserting node');
     const embeddingStr = node.embedding ? `[${node.embedding.join(',')}]` : null;
     const result = await this.pool.query<PgNodeRow & { is_new: boolean }>(
-      `INSERT INTO kg_nodes (id, type, label, properties, embedding, confidence, decay_class, source, created_at, last_confirmed_at)
-       VALUES ($1, $2, $3, $4, $5::vector, $6, $7, $8, $9, $9)
+      `INSERT INTO kg_nodes (id, type, label, properties, embedding, confidence, decay_class, source, created_at, last_confirmed_at, sensitivity)
+       VALUES ($1, $2, $3, $4, $5::vector, $6, $7, $8, $9, $9, $10)
        ON CONFLICT (lower(label), type) WHERE type != 'fact'
        DO UPDATE SET
          confidence = GREATEST(kg_nodes.confidence, EXCLUDED.confidence),
@@ -358,6 +367,7 @@ class PostgresBackend implements KnowledgeGraphBackend {
         node.temporal.decayClass,
         node.temporal.source,
         node.temporal.createdAt,
+        node.sensitivity,
       ],
     );
     const row = result.rows[0];
@@ -583,6 +593,7 @@ interface PgNodeRow {
   source: string;
   created_at: Date;
   last_confirmed_at: Date;
+  sensitivity: string;
 }
 
 interface PgEdgeRow {
@@ -612,6 +623,7 @@ function pgRowToNode(row: PgNodeRow): KgNode {
       decayClass: row.decay_class as DecayClass,
       source: row.source,
     },
+    sensitivity: (row.sensitivity as Sensitivity) ?? 'internal',
   };
 }
 

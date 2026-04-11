@@ -114,6 +114,33 @@
         "information_queries": { "type": "number", "minimum": 0, "maximum": 1 }
       }
     },
+    "intentDrift": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "checkEveryNBursts": { "type": "integer", "minimum": 1 },
+        "minConfidenceToPause": { "type": "string", "enum": ["high", "medium", "low"] }
+      }
+    },
+    "sensitivity_rules": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["category", "sensitivity", "patterns"],
+        "additionalProperties": false,
+        "properties": {
+          "category": { "type": "string", "minLength": 1 },
+          "sensitivity": { "type": "string", "enum": ["public", "internal", "confidential", "restricted"] },
+          "patterns": {
+            "type": "array",
+            "minItems": 1,
+            "items": { "type": "string", "minLength": 1 }
+          }
+        }
+      }
+    },
     "pii": {
       "type": "object",
       "additionalProperties": false,

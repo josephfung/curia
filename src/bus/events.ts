@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { ErrorType } from '../errors/types.js';
 import type { DedupConfidence } from '../contacts/types.js';
+import type { Sensitivity } from '../memory/types.js';
 
 // -- Base event shape --
 // Every event on the bus shares these fields; parentEventId forms the causal chain.
@@ -192,6 +193,8 @@ interface MemoryStorePayload {
   nodeType: string;
   label: string;
   source: string;
+  /** Sensitivity level assigned to the node at creation time (#200). */
+  sensitivity: Sensitivity;
 }
 
 interface MemoryQueryPayload {

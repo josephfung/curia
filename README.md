@@ -15,7 +15,7 @@
 </p>
 
 <p align="center">
-  <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/version-0.16.0-blueviolet" alt="Version: 0.16.0" /></a>
+  <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/version-0.16.4-blueviolet" alt="Version: 0.16.4" /></a>
   <img src="https://img.shields.io/badge/status-pre--alpha-orange" alt="Status: Pre-Alpha" />
   <img src="https://img.shields.io/badge/license-MIT-blue" alt="License: MIT" />
   <img src="https://img.shields.io/badge/node-%3E%3D22-brightgreen" alt="Node >= 22" />

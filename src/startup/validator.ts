@@ -9,8 +9,9 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-// Ajv is a CJS module with __esModule:true — nodenext resolution requires the
-// named export form when esModuleInterop is active.
+// Ajv v8 is a CJS module with __esModule:true and named exports (exports.Ajv = class).
+// Under ESM (nodenext), the named import `{ Ajv }` is the constructor; the default
+// import gives a non-constructable value in TypeScript 6 strict mode.
 import { Ajv, type ErrorObject } from 'ajv';
 import yaml from 'js-yaml';
 import type { Logger } from '../logger.js';

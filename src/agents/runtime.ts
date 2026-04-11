@@ -485,9 +485,13 @@ export class AgentRuntime {
         await bus.publish('agent', invokeEvent);
 
         const startTime = Date.now();
+        // Thread task context so the execution layer can emit memory.store audit events
+        // for any KG writes that happen inside this skill invocation (#200).
         const result = await executionLayer.invoke(toolCall.name, skillInput, caller, {
           taskEventId: taskEvent.id,
           agentId,
+          conversationId,
+          parentEventId: invokeEvent.id,
         });
         const durationMs = Date.now() - startTime;
 

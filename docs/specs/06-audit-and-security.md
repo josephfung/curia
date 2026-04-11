@@ -364,5 +364,5 @@ These are non-negotiable for launch.
 | Unknown sender → `hold_and_notify` path covered by integration test (in-memory `HeldMessageService`, verifies score, event payload, and store write) | Done (#254) |
 | Trust score floor: messages below `security.trust_score_floor` (default 0.2) trigger `hold_and_notify` regardless of per-channel policy | Done |
 | Trust-gated action thresholds use `messageTrustScore` numeric values, enforced via Coordinator system prompt | Done |
-| Data sensitivity tags on knowledge graph entities | Not Done |
+| Data sensitivity tags on knowledge graph entities | Done (#200) |
 | Bulk export gates active for confidential+ data | Not Done |

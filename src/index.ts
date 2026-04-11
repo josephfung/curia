@@ -70,6 +70,7 @@ import { bootstrapCeoContact } from './contacts/ceo-bootstrap.js';
 import { AutonomyService } from './autonomy/autonomy-service.js';
 import { BrowserService } from './browser/browser-service.js';
 import { OfficeIdentityService } from './identity/service.js';
+import { SensitivityClassifier } from './memory/sensitivity.js';
 import type { AgentPersona } from './skills/types.js';
 import type { ConfigChangeEvent } from './bus/events.js';
 import { BullpenService } from './memory/bullpen.js';
@@ -206,10 +207,28 @@ async function main(): Promise<void> {
   // If not configured, agents still work — they just don't have KG access.
   let entityMemory: EntityMemory | undefined;
   if (config.openaiApiKey) {
+    // Sensitivity classifier — loads rules from config/default.yaml at startup (#200).
+    // Resolved from __dirname so the path is stable regardless of which directory the
+    // process was launched from (systemd, Docker, worktree, test harness, etc.).
+    // Fail fast with a structured log if the file is missing or malformed — the service
+    // cannot safely protect sensitive data without classification rules.
+    let sensitivityClassifier: SensitivityClassifier;
+    const sensitivityConfigPath = path.resolve(import.meta.dirname, '../config/default.yaml');
+    try {
+      sensitivityClassifier = SensitivityClassifier.fromYaml(sensitivityConfigPath);
+      logger.info({ configPath: sensitivityConfigPath }, 'Sensitivity classifier loaded');
+    } catch (err) {
+      logger.fatal(
+        { err, configPath: sensitivityConfigPath },
+        'Failed to load sensitivity classifier — check that config/default.yaml exists and contains a valid sensitivity_rules array',
+      );
+      process.exit(1);
+    }
+
     const embeddingService = EmbeddingService.createWithOpenAI(config.openaiApiKey, logger);
     const kgStore = KnowledgeGraphStore.createWithPostgres(pool, embeddingService, logger);
     const validator = new MemoryValidator(kgStore, embeddingService);
-    entityMemory = new EntityMemory(kgStore, validator, embeddingService, logger);
+    entityMemory = new EntityMemory(kgStore, validator, embeddingService, logger, sensitivityClassifier);
     logger.info('Entity memory initialized with knowledge graph');
   } else {
     logger.warn('OPENAI_API_KEY not set — entity memory disabled (knowledge graph unavailable)');
