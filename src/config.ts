@@ -385,6 +385,9 @@ export function loadYamlConfig(configDir: string): YamlConfig {
         }
         const halfLifeDays = decay.halfLifeDays;
         if (halfLifeDays !== undefined) {
+          if (typeof halfLifeDays !== 'object' || halfLifeDays === null || Array.isArray(halfLifeDays)) {
+            throw new Error('dreaming.decay.halfLifeDays must be a YAML mapping');
+          }
           for (const key of ['slow_decay', 'fast_decay'] as const) {
             const val = halfLifeDays[key];
             if (val !== undefined && (!Number.isInteger(val) || val <= 0)) {

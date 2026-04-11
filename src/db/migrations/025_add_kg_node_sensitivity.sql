@@ -12,11 +12,14 @@
 -- (Sensitivity type in src/memory/types.ts) so that direct SQL writes and
 -- future code paths cannot persist an invalid value that would confuse export gates.
 
-ALTER TABLE kg_nodes ADD COLUMN sensitivity TEXT NOT NULL DEFAULT 'internal'
+-- ADD COLUMN IF NOT EXISTS — idempotent for databases where this migration
+-- was already applied under the name 024_add_kg_node_sensitivity before that
+-- prefix was renumbered to 025 to avoid the 024_add_kg_archived_at conflict.
+ALTER TABLE kg_nodes ADD COLUMN IF NOT EXISTS sensitivity TEXT NOT NULL DEFAULT 'internal'
   CHECK (sensitivity IN ('public', 'internal', 'confidential', 'restricted'));
 
 -- Index for export gate queries: "give me all nodes above sensitivity X"
-CREATE INDEX idx_kg_nodes_sensitivity ON kg_nodes (sensitivity);
+CREATE INDEX IF NOT EXISTS idx_kg_nodes_sensitivity ON kg_nodes (sensitivity);
 
 -- Down Migration
 

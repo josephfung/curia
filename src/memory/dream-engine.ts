@@ -1,4 +1,4 @@
-import type { Pool } from 'pg';
+import type { Pool, PoolClient } from 'pg';
 import type { EventBus } from '../bus/bus.js';
 import type { Logger } from '../logger.js';
 
@@ -82,6 +82,10 @@ export class DreamEngine {
    *   1. Decay confidence on slow_decay and fast_decay nodes and edges
    *   2. Archive nodes whose confidence is at or below archiveThreshold
    *   3. Archive edges whose endpoints were archived, or whose own confidence crossed the threshold
+   *
+   * All queries run inside a single transaction so partial failures leave no torn state
+   * (e.g. nodes archived but their dangling edges left live).
+   * Per node-postgres docs, all statements in a transaction must share the same client.
    */
   async runDecayPass(): Promise<DecayPassResult> {
     const start = Date.now();
@@ -89,14 +93,45 @@ export class DreamEngine {
 
     const { archiveThreshold, halfLifeDays } = this.config;
 
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      const result = await this._runDecayPassOnClient(client, archiveThreshold, halfLifeDays);
+
+      await client.query('COMMIT');
+
+      const durationMs = Date.now() - start;
+      this.logger.info(
+        { ...result, durationMs },
+        'DreamEngine: decay pass complete',
+      );
+
+      return { ...result, durationMs };
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
+  private async _runDecayPassOnClient(
+    client: PoolClient,
+    archiveThreshold: number,
+    halfLifeDays: DecayConfig['halfLifeDays'],
+  ): Promise<Omit<DecayPassResult, 'durationMs'>> {
     // Pass 1a: Decay slow_decay nodes
-    // confidence × 0.5^(days_since_confirmed / half_life_days)
-    // The guard confidence > archiveThreshold skips already-condemned rows to avoid
-    // unnecessary writes — they will be archived in Pass 2 regardless.
-    const slowNodeResult = await this.pool.query(
+    // Uses COALESCE(last_decayed_at, last_confirmed_at) so each run only applies
+    // decay for the interval since the last run rather than re-applying the full
+    // decay from last_confirmed_at to the already-decayed value (which would
+    // compound faster than intended). Also sets last_decayed_at = now() so the
+    // next run uses this timestamp as the reference point.
+    const slowNodeResult = await client.query(
       `UPDATE kg_nodes
          SET confidence = confidence * power(0.5,
-             EXTRACT(EPOCH FROM (now() - last_confirmed_at)) / 86400.0 / $1)
+             EXTRACT(EPOCH FROM (now() - COALESCE(last_decayed_at, last_confirmed_at))) / 86400.0 / $1),
+             last_decayed_at = now()
        WHERE archived_at IS NULL
          AND decay_class = $2
          AND confidence > $3`,
@@ -104,10 +139,11 @@ export class DreamEngine {
     );
 
     // Pass 1b: Decay fast_decay nodes
-    const fastNodeResult = await this.pool.query(
+    const fastNodeResult = await client.query(
       `UPDATE kg_nodes
          SET confidence = confidence * power(0.5,
-             EXTRACT(EPOCH FROM (now() - last_confirmed_at)) / 86400.0 / $1)
+             EXTRACT(EPOCH FROM (now() - COALESCE(last_decayed_at, last_confirmed_at))) / 86400.0 / $1),
+             last_decayed_at = now()
        WHERE archived_at IS NULL
          AND decay_class = $2
          AND confidence > $3`,
@@ -115,10 +151,11 @@ export class DreamEngine {
     );
 
     // Pass 1c: Decay slow_decay edges
-    const slowEdgeResult = await this.pool.query(
+    const slowEdgeResult = await client.query(
       `UPDATE kg_edges
          SET confidence = confidence * power(0.5,
-             EXTRACT(EPOCH FROM (now() - last_confirmed_at)) / 86400.0 / $1)
+             EXTRACT(EPOCH FROM (now() - COALESCE(last_decayed_at, last_confirmed_at))) / 86400.0 / $1),
+             last_decayed_at = now()
        WHERE archived_at IS NULL
          AND decay_class = $2
          AND confidence > $3`,
@@ -126,10 +163,11 @@ export class DreamEngine {
     );
 
     // Pass 1d: Decay fast_decay edges
-    const fastEdgeResult = await this.pool.query(
+    const fastEdgeResult = await client.query(
       `UPDATE kg_edges
          SET confidence = confidence * power(0.5,
-             EXTRACT(EPOCH FROM (now() - last_confirmed_at)) / 86400.0 / $1)
+             EXTRACT(EPOCH FROM (now() - COALESCE(last_decayed_at, last_confirmed_at))) / 86400.0 / $1),
+             last_decayed_at = now()
        WHERE archived_at IS NULL
          AND decay_class = $2
          AND confidence > $3`,
@@ -140,7 +178,7 @@ export class DreamEngine {
     const edgesDecayed = (slowEdgeResult.rowCount ?? 0) + (fastEdgeResult.rowCount ?? 0);
 
     // Pass 2: Archive nodes at or below threshold (permanent nodes are never archived)
-    const archiveNodeResult = await this.pool.query(
+    const archiveNodeResult = await client.query(
       `UPDATE kg_nodes
          SET archived_at = now()
        WHERE archived_at IS NULL
@@ -155,7 +193,7 @@ export class DreamEngine {
     // is at or below threshold. Using archived_at IS NOT NULL for nodes catches both
     // the just-archived nodes from Pass 2 and any previously archived nodes, ensuring
     // no edge is left dangling to an archived endpoint.
-    const archiveEdgeResult = await this.pool.query(
+    const archiveEdgeResult = await client.query(
       `UPDATE kg_edges
          SET archived_at = now()
        WHERE archived_at IS NULL
@@ -168,13 +206,7 @@ export class DreamEngine {
     );
 
     const edgesArchived = archiveEdgeResult.rowCount ?? 0;
-    const durationMs = Date.now() - start;
 
-    this.logger.info(
-      { nodesDecayed, edgesDecayed, nodesArchived, edgesArchived, durationMs },
-      'DreamEngine: decay pass complete',
-    );
-
-    return { nodesDecayed, edgesDecayed, nodesArchived, edgesArchived, durationMs };
+    return { nodesDecayed, edgesDecayed, nodesArchived, edgesArchived };
   }
 }

@@ -42,7 +42,7 @@ Without this, archived facts would continue to surface in agent context.
 
 Confidence decays using a half-life model:
 
-```
+```text
 new_confidence = current_confidence × 0.5^(days_since_last_confirmed / half_life_days)
 ```
 

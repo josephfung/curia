@@ -431,6 +431,13 @@ class PostgresBackend implements KnowledgeGraphBackend {
   async archiveNode(id: string): Promise<void> {
     this.logger.debug({ nodeId: id }, 'kg: archiving node');
     await this.pool.query('UPDATE kg_nodes SET archived_at = now() WHERE id = $1', [id]);
+    // Cascade: any active edge touching this node is also archived so it cannot
+    // be returned by getEdgesForNode before the next DreamEngine decay pass runs.
+    const edgeResult = await this.pool.query(
+      'UPDATE kg_edges SET archived_at = now() WHERE (source_node_id = $1 OR target_node_id = $1) AND archived_at IS NULL',
+      [id],
+    );
+    this.logger.debug({ nodeId: id, edgesArchived: edgeResult.rowCount ?? 0 }, 'kg: cascaded archive to incident edges');
   }
 
   async archiveEdge(id: string): Promise<void> {
@@ -502,7 +509,7 @@ class PostgresBackend implements KnowledgeGraphBackend {
          LEAST(source_node_id::text, target_node_id::text),
          GREATEST(source_node_id::text, target_node_id::text),
          type
-       ) DO UPDATE SET
+       ) WHERE archived_at IS NULL DO UPDATE SET
          confidence = GREATEST(kg_edges.confidence, EXCLUDED.confidence),
          last_confirmed_at = EXCLUDED.last_confirmed_at
        RETURNING *, (xmax = 0) AS is_new`,
@@ -765,6 +772,13 @@ class InMemoryBackend implements KnowledgeGraphBackend {
 
   async archiveNode(id: string): Promise<void> {
     this.archivedNodes.add(id);
+    // Cascade: archive all active edges touching this node so getEdgesForNode
+    // cannot return dangling edges to the newly archived node.
+    for (const edge of this.edges.values()) {
+      if ((edge.sourceNodeId === id || edge.targetNodeId === id) && !this.archivedEdges.has(edge.id)) {
+        this.archivedEdges.add(edge.id);
+      }
+    }
   }
 
   async archiveEdge(id: string): Promise<void> {

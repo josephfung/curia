@@ -25,6 +25,9 @@ describeIf('DreamEngine integration', () => {
   let pool: pg.Pool;
   let store: KnowledgeGraphStore;
   let engine: DreamEngine;
+  // Track every node ID inserted during this test run so afterAll can delete only
+  // those rows, leaving unrelated dev data intact.
+  const createdNodeIds: string[] = [];
 
   beforeAll(async () => {
     pool = new Pool({ connectionString: DATABASE_URL });
@@ -36,13 +39,15 @@ describeIf('DreamEngine integration', () => {
   });
 
   afterAll(async () => {
-    // Clean up all test data in FK-safe order.
-    // Contacts tables may reference kg_nodes, so clear them first.
-    await pool.query('DELETE FROM contact_auth_overrides');
-    await pool.query('DELETE FROM contact_channel_identities');
-    await pool.query('DELETE FROM contacts');
-    await pool.query('DELETE FROM kg_edges');
-    await pool.query('DELETE FROM kg_nodes');
+    // Delete only the rows this test run created, in FK-safe order.
+    // We never touch the contacts tables — no test in this suite creates contact rows.
+    if (createdNodeIds.length > 0) {
+      await pool.query(
+        'DELETE FROM kg_edges WHERE source_node_id = ANY($1) OR target_node_id = ANY($1)',
+        [createdNodeIds],
+      );
+      await pool.query('DELETE FROM kg_nodes WHERE id = ANY($1)', [createdNodeIds]);
+    }
     await pool.end();
   });
 
@@ -56,6 +61,7 @@ describeIf('DreamEngine integration', () => {
        RETURNING id`,
     );
     const nodeId = rows[0]!.id;
+    createdNodeIds.push(nodeId);
 
     await engine.runDecayPass();
 
@@ -77,6 +83,7 @@ describeIf('DreamEngine integration', () => {
        RETURNING id`,
     );
     const nodeId = rows[0]!.id;
+    createdNodeIds.push(nodeId);
 
     await engine.runDecayPass();
 
@@ -91,6 +98,7 @@ describeIf('DreamEngine integration', () => {
     const node = await store.createNode({
       type: 'fact', label: 'archived-search-test', properties: {}, source: 'test',
     });
+    createdNodeIds.push(node.id);
     await store.archiveNode(node.id);
 
     const results = await store.semanticSearch('archived-search-test');
@@ -101,6 +109,7 @@ describeIf('DreamEngine integration', () => {
     const node = await store.createNode({
       type: 'concept', label: 'archived-type-test', properties: {}, source: 'test',
     });
+    createdNodeIds.push(node.id);
     await store.archiveNode(node.id);
 
     const results = await store.findNodesByType('concept');
@@ -111,6 +120,7 @@ describeIf('DreamEngine integration', () => {
     const node = await store.createNode({
       type: 'fact', label: 'archived-label-test', properties: {}, source: 'test',
     });
+    createdNodeIds.push(node.id);
     await store.archiveNode(node.id);
 
     const results = await store.findNodesByLabel('archived-label-test');
@@ -120,6 +130,7 @@ describeIf('DreamEngine integration', () => {
   it('archived node does not appear in traverse', async () => {
     const a = await store.createNode({ type: 'person', label: 'traversal-source', properties: {}, source: 'test' });
     const b = await store.createNode({ type: 'project', label: 'traversal-archived-target', properties: {}, source: 'test' });
+    createdNodeIds.push(a.id, b.id);
     await store.createEdge({ sourceNodeId: a.id, targetNodeId: b.id, type: 'works_on', properties: {}, source: 'test' });
     await store.archiveNode(b.id);
 
@@ -130,6 +141,7 @@ describeIf('DreamEngine integration', () => {
   it('archives edges when their source node is archived in the decay pass', async () => {
     const a = await store.createNode({ type: 'person', label: 'edge-cascade-source', properties: {}, source: 'test' });
     const b = await store.createNode({ type: 'project', label: 'edge-cascade-target', properties: {}, source: 'test' });
+    createdNodeIds.push(a.id, b.id);
     const edge = await store.createEdge({ sourceNodeId: a.id, targetNodeId: b.id, type: 'works_on', properties: {}, source: 'test' });
 
     // Archive node a directly to simulate a prior decay pass having condemned it.
@@ -154,6 +166,7 @@ describeIf('DreamEngine integration', () => {
        RETURNING id`,
     );
     const nodeId = rows[0]!.id;
+    createdNodeIds.push(nodeId);
 
     await engine.runDecayPass();
 
