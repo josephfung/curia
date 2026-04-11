@@ -44,6 +44,12 @@ interface NylasLike {
       identifier: string;
       requestBody: SendMessageRequest;
     }): Promise<NylasResponse<NylasSdkMessage>>;
+
+    update(params: {
+      identifier: string;
+      messageId: string;
+      requestBody: { folders?: string[]; starred?: boolean; unread?: boolean };
+    }): Promise<NylasResponse<NylasSdkMessage>>;
   };
   drafts: {
     create(params: {
@@ -253,6 +259,38 @@ export class NylasClient {
         { err, grantId: this.grantId, to: options.to, subject: options.subject, isReply: !!options.replyToMessageId },
         'Nylas createDraft failed',
       );
+      throw err;
+    }
+  }
+
+  /**
+   * Archive a message by removing it from the INBOX folder.
+   *
+   * For Gmail (via Nylas), removing INBOX moves the message to "All Mail" —
+   * the standard archive. Other providers remove the INBOX folder equivalently.
+   *
+   * Two API calls: getMessage (to read current folders) then messages.update
+   * (to write back folders without INBOX). The fetch-then-update approach
+   * preserves non-INBOX labels (STARRED, IMPORTANT, custom labels) that
+   * would be lost if we blindly set folders: [].
+   */
+  async archiveMessage(messageId: string): Promise<void> {
+    this.log.debug({ messageId }, 'archiving message');
+
+    try {
+      const current = await this.getMessage(messageId);
+      // Filter by uppercase so we catch 'inbox', 'Inbox', 'INBOX' consistently
+      const updatedFolders = current.folders.filter((f) => f.toUpperCase() !== 'INBOX');
+
+      await this.nylas.messages.update({
+        identifier: this.grantId,
+        messageId,
+        requestBody: { folders: updatedFolders },
+      });
+
+      this.log.info({ messageId, updatedFolders }, 'message archived successfully');
+    } catch (err) {
+      this.log.error({ err, grantId: this.grantId, messageId }, 'Nylas archiveMessage failed');
       throw err;
     }
   }
