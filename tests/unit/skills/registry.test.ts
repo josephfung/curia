@@ -170,4 +170,76 @@ describe('SkillRegistry', () => {
     const tools = registry.toToolDefinitions(['nonexistent']);
     expect(tools).toHaveLength(0);
   });
+
+  // ── MCP input schema fast-path ──────────────────────────────────────────────
+
+  it('registers an MCP-sourced skill with mcpInputSchema', () => {
+    const mcpInputSchema = {
+      type: 'object' as const,
+      properties: { path: { type: 'string', description: 'File path to read' } },
+      required: ['path'],
+    };
+    const manifest = makeManifest({ name: 'mcp-readfile', inputs: {} });
+    registry.register(manifest, stubHandler, mcpInputSchema);
+
+    const skill = registry.get('mcp-readfile');
+    expect(skill).toBeDefined();
+    expect(skill!.mcpInputSchema).toEqual(mcpInputSchema);
+  });
+
+  it('toToolDefinitions uses mcpInputSchema directly (bypasses shorthand parsing)', () => {
+    // MCP tools have a rich JSON Schema that would be lossy to convert to shorthand.
+    // The fast-path should emit it verbatim.
+    const mcpInputSchema = {
+      type: 'object' as const,
+      properties: {
+        query: { type: 'string', description: 'Search query' },
+        limit: { type: 'integer', description: 'Max results' },
+      },
+      required: ['query'],
+    };
+    const manifest = makeManifest({
+      name: 'mcp-search',
+      description: 'Search documents',
+      inputs: {}, // hollow — not used for MCP tools
+    });
+    registry.register(manifest, stubHandler, mcpInputSchema);
+
+    const tools = registry.toToolDefinitions(['mcp-search']);
+    expect(tools).toHaveLength(1);
+    expect(tools[0].name).toBe('mcp-search');
+    expect(tools[0].description).toBe('Search documents');
+    // Schema must be passed through verbatim — not re-parsed via shorthand notation.
+    expect(tools[0].input_schema).toEqual(mcpInputSchema);
+  });
+
+  it('toToolDefinitions mixes local and MCP skills in one call', () => {
+    // Local skill — uses shorthand inputs.
+    registry.register(makeManifest({
+      name: 'local-fetch',
+      description: 'Fetch a URL',
+      inputs: { url: 'string' },
+    }), stubHandler);
+
+    // MCP skill — uses raw schema.
+    const mcpInputSchema = {
+      type: 'object' as const,
+      properties: { path: { type: 'string' } },
+      required: ['path'],
+    };
+    registry.register(
+      makeManifest({ name: 'mcp-read', description: 'Read a file', inputs: {} }),
+      stubHandler,
+      mcpInputSchema,
+    );
+
+    const tools = registry.toToolDefinitions(['local-fetch', 'mcp-read']);
+    expect(tools).toHaveLength(2);
+
+    const localTool = tools.find(t => t.name === 'local-fetch')!;
+    expect(localTool.input_schema.properties.url).toEqual({ type: 'string' });
+
+    const mcpTool = tools.find(t => t.name === 'mcp-read')!;
+    expect(mcpTool.input_schema).toEqual(mcpInputSchema);
+  });
 });

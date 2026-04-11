@@ -192,6 +192,13 @@ export interface SkillHandler {
 export interface RegisteredSkill {
   manifest: SkillManifest;
   handler: SkillHandler;
+  /**
+   * Raw MCP input schema from the MCP server's tools/list response.
+   * Present only for MCP-sourced tools. When set, toToolDefinitions() uses this
+   * directly instead of parsing manifest.inputs via the shorthand notation —
+   * preserving the full JSON Schema fidelity from the MCP server's documentation.
+   */
+  mcpInputSchema?: ToolDefinition['input_schema'];
 }
 
 /**

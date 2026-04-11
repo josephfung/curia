@@ -1,0 +1,82 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "skills-config",
+  "description": "Schema for config/skills.yaml — MCP server connection configuration.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "servers": {
+      "type": "array",
+      "description": "List of MCP servers to connect to at startup.",
+      "items": {
+        "$ref": "#/$defs/server"
+      }
+    }
+  },
+  "$defs": {
+    "actionRisk": {
+      "description": "Minimum autonomy score required to invoke tools from this server without explicit CEO approval.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": ["none", "low", "medium", "high", "critical"]
+        },
+        {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100
+        }
+      ]
+    },
+    "server": {
+      "type": "object",
+      "description": "An MCP server to connect to at startup. All tools discovered via tools/list are registered in the skill registry.",
+      "required": ["name", "transport", "action_risk"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Unique identifier for this MCP server. Used in log messages and as a namespace prefix for discovered tool names."
+        },
+        "transport": {
+          "type": "string",
+          "enum": ["stdio", "sse"],
+          "description": "Transport type. 'stdio' spawns a local process; 'sse' connects to an HTTP SSE endpoint."
+        },
+        "action_risk": {
+          "$ref": "#/$defs/actionRisk",
+          "description": "Required. Action risk applied to all tools discovered from this server. No default — must be declared explicitly."
+        },
+        "sensitivity": {
+          "type": "string",
+          "enum": ["normal", "elevated"],
+          "description": "Sensitivity level for all tools from this server. Defaults to 'normal'."
+        },
+        "timeout_ms": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Per-invocation timeout in milliseconds for tools from this server. Defaults to 30000."
+        },
+        "command": {
+          "type": "string",
+          "description": "Required for stdio transport. The executable to spawn (e.g. 'npx', 'node', '/usr/bin/python')."
+        },
+        "args": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Command-line arguments for the spawned process. Used with stdio transport only."
+        },
+        "env": {
+          "type": "object",
+          "additionalProperties": { "type": "string" },
+          "description": "Extra environment variables to set in the spawned process. Used with stdio transport only."
+        },
+        "url": {
+          "type": "string",
+          "description": "Required for sse transport. The SSE endpoint URL (e.g. https://mcp-github.example.com/sse)."
+        }
+      }
+    }
+  }
+}

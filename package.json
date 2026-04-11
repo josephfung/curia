@@ -27,6 +27,7 @@
     "@fastify/cors": "^11.2.0",
     "@fastify/rate-limit": "^10.3.0",
     "@ghostery/adblocker-playwright": "^2.14.1",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "@openredaction/openredaction": "^1.0.4",
     "ajv": "^8.18.0",
     "chokidar": "^5.0.0",

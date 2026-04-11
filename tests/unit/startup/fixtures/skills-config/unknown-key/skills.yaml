@@ -1,0 +1,6 @@
+servers:
+  - name: filesystem
+    transport: stdio
+    command: npx
+    action_risk: low
+    typo_key: should-not-be-here
