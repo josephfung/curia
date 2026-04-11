@@ -1,0 +1,13 @@
+servers:
+  - name: filesystem
+    transport: stdio
+    command: npx
+    args: ["-y", "@modelcontextprotocol/server-filesystem", "/data"]
+    action_risk: low
+    sensitivity: normal
+    timeout_ms: 15000
+
+  - name: github
+    transport: sse
+    url: https://mcp-github.example.com/sse
+    action_risk: medium

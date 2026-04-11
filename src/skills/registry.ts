@@ -34,7 +34,14 @@ export class SkillRegistry {
    * Invalid values fail closed at skill load time rather than silently producing
    * undefined thresholds later when autonomy gates are evaluated.
    */
-  register(manifest: SkillManifest, handler: SkillHandler): void {
+  /**
+   * Register a skill with its manifest and handler.
+   *
+   * @param mcpInputSchema - Optional raw MCP JSON Schema for the tool's inputs.
+   *   When provided, toToolDefinitions() passes it directly to the LLM instead of
+   *   parsing the shorthand manifest.inputs notation. Only set for MCP-sourced tools.
+   */
+  register(manifest: SkillManifest, handler: SkillHandler, mcpInputSchema?: ToolDefinition['input_schema']): void {
     if (this.skills.has(manifest.name)) {
       throw new Error(`Skill '${manifest.name}' is already registered`);
     }
@@ -54,7 +61,7 @@ export class SkillRegistry {
         );
       }
     }
-    this.skills.set(manifest.name, { manifest, handler });
+    this.skills.set(manifest.name, { manifest, handler, mcpInputSchema });
   }
 
   /** Look up a skill by exact name. Returns undefined if not found. */
@@ -94,6 +101,18 @@ export class SkillRegistry {
     for (const name of skillNames) {
       const skill = this.skills.get(name);
       if (!skill) continue;
+
+      // MCP-sourced tools carry the raw JSON Schema from the server's tools/list response.
+      // Pass it through directly — no shorthand parsing needed, and schema fidelity is
+      // preserved exactly as the MCP server documented it (enum constraints, formats, etc.).
+      if (skill.mcpInputSchema) {
+        tools.push({
+          name,
+          description: skill.manifest.description,
+          input_schema: skill.mcpInputSchema,
+        });
+        continue;
+      }
 
       const properties: ToolDefinition['input_schema']['properties'] = {};
       const required: string[] = [];

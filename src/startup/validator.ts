@@ -52,8 +52,9 @@ function formatErrors(errors: ErrorObject[]): string {
  *
  * Validation order:
  *   1. config/default.yaml (or configFileName override)
- *   2. all *.yaml and *.yml files in agentsDir
- *   3. all skill.json files in skillsDir (one per skill subdirectory)
+ *   2. config/skills.yaml (absent file is OK — no MCP servers configured)
+ *   3. all *.yaml and *.yml files in agentsDir
+ *   4. all skill.json files in skillsDir (one per skill subdirectory)
  */
 export async function runStartupValidation(opts: {
   configDir: string;
@@ -69,6 +70,7 @@ export async function runStartupValidation(opts: {
   // Compile schemas once — Ajv compilation is expensive; reuse across files.
   const ajv = new Ajv({ allErrors: true });
   const validateConfig = ajv.compile(loadSchema('default-config.schema.json'));
+  const validateSkillsConfig = ajv.compile(loadSchema('skills-config.json'));
   const validateAgent = ajv.compile(loadSchema('agent-config.schema.json'));
   const validateSkill = ajv.compile(loadSchema('skill-manifest.schema.json'));
 
@@ -86,7 +88,20 @@ export async function runStartupValidation(opts: {
     }
   }
 
-  // 2. Validate all agents/*.yaml
+  // 2. Validate config/skills.yaml (absent file is OK — no MCP servers configured)
+  const skillsConfigPath = path.join(configDir, 'skills.yaml');
+  if (fs.existsSync(skillsConfigPath)) {
+    const raw = yaml.load(fs.readFileSync(skillsConfigPath, 'utf-8'));
+    if (raw != null) {
+      if (!validateSkillsConfig(raw)) {
+        throw new Error(
+          `Startup validation failed for ${skillsConfigPath}:\n  - ${formatErrors(validateSkillsConfig.errors ?? [])}`,
+        );
+      }
+    }
+  }
+
+  // 3. Validate all agents/*.yaml
   if (fs.existsSync(agentsDir)) {
     const agentFiles = fs
       .readdirSync(agentsDir)
@@ -106,7 +121,7 @@ export async function runStartupValidation(opts: {
     }
   }
 
-  // 3. Validate all skills/*/skill.json
+  // 4. Validate all skills/*/skill.json
   //
   // Supports two layouts:
   //   a) skillsDir is a parent containing multiple skill subdirectories (production):

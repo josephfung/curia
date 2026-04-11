@@ -1,0 +1,5 @@
+servers:
+  - name: filesystem
+    transport: stdio
+    command: npx
+    # action_risk is intentionally omitted — should fail validation

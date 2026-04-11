@@ -191,7 +191,7 @@ Custom MCP servers will be needed for Google Calendar and expense platforms (Exp
 | Resource boundaries — per-invocation timeout enforcement from manifest | Done |
 | Built-in skill: `web-fetch` | Done |
 | Built-in skill: `scheduler` (create, list, cancel) | Done |
-| MCP skills — MCP client, stdio/SSE transport, `tools/list` discovery | Not Done — tracked in #270 |
+| MCP skills — MCP client, stdio/SSE transport, `tools/list` discovery | Done — `config/skills.yaml`, `src/skills/mcp-client.ts`, `src/skills/mcp-loader.ts`; closes #270 |
 | Safety gate for first-time elevated skill use — `skill_approvals` table and approval workflow | Partial — role-based elevation gate exists in execution layer (caller must have `role: ceo`); per-agent-skill `skill_approvals` table with persist-once-ask-once flow not yet built |
 | Built-in skill: `skill-registry` (agent-invocable search) | Not Done — `SkillRegistry.search()` exists; skill wrapper and runtime wiring pending (#274) |
 | Built-in skill: `memory-query` | Not Done |

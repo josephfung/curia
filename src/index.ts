@@ -39,6 +39,8 @@ import { EntityMemory } from './memory/entity-memory.js';
 import { SkillRegistry } from './skills/registry.js';
 import { ExecutionLayer } from './skills/execution.js';
 import { loadSkillsFromDirectory } from './skills/loader.js';
+import { loadMcpServers } from './skills/mcp-loader.js';
+import type { McpSession } from './skills/mcp-client.js';
 import { ContactService } from './contacts/contact-service.js';
 import { DedupService } from './contacts/dedup-service.js';
 import { ContactResolver } from './contacts/contact-resolver.js';
@@ -447,6 +449,26 @@ async function main(): Promise<void> {
     // handle missing DATABASE_URL and ANTHROPIC_API_KEY.
     logger.fatal({ err }, 'Failed to load skills');
     process.exit(1);
+  }
+
+  // MCP server connections — connects to each server in config/skills.yaml,
+  // discovers tools via tools/list, and registers them in the skill registry
+  // alongside local skills. Agents don't know or care which kind they're using.
+  //
+  // Connection failures are warn-not-crash: a missing MCP server shouldn't
+  // take down the system. The failed server's tools are simply not available
+  // until the next restart.
+  let mcpSessions: McpSession[] = [];
+  try {
+    mcpSessions = await loadMcpServers(configDir, skillRegistry, logger);
+  } catch (err) {
+    // Malformed skills.yaml or unexpected loader error — degrade gracefully rather
+    // than crashing. The startup validator catches schema violations, but a YAML
+    // parse error after the validator runs would otherwise crash here.
+    logger.error({ err }, 'MCP bootstrap failed; continuing without MCP tools');
+  }
+  if (mcpSessions.length > 0) {
+    logger.info({ mcpServers: mcpSessions.map(s => s.serverId) }, 'MCP servers connected');
   }
 
   // Agent registry — tracks all running agents for delegation and listing.
@@ -933,6 +955,15 @@ async function main(): Promise<void> {
         await browserService.stop();
       } catch (err) {
         logger.error({ err }, 'Error stopping browser service during shutdown');
+      }
+    }
+    // Close MCP server connections — each session owns a spawned process (stdio)
+    // or an open HTTP connection (SSE) that must be released before exit.
+    for (const session of mcpSessions) {
+      try {
+        await session.close();
+      } catch (err) {
+        logger.error({ err, server: session.serverId }, 'Error closing MCP session during shutdown');
       }
     }
     // Clear pending checkpoint timers before closing the pool — prevents in-flight

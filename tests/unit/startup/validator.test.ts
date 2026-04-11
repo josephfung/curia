@@ -124,6 +124,39 @@ describe('startup validator — default config', () => {
   });
 });
 
+// ── skills.yaml (MCP server config) validation ──────────────────────────────
+
+describe('startup validator — skills.yaml', () => {
+  it('passes for a valid skills.yaml', async () => {
+    await expect(
+      runWith({ config: path.join(F, 'skills-config/valid') }),
+    ).resolves.toBeUndefined();
+  });
+
+  it('passes when skills.yaml is absent (no MCP servers configured)', async () => {
+    // config/empty has no skills.yaml — should pass silently.
+    await expect(runWith({ config: path.join(F, 'config/empty') })).resolves.toBeUndefined();
+  });
+
+  it('passes when skills.yaml is empty', async () => {
+    await expect(
+      runWith({ config: path.join(F, 'skills-config/empty') }),
+    ).resolves.toBeUndefined();
+  });
+
+  it('throws when a server entry is missing action_risk', async () => {
+    await expect(
+      runWith({ config: path.join(F, 'skills-config/missing-action-risk') }),
+    ).rejects.toThrow(/action_risk/);
+  });
+
+  it('throws for unknown keys in a server entry (additionalProperties)', async () => {
+    await expect(
+      runWith({ config: path.join(F, 'skills-config/unknown-key') }),
+    ).rejects.toThrow(/typo_key/);
+  });
+});
+
 // ── Real project files ───────────────────────────────────────────────────────
 //
 // Validates the actual config/default.yaml, agents/*.yaml, and skills/*/skill.json
