@@ -469,6 +469,39 @@ export class OutboundGateway {
       .filter((phone): phone is string => !!phone && phone !== this.signalPhoneNumber);
   }
 
+  /**
+   * Archive an email message by removing it from the INBOX folder.
+   *
+   * Routes to the NylasClient for the given accountId (primary account when absent).
+   * Does NOT run the content filter or blocked-contact check — archiving is a
+   * read-move operation, not an outbound communication.
+   *
+   * @param messageId  Nylas message ID to archive
+   * @param accountId  Named account (e.g. "joseph"). Defaults to the primary account.
+   */
+  async archiveEmailMessage(
+    messageId: string,
+    accountId?: string,
+  ): Promise<{ success: boolean; error?: string }> {
+    const client = this.getNylasClient(accountId);
+    if (!client) {
+      return {
+        success: false,
+        error: `No email client configured for account: ${accountId ?? 'primary'}`,
+      };
+    }
+
+    try {
+      await client.archiveMessage(messageId);
+      this.log.info({ messageId, accountId }, 'outbound-gateway: message archived');
+      return { success: true };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.log.error({ err, messageId, accountId }, 'outbound-gateway: archiveEmailMessage failed');
+      return { success: false, error: `Archive failed: ${message}` };
+    }
+  }
+
   // ---------------------------------------------------------------------------
   // Private helpers
   // ---------------------------------------------------------------------------
