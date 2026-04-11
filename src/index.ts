@@ -73,6 +73,8 @@ import { AutonomyService } from './autonomy/autonomy-service.js';
 import { BrowserService } from './browser/browser-service.js';
 import { OfficeIdentityService } from './identity/service.js';
 import { SensitivityClassifier } from './memory/sensitivity.js';
+import { DreamEngine } from './memory/dream-engine.js';
+import type { DecayConfig } from './memory/dream-engine.js';
 import type { AgentPersona } from './skills/types.js';
 import type { ConfigChangeEvent } from './bus/events.js';
 import { BullpenService } from './memory/bullpen.js';
@@ -684,7 +686,22 @@ async function main(): Promise<void> {
     logger.info('Intent drift detection disabled via config');
   }
 
-  const scheduler = new Scheduler({ pool, bus, logger, schedulerService, driftDetector });
+  // Dream engine — background KG maintenance (spec 17 / issue #27).
+  // Defaults are intentionally conservative: daily cadence, 5% archive threshold,
+  // 180-day slow-decay half-life, 21-day fast-decay half-life.
+  const decayConfig: DecayConfig = {
+    intervalMs: yamlConfig.dreaming?.decay?.intervalMs ?? 86_400_000,
+    archiveThreshold: yamlConfig.dreaming?.decay?.archiveThreshold ?? 0.05,
+    halfLifeDays: {
+      permanent: null,
+      slow_decay: yamlConfig.dreaming?.decay?.halfLifeDays?.slow_decay ?? 180,
+      fast_decay: yamlConfig.dreaming?.decay?.halfLifeDays?.fast_decay ?? 21,
+    },
+  };
+  const dreamEngine = new DreamEngine(pool, bus, logger, decayConfig);
+  logger.info({ decayConfig }, 'DreamEngine configured');
+
+  const scheduler = new Scheduler({ pool, bus, logger, schedulerService, driftDetector, dreamEngine });
 
   // Execution layer — now with bus, agent registry, and outbound gateway for
   // infrastructure skills. outboundGateway gives email skills their send path.

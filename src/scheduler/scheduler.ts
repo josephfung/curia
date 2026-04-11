@@ -13,6 +13,7 @@ import {
 } from '../bus/events.js';
 import type { AgentResponseEvent, AgentErrorEvent } from '../bus/events.js';
 import type { DriftDetector } from './drift-detector.js';
+import type { DreamEngine } from '../memory/dream-engine.js';
 import type { JobRow } from './scheduler-service.js';
 
 // Poll every 30 seconds for due jobs.
@@ -80,6 +81,8 @@ export interface SchedulerConfig {
   schedulerService: SchedulerService;
   /** Optional drift detector — when absent, the drift check is skipped entirely. */
   driftDetector?: DriftDetector;
+  /** Dream engine for background KG maintenance. When absent, no background decay runs. */
+  dreamEngine?: DreamEngine;
 }
 
 export class Scheduler {
@@ -88,6 +91,7 @@ export class Scheduler {
   private logger: Logger;
   private schedulerService: SchedulerService;
   private driftDetector?: DriftDetector;
+  private dreamEngine?: DreamEngine;
   private intervalHandle: ReturnType<typeof setInterval> | null = null;
   private watchdogHandle: ReturnType<typeof setInterval> | null = null;
 
@@ -105,6 +109,7 @@ export class Scheduler {
     this.logger = config.logger;
     this.schedulerService = config.schedulerService;
     this.driftDetector = config.driftDetector;
+    this.dreamEngine = config.dreamEngine;
   }
 
   /**
@@ -149,6 +154,11 @@ export class Scheduler {
       });
     }, WATCHDOG_INTERVAL_MS);
 
+    // Dream engine — background KG maintenance (decay, and future passes).
+    if (this.dreamEngine) {
+      this.dreamEngine.start();
+    }
+
     this.logger.info({ intervalMs: POLL_INTERVAL_MS }, 'Scheduler started');
   }
 
@@ -163,6 +173,9 @@ export class Scheduler {
     if (this.watchdogHandle) {
       clearInterval(this.watchdogHandle);
       this.watchdogHandle = null;
+    }
+    if (this.dreamEngine) {
+      this.dreamEngine.stop();
     }
     this.logger.info('Scheduler stopped');
   }
