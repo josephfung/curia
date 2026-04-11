@@ -40,6 +40,20 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE TRIGGER audit_log_immutable_trigger
-  BEFORE UPDATE OR DELETE ON audit_log
-  FOR EACH ROW EXECUTE FUNCTION audit_log_immutable();
+-- Conditional creation keeps this migration idempotent on DBs where the trigger
+-- was applied manually before pgmigrations tracked it — without dropping the
+-- trigger first, which would leave a brief unprotected window if the transaction
+-- were interrupted.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_trigger
+    WHERE tgname = 'audit_log_immutable_trigger'
+      AND tgrelid = 'audit_log'::regclass
+  ) THEN
+    CREATE TRIGGER audit_log_immutable_trigger
+      BEFORE UPDATE OR DELETE ON audit_log
+      FOR EACH ROW EXECUTE FUNCTION audit_log_immutable();
+  END IF;
+END
+$$;
