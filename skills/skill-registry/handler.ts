@@ -18,9 +18,15 @@ export class SkillRegistryHandler implements SkillHandler {
     }
 
     const query = (ctx.input.query as string) ?? '';
-    const skills = ctx.skillSearch(query);
 
-    return { success: true, data: { skills } };
+    try {
+      const skills = ctx.skillSearch(query);
+      return { success: true, data: { skills } };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      ctx.log.error({ err }, 'skill-registry: search failed');
+      return { success: false, error: `skill-registry search failed: ${message}` };
+    }
   }
 }
 

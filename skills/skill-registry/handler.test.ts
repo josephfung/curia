@@ -38,6 +38,17 @@ describe('SkillRegistryHandler', () => {
     expect(result).toEqual({ success: true, data: { skills: mockResults } });
   });
 
+  it('returns error when skillSearch throws', async () => {
+    const handler = new SkillRegistryHandler();
+    const skillSearch = vi.fn().mockImplementation(() => { throw new Error('registry corrupted'); });
+    const ctx = makeCtx({ input: { query: 'email' }, skillSearch });
+
+    const result = await handler.execute(ctx);
+
+    expect(result.success).toBe(false);
+    expect((result as { success: false; error: string }).error).toMatch(/registry corrupted/);
+  });
+
   it('passes an empty string to skillSearch when query is empty', async () => {
     const handler = new SkillRegistryHandler();
     const skillSearch = vi.fn().mockReturnValue([]);

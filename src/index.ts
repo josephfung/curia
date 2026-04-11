@@ -750,10 +750,11 @@ async function main(): Promise<void> {
     if (agentConfig.allow_discovery && !agentPinnedSkills.includes('skill-registry')) {
       const discoveryToolDefs = skillRegistry.toToolDefinitions(['skill-registry']);
       if (discoveryToolDefs.length === 0) {
-        // skill-registry failed to load (bad manifest, missing handler, etc.).
-        // Warn so misconfiguration surfaces at startup rather than silently
-        // degrading — the agent will have allow_discovery: true but no way to search.
-        logger.warn({ agent: agentConfig.name }, 'allow_discovery is true but skill-registry failed to load — discovery unavailable');
+        // skill-registry is not in the registry — it either failed to load (bad manifest,
+        // missing handler) or was never registered. Error-level: a declared capability is
+        // unavailable for this agent's entire lifetime. Root cause will be in the earlier
+        // skill-loader error log; this connects the agent-level consequence to it.
+        logger.error({ agent: agentConfig.name }, 'allow_discovery is true but skill-registry is not registered — discovery unavailable; check startup logs for skill load errors');
       } else {
         agentToolDefs.push(...discoveryToolDefs);
       }
