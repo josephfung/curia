@@ -82,7 +82,7 @@ callback), opens your browser once per service, and waits for you to complete th
 Log in as **Curia's Gmail account** each time.
 
 After all five services are authenticated, tokens are saved to:
-```
+```text
 ~/.google_workspace_mcp/credentials/<curia-gmail>.json
 ```
 
@@ -155,8 +155,10 @@ empty or missing. Repeat Step 5.
 
 **Tools disappear after container restart**
 
-The `google-workspace-tokens` Docker volume is not being persisted. Confirm the volume
+The `google_workspace_tokens` Docker volume is not being persisted. Confirm the volume
 is declared in `docker-compose.yml` and mounted at `/root/.google_workspace_mcp`.
+(Note: the production compose uses `google-workspace-tokens` with a hyphen — the name
+differs between dev and production compose files.)
 
 **Drive calls fail with 403 Forbidden**
 

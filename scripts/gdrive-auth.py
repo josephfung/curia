@@ -15,6 +15,7 @@ After it completes, copy the tokens to the VPS — see docs/dev/google-drive.md.
 import asyncio
 import os
 import re
+import sys
 import webbrowser
 
 from mcp import ClientSession, StdioServerParameters
@@ -30,18 +31,27 @@ async def auth_service(session: ClientSession, service: str, email: str) -> None
         "service_name": service,
         "user_google_email": email,
     })
+
+    url = None
     for content in result.content:
         text = getattr(content, "text", "")
         if not text:
             continue
-        match = re.search(r"https://accounts\.google\.com\S+", text)
+        match = re.search(r"https://accounts\.google\.com[^\s'\"<>]+", text)
         if match:
-            url = match.group(0).rstrip(".")
-            print(f"  Opening browser for {service}: {url}\n")
-            webbrowser.open(url)
-            input(f"  Complete the {service} login in your browser, then press Enter to continue...")
-        else:
-            print(f"  {text}")
+            url = match.group(0).rstrip(".,;:!?)\"'")
+            break
+        print(f"  {text}")
+
+    if url is None:
+        sys.exit(
+            f"ERROR: no OAuth URL returned for service '{service}'. "
+            "Check the output above for error details."
+        )
+
+    print(f"  Opening browser for {service}: {url}\n")
+    webbrowser.open(url)
+    input(f"  Complete the {service} login in your browser, then press Enter to continue...")
 
 
 async def main() -> None:
