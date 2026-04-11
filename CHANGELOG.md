@@ -24,7 +24,6 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 - **Spec 03 implementation status** — MCP skills row updated to Done; corrected and annotated remaining rows: secrets access marked Done, safety gate and skill discovery marked Partial with detail, skill-registry cross-referenced to #274.
 
-## [0.17.0] — 2026-04-10
 
 ### Breaking Changes
 
@@ -337,7 +336,6 @@ bus event types) are noted explicitly even in the `0.x` range.
 - Architecture specs 00–08, contributor docs (CONTRIBUTING.md, CODE_OF_CONDUCT.md, SECURITY.md)
 
 [Unreleased]: https://github.com/josephfung/curia/compare/v0.16.0...HEAD
-[0.17.0]: https://github.com/josephfung/curia/compare/v0.16.0...v0.17.0
 [0.16.0]: https://github.com/josephfung/curia/compare/v0.15.0...v0.16.0
 [0.15.0]: https://github.com/josephfung/curia/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/josephfung/curia/compare/v0.12.1...v0.14.0
