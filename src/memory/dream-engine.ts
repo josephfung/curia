@@ -37,16 +37,15 @@ export interface DecayPassResult {
  */
 export class DreamEngine {
   private pool: Pool;
-  // EventBus reserved for decay warning pass (issue #280) — injected now so the
-  // constructor signature doesn't need to change when that feature lands.
-  private _bus: EventBus;
   private logger: Logger;
   private config: DecayConfig;
   private intervalHandle: ReturnType<typeof setInterval> | null = null;
 
-  constructor(pool: Pool, bus: EventBus, logger: Logger, config: DecayConfig) {
+  // _bus is accepted but not stored — it is reserved for the decay warning pass
+  // (#280) which will emit `memory.decay_warning` before archiving important nodes.
+  // The underscore prefix signals intentional non-use to TypeScript.
+  constructor(pool: Pool, _bus: EventBus, logger: Logger, config: DecayConfig) {
     this.pool = pool;
-    this._bus = bus;
     this.logger = logger;
     this.config = config;
   }
