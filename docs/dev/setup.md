@@ -141,6 +141,8 @@ NYLAS_SELF_EMAIL=curia@yourdomain.com
 
 Restart Curia (`pnpm local`) — the email channel activates automatically when all three Nylas vars are present.
 
+> **Multiple email accounts:** The three vars above wire up a single "legacy" email account. To configure multiple named accounts with per-account outbound policies (e.g. a Curia account that sends directly and a personal account that requires your approval), use `channel_accounts.email` in `config/local.yaml`. See [configuration.md](configuration.md#configlocalyaml--deployment-overrides) for details and an example.
+
 ### OpenAI (Embeddings)
 
 OpenAI's embedding model (`text-embedding-3-small`) powers entity memory and semantic search in the knowledge graph. Without it, KG lookups are exact-match only and smoke tests are unavailable.
