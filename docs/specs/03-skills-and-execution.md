@@ -47,7 +47,7 @@ interface SkillHandler {
 
 interface SkillContext {
   input: Record<string, unknown>;     // validated against manifest inputs
-  secret(name: string): Promise<string>;  // scoped secret access
+  secret(name: string): string;  // scoped secret access (synchronous — reads env vars)
   log: Logger;                         // scoped pino child logger
 }
 
