@@ -260,18 +260,15 @@ function deepMerge(
  */
 export function loadYamlConfig(configDir: string): YamlConfig {
   // ── Step 1: parse default.yaml ──────────────────────────────────────────
+  // Separate I/O (ENOENT-able) from parsing and structural validation so that
+  // a "must contain a YAML mapping" error isn't caught and re-wrapped with the
+  // "Failed to load" prefix (which would produce a doubled message).
   // ENOENT → empty config (test/CI environments where the file is absent).
   // Any other error → hard startup failure.
   let base: Record<string, unknown>;
+  let defaultRaw: string;
   try {
-    const parsed = yaml.load(readFileSync(path.join(configDir, 'default.yaml'), 'utf-8'));
-    if (parsed == null) {
-      base = {};
-    } else if (typeof parsed !== 'object' || Array.isArray(parsed)) {
-      throw new Error('config/default.yaml must contain a YAML mapping at the root');
-    } else {
-      base = parsed as Record<string, unknown>;
-    }
+    defaultRaw = readFileSync(path.join(configDir, 'default.yaml'), 'utf-8');
   } catch (err) {
     if (err instanceof Error && (err as NodeJS.ErrnoException).code === 'ENOENT') {
       return {};
@@ -280,14 +277,48 @@ export function loadYamlConfig(configDir: string): YamlConfig {
       `Failed to load config/default.yaml: ${err instanceof Error ? err.message : String(err)}`,
     );
   }
+  let defaultParsed: unknown;
+  try {
+    defaultParsed = yaml.load(defaultRaw);
+  } catch (err) {
+    throw new Error(
+      `Failed to load config/default.yaml: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+  if (defaultParsed == null) {
+    base = {};
+  } else if (typeof defaultParsed !== 'object' || Array.isArray(defaultParsed)) {
+    throw new Error('config/default.yaml must contain a YAML mapping at the root');
+  } else {
+    base = defaultParsed as Record<string, unknown>;
+  }
 
   // ── Step 2: merge config/local.yaml if present ──────────────────────────
   // local.yaml is gitignored and provided by deployment repos at deploy time.
   // ENOENT → silently skip (expected in dev, CI, and non-deployment envs).
   // Any other error → hard startup failure.
+  // Same I/O/parse/validate separation as default.yaml above.
   const localPath = path.join(configDir, 'local.yaml');
+  let localRaw: string | null = null;
   try {
-    const localParsed = yaml.load(readFileSync(localPath, 'utf-8'));
+    localRaw = readFileSync(localPath, 'utf-8');
+  } catch (err) {
+    if (!(err instanceof Error && (err as NodeJS.ErrnoException).code === 'ENOENT')) {
+      throw new Error(
+        `Failed to load config/local.yaml: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+    // ENOENT: local.yaml absent — proceed with default.yaml only.
+  }
+  if (localRaw !== null) {
+    let localParsed: unknown;
+    try {
+      localParsed = yaml.load(localRaw);
+    } catch (err) {
+      throw new Error(
+        `Failed to load config/local.yaml: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
     if (localParsed != null) {
       if (typeof localParsed !== 'object' || Array.isArray(localParsed)) {
         throw new Error('config/local.yaml must contain a YAML mapping at the root');
@@ -295,14 +326,6 @@ export function loadYamlConfig(configDir: string): YamlConfig {
       base = deepMerge(base, localParsed as Record<string, unknown>);
     }
     // localParsed == null (null or undefined) means the file was empty — treat as no override.
-  } catch (err) {
-    if (err instanceof Error && (err as NodeJS.ErrnoException).code === 'ENOENT') {
-      // local.yaml absent — proceed with default.yaml only.
-    } else {
-      throw new Error(
-        `Failed to load config/local.yaml: ${err instanceof Error ? err.message : String(err)}`,
-      );
-    }
   }
 
   // ── Step 3: validate the merged config ──────────────────────────────────
