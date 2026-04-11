@@ -178,12 +178,28 @@ export class Dispatcher {
       return;
     }
 
+    // Observation-mode messages originate from a monitored inbox (e.g. the CEO's
+    // personal email) where Curia is an observer, not the recipient. Senders are
+    // third parties emailing the CEO — they should not enter the contact trust flow,
+    // be held, or have provisional contact records created on their behalf. Route
+    // directly to the coordinator (with no senderContext) so it can surface the
+    // email to the CEO as an observation.
+    // Rate limiting and injection scanning still run below — those protections apply
+    // regardless of how the message is routed.
+    const isObservationMode = (payload.metadata as Record<string, unknown> | undefined)?.observationMode === true;
+    if (isObservationMode) {
+      this.logger.info(
+        { channelId: payload.channelId, senderId: payload.senderId, accountId: payload.accountId },
+        'Observation-mode email — bypassing contact trust flow, routing to coordinator',
+      );
+    }
+
     // Resolve sender if contact resolver is available.
     // Wrapped in try/catch so DB errors degrade gracefully (no sender context)
     // rather than silently dropping the message — the task still dispatches,
     // just without enriched sender info.
     let senderContext: InboundSenderContext | undefined;
-    if (this.contactResolver) {
+    if (this.contactResolver && !isObservationMode) {
       try {
         senderContext = await this.contactResolver.resolve(payload.channelId, payload.senderId);
 
@@ -513,8 +529,14 @@ export class Dispatcher {
       // This overrides per-channel 'allow' policies for very low-trust messages — including unknown
       // senders on 'allow' channels. Unknown senders on 'hold_and_notify' and 'ignore' channels
       // already returned early above, so there is no risk of double-holding here.
+      //
+      // Observation-mode messages bypass the floor: we already skipped the contact-resolver path
+      // (isObservationMode check above), so senderContext is undefined and contactConfidence is 0.
+      // Without the bypass, observation-mode emails would always fall below the 0.2 floor and get
+      // silently held — making the entire observation-mode feature non-functional in production.
       const policy = this.channelPolicies[payload.channelId];
       if (
+        !isObservationMode &&
         messageTrustScore < this.trustScoreFloor &&
         policy?.unknownSender !== 'ignore' &&
         this.heldMessages

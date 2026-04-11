@@ -644,6 +644,8 @@ async function main(): Promise<void> {
         contactService,
         pollingIntervalMs: config.nylasPollingIntervalMs,
         selfEmail: account.selfEmail,
+        observationMode: account.observationMode,
+        excludedSenderEmails: account.excludedSenderEmails,
       }));
     }
   }

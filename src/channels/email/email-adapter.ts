@@ -44,6 +44,20 @@ export interface EmailAdapterConfig {
   pollingIntervalMs: number;
   /** This account's own email address — used to filter out self-sent messages */
   selfEmail: string;
+  /**
+   * When true, Curia monitors this inbox as an observer rather than acting as
+   * the recipient. Inbound emails bypass contact auto-creation and the contact
+   * trust flow; the dispatcher receives them with observationMode: true in their
+   * metadata and routes them directly to the coordinator for surfacing to the CEO.
+   */
+  observationMode: boolean;
+  /**
+   * Additional sender addresses to suppress, beyond selfEmail.
+   * Used to exclude Curia's own outbound address from a monitored inbox so that
+   * Curia's sent emails don't get re-processed as observations (self-reply loops).
+   * Case-insensitive.
+   */
+  excludedSenderEmails: string[];
 }
 
 export class EmailAdapter {
@@ -136,18 +150,42 @@ export class EmailAdapter {
           this.lastSeenTimestamp = msg.date + 1;
         }
 
-        // Skip emails sent by Curia (self) — we only want inbound messages
+        // Skip emails sent by this account (self) — we only want inbound messages
         // from external senders, not our own outgoing replies.
         // Case-insensitive to guard against inconsistent casing from mail servers.
         const fromEmail = msg.from[0]?.email;
         if (fromEmail?.toLowerCase() === this.config.selfEmail.toLowerCase()) continue;
 
+        // Skip emails from any additionally-excluded sender addresses (e.g. Curia's
+        // outbound address on a monitored inbox, to prevent self-reply loops).
+        if (
+          fromEmail &&
+          this.config.excludedSenderEmails.some(
+            (excluded) => excluded.toLowerCase() === fromEmail.toLowerCase(),
+          )
+        ) {
+          this.config.logger.debug(
+            { fromEmail, accountId: this.config.accountId },
+            'Email skipped — sender is in excludedSenderEmails',
+          );
+          continue;
+        }
+
         try {
           const converted = convertNylasMessage(msg);
 
-          // Auto-create contacts from participants before publishing the inbound event,
-          // so the contact resolver in the dispatch layer can find them immediately.
-          await this.extractParticipants(converted.metadata.participants);
+          if (this.config.observationMode) {
+            // Observation mode: Curia monitors this inbox on behalf of the CEO but is
+            // not the recipient. Skip contact auto-creation (senders are third parties
+            // emailing the CEO, not people initiating contact with Curia). The dispatcher
+            // will receive observationMode: true in the metadata and bypass the contact
+            // trust flow, routing directly to the coordinator for surfacing to the CEO.
+          } else {
+            // Standard mode: auto-create contacts from participants before publishing
+            // the inbound event, so the contact resolver in the dispatch layer can find
+            // them immediately.
+            await this.extractParticipants(converted.metadata.participants);
+          }
 
           // Sanitize email content to mitigate prompt injection from external senders.
           // This strips known injection patterns (system/instruction/prompt tags) before
@@ -159,14 +197,19 @@ export class EmailAdapter {
             maxLength: 60_000,
           });
 
-          // Publish inbound message to the bus
+          // Publish inbound message to the bus.
+          // observationMode is stamped into metadata so the dispatcher can bypass the
+          // contact trust flow without needing to know about account configuration.
           const event = createInboundMessage({
             conversationId: converted.conversationId,
             channelId: converted.channelId,
             accountId: this.config.accountId,
             senderId: converted.senderId,
             content: sanitizedContent,
-            metadata: converted.metadata as unknown as Record<string, unknown>,
+            metadata: {
+              ...(converted.metadata as unknown as Record<string, unknown>),
+              ...(this.config.observationMode ? { observationMode: true } : {}),
+            },
           });
           await this.config.bus.publish('channel', event);
 
