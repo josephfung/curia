@@ -24,7 +24,7 @@ skills/
   "description": "Send an email via the Nylas API",
   "version": "1.0.0",
   "sensitivity": "elevated",
-  "infrastructure": true,
+  "action_risk": "medium",
   "inputs": { "to": "string", "subject": "string", "body": "string", "cc": "string?" },
   "outputs": { "messageId": "string", "threadId": "string" },
   "permissions": [],
@@ -34,9 +34,12 @@ skills/
 ```
 
 - `sensitivity`: `"normal"` (auto-approvable) or `"elevated"` (requires human approval on first use)
-- `secrets`: declares which secrets the skill will request via `ctx.secret()`
+- `action_risk`: required on all manifests. Named labels — `none`, `low`, `medium`, `high`, `critical` — map to minimum autonomy score thresholds. Raw integers (0–100) are also accepted for precision.
+- `secrets`: declares which env-var-backed secrets the skill will request via `ctx.secret()`
 - `permissions`: declared capabilities, validated at load time
-- `timeout`: per-invocation timeout in ms; exceeded invocations return a failure result
+- `timeout`: per-invocation timeout in ms; exceeded invocations return a failure result (default 30000)
+
+**Privilege access** — skills receive privileged services (bus, entity memory, calendar client, etc.) only via explicit name-based grants in the execution layer. There is no self-declaration mechanism in `skill.json` that grants privilege — any such declaration is ignored. See `src/skills/execution.ts` for the per-skill capability assignments. Issue #119 will codify these into a dedicated `src/skills/capabilities.ts` registry.
 
 ### Skill Handler Interface
 
@@ -46,9 +49,13 @@ interface SkillHandler {
 }
 
 interface SkillContext {
-  input: Record<string, unknown>;     // validated against manifest inputs
-  secret(name: string): string;  // scoped secret access (synchronous — reads env vars)
-  log: Logger;                         // scoped pino child logger
+  input: Record<string, unknown>;  // validated against manifest inputs
+  secret(name: string): string;    // scoped secret access (reads env vars)
+  log: Logger;                     // scoped pino child logger
+  agentPersona?: AgentPersona;     // display name, title, email signature — available to all skills
+  caller?: CallerContext;          // caller identity (guaranteed for elevated skills)
+  contactService?: ContactService; // read-only contact lookups — available to all skills
+  // ...plus service-specific fields injected per-skill by name (bus, entityMemory, etc.)
 }
 
 type SkillResult =
@@ -56,7 +63,7 @@ type SkillResult =
   | { success: false; error: string };
 ```
 
-Skills cannot access the bus directly — they receive inputs and return outputs. The execution layer wraps invocations in `skill.invoke`/`skill.result` events. Skills are sandboxed to their declared I/O.
+Skills cannot access the bus directly — they receive inputs and return outputs. Skills are invoked synchronously within the agent turn via `ExecutionLayer.invoke()`. Skills are sandboxed to their declared I/O and must never throw — all error paths return `{ success: false, error: '...' }`.
 
 ---
 
@@ -67,17 +74,16 @@ The framework acts as an MCP client connecting to external MCP servers:
 ```yaml
 # config/skills.yaml
 mcp_servers:
-  - name: filesystem
-    transport: stdio
-    command: npx
-    args: ["-y", "@modelcontextprotocol/server-filesystem", "/data"]
-    permissions: ["filesystem:read", "filesystem:write"]
-
-  - name: github
-    transport: sse
-    url: https://mcp-github.example.com/sse
-    permissions: ["network:github"]
+  - name: google-workspace
+    transport: http
+    url: https://mcp-server.example.com/mcp
+    headers:
+      Authorization: "Bearer <token>"
+    action_risk: low
+    permissions: ["workspace:read", "workspace:write"]
 ```
+
+Supported transports: `stdio` (local subprocess) and `http` (StreamableHTTP — the current MCP SDK recommended transport for hosted servers). The deprecated `sse` transport has been migrated.
 
 At startup, the framework connects to each MCP server, discovers tools via `tools/list`, and registers them in the skill registry alongside local skills. Agents don't know or care whether a tool is local or MCP.
 
@@ -91,33 +97,38 @@ Two-tier access:
 Explicitly listed in agent config (`pinned_skills`). Always available to the agent, always included in the LLM's tool list.
 
 ### Discoverable Skills
-All registered skills (local + MCP) are listed in a **skill registry**. A built-in `skill-registry` skill is available to all agents with `allow_discovery: true`. When an agent's LLM determines it needs a capability not in its pinned skills, it invokes:
+All registered skills (local + MCP) are searchable via the built-in `skill-registry` skill. Agents with `allow_discovery: true` in their YAML automatically receive `skill-registry` in their tool list. When the LLM determines it needs a capability not in its pinned skills, it invokes:
 
 ```
-skill-registry.search({ query: "send email" })
+skill-registry({ query: "send email" })
 ```
 
-This returns matching skill descriptions. The LLM can then request to use a discovered skill by name.
+This returns a list of matching skill names and descriptions. The LLM can then call a discovered skill by name — the execution layer resolves it from the registry regardless of whether it is pinned.
+
+`skill-registry` itself is excluded from its own search results to avoid circular self-discovery.
 
 ### Safety Gate for First-Time Use
 
 - Skills tagged `sensitivity: "normal"`: auto-approved if the agent allows discovery
-- Skills tagged `sensitivity: "elevated"` (e.g., payment, deletion, external communication): require human approval via the alert channel before first use by that agent
-- Approval is persisted in `skill_approvals` table — only asked once per agent-skill pair
-- All discovery and first-use events are audit-logged
+- Skills tagged `sensitivity: "elevated"` (e.g., payment, deletion, external communication): require human approval via the alert channel before first use by that agent — **not yet implemented** (per-agent-skill `skill_approvals` table with persist-once-ask-once flow is deferred)
+- The current elevation gate in the execution layer is role-based: the caller must have `role: ceo`
+- All discovery and first-use events will be audit-logged when the full gate is built
 
 ---
 
 ## Execution Layer
 
-When `skill.invoke` arrives on the bus:
+Skills are invoked directly by `AgentRuntime` via `ExecutionLayer.invoke(skillName, input, caller, options)`. The execution layer is constructed once per process and shared across all agents.
 
-1. **Resolve** — look up skill in registry (local directory or MCP server)
-2. **Validate permissions** — is this skill in scope for the requesting agent? (pinned, or discovered + approved)
-3. **Validate secrets** — does the skill's manifest declare only secrets it's authorized for?
-4. **Execute** — call local handler or MCP `tools/call`
-5. **Sanitize output** — see below
-6. **Publish `skill.result`** with the response
+Invocation flow:
+
+1. **Resolve** — look up skill in registry by name (local or MCP)
+2. **Normalize inputs** — convert timestamp inputs to UTC-offset ISO strings using the configured local timezone
+3. **Validate elevation** — if `sensitivity: elevated`, reject if caller is missing or role is not `ceo`
+4. **Build context** — assemble `SkillContext` with scoped secrets, logger, and per-skill service grants
+5. **Execute** — call `handler.execute(ctx)` with a timeout wrapper (local), or `tools/call` (MCP)
+6. **Sanitize output** — strip injection vectors, redact secrets, truncate, wrap errors
+7. **Return `SkillResult`** to the agent runtime for inclusion in the LLM's next turn
 
 ### Output Sanitization
 
@@ -125,7 +136,7 @@ When `skill.invoke` arrives on the bus:
 
 All skill results are sanitized before being included in the agent's LLM context:
 - Strip any XML/HTML tags that could be interpreted as system instructions
-- Truncate excessively long outputs to a configurable limit (default: 10,000 chars) with a `[truncated]` marker
+- Truncate excessively long outputs (default: 200,000 chars) with a `[truncated]` marker
 - Redact patterns matching known secret formats (API keys, tokens) using a configurable regex list
 - Error strings are wrapped in a structured format (`<tool_error>...</tool_error>`) to prevent them from being interpreted as instructions
 
@@ -133,9 +144,9 @@ All skill results are sanitized before being included in the agent's LLM context
 
 *Lesson from Zora: unbounded operations exhaust memory and block the system.*
 
-- **Buffer limits**: Streaming skill responses are capped at 1MB per invocation
-- **Concurrent invocations**: Max 5 concurrent skill invocations per agent task (prevents runaway parallelism)
 - **Timeout enforcement**: Every skill invocation has a timeout (from manifest or default 30s). Exceeded invocations are killed and return a failure result.
+- **Concurrent invocations**: Max 5 concurrent skill invocations per agent task — not yet implemented
+- **Buffer limits**: Streaming skill responses capped at 1MB — not yet implemented
 
 ---
 
@@ -143,7 +154,7 @@ All skill results are sanitized before being included in the agent's LLM context
 
 Skills access secrets via `ctx.secret("name")`:
 
-- **Launch implementation:** Environment variables behind a scoped accessor. Secret names map to env var names (e.g., `ctx.secret("signal_phone_number")` reads `SIGNAL_PHONE_NUMBER` from the environment). Note: Email skills use infrastructure access via `ctx.nylasClient` rather than the secret accessor — the Nylas API key is configured at bootstrap, not per-skill.
+- **Implementation:** Environment variables behind a scoped accessor. Secret names map to env var names (e.g., `ctx.secret("signal_phone_number")` reads `SIGNAL_PHONE_NUMBER` from the environment).
 - The execution layer validates that the calling skill's manifest declares the requested secret in its `secrets` array
 - Agents/LLMs never see secret values — only skills access them internally
 - All secret access is audit-logged (which skill, when, from which task) but values are never logged
@@ -153,15 +164,25 @@ Skills access secrets via `ctx.secret("name")`:
 
 ## Built-in Skills
 
-The framework ships with these skills (in `skills/` but part of core):
+The framework ships with these skills (in `skills/` as part of core):
 
-- `skill-registry` — search for available skills by description
-- `scheduler` — create/list/cancel scheduled jobs
-- `memory-query` — search entity memory and knowledge graph
-- `memory-store` — write facts to entity memory (with validation gates)
+- `skill-registry` — search for available skills by keyword; injected into tool list for agents with `allow_discovery: true`
+- `delegate` — route a sub-task to a specialist agent via the bus
 - `web-fetch` — HTTP GET with configurable timeouts and size limits
-- `file-reader` — read files from a configured data directory (not arbitrary filesystem)
-- `file-writer` — write files to a configured output directory
+- `web-browser` — Playwright-backed browser for JS-rendered pages
+- `web-search` — web search via Tavily API
+- `scheduler-create` / `scheduler-list` / `scheduler-cancel` — create and manage scheduled jobs
+- `email-send` / `email-reply` — outbound email via Nylas (multi-account aware)
+- `held-messages-list` / `held-messages-process` — review and act on held/deferred messages
+- Calendar skills (`calendar-list-calendars`, `calendar-list-events`, `calendar-create-event`, etc.) — Nylas calendar CRUD
+- Contact skills (`contact-create`, `contact-lookup`, `contact-merge`, etc.) — contact management and KG linking
+- Knowledge skills (`knowledge-company-overview`, `knowledge-meeting-links`, etc.) — structured KG queries
+- `entity-context` — assemble full context for a list of contacts/entities
+- `get-autonomy` / `set-autonomy` — read and write the global autonomy score (CEO only)
+- `bullpen` — inter-agent discussion threads
+- Template skills (`template-meeting-request`, `template-reschedule`, etc.) — structured outbound templates
+
+**Not yet built:** `memory-query` (freeform KG search), `memory-store` (write-with-validation), `file-reader`, `file-writer`
 
 ---
 
@@ -171,13 +192,11 @@ These are not bundled but documented as recommended integrations:
 
 | Server | Purpose | Link |
 |---|---|---|
+| **Google Workspace** | Drive, Docs, Sheets, Gmail read/search/write | [taylorwilsdon/google_workspace_mcp](https://github.com/taylorwilsdon/google_workspace_mcp) |
 | **Filesystem** | Scoped file access (read/write/search) | [modelcontextprotocol/servers/filesystem](https://github.com/modelcontextprotocol/servers/tree/main/src/filesystem) |
-| **Google Drive** | Read/search Google Docs and Sheets | [modelcontextprotocol/servers/gdrive](https://github.com/modelcontextprotocol/servers/tree/main/src/gdrive) |
 | **GitHub** | Repo management, issues, PRs | [modelcontextprotocol/servers/github](https://github.com/modelcontextprotocol/servers/tree/main/src/github) |
 | **Brave Search** | Web search for research agents | [modelcontextprotocol/servers/brave-search](https://github.com/modelcontextprotocol/servers/tree/main/src/brave-search) |
 | **Fetch** | Web fetching with robots.txt compliance | [modelcontextprotocol/servers/fetch](https://github.com/modelcontextprotocol/servers/tree/main/src/fetch) |
-
-Custom MCP servers will be needed for Google Calendar and expense platforms (Expensify, QuickBooks). These can be built as local skills initially and promoted to MCP servers when the protocol stabilizes for those APIs.
 
 ---
 
@@ -186,18 +205,21 @@ Custom MCP servers will be needed for Google Calendar and expense platforms (Exp
 | Item | Status |
 |---|---|
 | Local skill directory structure — `skill.json` manifest + `handler.ts` loading | Done |
-| Execution layer — resolve, validate permissions, validate secrets, execute, sanitize, publish `skill.result` | Done |
+| `action_risk` field — required on all manifests, validated at load time | Done |
+| Startup schema validation — `skill.json` validated via Ajv at boot | Done |
+| Execution layer — resolve, validate elevation, build context, execute, sanitize, return result | Done |
 | Output sanitization — tag stripping, secret redaction, truncation, error wrapping | Done |
 | Resource boundaries — per-invocation timeout enforcement from manifest | Done |
-| Built-in skill: `web-fetch` | Done |
-| Built-in skill: `scheduler` (create, list, cancel) | Done |
-| MCP skills — MCP client, stdio/SSE transport, `tools/list` discovery | Done — `config/skills.yaml`, `src/skills/mcp-client.ts`, `src/skills/mcp-loader.ts`; closes #270 |
-| Safety gate for first-time elevated skill use — `skill_approvals` table and approval workflow | Partial — role-based elevation gate exists in execution layer (caller must have `role: ceo`); per-agent-skill `skill_approvals` table with persist-once-ask-once flow not yet built |
-| Built-in skill: `skill-registry` (agent-invocable search) | Not Done — `SkillRegistry.search()` exists; skill wrapper and runtime wiring pending (#274) |
+| Secrets access — `ctx.secret()` scoped to manifest `secrets` array, audit-logged | Done |
+| MCP skills — MCP client, stdio/StreamableHTTP transport, `tools/list` discovery | Done — `config/skills.yaml`, `src/skills/mcp-client.ts`, `src/skills/mcp-loader.ts`; closes #270 |
+| MCP `headers` config field — per-server auth headers for hosted MCP servers | Done |
+| Built-in skill: `skill-registry` (agent-invocable search) | Done — `skills/skill-registry/`; closes #274 |
+| Skill discovery — `allow_discovery: true` wired to runtime tool-list builder | Done — closes #274 |
+| Safety gate for first-time elevated skill use — per-agent-skill `skill_approvals` table | Partial — role-based elevation gate exists (`caller.role === 'ceo'`); persist-once-ask-once flow not yet built |
+| Privilege scoping — per-skill capability assignments replacing `infrastructure` self-declaration | Partial — name-gated per-skill injection in `execution.ts`; full `capabilities.ts` registry pending (#119) |
+| Resource boundaries — max 5 concurrent skill invocations per agent task | Not Done |
+| Resource boundaries — 1MB buffer cap on streaming skill responses | Not Done |
 | Built-in skill: `memory-query` | Not Done |
 | Built-in skill: `memory-store` | Not Done |
 | Built-in skill: `file-reader` | Not Done |
 | Built-in skill: `file-writer` | Not Done |
-| Skill discovery — `allow_discovery` agent config field wired to registry search | Partial — field parsed by agent loader and set in agent YAMLs; not yet wired to runtime tool-list builder (#274) |
-| Secrets access — `ctx.secret()` accessor backed by env vars, validated against manifest `secrets` array | Done |
-| Resource boundaries — max 5 concurrent skill invocations per agent task | Not Done |

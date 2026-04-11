@@ -327,6 +327,18 @@ export class ExecutionLayer {
       ctx.browserService = this.browserService;
     }
 
+    // skillSearch is scoped to the skill-registry built-in only.
+    // The closure captures this.registry at invocation time and filters out
+    // skill-registry itself to avoid circular self-discovery results.
+    // When #119 lands, this moves into SKILL_CAPABILITIES alongside the other
+    // name-gated services.
+    if (manifest.name === 'skill-registry') {
+      ctx.skillSearch = (query: string) =>
+        this.registry.search(query)
+          .filter(s => s.manifest.name !== 'skill-registry')
+          .map(s => ({ name: s.manifest.name, description: s.manifest.description }));
+    }
+
     // entityContextAssembler — available to ALL skills (not just infrastructure).
     // The assembler is a read-only DB pipeline; granting it unconditionally is no
     // more privileged than contactService. Keeping it outside the infrastructure

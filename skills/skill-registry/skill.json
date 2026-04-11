@@ -1,0 +1,14 @@
+{
+  "name": "skill-registry",
+  "description": "Search the skill registry to discover available capabilities by keyword. Use this when you need a tool that is not in your current tool list. Returns matching skill names and descriptions. Pass an empty string to list all available skills.",
+  "version": "1.0.0",
+  "sensitivity": "normal",
+  "action_risk": "none",
+  "inputs": {
+    "query": "string (keyword to search — pass an empty string to list all available skills)"
+  },
+  "outputs": { "skills": "array" },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 5000
+}

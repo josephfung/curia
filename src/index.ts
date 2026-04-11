@@ -743,6 +743,22 @@ async function main(): Promise<void> {
     }
     const agentToolDefs = skillRegistry.toToolDefinitions(agentPinnedSkills);
 
+    // allow_discovery: true → inject the skill-registry discovery tool into the agent's
+    // tool list. Skipped if already pinned to avoid duplicate tool definitions.
+    // The skill-registry handler is loaded by the standard file loader like any other
+    // skill; this only controls whether it appears in the LLM's tool list for this agent.
+    if (agentConfig.allow_discovery && !agentPinnedSkills.includes('skill-registry')) {
+      const discoveryToolDefs = skillRegistry.toToolDefinitions(['skill-registry']);
+      if (discoveryToolDefs.length === 0) {
+        // skill-registry failed to load (bad manifest, missing handler, etc.).
+        // Warn so misconfiguration surfaces at startup rather than silently
+        // degrading — the agent will have allow_discovery: true but no way to search.
+        logger.warn({ agent: agentConfig.name }, 'allow_discovery is true but skill-registry failed to load — discovery unavailable');
+      } else {
+        agentToolDefs.push(...discoveryToolDefs);
+      }
+    }
+
     // For the coordinator, interpolate runtime context (specialist list, agent contact ID).
     // Date and timezone are no longer baked in here — they are appended fresh on every
     // task turn via AgentRuntime using formatTimeContextBlock() so they never go stale.
@@ -795,7 +811,7 @@ async function main(): Promise<void> {
     agent.register();
 
     if (agentToolDefs.length > 0) {
-      logger.info({ agent: agentConfig.name, skills: agentPinnedSkills }, 'Agent tools configured');
+      logger.info({ agent: agentConfig.name, skills: agentToolDefs.map(d => d.name) }, 'Agent tools configured');
     }
   }
 
