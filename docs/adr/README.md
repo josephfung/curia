@@ -37,6 +37,7 @@ Each ADR follows the [Nygard format](https://adr.github.io/):
 | [013](013-signal-cli-daemon-mode.md) | signal-cli daemon socket mode for Signal integration | Accepted |
 | [014](014-capability-tier-model-routing.md) | Capability-tier model routing over per-agent model declarations | Accepted |
 | [015](015-llm-as-judge-intent-drift.md) | LLM-as-judge for intent drift detection | Accepted |
+| [016](016-mcp-sdk-dependency.md) | Official MCP SDK over hand-rolled transport; registry-transparent skill integration | Accepted |
 
 ## Adding new ADRs
 

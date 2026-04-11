@@ -13,6 +13,25 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+## [0.17.0] — 2026-04-10
+
+### Added
+- **MCP client layer** — Curia can now connect to any MCP-compatible tool server at
+  startup. Servers are declared in `config/skills.yaml` (stdio or SSE transport).
+  Discovered tools are registered transparently in `SkillRegistry` alongside local
+  skills — agents cannot distinguish local from MCP tools, and all MCP calls flow
+  through the `ExecutionLayer` (sanitization, timeouts, sensitivity gating, audit log).
+  Connection failures warn-not-crash; absence of `config/skills.yaml` is treated as
+  "no MCP servers configured". Closes #270.
+- **`config/skills.yaml`** — new operator config file for declaring MCP server
+  connections. `action_risk` is required per server; no default is provided, forcing
+  explicit risk declaration.
+- **`schemas/skills-config.json`** — JSON Schema for `config/skills.yaml`, validated by
+  the startup validator at boot time.
+- **ADR 016** — documents the choice of `@modelcontextprotocol/sdk` over a hand-rolled
+  transport, the registry-transparent design, and the `SSEClientTransport` deprecation
+  risk.
+
 ### Changed
 
 - **Spec 03 implementation status** — corrected and annotated the implementation status table: secrets access (`ctx.secret()`) marked Done, safety gate and skill discovery marked Partial with detail, MCP and skill-registry cross-referenced to tracking issues (#270, #274).
