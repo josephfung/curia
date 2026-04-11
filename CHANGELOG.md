@@ -14,6 +14,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 ## [Unreleased]
 
 ### Added
+- **MCP HTTP transport migration** — the `sse` transport in `config/skills.yaml` now uses `StreamableHTTPClientTransport` (the recommended SDK transport for hosted MCP servers) instead of the deprecated `SSEClientTransport`. Behaviour is unchanged for existing configs. Resolves the ADR 016 migration note. Closes #271.
+- **MCP `headers` config field** — SSE server entries in `config/skills.yaml` now accept an optional `headers: Record<string, string>` field. Enables `Authorization: Bearer <token>` for authenticated hosted MCP servers (Google, etc.) without any code changes. See `docs/dev/google-drive.md` for the Google Workspace path forward.
 - **Multi-account email channel** (spec §03) — `channel_accounts.email` YAML block supports N named Nylas-backed email accounts, each with its own grant ID, `self_email`, and `outbound_policy` (`direct | draft_gate | autonomy_gated`). One `EmailAdapter` instance is constructed per account at startup; inbound events are stamped with the receiving `accountId` and replies are routed back through the same account. Closes #272.
 - **`draft_gate` outbound policy** — when set on an email account, the coordinator's reply is saved as a Nylas draft for human review instead of being sent immediately. The notification → approval → send flow is deferred to issue #278.
 - **`autonomy_gated` outbound policy** — checks the global autonomy score before each send; if the score meets `autonomy_threshold`, sends directly; otherwise falls back to `draft_gate`.

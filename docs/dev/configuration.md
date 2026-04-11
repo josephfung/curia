@@ -126,6 +126,43 @@ Changes take effect on restart.
 
 ---
 
+## `config/skills.yaml` — MCP servers
+
+MCP servers extend Curia with external tools (Google Drive, GitHub, etc.)
+without writing any TypeScript. At startup, Curia connects to each configured
+server, discovers its tools via `tools/list`, and registers them in the skill
+registry alongside local skills.
+
+The file does not exist by default — its absence means no MCP servers are
+configured. Create it when you add the first server.
+
+```yaml
+servers:
+  - name: gdrive
+    transport: stdio          # "stdio" spawns a local process; "sse" connects to an HTTP endpoint
+    command: npx
+    args: ["-y", "@modelcontextprotocol/server-gdrive"]
+    action_risk: low          # required — none | low | medium | high | critical
+    sensitivity: normal       # optional — "normal" (default) or "elevated" (CEO-only)
+    timeout_ms: 30000         # optional — per-invocation timeout in ms (default: 30000)
+    # env:                    # optional — extra env vars for the spawned process only
+    #   SOME_VAR: value       # vars already in .env are inherited automatically
+```
+
+Connection failures at startup are non-fatal but logged at `error` level — a
+missing MCP server won't take Curia down. The failed server's tools will be
+unavailable until restart. Search logs for `ERROR Failed to connect to MCP server`
+to diagnose.
+
+After adding a server, pin its tools in `agents/coordinator.yaml` under
+`pinned_skills` so the coordinator's LLM can call them. Tool names come from
+the server's `tools/list` response — check the startup logs to confirm.
+
+See [google-drive.md](google-drive.md) for a full walkthrough of the Google
+Drive integration (service account setup, folder sharing, credential wiring).
+
+---
+
 ## Environment variables (`.env`)
 
 Environment variables control secrets and deployment-specific values that must not be committed. A full list with descriptions lives in `.env.example` at the repo root. Key variables:
@@ -144,5 +181,6 @@ Environment variables control secrets and deployment-specific values that must n
 | `NYLAS_SELF_EMAIL` | Tier 2 | Address Curia reads and sends from |
 | `SIGNAL_PHONE_NUMBER` | Tier 3 | Enables Signal channel |
 | `TAVILY_API_KEY` | Tier 3 | Enables `web-search` skill |
+| `GOOGLE_APPLICATION_CREDENTIALS` | Optional | Path to service account JSON for Google Drive |
 
 See [setup.md](setup.md) for a step-by-step walkthrough of setting these up.

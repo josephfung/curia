@@ -205,6 +205,8 @@ Type a message at the prompt. You're talking to Curia.
 
 If you want to dig deeper, the [architecture overview](../specs/00-overview.md) explains how the layers fit together, and the [agent](adding-an-agent.md) and [skill](adding-a-skill.md) guides cover the most common extension points.
 
+To enable Google Drive access (for expense trackers, job application trackers, and other persistent documents), see [google-drive.md](google-drive.md).
+
 ---
 
 ## Troubleshooting

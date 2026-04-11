@@ -8,7 +8,7 @@
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
-import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import type { Logger } from '../logger.js';
 
 /**
@@ -25,17 +25,19 @@ export interface McpStdioServerConfig {
 }
 
 /**
- * Parameters for an SSE MCP server — connects to an HTTP SSE endpoint.
+ * Parameters for an HTTP MCP server — connects via StreamableHTTPClientTransport,
+ * the recommended transport for hosted MCP servers (Google, GitHub, etc.).
  *
- * Note: SSEClientTransport is deprecated in @modelcontextprotocol/sdk ≥ 1.10 in
- * favour of StreamableHTTPClientTransport. We use it here because the spec
- * explicitly calls for SSE transport, and many deployed MCP servers still use
- * the SSE protocol. See ADR 016 for the migration path.
+ * The `headers` field supports arbitrary HTTP headers on every request, making
+ * it straightforward to pass Authorization: Bearer tokens for authenticated
+ * hosted MCP servers. See ADR 016.
  */
 export interface McpSseServerConfig {
   name: string;
   transport: 'sse';
   url: string;
+  /** HTTP headers to include with every request (e.g. Authorization: Bearer <token>). */
+  headers?: Record<string, string>;
 }
 
 export type McpServerConfig = McpStdioServerConfig | McpSseServerConfig;
@@ -101,8 +103,13 @@ export async function connectStdio(
 }
 
 /**
- * Connect to an SSE MCP server.
- * Opens an HTTP SSE stream and performs the MCP initialization handshake.
+ * Connect to an HTTP MCP server via StreamableHTTPClientTransport.
+ *
+ * Uses a single endpoint for both POST (tool calls) and SSE (streaming responses),
+ * matching the pattern used by Google's hosted MCP servers and other modern
+ * MCP-compatible services. Custom headers (e.g. Authorization: Bearer <token>)
+ * are applied to every request via requestInit.
+ *
  * Throws on connection failure — callers decide whether to warn-and-continue
  * or propagate.
  */
@@ -110,9 +117,14 @@ export async function connectSse(
   config: McpSseServerConfig,
   logger: Logger,
 ): Promise<McpSession> {
-  logger.debug({ server: config.name, url: config.url }, 'Connecting to SSE MCP server');
+  logger.debug({ server: config.name, url: config.url }, 'Connecting to HTTP MCP server');
 
-  const transport = new SSEClientTransport(new URL(config.url));
+  const transport = new StreamableHTTPClientTransport(
+    new URL(config.url),
+    // Pass headers via requestInit so the SDK merges them into every request.
+    // SDK normalizes an empty or absent headers object cleanly — no need to guard.
+    config.headers ? { requestInit: { headers: config.headers } } : undefined,
+  );
 
   const client = new Client(
     { name: 'curia', version: '1.0.0' },
@@ -123,15 +135,21 @@ export async function connectSse(
 
   logger.info(
     { server: config.name, serverInfo: client.getServerVersion() },
-    'SSE MCP server connected',
+    'HTTP MCP server connected',
   );
 
   return {
     serverId: config.name,
     client,
     close: async () => {
-      logger.debug({ server: config.name }, 'Closing SSE MCP session');
-      await client.close();
+      logger.debug({ server: config.name }, 'Closing HTTP MCP session');
+      try {
+        await client.close();
+      } catch (err) {
+        // close() is best-effort — log but do not propagate, so the shutdown
+        // sequence continues regardless of transport teardown failures.
+        logger.error({ err, server: config.name }, 'Error closing HTTP MCP session');
+      }
     },
   };
 }

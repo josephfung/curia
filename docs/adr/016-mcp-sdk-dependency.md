@@ -57,13 +57,19 @@ instead of converting from the shorthand `inputs` format used by local skill man
 This avoids a lossy round-trip and preserves the full JSON Schema fidelity that MCP
 servers produce.
 
-### `SSEClientTransport` deprecation note
+### `SSEClientTransport` → `StreamableHTTPClientTransport` migration
 
-At the time of writing, `SSEClientTransport` carries an internal deprecation notice in
-the SDK in favour of the newer `StreamableHTTPClientTransport`. The config schema
-(`config/skills.yaml`) uses `transport: "sse"` to match the transport type string that
-operators already know from the MCP specification. This may need to be updated when the
-SDK drops `SSEClientTransport` entirely. The change is isolated to `src/skills/mcp-client.ts`.
+~~At the time of writing, `SSEClientTransport` carries an internal deprecation notice in
+the SDK in favour of the newer `StreamableHTTPClientTransport`.~~
+
+**Completed in PR #271.** The `sse` transport type in `config/skills.yaml` now routes
+through `StreamableHTTPClientTransport`, which uses a single combined POST+SSE endpoint
+pattern matching Google's and other hosted MCP servers. The migration was isolated to
+`src/skills/mcp-client.ts` as predicted.
+
+An optional `headers: Record<string, string>` field was added to the SSE server config
+to support bearer-token authentication (e.g. `Authorization: Bearer <token>`) required
+by hosted MCP servers. The config schema and loader interface were updated accordingly.
 
 ## Consequences
 
@@ -77,6 +83,6 @@ SDK drops `SSEClientTransport` entirely. The change is isolated to `src/skills/m
   failures are handled at the loader level (warn-not-crash), but persistent disconnects
   after startup are not yet managed. A future reconnection loop may be needed for
   long-running deployments.
-- **Risk:** `SSEClientTransport` is deprecated upstream. When it is removed, the `sse`
-  transport type will need to be remapped to `StreamableHTTPClientTransport`. The
-  change is contained to `src/skills/mcp-client.ts`.
+- ~~**Risk:** `SSEClientTransport` is deprecated upstream. When it is removed, the `sse`
+  transport type will need to be remapped to `StreamableHTTPClientTransport`.~~ **Resolved
+  in PR #271** — the migration is complete.
