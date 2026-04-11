@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterAll } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -6,12 +6,22 @@ import { loadYamlConfig } from './config.js';
 
 // ── Test helpers ─────────────────────────────────────────────────────────────
 
+// Track all temp dirs created during the test run so they can be cleaned up.
+const tempDirs: string[] = [];
+
+afterAll(() => {
+  for (const dir of tempDirs) {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 /** Write a config dir with default.yaml and optionally local.yaml. */
 function writeTempConfigDir(opts: {
   defaultYaml?: string;
   localYaml?: string;
 }): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'curia-local-cfg-'));
+  tempDirs.push(dir);
   if (opts.defaultYaml !== undefined) {
     fs.writeFileSync(path.join(dir, 'default.yaml'), opts.defaultYaml);
   }
@@ -26,6 +36,7 @@ function writeTempConfigDir(opts: {
 describe('loadYamlConfig — local.yaml absent', () => {
   it('returns empty object when neither file exists', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'curia-local-cfg-'));
+    tempDirs.push(dir);
     expect(loadYamlConfig(dir)).toEqual({});
   });
 
