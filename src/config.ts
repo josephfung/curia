@@ -2,6 +2,48 @@ import yaml from 'js-yaml';
 import { readFileSync } from 'node:fs';
 import * as path from 'node:path';
 
+// ---------------------------------------------------------------------------
+// Multi-account email config types
+// ---------------------------------------------------------------------------
+
+/**
+ * Outbound send policy for a named email account.
+ *
+ * - direct:          send immediately (default for Curia's own account)
+ * - draft_gate:      create a Nylas draft; human must approve before the reply goes out
+ *                    TODO(#278): wire up the notification → approval → send flow
+ * - autonomy_gated:  send autonomously only when the global autonomy score meets or
+ *                    exceeds the account's autonomy_threshold value
+ */
+export type OutboundPolicy = 'direct' | 'draft_gate' | 'autonomy_gated';
+
+/**
+ * Raw per-account email entry as read from config/default.yaml.
+ * Values may be literal strings or "env:VAR_NAME" env-var references.
+ */
+export interface RawEmailAccountConfig {
+  nylas_grant_id: string;
+  self_email: string;
+  outbound_policy: OutboundPolicy;
+  /** Required when outbound_policy is 'autonomy_gated'. Integer 0–100. */
+  autonomy_threshold?: number;
+}
+
+/**
+ * Fully resolved per-account email config with env-var references expanded
+ * to their actual values. This is the shape passed to NylasClient and EmailAdapter.
+ */
+export interface ResolvedEmailAccount {
+  /** Logical name for this account as declared in the YAML (e.g. "curia", "joseph"). */
+  name: string;
+  nylasGrantId: string;
+  selfEmail: string;
+  outboundPolicy: OutboundPolicy;
+  /** Minimum autonomy score (0–100) required for autonomous sends. Only set when
+   *  outboundPolicy is 'autonomy_gated'. */
+  autonomyThreshold?: number;
+}
+
 export interface Config {
   databaseUrl: string;
   anthropicApiKey: string | undefined;
@@ -50,6 +92,32 @@ export interface YamlConfig {
     /** Max inbound message content size in bytes. Default: 102400 (100KB).
      *  Messages exceeding this are rejected by the dispatcher before routing. */
     max_message_bytes?: number;
+  };
+  /**
+   * Multi-account channel config (spec 03 - #3).
+   *
+   * Defines N named accounts per channel type, each with its own credentials
+   * and outbound_policy. When this block is absent, the system falls back to the
+   * legacy single-account env-var config (NYLAS_GRANT_ID + NYLAS_SELF_EMAIL).
+   *
+   * Values may be literal strings or "env:VAR_NAME" references resolved at startup.
+   * The Nylas API key (NYLAS_API_KEY) is shared across all email accounts —
+   * it is the application key, not per-account.
+   *
+   * Example:
+   *   channel_accounts:
+   *     email:
+   *       curia:
+   *         nylas_grant_id: env:NYLAS_GRANT_ID
+   *         self_email: env:NYLAS_SELF_EMAIL
+   *         outbound_policy: direct
+   *       joseph:
+   *         nylas_grant_id: env:JOSEPH_NYLAS_GRANT_ID
+   *         self_email: env:JOSEPH_EMAIL
+   *         outbound_policy: draft_gate
+   */
+  channel_accounts?: {
+    email?: Record<string, RawEmailAccountConfig>;
   };
   browser?: {
     sessionTtlMs?: number;
@@ -213,6 +281,48 @@ export function loadYamlConfig(configDir: string): YamlConfig {
       }
     }
 
+    // Validate channel_accounts if present
+    const channelAccounts = config.channel_accounts?.email;
+    if (channelAccounts !== undefined) {
+      if (channelAccounts === null || typeof channelAccounts !== 'object' || Array.isArray(channelAccounts)) {
+        throw new Error('channel_accounts.email must be a YAML mapping');
+      }
+      const validPolicies: OutboundPolicy[] = ['direct', 'draft_gate', 'autonomy_gated'];
+      for (const [accountName, rawAccount] of Object.entries(channelAccounts)) {
+        if (typeof rawAccount !== 'object' || rawAccount === null || Array.isArray(rawAccount)) {
+          throw new Error(`channel_accounts.email.${accountName} must be a YAML mapping`);
+        }
+        if (typeof rawAccount.nylas_grant_id !== 'string' || !rawAccount.nylas_grant_id) {
+          throw new Error(`channel_accounts.email.${accountName}.nylas_grant_id must be a non-empty string`);
+        }
+        if (typeof rawAccount.self_email !== 'string' || !rawAccount.self_email) {
+          throw new Error(`channel_accounts.email.${accountName}.self_email must be a non-empty string`);
+        }
+        if (!validPolicies.includes(rawAccount.outbound_policy)) {
+          throw new Error(
+            `channel_accounts.email.${accountName}.outbound_policy must be one of: ${validPolicies.join(', ')}, got: "${rawAccount.outbound_policy}"`,
+          );
+        }
+        if (rawAccount.outbound_policy === 'autonomy_gated') {
+          if (rawAccount.autonomy_threshold === undefined) {
+            throw new Error(
+              `channel_accounts.email.${accountName}: outbound_policy 'autonomy_gated' requires autonomy_threshold`,
+            );
+          }
+          if (!Number.isInteger(rawAccount.autonomy_threshold) || rawAccount.autonomy_threshold < 0 || rawAccount.autonomy_threshold > 100) {
+            throw new Error(
+              `channel_accounts.email.${accountName}.autonomy_threshold must be an integer 0–100, got: ${rawAccount.autonomy_threshold}`,
+            );
+          }
+        }
+        if (rawAccount.autonomy_threshold !== undefined && rawAccount.outbound_policy !== 'autonomy_gated') {
+          throw new Error(
+            `channel_accounts.email.${accountName}: autonomy_threshold is only valid when outbound_policy is 'autonomy_gated'`,
+          );
+        }
+      }
+    }
+
     const drift = config.intentDrift;
     if (drift !== undefined) {
       // Reject non-object roots (e.g. `intentDrift: false`, `intentDrift: "off"`, `intentDrift: []`).
@@ -256,6 +366,87 @@ export function loadYamlConfig(configDir: string): YamlConfig {
       `Failed to load config/default.yaml: ${err instanceof Error ? err.message : String(err)}`,
     );
   }
+}
+
+// ---------------------------------------------------------------------------
+// Multi-account resolution
+// ---------------------------------------------------------------------------
+
+/**
+ * Resolve an "env:VAR_NAME" reference to its actual env-var value, or pass
+ * through a literal string unchanged.
+ *
+ * Throws at startup if a referenced env var is not set — a missing credential
+ * should fail loudly rather than produce a silent no-op.
+ */
+function resolveEnvValue(value: string, context: string): string {
+  if (value.startsWith('env:')) {
+    const varName = value.slice(4);
+    const resolved = process.env[varName];
+    if (!resolved) {
+      throw new Error(`${context}: env var "${varName}" is not set`);
+    }
+    return resolved;
+  }
+  return value;
+}
+
+/**
+ * Resolve the final list of email accounts to bootstrap, merging YAML multi-account
+ * config with the legacy env-var single-account fallback.
+ *
+ * Resolution order:
+ *   1. If channel_accounts.email is present in YAML → use it (multi-account mode)
+ *   2. Otherwise → fall back to NYLAS_GRANT_ID + NYLAS_SELF_EMAIL env vars with
+ *      a synthetic "curia" account (single-account backward-compat mode)
+ *
+ * Returns an empty array when neither source provides credentials — in that case
+ * the email channel is simply disabled at startup, matching existing behaviour.
+ *
+ * The Nylas API key (NYLAS_API_KEY) is always read from env and shared across all
+ * accounts; it lives in Config, not per-account config.
+ */
+export function resolveChannelAccounts(yamlConfig: YamlConfig, config: Config): ResolvedEmailAccount[] {
+  const emailAccounts = yamlConfig.channel_accounts?.email;
+
+  // Multi-account mode: YAML block is present (even if empty).
+  // An explicit empty mapping ({ }) means "no configured email accounts" — do NOT
+  // fall through to the legacy env-var path, so operators can intentionally
+  // disable email in YAML without the legacy account silently reappearing.
+  if (emailAccounts !== undefined) {
+    return Object.entries(emailAccounts).map(([name, raw]) => {
+      const nylasGrantId = resolveEnvValue(
+        raw.nylas_grant_id,
+        `channel_accounts.email.${name}.nylas_grant_id`,
+      );
+      const selfEmail = resolveEnvValue(
+        raw.self_email,
+        `channel_accounts.email.${name}.self_email`,
+      );
+      return {
+        name,
+        nylasGrantId,
+        selfEmail,
+        outboundPolicy: raw.outbound_policy,
+        autonomyThreshold: raw.autonomy_threshold,
+      };
+    });
+  }
+
+  // Backward-compat mode: fall back to the legacy single-account env vars.
+  // This path is only taken when channel_accounts.email is absent entirely,
+  // ensuring existing single-account deployments require no config changes.
+  if (config.nylasGrantId && config.nylasSelfEmail) {
+    return [{
+      name: 'curia',
+      nylasGrantId: config.nylasGrantId,
+      selfEmail: config.nylasSelfEmail,
+      outboundPolicy: 'direct',
+    }];
+  }
+
+  // No credentials available — email channel will be disabled
+  return [];
 }
 
 export function loadConfig(): Config {

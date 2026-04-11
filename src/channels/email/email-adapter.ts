@@ -3,22 +3,46 @@
 // Email channel adapter — polls Nylas for new inbound emails, publishes them
 // to the bus as inbound.message events, auto-creates contacts from participants,
 // and sends outbound replies when the coordinator responds to an email thread.
+//
+// Multi-account: one EmailAdapter instance is constructed per configured email account.
+// Each instance owns a single Nylas grant and applies its own outbound policy.
 
 import type { EventBus } from '../../bus/bus.js';
 import type { Logger } from '../../logger.js';
-import type { OutboundGateway } from '../../skills/outbound-gateway.js';
+import type { OutboundGateway, EmailSendRequest } from '../../skills/outbound-gateway.js';
 import type { ContactService } from '../../contacts/contact-service.js';
+import type { AutonomyService } from '../../autonomy/autonomy-service.js';
+import type { OutboundPolicy } from '../../config.js';
 import { convertNylasMessage } from './message-converter.js';
 import { createInboundMessage, type OutboundMessageEvent } from '../../bus/events.js';
 import { sanitizeOutput } from '../../skills/sanitize.js';
 
 export interface EmailAdapterConfig {
+  /**
+   * Logical name for this email account (e.g. "curia", "joseph").
+   * Stamped onto every inbound.message event as accountId so the dispatcher
+   * can route replies back through the same account.
+   */
+  accountId: string;
+  /**
+   * How outbound replies from this account are handled.
+   *
+   * - direct:          send immediately via OutboundGateway (current behavior)
+   * - draft_gate:      save as a Nylas draft; human approves before sending
+   *                    TODO(#278): wire up notification → approval → send flow
+   * - autonomy_gated:  send only when autonomy score >= autonomyThreshold
+   */
+  outboundPolicy: OutboundPolicy;
+  /** Required when outboundPolicy is 'autonomy_gated'. Minimum score (0–100) to send. */
+  autonomyThreshold?: number;
+  /** Required when outboundPolicy is 'autonomy_gated'. Queried before each send. */
+  autonomyService?: AutonomyService;
   bus: EventBus;
   logger: Logger;
   outboundGateway: OutboundGateway;
   contactService: ContactService;
   pollingIntervalMs: number;
-  /** Curia's own email address — used to filter out self-sent messages */
+  /** This account's own email address — used to filter out self-sent messages */
   selfEmail: string;
 }
 
@@ -35,13 +59,20 @@ export class EmailAdapter {
   async start(): Promise<void> {
     const { bus, logger, pollingIntervalMs } = this.config;
 
-    // Subscribe to outbound messages for the email channel.
+    // Subscribe to outbound messages for this specific email account.
     // When the coordinator responds to an email-triggered conversation, the dispatcher
-    // creates an outbound.message with channelId 'email'. The adapter sends this as
-    // a reply to the original email thread via Nylas.
+    // creates an outbound.message with channelId 'email' and the accountId that received
+    // the original message. Each adapter instance filters to its own accountId so replies
+    // are always sent from the same account that received the inbound message.
     bus.subscribe('outbound.message', 'channel', async (event) => {
       const outbound = event as OutboundMessageEvent;
       if (outbound.payload.channelId !== 'email') return;
+      // Only handle events addressed to this account.
+      // When accountId is absent (legacy events from before multi-account support),
+      // default to 'curia' so the primary account claims the event — consistent with
+      // the backward-compat fallback in resolveChannelAccounts().
+      const targetAccountId = outbound.payload.accountId ?? 'curia';
+      if (targetAccountId !== this.config.accountId) return;
 
       try {
         await this.sendOutboundReply(outbound);
@@ -88,7 +119,7 @@ export class EmailAdapter {
         // and compute senderVerified (SPF/DKIM/DMARC). Without this flag, Nylas
         // omits headers from the response entirely and senderVerified will be false.
         fields: 'include_headers',
-      });
+      }, this.config.accountId);
     } catch (err) {
       this.config.logger.error({ err }, 'Email polling failed — will retry');
       this.processing = false;
@@ -132,6 +163,7 @@ export class EmailAdapter {
           const event = createInboundMessage({
             conversationId: converted.conversationId,
             channelId: converted.channelId,
+            accountId: this.config.accountId,
             senderId: converted.senderId,
             content: sanitizedContent,
             metadata: converted.metadata as unknown as Record<string, unknown>,
@@ -167,9 +199,14 @@ export class EmailAdapter {
   }
 
   /**
-   * Send the coordinator's response as an email reply in the original thread.
+   * Send (or draft) the coordinator's response as an email reply in the original thread.
    * The conversationId encodes the thread (email:{threadId}), so we look up the
    * most recent inbound message in that thread and reply to it.
+   *
+   * The actual send behaviour is controlled by this account's outboundPolicy:
+   *   - direct:         send immediately via OutboundGateway
+   *   - draft_gate:     save as Nylas draft for human approval (TODO(#278): full flow)
+   *   - autonomy_gated: check autonomy score before sending; hold as draft if below threshold
    */
   private async sendOutboundReply(outbound: OutboundMessageEvent): Promise<void> {
     const { outboundGateway, logger } = this.config;
@@ -190,7 +227,7 @@ export class EmailAdapter {
       // latest. If Curia was the last sender (a prior turn in the conversation),
       // messages[0].from is Curia's own address — we must NOT reply to ourselves.
       // In that case, look at messages[0].to to find the human recipient.
-      const messages = await outboundGateway.listEmailMessages({ limit: 1, threadId });
+      const messages = await outboundGateway.listEmailMessages({ limit: 1, threadId }, this.config.accountId);
       const threadMessage = messages[0];
       if (!threadMessage) {
         logger.warn({ threadId }, 'Cannot find message to reply to in thread');
@@ -237,23 +274,114 @@ export class EmailAdapter {
       // "Re: Re: Re: ..." chains when replying to already-replied threads.
       const baseSubject = threadMessage.subject.replace(/^Re:\s*/i, '');
 
-      // Route through the gateway so the blocked-contact check and content filter
-      // run on every outbound reply, not just those originating from skills.
-      const result = await outboundGateway.send({
-        channel: 'email',
+      const sendRequest = {
+        channel: 'email' as const,
+        accountId: this.config.accountId,
         to: recipientEmail,
         subject: `Re: ${baseSubject}`,
         body: outbound.payload.content,
         replyToMessageId: threadMessage.id,
-      });
+      };
 
-      if (result.success) {
-        logger.info({ to: recipientEmail, threadId, latestIsOurs }, 'Email reply sent via gateway');
-      } else {
-        logger.warn({ to: recipientEmail, threadId, latestIsOurs, reason: result.blockedReason }, 'Email reply blocked by gateway');
-      }
+      await this.dispatchByPolicy(sendRequest, { threadId, latestIsOurs, to: recipientEmail });
     } catch (err) {
       logger.error({ err, threadId }, 'Failed to send email reply');
+    }
+  }
+
+  /**
+   * Apply this account's outbound policy before dispatching a reply.
+   *
+   * - direct:         send immediately through the gateway (blocked-contact +
+   *                   content filter run inside gateway.send)
+   * - draft_gate:     save as a Nylas draft for human review; the notification +
+   *                   approval + send flow is deferred (TODO(#278))
+   * - autonomy_gated: check the current global autonomy score; if it meets the
+   *                   configured threshold, send directly; otherwise draft-gate
+   */
+  private async dispatchByPolicy(
+    sendRequest: EmailSendRequest,
+    logCtx: Record<string, unknown>,
+  ): Promise<void> {
+    const { outboundGateway, logger, outboundPolicy, autonomyThreshold, autonomyService } = this.config;
+
+    if (outboundPolicy === 'direct') {
+      // Standard path — gateway enforces blocked-contact check + content filter
+      const result = await outboundGateway.send(sendRequest);
+      if (result.success) {
+        logger.info({ ...logCtx, accountId: this.config.accountId }, 'Email reply sent via gateway');
+      } else {
+        logger.warn({ ...logCtx, accountId: this.config.accountId, reason: result.blockedReason }, 'Email reply blocked by gateway');
+      }
+      return;
+    }
+
+    if (outboundPolicy === 'autonomy_gated') {
+      // Check the global autonomy score before committing to a send.
+      // autonomyThreshold and autonomyService are guaranteed to be set when
+      // outboundPolicy is 'autonomy_gated' — validated at startup via config.ts.
+      if (!autonomyService || autonomyThreshold === undefined) {
+        logger.error(
+          { ...logCtx, accountId: this.config.accountId },
+          'autonomy_gated policy requires autonomyService and autonomyThreshold — degrading to draft_gate for this reply',
+        );
+        // Explicit fall-through to draft_gate below (operator sees error log above).
+        // Degrading to draft rather than silently sending or dropping is the safest
+        // choice: the reply is preserved for human review despite the misconfiguration.
+      } else {
+        const autonomyCfg = await autonomyService.getConfig();
+        if (autonomyCfg === null) {
+          // Autonomy not yet configured (pre-migration environment) — preserve for
+          // human review rather than sending autonomously or dropping the reply.
+          logger.warn(
+            { ...logCtx, accountId: this.config.accountId },
+            'Autonomy config not found (pre-migration?) — degrading to draft_gate for this reply',
+          );
+          // Fall through to draft_gate below
+        } else {
+          const score = autonomyCfg.score;
+          if (score >= autonomyThreshold) {
+            const result = await outboundGateway.send(sendRequest);
+            if (result.success) {
+              logger.info(
+                { ...logCtx, accountId: this.config.accountId, autonomyScore: score, threshold: autonomyThreshold },
+                'Email reply sent autonomously (autonomy threshold met)',
+              );
+            } else {
+              logger.warn({ ...logCtx, accountId: this.config.accountId, reason: result.blockedReason }, 'Email reply blocked by gateway');
+            }
+            return;
+          }
+          logger.info(
+            { ...logCtx, accountId: this.config.accountId, autonomyScore: score, threshold: autonomyThreshold },
+            'Autonomy score below threshold — saving reply as draft',
+          );
+          // Score too low: fall through to draft_gate behaviour
+        }
+      }
+    }
+
+    // draft_gate (and autonomy_gated fallback): save as draft for human approval.
+    // TODO(#278): after draft creation, notify the CEO and wire up the approval flow.
+    const draftResult = await outboundGateway.createEmailDraft(sendRequest);
+    if (draftResult.success) {
+      logger.info(
+        { ...logCtx, accountId: this.config.accountId, draftId: draftResult.draftId },
+        'Email reply saved as draft pending human approval (TODO(#278): wire up notification+approval)',
+      );
+    } else if (draftResult.blockedReason === 'Recipient is blocked') {
+      // Intentional block — not an infrastructure failure
+      logger.warn(
+        { ...logCtx, accountId: this.config.accountId, reason: draftResult.blockedReason },
+        'Email draft blocked — recipient is on the blocked list',
+      );
+    } else {
+      // Infrastructure failure (Nylas error, contact resolution failure, client not configured).
+      // The reply is permanently lost — log at error so operators can investigate.
+      logger.error(
+        { ...logCtx, accountId: this.config.accountId, reason: draftResult.blockedReason },
+        'Email draft creation failed — reply permanently lost',
+      );
     }
   }
 

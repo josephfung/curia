@@ -6,6 +6,46 @@ channels:
   # Set SIGNAL_SOCKET_PATH + SIGNAL_PHONE_NUMBER at runtime to enable the Signal adapter.
   # Trust level and unknown-sender policy live in config/channel-trust.yaml.
 
+# Multi-account email configuration (spec §03-email-channel.md).
+#
+# channel_accounts.email defines one or more named Nylas-backed email accounts.
+# Each account has its own grant ID, self-email address, and outbound policy.
+#
+# Outbound policies:
+#   direct          — send immediately via the OutboundGateway (blocked-contact + content
+#                     filter enforced by the gateway). This is the default for most accounts.
+#   draft_gate      — save the coordinator's reply as a Nylas draft for human review;
+#                     the notification → approval → send flow is deferred (see issue #278).
+#   autonomy_gated  — check the global autonomy score before sending; if the score meets
+#                     `autonomy_threshold`, send directly; otherwise fall back to draft_gate.
+#
+# Credential values may be supplied inline or as env-var references using the
+# `env:VAR_NAME` syntax (recommended for secrets):
+#
+#   nylas_grant_id: "env:NYLAS_GRANT_ID"
+#   self_email:     "env:NYLAS_SELF_EMAIL"
+#
+# Backward compatibility: if this block is absent, the email channel falls back to the
+# single-account env-var mode (NYLAS_API_KEY / NYLAS_GRANT_ID / NYLAS_SELF_EMAIL).
+#
+# Example — two accounts, one direct and one autonomy-gated:
+# (Keys are the logical account names; they become the accountId on bus events.)
+#
+# channel_accounts:
+#   email:
+#     curia:
+#       nylas_grant_id: "env:NYLAS_GRANT_ID_CURIA"
+#       self_email:     "env:NYLAS_SELF_EMAIL_CURIA"
+#       outbound_policy: direct
+#
+#     joseph:
+#       nylas_grant_id: "env:NYLAS_GRANT_ID_JOSEPH"
+#       self_email:     "env:NYLAS_SELF_EMAIL_JOSEPH"
+#       outbound_policy: autonomy_gated
+#       autonomy_threshold: 80   # score out of 100; below this, replies are saved as drafts
+#
+# channel_accounts: {}
+
 browser:
   # How long a browser session stays alive after its last action (ms).
   sessionTtlMs: 600000   # 10 minutes

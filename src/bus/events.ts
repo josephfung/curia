@@ -22,6 +22,11 @@ export type Layer = 'channel' | 'dispatch' | 'agent' | 'execution' | 'system';
 interface InboundMessagePayload {
   conversationId: string;
   channelId: string;
+  /** Which named account received this message (e.g. "curia", "joseph").
+   *  Set by the channel adapter; used by the dispatcher to route replies back
+   *  to the same account. Absent for channels without multi-account support
+   *  (Signal, CLI). */
+  accountId?: string;
   senderId: string;
   content: string;
   metadata?: Record<string, unknown>;
@@ -31,6 +36,9 @@ interface AgentTaskPayload {
   agentId: string;
   conversationId: string;
   channelId: string;
+  /** Propagated from the originating inbound.message — identifies which email account
+   *  to reply from. Absent for Signal, CLI, and other single-account channels. */
+  accountId?: string;
   senderId: string;
   content: string;
   metadata?: Record<string, unknown>;
@@ -59,6 +67,10 @@ interface AgentResponsePayload {
 interface OutboundMessagePayload {
   conversationId: string;
   channelId: string;
+  /** Which named account should send this reply. Propagated from the inbound routing
+   *  table so the email adapter uses the same account that received the original message.
+   *  Absent for Signal, CLI, and other single-account channels. */
+  accountId?: string;
   content: string;
 }
 

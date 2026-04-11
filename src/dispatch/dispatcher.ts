@@ -66,7 +66,7 @@ export class Dispatcher {
    * We key on the task event ID (not the inbound message ID) because the agent
    * runtime sets parentEventId on its response to the task event that triggered it.
    */
-  private taskRouting = new Map<string, { channelId: string; conversationId: string; senderId: string }>();
+  private taskRouting = new Map<string, { channelId: string; conversationId: string; senderId: string; accountId?: string }>();
   /** Key: `${conversationId}:${agentId}` — reset on every agent.response */
   private checkpointTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private pool: DbPool | undefined;
@@ -569,6 +569,7 @@ export class Dispatcher {
       agentId: 'coordinator',
       conversationId: payload.conversationId,
       channelId: payload.channelId,
+      accountId: payload.accountId,
       senderId: payload.senderId,
       content: taskContent,
       senderContext,
@@ -585,10 +586,13 @@ export class Dispatcher {
 
     // Store routing info keyed by the task event ID so we can look it up
     // when the agent publishes its response (agent sets parentEventId = task.id).
+    // accountId is stored so the outbound.message is routed to the same email account
+    // that received the original inbound message.
     this.taskRouting.set(taskEvent.id, {
       channelId: payload.channelId,
       conversationId: payload.conversationId,
       senderId: payload.senderId,
+      accountId: payload.accountId,
     });
 
     await this.bus.publish('dispatch', taskEvent);
@@ -629,6 +633,7 @@ export class Dispatcher {
     const outbound = createOutboundMessage({
       conversationId: routing.conversationId,
       channelId: routing.channelId,
+      accountId: routing.accountId,
       content: event.payload.content,
       parentEventId: event.id,
     });

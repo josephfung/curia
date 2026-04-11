@@ -158,6 +158,29 @@
           }
         }
       }
+    },
+    "channel_accounts": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "email": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "required": ["nylas_grant_id", "self_email", "outbound_policy"],
+            "additionalProperties": false,
+            "properties": {
+              "nylas_grant_id": { "type": "string", "minLength": 1 },
+              "self_email": { "type": "string", "minLength": 1 },
+              "outbound_policy": {
+                "type": "string",
+                "enum": ["direct", "draft_gate", "autonomy_gated"]
+              },
+              "autonomy_threshold": { "type": "integer", "minimum": 0, "maximum": 100 }
+            }
+          }
+        }
+      }
     }
   }
 }

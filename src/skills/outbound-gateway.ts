@@ -36,6 +36,10 @@ import { markdownToHtml } from '../channels/email/markdown-to-html.js';
 
 export interface EmailSendRequest {
   channel: 'email';
+  /** Which named account should send this message (e.g. "curia", "joseph").
+   *  Used by the gateway to select the right NylasClient from its map.
+   *  Defaults to the first configured account when absent. */
+  accountId?: string;
   /** Recipient email address */
   to: string;
   subject?: string;
@@ -85,16 +89,27 @@ export interface OutboundSendResult {
   blockedReason?: string;
 }
 
+/** Result from createEmailDraft() — extends send result with the Nylas draft ID. */
+export interface OutboundDraftResult extends OutboundSendResult {
+  /** Nylas draft ID when success is true. */
+  draftId?: string;
+}
+
 export interface OutboundGatewayConfig {
   /**
-   * Nylas client for email sends. Optional — gateway can be initialized with
-   * only Signal (signalClient) if email is not configured.
+   * Map of accountId → NylasClient, one entry per configured email account.
+   * The gateway uses this map to route email sends and draft creations to the
+   * correct Nylas grant. The first entry in the map is treated as the primary
+   * account and is used for system notifications (e.g. blocked-content alerts).
    *
-   * In production (Nylas + Signal mode), this is always set alongside signalClient.
-   * The optional type exists so the gateway can be constructed when only Signal
-   * credentials are provided (e.g., integration tests without Nylas API key).
+   * Optional — gateway can be initialised with only Signal (signalClient) if
+   * email is not configured.
+   *
+   * TODO: If non-Nylas email backends are added in future, replace this map with
+   * an AccountManager abstraction that can hold heterogeneous client types and
+   * abstract over the underlying send/draft/list APIs per account.
    */
-  nylasClient?: NylasClient;
+  nylasClients?: Map<string, NylasClient>;
 
   /**
    * signal-cli RPC client for Signal sends. Optional — gateway can be initialized
@@ -153,7 +168,13 @@ function redactId(value: string): string {
 // ---------------------------------------------------------------------------
 
 export class OutboundGateway {
-  private readonly nylasClient?: NylasClient;
+  /** All configured email accounts: accountId → NylasClient. */
+  private readonly nylasClients: Map<string, NylasClient>;
+  /**
+   * The primary NylasClient — first entry in nylasClients, used for system
+   * notifications (blocked-content CEO alerts) when no accountId is specified.
+   */
+  private readonly primaryNylasClient: NylasClient | undefined;
   private readonly signalClient?: SignalRpcClient;
   private readonly signalPhoneNumber?: string;
   private readonly contactService: ContactService;
@@ -163,7 +184,8 @@ export class OutboundGateway {
   private readonly log: Logger;
 
   constructor(config: OutboundGatewayConfig) {
-    this.nylasClient = config.nylasClient;
+    this.nylasClients = config.nylasClients ?? new Map();
+    this.primaryNylasClient = this.nylasClients.values().next().value;
     this.signalClient = config.signalClient;
     this.signalPhoneNumber = config.signalPhoneNumber;
     this.contactService = config.contactService;
@@ -299,10 +321,11 @@ export class OutboundGateway {
       // message was a Signal send — this avoids a potential Signal → block → Signal
       // notification loop, and email is the canonical out-of-band channel for system alerts.
       //
-      // If email is not configured (no nylasClient or no ceoEmail), we log.error and rely
+      // Uses the primary email account (first in nylasClients map) for notifications.
+      // If email is not configured (no accounts or no ceoEmail), we log.error and rely
       // on the audit log. A future Signal notification fallback can be added here.
       // TODO: add Signal-based blocked-content notification when email is absent.
-      if (this.ceoEmail && this.nylasClient) {
+      if (this.ceoEmail && this.primaryNylasClient) {
         // dispatchEmail bypasses this.send() to avoid infinite recursion.
         // The notification body is a hardcoded template — no user-supplied content.
         // dispatchEmail skips the content filter entirely, so triggerSource is irrelevant.
@@ -332,7 +355,6 @@ export class OutboundGateway {
           'outbound-gateway: CEO notification skipped — no email client configured. Block recorded in audit log only.',
         );
       }
-
       return { success: false, blockedReason: 'Content blocked by filter' };
     }
 
@@ -348,24 +370,71 @@ export class OutboundGateway {
 
   /**
    * Fetch a single email message by its Nylas message ID.
-   * Read-only — no filtering applied.
+   * Read-only — no security filtering applied.
+   *
+   * @param messageId  Nylas message ID
+   * @param accountId  Which account to query. Defaults to the primary account.
    */
-  async getEmailMessage(messageId: string): Promise<NylasMessage> {
-    if (!this.nylasClient) {
-      throw new Error('outbound-gateway: getEmailMessage called but nylasClient is not configured');
+  async getEmailMessage(messageId: string, accountId?: string): Promise<NylasMessage> {
+    const client = this.getNylasClient(accountId);
+    if (!client) {
+      throw new Error('outbound-gateway: getEmailMessage called but no nylasClient is configured');
     }
-    return this.nylasClient.getMessage(messageId);
+    return client.getMessage(messageId);
   }
 
   /**
    * List email messages, optionally filtered by the provided options.
-   * Read-only — no filtering applied.
+   * Read-only — no security filtering applied.
+   *
+   * @param options    Nylas list-messages query params
+   * @param accountId  Which account to query. Defaults to the primary account.
    */
-  async listEmailMessages(options?: ListMessagesOptions): Promise<NylasMessage[]> {
-    if (!this.nylasClient) {
-      throw new Error('outbound-gateway: listEmailMessages called but nylasClient is not configured');
+  async listEmailMessages(options?: ListMessagesOptions, accountId?: string): Promise<NylasMessage[]> {
+    const client = this.getNylasClient(accountId);
+    if (!client) {
+      throw new Error('outbound-gateway: listEmailMessages called but no nylasClient is configured');
     }
-    return this.nylasClient.listMessages(options);
+    return client.listMessages(options);
+  }
+
+  /**
+   * Create a Nylas draft without sending it — used by the draft_gate outbound policy.
+   *
+   * Runs the same blocked-contact check as send() but skips the content filter
+   * (the filter is designed for messages leaving Curia's control; drafts stay in the
+   * mailbox until explicitly sent). The reply goes through the full pipeline when the
+   * draft is eventually approved and sent.
+   *
+   * TODO(#278): after draft creation, notify the CEO and wire up the approval flow.
+   */
+  async createEmailDraft(request: EmailSendRequest): Promise<OutboundDraftResult> {
+    const recipientId = request.to;
+
+    // ------------------------------------------------------------------
+    // Blocked contact check
+    // ------------------------------------------------------------------
+    try {
+      const contact = await this.contactService.resolveByChannelIdentity('email', recipientId);
+      if (contact !== null && contact.status === 'blocked') {
+        this.log.warn(
+          { channel: 'email', recipientId: redactId(recipientId), contactId: contact.contactId },
+          'outbound-gateway: draft blocked — recipient is blocked',
+        );
+        return { success: false, blockedReason: 'Recipient is blocked' };
+      }
+    } catch (err) {
+      // For drafts, fail-closed on contact-resolution errors: a draft created for a
+      // blocked contact could be sent by a human later, bypassing the block entirely.
+      // Better to drop the draft and surface the error than to silently bypass the check.
+      this.log.error(
+        { err, channel: 'email', recipientId: redactId(recipientId) },
+        'outbound-gateway: contact resolution failed — aborting draft to avoid bypassing block check',
+      );
+      return { success: false, blockedReason: 'Contact resolution failed; draft not created' };
+    }
+
+    return this.dispatchEmailDraft(request);
   }
 
   /**
@@ -405,11 +474,74 @@ export class OutboundGateway {
   // ---------------------------------------------------------------------------
 
   /**
+   * Return the NylasClient for the given accountId, or the primary client if
+   * accountId is absent. Returns undefined when no clients are configured.
+   */
+  private getNylasClient(accountId?: string): NylasClient | undefined {
+    if (this.nylasClients.size === 0) return undefined;
+    if (accountId) {
+      const client = this.nylasClients.get(accountId);
+      if (!client) {
+        // Do NOT fall back to the primary account — sending from the wrong account
+        // (wrong From address, wrong mailbox) is a correctness failure, not a graceful
+        // degradation. The caller will receive undefined and return { success: false }.
+        this.log.error(
+          { accountId, availableAccounts: [...this.nylasClients.keys()] },
+          'outbound-gateway: no NylasClient found for accountId — cannot route send; reply dropped',
+        );
+        return undefined;
+      }
+      return client;
+    }
+    return this.primaryNylasClient;
+  }
+
+  /**
+   * Create a Nylas draft without sending.
+   * Called from createEmailDraft() after the blocked-contact check passes.
+   */
+  private async dispatchEmailDraft(request: EmailSendRequest): Promise<OutboundDraftResult> {
+    const nylasClient = this.getNylasClient(request.accountId);
+    if (!nylasClient) {
+      return { success: false, blockedReason: 'Email client not configured' };
+    }
+
+    const htmlBody = markdownToHtml(request.body);
+
+    try {
+      const sendOptions: SendEmailOptions = {
+        to: [{ email: request.to }],
+        cc: request.cc?.map((email) => ({ email })),
+        subject: request.subject ?? '',
+        body: htmlBody,
+        replyToMessageId: request.replyToMessageId,
+      };
+
+      const draft = await nylasClient.createDraft(sendOptions);
+
+      this.log.info(
+        { draftId: draft.id, channel: 'email', to: request.to, accountId: request.accountId },
+        'outbound-gateway: draft created successfully',
+      );
+
+      return { success: true, draftId: draft.id };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.log.error(
+        { err, channel: 'email', to: request.to, accountId: request.accountId },
+        'outbound-gateway: Nylas createDraft failed',
+      );
+      return { success: false, blockedReason: `Draft creation failed: ${message}` };
+    }
+  }
+
+  /**
    * Dispatch a send request to Nylas for email delivery.
    * Maps our flat request shape into the SendEmailOptions the NylasClient expects.
    */
   private async dispatchEmail(request: EmailSendRequest): Promise<OutboundSendResult> {
-    if (!this.nylasClient) {
+    const nylasClient = this.getNylasClient(request.accountId);
+    if (!nylasClient) {
       return { success: false, blockedReason: 'Email client not configured' };
     }
 
@@ -427,10 +559,10 @@ export class OutboundGateway {
         replyToMessageId: request.replyToMessageId,
       };
 
-      const sent = await this.nylasClient.sendMessage(sendOptions);
+      const sent = await nylasClient.sendMessage(sendOptions);
 
       this.log.info(
-        { messageId: sent.id, channel: 'email', to: request.to },
+        { messageId: sent.id, channel: 'email', to: request.to, accountId: request.accountId },
         'outbound-gateway: message sent successfully',
       );
 
