@@ -409,8 +409,11 @@ function resolveEnvValue(value: string, context: string): string {
 export function resolveChannelAccounts(yamlConfig: YamlConfig, config: Config): ResolvedEmailAccount[] {
   const emailAccounts = yamlConfig.channel_accounts?.email;
 
-  // Multi-account mode: YAML block is present and has at least one account
-  if (emailAccounts && Object.keys(emailAccounts).length > 0) {
+  // Multi-account mode: YAML block is present (even if empty).
+  // An explicit empty mapping ({ }) means "no configured email accounts" — do NOT
+  // fall through to the legacy env-var path, so operators can intentionally
+  // disable email in YAML without the legacy account silently reappearing.
+  if (emailAccounts !== undefined) {
     return Object.entries(emailAccounts).map(([name, raw]) => {
       const nylasGrantId = resolveEnvValue(
         raw.nylas_grant_id,
@@ -431,8 +434,8 @@ export function resolveChannelAccounts(yamlConfig: YamlConfig, config: Config): 
   }
 
   // Backward-compat mode: fall back to the legacy single-account env vars.
-  // This path is taken when channel_accounts.email is absent or empty, ensuring
-  // existing single-account deployments require no config changes.
+  // This path is only taken when channel_accounts.email is absent entirely,
+  // ensuring existing single-account deployments require no config changes.
   if (config.nylasGrantId && config.nylasSelfEmail) {
     return [{
       name: 'curia',
