@@ -94,9 +94,18 @@ function loadSkillsConfig(configDir: string): SkillsConfig {
  */
 function mapMcpResult(
   result: Awaited<ReturnType<import('./mcp-client.js').McpSession['client']['callTool']>>,
+  logger: Logger,
+  serverId: string,
+  toolName: string,
 ): SkillResult {
   // Legacy compatibility result shape from older MCP servers (toolResult wrapper).
+  // The legacy protocol has no isError flag, so we cannot determine success/failure.
+  // Log a warning so operators know which servers still need upgrading.
   if ('toolResult' in result) {
+    logger.warn(
+      { server: serverId, tool: toolName },
+      'MCP server returned legacy toolResult shape — cannot determine success/failure; upgrade the server to MCP 2024-11-05+',
+    );
     return { success: true, data: result.toolResult };
   }
 
@@ -172,12 +181,12 @@ export async function loadMcpServers(
         ? await connectStdio(serverEntry, logger)
         : await connectSse(serverEntry, logger);
     } catch (err) {
-      // Connection failure is warn-not-crash: a missing or broken MCP server
-      // should not take down the whole system. The server's tools simply won't
-      // be available until the next restart.
-      logger.warn(
+      // Connection failure is non-recoverable without a restart — tools from this
+      // server will be unavailable for the lifetime of this process. Log at error
+      // so operators are alerted, but don't crash the system.
+      logger.error(
         { err, server: serverEntry.name },
-        'Failed to connect to MCP server — skipping; tools from this server will be unavailable',
+        'Failed to connect to MCP server — tools from this server will be unavailable until restart',
       );
       continue;
     }
@@ -187,9 +196,10 @@ export async function loadMcpServers(
     try {
       toolList = await session.client.listTools();
     } catch (err) {
-      logger.warn(
+      // tools/list failure means no tools can be registered from this server — non-recoverable.
+      logger.error(
         { err, server: serverEntry.name },
-        'tools/list failed for MCP server — skipping; closing connection',
+        'tools/list failed for MCP server — tools from this server will be unavailable until restart; closing connection',
       );
       await session.close().catch((closeErr: unknown) => {
         logger.error({ err: closeErr, server: serverEntry.name }, 'Error closing MCP session after tools/list failure');
@@ -231,11 +241,19 @@ export async function loadMcpServers(
       const handler: SkillHandler = {
         async execute(ctx: SkillContext): Promise<SkillResult> {
           try {
-            const result = await capturedSession.client.callTool({
+            const rawResult = await capturedSession.client.callTool({
               name: toolName,
               arguments: ctx.input,
             });
-            return mapMcpResult(result);
+            const result = mapMcpResult(rawResult, logger, capturedSession.serverId, toolName);
+            if (!result.success) {
+              // Log tool-level errors so operators can detect persistently failing tools.
+              logger.warn(
+                { server: capturedSession.serverId, tool: toolName, error: result.error },
+                'MCP tool returned an error result',
+              );
+            }
+            return result;
           } catch (err) {
             // Skills must never throw — return a failure result instead.
             const message = err instanceof Error ? err.message : String(err);
@@ -257,12 +275,20 @@ export async function loadMcpServers(
           'MCP tool registered',
         );
       } catch (err) {
-        // Duplicate name is the most common error — another local skill or MCP
-        // server already registered a tool with this name.
-        logger.warn(
-          { err, server: serverEntry.name, tool: tool.name },
-          'Failed to register MCP tool — skipping',
-        );
+        const isDuplicate = err instanceof Error && err.message.toLowerCase().includes('already registered');
+        if (isDuplicate) {
+          // Duplicate name — another local skill or MCP server registered this tool first.
+          logger.warn(
+            { server: serverEntry.name, tool: tool.name },
+            'MCP tool name collision with existing skill — skipping; first registration wins',
+          );
+        } else {
+          // Unexpected error — likely a bug or a malformed manifest derived from the tool metadata.
+          logger.error(
+            { err, server: serverEntry.name, tool: tool.name },
+            'Unexpected error registering MCP tool — skipping',
+          );
+        }
       }
     }
 
