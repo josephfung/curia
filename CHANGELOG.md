@@ -13,6 +13,14 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Coordinator always uses its own account for third-party tool calls** — added explicit
+  system prompt guidance instructing the coordinator to default to its own account identity
+  (not the CEO's) when any tool requires an email or account parameter. Prevents tools like
+  `user_google_email` from being populated with the CEO's address, which caused workspace-mcp
+  to request a new OAuth flow for an account it has no credentials for.
+
 ### Added
 
 - **Google Workspace tools wired to coordinator** — Drive, Docs, Sheets, and Gmail read/search/write tools from the `google-workspace` MCP server are now pinned to the coordinator's skill list, making them available as LLM tools on every request. Gmail outbound (send/reply) continues to use the existing local skills; the MCP Gmail tools cover search, read, threads, labels, and drafts. Temporary measure until spec #274 (allow_discovery) is fully implemented.
