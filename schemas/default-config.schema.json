@@ -173,13 +173,12 @@
       "additionalProperties": false,
       "properties": {
         "email": {
-          "type": "array",
-          "items": {
+          "type": "object",
+          "additionalProperties": {
             "type": "object",
-            "required": ["name", "nylas_grant_id", "self_email", "outbound_policy"],
+            "required": ["nylas_grant_id", "self_email", "outbound_policy"],
             "additionalProperties": false,
             "properties": {
-              "name": { "type": "string", "minLength": 1 },
               "nylas_grant_id": { "type": "string", "minLength": 1 },
               "self_email": { "type": "string", "minLength": 1 },
               "outbound_policy": {

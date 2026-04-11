@@ -323,9 +323,11 @@ export class EmailAdapter {
       if (!autonomyService || autonomyThreshold === undefined) {
         logger.error(
           { ...logCtx, accountId: this.config.accountId },
-          'autonomy_gated policy requires autonomyService and autonomyThreshold — falling back to draft_gate',
+          'autonomy_gated policy requires autonomyService and autonomyThreshold — degrading to draft_gate for this reply',
         );
-        // Fall through to draft_gate rather than silently sending or silently dropping
+        // Explicit fall-through to draft_gate below (operator sees error log above).
+        // Degrading to draft rather than silently sending or dropping is the safest
+        // choice: the reply is preserved for human review despite the misconfiguration.
       } else {
         const score = await autonomyService.getScore();
         if (score >= autonomyThreshold) {
@@ -356,10 +358,18 @@ export class EmailAdapter {
         { ...logCtx, accountId: this.config.accountId, draftId: draftResult.draftId },
         'Email reply saved as draft pending human approval (TODO(#273): wire up notification+approval)',
       );
-    } else {
+    } else if (draftResult.blockedReason === 'Recipient is blocked') {
+      // Intentional block — not an infrastructure failure
       logger.warn(
         { ...logCtx, accountId: this.config.accountId, reason: draftResult.blockedReason },
-        'Email draft creation failed or was blocked',
+        'Email draft blocked — recipient is on the blocked list',
+      );
+    } else {
+      // Infrastructure failure (Nylas error, contact resolution failure, client not configured).
+      // The reply is permanently lost — log at error so operators can investigate.
+      logger.error(
+        { ...logCtx, accountId: this.config.accountId, reason: draftResult.blockedReason },
+        'Email draft creation failed — reply permanently lost',
       );
     }
   }

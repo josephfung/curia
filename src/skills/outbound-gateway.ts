@@ -427,10 +427,14 @@ export class OutboundGateway {
         return { success: false, blockedReason: 'Recipient is blocked' };
       }
     } catch (err) {
-      this.log.warn(
+      // For drafts, fail-closed on contact-resolution errors: a draft created for a
+      // blocked contact could be sent by a human later, bypassing the block entirely.
+      // Better to drop the draft and surface the error than to silently bypass the check.
+      this.log.error(
         { err, channel: 'email', recipientId: redactId(recipientId) },
-        'outbound-gateway: contact resolution failed for draft, proceeding without blocked check',
+        'outbound-gateway: contact resolution failed — aborting draft to avoid bypassing block check',
       );
+      return { success: false, blockedReason: 'Contact resolution failed; draft not created' };
     }
 
     return this.dispatchEmailDraft(request);
@@ -481,12 +485,16 @@ export class OutboundGateway {
     if (accountId) {
       const client = this.nylasClients.get(accountId);
       if (!client) {
-        this.log.warn(
-          { accountId },
-          'outbound-gateway: no NylasClient found for accountId — falling back to primary account',
+        // Do NOT fall back to the primary account — sending from the wrong account
+        // (wrong From address, wrong mailbox) is a correctness failure, not a graceful
+        // degradation. The caller will receive undefined and return { success: false }.
+        this.log.error(
+          { accountId, availableAccounts: [...this.nylasClients.keys()] },
+          'outbound-gateway: no NylasClient found for accountId — cannot route send; reply dropped',
         );
+        return undefined;
       }
-      return client ?? this.primaryNylasClient;
+      return client;
     }
     return this.primaryNylasClient;
   }
