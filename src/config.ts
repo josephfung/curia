@@ -191,6 +191,20 @@ export interface YamlConfig {
     /** Minimum LLM confidence required to pause the task. Default: 'high'. */
     minConfidenceToPause?: 'high' | 'medium' | 'low';
   };
+  dreaming?: {
+    decay?: {
+      /** How often the decay pass runs in milliseconds. Default: 86400000 (daily). */
+      intervalMs?: number;
+      /** Confidence at or below this value triggers soft-delete. Default: 0.05. */
+      archiveThreshold?: number;
+      /** Half-life in days per decay class. null = never decays. */
+      halfLifeDays?: {
+        permanent?: null;
+        slow_decay?: number;
+        fast_decay?: number;
+      };
+    };
+  };
 }
 
 /**
@@ -350,6 +364,34 @@ export function loadYamlConfig(configDir: string): YamlConfig {
         throw new Error(
           `intentDrift.minConfidenceToPause must be one of: ${validConfidences.join(', ')}, got: "${drift.minConfidenceToPause}"`,
         );
+      }
+    }
+
+    const dreaming = config.dreaming;
+    if (dreaming !== undefined) {
+      if (typeof dreaming !== 'object' || dreaming === null || Array.isArray(dreaming)) {
+        throw new Error('dreaming must be a YAML mapping');
+      }
+      const decay = dreaming.decay;
+      if (decay !== undefined) {
+        if (typeof decay !== 'object' || decay === null || Array.isArray(decay)) {
+          throw new Error('dreaming.decay must be a YAML mapping');
+        }
+        if (decay.intervalMs !== undefined && (!Number.isInteger(decay.intervalMs) || decay.intervalMs <= 0)) {
+          throw new Error(`dreaming.decay.intervalMs must be a positive integer, got: ${decay.intervalMs}`);
+        }
+        if (decay.archiveThreshold !== undefined && (typeof decay.archiveThreshold !== 'number' || decay.archiveThreshold < 0 || decay.archiveThreshold > 1)) {
+          throw new Error(`dreaming.decay.archiveThreshold must be a number between 0 and 1, got: ${decay.archiveThreshold}`);
+        }
+        const halfLifeDays = decay.halfLifeDays;
+        if (halfLifeDays !== undefined) {
+          for (const key of ['slow_decay', 'fast_decay'] as const) {
+            const val = halfLifeDays[key];
+            if (val !== undefined && (!Number.isInteger(val) || val <= 0)) {
+              throw new Error(`dreaming.decay.halfLifeDays.${key} must be a positive integer, got: ${val}`);
+            }
+          }
+        }
       }
     }
 
