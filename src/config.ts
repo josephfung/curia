@@ -208,215 +208,307 @@ export interface YamlConfig {
 }
 
 /**
- * Load and parse config/default.yaml.
+ * Recursively merge two plain objects. `override` wins on all scalar and
+ * array conflicts; nested plain objects are merged recursively.
+ *
+ * Neither input is mutated — a new object is always returned.
+ * Arrays are replaced, not concatenated: config arrays (e.g.
+ * extra_injection_patterns) are self-contained lists, not additive.
+ */
+function deepMerge(
+  base: Record<string, unknown>,
+  override: Record<string, unknown>,
+): Record<string, unknown> {
+  const result: Record<string, unknown> = { ...base };
+  for (const [key, overrideVal] of Object.entries(override)) {
+    // Guard against prototype pollution via crafted YAML keys.
+    if (key === '__proto__' || key === 'constructor' || key === 'prototype') continue;
+    const baseVal = result[key];
+    if (
+      overrideVal !== null &&
+      typeof overrideVal === 'object' &&
+      !Array.isArray(overrideVal) &&
+      baseVal !== null &&
+      typeof baseVal === 'object' &&
+      !Array.isArray(baseVal)
+    ) {
+      // Both sides are plain objects — merge recursively.
+      result[key] = deepMerge(
+        baseVal as Record<string, unknown>,
+        overrideVal as Record<string, unknown>,
+      );
+    } else {
+      // Scalar, array, or type mismatch — override wins outright.
+      result[key] = overrideVal;
+    }
+  }
+  return result;
+}
+
+/**
+ * Load and parse config/default.yaml, then deep-merge config/local.yaml on
+ * top if it exists. local.yaml is gitignored in this repo and supplied by
+ * deployment repos (e.g. curia-deploy) at deploy time.
  *
  * @param configDir - Absolute path to the directory containing default.yaml.
  *   Pass `path.resolve(import.meta.dirname, '../config')` from index.ts.
- * @returns Parsed YAML config, or an empty object if the file is absent.
- * @throws If the file exists but cannot be parsed (YAML syntax error, permission
- *   denied, etc.) — a broken config file should cause a loud startup failure,
+ * @returns Merged and validated YAML config, or an empty object if
+ *   default.yaml is absent (test/CI environments).
+ * @throws If either file exists but cannot be parsed, or if the merged config
+ *   fails validation — a broken config should cause a loud startup failure,
  *   not silently apply wrong defaults.
  */
 export function loadYamlConfig(configDir: string): YamlConfig {
-  const filePath = path.join(configDir, 'default.yaml');
+  // ── Step 1: parse default.yaml ──────────────────────────────────────────
+  // Separate I/O (ENOENT-able) from parsing and structural validation so that
+  // a "must contain a YAML mapping" error isn't caught and re-wrapped with the
+  // "Failed to load" prefix (which would produce a doubled message).
+  // ENOENT → empty config (test/CI environments where the file is absent).
+  // Any other error → hard startup failure.
+  let base: Record<string, unknown>;
+  let defaultRaw: string;
   try {
-    const parsed = yaml.load(readFileSync(filePath, 'utf-8'));
-
-    // Empty file — treat as no config (same as absent).
-    if (parsed == null) return {};
-
-    // Root must be a mapping, not a scalar or sequence.
-    if (typeof parsed !== 'object' || Array.isArray(parsed)) {
-      throw new Error('config/default.yaml must contain a YAML mapping at the root');
-    }
-
-    const config = parsed as YamlConfig;
-
-    // Validate skillOutput.maxLength if present — a non-positive or non-integer value
-    // would silently distort truncation behavior (e.g., negative would truncate to zero,
-    // a float would be misinterpreted by slice()).
-    const maxLength = config.skillOutput?.maxLength;
-    if (maxLength !== undefined && (!Number.isInteger(maxLength) || maxLength <= 0)) {
-      throw new Error(`skillOutput.maxLength must be a positive integer, got: ${maxLength}`);
-    }
-
-    const checkpointDebounceMs = config.dispatch?.conversationCheckpointDebounceMs;
-    if (checkpointDebounceMs !== undefined && (!Number.isInteger(checkpointDebounceMs) || checkpointDebounceMs <= 0)) {
-      throw new Error(
-        `dispatch.conversationCheckpointDebounceMs must be a positive integer, got: ${checkpointDebounceMs}`,
-      );
-    }
-
-    const rateLimit = config.dispatch?.rate_limit;
-    if (rateLimit !== undefined) {
-      const { window_ms, max_per_sender, max_global } = rateLimit;
-      if (window_ms !== undefined && (!Number.isInteger(window_ms) || window_ms <= 0)) {
-        throw new Error(`dispatch.rate_limit.window_ms must be a positive integer, got: ${window_ms}`);
-      }
-      if (max_per_sender !== undefined && (!Number.isInteger(max_per_sender) || max_per_sender <= 0)) {
-        throw new Error(`dispatch.rate_limit.max_per_sender must be a positive integer, got: ${max_per_sender}`);
-      }
-      if (max_global !== undefined && (!Number.isInteger(max_global) || max_global <= 0)) {
-        throw new Error(`dispatch.rate_limit.max_global must be a positive integer, got: ${max_global}`);
-      }
-      // Cross-validate: global must be at least as large as per-sender, otherwise no single
-      // sender can ever reach their per-sender quota — the global becomes the effective ceiling
-      // for everyone, making per-sender meaningless. This is almost certainly a misconfiguration.
-      // Uses effective values (same defaults as index.ts) so a partial config is also caught.
-      const effectiveMaxPerSender = max_per_sender ?? 15;
-      const effectiveMaxGlobal = max_global ?? 100;
-      if (effectiveMaxGlobal < effectiveMaxPerSender) {
-        throw new Error(
-          `dispatch.rate_limit.max_global (${effectiveMaxGlobal}) must be >= max_per_sender (${effectiveMaxPerSender})`,
-        );
-      }
-    }
-
-    if (config.workingMemory?.summarization !== undefined) {
-      const summarizationThreshold = config.workingMemory.summarization.threshold;
-      if (summarizationThreshold !== undefined && (!Number.isInteger(summarizationThreshold) || summarizationThreshold < 2)) {
-        throw new Error(`workingMemory.summarization.threshold must be an integer >= 2, got: ${summarizationThreshold}`);
-      }
-
-      const summarizationKeepWindow = config.workingMemory.summarization.keepWindow;
-      if (summarizationKeepWindow !== undefined && (!Number.isInteger(summarizationKeepWindow) || summarizationKeepWindow < 1)) {
-        throw new Error(`workingMemory.summarization.keepWindow must be a positive integer, got: ${summarizationKeepWindow}`);
-      }
-
-      // Cross-validate using effective values (same defaults as index.ts bootstrap) so a
-      // config like { keepWindow: 25 } (no explicit threshold) is caught here rather than
-      // silently passing validation and failing at runtime.
-      const effectiveThreshold = summarizationThreshold ?? 20;
-      const effectiveKeepWindow = summarizationKeepWindow ?? 10;
-      if (effectiveKeepWindow >= effectiveThreshold) {
-        throw new Error(
-          `workingMemory.summarization.keepWindow (${effectiveKeepWindow}) must be less than threshold (${effectiveThreshold})`,
-        );
-      }
-    }
-
-    // Validate channel_accounts if present
-    const channelAccounts = config.channel_accounts?.email;
-    if (channelAccounts !== undefined) {
-      if (channelAccounts === null || typeof channelAccounts !== 'object' || Array.isArray(channelAccounts)) {
-        throw new Error('channel_accounts.email must be a YAML mapping');
-      }
-      const validPolicies: OutboundPolicy[] = ['direct', 'draft_gate', 'autonomy_gated'];
-      for (const [accountName, rawAccount] of Object.entries(channelAccounts)) {
-        if (typeof rawAccount !== 'object' || rawAccount === null || Array.isArray(rawAccount)) {
-          throw new Error(`channel_accounts.email.${accountName} must be a YAML mapping`);
-        }
-        if (typeof rawAccount.nylas_grant_id !== 'string' || !rawAccount.nylas_grant_id) {
-          throw new Error(`channel_accounts.email.${accountName}.nylas_grant_id must be a non-empty string`);
-        }
-        if (typeof rawAccount.self_email !== 'string' || !rawAccount.self_email) {
-          throw new Error(`channel_accounts.email.${accountName}.self_email must be a non-empty string`);
-        }
-        if (!validPolicies.includes(rawAccount.outbound_policy)) {
-          throw new Error(
-            `channel_accounts.email.${accountName}.outbound_policy must be one of: ${validPolicies.join(', ')}, got: "${rawAccount.outbound_policy}"`,
-          );
-        }
-        if (rawAccount.outbound_policy === 'autonomy_gated') {
-          if (rawAccount.autonomy_threshold === undefined) {
-            throw new Error(
-              `channel_accounts.email.${accountName}: outbound_policy 'autonomy_gated' requires autonomy_threshold`,
-            );
-          }
-          if (!Number.isInteger(rawAccount.autonomy_threshold) || rawAccount.autonomy_threshold < 0 || rawAccount.autonomy_threshold > 100) {
-            throw new Error(
-              `channel_accounts.email.${accountName}.autonomy_threshold must be an integer 0–100, got: ${rawAccount.autonomy_threshold}`,
-            );
-          }
-        }
-        if (rawAccount.autonomy_threshold !== undefined && rawAccount.outbound_policy !== 'autonomy_gated') {
-          throw new Error(
-            `channel_accounts.email.${accountName}: autonomy_threshold is only valid when outbound_policy is 'autonomy_gated'`,
-          );
-        }
-      }
-    }
-
-    const drift = config.intentDrift;
-    if (drift !== undefined) {
-      // Reject non-object roots (e.g. `intentDrift: false`, `intentDrift: "off"`, `intentDrift: []`).
-      // Without this check, those values would pass the leaf validations below, then reach
-      // index.ts where `yamlConfig.intentDrift?.enabled !== false` evaluates truthy-by-default,
-      // silently enabling drift detection despite a clearly invalid config.
-      if (typeof drift !== 'object' || drift === null || Array.isArray(drift)) {
-        throw new Error('intentDrift must be a YAML mapping');
-      }
-      if (drift.enabled !== undefined && typeof drift.enabled !== 'boolean') {
-        throw new Error(`intentDrift.enabled must be a boolean, got: ${String(drift.enabled)}`);
-      }
-      if (drift.checkEveryNBursts !== undefined) {
-        if (!Number.isInteger(drift.checkEveryNBursts) || drift.checkEveryNBursts < 1) {
-          throw new Error(
-            `intentDrift.checkEveryNBursts must be a positive integer, got: ${drift.checkEveryNBursts}`,
-          );
-        }
-      }
-      const validConfidences = ['high', 'medium', 'low'];
-      if (
-        drift.minConfidenceToPause !== undefined &&
-        !validConfidences.includes(drift.minConfidenceToPause)
-      ) {
-        throw new Error(
-          `intentDrift.minConfidenceToPause must be one of: ${validConfidences.join(', ')}, got: "${drift.minConfidenceToPause}"`,
-        );
-      }
-    }
-
-    const dreaming = config.dreaming;
-    if (dreaming !== undefined) {
-      if (typeof dreaming !== 'object' || dreaming === null || Array.isArray(dreaming)) {
-        throw new Error('dreaming must be a YAML mapping');
-      }
-      const decay = dreaming.decay;
-      if (decay !== undefined) {
-        if (typeof decay !== 'object' || decay === null || Array.isArray(decay)) {
-          throw new Error('dreaming.decay must be a YAML mapping');
-        }
-        if (decay.intervalMs !== undefined && (!Number.isInteger(decay.intervalMs) || decay.intervalMs <= 0)) {
-          throw new Error(`dreaming.decay.intervalMs must be a positive integer, got: ${decay.intervalMs}`);
-        }
-        if (decay.archiveThreshold !== undefined && (typeof decay.archiveThreshold !== 'number' || decay.archiveThreshold < 0 || decay.archiveThreshold > 1)) {
-          throw new Error(`dreaming.decay.archiveThreshold must be a number between 0 and 1, got: ${decay.archiveThreshold}`);
-        }
-        const halfLifeDays = decay.halfLifeDays;
-        if (halfLifeDays !== undefined) {
-          if (typeof halfLifeDays !== 'object' || halfLifeDays === null || Array.isArray(halfLifeDays)) {
-            throw new Error('dreaming.decay.halfLifeDays must be a YAML mapping');
-          }
-          for (const key of ['slow_decay', 'fast_decay'] as const) {
-            const val = halfLifeDays[key];
-            if (val !== undefined && (!Number.isInteger(val) || val <= 0)) {
-              throw new Error(`dreaming.decay.halfLifeDays.${key} must be a positive integer, got: ${val}`);
-            }
-          }
-          // permanent must be null (meaning it never decays) — any non-null value
-          // would be silently ignored by the decay engine, which only loops over
-          // slow_decay and fast_decay, making a non-null permanent a misconfiguration.
-          if (halfLifeDays.permanent !== undefined && halfLifeDays.permanent !== null) {
-            throw new Error(`dreaming.decay.halfLifeDays.permanent must be null (permanent nodes never decay), got: ${String(halfLifeDays.permanent)}`);
-          }
-        }
-      }
-    }
-
-    return config;
+    defaultRaw = readFileSync(path.join(configDir, 'default.yaml'), 'utf-8');
   } catch (err) {
-    // File absent in test/CI environments — silently return empty config.
     if (err instanceof Error && (err as NodeJS.ErrnoException).code === 'ENOENT') {
       return {};
     }
-    // Anything else (YAML syntax error, invalid shape, permission denied, etc.) is a
-    // configuration mistake that must fail loudly rather than silently apply
-    // wrong defaults. Throw so main() crashes with a readable startup error.
     throw new Error(
       `Failed to load config/default.yaml: ${err instanceof Error ? err.message : String(err)}`,
     );
   }
+  let defaultParsed: unknown;
+  try {
+    defaultParsed = yaml.load(defaultRaw);
+  } catch (err) {
+    throw new Error(
+      `Failed to load config/default.yaml: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+  if (defaultParsed === undefined) {
+    // Empty file (yaml.load returns undefined for '') — treat as no config.
+    base = {};
+  } else if (defaultParsed === null || typeof defaultParsed !== 'object' || Array.isArray(defaultParsed)) {
+    // Explicit YAML null, a scalar, or a sequence — all invalid for a config root.
+    throw new Error('config/default.yaml must contain a YAML mapping at the root');
+  } else {
+    base = defaultParsed as Record<string, unknown>;
+  }
+
+  // ── Step 2: merge config/local.yaml if present ──────────────────────────
+  // local.yaml is gitignored and provided by deployment repos at deploy time.
+  // ENOENT → silently skip (expected in dev, CI, and non-deployment envs).
+  // Any other error → hard startup failure.
+  // Same I/O/parse/validate separation as default.yaml above.
+  const localPath = path.join(configDir, 'local.yaml');
+  let localRaw: string | null = null;
+  try {
+    localRaw = readFileSync(localPath, 'utf-8');
+  } catch (err) {
+    if (!(err instanceof Error && (err as NodeJS.ErrnoException).code === 'ENOENT')) {
+      throw new Error(
+        `Failed to load config/local.yaml: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+    // ENOENT: local.yaml absent — proceed with default.yaml only.
+  }
+  if (localRaw !== null) {
+    let localParsed: unknown;
+    try {
+      localParsed = yaml.load(localRaw);
+    } catch (err) {
+      throw new Error(
+        `Failed to load config/local.yaml: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+    if (localParsed === undefined) {
+      // Empty file (yaml.load returns undefined for '') — treat as no override.
+    } else if (localParsed === null || typeof localParsed !== 'object' || Array.isArray(localParsed)) {
+      // Explicit YAML null, a scalar, or a sequence — all invalid for a config root.
+      throw new Error('config/local.yaml must contain a YAML mapping at the root');
+    } else {
+      base = deepMerge(base, localParsed as Record<string, unknown>);
+    }
+  }
+
+  // ── Step 3: validate the merged config ──────────────────────────────────
+  // All validation below is identical to the original — it now runs on the
+  // merged object so local.yaml additions are subject to the same checks.
+  const config = base as YamlConfig;
+
+  // Validate skillOutput.maxLength if present — a non-positive or non-integer value
+  // would silently distort truncation behavior (e.g., negative would truncate to zero,
+  // a float would be misinterpreted by slice()).
+  const maxLength = config.skillOutput?.maxLength;
+  if (maxLength !== undefined && (!Number.isInteger(maxLength) || maxLength <= 0)) {
+    throw new Error(`skillOutput.maxLength must be a positive integer, got: ${maxLength}`);
+  }
+
+  const checkpointDebounceMs = config.dispatch?.conversationCheckpointDebounceMs;
+  if (checkpointDebounceMs !== undefined && (!Number.isInteger(checkpointDebounceMs) || checkpointDebounceMs <= 0)) {
+    throw new Error(
+      `dispatch.conversationCheckpointDebounceMs must be a positive integer, got: ${checkpointDebounceMs}`,
+    );
+  }
+
+  const rateLimit = config.dispatch?.rate_limit;
+  if (rateLimit !== undefined) {
+    const { window_ms, max_per_sender, max_global } = rateLimit;
+    if (window_ms !== undefined && (!Number.isInteger(window_ms) || window_ms <= 0)) {
+      throw new Error(`dispatch.rate_limit.window_ms must be a positive integer, got: ${window_ms}`);
+    }
+    if (max_per_sender !== undefined && (!Number.isInteger(max_per_sender) || max_per_sender <= 0)) {
+      throw new Error(`dispatch.rate_limit.max_per_sender must be a positive integer, got: ${max_per_sender}`);
+    }
+    if (max_global !== undefined && (!Number.isInteger(max_global) || max_global <= 0)) {
+      throw new Error(`dispatch.rate_limit.max_global must be a positive integer, got: ${max_global}`);
+    }
+    // Cross-validate: global must be at least as large as per-sender, otherwise no single
+    // sender can ever reach their per-sender quota — the global becomes the effective ceiling
+    // for everyone, making per-sender meaningless. This is almost certainly a misconfiguration.
+    // Uses effective values (same defaults as index.ts) so a partial config is also caught.
+    const effectiveMaxPerSender = max_per_sender ?? 15;
+    const effectiveMaxGlobal = max_global ?? 100;
+    if (effectiveMaxGlobal < effectiveMaxPerSender) {
+      throw new Error(
+        `dispatch.rate_limit.max_global (${effectiveMaxGlobal}) must be >= max_per_sender (${effectiveMaxPerSender})`,
+      );
+    }
+  }
+
+  if (config.workingMemory?.summarization !== undefined) {
+    const summarizationThreshold = config.workingMemory.summarization.threshold;
+    if (summarizationThreshold !== undefined && (!Number.isInteger(summarizationThreshold) || summarizationThreshold < 2)) {
+      throw new Error(`workingMemory.summarization.threshold must be an integer >= 2, got: ${summarizationThreshold}`);
+    }
+
+    const summarizationKeepWindow = config.workingMemory.summarization.keepWindow;
+    if (summarizationKeepWindow !== undefined && (!Number.isInteger(summarizationKeepWindow) || summarizationKeepWindow < 1)) {
+      throw new Error(`workingMemory.summarization.keepWindow must be a positive integer, got: ${summarizationKeepWindow}`);
+    }
+
+    // Cross-validate using effective values (same defaults as index.ts bootstrap) so a
+    // config like { keepWindow: 25 } (no explicit threshold) is caught here rather than
+    // silently passing validation and failing at runtime.
+    const effectiveThreshold = summarizationThreshold ?? 20;
+    const effectiveKeepWindow = summarizationKeepWindow ?? 10;
+    if (effectiveKeepWindow >= effectiveThreshold) {
+      throw new Error(
+        `workingMemory.summarization.keepWindow (${effectiveKeepWindow}) must be less than threshold (${effectiveThreshold})`,
+      );
+    }
+  }
+
+  // Validate channel_accounts if present
+  const channelAccounts = config.channel_accounts?.email;
+  if (channelAccounts !== undefined) {
+    if (channelAccounts === null || typeof channelAccounts !== 'object' || Array.isArray(channelAccounts)) {
+      throw new Error('channel_accounts.email must be a YAML mapping');
+    }
+    const validPolicies: OutboundPolicy[] = ['direct', 'draft_gate', 'autonomy_gated'];
+    for (const [accountName, rawAccount] of Object.entries(channelAccounts)) {
+      if (typeof rawAccount !== 'object' || rawAccount === null || Array.isArray(rawAccount)) {
+        throw new Error(`channel_accounts.email.${accountName} must be a YAML mapping`);
+      }
+      if (typeof rawAccount.nylas_grant_id !== 'string' || !rawAccount.nylas_grant_id) {
+        throw new Error(`channel_accounts.email.${accountName}.nylas_grant_id must be a non-empty string`);
+      }
+      if (typeof rawAccount.self_email !== 'string' || !rawAccount.self_email) {
+        throw new Error(`channel_accounts.email.${accountName}.self_email must be a non-empty string`);
+      }
+      if (!validPolicies.includes(rawAccount.outbound_policy)) {
+        throw new Error(
+          `channel_accounts.email.${accountName}.outbound_policy must be one of: ${validPolicies.join(', ')}, got: "${rawAccount.outbound_policy}"`,
+        );
+      }
+      if (rawAccount.outbound_policy === 'autonomy_gated') {
+        if (rawAccount.autonomy_threshold === undefined) {
+          throw new Error(
+            `channel_accounts.email.${accountName}: outbound_policy 'autonomy_gated' requires autonomy_threshold`,
+          );
+        }
+        if (!Number.isInteger(rawAccount.autonomy_threshold) || rawAccount.autonomy_threshold < 0 || rawAccount.autonomy_threshold > 100) {
+          throw new Error(
+            `channel_accounts.email.${accountName}.autonomy_threshold must be an integer 0–100, got: ${rawAccount.autonomy_threshold}`,
+          );
+        }
+      }
+      if (rawAccount.autonomy_threshold !== undefined && rawAccount.outbound_policy !== 'autonomy_gated') {
+        throw new Error(
+          `channel_accounts.email.${accountName}: autonomy_threshold is only valid when outbound_policy is 'autonomy_gated'`,
+        );
+      }
+    }
+  }
+
+  const drift = config.intentDrift;
+  if (drift !== undefined) {
+    // Reject non-object roots (e.g. `intentDrift: false`, `intentDrift: "off"`, `intentDrift: []`).
+    // Without this check, those values would pass the leaf validations below, then reach
+    // index.ts where `yamlConfig.intentDrift?.enabled !== false` evaluates truthy-by-default,
+    // silently enabling drift detection despite a clearly invalid config.
+    if (typeof drift !== 'object' || drift === null || Array.isArray(drift)) {
+      throw new Error('intentDrift must be a YAML mapping');
+    }
+    if (drift.enabled !== undefined && typeof drift.enabled !== 'boolean') {
+      throw new Error(`intentDrift.enabled must be a boolean, got: ${String(drift.enabled)}`);
+    }
+    if (drift.checkEveryNBursts !== undefined) {
+      if (!Number.isInteger(drift.checkEveryNBursts) || drift.checkEveryNBursts < 1) {
+        throw new Error(
+          `intentDrift.checkEveryNBursts must be a positive integer, got: ${drift.checkEveryNBursts}`,
+        );
+      }
+    }
+    const validConfidences = ['high', 'medium', 'low'];
+    if (
+      drift.minConfidenceToPause !== undefined &&
+      !validConfidences.includes(drift.minConfidenceToPause)
+    ) {
+      throw new Error(
+        `intentDrift.minConfidenceToPause must be one of: ${validConfidences.join(', ')}, got: "${drift.minConfidenceToPause}"`,
+      );
+    }
+  }
+
+  const dreaming = config.dreaming;
+  if (dreaming !== undefined) {
+    if (typeof dreaming !== 'object' || dreaming === null || Array.isArray(dreaming)) {
+      throw new Error('dreaming must be a YAML mapping');
+    }
+    const decay = dreaming.decay;
+    if (decay !== undefined) {
+      if (typeof decay !== 'object' || decay === null || Array.isArray(decay)) {
+        throw new Error('dreaming.decay must be a YAML mapping');
+      }
+      if (decay.intervalMs !== undefined && (!Number.isInteger(decay.intervalMs) || decay.intervalMs <= 0)) {
+        throw new Error(`dreaming.decay.intervalMs must be a positive integer, got: ${decay.intervalMs}`);
+      }
+      if (decay.archiveThreshold !== undefined && (typeof decay.archiveThreshold !== 'number' || decay.archiveThreshold < 0 || decay.archiveThreshold > 1)) {
+        throw new Error(`dreaming.decay.archiveThreshold must be a number between 0 and 1, got: ${decay.archiveThreshold}`);
+      }
+      const halfLifeDays = decay.halfLifeDays;
+      if (halfLifeDays !== undefined) {
+        if (typeof halfLifeDays !== 'object' || halfLifeDays === null || Array.isArray(halfLifeDays)) {
+          throw new Error('dreaming.decay.halfLifeDays must be a YAML mapping');
+        }
+        for (const key of ['slow_decay', 'fast_decay'] as const) {
+          const val = halfLifeDays[key];
+          if (val !== undefined && (!Number.isInteger(val) || val <= 0)) {
+            throw new Error(`dreaming.decay.halfLifeDays.${key} must be a positive integer, got: ${val}`);
+          }
+        }
+        // permanent must be null (meaning it never decays) — any non-null value
+        // would be silently ignored by the decay engine, which only loops over
+        // slow_decay and fast_decay, making a non-null permanent a misconfiguration.
+        if (halfLifeDays.permanent !== undefined && halfLifeDays.permanent !== null) {
+          throw new Error(`dreaming.decay.halfLifeDays.permanent must be null (permanent nodes never decay), got: ${String(halfLifeDays.permanent)}`);
+        }
+      }
+    }
+  }
+
+  return config;
 }
 
 // ---------------------------------------------------------------------------

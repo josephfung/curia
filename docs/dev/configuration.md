@@ -126,6 +126,70 @@ Changes take effect on restart.
 
 ---
 
+## `config/local.yaml` — deployment overrides
+
+`config/local.yaml` is an optional file that, when present, is deep-merged on
+top of `default.yaml` at startup. It exists so deployment-specific config can
+live in a deployment repo (e.g. `curia-deploy`) rather than in the `curia`
+repo itself.
+
+**`config/local.yaml` is gitignored** — it is never committed to the `curia`
+repo. Your deployment tooling writes it to the server at deploy time.
+
+### Merge semantics
+
+- **Objects** are merged recursively. A key in `local.yaml` that is a YAML
+  mapping is merged into the corresponding mapping in `default.yaml` — only
+  the keys you specify are overridden.
+- **Scalars and arrays** in `local.yaml` replace the corresponding value in
+  `default.yaml`. Arrays are not concatenated — the local value wins wholesale.
+- A key present only in `local.yaml` is added. A key present only in
+  `default.yaml` is preserved unchanged.
+
+### Primary use case: multi-account email
+
+The most common reason to use `local.yaml` is to configure
+`channel_accounts.email`, which defines the named email accounts Curia manages
+and their outbound policies. Because this structure varies per deployment, it
+belongs in `local.yaml` rather than `default.yaml`.
+
+Example `local.yaml` for a two-account deployment:
+
+```yaml
+channel_accounts:
+  email:
+    curia:
+      nylas_grant_id: "env:NYLAS_GRANT_ID"
+      self_email:     "env:NYLAS_SELF_EMAIL"
+      outbound_policy: direct
+
+    joseph:
+      nylas_grant_id: "env:NYLAS_GRANT_ID_JOSEPH"
+      self_email:     "env:NYLAS_SELF_EMAIL_JOSEPH"
+      outbound_policy: autonomy_gated
+      autonomy_threshold: 80
+```
+
+The `env:VAR_NAME` references are resolved from environment variables at
+startup — no credentials are stored in `local.yaml`. The actual grant IDs and
+email addresses live in `.env`.
+
+For a full description of the `channel_accounts.email` schema and outbound
+policy options, see the `channel_accounts` comment block in
+`config/default.yaml`.
+
+### Error handling
+
+| Situation | Behaviour |
+|---|---|
+| `local.yaml` absent | Silently ignored — `default.yaml` is used alone |
+| `local.yaml` present but empty | Treated as no override |
+| `local.yaml` has a YAML syntax error | Hard startup failure with `Failed to load config/local.yaml: ...` |
+| `local.yaml` root is not a mapping | Hard startup failure: `config/local.yaml must contain a YAML mapping at the root` |
+| Merged value fails validation | Hard startup failure — same messages as a bad `default.yaml` value |
+
+---
+
 ## `config/skills.yaml` — MCP servers
 
 MCP servers extend Curia with external tools (Google Drive, GitHub, etc.)
