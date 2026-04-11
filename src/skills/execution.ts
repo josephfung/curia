@@ -17,7 +17,7 @@
 // before invoking the handler. The handler receives ctx.entityContext[] and
 // never needs to call entity-context itself.
 
-import type { SkillResult, SkillContext, CallerContext, AgentPersona } from './types.js';
+import type { SkillResult, SkillContext, CallerContext, AgentPersona, ToolDefinition } from './types.js';
 import { normalizeTimestamp } from '../time/timestamp.js';
 import type { SkillRegistry } from './registry.js';
 import { sanitizeOutput } from './sanitize.js';
@@ -131,6 +131,20 @@ export class ExecutionLayer {
    */
   setAgentContactId(contactId: string): void {
     this.agentContactId = contactId;
+  }
+
+  /**
+   * Return LLM tool definitions for the named skills.
+   *
+   * Used by AgentRuntime to expand the per-task working tool list after a
+   * skill-registry discovery call — the runtime calls this with the names
+   * returned by skill-registry, gets back full tool schemas, and appends
+   * them so the LLM can call the newly-discovered skills in subsequent turns.
+   *
+   * Unknown names are silently skipped (same as toToolDefinitions).
+   */
+  getToolDefinitions(skillNames: string[]): ToolDefinition[] {
+    return this.registry.toToolDefinitions(skillNames);
   }
 
   /**
