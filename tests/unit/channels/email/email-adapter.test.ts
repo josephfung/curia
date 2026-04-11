@@ -69,8 +69,13 @@ function makeAdapter(mocks: ReturnType<typeof createMocks>) {
     contactService: mocks.contactService,
     pollingIntervalMs: 999999, // never fires in tests
     selfEmail: SELF_EMAIL,
+    observationMode: false,
+    excludedSenderEmails: [],
   });
 }
+
+/** Flush pending microtasks and macrotasks so an initial poll triggered by start() can complete. */
+const flushPoll = () => new Promise<void>(resolve => setTimeout(resolve, 0));
 
 // Trigger the outbound.message handler directly by capturing the subscriber
 // registered during start() and calling it with a synthetic event.
@@ -223,5 +228,157 @@ describe('EmailAdapter — sendOutboundReply', () => {
     expect(mocks.outboundGateway.send).toHaveBeenCalledWith(
       expect.objectContaining({ replyToMessageId: 'msg-latest' }),
     );
+  });
+});
+
+// ── Inbound poll — excludedSenderEmails and observationMode ──────────────────
+
+describe('EmailAdapter — inbound poll: excludedSenderEmails', () => {
+  it('suppresses emails from an excluded sender address', async () => {
+    const mocks = createMocks();
+    const adapter = new EmailAdapter({
+      accountId: 'joseph',
+      outboundPolicy: 'draft_gate',
+      bus: mocks.bus,
+      logger: mocks.logger,
+      outboundGateway: mocks.outboundGateway,
+      contactService: mocks.contactService,
+      pollingIntervalMs: 999999,
+      selfEmail: 'joseph@example.com',
+      observationMode: false,
+      excludedSenderEmails: ['curia@example.com'],
+    });
+
+    const msg = makeMockMessage({ from: [{ email: 'curia@example.com' }] });
+    (mocks.outboundGateway.listEmailMessages as ReturnType<typeof vi.fn>).mockResolvedValueOnce([msg]);
+
+    await adapter.start();
+    await flushPoll();
+
+    // Suppressed — bus must not publish an inbound event for this message
+    const inboundPublish = (mocks.bus.publish as ReturnType<typeof vi.fn>).mock.calls
+      .find(([, ev]) => ev?.type === 'inbound.message');
+    expect(inboundPublish).toBeUndefined();
+
+    await adapter.stop();
+  });
+
+  it('excluded sender check is case-insensitive', async () => {
+    const mocks = createMocks();
+    const adapter = new EmailAdapter({
+      accountId: 'joseph',
+      outboundPolicy: 'draft_gate',
+      bus: mocks.bus,
+      logger: mocks.logger,
+      outboundGateway: mocks.outboundGateway,
+      contactService: mocks.contactService,
+      pollingIntervalMs: 999999,
+      selfEmail: 'joseph@example.com',
+      observationMode: false,
+      excludedSenderEmails: ['CURIA@EXAMPLE.COM'],
+    });
+
+    // Sender address uses different casing than the exclusion list entry
+    const msg = makeMockMessage({ from: [{ email: 'curia@example.com' }] });
+    (mocks.outboundGateway.listEmailMessages as ReturnType<typeof vi.fn>).mockResolvedValueOnce([msg]);
+
+    await adapter.start();
+    await flushPoll();
+
+    const inboundPublish = (mocks.bus.publish as ReturnType<typeof vi.fn>).mock.calls
+      .find(([, ev]) => ev?.type === 'inbound.message');
+    expect(inboundPublish).toBeUndefined();
+
+    await adapter.stop();
+  });
+
+  it('does not suppress emails from non-excluded senders', async () => {
+    const mocks = createMocks();
+    const adapter = new EmailAdapter({
+      accountId: 'joseph',
+      outboundPolicy: 'draft_gate',
+      bus: mocks.bus,
+      logger: mocks.logger,
+      outboundGateway: mocks.outboundGateway,
+      contactService: mocks.contactService,
+      pollingIntervalMs: 999999,
+      selfEmail: 'joseph@example.com',
+      observationMode: false,
+      excludedSenderEmails: ['curia@example.com'],
+    });
+
+    // Different sender — should not be suppressed
+    const msg = makeMockMessage({ from: [{ email: 'someone@example.com' }] });
+    (mocks.outboundGateway.listEmailMessages as ReturnType<typeof vi.fn>).mockResolvedValueOnce([msg]);
+
+    await adapter.start();
+    await flushPoll();
+
+    const inboundPublish = (mocks.bus.publish as ReturnType<typeof vi.fn>).mock.calls
+      .find(([, ev]) => ev?.type === 'inbound.message');
+    expect(inboundPublish).toBeDefined();
+
+    await adapter.stop();
+  });
+});
+
+describe('EmailAdapter — inbound poll: observationMode', () => {
+  it('stamps observationMode: true in event metadata and skips contact auto-creation', async () => {
+    const mocks = createMocks();
+    const adapter = new EmailAdapter({
+      accountId: 'joseph',
+      outboundPolicy: 'draft_gate',
+      bus: mocks.bus,
+      logger: mocks.logger,
+      outboundGateway: mocks.outboundGateway,
+      contactService: mocks.contactService,
+      pollingIntervalMs: 999999,
+      selfEmail: 'joseph@example.com',
+      observationMode: true,
+      excludedSenderEmails: [],
+    });
+
+    const msg = makeMockMessage({
+      from: [{ email: 'sender@example.com', name: 'Sender' }],
+      to: [{ email: 'joseph@example.com' }],
+    });
+    (mocks.outboundGateway.listEmailMessages as ReturnType<typeof vi.fn>).mockResolvedValueOnce([msg]);
+
+    await adapter.start();
+    await flushPoll();
+
+    // Contact auto-creation must be skipped entirely in observation mode
+    expect(mocks.contactService.resolveByChannelIdentity).not.toHaveBeenCalled();
+    expect(mocks.contactService.createContact).not.toHaveBeenCalled();
+
+    // Published event must carry observationMode: true in metadata
+    const inboundCall = (mocks.bus.publish as ReturnType<typeof vi.fn>).mock.calls
+      .find(([, ev]) => ev?.type === 'inbound.message');
+    expect(inboundCall).toBeDefined();
+    expect(inboundCall![1].payload.metadata.observationMode).toBe(true);
+
+    await adapter.stop();
+  });
+
+  it('standard mode runs contact auto-creation and does not stamp observationMode', async () => {
+    const mocks = createMocks();
+    const adapter = makeAdapter(mocks); // observationMode: false
+
+    const msg = makeMockMessage({ from: [{ email: CEO_EMAIL, name: 'CEO' }] });
+    (mocks.outboundGateway.listEmailMessages as ReturnType<typeof vi.fn>).mockResolvedValueOnce([msg]);
+
+    await adapter.start();
+    await flushPoll();
+
+    // Contact resolution IS called in standard mode
+    expect(mocks.contactService.resolveByChannelIdentity).toHaveBeenCalled();
+
+    // Published event must NOT have observationMode set
+    const inboundCall = (mocks.bus.publish as ReturnType<typeof vi.fn>).mock.calls
+      .find(([, ev]) => ev?.type === 'inbound.message');
+    expect(inboundCall).toBeDefined();
+    expect(inboundCall![1].payload.metadata.observationMode).toBeUndefined();
+
+    await adapter.stop();
   });
 });

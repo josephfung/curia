@@ -27,6 +27,26 @@ export interface RawEmailAccountConfig {
   outbound_policy: OutboundPolicy;
   /** Required when outbound_policy is 'autonomy_gated'. Integer 0–100. */
   autonomy_threshold?: number;
+  /**
+   * When true, Curia monitors this inbox as an observer rather than acting as
+   * the recipient. Inbound emails bypass the contact trust flow (no provisional
+   * contact creation, no hold queue) and are delivered directly to the coordinator
+   * with an observationMode flag in their metadata. The coordinator treats them as
+   * third-party communications to surface to the CEO, not as instructions.
+   *
+   * Intended for accounts like the CEO's personal email where Curia should draft
+   * replies on request but never act autonomously on incoming emails.
+   */
+  observation_mode?: boolean;
+  /**
+   * Additional sender email addresses to suppress from this account's inbox,
+   * beyond the account's own selfEmail. Supports env:VAR_NAME references.
+   *
+   * Primary use case: exclude Curia's own outbound address from a monitored
+   * inbox so that Curia's sent emails don't get re-processed as observations
+   * (which would cause self-reply loops).
+   */
+  excluded_sender_emails?: string[];
 }
 
 /**
@@ -42,6 +62,10 @@ export interface ResolvedEmailAccount {
   /** Minimum autonomy score (0–100) required for autonomous sends. Only set when
    *  outboundPolicy is 'autonomy_gated'. */
   autonomyThreshold?: number;
+  /** See RawEmailAccountConfig.observation_mode. */
+  observationMode: boolean;
+  /** Resolved sender addresses to suppress in addition to selfEmail. */
+  excludedSenderEmails: string[];
 }
 
 export interface Config {
@@ -438,6 +462,25 @@ export function loadYamlConfig(configDir: string): YamlConfig {
           `channel_accounts.email.${accountName}: autonomy_threshold is only valid when outbound_policy is 'autonomy_gated'`,
         );
       }
+      if (rawAccount.observation_mode !== undefined && typeof rawAccount.observation_mode !== 'boolean') {
+        throw new Error(
+          `channel_accounts.email.${accountName}.observation_mode must be a boolean, got: ${typeof rawAccount.observation_mode}`,
+        );
+      }
+      if (rawAccount.excluded_sender_emails !== undefined) {
+        if (!Array.isArray(rawAccount.excluded_sender_emails)) {
+          throw new Error(
+            `channel_accounts.email.${accountName}.excluded_sender_emails must be a list of strings`,
+          );
+        }
+        for (const entry of rawAccount.excluded_sender_emails) {
+          if (typeof entry !== 'string' || !entry) {
+            throw new Error(
+              `channel_accounts.email.${accountName}.excluded_sender_emails entries must be non-empty strings`,
+            );
+          }
+        }
+      }
     }
   }
 
@@ -566,12 +609,17 @@ export function resolveChannelAccounts(yamlConfig: YamlConfig, config: Config): 
         raw.self_email,
         `channel_accounts.email.${name}.self_email`,
       );
+      const excludedSenderEmails = (raw.excluded_sender_emails ?? []).map((entry, i) =>
+        resolveEnvValue(entry, `channel_accounts.email.${name}.excluded_sender_emails[${i}]`),
+      );
       return {
         name,
         nylasGrantId,
         selfEmail,
         outboundPolicy: raw.outbound_policy,
         autonomyThreshold: raw.autonomy_threshold,
+        observationMode: raw.observation_mode ?? false,
+        excludedSenderEmails,
       };
     });
   }
@@ -585,6 +633,8 @@ export function resolveChannelAccounts(yamlConfig: YamlConfig, config: Config): 
       nylasGrantId: config.nylasGrantId,
       selfEmail: config.nylasSelfEmail,
       outboundPolicy: 'direct',
+      observationMode: false,
+      excludedSenderEmails: [],
     }];
   }
 
