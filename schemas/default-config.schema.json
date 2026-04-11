@@ -159,15 +159,6 @@
         }
       }
     },
-    "intentDrift": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "enabled": { "type": "boolean" },
-        "checkEveryNBursts": { "type": "integer", "minimum": 1 },
-        "minConfidenceToPause": { "type": "string", "enum": ["high", "medium", "low"] }
-      }
-    },
     "channel_accounts": {
       "type": "object",
       "additionalProperties": false,
@@ -185,7 +176,7 @@
                 "type": "string",
                 "enum": ["direct", "draft_gate", "autonomy_gated"]
               },
-              "autonomy_threshold": { "type": "number", "minimum": 0, "maximum": 100 }
+              "autonomy_threshold": { "type": "integer", "minimum": 0, "maximum": 100 }
             }
           }
         }

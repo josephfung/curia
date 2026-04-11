@@ -300,7 +300,7 @@ export class EmailAdapter {
    *                   configured threshold, send directly; otherwise draft-gate
    */
   private async dispatchByPolicy(
-    sendRequest: Parameters<OutboundGateway['send']>[0],
+    sendRequest: EmailSendRequest,
     logCtx: Record<string, unknown>,
   ): Promise<void> {
     const { outboundGateway, logger, outboundPolicy, autonomyThreshold, autonomyService } = this.config;
@@ -329,24 +329,35 @@ export class EmailAdapter {
         // Degrading to draft rather than silently sending or dropping is the safest
         // choice: the reply is preserved for human review despite the misconfiguration.
       } else {
-        const score = await autonomyService.getScore();
-        if (score >= autonomyThreshold) {
-          const result = await outboundGateway.send(sendRequest);
-          if (result.success) {
-            logger.info(
-              { ...logCtx, accountId: this.config.accountId, autonomyScore: score, threshold: autonomyThreshold },
-              'Email reply sent autonomously (autonomy threshold met)',
-            );
-          } else {
-            logger.warn({ ...logCtx, accountId: this.config.accountId, reason: result.blockedReason }, 'Email reply blocked by gateway');
+        const autonomyCfg = await autonomyService.getConfig();
+        if (autonomyCfg === null) {
+          // Autonomy not yet configured (pre-migration environment) — preserve for
+          // human review rather than sending autonomously or dropping the reply.
+          logger.warn(
+            { ...logCtx, accountId: this.config.accountId },
+            'Autonomy config not found (pre-migration?) — degrading to draft_gate for this reply',
+          );
+          // Fall through to draft_gate below
+        } else {
+          const score = autonomyCfg.score;
+          if (score >= autonomyThreshold) {
+            const result = await outboundGateway.send(sendRequest);
+            if (result.success) {
+              logger.info(
+                { ...logCtx, accountId: this.config.accountId, autonomyScore: score, threshold: autonomyThreshold },
+                'Email reply sent autonomously (autonomy threshold met)',
+              );
+            } else {
+              logger.warn({ ...logCtx, accountId: this.config.accountId, reason: result.blockedReason }, 'Email reply blocked by gateway');
+            }
+            return;
           }
-          return;
+          logger.info(
+            { ...logCtx, accountId: this.config.accountId, autonomyScore: score, threshold: autonomyThreshold },
+            'Autonomy score below threshold — saving reply as draft',
+          );
+          // Score too low: fall through to draft_gate behaviour
         }
-        logger.info(
-          { ...logCtx, accountId: this.config.accountId, autonomyScore: score, threshold: autonomyThreshold },
-          'Autonomy score below threshold — saving reply as draft',
-        );
-        // Score too low: fall through to draft_gate behaviour
       }
     }
 

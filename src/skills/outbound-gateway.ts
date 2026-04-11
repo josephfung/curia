@@ -355,9 +355,6 @@ export class OutboundGateway {
           'outbound-gateway: CEO notification skipped — no email client configured. Block recorded in audit log only.',
         );
       }
-
-
-
       return { success: false, blockedReason: 'Content blocked by filter' };
     }
 

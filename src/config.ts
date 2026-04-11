@@ -284,7 +284,7 @@ export function loadYamlConfig(configDir: string): YamlConfig {
     // Validate channel_accounts if present
     const channelAccounts = config.channel_accounts?.email;
     if (channelAccounts !== undefined) {
-      if (typeof channelAccounts !== 'object' || Array.isArray(channelAccounts)) {
+      if (channelAccounts === null || typeof channelAccounts !== 'object' || Array.isArray(channelAccounts)) {
         throw new Error('channel_accounts.email must be a YAML mapping');
       }
       const validPolicies: OutboundPolicy[] = ['direct', 'draft_gate', 'autonomy_gated'];

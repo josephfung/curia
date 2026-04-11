@@ -15,7 +15,7 @@ channels:
 #   direct          — send immediately via the OutboundGateway (blocked-contact + content
 #                     filter enforced by the gateway). This is the default for most accounts.
 #   draft_gate      — save the coordinator's reply as a Nylas draft for human review;
-#                     the notification → approval → send flow is deferred (see issue #273).
+#                     the notification → approval → send flow is deferred (see issue #278).
 #   autonomy_gated  — check the global autonomy score before sending; if the score meets
 #                     `autonomy_threshold`, send directly; otherwise fall back to draft_gate.
 #
