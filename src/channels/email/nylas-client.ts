@@ -278,20 +278,28 @@ export class NylasClient {
   async archiveMessage(messageId: string): Promise<void> {
     this.log.debug({ messageId }, 'archiving message');
 
+    // Split into two try blocks so log messages accurately identify which API call failed.
+    // getMessage already logs its own error; re-throwing without a second log avoids
+    // misleading 'archiveMessage failed' entries when it's actually a fetch failure.
+    let currentFolders: string[];
     try {
       const current = await this.getMessage(messageId);
       // Filter by uppercase so we catch 'inbox', 'Inbox', 'INBOX' consistently
-      const updatedFolders = current.folders.filter((f) => f.toUpperCase() !== 'INBOX');
+      currentFolders = current.folders.filter((f) => f.toUpperCase() !== 'INBOX');
+    } catch (err) {
+      // getMessage already logged; re-throw without a second log line
+      throw err;
+    }
 
+    try {
       await this.nylas.messages.update({
         identifier: this.grantId,
         messageId,
-        requestBody: { folders: updatedFolders },
+        requestBody: { folders: currentFolders },
       });
-
-      this.log.info({ messageId, updatedFolders }, 'message archived successfully');
+      this.log.info({ messageId, updatedFolders: currentFolders }, 'message archived successfully');
     } catch (err) {
-      this.log.error({ err, grantId: this.grantId, messageId }, 'Nylas archiveMessage failed');
+      this.log.error({ err, grantId: this.grantId, messageId }, 'Nylas messages.update failed during archive');
       throw err;
     }
   }

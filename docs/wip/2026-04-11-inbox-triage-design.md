@@ -59,9 +59,9 @@ TRIAGE — evaluate in order:
 **Interface:**
 
 ```typescript
-// Input
+// Input (snake_case to match skill.json manifest convention)
 {
-  messageId: string;   // Nylas message ID
+  message_id: string;  // Nylas message ID
   account: string;     // "curia" | "ceo" | any configured account name
 }
 

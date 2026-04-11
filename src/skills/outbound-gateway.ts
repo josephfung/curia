@@ -520,7 +520,7 @@ export class OutboundGateway {
         // degradation. The caller will receive undefined and return { success: false }.
         this.log.error(
           { accountId, availableAccounts: [...this.nylasClients.keys()] },
-          'outbound-gateway: no NylasClient found for accountId — cannot route send; reply dropped',
+          'outbound-gateway: no NylasClient found for accountId — operation cannot proceed',
         );
         return undefined;
       }
