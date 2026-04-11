@@ -63,15 +63,23 @@ signed in as Curia's Gmail.
 
 **Option A (recommended): auth locally, copy tokens to VPS**
 
+Use `--transport streamable-http` to run the server as an HTTP process so the
+OAuth flow goes through the browser. Do NOT use the default stdio transport for
+this step — stdio mode expects a JSON-RPC client on stdin, not a human, and will
+log parse errors if run directly in a terminal (those errors are harmless but the
+OAuth flow won't complete).
+
 ```bash
 # Install uv locally if not already present
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
-# Run the MCP server — it will print an OAuth URL
-GOOGLE_OAUTH_CLIENT_ID=<...> GOOGLE_OAUTH_CLIENT_SECRET=<...> uvx workspace-mcp
+# Run the server in HTTP mode — this starts an OAuth callback listener
+GOOGLE_OAUTH_CLIENT_ID=<...> GOOGLE_OAUTH_CLIENT_SECRET=<...> uvx workspace-mcp --transport streamable-http
 
-# In the browser: open the printed URL, log in as Curia's Gmail, and approve access.
-# Tokens are saved to ~/.workspace-mcp/cli-tokens/.
+# Open http://localhost:8000 in a browser.
+# You will be redirected to Google's OAuth consent page.
+# Log in as Curia's Gmail (nathancuria1@gmail.com) and approve access.
+# Tokens are saved to ~/.workspace-mcp/cli-tokens/ — you can then Ctrl-C the server.
 ```
 
 Then copy the token cache to the VPS:
