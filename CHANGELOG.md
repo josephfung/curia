@@ -13,6 +13,17 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Added
+
+- **MCP client layer** — Curia can now connect to any MCP-compatible tool server at startup. Servers are declared in `config/skills.yaml` (stdio or SSE transport). Discovered tools are registered transparently in `SkillRegistry` alongside local skills — agents cannot distinguish local from MCP tools, and all MCP calls flow through the `ExecutionLayer` (sanitization, timeouts, sensitivity gating, audit log). Connection failures warn-not-crash; absence of `config/skills.yaml` is treated as "no MCP servers configured". Closes #270.
+- **`config/skills.yaml`** — new operator config file for declaring MCP server connections. `action_risk` is required per server; no default is provided, forcing explicit risk declaration.
+- **`schemas/skills-config.json`** — JSON Schema for `config/skills.yaml`, validated by the startup validator at boot time.
+- **ADR 016** — documents the choice of `@modelcontextprotocol/sdk` over a hand-rolled transport, the registry-transparent design, and the `SSEClientTransport` deprecation risk.
+
+### Changed
+
+- **Spec 03 implementation status** — MCP skills row updated to Done; corrected and annotated remaining rows: secrets access marked Done, safety gate and skill discovery marked Partial with detail, skill-registry cross-referenced to #274.
+
 ## [0.17.0] — 2026-04-10
 
 ### Breaking Changes
@@ -30,10 +41,6 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
-- **MCP client layer** — Curia can now connect to any MCP-compatible tool server at startup. Servers are declared in `config/skills.yaml` (stdio or SSE transport). Discovered tools are registered transparently in `SkillRegistry` alongside local skills — agents cannot distinguish local from MCP tools, and all MCP calls flow through the `ExecutionLayer` (sanitization, timeouts, sensitivity gating, audit log). Connection failures warn-not-crash; absence of `config/skills.yaml` is treated as "no MCP servers configured". Closes #270.
-- **`config/skills.yaml`** — new operator config file for declaring MCP server connections. `action_risk` is required per server; no default is provided, forcing explicit risk declaration.
-- **`schemas/skills-config.json`** — JSON Schema for `config/skills.yaml`, validated by the startup validator at boot time.
-- **ADR 016** — documents the choice of `@modelcontextprotocol/sdk` over a hand-rolled transport, the registry-transparent design, and the `SSEClientTransport` deprecation risk.
 - **Data sensitivity tags on KG nodes** — every KG node now carries a `sensitivity` field (`public | internal | confidential | restricted`). `EntityMemory.createEntity()` and `storeFact()` auto-classify content via `SensitivityClassifier` using keyword rules loaded from `config/default.yaml` (`sensitivity_rules`). Explicit caller overrides always win. Sensitivity is threaded through `memory.store` audit events, enabling downstream gating (e.g. bulk export). Closes #200.
 - **Intent drift detection** — after each burst of a persistent scheduled task, an LLM judge compares the current `task_payload` against the original `intent_anchor`. Tasks that drift with sufficient confidence are paused, and a follow-up `agent.task` is dispatched to the coordinator to notify the CEO (spec §06-audit-and-security.md). Configured via `intentDrift:` block in `config/default.yaml`.
 - **`schemas/` directory** — JSON Schema files for agent configs, skill manifests, and `config/default.yaml`. Schemas are legible without TypeScript and can be validated with third-party tools.
@@ -42,7 +49,6 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
-- **Spec 03 implementation status** — MCP skills row updated to Done; corrected and annotated remaining rows: secrets access marked Done, safety gate and skill discovery marked Partial with detail, skill-registry cross-referenced to #274.
 - **Agent and skill loaders** — manual field checks removed; validation is now handled by the startup validator schema.
 
 ### Fixed
@@ -330,7 +336,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Bootstrap orchestrator** — `src/index.ts` wires all layers in dependency order
 - Architecture specs 00–08, contributor docs (CONTRIBUTING.md, CODE_OF_CONDUCT.md, SECURITY.md)
 
-[Unreleased]: https://github.com/josephfung/curia/compare/v0.17.0...HEAD
+[Unreleased]: https://github.com/josephfung/curia/compare/v0.16.0...HEAD
 [0.17.0]: https://github.com/josephfung/curia/compare/v0.16.0...v0.17.0
 [0.16.0]: https://github.com/josephfung/curia/compare/v0.15.0...v0.16.0
 [0.15.0]: https://github.com/josephfung/curia/compare/v0.14.0...v0.15.0
