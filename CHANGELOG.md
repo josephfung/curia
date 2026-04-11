@@ -15,27 +15,6 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [0.17.0] — 2026-04-10
 
-### Added
-- **MCP client layer** — Curia can now connect to any MCP-compatible tool server at
-  startup. Servers are declared in `config/skills.yaml` (stdio or SSE transport).
-  Discovered tools are registered transparently in `SkillRegistry` alongside local
-  skills — agents cannot distinguish local from MCP tools, and all MCP calls flow
-  through the `ExecutionLayer` (sanitization, timeouts, sensitivity gating, audit log).
-  Connection failures warn-not-crash; absence of `config/skills.yaml` is treated as
-  "no MCP servers configured". Closes #270.
-- **`config/skills.yaml`** — new operator config file for declaring MCP server
-  connections. `action_risk` is required per server; no default is provided, forcing
-  explicit risk declaration.
-- **`schemas/skills-config.json`** — JSON Schema for `config/skills.yaml`, validated by
-  the startup validator at boot time.
-- **ADR 016** — documents the choice of `@modelcontextprotocol/sdk` over a hand-rolled
-  transport, the registry-transparent design, and the `SSEClientTransport` deprecation
-  risk.
-
-### Changed
-
-- **Spec 03 implementation status** — corrected and annotated the implementation status table: secrets access (`ctx.secret()`) marked Done, safety gate and skill discovery marked Partial with detail, MCP and skill-registry cross-referenced to tracking issues (#270, #274).
-
 ### Breaking Changes
 
 - **Agent YAML schema now enforced at startup** — previously ignored unknown keys and missing required fields now cause a descriptive `process.exit(1)`. Any `agents/*.yaml` that was silently tolerated must be fixed before upgrading.
@@ -44,19 +23,17 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **HTTP 413 for oversized messages** — inbound messages that exceed `channels.max_message_bytes` now receive HTTP 413 (Payload Too Large) instead of 403.
 
 ### Security
+
 - **Input validation** — startup validator (`src/startup/validator.ts`) validates `config/default.yaml`, all `agents/*.yaml`, and all `skills/*/skill.json` against JSON Schema (Ajv) at boot time. Invalid configs cause a descriptive `process.exit(1)` before any service initializes (spec §06).
 - **Message size limiting** — dispatcher rejects inbound messages exceeding `channels.max_message_bytes` (default 100KB) before routing; rejection is audit-logged as `message.rejected` with causal `parentEventId` and includes the message byte size and configured limit (spec §06).
-- **Rate limiting at the dispatch layer** — the dispatch layer now enforces two independent
-  in-memory fixed-window rate limits: a global limit (default 100 msg/min across all senders)
-  checked before any policy-gate processing to stop aggregate DoS floods early, and a per-sender
-  limit (default 15 msg/min) checked after policy gates so blocked/held senders don't consume
-  quota for legitimate senders. Excess messages are dropped silently; violations are audit-logged
-  as `message.rejected` events with reason `global_rate_limited` or `sender_rate_limited` and
-  logged at `warn` level. Both limits and the window duration are configurable in
-  `config/default.yaml` under `dispatch.rate_limit`. Completes the rate-limiting item in the
-  spec §06 security checklist. Closes #198.
+- **Rate limiting at the dispatch layer** — the dispatch layer now enforces two independent in-memory fixed-window rate limits: a global limit (default 100 msg/min across all senders) checked before any policy-gate processing to stop aggregate DoS floods early, and a per-sender limit (default 15 msg/min) checked after policy gates so blocked/held senders don't consume quota for legitimate senders. Excess messages are dropped silently; violations are audit-logged as `message.rejected` events with reason `global_rate_limited` or `sender_rate_limited` and logged at `warn` level. Both limits and the window duration are configurable in `config/default.yaml` under `dispatch.rate_limit`. Completes the rate-limiting item in the spec §06 security checklist. Closes #198.
 
 ### Added
+
+- **MCP client layer** — Curia can now connect to any MCP-compatible tool server at startup. Servers are declared in `config/skills.yaml` (stdio or SSE transport). Discovered tools are registered transparently in `SkillRegistry` alongside local skills — agents cannot distinguish local from MCP tools, and all MCP calls flow through the `ExecutionLayer` (sanitization, timeouts, sensitivity gating, audit log). Connection failures warn-not-crash; absence of `config/skills.yaml` is treated as "no MCP servers configured". Closes #270.
+- **`config/skills.yaml`** — new operator config file for declaring MCP server connections. `action_risk` is required per server; no default is provided, forcing explicit risk declaration.
+- **`schemas/skills-config.json`** — JSON Schema for `config/skills.yaml`, validated by the startup validator at boot time.
+- **ADR 016** — documents the choice of `@modelcontextprotocol/sdk` over a hand-rolled transport, the registry-transparent design, and the `SSEClientTransport` deprecation risk.
 - **Data sensitivity tags on KG nodes** — every KG node now carries a `sensitivity` field (`public | internal | confidential | restricted`). `EntityMemory.createEntity()` and `storeFact()` auto-classify content via `SensitivityClassifier` using keyword rules loaded from `config/default.yaml` (`sensitivity_rules`). Explicit caller overrides always win. Sensitivity is threaded through `memory.store` audit events, enabling downstream gating (e.g. bulk export). Closes #200.
 - **Intent drift detection** — after each burst of a persistent scheduled task, an LLM judge compares the current `task_payload` against the original `intent_anchor`. Tasks that drift with sufficient confidence are paused, and a follow-up `agent.task` is dispatched to the coordinator to notify the CEO (spec §06-audit-and-security.md). Configured via `intentDrift:` block in `config/default.yaml`.
 - **`schemas/` directory** — JSON Schema files for agent configs, skill manifests, and `config/default.yaml`. Schemas are legible without TypeScript and can be validated with third-party tools.
@@ -64,38 +41,16 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Real-config validator tests** — `tests/unit/startup/validator.test.ts` now validates the actual `config/default.yaml`, `agents/*.yaml`, and `skills/*/skill.json` against their schemas. Catches schema/config drift in CI before it reaches prod.
 
 ### Changed
+
+- **Spec 03 implementation status** — MCP skills row updated to Done; corrected and annotated remaining rows: secrets access marked Done, safety gate and skill discovery marked Partial with detail, skill-registry cross-referenced to #274.
 - **Agent and skill loaders** — manual field checks removed; validation is now handled by the startup validator schema.
 
 ### Fixed
+
 - **`dispatch.rate_limit` missing from `default-config.schema.json`** — the rate-limit config block added in this release was not declared in the schema, causing startup validation to reject the config with `additionalProperties` on every deploy. Schema now allows `window_ms`, `max_per_sender`, and `max_global` under `dispatch.rate_limit`.
-- **Delegate skill timeout now wired to `expected_duration_seconds`** — the delegate skill
-  previously used a hardcoded 90-second timeout regardless of job type, causing long-running
-  scheduled specialists (e.g. writing-scout doing many web-fetch calls) to time out and retry
-  unnecessarily. `expected_duration_seconds` from the scheduler job is now forwarded through the
-  `agent.task` event payload; the runtime injects it as `timeout_ms` on every `delegate` call so
-  the specialist gets appropriate headroom without any coordinator.yaml changes. The 90-second
-  default is preserved for interactive tasks that carry no scheduler hint. The delegate skill
-  outer execution timeout has been raised to 660 s to accommodate jobs up to 600 s. Closes #258.
-- **`CreateJobParams` now accepts `expectedDurationSeconds`** — dynamic job creation (HTTP API,
-  skills) previously could not set `expected_duration_seconds`; the field was only reachable via
-  declarative YAML. `CreateJobParams` now exposes the field with the same validation rules as the
-  YAML path (positive finite integer; non-integer/zero/negative values rejected with a clear
-  error). Part of #258.
-- **Null byte crash in audit logger** — `AuditLogger.log()` now strips U+0000 from all
-  string values in event payloads before writing to `audit_log.payload`. Previously, binary
-  content returned by `web-fetch` could embed null bytes that PostgreSQL rejects with
-  `22P05`, causing the agent task to crash mid-run. Fixes josephfung/curia#257.
-- **contact-data-leak false positives** — The `contact-data-leak` deterministic filter rule
-  now uses a single-axis policy based solely on recipient trust level, instead of blocking all
-  third-party email addresses unconditionally. A third-party email is blocked only when the
-  recipient is not trusted. Trusted recipients are the CEO (matched by `CEO_PRIMARY_EMAIL`) and
-  any contact with `trustLevel = 'high'` in the contact DB. Trusted recipients may receive
-  third-party contact data regardless of how the message was triggered — this correctly handles
-  both "CEO asked for Hamilton's email" (user-initiated) and "daily briefing lists meeting
-  attendees" (scheduled routine). Closes #210.
-  **Breaking changes**: `FilterCheckInput` gained a required `recipientTrustLevel` field.
-  `FilterCheckInput`, `EmailSendRequest`, `SignalOutboundRequest`, and `SkillContext` no longer
-  have a `triggerSource` field — callers must remove it.
+- **Delegate skill timeout now wired to `expected_duration_seconds`** — the delegate skill previously used a hardcoded 90-second timeout regardless of job type, causing long-running scheduled specialists (e.g. writing-scout doing many web-fetch calls) to time out and retry unnecessarily. `expected_duration_seconds` from the scheduler job is now forwarded through the `agent.task` event payload; the runtime injects it as `timeout_ms` on every `delegate` call so the specialist gets appropriate headroom without any coordinator.yaml changes. The 90-second default is preserved for interactive tasks that carry no scheduler hint. The delegate skill outer execution timeout has been raised to 660 s to accommodate jobs up to 600 s. Closes #258.
+- **`CreateJobParams` now accepts `expectedDurationSeconds`** — dynamic job creation (HTTP API, skills) previously could not set `expected_duration_seconds`; the field was only reachable via declarative YAML. `CreateJobParams` now exposes the field with the same validation rules as the YAML path (positive finite integer; non-integer/zero/negative values rejected with a clear error). Part of #258.
+- **Null byte crash in audit logger** — `AuditLogger.log()` now strips U+0000 from all string values in event payloads before writing to `audit_log.payload`. Previously, binary content returned by `web-fetch` could embed null bytes that PostgreSQL rejects with `22P05`, causing the agent task to crash mid-run. Fixes josephfung/curia#257.
 
 ---
 
@@ -375,7 +330,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Bootstrap orchestrator** — `src/index.ts` wires all layers in dependency order
 - Architecture specs 00–08, contributor docs (CONTRIBUTING.md, CODE_OF_CONDUCT.md, SECURITY.md)
 
-[Unreleased]: https://github.com/josephfung/curia/compare/v0.16.0...HEAD
+[Unreleased]: https://github.com/josephfung/curia/compare/v0.17.0...HEAD
+[0.17.0]: https://github.com/josephfung/curia/compare/v0.16.0...v0.17.0
 [0.16.0]: https://github.com/josephfung/curia/compare/v0.15.0...v0.16.0
 [0.15.0]: https://github.com/josephfung/curia/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/josephfung/curia/compare/v0.12.1...v0.14.0
