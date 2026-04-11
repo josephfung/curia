@@ -769,8 +769,38 @@ describe('Dispatcher — observation mode preamble', () => {
     const content = tasks[0]!.payload.content;
     expect(content).toContain('[OBSERVATION MODE');
     expect(content).toContain('testing if you read this');
-    expect(content).toContain('Do NOT reply');
-    expect(content).toContain('Do NOT sign as yourself');
+    expect(content).toContain('sign with your name');
+    expect(content).toContain('TRIAGE');
+    expect(content).toContain('URGENT');
+    expect(content).toContain('NOISE');
+    expect(content).toContain('email-archive');
+  });
+
+  it('includes nylasMessageId and accountId in preamble when present in metadata', async () => {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+
+    const tasks: AgentTaskEvent[] = [];
+    bus.subscribe('agent.task', 'agent', (e) => tasks.push(e as AgentTaskEvent));
+
+    const dispatcher = new Dispatcher({ bus, logger });
+    dispatcher.register();
+
+    const event = createInboundMessage({
+      conversationId: 'email:thread-obs-id',
+      channelId: 'email',
+      accountId: 'curia',
+      senderId: 'sender@example.com',
+      content: 'email body here',
+      metadata: { observationMode: true, nylasMessageId: 'msg-abc-123' },
+    });
+
+    await bus.publish('channel', event);
+
+    expect(tasks).toHaveLength(1);
+    const content = tasks[0]!.payload.content;
+    expect(content).toContain('msg-abc-123');
+    expect(content).toContain('curia');
   });
 
   it('does not prepend preamble for normal (non-observation) messages', async () => {
