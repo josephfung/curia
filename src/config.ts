@@ -208,34 +208,110 @@ export interface YamlConfig {
 }
 
 /**
- * Load and parse config/default.yaml.
+ * Recursively merge two plain objects. `override` wins on all scalar and
+ * array conflicts; nested plain objects are merged recursively.
+ *
+ * Neither input is mutated — a new object is always returned.
+ * Arrays are replaced, not concatenated: config arrays (e.g.
+ * extra_injection_patterns) are self-contained lists, not additive.
+ */
+function deepMerge(
+  base: Record<string, unknown>,
+  override: Record<string, unknown>,
+): Record<string, unknown> {
+  const result: Record<string, unknown> = { ...base };
+  for (const [key, overrideVal] of Object.entries(override)) {
+    const baseVal = result[key];
+    if (
+      overrideVal !== null &&
+      typeof overrideVal === 'object' &&
+      !Array.isArray(overrideVal) &&
+      baseVal !== null &&
+      typeof baseVal === 'object' &&
+      !Array.isArray(baseVal)
+    ) {
+      // Both sides are plain objects — merge recursively.
+      result[key] = deepMerge(
+        baseVal as Record<string, unknown>,
+        overrideVal as Record<string, unknown>,
+      );
+    } else {
+      // Scalar, array, or type mismatch — override wins outright.
+      result[key] = overrideVal;
+    }
+  }
+  return result;
+}
+
+/**
+ * Load and parse config/default.yaml, then deep-merge config/local.yaml on
+ * top if it exists. local.yaml is gitignored in this repo and supplied by
+ * deployment repos (e.g. curia-deploy) at deploy time.
  *
  * @param configDir - Absolute path to the directory containing default.yaml.
  *   Pass `path.resolve(import.meta.dirname, '../config')` from index.ts.
- * @returns Parsed YAML config, or an empty object if the file is absent.
- * @throws If the file exists but cannot be parsed (YAML syntax error, permission
- *   denied, etc.) — a broken config file should cause a loud startup failure,
+ * @returns Merged and validated YAML config, or an empty object if
+ *   default.yaml is absent (test/CI environments).
+ * @throws If either file exists but cannot be parsed, or if the merged config
+ *   fails validation — a broken config should cause a loud startup failure,
  *   not silently apply wrong defaults.
  */
 export function loadYamlConfig(configDir: string): YamlConfig {
-  const filePath = path.join(configDir, 'default.yaml');
+  // ── Step 1: parse default.yaml ──────────────────────────────────────────
+  // ENOENT → empty config (test/CI environments where the file is absent).
+  // Any other error → hard startup failure.
+  let base: Record<string, unknown>;
   try {
-    const parsed = yaml.load(readFileSync(filePath, 'utf-8'));
-
-    // Empty file — treat as no config (same as absent).
-    if (parsed == null) return {};
-
-    // Root must be a mapping, not a scalar or sequence.
-    if (typeof parsed !== 'object' || Array.isArray(parsed)) {
+    const parsed = yaml.load(readFileSync(path.join(configDir, 'default.yaml'), 'utf-8'));
+    if (parsed == null) {
+      base = {};
+    } else if (typeof parsed !== 'object' || Array.isArray(parsed)) {
       throw new Error('config/default.yaml must contain a YAML mapping at the root');
+    } else {
+      base = parsed as Record<string, unknown>;
     }
+  } catch (err) {
+    if (err instanceof Error && (err as NodeJS.ErrnoException).code === 'ENOENT') {
+      return {};
+    }
+    throw new Error(
+      `Failed to load config/default.yaml: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
 
-    const config = parsed as YamlConfig;
+  // ── Step 2: merge config/local.yaml if present ──────────────────────────
+  // local.yaml is gitignored and provided by deployment repos at deploy time.
+  // ENOENT → silently skip (expected in dev, CI, and non-deployment envs).
+  // Any other error → hard startup failure.
+  const localPath = path.join(configDir, 'local.yaml');
+  try {
+    const localParsed = yaml.load(readFileSync(localPath, 'utf-8'));
+    if (localParsed != null) {
+      if (typeof localParsed !== 'object' || Array.isArray(localParsed)) {
+        throw new Error('config/local.yaml must contain a YAML mapping at the root');
+      }
+      base = deepMerge(base, localParsed as Record<string, unknown>);
+    }
+    // localParsed == null (null or undefined) means the file was empty — treat as no override.
+  } catch (err) {
+    if (err instanceof Error && (err as NodeJS.ErrnoException).code === 'ENOENT') {
+      // local.yaml absent — proceed with default.yaml only.
+    } else {
+      throw new Error(
+        `Failed to load config/local.yaml: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
 
-    // Validate skillOutput.maxLength if present — a non-positive or non-integer value
-    // would silently distort truncation behavior (e.g., negative would truncate to zero,
-    // a float would be misinterpreted by slice()).
-    const maxLength = config.skillOutput?.maxLength;
+  // ── Step 3: validate the merged config ──────────────────────────────────
+  // All validation below is identical to the original — it now runs on the
+  // merged object so local.yaml additions are subject to the same checks.
+  const config = base as YamlConfig;
+
+  // Validate skillOutput.maxLength if present — a non-positive or non-integer value
+  // would silently distort truncation behavior (e.g., negative would truncate to zero,
+  // a float would be misinterpreted by slice()).
+  const maxLength = config.skillOutput?.maxLength;
     if (maxLength !== undefined && (!Number.isInteger(maxLength) || maxLength <= 0)) {
       throw new Error(`skillOutput.maxLength must be a positive integer, got: ${maxLength}`);
     }
@@ -404,19 +480,7 @@ export function loadYamlConfig(configDir: string): YamlConfig {
       }
     }
 
-    return config;
-  } catch (err) {
-    // File absent in test/CI environments — silently return empty config.
-    if (err instanceof Error && (err as NodeJS.ErrnoException).code === 'ENOENT') {
-      return {};
-    }
-    // Anything else (YAML syntax error, invalid shape, permission denied, etc.) is a
-    // configuration mistake that must fail loudly rather than silently apply
-    // wrong defaults. Throw so main() crashes with a readable startup error.
-    throw new Error(
-      `Failed to load config/default.yaml: ${err instanceof Error ? err.message : String(err)}`,
-    );
-  }
+  return config;
 }
 
 // ---------------------------------------------------------------------------
