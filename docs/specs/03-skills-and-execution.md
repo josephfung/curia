@@ -33,7 +33,7 @@ skills/
 }
 ```
 
-- `sensitivity`: `"normal"` (auto-approvable) or `"elevated"` (requires human approval on first use)
+- `sensitivity`: `"normal"` (auto-approvable) or `"elevated"` — **target behaviour**: requires human approval on first use by that agent; **current behaviour**: not yet enforced — the execution layer applies role-gating instead (caller must have `role: ceo`); the persist-once-ask-once flow is deferred (see Safety Gate section below)
 - `action_risk`: required on all manifests. Named labels — `none`, `low`, `medium`, `high`, `critical` — map to minimum autonomy score thresholds. Raw integers (0–100) are also accepted for precision.
 - `secrets`: declares which env-var-backed secrets the skill will request via `ctx.secret()`
 - `permissions`: declared capabilities, validated at load time
@@ -63,7 +63,7 @@ type SkillResult =
   | { success: false; error: string };
 ```
 
-Skills cannot access the bus directly — they receive inputs and return outputs. Skills are invoked synchronously within the agent turn via `ExecutionLayer.invoke()`. Skills are sandboxed to their declared I/O and must never throw — all error paths return `{ success: false, error: '...' }`.
+Skills cannot self-grant privileges — all service access (bus, entityMemory, calendar client, etc.) must come from the injected `SkillContext` via explicit per-skill grants in the execution layer. Skills are invoked synchronously within the agent turn via `ExecutionLayer.invoke()`. Skills are sandboxed to their declared I/O and must never throw — all error paths return `{ success: false, error: '...' }`.
 
 ---
 
@@ -103,7 +103,7 @@ All registered skills (local + MCP) are searchable via the built-in `skill-regis
 skill-registry({ query: "send email" })
 ```
 
-This returns a list of matching skill names and descriptions. The LLM can then call a discovered skill by name — the execution layer resolves it from the registry regardless of whether it is pinned.
+This returns a list of matching skill names and descriptions. **Discovery returns metadata only** — a skill returned by `skill-registry` is not automatically callable. The LLM can only invoke tools present in its tool list at the start of the turn; `skill-registry` results are informational. Making discovered-but-unpinned skills callable (dynamic tool-list expansion mid-task, or an `invoke-skill` proxy tool) is a follow-up tracked in #291 and is not yet implemented. Until then, agents must pin any tool they intend to call.
 
 `skill-registry` itself is excluded from its own search results to avoid circular self-discovery.
 
