@@ -21,3 +21,16 @@ DROP INDEX IF EXISTS idx_kg_nodes_unique;
 CREATE UNIQUE INDEX idx_kg_nodes_unique
   ON kg_nodes (lower(label), type)
   WHERE type != 'fact' AND archived_at IS NULL;
+
+-- Recreate the edge uniqueness index to exclude archived rows.
+-- Without this, upsertEdge's ON CONFLICT clause would match archived edges and
+-- revive them via DO UPDATE — the old index covers all rows regardless of archived_at.
+-- After this migration, uniqueness is enforced only among active (non-archived) edges.
+DROP INDEX IF EXISTS idx_kg_edges_unique;
+CREATE UNIQUE INDEX idx_kg_edges_unique
+  ON kg_edges (
+    LEAST(source_node_id::text, target_node_id::text),
+    GREATEST(source_node_id::text, target_node_id::text),
+    type
+  )
+  WHERE archived_at IS NULL;

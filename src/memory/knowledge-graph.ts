@@ -797,10 +797,13 @@ class InMemoryBackend implements KnowledgeGraphBackend {
   }
 
   async upsertEdge(edge: KgEdge): Promise<{ edge: KgEdge; created: boolean }> {
-    // Check for an existing edge of the same type in either direction
+    // Check for an existing *active* edge of the same type in either direction.
+    // Archived edges are invisible for conflict detection — a new edge should be
+    // created fresh rather than reviving a soft-deleted row.
     let existing: KgEdge | undefined;
     for (const e of this.edges.values()) {
       if (
+        !this.archivedEdges.has(e.id) &&
         e.type === edge.type &&
         (
           (e.sourceNodeId === edge.sourceNodeId && e.targetNodeId === edge.targetNodeId) ||
