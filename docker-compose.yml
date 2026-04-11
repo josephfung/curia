@@ -55,7 +55,7 @@ services:
       # Tokens are written here on first OAuth login and auto-refreshed thereafter.
       # Without this volume, re-authentication is required on every container restart.
       # See docs/dev/google-drive.md for first-time OAuth setup.
-      - google_workspace_tokens:/root/.workspace-mcp
+      - google_workspace_tokens:/root/.google_workspace_mcp
 
 volumes:
   pgdata:
