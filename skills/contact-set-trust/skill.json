@@ -7,7 +7,7 @@
   "infrastructure": true,
   "inputs": {
     "contact_id": "string (UUID from contact-lookup or contact-create)",
-    "trust_level": "string? — 'high', 'medium', 'low', or null to clear the override"
+    "trust_level": "string? (one of 'high', 'medium', 'low', or null to clear the override)"
   },
   "outputs": {
     "contact_id": "string",
