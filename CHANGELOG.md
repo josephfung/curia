@@ -19,6 +19,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **Observation-mode NOISE drafts** — the triage preamble now explicitly prohibits calling `email-reply` (or any draft/send skill) when classifying an email as NOISE. Previously the coordinator sometimes created an explanatory draft alongside the archive call, which became a dangling draft in the CEO's inbox under the `draft_gate` outbound policy. Classification rationale is already persisted via the LLM call archive and `agent.response` audit events, so the draft is redundant.
+
 ---
 
 ## [0.18.0] — 2026-04-11

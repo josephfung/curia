@@ -774,6 +774,10 @@ describe('Dispatcher — observation mode preamble', () => {
     expect(content).toContain('URGENT');
     expect(content).toContain('NOISE');
     expect(content).toContain('email-archive');
+    // NOISE classification must not create a draft — the outbound_policy: draft_gate
+    // on observation-mode accounts would turn any email-reply call into a dangling
+    // draft in the CEO's inbox. Lock in the explicit prohibition.
+    expect(content).toContain('Do NOT call email-reply');
   });
 
   it('includes nylasMessageId and accountId in preamble when present in metadata', async () => {

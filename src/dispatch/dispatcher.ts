@@ -622,7 +622,9 @@ export class Dispatcher {
         `   - NEEDS DRAFT — a reply is warranted and you can write it:\n` +
         `     Save a draft with email-reply. The CEO will review before it sends.\n` +
         `   - NOISE — receipt, newsletter, automated notification, no action needed:\n` +
-        `     Call email-archive. No notification.\n\n` +
+        `     Call email-archive. Do NOT call email-reply or any draft/send skill — archiving\n` +
+        `     is the only action. Your classification rationale is already captured in the\n` +
+        `     audit log; do not leave an explanatory draft in the CEO's inbox. No notification.\n\n` +
         `3. WHEN IN DOUBT: default to URGENT (notify) rather than acting silently.\n` +
         `   It is better to surface something than to quietly act on it incorrectly.\n\n` +
         `--- Original message ---\n` +
