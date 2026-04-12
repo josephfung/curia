@@ -36,6 +36,19 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **Skill manifest parser crash at startup** — `email-archive`, `bullpen`, and
+  `contact-set-trust` shipped `skill.json` `inputs` blocks using the em-dash or
+  colon shorthand (e.g. `"string — Nylas message ID..."`). The registry's
+  shorthand parser only recognises the canonical `"type (description)"` form,
+  and the recently-added primitive-type allowlist validation at
+  `src/skills/registry.ts:169-175` now throws at agent boot instead of silently
+  emitting a broken JSON Schema. This took the whole container down with
+  `Fatal startup error` and failed its healthcheck, blocking deploys of
+  `0.17.10`. Rewritten all three manifests to use the parenthetical shorthand.
+  A new regression guard in `tests/unit/skills/loader.test.ts` now loads every
+  installed manifest and runs `toToolDefinitions()` on the full set, so any
+  future manifest typo fails CI instead of production boot.
+
 - **Coordinator always uses its own account for third-party tool calls** — added explicit
   system prompt guidance instructing the coordinator to default to its own account identity
   (not the CEO's) when any tool requires an email or account parameter. Prevents tools like

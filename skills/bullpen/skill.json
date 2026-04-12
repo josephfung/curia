@@ -6,12 +6,12 @@
   "action_risk": "low",
   "infrastructure": true,
   "inputs": {
-    "action": "string: 'post' | 'reply' | 'get_thread' | 'close'",
-    "topic": "string: thread topic — required for 'post'",
-    "participants": "string[]: agent IDs to include in the thread — required for 'post'",
-    "mentioned_agent_ids": "string[]: agent IDs to @ mention (optional for 'post' and 'reply'; defaults to all participants for 'post')",
-    "content": "string: message content — required for 'post' and 'reply'",
-    "thread_id": "string: thread ID — required for 'reply', 'get_thread', 'close'"
+    "action": "string (one of: 'post', 'reply', 'get_thread', 'close')",
+    "topic": "string? (thread topic; required when action is 'post')",
+    "participants": "string[]? (agent IDs to include in the thread; required when action is 'post')",
+    "mentioned_agent_ids": "string[]? (agent IDs to at-mention; defaults to all participants when action is 'post')",
+    "content": "string? (message body; required when action is 'post' or 'reply')",
+    "thread_id": "string? (thread ID; required when action is 'reply', 'get_thread', or 'close')"
   },
   "outputs": {
     "thread_id": "string: the thread ID",
