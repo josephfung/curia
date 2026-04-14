@@ -1,0 +1,21 @@
+{
+  "name": "email-draft-save",
+  "description": "Save an email as a draft without sending it. The CEO can review and send the draft from their email client. Use for observation-mode triage (NEEDS DRAFT category) or when composing a reply that needs CEO approval before sending.",
+  "version": "1.0.0",
+  "sensitivity": "normal",
+  "action_risk": "medium",
+  "infrastructure": true,
+  "inputs": {
+    "to": "string (recipient email address)",
+    "subject": "string (email subject line)",
+    "body": "string (email body; markdown supported, converted to HTML automatically)",
+    "account": "string? (named account to draft from, e.g. 'curia' or 'joseph'. Defaults to the primary account.)",
+    "reply_to_message_id": "string? (Nylas message ID to reply to; threads the draft as a reply when set)"
+  },
+  "outputs": {
+    "draft_id": "string"
+  },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 20000
+}
