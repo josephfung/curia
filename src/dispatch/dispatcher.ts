@@ -66,7 +66,20 @@ export class Dispatcher {
    * We key on the task event ID (not the inbound message ID) because the agent
    * runtime sets parentEventId on its response to the task event that triggered it.
    */
-  private taskRouting = new Map<string, { channelId: string; conversationId: string; senderId: string; accountId?: string }>();
+  private taskRouting = new Map<
+    string,
+    {
+      channelId: string;
+      conversationId: string;
+      senderId: string;
+      accountId?: string;
+      // When true, the originating inbound message was observation-mode (monitored
+      // inbox). The coordinator's final response is for audit/logging only — we
+      // must NOT auto-publish it as an outbound reply, because that would land
+      // as a draft in the CEO's inbox under the `draft_gate` outbound policy.
+      observationMode?: boolean;
+    }
+  >();
   /** Key: `${conversationId}:${agentId}` — reset on every agent.response */
   private checkpointTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private pool: DbPool | undefined;
@@ -608,7 +621,9 @@ export class Dispatcher {
       taskContent =
         `[OBSERVATION MODE — monitored inbox]\n` +
         `This email arrived in a monitored inbox. You watch it on the CEO's behalf.\n` +
-        `You are NOT the recipient. NEVER reply to the sender as yourself or sign with your name.\n\n` +
+        `You are NOT the recipient. NEVER reply to the sender as yourself or sign with your name.\n` +
+        `Your final response text is for audit/logging only — the dispatcher will NOT turn\n` +
+        `it into an outbound email. Keep it brief: just state your classification and action.\n\n` +
         identifierBlock +
         `TRIAGE — evaluate in order:\n\n` +
         `1. STANDING INSTRUCTIONS: use entity-context to look up the sender. If the CEO has\n` +
@@ -621,12 +636,17 @@ export class Dispatcher {
         `     Do it using your existing skills. No notification. It will appear in the weekly log.\n` +
         `   - NEEDS DRAFT — a reply is warranted and you can write it:\n` +
         `     Save a draft with email-reply. The CEO will review before it sends.\n` +
+        `   - LEAVE FOR CEO — personal, sensitive, relationship-dependent, requires the CEO's\n` +
+        `     own voice or judgment, or you are not confident you understand it:\n` +
+        `     Do NOTHING. No archive, no draft, no notification. The CEO will read and\n` +
+        `     handle it themselves when they next check their inbox. Examples: personal\n` +
+        `     correspondence, LinkedIn DMs from specific individuals, offers/negotiations,\n` +
+        `     anything requiring the CEO's discretion.\n` +
         `   - NOISE — receipt, newsletter, automated notification, no action needed:\n` +
-        `     Call email-archive. Do NOT call email-reply or any draft/send skill — archiving\n` +
-        `     is the only action. Your classification rationale is already captured in the\n` +
-        `     audit log; do not leave an explanatory draft in the CEO's inbox. No notification.\n\n` +
-        `3. WHEN IN DOUBT: default to URGENT (notify) rather than acting silently.\n` +
-        `   It is better to surface something than to quietly act on it incorrectly.\n\n` +
+        `     Call email-archive. No other action. No notification.\n\n` +
+        `3. WHEN IN DOUBT: prefer LEAVE FOR CEO over acting. The CEO will see the email in\n` +
+        `   their inbox. URGENT is only for time-sensitive items that need an immediate\n` +
+        `   Signal ping. Do not over-notify.\n\n` +
         `--- Original message ---\n` +
         taskContent;
     }
@@ -653,12 +673,14 @@ export class Dispatcher {
     // Store routing info keyed by the task event ID so we can look it up
     // when the agent publishes its response (agent sets parentEventId = task.id).
     // accountId is stored so the outbound.message is routed to the same email account
-    // that received the original inbound message.
+    // that received the original inbound message. observationMode is stored so
+    // handleAgentResponse can suppress auto-reply for monitored-inbox tasks.
     this.taskRouting.set(taskEvent.id, {
       channelId: payload.channelId,
       conversationId: payload.conversationId,
       senderId: payload.senderId,
       accountId: payload.accountId,
+      observationMode: isObservationMode,
     });
 
     await this.bus.publish('dispatch', taskEvent);
@@ -693,17 +715,49 @@ export class Dispatcher {
 
     this.taskRouting.delete(event.parentEventId!);
 
-    // Publish outbound.message to the bus — the email adapter will pick it up
-    // and route it through OutboundGateway (blocked-contact check + content filter).
-    // No filter logic lives here anymore; it all runs inside the gateway.
-    const outbound = createOutboundMessage({
-      conversationId: routing.conversationId,
-      channelId: routing.channelId,
-      accountId: routing.accountId,
-      content: event.payload.content,
-      parentEventId: event.id,
-    });
-    await this.bus.publish('dispatch', outbound);
+    // Observation-mode: the coordinator is watching a monitored inbox on the
+    // CEO's behalf. Its final response is an audit/log artefact — NOT a reply
+    // to the sender. Suppress the outbound.message so the email adapter does
+    // not turn the coordinator's classification summary into a dangling draft
+    // in the CEO's inbox (which it would under `draft_gate` outbound policy).
+    //
+    // Any outbound action the coordinator wanted to take (notify CEO on Signal,
+    // archive, save a reply draft) is taken explicitly via skill calls during
+    // the task — not via this auto-reply path. We still schedule a checkpoint
+    // below so working memory is persisted.
+    if (routing.observationMode) {
+      // Log at info (not debug) so the suppression is visible in default prod
+      // log streams. If observationMode is ever flipped incorrectly (misrouted
+      // metadata, config mistake, future refactor), real replies would vanish —
+      // this log is the operator's only hook to notice. Include the first 500
+      // chars of the coordinator's final text so the classification rationale
+      // is greppable in logs, not only buried in the LLM call archive.
+      const summary = event.payload.content?.slice(0, 500) ?? '';
+      this.logger.info(
+        {
+          conversationId: routing.conversationId,
+          agentId: event.payload.agentId,
+          senderId: routing.senderId,
+          accountId: routing.accountId,
+          parentEventId: event.id,
+          contentLength: event.payload.content?.length ?? 0,
+          summary,
+        },
+        'observation-mode: suppressed auto-reply outbound.message (audit-only response)',
+      );
+    } else {
+      // Publish outbound.message to the bus — the email adapter will pick it up
+      // and route it through OutboundGateway (blocked-contact check + content filter).
+      // No filter logic lives here anymore; it all runs inside the gateway.
+      const outbound = createOutboundMessage({
+        conversationId: routing.conversationId,
+        channelId: routing.channelId,
+        accountId: routing.accountId,
+        content: event.payload.content,
+        parentEventId: event.id,
+      });
+      await this.bus.publish('dispatch', outbound);
+    }
 
     // Schedule a checkpoint for this conversation — resets the debounce timer if
     // already running, so only fires after a full window of inactivity.

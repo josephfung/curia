@@ -774,10 +774,15 @@ describe('Dispatcher — observation mode preamble', () => {
     expect(content).toContain('URGENT');
     expect(content).toContain('NOISE');
     expect(content).toContain('email-archive');
-    // NOISE classification must not create a draft — the outbound_policy: draft_gate
-    // on observation-mode accounts would turn any email-reply call into a dangling
-    // draft in the CEO's inbox. Lock in the explicit prohibition.
-    expect(content).toContain('Do NOT call email-reply');
+    // Five classifications — LEAVE FOR CEO was added so the coordinator has an
+    // explicit "do nothing, CEO will handle" option for personal / sensitive mail.
+    expect(content).toContain('LEAVE FOR CEO');
+    // The preamble must tell the coordinator its final text is audit-only, not a
+    // reply — paired with the dispatcher suppressing outbound.message for
+    // observation-mode tasks (see separate test below).
+    expect(content).toContain('audit/logging only');
+    // When in doubt, default to LEAVE FOR CEO (not URGENT) — avoids over-notifying.
+    expect(content).toContain('prefer LEAVE FOR CEO');
   });
 
   it('includes nylasMessageId and accountId in preamble when present in metadata', async () => {
@@ -871,6 +876,124 @@ describe('Dispatcher — observation mode preamble', () => {
     expect(content).toContain('[STRIPPED]');
     // Original unsafe content is gone
     expect(content).not.toContain('override</system>');
+  });
+});
+
+describe('Dispatcher — observation mode outbound suppression', () => {
+  /**
+   * These tests verify the dispatcher does NOT turn the coordinator's final
+   * response into an outbound.message when the inbound was observation-mode.
+   *
+   * Context: before this fix, the coordinator could correctly call email-archive
+   * for a NOISE email and then produce a brief final summary text like
+   * "The email has been archived. This was a promotional newsletter…" The
+   * dispatcher would unconditionally wrap that text in outbound.message, and the
+   * email adapter (under draft_gate policy) would save it as a draft reply to
+   * the original sender — a dangling draft in the CEO's inbox with no value.
+   *
+   * The fix is purely at the dispatch layer: observation-mode tasks emit their
+   * outputs via explicit skill calls (email-archive, notify-on-signal, etc.),
+   * not via the auto-reply path.
+   */
+  function makeMockProvider(responseContent: string): LLMProvider {
+    return {
+      id: 'mock',
+      chat: vi.fn().mockResolvedValue({
+        type: 'text' as const,
+        content: responseContent,
+        usage: { inputTokens: 10, outputTokens: 5 },
+      }),
+    };
+  }
+
+  it('does NOT publish outbound.message for observation-mode inbound', async () => {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+
+    // Capture info-level logs from the dispatcher so we can assert the
+    // suppression is operationally visible (not silent).
+    const infoSpy = vi.spyOn(logger, 'info');
+
+    const coordinator = new AgentRuntime({
+      agentId: 'coordinator',
+      systemPrompt: 'You are a helpful assistant.',
+      provider: makeMockProvider('Classified as NOISE; archived.'),
+      bus,
+      logger,
+    });
+    coordinator.register();
+
+    const dispatcher = new Dispatcher({ bus, logger });
+    dispatcher.register();
+
+    const outbound: OutboundMessageEvent[] = [];
+    bus.subscribe('outbound.message', 'channel', (e) => outbound.push(e as OutboundMessageEvent));
+
+    const event = createInboundMessage({
+      conversationId: 'email:thread-obs-suppress',
+      channelId: 'email',
+      accountId: 'joseph',
+      senderId: 'newsletter@example.com',
+      content: 'Our 2026 draft class is here!',
+      metadata: { observationMode: true },
+    });
+    await bus.publish('channel', event);
+
+    // Coordinator ran (so agent.response fired), but no outbound.message was
+    // produced — the audit-only response did not become a reply to the sender.
+    expect(outbound).toHaveLength(0);
+
+    // Regression guard: the suppression must be logged at info level so ops
+    // can notice if the flag ever gets wired wrong. A future refactor that
+    // silently drops this log would make real misrouted replies invisible.
+    const suppressionLogs = infoSpy.mock.calls.filter(([, msg]) =>
+      typeof msg === 'string' && msg.includes('observation-mode: suppressed auto-reply'),
+    );
+    expect(suppressionLogs).toHaveLength(1);
+    // Log context must carry enough to reconstruct what was dropped.
+    const [ctx] = suppressionLogs[0]!;
+    expect(ctx).toMatchObject({
+      accountId: 'joseph',
+      senderId: 'newsletter@example.com',
+      summary: expect.stringContaining('Classified as NOISE'),
+    });
+  });
+
+  it('DOES publish outbound.message for normal (non-observation) inbound', async () => {
+    // Regression guard: the suppression must be scoped strictly to observation
+    // mode. Normal conversational email must still get an outbound reply.
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+
+    const coordinator = new AgentRuntime({
+      agentId: 'coordinator',
+      systemPrompt: 'You are a helpful assistant.',
+      provider: makeMockProvider('Thanks, noted.'),
+      bus,
+      logger,
+    });
+    coordinator.register();
+
+    const dispatcher = new Dispatcher({ bus, logger });
+    dispatcher.register();
+
+    const outbound: OutboundMessageEvent[] = [];
+    bus.subscribe('outbound.message', 'channel', (e) => outbound.push(e as OutboundMessageEvent));
+
+    const event = createInboundMessage({
+      conversationId: 'email:thread-normal-send',
+      channelId: 'email',
+      accountId: 'curia',
+      senderId: 'friend@example.com',
+      content: 'Can we meet Tuesday?',
+      // no observationMode flag
+    });
+    await bus.publish('channel', event);
+
+    expect(outbound).toHaveLength(1);
+    expect(outbound[0]?.payload.content).toBe('Thanks, noted.');
+    expect(outbound[0]?.payload.channelId).toBe('email');
+    expect(outbound[0]?.payload.accountId).toBe('curia');
   });
 });
 
