@@ -34,7 +34,15 @@ export class EmailListHandler implements SkillHandler {
     if (typeof from === 'string' && from.trim()) options.from = from.trim();
     if (typeof subject === 'string' && subject.trim()) options.subject = subject.trim();
     if (typeof search === 'string' && search.trim()) options.searchQueryNative = search.trim();
-    options.limit = typeof limit === 'number' && limit > 0 ? Math.min(limit, MAX_LIMIT) : DEFAULT_LIMIT;
+    // Coerce to a positive integer before forwarding — LLMs occasionally emit floats
+    // (e.g. 12.7) and Nylas expects an int. Non-finite or non-positive values fall back
+    // to DEFAULT_LIMIT.
+    const normalizedLimit =
+      typeof limit === 'number' && Number.isFinite(limit) ? Math.floor(limit) : undefined;
+    options.limit =
+      normalizedLimit !== undefined && normalizedLimit > 0
+        ? Math.min(normalizedLimit, MAX_LIMIT)
+        : DEFAULT_LIMIT;
 
     ctx.log.info({ accountId, options }, 'email-list: listing messages');
 

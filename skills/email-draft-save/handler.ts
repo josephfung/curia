@@ -54,6 +54,13 @@ export class EmailDraftSaveHandler implements SkillHandler {
       return { success: false, error: result.blockedReason ?? 'Failed to save draft' };
     }
 
+    // OutboundDraftResult.draftId is typed optional; guard so we never violate the
+    // declared `draft_id: string` output contract by emitting `undefined`.
+    if (!result.draftId) {
+      ctx.log.error({ to, accountId }, 'email-draft-save: gateway returned success without draftId');
+      return { success: false, error: 'Failed to save draft' };
+    }
+
     ctx.log.info({ draftId: result.draftId, to, accountId }, 'email-draft-save: draft saved');
     return { success: true, data: { draft_id: result.draftId } };
   }
