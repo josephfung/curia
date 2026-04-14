@@ -1,0 +1,18 @@
+{
+  "name": "email-get",
+  "description": "Fetch the full content (including body) of a single email message by its Nylas message ID. Use email-list to find message IDs first.",
+  "version": "1.0.0",
+  "sensitivity": "normal",
+  "action_risk": "none",
+  "infrastructure": true,
+  "inputs": {
+    "message_id": "string (Nylas message ID of the email to fetch)",
+    "account": "string? (named account to read from, e.g. 'curia' or 'joseph'. Defaults to the primary account.)"
+  },
+  "outputs": {
+    "message": "object"
+  },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 15000
+}
