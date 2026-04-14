@@ -372,8 +372,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Bootstrap orchestrator** — `src/index.ts` wires all layers in dependency order
 - Architecture specs 00–08, contributor docs (CONTRIBUTING.md, CODE_OF_CONDUCT.md, SECURITY.md)
 
-[Unreleased]: https://github.com/josephfung/curia/compare/v0.18.2...HEAD
-[0.18.2]: https://github.com/josephfung/curia/compare/v0.18.1...v0.18.2
+[Unreleased]: https://github.com/josephfung/curia/compare/v0.18.1...HEAD
 [0.18.1]: https://github.com/josephfung/curia/compare/v0.18.0...v0.18.1
 [0.18.0]: https://github.com/josephfung/curia/compare/v0.17.0...v0.18.0
 [0.17.0]: https://github.com/josephfung/curia/compare/v0.16.0...v0.17.0
