@@ -950,13 +950,18 @@ describe('Dispatcher — observation mode outbound suppression', () => {
       typeof msg === 'string' && msg.includes('observation-mode: suppressed auto-reply'),
     );
     expect(suppressionLogs).toHaveLength(1);
-    // Log context must carry enough to reconstruct what was dropped.
+    // Log context must carry enough to reconstruct what was dropped —
+    // specifically a bounded classification token, NOT free-form summary text.
+    // Observation mode handles sensitive mail; default logs must not become a
+    // data sink. Full rationale stays in llm_call_archive.
     const [ctx] = suppressionLogs[0]!;
     expect(ctx).toMatchObject({
       accountId: 'joseph',
       senderId: 'newsletter@example.com',
-      summary: expect.stringContaining('Classified as NOISE'),
+      classification: 'NOISE',
     });
+    // Belt-and-braces: ensure the free-form content is NOT in the log context.
+    expect(ctx).not.toHaveProperty('summary');
   });
 
   it('DOES publish outbound.message for normal (non-observation) inbound', async () => {

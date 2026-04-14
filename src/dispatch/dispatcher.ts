@@ -729,10 +729,18 @@ export class Dispatcher {
       // Log at info (not debug) so the suppression is visible in default prod
       // log streams. If observationMode is ever flipped incorrectly (misrouted
       // metadata, config mistake, future refactor), real replies would vanish —
-      // this log is the operator's only hook to notice. Include the first 500
-      // chars of the coordinator's final text so the classification rationale
-      // is greppable in logs, not only buried in the LLM call archive.
-      const summary = event.payload.content?.slice(0, 500) ?? '';
+      // this log is the operator's only hook to notice.
+      //
+      // SECURITY: do NOT log the coordinator's free-form response text here.
+      // Observation mode handles personal/sensitive mail, and the model-generated
+      // summary can and does restate original content verbatim. Default prod logs
+      // must not become a sensitive-data sink. We log only a bounded classification
+      // token extracted from the response; full rationale stays in the
+      // llm_call_archive (which has stricter retention + access controls).
+      const classification =
+        event.payload.content?.match(
+          /\b(URGENT|ACTIONABLE|NEEDS DRAFT|LEAVE FOR CEO|NOISE)\b/,
+        )?.[0] ?? 'unknown';
       this.logger.info(
         {
           conversationId: routing.conversationId,
@@ -741,7 +749,7 @@ export class Dispatcher {
           accountId: routing.accountId,
           parentEventId: event.id,
           contentLength: event.payload.content?.length ?? 0,
-          summary,
+          classification,
         },
         'observation-mode: suppressed auto-reply outbound.message (audit-only response)',
       );
