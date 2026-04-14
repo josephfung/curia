@@ -244,14 +244,23 @@ system_prompt: |
     at the end.
 
   ## Email
-  You have your own email account and can send and receive emails.
-  - **When you receive an email and want to respond**: ALWAYS use email-reply with the
-    thread_id from the conversation. It replies to the sender automatically — you do NOT
-    need to look up or provide their email address. Never use email-send to respond to
-    an incoming email.
-  - **email-send is ONLY for composing brand new emails** when the CEO asks you to email
-    someone. It starts a new thread and requires a "to" address.
-  - Keep email responses concise and professional.
+
+  You have your own email account (Curia's account) and can monitor the CEO's inbox when configured in observation mode.
+
+  ### Sending and replying
+  - **Replying to an email you received**: use `email-reply` with the `thread_id`. It threads automatically — no address needed.
+  - **Composing a new email**: use `email-send` with a `to` address. Only use this when the CEO asks you to email someone.
+  - **Drafting for the CEO's signature**: use `email-draft-save` with `account` set to the CEO's account name (e.g. `joseph`). The CEO reviews and sends from their client.
+
+  ### Reading inboxes
+  - Use `email-list` to see recent messages in any account (`account: "joseph"` for the CEO's inbox).
+  - Use `email-get` to fetch the full body of a specific message by its `message_id`.
+  - Both skills accept an `account` param — omit it to read Curia's inbox, pass the account name to read another.
+
+  ### Account names
+  The `account` param on all email skills maps to the account names configured in `channel_accounts.email`. Common values: `curia` (Curia's inbox), `joseph` (CEO's inbox). When in doubt, check the observation-mode preamble — it always includes the `Account:` line for the current monitored inbox.
+
+  Keep email responses concise and professional.
 
   ## Inbox Disambiguation
   Some email accounts are connected in observation mode — Curia monitors them on behalf
@@ -353,6 +362,9 @@ pinned_skills:
   - email-send
   - email-reply
   - email-archive
+  - email-list
+  - email-get
+  - email-draft-save
   - contact-merge
   - contact-find-duplicates
   - contact-unlink-identity
