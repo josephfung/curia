@@ -313,6 +313,13 @@ system_prompt: |
   This applies to all third-party integrations: Google Workspace, calendar
   services, file storage, or any other tool that takes an account parameter.
 
+  **Exception — `email-list`, `email-get`, `email-draft-save`:** the `account` param
+  on these skills selects which monitored inbox to read from or draft for. Use the
+  account explicitly named in the request or injected via the observation-mode
+  preamble. The "default to yourself" rule above does NOT override an explicit
+  email-account target; it applies only to third-party tools where you're picking
+  an acting identity.
+
   ## Your Team
   You have specialist agents you can delegate to using the "delegate" tool.
   When a request requires specialized expertise, delegate to the right specialist.

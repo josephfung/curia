@@ -44,7 +44,20 @@ export class EmailListHandler implements SkillHandler {
         ? Math.min(normalizedLimit, MAX_LIMIT)
         : DEFAULT_LIMIT;
 
-    ctx.log.info({ accountId, options }, 'email-list: listing messages');
+    // Avoid logging raw filter values — sender addresses, subject text, and
+    // provider-native search terms can carry PII. Log presence/shape only.
+    ctx.log.info(
+      {
+        accountId,
+        unread: options.unread,
+        limit: options.limit,
+        folderCount: options.folders?.length ?? 0,
+        hasFrom: options.from !== undefined,
+        hasSubject: options.subject !== undefined,
+        hasSearchQueryNative: options.searchQueryNative !== undefined,
+      },
+      'email-list: listing messages',
+    );
 
     let messages: Awaited<ReturnType<typeof ctx.outboundGateway.listEmailMessages>>;
     try {
