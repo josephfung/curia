@@ -15,11 +15,23 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **LEAVE FOR CEO triage classification** — the observation-mode preamble now defines a fifth category for personal, sensitive, or judgment-dependent email where the CEO will read and handle it themselves. No archive, no draft, no notification. The "when in doubt" default has shifted from URGENT to LEAVE FOR CEO to stop over-notifying. Mirrored in `agents/coordinator.yaml`.
+
 ### Changed
+
+- **Observation-mode coordinator response is audit-only** — the dispatcher no longer converts the coordinator's final response into an `outbound.message` when the originating inbound was observation-mode. The preamble tells the coordinator its final text is for audit/logging only; outbound actions happen via explicit skill calls (email-archive, notify channels, email-reply for drafts). The `taskRouting` map gained an `observationMode` flag so `handleAgentResponse` can suppress the auto-reply path.
 
 ### Fixed
 
-- **Observation-mode NOISE drafts** — the triage preamble now explicitly prohibits calling `email-reply` (or any draft/send skill) when classifying an email as NOISE. Previously the coordinator sometimes created an explanatory draft alongside the archive call, which became a dangling draft in the CEO's inbox under the `draft_gate` outbound policy. Classification rationale is already persisted via the LLM call archive and `agent.response` audit events, so the draft is redundant.
+- **Dangling explanatory drafts on NOISE triage** — the coordinator's short final summary (e.g. "The email has been archived. This was a promotional newsletter…") was being wrapped in `outbound.message` by the dispatcher and saved as a draft reply by the email adapter under `draft_gate` policy. PR #304's prompt-only fix targeted `email-reply` (which wasn't being called); the actual mechanism was the dispatch-layer auto-reply of every `agent.response`. Root cause now fixed at the dispatch layer; the preamble's redundant "Do NOT call email-reply" guidance has been trimmed.
+
+---
+
+## [0.18.1] — 2026-04-12
+
+### Fixed
+
+- **Observation-mode NOISE drafts (partial)** — added explicit "Do NOT call email-reply" language to the triage preamble for NOISE classifications. Superseded by the proper dispatch-layer fix in 0.18.2 (the drafts were never coming from `email-reply` — they came from the auto-reply path in `handleAgentResponse`).
 
 ---
 
@@ -360,7 +372,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Bootstrap orchestrator** — `src/index.ts` wires all layers in dependency order
 - Architecture specs 00–08, contributor docs (CONTRIBUTING.md, CODE_OF_CONDUCT.md, SECURITY.md)
 
-[Unreleased]: https://github.com/josephfung/curia/compare/v0.18.0...HEAD
+[Unreleased]: https://github.com/josephfung/curia/compare/v0.18.1...HEAD
+[0.18.1]: https://github.com/josephfung/curia/compare/v0.18.0...v0.18.1
 [0.18.0]: https://github.com/josephfung/curia/compare/v0.17.0...v0.18.0
 [0.17.0]: https://github.com/josephfung/curia/compare/v0.16.0...v0.17.0
 [0.16.0]: https://github.com/josephfung/curia/compare/v0.15.0...v0.16.0
