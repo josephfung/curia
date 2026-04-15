@@ -14,7 +14,10 @@ export class EmailDraftSaveHandler implements SkillHandler {
       return { success: false, error: 'email-draft-save requires outboundGateway (infrastructure: true)' };
     }
 
-    const { to: rawTo, subject, body, account, reply_to_message_id } = ctx.input as {
+    // Handlers must never throw — destructuring a non-object ctx.input would.
+    const input =
+      ctx.input && typeof ctx.input === 'object' ? (ctx.input as Record<string, unknown>) : {};
+    const { to: rawTo, subject, body, account, reply_to_message_id } = input as {
       to?: string;
       subject?: string;
       body?: string;

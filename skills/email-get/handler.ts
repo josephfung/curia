@@ -12,7 +12,10 @@ export class EmailGetHandler implements SkillHandler {
       return { success: false, error: 'email-get requires outboundGateway (infrastructure: true)' };
     }
 
-    const { message_id: rawId, account } = ctx.input as {
+    // Handlers must never throw — destructuring a non-object ctx.input would.
+    const input =
+      ctx.input && typeof ctx.input === 'object' ? (ctx.input as Record<string, unknown>) : {};
+    const { message_id: rawId, account } = input as {
       message_id?: string;
       account?: string;
     };

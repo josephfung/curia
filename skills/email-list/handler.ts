@@ -16,7 +16,10 @@ export class EmailListHandler implements SkillHandler {
       return { success: false, error: 'email-list requires outboundGateway (infrastructure: true)' };
     }
 
-    const { account, folder, unread_only, from, subject, search, limit } = ctx.input as {
+    // Handlers must never throw — destructuring a non-object ctx.input would.
+    const input =
+      ctx.input && typeof ctx.input === 'object' ? (ctx.input as Record<string, unknown>) : {};
+    const { account, folder, unread_only, from, subject, search, limit } = input as {
       account?: string;
       folder?: string;
       unread_only?: boolean;

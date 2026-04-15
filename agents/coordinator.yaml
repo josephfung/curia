@@ -248,7 +248,7 @@ system_prompt: |
   You have your own email account (Curia's account) and can monitor the CEO's inbox when configured in observation mode.
 
   ### Sending and replying
-  - **Replying to an email you received**: use `email-reply` with the `thread_id`. It threads automatically — no address needed.
+  - **Replying to an email you received**: use `email-reply` with `reply_to_message_id` (the Nylas message ID from context or the observation-mode preamble). It threads automatically — no `to` address is needed.
   - **Composing a new email**: use `email-send` with a `to` address. Only use this when the CEO asks you to email someone.
   - **Drafting for the CEO's signature**: use `email-draft-save` with `account` set to the CEO's account name. The CEO reviews and sends from their client.
 
