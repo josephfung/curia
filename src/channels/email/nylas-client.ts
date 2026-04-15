@@ -114,6 +114,15 @@ export interface ListMessagesOptions {
    * Required to access Authentication-Results for SPF/DKIM/DMARC sender verification.
    */
   fields?: 'include_headers';
+  /** Filter to messages in these folder IDs (maps to Nylas `in` param).
+   *  Standard values: INBOX, DRAFTS, SENT, TRASH. Providers may have custom labels. */
+  folders?: string[];
+  /** Filter to messages from this sender email address */
+  from?: string;
+  /** Filter to messages with this exact subject line */
+  subject?: string;
+  /** Provider-native search query (Gmail search syntax, Outlook KQL, etc.) */
+  searchQueryNative?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -158,6 +167,20 @@ export class NylasClient {
       // Cast needed: our interface uses a string literal to avoid leaking the SDK's
       // MessageFields enum type into the broader codebase.
       queryParams.fields = options.fields as MessageFields;
+    }
+    if (options?.folders !== undefined) {
+      // Nylas uses `in` for folder filtering — maps to our `folders` option.
+      queryParams.in = options.folders;
+    }
+    if (options?.from !== undefined) {
+      // Nylas expects `from` as an array of email strings.
+      queryParams.from = [options.from];
+    }
+    if (options?.subject !== undefined) {
+      queryParams.subject = options.subject;
+    }
+    if (options?.searchQueryNative !== undefined) {
+      queryParams.searchQueryNative = options.searchQueryNative;
     }
 
     this.log.debug({ queryParams }, 'listing messages');

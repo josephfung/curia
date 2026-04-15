@@ -1,0 +1,24 @@
+{
+  "name": "email-list",
+  "description": "List recent emails from any configured email account. Returns message summaries (ID, sender, subject, snippet, date). Use email-get to fetch the full body of a specific message.",
+  "version": "1.0.0",
+  "sensitivity": "normal",
+  "action_risk": "none",
+  "infrastructure": true,
+  "inputs": {
+    "account": "string? (named account to read from, as configured in channel_accounts.email. Defaults to the primary account.)",
+    "folder": "string? (folder to filter by, e.g. 'INBOX', 'SENT', 'DRAFTS'. Defaults to all folders.)",
+    "unread_only": "boolean? (when true, only return unread messages)",
+    "from": "string? (filter to messages from this email address)",
+    "subject": "string? (filter to messages with this subject)",
+    "search": "string? (provider-native search query, e.g. Gmail search syntax)",
+    "limit": "number? (max results to return, capped at 50, default 20)"
+  },
+  "outputs": {
+    "messages": "object[]",
+    "count": "number"
+  },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 20000
+}
