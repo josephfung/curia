@@ -7,7 +7,7 @@
   "infrastructure": true,
   "inputs": {
     "message_id": "string (Nylas message ID of the email to fetch)",
-    "account": "string? (named account to read from, e.g. 'curia' or 'joseph'. Defaults to the primary account.)"
+    "account": "string? (named account to read from, as configured in channel_accounts.email. Defaults to the primary account.)"
   },
   "outputs": {
     "message": "object"

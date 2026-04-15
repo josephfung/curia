@@ -6,7 +6,7 @@
   "action_risk": "none",
   "infrastructure": true,
   "inputs": {
-    "account": "string? (named account to read from, e.g. 'curia' or 'joseph'. Defaults to the primary account.)",
+    "account": "string? (named account to read from, as configured in channel_accounts.email. Defaults to the primary account.)",
     "folder": "string? (folder to filter by, e.g. 'INBOX', 'SENT', 'DRAFTS'. Defaults to all folders.)",
     "unread_only": "boolean? (when true, only return unread messages)",
     "from": "string? (filter to messages from this email address)",
