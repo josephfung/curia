@@ -7,8 +7,9 @@
 //   2. The CEO confirms which contact owns it (usually themselves)
 //   3. This skill persists that mapping so calendar-list-events can auto-resolve it
 //
-// contact_id defaults to the caller's own contact when omitted — the common case
-// when the CEO is claiming ownership of their own calendar.
+// contact_id is required — the coordinator must always specify which contact
+// owns the calendar. This prevents silent mis-assignment (see incident
+// kg-web-a7717246-1d7a-411c-9129-b6feb54bfc22).
 
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
 
@@ -35,21 +36,14 @@ export class CalendarRegisterHandler implements SkillHandler {
       return { success: false, error: 'label must be 200 characters or fewer' };
     }
 
-    // Default to the caller's contact when contact_id is not provided.
-    // This is the most common case: the CEO saying "that calendar is mine."
-    const resolvedContactId: string | null =
-      typeof contact_id === 'string' ? contact_id : (ctx.caller?.contactId ?? null);
-
-    // Warn when neither contact_id nor caller context is present — the calendar
-    // will be registered as org-wide (null contact). This is valid for shared
-    // calendars (holidays, rooms) but is probably a routing bug if it happens
-    // during a CEO conversation.
-    if (resolvedContactId === null && typeof contact_id !== 'string') {
-      ctx.log.warn(
-        { nylasCalendarId: nylas_calendar_id },
-        'calendar-register: no contact_id and no caller — registering as org-wide (no contact association)',
-      );
+    // contact_id is required — the coordinator must explicitly specify which
+    // contact owns this calendar. This prevents silent mis-assignment when the
+    // caller (e.g. the CEO) is not the calendar's actual owner.
+    if (!contact_id || typeof contact_id !== 'string') {
+      return { success: false, error: 'Missing required input: contact_id — specify which contact owns this calendar.' };
     }
+
+    const resolvedContactId = contact_id;
 
     ctx.log.info(
       { nylasCalendarId: nylas_calendar_id, contactId: resolvedContactId, label, isPrimary: is_primary ?? false },
