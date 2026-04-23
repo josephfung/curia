@@ -106,6 +106,22 @@ describe('CalendarRegisterHandler', () => {
     expect(contactService.linkCalendar).not.toHaveBeenCalled();
   });
 
+  it('returns failure when contact_id is whitespace-only', async () => {
+    const contactService = { linkCalendar: vi.fn() };
+    const result = await handler.execute(
+      makeCtx(
+        { nylas_calendar_id: 'cal-1', label: 'Personal', contact_id: '   ' },
+        { contactService: contactService as never },
+      ),
+    );
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error).toContain('contact_id');
+    }
+    expect(contactService.linkCalendar).not.toHaveBeenCalled();
+  });
+
   it('returns failure when contact_id is missing even without caller context', async () => {
     const contactService = { linkCalendar: vi.fn() };
     const result = await handler.execute(

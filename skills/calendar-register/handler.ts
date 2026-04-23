@@ -39,11 +39,11 @@ export class CalendarRegisterHandler implements SkillHandler {
     // contact_id is required — the coordinator must explicitly specify which
     // contact owns this calendar. This prevents silent mis-assignment when the
     // caller (e.g. the CEO) is not the calendar's actual owner.
-    if (!contact_id || typeof contact_id !== 'string') {
+    if (!contact_id || typeof contact_id !== 'string' || contact_id.trim() === '') {
       return { success: false, error: 'Missing required input: contact_id — specify which contact owns this calendar.' };
     }
 
-    const resolvedContactId = contact_id;
+    const resolvedContactId = contact_id.trim();
 
     ctx.log.info(
       { nylasCalendarId: nylas_calendar_id, contactId: resolvedContactId, label, isPrimary: is_primary ?? false },

@@ -280,6 +280,7 @@ system_prompt: |
 
   - **"my calendar"** (the CEO speaking to you directly) → the CEO's own calendar
   - **"your calendar"** (the CEO speaking to you directly) → Curia's own calendar
+  - **"Curia's calendar"** → Curia's own calendar
   - **Default for scheduling on behalf of the CEO** → always use the CEO's
     calendar unless the CEO explicitly says to use Curia's
 
