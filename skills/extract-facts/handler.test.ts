@@ -53,7 +53,7 @@ describe('ExtractFactsHandler', () => {
     const anthropic = makeMockAnthropicClient(['no']);
     const handler = new ExtractFactsHandler(anthropic as never);
     const ctx = makeCtx(entityMemory, {
-      text: 'Ada manages Project Orion and works closely with Joseph.',
+      text: 'Ada manages Project Orion and works closely with Bob.',
       source: 'test',
     });
 
@@ -64,7 +64,7 @@ describe('ExtractFactsHandler', () => {
     expect(anthropic.messages.create).toHaveBeenCalledTimes(1);
   });
 
-  it('acceptance criterion: "Joseph lives in Toronto" stores a location fact', async () => {
+  it('acceptance criterion: "Bob lives in Toronto" stores a location fact', async () => {
     const entityMemory = makeEntityMemory();
     const facts = JSON.stringify([
       { subject: 'Jane Doe', subjectType: 'person', attribute: 'home_city', value: 'Toronto', confidence: 0.9, decayClass: 'slow_decay' },
@@ -72,7 +72,7 @@ describe('ExtractFactsHandler', () => {
     const anthropic = makeMockAnthropicClient(['yes', facts]);
     const handler = new ExtractFactsHandler(anthropic as never);
     const ctx = makeCtx(entityMemory, {
-      text: 'Joseph lives in Toronto.',
+      text: 'Bob lives in Toronto.',
       source: 'test',
     });
 
@@ -139,7 +139,7 @@ describe('ExtractFactsHandler', () => {
     const anthropic = makeMockAnthropicClient(['yes', facts]);
     const handler = new ExtractFactsHandler(anthropic as never);
     const ctx = makeCtx(entityMemory, {
-      text: 'Joseph is the CEO.',
+      text: 'Bob is the CEO.',
       source: 'test',
     });
 
@@ -160,14 +160,14 @@ describe('ExtractFactsHandler', () => {
     // First invocation — stores the fact
     const anthropic1 = makeMockAnthropicClient(['yes', facts]);
     const handler1 = new ExtractFactsHandler(anthropic1 as never);
-    const ctx1 = makeCtx(entityMemory, { text: 'Joseph lives in Toronto.', source: 'test' });
+    const ctx1 = makeCtx(entityMemory, { text: 'Bob lives in Toronto.', source: 'test' });
     const result1 = await handler1.execute(ctx1);
     expect(result1).toEqual({ success: true, data: { stored: 1, skipped: false, failed: 0 } });
 
     // Second invocation with semantically identical fact — storeFact deduplicates internally
     const anthropic2 = makeMockAnthropicClient(['yes', facts]);
     const handler2 = new ExtractFactsHandler(anthropic2 as never);
-    const ctx2 = makeCtx(entityMemory, { text: 'Joseph lives in Toronto.', source: 'test' });
+    const ctx2 = makeCtx(entityMemory, { text: 'Bob lives in Toronto.', source: 'test' });
     const result2 = await handler2.execute(ctx2);
     expect(result2).toEqual({ success: true, data: { stored: 1, skipped: false, failed: 0 } });
 
@@ -195,7 +195,7 @@ describe('ExtractFactsHandler', () => {
     const anthropic = makeMockAnthropicClient(['yes', 'null']);
     const handler = new ExtractFactsHandler(anthropic as never);
     const ctx = makeCtx(entityMemory, {
-      text: 'Joseph lives in Toronto.',
+      text: 'Bob lives in Toronto.',
       source: 'test',
     });
 
@@ -215,7 +215,7 @@ describe('ExtractFactsHandler', () => {
     // Mock storeFact to return stored:false (simulates rate-limit rejection or contradiction)
     const storeFact = vi.spyOn(entityMemory, 'storeFact').mockResolvedValueOnce({ stored: false, conflict: 'Rate limit exceeded' });
 
-    const ctx = makeCtx(entityMemory, { text: 'Joseph lives in Toronto.', source: 'test' });
+    const ctx = makeCtx(entityMemory, { text: 'Bob lives in Toronto.', source: 'test' });
     const result = await handler.execute(ctx);
 
     // stored:false is not counted as failed — it is an expected semantic outcome

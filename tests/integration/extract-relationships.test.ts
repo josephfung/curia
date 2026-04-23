@@ -95,7 +95,7 @@ describeIf('extract-relationships integration', () => {
     ]);
     const anthropic = makeMockAnthropicClient(['yes', triple]);
     const handler = new ExtractRelationshipsHandler(anthropic as never);
-    const ctx = makeCtx(entityMemory, 'John Smith is Joseph\'s wife.');
+    const ctx = makeCtx(entityMemory, 'John Smith is Bob\'s wife.');
 
     const result = await handler.execute(ctx);
 

@@ -36,7 +36,7 @@ describe('KnowledgeGraphStore', () => {
     it('updates node properties and refreshes last_confirmed_at', async () => {
       const node = await store.createNode({
         type: 'person',
-        label: 'Joseph',
+        label: 'Bob',
         properties: { city: 'Kitchener' },
         source: 'test',
       });

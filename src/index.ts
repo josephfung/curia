@@ -555,11 +555,11 @@ async function main(): Promise<void> {
   let outboundFilter: OutboundContentFilter | undefined;
   if (coordinatorConfig) {
     const systemPromptMarkers = extractIdentityMarkers(officeIdentity);
-    // CEO_PRIMARY_EMAIL is Joseph's email — used to allow his address in outbound
+    // CEO_PRIMARY_EMAIL is the CEO's email — used to allow their address in outbound
     // content without triggering the contact-data-leak rule. Must NOT be Curia's
     // own Nylas address (nylasSelfEmail): using Curia's address here was a bug
-    // that (a) treated Joseph's email as a third-party leak and (b) routed
-    // blocked-content notifications to Curia's inbox instead of Joseph's.
+    // that (a) treated the CEO's email as a third-party leak and (b) routed
+    // blocked-content notifications to Curia's inbox instead of the CEO's.
     const ceoEmail = config.ceoPrimaryEmail ?? '';
     if (!ceoEmail) {
       logger.warn('Outbound content filter initialized without CEO email (CEO_PRIMARY_EMAIL not set) — contact-data-leak rule may produce false positives');
@@ -599,8 +599,8 @@ async function main(): Promise<void> {
       bus,
       // ceoEmail is optional in OutboundGatewayConfig; only needed for email notifications.
       // When Nylas is configured, this must be set or CEO blocked-content alerts won't send.
-      // Must be the CEO's primary email (Joseph's), NOT Curia's own Nylas address —
-      // notifications addressed to Curia's inbox were never visible to Joseph.
+      // Must be the CEO's primary email, NOT Curia's own Nylas address —
+      // notifications addressed to Curia's inbox were never visible to the CEO.
       ceoEmail: config.ceoPrimaryEmail || undefined,
       logger,
     });

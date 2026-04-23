@@ -107,11 +107,11 @@ describe('EntityMemory.updateNode', () => {
     const { mem } = makeEntityMemory();
     const { entity: node } = await mem.createEntity({ type: 'person', label: 'Joe', properties: {}, source: 'test' });
 
-    const { node: updated, merged } = await mem.updateNode(node.id, { label: 'Joseph' });
+    const { node: updated, merged } = await mem.updateNode(node.id, { label: 'Bob' });
 
     expect(merged).toBe(false);
     expect(updated.id).toBe(node.id);
-    expect(updated.label).toBe('Joseph');
+    expect(updated.label).toBe('Bob');
   });
 
   it('merges nodes when label update collides with an existing node of the same type', async () => {

@@ -1,5 +1,5 @@
 // Tests for resolveChannelAccounts() — focused on the observation_mode and
-// excluded_sender_emails fields added for Joseph's inbox monitoring (#273).
+// excluded_sender_emails fields added for CEO inbox monitoring (#273).
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { resolveChannelAccounts, loadYamlConfig } from '../../src/config.js';

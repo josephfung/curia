@@ -101,7 +101,7 @@ describe('TemplateMeetingRequestHandler', () => {
       const result = await handler.execute(makeCtx({
         action: 'generate',
         recipient_name: 'Alice',
-        sender_name: 'Joseph',
+        sender_name: 'Alex',
         proposed_times: 'Monday 10am, Tuesday 2pm',
         meeting_purpose: 'Q3 Planning',
       }));
@@ -125,7 +125,7 @@ describe('TemplateMeetingRequestHandler', () => {
 
         // Context passes through the input variables for the LLM
         expect(data.context.recipient_name).toBe('Alice');
-        expect(data.context.sender_name).toBe('Joseph');
+        expect(data.context.sender_name).toBe('Alex');
         expect(data.context.proposed_times).toBe('Monday 10am, Tuesday 2pm');
         expect(data.context.meeting_purpose).toBe('Q3 Planning');
         expect(data.context.agent_signature).toContain('Test Agent');

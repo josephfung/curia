@@ -81,7 +81,7 @@ describeIf('extract-facts integration', () => {
     ]);
     const anthropic = makeMockAnthropicClient(['yes', facts]);
     const handler = new ExtractFactsHandler(anthropic as never);
-    const ctx = makeCtx(entityMemory, 'Joseph lives in Toronto.');
+    const ctx = makeCtx(entityMemory, 'Bob lives in Toronto.');
 
     const result = await handler.execute(ctx);
 

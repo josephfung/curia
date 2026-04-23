@@ -69,7 +69,7 @@ describe('markdownToHtml', () => {
   it('renders a realistic email body correctly', () => {
     // Blank lines between paragraphs and list blocks (standard markdown)
     const body = [
-      'Hi Joseph,',
+      'Hi Alex,',
       '',
       "Here's what you have on your weekend agenda:",
       '',
@@ -81,7 +81,7 @@ describe('markdownToHtml', () => {
       '',
       '**Sunday, April 6th:**',
       '',
-      '- Joseph + Hamilton Catchup (meeting with Hamilton Petropoulos from Generation Capital via Google Meet)',
+      '- Alex + Hamilton Catchup (meeting with Hamilton Petropoulos from Generation Capital via Google Meet)',
       '',
       'You have a nice mix of personal and business items.',
     ].join('\n');
@@ -89,7 +89,7 @@ describe('markdownToHtml', () => {
     const result = markdownToHtml(body);
 
     // Paragraphs are wrapped
-    expect(result).toContain('<p>Hi Joseph,</p>');
+    expect(result).toContain('<p>Hi Alex,</p>');
     // Bold markers are converted
     expect(result).toContain('<strong>Saturday, April 5th:</strong>');
     expect(result).toContain('<strong>Sunday, April 6th:</strong>');

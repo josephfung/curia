@@ -770,7 +770,7 @@ class PostgresContactBackend implements ContactServiceBackend {
   }
 
   async findContactByName(name: string): Promise<Contact[]> {
-    // Substring match (case-insensitive) so partial names like "Joe" match "Joseph Brennan".
+    // Substring match (case-insensitive) so partial names like "Jo" match "Jo Brennan".
     // Uses ILIKE with wildcards — the idx_contacts_display_name btree index won't help here,
     // but the contacts table is small (hundreds, not millions) so a seq scan is fine.
     // For exact match, the caller can filter the results further.

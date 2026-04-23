@@ -15,25 +15,25 @@ function makeEntityMemory() {
 describe('EntityMemory.findEdges', () => {
   it('returns all edges for a node in both directions', async () => {
     const mem = makeEntityMemory();
-    const { entity: joseph } = await mem.createEntity({ type: 'person', label: 'Joseph', properties: {}, source: 'test' });
+    const { entity: bob } = await mem.createEntity({ type: 'person', label: 'Bob', properties: {}, source: 'test' });
     const { entity: xiaopu } = await mem.createEntity({ type: 'person', label: 'Alice', properties: {}, source: 'test' });
     const { entity: acme } = await mem.createEntity({ type: 'organization', label: 'Acme', properties: {}, source: 'test' });
-    await mem.upsertEdge(joseph.id, xiaopu.id, 'spouse', {}, 'test', 0.9);
-    await mem.upsertEdge(acme.id, joseph.id, 'member_of', {}, 'test', 0.8); // inbound to joseph
+    await mem.upsertEdge(bob.id, xiaopu.id, 'spouse', {}, 'test', 0.9);
+    await mem.upsertEdge(acme.id, bob.id, 'member_of', {}, 'test', 0.8); // inbound to bob
 
-    const results = await mem.findEdges(joseph.id);
+    const results = await mem.findEdges(bob.id);
     expect(results).toHaveLength(2);
   });
 
   it('filters by edge type', async () => {
     const mem = makeEntityMemory();
-    const { entity: joseph } = await mem.createEntity({ type: 'person', label: 'Joseph', properties: {}, source: 'test' });
+    const { entity: bob } = await mem.createEntity({ type: 'person', label: 'Bob', properties: {}, source: 'test' });
     const { entity: xiaopu } = await mem.createEntity({ type: 'person', label: 'Alice', properties: {}, source: 'test' });
     const { entity: acme } = await mem.createEntity({ type: 'organization', label: 'Acme', properties: {}, source: 'test' });
-    await mem.upsertEdge(joseph.id, xiaopu.id, 'spouse', {}, 'test', 0.9);
-    await mem.upsertEdge(joseph.id, acme.id, 'member_of', {}, 'test', 0.8);
+    await mem.upsertEdge(bob.id, xiaopu.id, 'spouse', {}, 'test', 0.9);
+    await mem.upsertEdge(bob.id, acme.id, 'member_of', {}, 'test', 0.8);
 
-    const results = await mem.findEdges(joseph.id, { type: 'spouse' });
+    const results = await mem.findEdges(bob.id, { type: 'spouse' });
     expect(results).toHaveLength(1);
     expect(results[0]!.edge.type).toBe('spouse');
     expect(results[0]!.node.label).toBe('Alice');
@@ -41,11 +41,11 @@ describe('EntityMemory.findEdges', () => {
 
   it('labels direction correctly', async () => {
     const mem = makeEntityMemory();
-    const { entity: joseph } = await mem.createEntity({ type: 'person', label: 'Joseph', properties: {}, source: 'test' });
+    const { entity: bob } = await mem.createEntity({ type: 'person', label: 'Bob', properties: {}, source: 'test' });
     const { entity: xiaopu } = await mem.createEntity({ type: 'person', label: 'Alice', properties: {}, source: 'test' });
-    await mem.upsertEdge(joseph.id, xiaopu.id, 'manages', {}, 'test', 0.8);
+    await mem.upsertEdge(bob.id, xiaopu.id, 'manages', {}, 'test', 0.8);
 
-    const fromJoseph = await mem.findEdges(joseph.id);
+    const fromJoseph = await mem.findEdges(bob.id);
     const fromAlice = await mem.findEdges(xiaopu.id);
 
     expect(fromJoseph[0]!.direction).toBe('outbound');
@@ -54,13 +54,13 @@ describe('EntityMemory.findEdges', () => {
 
   it('filters out fact-type nodes', async () => {
     const mem = makeEntityMemory();
-    const { entity: joseph } = await mem.createEntity({ type: 'person', label: 'Joseph', properties: {}, source: 'test' });
+    const { entity: bob } = await mem.createEntity({ type: 'person', label: 'Bob', properties: {}, source: 'test' });
     // Store a fact — this creates a 'fact' node linked via 'relates_to' edge
-    await mem.storeFact({ entityNodeId: joseph.id, label: 'Lives in Toronto', source: 'test' });
+    await mem.storeFact({ entityNodeId: bob.id, label: 'Lives in Toronto', source: 'test' });
     const { entity: xiaopu } = await mem.createEntity({ type: 'person', label: 'Alice', properties: {}, source: 'test' });
-    await mem.upsertEdge(joseph.id, xiaopu.id, 'spouse', {}, 'test', 0.9);
+    await mem.upsertEdge(bob.id, xiaopu.id, 'spouse', {}, 'test', 0.9);
 
-    const results = await mem.findEdges(joseph.id);
+    const results = await mem.findEdges(bob.id);
     // Should only return the spouse relationship, not the fact link
     expect(results).toHaveLength(1);
     expect(results[0]!.edge.type).toBe('spouse');
@@ -68,15 +68,15 @@ describe('EntityMemory.findEdges', () => {
 
   it('filters by direction:inbound', async () => {
     const mem = makeEntityMemory();
-    const { entity: joseph } = await mem.createEntity({ type: 'person', label: 'Joseph', properties: {}, source: 'test' });
+    const { entity: bob } = await mem.createEntity({ type: 'person', label: 'Bob', properties: {}, source: 'test' });
     const { entity: xiaopu } = await mem.createEntity({ type: 'person', label: 'Alice', properties: {}, source: 'test' });
     const { entity: acme } = await mem.createEntity({ type: 'organization', label: 'Acme', properties: {}, source: 'test' });
-    // joseph manages xiaopu (outbound from joseph)
-    await mem.upsertEdge(joseph.id, xiaopu.id, 'manages', {}, 'test', 0.8);
-    // acme advises joseph (inbound to joseph)
-    await mem.upsertEdge(acme.id, joseph.id, 'advises', {}, 'test', 0.8);
+    // bob manages xiaopu (outbound from bob)
+    await mem.upsertEdge(bob.id, xiaopu.id, 'manages', {}, 'test', 0.8);
+    // acme advises bob (inbound to bob)
+    await mem.upsertEdge(acme.id, bob.id, 'advises', {}, 'test', 0.8);
 
-    const inbound = await mem.findEdges(joseph.id, { direction: 'inbound' });
+    const inbound = await mem.findEdges(bob.id, { direction: 'inbound' });
     expect(inbound).toHaveLength(1);
     expect(inbound[0]!.direction).toBe('inbound');
     expect(inbound[0]!.node.label).toBe('Acme');
@@ -86,13 +86,13 @@ describe('EntityMemory.findEdges', () => {
 describe('EntityMemory.deleteEdge', () => {
   it('removes the edge so it no longer appears in findEdges', async () => {
     const mem = makeEntityMemory();
-    const { entity: joseph } = await mem.createEntity({ type: 'person', label: 'Joseph', properties: {}, source: 'test' });
+    const { entity: bob } = await mem.createEntity({ type: 'person', label: 'Bob', properties: {}, source: 'test' });
     const { entity: xiaopu } = await mem.createEntity({ type: 'person', label: 'Alice', properties: {}, source: 'test' });
-    const { edge } = await mem.upsertEdge(joseph.id, xiaopu.id, 'spouse', {}, 'test', 0.9);
+    const { edge } = await mem.upsertEdge(bob.id, xiaopu.id, 'spouse', {}, 'test', 0.9);
 
     await mem.deleteEdge(edge.id);
 
-    const results = await mem.findEdges(joseph.id);
+    const results = await mem.findEdges(bob.id);
     expect(results).toHaveLength(0);
   });
 });

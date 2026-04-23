@@ -58,7 +58,7 @@ describe('NylasCalendarClient', () => {
       (sdk.calendars.list as ReturnType<typeof vi.fn>).mockResolvedValue({
         data: [{
           id: 'cal-1',
-          name: 'Joseph Work',
+          name: 'Work Calendar',
           description: 'Main calendar',
           timezone: 'America/Toronto',
           isPrimary: true,
@@ -72,7 +72,7 @@ describe('NylasCalendarClient', () => {
       expect(calendars).toHaveLength(1);
       expect(calendars[0]).toEqual({
         id: 'cal-1',
-        name: 'Joseph Work',
+        name: 'Work Calendar',
         description: 'Main calendar',
         timezone: 'America/Toronto',
         isPrimary: true,

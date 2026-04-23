@@ -100,13 +100,13 @@ describe('ExtractRelationshipsHandler', () => {
     // First invocation — creates the edge
     const anthropic1 = makeMockAnthropicClient(['yes', triple]);
     const handler1 = new ExtractRelationshipsHandler(anthropic1 as never);
-    const ctx1 = makeCtx(entityMemory, { text: 'John Smith is Joseph\'s wife.', source: 'test' });
+    const ctx1 = makeCtx(entityMemory, { text: 'John Smith is Bob\'s wife.', source: 'test' });
     await handler1.execute(ctx1);
 
     // Second invocation with same text — should confirm, not duplicate
     const anthropic2 = makeMockAnthropicClient(['yes', triple]);
     const handler2 = new ExtractRelationshipsHandler(anthropic2 as never);
-    const ctx2 = makeCtx(entityMemory, { text: 'John Smith is Joseph\'s wife.', source: 'test' });
+    const ctx2 = makeCtx(entityMemory, { text: 'John Smith is Bob\'s wife.', source: 'test' });
     const result = await handler2.execute(ctx2);
 
     expect(result).toEqual({ success: true, data: { extracted: 0, confirmed: 1, failed: 0, skipped: false } });
@@ -145,7 +145,7 @@ describe('ExtractRelationshipsHandler', () => {
     expect(aNodes[0]!.temporal.confidence).toBe(0.6);
   });
 
-  it('acceptance criterion: "John Smith is Joseph\'s wife" creates a spouse edge', async () => {
+  it('acceptance criterion: "John Smith is Bob\'s wife" creates a spouse edge', async () => {
     const entityMemory = makeEntityMemory();
     const triple = JSON.stringify([
       { subject: 'John Smith', subjectType: 'person', predicate: 'spouse', object: 'Jane Doe', objectType: 'person', confidence: 0.95 },
@@ -153,7 +153,7 @@ describe('ExtractRelationshipsHandler', () => {
     const anthropic = makeMockAnthropicClient(['yes', triple]);
     const handler = new ExtractRelationshipsHandler(anthropic as never);
     const ctx = makeCtx(entityMemory, {
-      text: 'John Smith is Joseph\'s wife.',
+      text: 'John Smith is Bob\'s wife.',
       source: 'test',
     });
 
