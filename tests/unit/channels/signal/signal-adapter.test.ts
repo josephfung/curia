@@ -73,7 +73,7 @@ function makeEnvelope(overrides: Partial<SignalEnvelope> = {}): SignalEnvelope {
     timestamp: 1700000000000,
     dataMessage: {
       timestamp: 1700000000000,
-      message: 'Hello Nathan',
+      message: 'Hello there',
       expiresInSeconds: 0,
       viewOnce: false,
     },
@@ -135,7 +135,7 @@ describe('SignalAdapter', () => {
     expect(event.type).toBe('inbound.message');
     expect(event.payload.channelId).toBe('signal');
     expect(event.payload.senderId).toBe('+14155551234');
-    expect(event.payload.content).toBe('Hello Nathan');
+    expect(event.payload.content).toBe('Hello there');
   });
 
   it('sends a read receipt for a 1:1 message from a known (confirmed) sender', async () => {
@@ -298,7 +298,7 @@ describe('SignalAdapter', () => {
       payload: {
         conversationId: 'signal:+14155551234',
         channelId: 'signal',
-        content: 'Hello from Nathan',
+        content: 'Hello from the agent',
       },
     };
 
@@ -309,7 +309,7 @@ describe('SignalAdapter', () => {
       expect.objectContaining({
         channel: 'signal',
         recipient: '+14155551234',
-        message: 'Hello from Nathan',
+        message: 'Hello from the agent',
       }),
     );
   });

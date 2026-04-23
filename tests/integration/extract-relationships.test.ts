@@ -85,17 +85,17 @@ describeIf('extract-relationships integration', () => {
   it('persists a spouse edge to Postgres and surfaces it via entity context', async () => {
     const triple = JSON.stringify([
       {
-        subject: 'Xiaopu Fung',
+        subject: 'John Smith',
         subjectType: 'person',
         predicate: 'spouse',
-        object: 'Joseph Fung',
+        object: 'Jane Doe',
         objectType: 'person',
         confidence: 0.95,
       },
     ]);
     const anthropic = makeMockAnthropicClient(['yes', triple]);
     const handler = new ExtractRelationshipsHandler(anthropic as never);
-    const ctx = makeCtx(entityMemory, 'Xiaopu Fung is Joseph\'s wife.');
+    const ctx = makeCtx(entityMemory, 'John Smith is Bob\'s wife.');
 
     const result = await handler.execute(ctx);
 
@@ -103,7 +103,7 @@ describeIf('extract-relationships integration', () => {
     expect(result).toMatchObject({ success: true, data: { extracted: 1, confirmed: 0, skipped: false } });
 
     // Verify edge exists in Postgres directly
-    const josephNodes = await entityMemory.findEntities('Joseph Fung');
+    const josephNodes = await entityMemory.findEntities('Jane Doe');
     expect(josephNodes).toHaveLength(1);
     const josephId = josephNodes[0]!.id;
 
@@ -121,7 +121,7 @@ describeIf('extract-relationships integration', () => {
     // EntityRelationship uses .type and .relatedEntityLabel (see src/entity-context/types.ts)
     const spouseRel = josephCtx.relationships.find(r => r.type === 'spouse');
     expect(spouseRel).toBeDefined();
-    expect(spouseRel!.relatedEntityLabel).toBe('Xiaopu Fung');
+    expect(spouseRel!.relatedEntityLabel).toBe('John Smith');
   });
 
   it('is idempotent — second call with same triple confirms the edge, not duplicates it', async () => {

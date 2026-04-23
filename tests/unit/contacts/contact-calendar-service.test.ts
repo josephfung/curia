@@ -20,7 +20,7 @@ describe('ContactService — calendar methods', () => {
     service = ContactService.createInMemory(entityMemory);
 
     ceoContact = await service.createContact({
-      displayName: 'Joseph Fung',
+      displayName: 'Jane Doe',
       role: 'ceo',
       source: 'test',
     });

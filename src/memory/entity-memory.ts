@@ -148,10 +148,10 @@ export class EntityMemory {
    * ║                                                                      ║
    * ║  Example:                                                            ║
    * ║    const { node, merged } = await entityMemory.updateNode(          ║
-   * ║      joeId, { label: 'Joseph Fung' }                                ║
+   * ║      oldId, { label: 'Jane Doe' }                                    ║
    * ║    );                                                                ║
    * ║    if (merged) {                                                     ║
-   * ║      // joeId is gone. node.id is the canonical Joseph Fung node.   ║
+   * ║      // oldId is gone. node.id is the canonical Jane Doe node.      ║
    * ║      // Log, surface to the agent, update your local reference.     ║
    * ║    }                                                                 ║
    * ╚══════════════════════════════════════════════════════════════════════╝

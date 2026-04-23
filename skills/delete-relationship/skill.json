@@ -6,9 +6,9 @@
   "action_risk": "low",
   "infrastructure": true,
   "inputs": {
-    "subject": "string (name or label of the source entity, e.g. 'Joseph Fung')",
+    "subject": "string (name or label of the source entity, e.g. 'Jane Doe')",
     "predicate": "string (the edge type to delete, e.g. 'spouse' or 'reports_to'. Must be a known edge type.)",
-    "object": "string (name or label of the target entity, e.g. 'Xiaopu Fung')"
+    "object": "string (name or label of the target entity, e.g. 'John Smith')"
   },
   "outputs": {
     "deleted": "boolean — true if a matching edge was found and removed",

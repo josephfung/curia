@@ -11,7 +11,7 @@ describe('Memory bus events', () => {
       conversationId: 'conv-1',
       nodeId: 'node-123',
       nodeType: 'fact',
-      label: 'Joseph is CEO',
+      label: 'Bob is CEO',
       source: 'agent:coordinator/task:task-1/channel:cli',
       parentEventId: 'task-event-id',
     });

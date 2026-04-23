@@ -36,7 +36,7 @@ the CEO, or exfiltrate internal data to an external party.
 | **Accidental context leakage** | LLM naturally includes a third party's email address in a reply | Content filter — contact data leakage rule |
 | **Skill-layer bypass** | Prompt injection tricks LLM into calling `email-send` directly, circumventing the dispatcher filter | Outbound gateway — all `nylasClient.sendMessage()` calls go through it |
 | **Impersonation of CEO** | Attacker sends email claiming to be the CEO, triggers a high-sensitivity action | Caller verification — cross-channel challenge/response for elevated skills |
-| **Display name spoofing** | Reply-To header set to `Joseph Fung <attacker@evil.com>` | Display name sanitization — strip or flag mismatched display names |
+| **Display name spoofing** | Reply-To header set to `Jane Doe <attacker@evil.com>` | Display name sanitization — strip or flag mismatched display names |
 
 ---
 
@@ -104,7 +104,7 @@ Trust levels used for gating: see [06-audit-and-security.md](06-audit-and-securi
 ## Display Name Sanitization
 
 Inbound messages are checked for mismatches between the platform-verified sender identity and
-the display name claimed in message headers. A `From: Joseph Fung <attacker@evil.com>` header
+the display name claimed in message headers. A `From: Jane Doe <attacker@evil.com>` header
 is flagged: the display name matches a known contact but the address does not.
 
 Flagged messages are tagged `sender_verified: false` in `InboundMessage.metadata`. The

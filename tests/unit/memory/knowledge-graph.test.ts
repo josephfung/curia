@@ -14,7 +14,7 @@ describe('KnowledgeGraphStore', () => {
     it('creates and retrieves a node by ID', async () => {
       const node = await store.createNode({
         type: 'person',
-        label: 'Joseph Fung',
+        label: 'Jane Doe',
         properties: { title: 'CEO' },
         confidence: 0.9,
         decayClass: 'permanent',
@@ -22,10 +22,10 @@ describe('KnowledgeGraphStore', () => {
       });
       expect(node.id).toBeDefined();
       expect(node.type).toBe('person');
-      expect(node.label).toBe('Joseph Fung');
+      expect(node.label).toBe('Jane Doe');
       const retrieved = await store.getNode(node.id);
       expect(retrieved).toBeDefined();
-      expect(retrieved!.label).toBe('Joseph Fung');
+      expect(retrieved!.label).toBe('Jane Doe');
     });
 
     it('returns undefined for non-existent node', async () => {
@@ -36,7 +36,7 @@ describe('KnowledgeGraphStore', () => {
     it('updates node properties and refreshes last_confirmed_at', async () => {
       const node = await store.createNode({
         type: 'person',
-        label: 'Joseph',
+        label: 'Bob',
         properties: { city: 'Kitchener' },
         source: 'test',
       });
@@ -92,10 +92,10 @@ describe('KnowledgeGraphStore', () => {
     });
 
     it('finds nodes by label (case-insensitive)', async () => {
-      await store.createNode({ type: 'person', label: 'Joseph Fung', properties: {}, source: 'test' });
-      const results = await store.findNodesByLabel('joseph fung');
+      await store.createNode({ type: 'person', label: 'Jane Doe', properties: {}, source: 'test' });
+      const results = await store.findNodesByLabel('jane doe');
       expect(results).toHaveLength(1);
-      expect(results[0]!.label).toBe('Joseph Fung');
+      expect(results[0]!.label).toBe('Jane Doe');
     });
   });
 

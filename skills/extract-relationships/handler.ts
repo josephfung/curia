@@ -94,7 +94,7 @@ Available node types: ${NODE_TYPES_LIST}
 
 Rules:
 - Only extract relationships between two distinct entities (person, organization, project, etc.)
-- Do NOT extract facts about a single entity (e.g. "Joseph lives in Toronto" is a fact about one entity, not a relationship)
+- Do NOT extract facts about a single entity (e.g. "Bob lives in Toronto" is a fact about one entity, not a relationship)
 - Use 'relates_to' as predicate if no specific edge type fits
 - Set confidence between 0.0 and 1.0 based on how explicitly the relationship is stated
 - Return ONLY valid JSON, no explanation or markdown fences
@@ -199,7 +199,7 @@ ${text}`,
 
         // Skip self-loops — subject and object resolved to the same node.
         // The extraction prompt asks for two distinct entities but the LLM can still
-        // produce a triple like ("Joseph", "knows", "Joseph") on malformed input.
+        // produce a triple like ("Alice", "knows", "Alice") on malformed input.
         if (subjectNode.id === objectNode.id) {
           ctx.log.warn({ subject: triple.subject, object: triple.object }, 'extract-relationships: skipping self-loop triple');
           continue;

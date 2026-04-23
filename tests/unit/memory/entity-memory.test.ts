@@ -20,15 +20,15 @@ describe('EntityMemory', () => {
     it('creates a new entity and retrieves it', async () => {
       const { entity } = await entityMemory.createEntity({
         type: 'person',
-        label: 'Joseph Fung',
+        label: 'Jane Doe',
         properties: { title: 'CEO' },
         source: 'test',
       });
       expect(entity.id).toBeDefined();
-      expect(entity.label).toBe('Joseph Fung');
+      expect(entity.label).toBe('Jane Doe');
       const retrieved = await entityMemory.getEntity(entity.id);
       expect(retrieved).toBeDefined();
-      expect(retrieved!.label).toBe('Joseph Fung');
+      expect(retrieved!.label).toBe('Jane Doe');
     });
 
     it('returns undefined for a non-existent entity', async () => {
@@ -39,11 +39,11 @@ describe('EntityMemory', () => {
     it('finds entity by label', async () => {
       await entityMemory.createEntity({
         type: 'person',
-        label: 'Joseph Fung',
+        label: 'Jane Doe',
         properties: {},
         source: 'test',
       });
-      const results = await entityMemory.findEntities('Joseph Fung');
+      const results = await entityMemory.findEntities('Jane Doe');
       expect(results).toHaveLength(1);
     });
 
@@ -68,13 +68,13 @@ describe('EntityMemory', () => {
     it('stores a fact about an entity', async () => {
       const { entity } = await entityMemory.createEntity({
         type: 'person',
-        label: 'Joseph',
+        label: 'Bob',
         properties: {},
         source: 'test',
       });
       const result = await entityMemory.storeFact({
         entityNodeId: entity.id,
-        label: 'Joseph is CEO of Curia',
+        label: 'Bob is CEO of Curia',
         properties: { attribute: 'role' },
         source: 'agent:coordinator/task:test',
       });
@@ -84,13 +84,13 @@ describe('EntityMemory', () => {
     it('returns nodeId when a fact is stored', async () => {
       const { entity } = await entityMemory.createEntity({
         type: 'person',
-        label: 'Joseph',
+        label: 'Bob',
         properties: {},
         source: 'test',
       });
       const result = await entityMemory.storeFact({
         entityNodeId: entity.id,
-        label: 'Joseph is CEO of Curia',
+        label: 'Bob is CEO of Curia',
         source: 'test',
       });
       expect(result.stored).toBe(true);
@@ -100,18 +100,18 @@ describe('EntityMemory', () => {
     it('retrieves all facts about an entity', async () => {
       const { entity } = await entityMemory.createEntity({
         type: 'person',
-        label: 'Joseph',
+        label: 'Bob',
         properties: {},
         source: 'test',
       });
       await entityMemory.storeFact({
         entityNodeId: entity.id,
-        label: 'Joseph is CEO',
+        label: 'Bob is CEO',
         source: 'test',
       });
       await entityMemory.storeFact({
         entityNodeId: entity.id,
-        label: 'Joseph lives in Kitchener',
+        label: 'Bob lives in Kitchener',
         source: 'test',
       });
       const facts = await entityMemory.getFacts(entity.id);
@@ -149,13 +149,13 @@ describe('EntityMemory', () => {
     it('deduplicates identical facts (returns stored:true with existing nodeId)', async () => {
       const { entity } = await entityMemory.createEntity({
         type: 'person',
-        label: 'Joseph',
+        label: 'Bob',
         properties: {},
         source: 'test',
       });
       const first = await entityMemory.storeFact({
         entityNodeId: entity.id,
-        label: 'Joseph is the founder',
+        label: 'Bob is the founder',
         source: 'test',
       });
       expect(first.stored).toBe(true);
@@ -163,7 +163,7 @@ describe('EntityMemory', () => {
       // Identical label — dedup should return stored:true with the existing nodeId
       const second = await entityMemory.storeFact({
         entityNodeId: entity.id,
-        label: 'Joseph is the founder',
+        label: 'Bob is the founder',
         source: 'test',
       });
       expect(second.stored).toBe(true);
@@ -176,14 +176,14 @@ describe('EntityMemory', () => {
     it('returns stored:false with conflict reason on contradiction', async () => {
       const { entity } = await entityMemory.createEntity({
         type: 'person',
-        label: 'Joseph',
+        label: 'Bob',
         properties: {},
         source: 'test',
       });
       // Store a fact with attribute metadata to enable contradiction detection
       await store.createNode({
         type: 'fact',
-        label: 'Joseph lives in Kitchener',
+        label: 'Bob lives in Kitchener',
         properties: { attribute: 'location' },
         confidence: 0.9,
         source: 'test',

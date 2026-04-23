@@ -23,7 +23,7 @@ expected_behaviors:
     description: Recognizes that the original Friday reservation should be cancelled or not pursued
     weight: critical
   - id: apply-changes
-    description: Updates the request to Saturday at 7:30pm for 3 people (Joseph, Raj, Tomoko)
+    description: Updates the request to Saturday at 7:30pm for 3 people (Alex, Raj, Tomoko)
     weight: critical
   - id: remove-claire
     description: Removes Claire from the guest list as instructed

@@ -6,7 +6,7 @@
   "action_risk": "none",
   "infrastructure": true,
   "inputs": {
-    "entity": "string (the name or label of the entity to query, e.g. 'Joseph Fung')",
+    "entity": "string (the name or label of the entity to query, e.g. 'Jane Doe')",
     "edge_type": "string? (optional edge type filter, e.g. 'spouse' or 'reports_to'. Must be a known edge type.)"
   },
   "outputs": {

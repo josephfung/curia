@@ -17,7 +17,7 @@ describe('MemoryValidator', () => {
     it('detects duplicate fact by exact label match', async () => {
       const entity = await store.createNode({
         type: 'person',
-        label: 'Joseph',
+        label: 'Bob',
         properties: {},
         source: 'test',
       });
@@ -26,7 +26,7 @@ describe('MemoryValidator', () => {
       // without this edge, the validator can't discover the existing fact.
       const fact = await store.createNode({
         type: 'fact',
-        label: 'Joseph lives in Kitchener',
+        label: 'Bob lives in Kitchener',
         properties: {},
         source: 'test',
       });
@@ -40,7 +40,7 @@ describe('MemoryValidator', () => {
 
       const result = await validator.validate({
         entityNodeId: entity.id,
-        label: 'Joseph lives in Kitchener',
+        label: 'Bob lives in Kitchener',
         source: 'test',
       });
       expect(result.action).toBe('update');
@@ -49,14 +49,14 @@ describe('MemoryValidator', () => {
     it('allows new fact when no duplicate exists', async () => {
       const entity = await store.createNode({
         type: 'person',
-        label: 'Joseph',
+        label: 'Bob',
         properties: {},
         source: 'test',
       });
 
       const result = await validator.validate({
         entityNodeId: entity.id,
-        label: 'Joseph likes coffee',
+        label: 'Bob likes coffee',
         source: 'test',
       });
       expect(result.action).toBe('create');
@@ -65,14 +65,14 @@ describe('MemoryValidator', () => {
     it('returns merged properties on dedup hit', async () => {
       const entity = await store.createNode({
         type: 'person',
-        label: 'Joseph',
+        label: 'Bob',
         properties: {},
         source: 'test',
       });
 
       const fact = await store.createNode({
         type: 'fact',
-        label: 'Joseph lives in Kitchener',
+        label: 'Bob lives in Kitchener',
         properties: { verified: true },
         source: 'test',
       });
@@ -86,7 +86,7 @@ describe('MemoryValidator', () => {
 
       const result = await validator.validate({
         entityNodeId: entity.id,
-        label: 'Joseph lives in Kitchener',
+        label: 'Bob lives in Kitchener',
         properties: { updatedBy: 'agent:coordinator' },
         source: 'test',
       });
@@ -184,14 +184,14 @@ describe('MemoryValidator', () => {
     it('flags contradiction when existing fact has equal confidence', async () => {
       const entity = await store.createNode({
         type: 'person',
-        label: 'Joseph',
+        label: 'Bob',
         properties: {},
         source: 'test',
       });
 
       const existingFact = await store.createNode({
         type: 'fact',
-        label: 'Joseph lives in Kitchener',
+        label: 'Bob lives in Kitchener',
         properties: { attribute: 'location' },
         confidence: 0.8,
         source: 'test',
@@ -206,7 +206,7 @@ describe('MemoryValidator', () => {
 
       const result = await validator.validateContradiction({
         entityNodeId: entity.id,
-        label: 'Joseph lives in Toronto',
+        label: 'Bob lives in Toronto',
         properties: { attribute: 'location' },
         confidence: 0.8,
         source: 'test',
@@ -218,14 +218,14 @@ describe('MemoryValidator', () => {
     it('includes existing and new fact labels in the conflict reason', async () => {
       const entity = await store.createNode({
         type: 'person',
-        label: 'Joseph',
+        label: 'Bob',
         properties: {},
         source: 'test',
       });
 
       const existingFact = await store.createNode({
         type: 'fact',
-        label: 'Joseph lives in Kitchener',
+        label: 'Bob lives in Kitchener',
         properties: { attribute: 'location' },
         confidence: 0.9,
         source: 'test',
@@ -240,7 +240,7 @@ describe('MemoryValidator', () => {
 
       const result = await validator.validateContradiction({
         entityNodeId: entity.id,
-        label: 'Joseph lives in Vancouver',
+        label: 'Bob lives in Vancouver',
         properties: { attribute: 'location' },
         confidence: 0.7,
         source: 'test',
@@ -256,7 +256,7 @@ describe('MemoryValidator', () => {
     it('proceeds normally when no contradiction exists for the attribute', async () => {
       const entity = await store.createNode({
         type: 'person',
-        label: 'Joseph',
+        label: 'Bob',
         properties: {},
         source: 'test',
       });
@@ -264,7 +264,7 @@ describe('MemoryValidator', () => {
       // Existing fact has a DIFFERENT attribute, so no contradiction
       const existingFact = await store.createNode({
         type: 'fact',
-        label: 'Joseph is 40 years old',
+        label: 'Bob is 40 years old',
         properties: { attribute: 'age' },
         confidence: 0.9,
         source: 'test',
@@ -279,7 +279,7 @@ describe('MemoryValidator', () => {
 
       const result = await validator.validateContradiction({
         entityNodeId: entity.id,
-        label: 'Joseph lives in Kitchener',
+        label: 'Bob lives in Kitchener',
         properties: { attribute: 'location' },
         confidence: 0.8,
         source: 'test',
@@ -292,7 +292,7 @@ describe('MemoryValidator', () => {
     it('falls through to normal validation when no attribute metadata present', async () => {
       const entity = await store.createNode({
         type: 'person',
-        label: 'Joseph',
+        label: 'Bob',
         properties: {},
         source: 'test',
       });
@@ -300,7 +300,7 @@ describe('MemoryValidator', () => {
       // No attribute property — contradiction detection is skipped
       const result = await validator.validateContradiction({
         entityNodeId: entity.id,
-        label: 'Joseph is a software engineer',
+        label: 'Bob is a software engineer',
         confidence: 0.8,
         source: 'test',
       });
@@ -313,14 +313,14 @@ describe('MemoryValidator', () => {
     it('records full provenance chain on validation result', async () => {
       const entity = await store.createNode({
         type: 'person',
-        label: 'Joseph',
+        label: 'Bob',
         properties: {},
         source: 'test',
       });
 
       const result = await validator.validate({
         entityNodeId: entity.id,
-        label: 'New fact about Joseph',
+        label: 'New fact about Bob',
         source: 'agent:coordinator/task:abc123/channel:cli',
       });
 
@@ -333,14 +333,14 @@ describe('MemoryValidator', () => {
     it('preserves confidence and decayClass from options', async () => {
       const entity = await store.createNode({
         type: 'person',
-        label: 'Joseph',
+        label: 'Bob',
         properties: {},
         source: 'test',
       });
 
       const result = await validator.validate({
         entityNodeId: entity.id,
-        label: 'Joseph is an executive',
+        label: 'Bob is an executive',
         confidence: 0.95,
         decayClass: 'permanent',
         source: 'agent:coordinator/task:xyz/channel:email',
@@ -356,14 +356,14 @@ describe('MemoryValidator', () => {
     it('defaults confidence to 0.7 and decayClass to slow_decay when omitted', async () => {
       const entity = await store.createNode({
         type: 'person',
-        label: 'Joseph',
+        label: 'Bob',
         properties: {},
         source: 'test',
       });
 
       const result = await validator.validate({
         entityNodeId: entity.id,
-        label: 'Joseph has an office',
+        label: 'Bob has an office',
         source: 'test',
       });
 

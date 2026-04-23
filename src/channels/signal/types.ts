@@ -43,7 +43,7 @@ export interface SignalEnvelope {
   timestamp: number;
   /** Set for regular inbound messages from other Signal users */
   dataMessage?: SignalDataMessage;
-  /** Set for messages sent from Nathan's own other devices (self-sync) */
+  /** Set for messages sent from the agent's own other devices (self-sync) */
   syncMessage?: SignalSyncMessage;
 }
 
@@ -100,9 +100,9 @@ export interface SignalReaction {
 }
 
 /**
- * Messages Nathan sends from another Signal device (phone, desktop) are
+ * Messages the agent sends from another Signal device (phone, desktop) are
  * mirrored back to all linked devices as syncMessage envelopes. We discard
- * these — they represent Nathan's outbound activity, not inbound requests.
+ * these — they represent the agent's outbound activity, not inbound requests.
  */
 export interface SignalSyncMessage {
   sentMessage?: {
@@ -118,7 +118,7 @@ export interface SignalSyncMessage {
  */
 export interface SignalReceiveParams {
   envelope: SignalEnvelope;
-  /** Nathan's phone number — the account that received the message */
+  /** The agent's phone number — the account that received the message */
   account: string;
 }
 
@@ -131,7 +131,7 @@ export interface SignalReceiveParams {
  * Either `recipient` (1:1) or `groupId` (group) must be set, not both.
  */
 export interface SignalSendParams {
-  /** Nathan's phone number — the sending account */
+  /** The agent's phone number — the sending account */
   account: string;
   /** E.164 number array for 1:1 sends. signal-cli takes an array. */
   recipient?: string[];
@@ -148,7 +148,7 @@ export interface SignalSendParams {
  * (they broadcast to all group members). Group read receipts are deferred.
  */
 export interface SignalReadReceiptParams {
-  /** Nathan's phone number — the account sending the receipt */
+  /** The agent's phone number — the account sending the receipt */
   account: string;
   /** The sender who will receive the read confirmation */
   recipient: string;

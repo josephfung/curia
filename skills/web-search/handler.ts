@@ -1,7 +1,7 @@
 // handler.ts — web-search skill implementation.
 //
 // Calls the Tavily search API and returns structured results for the LLM
-// to synthesise. All synthesis happens in Nathan's LLM — this skill is a
+// to synthesise. All synthesis happens in the agent's LLM — this skill is a
 // data bridge, not an answer generator.
 //
 // Two search depths:

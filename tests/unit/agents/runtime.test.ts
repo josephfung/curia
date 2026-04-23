@@ -343,7 +343,7 @@ describe('AgentRuntime', () => {
       channelId: 'scheduler',
       senderId: 'scheduler',
       content: JSON.stringify({ progress: {}, task_payload: { task: 'dedup scan' } }),
-      intentAnchor: 'Run weekly contacts dedup scan and present duplicates to Joseph.',
+      intentAnchor: 'Run weekly contacts dedup scan and present duplicates to the CEO.',
       parentEventId: 'parent-1',
     });
     await bus.publish('dispatch', task);
@@ -354,7 +354,7 @@ describe('AgentRuntime', () => {
           expect.objectContaining({
             role: 'system',
             content: expect.stringContaining(
-              '## Original Task Intent\nRun weekly contacts dedup scan and present duplicates to Joseph.',
+              '## Original Task Intent\nRun weekly contacts dedup scan and present duplicates to the CEO.',
             ),
           }),
         ]),

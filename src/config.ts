@@ -93,7 +93,7 @@ export interface Config {
   // Signal channel config. Both must be set to enable the Signal adapter.
   // signalSocketPath: path to the signal-cli daemon Unix socket (e.g. /run/signal-cli/socket).
   //   In Docker Compose, this is mounted from the signal-cli container's socket volume.
-  // signalPhoneNumber: Nathan's E.164 number (e.g. +12223334444). This is the Signal account
+  // signalPhoneNumber: the agent's E.164 number (e.g. +12223334444). This is the Signal account
   //   that was registered via `signal-cli register` + `signal-cli verify`.
   signalSocketPath: string | undefined;
   signalPhoneNumber: string | undefined;
@@ -135,9 +135,9 @@ export interface YamlConfig {
    *         nylas_grant_id: env:NYLAS_GRANT_ID
    *         self_email: env:NYLAS_SELF_EMAIL
    *         outbound_policy: direct
-   *       joseph:
-   *         nylas_grant_id: env:JOSEPH_NYLAS_GRANT_ID
-   *         self_email: env:JOSEPH_EMAIL
+   *       personal:
+   *         nylas_grant_id: env:PERSONAL_NYLAS_GRANT_ID
+   *         self_email: env:PERSONAL_EMAIL
    *         outbound_policy: draft_gate
    */
   channel_accounts?: {

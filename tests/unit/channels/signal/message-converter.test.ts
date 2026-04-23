@@ -16,7 +16,7 @@ function makeEnvelope(overrides: Partial<SignalEnvelope> = {}): SignalEnvelope {
     timestamp: 1700000000000,
     dataMessage: {
       timestamp: 1700000000000,
-      message: 'Hello Nathan',
+      message: 'Hello there',
       expiresInSeconds: 0,
       viewOnce: false,
     },
@@ -35,7 +35,7 @@ describe('convertSignalEnvelope', () => {
     expect(result!.conversationId).toBe('signal:+14155551234');
     expect(result!.channelId).toBe('signal');
     expect(result!.senderId).toBe('+14155551234');
-    expect(result!.content).toBe('Hello Nathan');
+    expect(result!.content).toBe('Hello there');
     expect(result!.metadata.isGroup).toBe(false);
     expect(result!.metadata.groupId).toBeUndefined();
     expect(result!.metadata.signalTimestamp).toBe(1700000000000);

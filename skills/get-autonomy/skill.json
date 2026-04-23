@@ -1,6 +1,6 @@
 {
   "name": "get-autonomy",
-  "description": "Report Nathan's current global autonomy score, band, and recent change history. Use this when the CEO asks about autonomy level, trust level, or how independently Nathan is operating.",
+  "description": "Report the agent's current global autonomy score, band, and recent change history. Use this when the CEO asks about autonomy level, trust level, or how independently the agent is operating.",
   "version": "1.0.0",
   "sensitivity": "normal",
   "infrastructure": true,

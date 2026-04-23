@@ -15,7 +15,7 @@ function makeEntityMemory() {
 describe('EntityMemory.mergeEntities Phase 2', () => {
   it('re-points secondary edges to primary after merge', async () => {
     const { mem } = makeEntityMemory();
-    const { entity: primary } = await mem.createEntity({ type: 'person', label: 'Joseph Fung', properties: {}, source: 'test' });
+    const { entity: primary } = await mem.createEntity({ type: 'person', label: 'Jane Doe', properties: {}, source: 'test' });
     const { entity: secondary } = await mem.createEntity({ type: 'person', label: 'Joe', properties: {}, source: 'test' });
     const { entity: org } = await mem.createEntity({ type: 'organization', label: 'Acme', properties: {}, source: 'test' });
 
@@ -34,7 +34,7 @@ describe('EntityMemory.mergeEntities Phase 2', () => {
 
   it('does not duplicate edges that primary already has', async () => {
     const { mem } = makeEntityMemory();
-    const { entity: primary } = await mem.createEntity({ type: 'person', label: 'Joseph Fung', properties: {}, source: 'test' });
+    const { entity: primary } = await mem.createEntity({ type: 'person', label: 'Jane Doe', properties: {}, source: 'test' });
     const { entity: secondary } = await mem.createEntity({ type: 'person', label: 'Joe', properties: {}, source: 'test' });
     const { entity: org } = await mem.createEntity({ type: 'organization', label: 'Acme', properties: {}, source: 'test' });
 
@@ -54,7 +54,7 @@ describe('EntityMemory.mergeEntities Phase 2', () => {
 
   it('deletes the secondary node after merge', async () => {
     const { mem } = makeEntityMemory();
-    const { entity: primary } = await mem.createEntity({ type: 'person', label: 'Joseph Fung', properties: {}, source: 'test' });
+    const { entity: primary } = await mem.createEntity({ type: 'person', label: 'Jane Doe', properties: {}, source: 'test' });
     const { entity: secondary } = await mem.createEntity({ type: 'person', label: 'Joe', properties: {}, source: 'test' });
 
     await mem.mergeEntities(primary.id, secondary.id);
@@ -64,7 +64,7 @@ describe('EntityMemory.mergeEntities Phase 2', () => {
 
   it('cleans up secondary fact nodes after merge (no orphans)', async () => {
     const { mem } = makeEntityMemory();
-    const { entity: primary } = await mem.createEntity({ type: 'person', label: 'Joseph Fung', properties: {}, source: 'test' });
+    const { entity: primary } = await mem.createEntity({ type: 'person', label: 'Jane Doe', properties: {}, source: 'test' });
     const { entity: secondary } = await mem.createEntity({ type: 'person', label: 'Joe', properties: {}, source: 'test' });
 
     await mem.storeFact({
@@ -107,19 +107,19 @@ describe('EntityMemory.updateNode', () => {
     const { mem } = makeEntityMemory();
     const { entity: node } = await mem.createEntity({ type: 'person', label: 'Joe', properties: {}, source: 'test' });
 
-    const { node: updated, merged } = await mem.updateNode(node.id, { label: 'Joseph' });
+    const { node: updated, merged } = await mem.updateNode(node.id, { label: 'Bob' });
 
     expect(merged).toBe(false);
     expect(updated.id).toBe(node.id);
-    expect(updated.label).toBe('Joseph');
+    expect(updated.label).toBe('Bob');
   });
 
   it('merges nodes when label update collides with an existing node of the same type', async () => {
     const { mem } = makeEntityMemory();
-    const { entity: canonical } = await mem.createEntity({ type: 'person', label: 'Joseph Fung', properties: {}, source: 'test' });
+    const { entity: canonical } = await mem.createEntity({ type: 'person', label: 'Jane Doe', properties: {}, source: 'test' });
     const { entity: toRename } = await mem.createEntity({ type: 'person', label: 'Joe', properties: {}, source: 'test' });
 
-    const { node: result, merged } = await mem.updateNode(toRename.id, { label: 'Joseph Fung' });
+    const { node: result, merged } = await mem.updateNode(toRename.id, { label: 'Jane Doe' });
 
     expect(merged).toBe(true);
     // Returned node is the canonical, not the renamed node
@@ -141,13 +141,13 @@ describe('EntityMemory.updateNode', () => {
 
   it('transfers edges to canonical on merge-on-collision', async () => {
     const { mem } = makeEntityMemory();
-    const { entity: canonical } = await mem.createEntity({ type: 'person', label: 'Joseph Fung', properties: {}, source: 'test' });
+    const { entity: canonical } = await mem.createEntity({ type: 'person', label: 'Jane Doe', properties: {}, source: 'test' });
     const { entity: toRename } = await mem.createEntity({ type: 'person', label: 'Joe', properties: {}, source: 'test' });
     const { entity: org } = await mem.createEntity({ type: 'organization', label: 'Acme', properties: {}, source: 'test' });
 
     await mem.upsertEdge(toRename.id, org.id, 'member_of', {}, 'test', 0.8);
 
-    await mem.updateNode(toRename.id, { label: 'Joseph Fung' });
+    await mem.updateNode(toRename.id, { label: 'Jane Doe' });
 
     const edges = await mem.findEdges(canonical.id);
     expect(edges.some(e => e.node.id === org.id && e.edge.type === 'member_of')).toBe(true);

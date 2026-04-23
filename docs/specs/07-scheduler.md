@@ -140,7 +140,7 @@ If the job has prior-run data (`last_run_outcome IS NOT NULL`), the scheduler in
 ```
 [Prior run context — 2026-04-08 07:30 ET]
 Outcome: completed
-Summary: Sent schedule for 6 events to joseph@josephfung.ca
+Summary: Sent schedule for 6 events to ceo@example.com
 Agent context: {"events_sent": 6}
 ```
 
