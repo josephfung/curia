@@ -38,9 +38,9 @@ channels:
 #       self_email:     "env:NYLAS_SELF_EMAIL_CURIA"
 #       outbound_policy: direct
 #
-#     joseph:
-#       nylas_grant_id: "env:NYLAS_GRANT_ID_JOSEPH"
-#       self_email:     "env:NYLAS_SELF_EMAIL_JOSEPH"
+#     personal:
+#       nylas_grant_id: "env:NYLAS_GRANT_ID_PERSONAL"
+#       self_email:     "env:NYLAS_SELF_EMAIL_PERSONAL"
 #       outbound_policy: autonomy_gated
 #       autonomy_threshold: 80   # score out of 100; below this, replies are saved as drafts
 #
