@@ -232,6 +232,16 @@ export class Scheduler {
           await this.fireJob(job);
         } catch (err) {
           this.logger.error({ err, jobId: job.id }, 'Failed to fire job — reverting to pending for retry');
+          // Clean up the pendingJobs entry that fireJob sets before publishing.
+          // Without this, a publish failure after pendingJobs.set() leaks an
+          // orphaned entry that the watchdog won't clean (job reverts to 'pending',
+          // not 'running', so the watchdog's WHERE clause never matches).
+          for (const [eventId, pendingJobId] of this.pendingJobs) {
+            if (pendingJobId === job.id) {
+              this.pendingJobs.delete(eventId);
+              break;
+            }
+          }
           // Revert the job to its prior status so it can be retried next poll.
           // If this revert also fails, the job stays in 'running' — logged below.
           await this.pool.query(
