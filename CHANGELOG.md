@@ -28,6 +28,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **Scheduler never completes job runs** — `pendingJobs.set()` was called after `bus.publish()` in `fireJob()`, but `bus.publish()` awaits all handlers synchronously. The agent would finish and emit `agent.response` before the tracking entry existed, so `handleCompletion` silently dropped every completion. The watchdog then reaped every run as timed-out, accumulating `consecutive_failures` until auto-suspend. All cron jobs were affected. Fix: set the tracking entry before publishing the task event.
 - **Dangling explanatory drafts on NOISE triage** — the coordinator's short final summary (e.g. "The email has been archived. This was a promotional newsletter…") was being wrapped in `outbound.message` by the dispatcher and saved as a draft reply by the email adapter under `draft_gate` policy. PR #304's prompt-only fix targeted `email-reply` (which wasn't being called); the actual mechanism was the dispatch-layer auto-reply of every `agent.response`. Root cause now fixed at the dispatch layer; the preamble's redundant "Do NOT call email-reply" guidance has been trimmed.
 
 ---
