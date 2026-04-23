@@ -24,9 +24,13 @@ expected_behaviors:
   - id: confirm-specifics
     description: Confirms back the specifics of what will be created before or after acting
     weight: important
+  - id: use-ceo-calendar
+    description: Creates the event on the CEO's calendar, not on Curia's own calendar
+    weight: critical
 
 failure_modes:
   - Drops one or more details (wrong date, missing timezone, forgets duration)
   - Ignores the Zoom link instruction
   - Creates the event without confirming details with the user
   - Treats this as informational rather than an actionable request
+  - Creates the event on Curia's own calendar instead of the CEO's

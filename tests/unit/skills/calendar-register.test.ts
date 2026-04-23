@@ -86,20 +86,8 @@ describe('CalendarRegisterHandler', () => {
     );
   });
 
-  it('defaults contact_id to the caller when not provided', async () => {
-    const linkedCalendar = {
-      id: 'link-uuid',
-      nylasCalendarId: 'cal-1',
-      contactId: 'caller-contact',
-      label: 'Personal',
-      isPrimary: true,
-      readOnly: false,
-      timezone: null,
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    };
-    const contactService = { linkCalendar: vi.fn().mockResolvedValue(linkedCalendar) };
-
+  it('returns failure when contact_id is missing', async () => {
+    const contactService = { linkCalendar: vi.fn() };
     const result = await handler.execute(
       makeCtx(
         { nylas_calendar_id: 'cal-1', label: 'Personal', is_primary: true },
@@ -110,26 +98,32 @@ describe('CalendarRegisterHandler', () => {
       ),
     );
 
-    expect(result.success).toBe(true);
-    expect(contactService.linkCalendar).toHaveBeenCalledWith(
-      expect.objectContaining({ contactId: 'caller-contact', isPrimary: true }),
-    );
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error).toContain('contact_id');
+    }
+    // Crucially: linkCalendar should NOT have been called
+    expect(contactService.linkCalendar).not.toHaveBeenCalled();
   });
 
-  it('uses null contact_id when no contact_id and no caller', async () => {
-    const linkedCalendar = {
-      id: 'link-uuid',
-      nylasCalendarId: 'cal-holidays',
-      contactId: null,
-      label: 'Holidays',
-      isPrimary: false,
-      readOnly: true,
-      timezone: null,
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    };
-    const contactService = { linkCalendar: vi.fn().mockResolvedValue(linkedCalendar) };
+  it('returns failure when contact_id is whitespace-only', async () => {
+    const contactService = { linkCalendar: vi.fn() };
+    const result = await handler.execute(
+      makeCtx(
+        { nylas_calendar_id: 'cal-1', label: 'Personal', contact_id: '   ' },
+        { contactService: contactService as never },
+      ),
+    );
 
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error).toContain('contact_id');
+    }
+    expect(contactService.linkCalendar).not.toHaveBeenCalled();
+  });
+
+  it('returns failure when contact_id is missing even without caller context', async () => {
+    const contactService = { linkCalendar: vi.fn() };
     const result = await handler.execute(
       makeCtx(
         { nylas_calendar_id: 'cal-holidays', label: 'Holidays' },
@@ -137,10 +131,11 @@ describe('CalendarRegisterHandler', () => {
       ),
     );
 
-    expect(result.success).toBe(true);
-    expect(contactService.linkCalendar).toHaveBeenCalledWith(
-      expect.objectContaining({ contactId: null }),
-    );
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error).toContain('contact_id');
+    }
+    expect(contactService.linkCalendar).not.toHaveBeenCalled();
   });
 
   it('returns failure when label exceeds 200 characters', async () => {
@@ -167,7 +162,7 @@ describe('CalendarRegisterHandler', () => {
 
     const result = await handler.execute(
       makeCtx(
-        { nylas_calendar_id: 'cal-1', label: 'Work' },
+        { nylas_calendar_id: 'cal-1', label: 'Work', contact_id: 'contact-abc' },
         { contactService: contactService as never },
       ),
     );
@@ -208,7 +203,7 @@ describe('CalendarRegisterHandler', () => {
 
     const result = await handler.execute(
       makeCtx(
-        { nylas_calendar_id: 'cal-1', label: 'Work' },
+        { nylas_calendar_id: 'cal-1', label: 'Work', contact_id: 'contact-abc' },
         { contactService: contactService as never },
       ),
     );
