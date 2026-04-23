@@ -13,7 +13,7 @@
 //      can be used with different Claude versions without re-instantiation.
 
 import Anthropic from '@anthropic-ai/sdk';
-import type { MessageParam, ToolUseBlock, TextBlock, ToolResultBlockParam } from '@anthropic-ai/sdk/resources/messages/messages.js';
+import type { MessageParam, ToolUseBlock, TextBlock, TextBlockParam, ToolResultBlockParam } from '@anthropic-ai/sdk/resources/messages/messages.js';
 import type { LLMProvider, LLMResponse, LLMUsage, Message, ToolCall, ToolDefinition, ToolResult } from './provider.js';
 import type { Logger } from '../../logger.js';
 import { classifyError } from '../../errors/classify.js';
@@ -109,22 +109,35 @@ export class AnthropicProvider implements LLMProvider {
       const createParams: Anthropic.Messages.MessageCreateParamsNonStreaming = {
         model,
         max_tokens: 4096,
-        // System messages are concatenated into a single string above.
-        // Omit the key entirely when there are no system messages.
-        system: systemContent || undefined,
+        // Wrap the concatenated system string in a TextBlockParam array with a
+        // cache_control breakpoint. This tells Anthropic to cache everything up
+        // to this block, saving ~5K tokens of system prompt cost on repeat calls.
+        // Omit the key entirely when there is no system content (same as before).
+        system: systemContent
+          ? [{ type: 'text' as const, text: systemContent, cache_control: { type: 'ephemeral' as const } } satisfies TextBlockParam]
+          : undefined,
         messages: conversationMessages,
       };
 
       // Only attach the tools array when tools are provided — the API rejects
       // an empty tools array, so we omit the key entirely when there are none.
       if (tools && tools.length > 0) {
-        createParams.tools = tools.map(t => ({
+        const mappedTools = tools.map(t => ({
           name: t.name,
           description: t.description,
           // Cast required because ToolDefinition.input_schema is a narrower shape
           // than the SDK's polymorphic Tool['input_schema'] union type.
           input_schema: t.input_schema as Anthropic.Messages.Tool['input_schema'],
         }));
+        // Mark the last tool with a cache_control breakpoint so the entire tool
+        // list is captured in a single cache slot. The coordinator's tool list is
+        // stable (48 pinned skills), so this achieves near-100% hit rate within
+        // the 5-minute TTL and saves ~10K tokens per call.
+        mappedTools[mappedTools.length - 1] = {
+          ...mappedTools[mappedTools.length - 1],
+          cache_control: { type: 'ephemeral' as const },
+        };
+        createParams.tools = mappedTools;
       }
 
       const response = await this.client.messages.create(createParams);
