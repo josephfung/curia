@@ -900,4 +900,4 @@ After running, capture the issue URL and replace `#TBD` references in the CHANGE
 - [ ] `email-archive` is wired in `pinned_skills` and the handler is registered (the skill loader picks it up automatically from the `skills/` directory scan — no additional wiring in `index.ts`)
 - [ ] The dispatcher preamble includes both `nylasMessageId` and `accountId` from the event payload
 - [ ] The coordinator "Observation Mode" section no longer says "summarise"
-- [ ] CHANGELOG entry does not mention "Joseph" (use "CEO" throughout)
+- [ ] CHANGELOG entry does not mention the admin user's name (use "CEO" throughout)

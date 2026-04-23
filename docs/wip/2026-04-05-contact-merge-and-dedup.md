@@ -2129,7 +2129,7 @@ Open `agents/coordinator.yaml`. Find the `## Contact Lookup Best Practices` sect
      - Has a role assigned
      - Older created_at (established contact wins)
   3. Call contact-merge with dry_run: true to get the golden record preview.
-  4. Present both contacts side-by-side to Joseph, show what will change, and ask
+  4. Present both contacts side-by-side to the CEO, show what will change, and ask
      for confirmation before merging. Example:
      "I noticed two contacts that look like the same person:
      - Jenna Torres (CFO, verified email jenna@acme.com)
@@ -2141,12 +2141,12 @@ Open `agents/coordinator.yaml`. Find the `## Contact Lookup Best Practices` sect
   ### Weekly contacts dedup scan
   When the scheduler sends "Run your weekly contacts dedup scan":
   1. Call contact-find-duplicates (default min_confidence: probable).
-  2. If no pairs found: confirm to Joseph that no duplicates were detected.
+  2. If no pairs found: confirm to the CEO that no duplicates were detected.
   3. If pairs found: work through them one at a time.
      - For each pair: use the primary heuristic above, call contact-merge dry_run: true,
        present the preview, get confirmation, then merge.
-     - If Joseph defers a pair ("skip this one"), move on without merging.
-     - Continue until all pairs are reviewed or Joseph ends the session.
+     - If the CEO defers a pair ("skip this one"), move on without merging.
+     - Continue until all pairs are reviewed or the CEO ends the session.
   4. After finishing: summarize what was merged.
 
   ### Primary contact heuristic (for merge decisions)
@@ -2154,7 +2154,7 @@ Open `agents/coordinator.yaml`. Find the `## Contact Lookup Best Practices` sect
   1. More verified channel identities → that contact is primary
   2. Has role assigned, other does not → the one with a role is primary
   3. Older created_at → the older contact is primary
-  4. If still tied: ask Joseph to choose
+  4. If still tied: ask the CEO to choose
 ```
 
 - [ ] **Step 2: Add new skills to pinned_skills**
