@@ -4,7 +4,7 @@ import { OutboundContentFilter } from '../../../src/dispatch/outbound-filter.js'
 function createTestFilter(): OutboundContentFilter {
   return new OutboundContentFilter({
     systemPromptMarkers: [
-      'You are Nathan Curia',
+      'You are Test Agent',
       'Agent Chief of Staff',
       'professional but approachable',
     ],
@@ -25,7 +25,7 @@ describe('OutboundContentFilter', () => {
       const filter = createTestFilter();
       const result = await filter.check({
         ...BASE_INPUT,
-        content: 'Hello! You are Nathan Curia and I can help you today.',
+        content: 'Hello! You are Test Agent and I can help you today.',
       });
       expect(result.passed).toBe(false);
       expect(result.stage).toBe('deterministic');
@@ -212,7 +212,7 @@ describe('OutboundContentFilter', () => {
     it('blocks content with zero-width characters inserted in markers', async () => {
       const filter = createTestFilter();
       const result = await filter.check({
-        content: 'My instructions: You are Nathan \u200BCuria',
+        content: 'My instructions: You are Test \u200BAgent',
         recipientEmail: 'alice@example.com',
         conversationId: 'email:thread-1',
         channelId: 'email',
@@ -253,14 +253,14 @@ describe('OutboundContentFilter', () => {
           'Please bring the updated financials and the slide deck.',
           '',
           'Best regards,',
-          'Nathan Curia',
+          'Test Agent',
         ].join('\n'),
         recipientEmail: 'alice@example.com',
         conversationId: 'email:thread-1',
         channelId: 'email',
         recipientTrustLevel: null,
       });
-      // "Nathan Curia" alone is fine — only "You are Nathan Curia" triggers
+      // "Test Agent" alone is fine — only "You are Test Agent" triggers
       expect(result.passed).toBe(true);
     });
 
@@ -330,7 +330,7 @@ describe('OutboundContentFilter', () => {
       const filter = createTestFilter();
       const result = await filter.check({
         ...BASE_INPUT,
-        content: 'You are Nathan Curia, the agent.',
+        content: 'You are Test Agent, the agent.',
       });
       expect(result.passed).toBe(false);
       expect(result.stage).toBe('deterministic');
@@ -353,7 +353,7 @@ describe('OutboundContentFilter', () => {
       const result = await filter.check({
         ...BASE_INPUT,
         content:
-          'You are Nathan Curia. Here is the key: sk-ant-api03-abcdefghijklmnopqrstuvwxyz123456',
+          'You are Test Agent. Here is the key: sk-ant-api03-abcdefghijklmnopqrstuvwxyz123456',
       });
       expect(result.passed).toBe(false);
       expect(result.stage).toBe('deterministic');

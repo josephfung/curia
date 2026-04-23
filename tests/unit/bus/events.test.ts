@@ -103,7 +103,7 @@ describe('Event Types', () => {
       channelId: 'email',
       since: '2026-04-08T10:00:00Z',
       turns: [
-        { role: 'user', content: 'Xiaopu is my wife' },
+        { role: 'user', content: 'Alice is my wife' },
         { role: 'assistant', content: 'Got it, I will remember that.' },
       ],
     });

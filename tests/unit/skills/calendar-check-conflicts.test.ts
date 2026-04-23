@@ -55,7 +55,7 @@ describe('CalendarCheckConflictsHandler', () => {
     };
     const contactService = {
       resolveCalendar: vi.fn().mockResolvedValue({ contactId: 'c1', label: 'Work', isPrimary: true, readOnly: false }),
-      getContact: vi.fn().mockResolvedValue({ id: 'c1', displayName: 'Joseph Fung' }),
+      getContact: vi.fn().mockResolvedValue({ id: 'c1', displayName: 'Jane Doe' }),
     };
 
     // Proposed time overlaps with the busy period
@@ -69,7 +69,7 @@ describe('CalendarCheckConflictsHandler', () => {
       const data = result.data as { conflicts: Array<{ calendarId: string; contactName: string | null; startTime: string; endTime: string }>; clear: boolean };
       expect(data.clear).toBe(false);
       expect(data.conflicts).toHaveLength(1);
-      expect(data.conflicts[0].contactName).toBe('Joseph Fung');
+      expect(data.conflicts[0].contactName).toBe('Jane Doe');
       // Timestamps must be ISO strings, not raw Unix seconds (1000s → 16:40, 2000s → 33:20)
       expect(data.conflicts[0].startTime).toBe('1970-01-01T00:16:40.000Z');
       expect(data.conflicts[0].endTime).toBe('1970-01-01T00:33:20.000Z');

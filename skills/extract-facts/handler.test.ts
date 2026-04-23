@@ -67,7 +67,7 @@ describe('ExtractFactsHandler', () => {
   it('acceptance criterion: "Joseph lives in Toronto" stores a location fact', async () => {
     const entityMemory = makeEntityMemory();
     const facts = JSON.stringify([
-      { subject: 'Joseph Fung', subjectType: 'person', attribute: 'home_city', value: 'Toronto', confidence: 0.9, decayClass: 'slow_decay' },
+      { subject: 'Jane Doe', subjectType: 'person', attribute: 'home_city', value: 'Toronto', confidence: 0.9, decayClass: 'slow_decay' },
     ]);
     const anthropic = makeMockAnthropicClient(['yes', facts]);
     const handler = new ExtractFactsHandler(anthropic as never);
@@ -81,7 +81,7 @@ describe('ExtractFactsHandler', () => {
     expect(result).toEqual({ success: true, data: { stored: 1, skipped: false, failed: 0 } });
 
     // Fact node exists in the KG
-    const josephNodes = await entityMemory.findEntities('Joseph Fung');
+    const josephNodes = await entityMemory.findEntities('Jane Doe');
     expect(josephNodes).toHaveLength(1);
     const storedFacts = await entityMemory.getFacts(josephNodes[0]!.id);
     expect(storedFacts).toHaveLength(1);
@@ -134,7 +134,7 @@ describe('ExtractFactsHandler', () => {
   it('falls back to slow_decay for an unknown decayClass in the extraction output', async () => {
     const entityMemory = makeEntityMemory();
     const facts = JSON.stringify([
-      { subject: 'Joseph Fung', subjectType: 'person', attribute: 'role', value: 'CEO', confidence: 0.9, decayClass: 'ultra_slow' },
+      { subject: 'Jane Doe', subjectType: 'person', attribute: 'role', value: 'CEO', confidence: 0.9, decayClass: 'ultra_slow' },
     ]);
     const anthropic = makeMockAnthropicClient(['yes', facts]);
     const handler = new ExtractFactsHandler(anthropic as never);
@@ -145,7 +145,7 @@ describe('ExtractFactsHandler', () => {
 
     await handler.execute(ctx);
 
-    const josephNodes = await entityMemory.findEntities('Joseph Fung');
+    const josephNodes = await entityMemory.findEntities('Jane Doe');
     expect(josephNodes).toHaveLength(1);
     const storedFacts = await entityMemory.getFacts(josephNodes[0]!.id);
     expect(storedFacts[0]!.temporal.decayClass).toBe('slow_decay');
@@ -154,7 +154,7 @@ describe('ExtractFactsHandler', () => {
   it('is idempotent — second call with same fact does not create a duplicate node', async () => {
     const entityMemory = makeEntityMemory();
     const facts = JSON.stringify([
-      { subject: 'Joseph Fung', subjectType: 'person', attribute: 'home_city', value: 'Toronto', confidence: 0.9, decayClass: 'slow_decay' },
+      { subject: 'Jane Doe', subjectType: 'person', attribute: 'home_city', value: 'Toronto', confidence: 0.9, decayClass: 'slow_decay' },
     ]);
 
     // First invocation — stores the fact
@@ -172,7 +172,7 @@ describe('ExtractFactsHandler', () => {
     expect(result2).toEqual({ success: true, data: { stored: 1, skipped: false, failed: 0 } });
 
     // Only one fact node should exist — storeFact merged the second call into the first
-    const josephNodes = await entityMemory.findEntities('Joseph Fung');
+    const josephNodes = await entityMemory.findEntities('Jane Doe');
     expect(josephNodes).toHaveLength(1);
     const storedFacts = await entityMemory.getFacts(josephNodes[0]!.id);
     expect(storedFacts).toHaveLength(1);
@@ -207,7 +207,7 @@ describe('ExtractFactsHandler', () => {
   it('handles storeFact returning stored:false (rate-limit or contradiction) — not counted as failed', async () => {
     const entityMemory = makeEntityMemory();
     const facts = JSON.stringify([
-      { subject: 'Joseph Fung', subjectType: 'person', attribute: 'home_city', value: 'Toronto', confidence: 0.9, decayClass: 'slow_decay' },
+      { subject: 'Jane Doe', subjectType: 'person', attribute: 'home_city', value: 'Toronto', confidence: 0.9, decayClass: 'slow_decay' },
     ]);
     const anthropic = makeMockAnthropicClient(['yes', facts]);
     const handler = new ExtractFactsHandler(anthropic as never);

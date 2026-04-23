@@ -94,26 +94,26 @@ describe('ExtractRelationshipsHandler', () => {
   it('confirms an existing edge on second call (idempotency)', async () => {
     const entityMemory = makeEntityMemory();
     const triple = JSON.stringify([
-      { subject: 'Joseph Fung', subjectType: 'person', predicate: 'spouse', object: 'Xiaopu Fung', objectType: 'person', confidence: 0.95 },
+      { subject: 'Jane Doe', subjectType: 'person', predicate: 'spouse', object: 'John Smith', objectType: 'person', confidence: 0.95 },
     ]);
 
     // First invocation — creates the edge
     const anthropic1 = makeMockAnthropicClient(['yes', triple]);
     const handler1 = new ExtractRelationshipsHandler(anthropic1 as never);
-    const ctx1 = makeCtx(entityMemory, { text: 'Xiaopu Fung is Joseph\'s wife.', source: 'test' });
+    const ctx1 = makeCtx(entityMemory, { text: 'John Smith is Joseph\'s wife.', source: 'test' });
     await handler1.execute(ctx1);
 
     // Second invocation with same text — should confirm, not duplicate
     const anthropic2 = makeMockAnthropicClient(['yes', triple]);
     const handler2 = new ExtractRelationshipsHandler(anthropic2 as never);
-    const ctx2 = makeCtx(entityMemory, { text: 'Xiaopu Fung is Joseph\'s wife.', source: 'test' });
+    const ctx2 = makeCtx(entityMemory, { text: 'John Smith is Joseph\'s wife.', source: 'test' });
     const result = await handler2.execute(ctx2);
 
     expect(result).toEqual({ success: true, data: { extracted: 0, confirmed: 1, failed: 0, skipped: false } });
 
     // Exactly two person nodes, one edge — no duplicate
-    const josephNodes = await entityMemory.findEntities('Joseph Fung');
-    const xiaopuNodes = await entityMemory.findEntities('Xiaopu Fung');
+    const josephNodes = await entityMemory.findEntities('Jane Doe');
+    const xiaopuNodes = await entityMemory.findEntities('John Smith');
     expect(josephNodes).toHaveLength(1);
     expect(xiaopuNodes).toHaveLength(1);
 
@@ -145,15 +145,15 @@ describe('ExtractRelationshipsHandler', () => {
     expect(aNodes[0]!.temporal.confidence).toBe(0.6);
   });
 
-  it('acceptance criterion: "Xiaopu Fung is Joseph\'s wife" creates a spouse edge', async () => {
+  it('acceptance criterion: "John Smith is Joseph\'s wife" creates a spouse edge', async () => {
     const entityMemory = makeEntityMemory();
     const triple = JSON.stringify([
-      { subject: 'Xiaopu Fung', subjectType: 'person', predicate: 'spouse', object: 'Joseph Fung', objectType: 'person', confidence: 0.95 },
+      { subject: 'John Smith', subjectType: 'person', predicate: 'spouse', object: 'Jane Doe', objectType: 'person', confidence: 0.95 },
     ]);
     const anthropic = makeMockAnthropicClient(['yes', triple]);
     const handler = new ExtractRelationshipsHandler(anthropic as never);
     const ctx = makeCtx(entityMemory, {
-      text: 'Xiaopu Fung is Joseph\'s wife.',
+      text: 'John Smith is Joseph\'s wife.',
       source: 'test',
     });
 
@@ -161,15 +161,15 @@ describe('ExtractRelationshipsHandler', () => {
 
     expect(result).toEqual({ success: true, data: { extracted: 1, confirmed: 0, failed: 0, skipped: false } });
 
-    const xiaopuNodes = await entityMemory.findEntities('Xiaopu Fung');
-    const josephNodes = await entityMemory.findEntities('Joseph Fung');
+    const xiaopuNodes = await entityMemory.findEntities('John Smith');
+    const josephNodes = await entityMemory.findEntities('Jane Doe');
     expect(xiaopuNodes).toHaveLength(1);
     expect(josephNodes).toHaveLength(1);
 
     const queryResult = await entityMemory.query(xiaopuNodes[0]!.id);
     const spouseRel = queryResult.relationships.find(r => r.edge.type === 'spouse');
     expect(spouseRel).toBeDefined();
-    expect(spouseRel!.node.label).toBe('Joseph Fung');
+    expect(spouseRel!.node.label).toBe('Jane Doe');
   });
 
   it('falls back to relates_to for an unknown predicate in the extraction output', async () => {

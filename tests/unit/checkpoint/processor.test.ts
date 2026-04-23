@@ -78,7 +78,7 @@ describe('ConversationCheckpointProcessor', () => {
       channelId: 'email',
       since: '',
       turns: [
-        { role: 'user', content: 'Xiaopu is my wife' },
+        { role: 'user', content: 'Alice is my wife' },
         { role: 'assistant', content: 'Got it.' },
       ],
     });
@@ -86,7 +86,7 @@ describe('ConversationCheckpointProcessor', () => {
     expect(stubs.executionLayer.invoke).toHaveBeenCalledWith(
       'extract-relationships',
       expect.objectContaining({
-        text: 'User: Xiaopu is my wife\n\nCuria: Got it.',
+        text: 'User: Alice is my wife\n\nCuria: Got it.',
         source: expect.stringContaining('email:thread-abc'),
       }),
       expect.anything(),

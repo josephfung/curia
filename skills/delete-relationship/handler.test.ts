@@ -34,7 +34,7 @@ describe('DeleteRelationshipHandler', () => {
   it('returns error for unknown predicate', async () => {
     const mem = makeEntityMemory();
     const handler = new DeleteRelationshipHandler();
-    const ctx = makeCtx(mem, { subject: 'Joseph', predicate: 'not_real', object: 'Xiaopu' });
+    const ctx = makeCtx(mem, { subject: 'Bob', predicate: 'not_real', object: 'Alice' });
 
     const result = await handler.execute(ctx);
 
@@ -44,11 +44,11 @@ describe('DeleteRelationshipHandler', () => {
 
   it('returns deleted:false (idempotent) when edge does not exist', async () => {
     const mem = makeEntityMemory();
-    await mem.createEntity({ type: 'person', label: 'Joseph', properties: {}, source: 'test' }); // return value not needed
-    await mem.createEntity({ type: 'person', label: 'Xiaopu', properties: {}, source: 'test' }); // return value not needed
+    await mem.createEntity({ type: 'person', label: 'Bob', properties: {}, source: 'test' }); // return value not needed
+    await mem.createEntity({ type: 'person', label: 'Alice', properties: {}, source: 'test' }); // return value not needed
 
     const handler = new DeleteRelationshipHandler();
-    const ctx = makeCtx(mem, { subject: 'Joseph', predicate: 'spouse', object: 'Xiaopu' });
+    const ctx = makeCtx(mem, { subject: 'Bob', predicate: 'spouse', object: 'Alice' });
     const result = await handler.execute(ctx);
 
     expect(result).toEqual({ success: true, data: { deleted: false } });
@@ -56,12 +56,12 @@ describe('DeleteRelationshipHandler', () => {
 
   it('deletes the edge and returns deleted:true with edge_id', async () => {
     const mem = makeEntityMemory();
-    const { entity: joseph } = await mem.createEntity({ type: 'person', label: 'Joseph', properties: {}, source: 'test' });
-    const { entity: xiaopu } = await mem.createEntity({ type: 'person', label: 'Xiaopu', properties: {}, source: 'test' });
-    const { edge } = await mem.upsertEdge(joseph.id, xiaopu.id, 'spouse', {}, 'test', 0.9);
+    const { entity: bob } = await mem.createEntity({ type: 'person', label: 'Bob', properties: {}, source: 'test' });
+    const { entity: xiaopu } = await mem.createEntity({ type: 'person', label: 'Alice', properties: {}, source: 'test' });
+    const { edge } = await mem.upsertEdge(bob.id, xiaopu.id, 'spouse', {}, 'test', 0.9);
 
     const handler = new DeleteRelationshipHandler();
-    const ctx = makeCtx(mem, { subject: 'Joseph', predicate: 'spouse', object: 'Xiaopu' });
+    const ctx = makeCtx(mem, { subject: 'Bob', predicate: 'spouse', object: 'Alice' });
     const result = await handler.execute(ctx);
 
     expect(result.success).toBe(true);
@@ -70,20 +70,20 @@ describe('DeleteRelationshipHandler', () => {
     expect(data.edge_id).toBe(edge.id);
 
     // Verify the edge is gone
-    const remaining = await mem.findEdges(joseph.id);
+    const remaining = await mem.findEdges(bob.id);
     expect(remaining).toHaveLength(0);
   });
 
   it('finds the edge regardless of which direction it was stored', async () => {
     const mem = makeEntityMemory();
-    const { entity: joseph } = await mem.createEntity({ type: 'person', label: 'Joseph', properties: {}, source: 'test' });
-    const { entity: xiaopu } = await mem.createEntity({ type: 'person', label: 'Xiaopu', properties: {}, source: 'test' });
+    const { entity: bob } = await mem.createEntity({ type: 'person', label: 'Bob', properties: {}, source: 'test' });
+    const { entity: xiaopu } = await mem.createEntity({ type: 'person', label: 'Alice', properties: {}, source: 'test' });
     // Stored with xiaopu as source
-    await mem.upsertEdge(xiaopu.id, joseph.id, 'spouse', {}, 'test', 0.9);
+    await mem.upsertEdge(xiaopu.id, bob.id, 'spouse', {}, 'test', 0.9);
 
     const handler = new DeleteRelationshipHandler();
-    // Deleting with joseph as subject — should still find it
-    const ctx = makeCtx(mem, { subject: 'Joseph', predicate: 'spouse', object: 'Xiaopu' });
+    // Deleting with bob as subject — should still find it
+    const ctx = makeCtx(mem, { subject: 'Bob', predicate: 'spouse', object: 'Alice' });
     const result = await handler.execute(ctx);
 
     expect(result.success).toBe(true);
@@ -113,12 +113,12 @@ describe('DeleteRelationshipHandler', () => {
     // createEntity uses upsertNode which prevents duplicates.
     // Insert a second node directly to simulate pre-migration duplicate data.
     const { mem, store } = makeEntityMemoryWithStore();
-    await mem.createEntity({ type: 'person', label: 'Joseph', properties: {}, source: 'test' });
+    await mem.createEntity({ type: 'person', label: 'Bob', properties: {}, source: 'test' });
     await mem.createEntity({ type: 'person', label: 'Jane Smith', properties: {}, source: 'test' });
     await store.createNode({ type: 'person', label: 'Jane Smith', properties: {}, source: 'test' });
 
     const handler = new DeleteRelationshipHandler();
-    const ctx = makeCtx(mem, { subject: 'Joseph', predicate: 'manages', object: 'Jane Smith' });
+    const ctx = makeCtx(mem, { subject: 'Bob', predicate: 'manages', object: 'Jane Smith' });
     const result = await handler.execute(ctx);
 
     expect(result.success).toBe(true);
@@ -129,10 +129,10 @@ describe('DeleteRelationshipHandler', () => {
 
   it('returns deleted:false when subject does not exist', async () => {
     const mem = makeEntityMemory();
-    await mem.createEntity({ type: 'person', label: 'Xiaopu', properties: {}, source: 'test' });
+    await mem.createEntity({ type: 'person', label: 'Alice', properties: {}, source: 'test' });
 
     const handler = new DeleteRelationshipHandler();
-    const ctx = makeCtx(mem, { subject: 'Nobody', predicate: 'spouse', object: 'Xiaopu' });
+    const ctx = makeCtx(mem, { subject: 'Nobody', predicate: 'spouse', object: 'Alice' });
     const result = await handler.execute(ctx);
 
     expect(result).toEqual({ success: true, data: { deleted: false } });

@@ -77,7 +77,7 @@ describeIf('extract-facts integration', () => {
 
   it('persists a location fact to Postgres and reads it back via getFacts()', async () => {
     const facts = JSON.stringify([
-      { subject: 'Joseph Fung', subjectType: 'person', attribute: 'home_city', value: 'Toronto', confidence: 0.9, decayClass: 'slow_decay' },
+      { subject: 'Jane Doe', subjectType: 'person', attribute: 'home_city', value: 'Toronto', confidence: 0.9, decayClass: 'slow_decay' },
     ]);
     const anthropic = makeMockAnthropicClient(['yes', facts]);
     const handler = new ExtractFactsHandler(anthropic as never);
@@ -88,7 +88,7 @@ describeIf('extract-facts integration', () => {
     expect(result).toMatchObject({ success: true, data: { stored: 1, skipped: false } });
 
     // Verify the entity node and fact node exist in Postgres
-    const josephNodes = await entityMemory.findEntities('Joseph Fung');
+    const josephNodes = await entityMemory.findEntities('Jane Doe');
     expect(josephNodes).toHaveLength(1);
     const josephId = josephNodes[0]!.id;
 

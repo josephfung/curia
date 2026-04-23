@@ -48,7 +48,7 @@ describeIf('ConversationCheckpointProcessor — integration', () => {
     const { logger } = makeBusAndLogger();
     const memory = WorkingMemory.createWithPostgres(pool as unknown as DbPool, logger);
 
-    await memory.addTurn(conversationId, agentId, { role: 'user', content: 'Xiaopu Fung is my wife' });
+    await memory.addTurn(conversationId, agentId, { role: 'user', content: 'John Smith is my wife' });
     await memory.addTurn(conversationId, agentId, { role: 'assistant', content: 'Got it, I will remember that.' });
 
     try {
@@ -83,7 +83,7 @@ describeIf('ConversationCheckpointProcessor — integration', () => {
         since: '',
         through,
         turns: [
-          { role: 'user', content: 'Xiaopu Fung is my wife' },
+          { role: 'user', content: 'John Smith is my wife' },
           { role: 'assistant', content: 'Got it, I will remember that.' },
         ],
       });
@@ -96,9 +96,9 @@ describeIf('ConversationCheckpointProcessor — integration', () => {
       expect(invokedArgs).toHaveLength(2);
       expect(invokedArgs[0]!.name).toBe('extract-relationships');
       expect(invokedArgs[1]!.name).toBe('extract-facts');
-      expect(invokedArgs[0]!.input['text']).toContain('Xiaopu Fung');
+      expect(invokedArgs[0]!.input['text']).toContain('John Smith');
       expect(invokedArgs[0]!.input['source']).toContain(conversationId);
-      expect(invokedArgs[1]!.input['text']).toContain('Xiaopu Fung');
+      expect(invokedArgs[1]!.input['text']).toContain('John Smith');
       expect(invokedArgs[1]!.input['source']).toContain(conversationId);
 
       // Watermark was created at the batch's upper bound
@@ -121,7 +121,7 @@ describeIf('ConversationCheckpointProcessor — integration', () => {
     const { logger } = makeBusAndLogger();
     const memory = WorkingMemory.createWithPostgres(pool as unknown as DbPool, logger);
 
-    await memory.addTurn(conversationId, agentId, { role: 'user', content: 'Xiaopu Fung is my wife' });
+    await memory.addTurn(conversationId, agentId, { role: 'user', content: 'John Smith is my wife' });
     await memory.addTurn(conversationId, agentId, { role: 'assistant', content: 'Got it, I will remember that.' });
 
     try {
@@ -145,7 +145,7 @@ describeIf('ConversationCheckpointProcessor — integration', () => {
       await handler1(createConversationCheckpoint({
         conversationId, agentId, channelId: 'test', since: '', through: firstThrough,
         turns: [
-          { role: 'user', content: 'Xiaopu Fung is my wife' },
+          { role: 'user', content: 'John Smith is my wife' },
           { role: 'assistant', content: 'Got it, I will remember that.' },
         ],
       }));
@@ -198,7 +198,7 @@ describeIf('ConversationCheckpointProcessor — integration', () => {
       expect(invokedTexts).toHaveLength(2);
       for (const txt of invokedTexts) {
         expect(txt).toContain('Ada Chen');
-        expect(txt).not.toContain('Xiaopu');
+        expect(txt).not.toContain('Alice');
       }
 
       // Watermark was advanced past the first checkpoint

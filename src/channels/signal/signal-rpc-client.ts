@@ -41,7 +41,7 @@ import type {
 export interface SignalRpcClientConfig {
   /** Path to the signal-cli Unix socket, e.g. '/run/signal-cli/socket' */
   socketPath: string;
-  /** Nathan's phone number — sent as the `account` param in all RPC calls */
+  /** The agent's phone number — sent as the `account` param in all RPC calls */
   accountNumber: string;
   logger: Logger;
 }

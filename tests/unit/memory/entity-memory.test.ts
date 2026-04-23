@@ -20,15 +20,15 @@ describe('EntityMemory', () => {
     it('creates a new entity and retrieves it', async () => {
       const { entity } = await entityMemory.createEntity({
         type: 'person',
-        label: 'Joseph Fung',
+        label: 'Jane Doe',
         properties: { title: 'CEO' },
         source: 'test',
       });
       expect(entity.id).toBeDefined();
-      expect(entity.label).toBe('Joseph Fung');
+      expect(entity.label).toBe('Jane Doe');
       const retrieved = await entityMemory.getEntity(entity.id);
       expect(retrieved).toBeDefined();
-      expect(retrieved!.label).toBe('Joseph Fung');
+      expect(retrieved!.label).toBe('Jane Doe');
     });
 
     it('returns undefined for a non-existent entity', async () => {
@@ -39,11 +39,11 @@ describe('EntityMemory', () => {
     it('finds entity by label', async () => {
       await entityMemory.createEntity({
         type: 'person',
-        label: 'Joseph Fung',
+        label: 'Jane Doe',
         properties: {},
         source: 'test',
       });
-      const results = await entityMemory.findEntities('Joseph Fung');
+      const results = await entityMemory.findEntities('Jane Doe');
       expect(results).toHaveLength(1);
     });
 

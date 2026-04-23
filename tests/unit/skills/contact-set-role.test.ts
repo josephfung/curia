@@ -87,7 +87,7 @@ describe('ContactSetRoleHandler', () => {
 
   it('sets the role and returns updated contact details', async () => {
     const contactService = {
-      setRole: vi.fn().mockResolvedValue({ id: VALID_UUID, displayName: 'Joseph Fung', role: 'Founder & CEO' }),
+      setRole: vi.fn().mockResolvedValue({ id: VALID_UUID, displayName: 'Jane Doe', role: 'Founder & CEO' }),
     };
     const result = await handler.execute(
       makeCtx({ contact_id: VALID_UUID, role: 'Founder & CEO' }, { contactService: contactService as never }),
@@ -96,7 +96,7 @@ describe('ContactSetRoleHandler', () => {
     if (result.success) {
       const data = result.data as { contact_id: string; display_name: string; role: string };
       expect(data.contact_id).toBe(VALID_UUID);
-      expect(data.display_name).toBe('Joseph Fung');
+      expect(data.display_name).toBe('Jane Doe');
       expect(data.role).toBe('Founder & CEO');
     }
     expect(contactService.setRole).toHaveBeenCalledWith(VALID_UUID, 'Founder & CEO');

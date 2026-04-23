@@ -7,7 +7,7 @@ import pino from 'pino';
 const logger = pino({ level: 'silent' });
 
 const TEST_PERSONA: AgentPersona = {
-  displayName: 'Nathan Curia',
+  displayName: 'Test Agent',
   title: 'Agent Chief of Staff',
 };
 
@@ -108,7 +108,7 @@ describe('ContextForEmailHandler', () => {
         };
         expect(data.guidelines_source).toBe('default');
         expect(data.guidelines.required_elements).toBeInstanceOf(Array);
-        expect(data.agent_signature).toContain('Nathan Curia');
+        expect(data.agent_signature).toContain('Test Agent');
         expect(data.recipient).toBeNull();
         expect(data.instructions).toContain('meeting-request');
       }

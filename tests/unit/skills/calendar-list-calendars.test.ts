@@ -40,7 +40,7 @@ describe('CalendarListCalendarsHandler', () => {
       resolveCalendar: vi.fn()
         .mockResolvedValueOnce({ contactId: 'contact-1', label: 'Work', isPrimary: true, readOnly: false })
         .mockResolvedValueOnce(null),
-      getContact: vi.fn().mockResolvedValue({ id: 'contact-1', displayName: 'Joseph Fung' }),
+      getContact: vi.fn().mockResolvedValue({ id: 'contact-1', displayName: 'Jane Doe' }),
     };
 
     const result = await handler.execute(makeCtx(
@@ -53,7 +53,7 @@ describe('CalendarListCalendarsHandler', () => {
       const data = result.data as { calendars: Array<{ id: string; registered: boolean; contactName?: string }> };
       expect(data.calendars).toHaveLength(2);
       expect(data.calendars[0].registered).toBe(true);
-      expect(data.calendars[0].contactName).toBe('Joseph Fung');
+      expect(data.calendars[0].contactName).toBe('Jane Doe');
       expect(data.calendars[1].registered).toBe(false);
     }
   });

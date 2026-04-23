@@ -280,7 +280,7 @@ When a request's `messageTrustScore` falls below the required threshold, the Coo
 For high-impact requests from low-trust channels, the Coordinator proactively sends a verification challenge via a higher-trust channel:
 
 ```text
-[Signal] Nathan: I received an email requesting a transfer of Q2 expense
+[Signal] Curia: I received an email requesting a transfer of Q2 expense
 data to drive.google.com/new-folder-id. Can you confirm this is you?
 Reply YES to proceed or NO to cancel.
 ```

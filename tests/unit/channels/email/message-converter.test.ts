@@ -13,7 +13,7 @@ function mockMessage(overrides?: Partial<NylasMessage>): NylasMessage {
     threadId: 'thread-1',
     subject: 'Test Subject',
     from: [{ email: 'sender@example.com', name: 'Sender' }],
-    to: [{ email: 'nathan@curia.com', name: 'Nathan Curia' }],
+    to: [{ email: 'nathan@curia.com', name: 'Test Agent' }],
     cc: [],
     bcc: [],
     body: '<p>Hello world</p>',

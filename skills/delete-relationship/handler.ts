@@ -6,7 +6,7 @@
 // Design decisions:
 // - Idempotent: returns deleted:false if no matching edge exists (not an error).
 // - Disambiguates: if subject or object matches multiple nodes, returns candidates
-//   so Nathan can ask the user to clarify before retrying.
+//   so the agent can ask the user to clarify before retrying.
 // - Direction-agnostic: uses findEdges() which checks both directions, so the
 //   caller does not need to know how the edge was originally stored.
 
@@ -87,8 +87,8 @@ export class DeleteRelationshipHandler implements SkillHandler {
       const objectNode = objectMatches[0]!;
 
       // Find the edge matching the triple in either direction.
-      // findEdges() checks both source and target directions, so (Joseph, spouse, Xiaopu)
-      // finds the edge even if it was stored as (Xiaopu, spouse, Joseph).
+      // findEdges() checks both source and target directions, so (Bob, spouse, Alice)
+      // finds the edge even if it was stored as (Alice, spouse, Bob).
       const edges = await ctx.entityMemory.findEdges(subjectNode.id, { type: edgeType });
       const match = edges.find(r => r.node.id === objectNode.id);
 

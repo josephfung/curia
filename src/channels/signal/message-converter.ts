@@ -4,7 +4,7 @@
 // that the SignalAdapter can publish to the bus as an inbound.message event.
 //
 // Many envelope types arrive that we don't want to process as messages:
-//   - syncMessage: Nathan sent this from another device — not inbound
+//   - syncMessage: the agent sent this from another device — not inbound
 //   - reaction: emoji reaction to a prior message — ignored per spec (MVP)
 //   - viewOnce: self-destructing message — skip (we don't want LLM context on ephemeral content)
 //   - null/empty message: attachment-only or other non-text envelope
@@ -58,7 +58,7 @@ export interface ConvertedSignalMessage {
 export function convertSignalEnvelope(
   envelope: SignalEnvelope,
 ): ConvertedSignalMessage | null {
-  // Sync messages are Nathan's outbound activity mirrored back to linked devices.
+  // Sync messages are the agent's outbound activity mirrored back to linked devices.
   // We never want these to appear as inbound requests to the coordinator.
   if (envelope.syncMessage) return null;
 

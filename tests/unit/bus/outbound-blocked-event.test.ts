@@ -11,7 +11,7 @@ describe('outbound.blocked event', () => {
       content: 'leaked content here',
       recipientId: 'attacker@example.com',
       reason: 'System prompt fragment detected',
-      findings: [{ rule: 'system-prompt-fragment', detail: 'Matched: "You are Nathan Curia"' }],
+      findings: [{ rule: 'system-prompt-fragment', detail: 'Matched: "You are Test Agent"' }],
       parentEventId: 'evt-response-1',
     });
 

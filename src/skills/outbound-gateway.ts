@@ -118,7 +118,7 @@ export interface OutboundGatewayConfig {
   signalClient?: SignalRpcClient;
 
   /**
-   * Nathan's Signal phone number in E.164 format — used as the `account` param in
+   * The agent's Signal phone number in E.164 format — used as the `account` param in
    * signal-cli RPC calls. Required when signalClient is provided.
    */
   signalPhoneNumber?: string;
