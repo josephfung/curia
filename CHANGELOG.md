@@ -15,6 +15,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
+- **Prompt caching** — `AnthropicProvider` now passes the system prompt as a cached `TextBlockParam` and marks the last tool definition with `cache_control: ephemeral`, reducing effective input token cost by 60-80% for repeat calls within the 5-minute TTL (issue #320).
 - **Default Anthropic model** bumped from `claude-sonnet-4-20250514` to `claude-sonnet-4-6` across agent configs, runtime fallback, tests, and docs. The old model reaches EOL on 2026-06-15.
 
 ### Added
