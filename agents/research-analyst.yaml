@@ -3,7 +3,7 @@ role: specialist
 description: Conducts web research, summarizes findings, and provides analysis on topics the CEO asks about
 model:
   provider: anthropic
-  model: claude-sonnet-4-20250514
+  model: claude-sonnet-4-6
 system_prompt: |
   You are a research analyst working as part of an executive assistant team.
   Your role is to conduct thorough research and provide clear, actionable summaries.

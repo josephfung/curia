@@ -34,7 +34,7 @@ description: |                 # human-readable purpose; shown in the admin UI a
 
 model:
   provider: anthropic          # "anthropic" | "openai" | "ollama"
-  model: claude-sonnet-4-20250514
+  model: claude-sonnet-4-6
 
   # Optional: fallback provider if primary is unavailable
   fallback:
@@ -127,7 +127,7 @@ Specifies which LLM to use.
 | Field | Values |
 |---|---|
 | `provider` | `"anthropic"`, `"openai"`, `"ollama"` |
-| `model` | Provider-specific model ID (e.g., `claude-sonnet-4-20250514`, `gpt-4o`, `llama3.2`) |
+| `model` | Provider-specific model ID (e.g., `claude-sonnet-4-6`, `gpt-4o`, `llama3.2`) |
 
 The optional `fallback` block specifies an alternate provider+model to use if the primary provider returns an error or is unavailable. The fallback is used transparently — the agent does not need to be aware of the switch.
 

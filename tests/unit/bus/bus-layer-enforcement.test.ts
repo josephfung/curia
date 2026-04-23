@@ -108,8 +108,8 @@ describe('Bus Layer Enforcement (integration)', () => {
     const llmEvent = createLlmCall({
       agentId: 'coordinator',
       conversationId: 'conv-1',
-      requestedModel: 'claude-sonnet-4-20250514',
-      actualModel: 'claude-sonnet-4-20250514',
+      requestedModel: 'claude-sonnet-4-6',
+      actualModel: 'claude-sonnet-4-6',
       provider: 'anthropic',
       inputTokens: 150,
       outputTokens: 75,
