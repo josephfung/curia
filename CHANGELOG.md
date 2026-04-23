@@ -13,6 +13,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Changed
+
+- **Default Anthropic model** bumped from `claude-sonnet-4-20250514` to `claude-sonnet-4-6` across agent configs, runtime fallback, tests, and docs. The old model reaches EOL on 2026-06-15.
+
 ### Added
 
 - **LEAVE FOR CEO triage classification** — the observation-mode preamble now defines a fifth category for personal, sensitive, or judgment-dependent email where the CEO will read and handle it themselves. No archive, no draft, no notification. The "when in doubt" default has shifted from URGENT to LEAVE FOR CEO to stop over-notifying. Mirrored in `agents/coordinator.yaml`.

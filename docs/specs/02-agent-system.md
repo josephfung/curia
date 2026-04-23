@@ -26,7 +26,7 @@ persona:
     Office of the CEO
 model:
   provider: anthropic
-  model: claude-sonnet-4-20250514
+  model: claude-sonnet-4-6
 system_prompt: |
   You are ${persona.display_name}, executive assistant to the CEO.
   You are the single point of contact for all communications.
@@ -62,7 +62,7 @@ name: expense-tracker
 description: Tracks and categorizes expenses from receipts and emails
 model:
   provider: anthropic
-  model: claude-sonnet-4-20250514
+  model: claude-sonnet-4-6
 system_prompt: |
   You are an expense tracking assistant for a CEO.
   Extract amounts, vendors, categories, and dates from receipts.
@@ -213,7 +213,7 @@ Agents specify provider + model in their config. A `fallback` provider can be co
 ```yaml
 model:
   provider: anthropic
-  model: claude-sonnet-4-20250514
+  model: claude-sonnet-4-6
   fallback:
     provider: openai
     model: gpt-4o

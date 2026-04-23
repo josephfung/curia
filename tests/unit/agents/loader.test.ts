@@ -44,7 +44,7 @@ describe('loadAgentConfig', () => {
 name: test-agent
 model:
   provider: anthropic
-  model: claude-sonnet-4-20250514
+  model: claude-sonnet-4-6
 system_prompt: "Test agent"
 error_budget:
   max_turns: 10
@@ -65,7 +65,7 @@ error_budget:
 name: writing-scout
 model:
   provider: anthropic
-  model: claude-sonnet-4-20250514
+  model: claude-sonnet-4-6
 system_prompt: "Scout agent"
 schedule:
   - cron: "30 8 * * 2"
@@ -90,7 +90,7 @@ schedule:
 name: test-sched
 model:
   provider: anthropic
-  model: claude-sonnet-4-20250514
+  model: claude-sonnet-4-6
 system_prompt: "Test"
 schedule:
   - cron: "0 9 * * 1"

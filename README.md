@@ -146,7 +146,7 @@ description: Tracks and categorizes expenses from receipts and emails
 
 model:
   provider: anthropic
-  model: claude-sonnet-4-20250514
+  model: claude-sonnet-4-6
   fallback:
     provider: openai
     model: gpt-4o

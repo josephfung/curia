@@ -103,7 +103,7 @@ export class AnthropicProvider implements LLMProvider {
 
     // Default to the latest Claude Sonnet; callers can override via options.model.
     // Using a default here ensures we never accidentally call without a model.
-    const model = (options?.model as string) ?? 'claude-sonnet-4-20250514';
+    const model = (options?.model as string) ?? 'claude-sonnet-4-6';
 
     try {
       const createParams: Anthropic.Messages.MessageCreateParamsNonStreaming = {

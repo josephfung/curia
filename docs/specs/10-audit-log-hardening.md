@@ -111,7 +111,7 @@ interface LlmCallPayload {
   agentId: string;
   conversationId: string;
   // Model provenance — what was requested vs. what actually ran
-  requestedModel: string;       // e.g. 'claude-sonnet-4-20250514'
+  requestedModel: string;       // e.g. 'claude-sonnet-4-6'
   actualModel: string;          // from the API response (may differ if provider aliases)
   provider: string;             // 'anthropic' | 'openai' | 'ollama'
   // Token accounting

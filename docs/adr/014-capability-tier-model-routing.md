@@ -10,7 +10,7 @@ The current agent config schema (`agents/*.yaml`) requires each agent to declare
 ```yaml
 model:
   provider: anthropic
-  model: claude-sonnet-4-20250514
+  model: claude-sonnet-4-6
   fallback:
     provider: openai
     model: gpt-4o
@@ -18,7 +18,7 @@ model:
 
 This design has several problems:
 
-**Portability.** A shared or third-party agent that hardcodes `claude-sonnet-4-20250514` will fail or silently degrade on any instance that doesn't have that model enabled, or on a deployment targeting a different cloud provider (e.g., a Bedrock model ID means nothing on GCP).
+**Portability.** A shared or third-party agent that hardcodes `claude-sonnet-4-6` will fail or silently degrade on any instance that doesn't have that model enabled, or on a deployment targeting a different cloud provider (e.g., a Bedrock model ID means nothing on GCP).
 
 **Operator control.** When model IDs live in agent YAML files, the instance operator cannot centrally change which model is used for a class of agents. Upgrading to a new model requires touching every agent file. Cost routing, model pinning during outages, and A/B testing require per-file edits rather than a config change.
 
