@@ -80,14 +80,44 @@ export class HeldMessagesProcessHandler implements SkillHandler {
       let contactId: string;
 
       if (existing_contact_id) {
-        // Link to existing contact
+        // Link the sender's channel identity to the specified existing contact.
+        // If the identity is already linked (e.g. contact-merge ran before us), treat
+        // it as a no-op when it's linked to the right contact — otherwise surface the
+        // conflict so the caller can resolve it with contact-merge first.
         contactId = existing_contact_id;
-        await ctx.contactService.linkIdentity({
-          contactId,
-          channel: heldMsg.channel,
-          channelIdentifier: heldMsg.senderId,
-          source: 'ceo_stated',
-        });
+        try {
+          await ctx.contactService.linkIdentity({
+            contactId,
+            channel: heldMsg.channel,
+            channelIdentifier: heldMsg.senderId,
+            source: 'ceo_stated',
+          });
+        } catch (linkErr) {
+          const isDuplicate =
+            linkErr instanceof Error &&
+            linkErr.message.includes('duplicate key value violates unique constraint');
+          if (!isDuplicate) throw linkErr;
+
+          // Identity already exists — check who owns it.
+          const resolved = await ctx.contactService.resolveByChannelIdentity(
+            heldMsg.channel,
+            heldMsg.senderId,
+          );
+          if (!resolved || resolved.contactId !== contactId) {
+            // Belongs to a different contact — this is a real conflict.
+            return {
+              success: false,
+              error:
+                `Cannot link ${heldMsg.senderId} to contact ${contactId} — that identity is already linked to a different contact. Use contact-merge first.`,
+            };
+          }
+          // Already linked to the correct contact (e.g. from contact-merge).
+          // Nothing to do — fall through to markProcessed.
+          ctx.log.info(
+            { contactId, channel: heldMsg.channel, senderId: heldMsg.senderId },
+            'Channel identity already linked to target contact — skipping linkIdentity',
+          );
+        }
       } else {
         // Create new confirmed contact
         if (!contact_name || typeof contact_name !== 'string') {

@@ -13,6 +13,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`held-messages-process` idempotent identity link** — when `contact-merge` links a sender's channel identity before `held-messages-process` runs (e.g. the CEO merges contacts mid-conversation), the skill now treats the duplicate-key error as a no-op if the identity already belongs to the target contact, and proceeds to `markProcessed`. Previously both calls failed with a unique constraint violation, leaving the held message in `pending` status indefinitely and triggering a false "Held Messages Pending Your Review" alert from the scheduled scanner.
+
 ### Changed
 
 - **Prompt caching** — `AnthropicProvider` now passes the system prompt as a cached `TextBlockParam` and marks the last tool definition with `cache_control: ephemeral`, reducing effective input token cost by 60-80% for repeat calls within the 5-minute TTL (issue #320).
