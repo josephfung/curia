@@ -50,7 +50,7 @@ describe('AnthropicProvider — prompt caching', () => {
       ],
     });
 
-    const params = mockCreate.mock.calls[0][0];
+    const params = mockCreate.mock.calls[0]![0];
     expect(params.system).toEqual([
       { type: 'text', text: 'You are helpful.', cache_control: { type: 'ephemeral' } },
     ]);
@@ -62,7 +62,7 @@ describe('AnthropicProvider — prompt caching', () => {
       messages: [{ role: 'user', content: 'Hello' }],
     });
 
-    const params = mockCreate.mock.calls[0][0];
+    const params = mockCreate.mock.calls[0]![0];
     expect(params.system).toBeUndefined();
   });
 
@@ -76,7 +76,7 @@ describe('AnthropicProvider — prompt caching', () => {
       ],
     });
 
-    const params = mockCreate.mock.calls[0][0];
+    const params = mockCreate.mock.calls[0]![0];
     expect(params.system).toEqual([
       { type: 'text', text: 'Part one.\n\nPart two.', cache_control: { type: 'ephemeral' } },
     ]);
@@ -93,7 +93,7 @@ describe('AnthropicProvider — prompt caching', () => {
       ],
     });
 
-    const params = mockCreate.mock.calls[0][0];
+    const params = mockCreate.mock.calls[0]![0];
     expect(params.tools[0].cache_control).toBeUndefined();
     expect(params.tools[1].cache_control).toBeUndefined();
     expect(params.tools[2].cache_control).toEqual({ type: 'ephemeral' });
@@ -108,7 +108,7 @@ describe('AnthropicProvider — prompt caching', () => {
       ],
     });
 
-    const params = mockCreate.mock.calls[0][0];
+    const params = mockCreate.mock.calls[0]![0];
     expect(params.tools[0].cache_control).toEqual({ type: 'ephemeral' });
   });
 
@@ -118,7 +118,7 @@ describe('AnthropicProvider — prompt caching', () => {
       messages: [{ role: 'user', content: 'Hello' }],
     });
 
-    const params = mockCreate.mock.calls[0][0];
+    const params = mockCreate.mock.calls[0]![0];
     expect(params.tools).toBeUndefined();
   });
 });

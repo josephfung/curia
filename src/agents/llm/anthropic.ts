@@ -122,7 +122,10 @@ export class AnthropicProvider implements LLMProvider {
       // Only attach the tools array when tools are provided — the API rejects
       // an empty tools array, so we omit the key entirely when there are none.
       if (tools && tools.length > 0) {
-        const mappedTools = tools.map(t => ({
+        // Type explicitly as Tool[] so that spreading cache_control onto the last
+        // element is accepted by TypeScript — the inferred type from .map() is
+        // narrower and doesn't include the optional cache_control field.
+        const mappedTools: Anthropic.Messages.Tool[] = tools.map(t => ({
           name: t.name,
           description: t.description,
           // Cast required because ToolDefinition.input_schema is a narrower shape
@@ -133,10 +136,9 @@ export class AnthropicProvider implements LLMProvider {
         // list is captured in a single cache slot. The coordinator's tool list is
         // stable (48 pinned skills), so this achieves near-100% hit rate within
         // the 5-minute TTL and saves ~10K tokens per call.
-        mappedTools[mappedTools.length - 1] = {
-          ...mappedTools[mappedTools.length - 1],
-          cache_control: { type: 'ephemeral' as const },
-        };
+        // Mutate in place rather than spread-reassign — the spread pattern widens
+        // the inferred type and makes required fields optional, breaking assignability.
+        mappedTools[mappedTools.length - 1]!.cache_control = { type: 'ephemeral' as const };
         createParams.tools = mappedTools;
       }
 
