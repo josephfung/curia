@@ -1271,7 +1271,12 @@ class InMemoryContactBackend implements ContactServiceBackend {
     // that Postgres would reject via its unique index.
     for (const existing of this.identities.values()) {
       if (existing.channel === identity.channel && existing.channelIdentifier === identity.channelIdentifier) {
-        throw new Error(`Channel identity already exists: ${identity.channel}:${identity.channelIdentifier}`);
+        // Throw with the same shape as Postgres unique-violation errors (code 23505)
+        // so callers can detect duplicates uniformly across backends.
+        throw Object.assign(
+          new Error(`duplicate key value violates unique constraint "contact_channel_identities_channel_channel_identifier_key"`),
+          { code: '23505', constraint: 'contact_channel_identities_channel_channel_identifier_key' },
+        );
       }
     }
     this.identities.set(identity.id, identity);

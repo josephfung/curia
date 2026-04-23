@@ -106,7 +106,10 @@ describe('HeldMessagesProcessHandler — identify action', () => {
     };
     const contactService = {
       linkIdentity: vi.fn().mockRejectedValue(
-        new Error('duplicate key value violates unique constraint "contact_channel_identities_channel_channel_identifier_key"'),
+        Object.assign(
+          new Error('duplicate key value violates unique constraint "contact_channel_identities_channel_channel_identifier_key"'),
+          { code: '23505' },
+        ),
       ),
       resolveByChannelIdentity: vi.fn().mockResolvedValue({
         contactId: CONTACT_ID,
@@ -137,7 +140,10 @@ describe('HeldMessagesProcessHandler — identify action', () => {
     };
     const contactService = {
       linkIdentity: vi.fn().mockRejectedValue(
-        new Error('duplicate key value violates unique constraint "contact_channel_identities_channel_channel_identifier_key"'),
+        Object.assign(
+          new Error('duplicate key value violates unique constraint "contact_channel_identities_channel_channel_identifier_key"'),
+          { code: '23505' },
+        ),
       ),
       resolveByChannelIdentity: vi.fn().mockResolvedValue({
         contactId: OTHER_CONTACT_ID,  // owned by a different contact
@@ -156,6 +162,33 @@ describe('HeldMessagesProcessHandler — identify action', () => {
 
     expect(result.success).toBe(false);
     if (!result.success) expect(result.error).toContain('already linked to a different contact');
+    expect(bus.publish).not.toHaveBeenCalled();
+    expect(heldMessages.markProcessed).not.toHaveBeenCalled();
+  });
+
+  it('returns data-integrity error when resolveByChannelIdentity returns null after duplicate', async () => {
+    const heldMessages = {
+      getById: vi.fn().mockResolvedValue(pendingMsg),
+      markProcessed: vi.fn(),
+    };
+    const contactService = {
+      linkIdentity: vi.fn().mockRejectedValue(
+        Object.assign(
+          new Error('duplicate key value violates unique constraint "contact_channel_identities_channel_channel_identifier_key"'),
+          { code: '23505' },
+        ),
+      ),
+      resolveByChannelIdentity: vi.fn().mockResolvedValue(null),  // orphaned identity
+    };
+    const bus = makeBus();
+
+    const result = await handler.execute(makeCtx(
+      { held_message_id: HELD_MSG_ID, action: 'identify', existing_contact_id: CONTACT_ID },
+      { heldMessages: heldMessages as never, contactService: contactService as never, bus: bus as never },
+    ));
+
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error).toContain('Internal error');
     expect(bus.publish).not.toHaveBeenCalled();
     expect(heldMessages.markProcessed).not.toHaveBeenCalled();
   });

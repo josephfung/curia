@@ -93,9 +93,9 @@ export class HeldMessagesProcessHandler implements SkillHandler {
             source: 'ceo_stated',
           });
         } catch (linkErr) {
-          const isDuplicate =
-            linkErr instanceof Error &&
-            linkErr.message.includes('duplicate key value violates unique constraint');
+          // Check by PG error code (23505) — both the Postgres and in-memory backends
+          // emit this code on unique constraint violations, so it's reliable across envs.
+          const isDuplicate = (linkErr as { code?: string }).code === '23505';
           if (!isDuplicate) throw linkErr;
 
           // Identity already exists — check who owns it.
@@ -103,7 +103,18 @@ export class HeldMessagesProcessHandler implements SkillHandler {
             heldMsg.channel,
             heldMsg.senderId,
           );
-          if (!resolved || resolved.contactId !== contactId) {
+          if (!resolved) {
+            // Unique constraint fired but lookup found nothing — data integrity anomaly.
+            ctx.log.error(
+              { contactId, channel: heldMsg.channel, senderId: heldMsg.senderId },
+              'Duplicate-key on linkIdentity but resolveByChannelIdentity returned null — possible orphaned identity',
+            );
+            return {
+              success: false,
+              error: `Internal error: ${heldMsg.senderId} caused a duplicate-key error but no owning contact was found.`,
+            };
+          }
+          if (resolved.contactId !== contactId) {
             // Belongs to a different contact — this is a real conflict.
             return {
               success: false,
@@ -163,6 +174,7 @@ export class HeldMessagesProcessHandler implements SkillHandler {
       );
       return { success: true, data: { result: 'identified_and_replayed', contact_id: contactId } };
     } catch (err) {
+      ctx.log.error({ err, heldMessageId: held_message_id, action }, 'held-messages-process: unexpected error');
       const message = err instanceof Error ? err.message : String(err);
       return { success: false, error: `Failed to process held message: ${message}` };
     }
