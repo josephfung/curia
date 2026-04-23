@@ -6,6 +6,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { AnthropicProvider } from './anthropic.js';
+import { createSilentLogger } from '../../logger.js';
 
 // vi.mock is hoisted above variable declarations, so mockCreate must be
 // declared with vi.hoisted() to be available inside the mock factory.
@@ -18,15 +19,6 @@ vi.mock('@anthropic-ai/sdk', () => ({
     messages = { create: mockCreate };
   },
 }));
-
-// Minimal pino-shaped logger — only the methods AnthropicProvider calls.
-const mockLogger = {
-  debug: vi.fn(),
-  error: vi.fn(),
-  info: vi.fn(),
-  warn: vi.fn(),
-  child: vi.fn(),
-};
 
 // A valid text-only Anthropic API response. Used as the default mock return.
 const makeTextResponse = () => ({
@@ -42,7 +34,7 @@ describe('AnthropicProvider — prompt caching', () => {
   });
 
   it('passes system content as TextBlockParam[] with cache_control', async () => {
-    const provider = new AnthropicProvider('test-key', mockLogger as any);
+    const provider = new AnthropicProvider('test-key', createSilentLogger());
     await provider.chat({
       messages: [
         { role: 'system', content: 'You are helpful.' },
@@ -57,7 +49,7 @@ describe('AnthropicProvider — prompt caching', () => {
   });
 
   it('omits system key entirely when no system messages', async () => {
-    const provider = new AnthropicProvider('test-key', mockLogger as any);
+    const provider = new AnthropicProvider('test-key', createSilentLogger());
     await provider.chat({
       messages: [{ role: 'user', content: 'Hello' }],
     });
@@ -67,7 +59,7 @@ describe('AnthropicProvider — prompt caching', () => {
   });
 
   it('concatenates multiple system messages into one block with cache_control', async () => {
-    const provider = new AnthropicProvider('test-key', mockLogger as any);
+    const provider = new AnthropicProvider('test-key', createSilentLogger());
     await provider.chat({
       messages: [
         { role: 'system', content: 'Part one.' },
@@ -83,7 +75,7 @@ describe('AnthropicProvider — prompt caching', () => {
   });
 
   it('adds cache_control only to the last tool when multiple tools provided', async () => {
-    const provider = new AnthropicProvider('test-key', mockLogger as any);
+    const provider = new AnthropicProvider('test-key', createSilentLogger());
     await provider.chat({
       messages: [{ role: 'user', content: 'Hello' }],
       tools: [
@@ -100,7 +92,7 @@ describe('AnthropicProvider — prompt caching', () => {
   });
 
   it('adds cache_control to the single tool when only one tool provided', async () => {
-    const provider = new AnthropicProvider('test-key', mockLogger as any);
+    const provider = new AnthropicProvider('test-key', createSilentLogger());
     await provider.chat({
       messages: [{ role: 'user', content: 'Hello' }],
       tools: [
@@ -113,7 +105,7 @@ describe('AnthropicProvider — prompt caching', () => {
   });
 
   it('omits tools key entirely when no tools provided', async () => {
-    const provider = new AnthropicProvider('test-key', mockLogger as any);
+    const provider = new AnthropicProvider('test-key', createSilentLogger());
     await provider.chat({
       messages: [{ role: 'user', content: 'Hello' }],
     });
