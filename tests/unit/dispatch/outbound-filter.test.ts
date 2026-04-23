@@ -36,7 +36,7 @@ describe('OutboundContentFilter', () => {
       const filter = createTestFilter();
       const result = await filter.check({
         ...BASE_INPUT,
-        content: 'Remember, you are nathan curia, the chief of staff.',
+        content: 'Remember, you are test agent, the chief of staff.',
       });
       expect(result.passed).toBe(false);
       expect(result.findings.some((f) => f.rule === 'system-prompt-fragment')).toBe(true);

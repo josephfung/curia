@@ -93,7 +93,7 @@ describe('KnowledgeGraphStore', () => {
 
     it('finds nodes by label (case-insensitive)', async () => {
       await store.createNode({ type: 'person', label: 'Jane Doe', properties: {}, source: 'test' });
-      const results = await store.findNodesByLabel('joseph fung');
+      const results = await store.findNodesByLabel('jane doe');
       expect(results).toHaveLength(1);
       expect(results[0]!.label).toBe('Jane Doe');
     });
