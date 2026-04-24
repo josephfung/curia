@@ -125,7 +125,7 @@ export async function loadSkillsFromDirectory(
       // escalate its own privileges by pushing to capabilities[] or reassigning
       // any manifest field. Object.freeze is shallow, so we freeze the capabilities
       // array separately before freezing the manifest itself.
-      if (manifest.capabilities) Object.freeze(manifest.capabilities);
+      if (manifest.capabilities !== undefined) Object.freeze(manifest.capabilities);
       Object.freeze(manifest);
 
       registry.register(manifest, handler);
