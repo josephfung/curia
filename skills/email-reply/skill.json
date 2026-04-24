@@ -4,7 +4,6 @@
   "version": "1.0.0",
   "sensitivity": "normal",
   "action_risk": "medium",
-  "infrastructure": true,
   "inputs": {
     "reply_to_message_id": "string",
     "body": "string"
@@ -16,5 +15,8 @@
   },
   "permissions": [],
   "secrets": [],
-  "timeout": 30000
+  "timeout": 30000,
+  "capabilities": [
+    "outboundGateway"
+  ]
 }

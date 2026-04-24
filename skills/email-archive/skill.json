@@ -4,7 +4,6 @@
   "version": "1.0.0",
   "sensitivity": "normal",
   "action_risk": "low",
-  "infrastructure": true,
   "inputs": {
     "message_id": "string (Nylas message ID of the email to archive)",
     "account": "string? (named account to archive from, e.g. 'curia' or 'joseph'; defaults to the primary account if omitted)"
@@ -14,5 +13,8 @@
   },
   "permissions": [],
   "secrets": [],
-  "timeout": 15000
+  "timeout": 15000,
+  "capabilities": [
+    "outboundGateway"
+  ]
 }

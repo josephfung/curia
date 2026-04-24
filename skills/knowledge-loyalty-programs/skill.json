@@ -4,7 +4,6 @@
   "version": "1.0.0",
   "sensitivity": "normal",
   "action_risk": "none",
-  "infrastructure": true,
   "inputs": {
     "action": "string (store | retrieve)",
     "program_name": "string? (required for store — e.g. 'Air Canada Aeroplan', 'Marriott Bonvoy', 'United MileagePlus')",
@@ -19,5 +18,8 @@
   },
   "permissions": [],
   "secrets": [],
-  "timeout": 30000
+  "timeout": 30000,
+  "capabilities": [
+    "entityMemory"
+  ]
 }

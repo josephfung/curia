@@ -42,7 +42,10 @@
       "items": { "type": "string" }
     },
     "timeout": { "type": "integer", "minimum": 1 },
-    "infrastructure": { "type": "boolean" },
+    "capabilities": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
     "entity_enrichment": {
       "type": "object",
       "required": ["param", "default"],

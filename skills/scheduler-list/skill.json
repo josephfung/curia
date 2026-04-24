@@ -4,10 +4,17 @@
   "version": "1.0.0",
   "sensitivity": "elevated",
   "action_risk": "none",
-  "infrastructure": true,
-  "inputs": { "status": "string?", "agent_id": "string?" },
-  "outputs": { "jobs": "array" },
+  "inputs": {
+    "status": "string?",
+    "agent_id": "string?"
+  },
+  "outputs": {
+    "jobs": "array"
+  },
   "permissions": [],
   "secrets": [],
-  "timeout": 15000
+  "timeout": 15000,
+  "capabilities": [
+    "schedulerService"
+  ]
 }

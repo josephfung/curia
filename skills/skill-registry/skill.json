@@ -7,8 +7,13 @@
   "inputs": {
     "query": "string (keyword to search — pass an empty string to list all available skills)"
   },
-  "outputs": { "skills": "array" },
+  "outputs": {
+    "skills": "array"
+  },
   "permissions": [],
   "secrets": [],
-  "timeout": 5000
+  "timeout": 5000,
+  "capabilities": [
+    "skillSearch"
+  ]
 }

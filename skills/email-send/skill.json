@@ -4,7 +4,6 @@
   "version": "1.0.0",
   "sensitivity": "normal",
   "action_risk": "medium",
-  "infrastructure": true,
   "inputs": {
     "to": "string",
     "cc": "string?",
@@ -18,5 +17,8 @@
   },
   "permissions": [],
   "secrets": [],
-  "timeout": 30000
+  "timeout": 30000,
+  "capabilities": [
+    "outboundGateway"
+  ]
 }

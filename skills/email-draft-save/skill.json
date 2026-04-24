@@ -4,7 +4,6 @@
   "version": "1.0.0",
   "sensitivity": "normal",
   "action_risk": "medium",
-  "infrastructure": true,
   "inputs": {
     "to": "string (recipient email address)",
     "subject": "string (email subject line)",
@@ -17,5 +16,8 @@
   },
   "permissions": [],
   "secrets": [],
-  "timeout": 20000
+  "timeout": 20000,
+  "capabilities": [
+    "outboundGateway"
+  ]
 }

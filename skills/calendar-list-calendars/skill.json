@@ -4,12 +4,14 @@
   "version": "1.0.0",
   "sensitivity": "normal",
   "action_risk": "none",
-  "infrastructure": true,
   "inputs": {},
   "outputs": {
     "calendars": "array"
   },
   "permissions": [],
   "secrets": [],
-  "timeout": 15000
+  "timeout": 15000,
+  "capabilities": [
+    "nylasCalendarClient"
+  ]
 }

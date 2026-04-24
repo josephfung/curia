@@ -4,14 +4,18 @@
   "version": "1.0.0",
   "sensitivity": "elevated",
   "action_risk": "none",
-  "infrastructure": true,
   "inputs": {
     "job_id": "string",
     "summary": "string",
     "context": "object?"
   },
-  "outputs": { "success": "boolean" },
+  "outputs": {
+    "success": "boolean"
+  },
   "permissions": [],
   "secrets": [],
-  "timeout": 15000
+  "timeout": 15000,
+  "capabilities": [
+    "schedulerService"
+  ]
 }

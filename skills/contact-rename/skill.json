@@ -4,7 +4,6 @@
   "version": "1.0.0",
   "sensitivity": "elevated",
   "action_risk": "low",
-  "infrastructure": true,
   "inputs": {
     "contact_id": "string (UUID from contact-lookup or contact-list)",
     "display_name": "string (new display name)"

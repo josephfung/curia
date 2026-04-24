@@ -4,7 +4,6 @@
   "version": "1.0.0",
   "sensitivity": "normal",
   "action_risk": "none",
-  "infrastructure": true,
   "inputs": {
     "calendarId": "string? (omit to auto-query all caller calendars — only pass when targeting a specific calendar)",
     "timeMin": "timestamp (start of range, inclusive)",
@@ -19,5 +18,8 @@
   },
   "permissions": [],
   "secrets": [],
-  "timeout": 30000
+  "timeout": 30000,
+  "capabilities": [
+    "nylasCalendarClient"
+  ]
 }
