@@ -21,7 +21,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
-- **Dispatcher observation-mode branch** — now emits a `warn`-level log when a non-LEAVE_FOR_CEO classification completes with zero skill calls (defensive check for coordinator stalls)
+- **Dispatcher observation-mode branch** — now emits a `warn`-level log when a non-`LEAVE FOR CEO` classification completes with zero skill calls (defensive check for coordinator stalls)
 
 ---
 
