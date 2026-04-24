@@ -98,6 +98,40 @@ describe('loader: capability validation', () => {
   // Test 3: Frozen manifest cannot be mutated at runtime
   // ---------------------------------------------------------------------------
 
+  // ---------------------------------------------------------------------------
+  // Test 3b: Manifest is frozen even when no capabilities are declared
+  // ---------------------------------------------------------------------------
+
+  it('freezes the manifest even when no capabilities field is present', async () => {
+    const tmpDir = path.join(import.meta.dirname, '__test_cap_none__');
+    fs.mkdirSync(tmpDir, { recursive: true });
+    try {
+      setupSkillDir(tmpDir, 'nocap-skill', {
+        name: 'nocap-skill',
+        description: 'test skill with no capabilities',
+        version: '1.0.0',
+        action_risk: 'none',
+        inputs: {},
+        outputs: {},
+        // no 'capabilities' key — skill uses only universal services
+      });
+      const registry = new SkillRegistry();
+      const count = await loadSkillsFromDirectory(tmpDir, registry, logger);
+      expect(count).toBe(1);
+
+      const skill = registry.get('nocap-skill');
+      // capabilities should be absent (not defaulted to []), and manifest must still be frozen
+      expect(skill?.manifest.capabilities).toBeUndefined();
+      expect(Object.isFrozen(skill?.manifest)).toBe(true);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  // ---------------------------------------------------------------------------
+  // Test 4: Frozen manifest cannot be mutated at runtime
+  // ---------------------------------------------------------------------------
+
   it('throws when attempting to mutate a frozen capabilities array', async () => {
     const tmpDir = path.join(import.meta.dirname, '__test_cap_freeze__');
     fs.mkdirSync(tmpDir, { recursive: true });
