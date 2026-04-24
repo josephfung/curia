@@ -4,13 +4,13 @@
 // It resolves skills from the registry, validates permissions, provides
 // a sandboxed SkillContext, enforces timeouts, and sanitizes outputs.
 //
-// Normal skills get: validated input, scoped secret access, a scoped logger.
-// They cannot access the bus, database, or filesystem directly.
+// Normal skills get: validated input, scoped secret access, a scoped logger,
+// and universal services (contactService, entityContextAssembler, agentPersona).
 //
-// Infrastructure skills (manifest.infrastructure: true) additionally receive
-// bus and agent registry access. This effectively grants unrestricted bus
-// publish/subscribe including layer impersonation. Only framework-internal
-// skills like 'delegate' should use this — it is a privileged escape hatch.
+// Privileged services (bus, outboundGateway, entityMemory, etc.) are only
+// injected when the skill declares them in manifest.capabilities[]. The loader
+// validates capability names against a fixed allowlist and freezes the manifest
+// at startup — skills cannot self-escalate at runtime.
 //
 // Entity enrichment (manifest.entity_enrichment): when a skill declares this,
 // the execution layer assembles EntityContext for the declared input parameter
@@ -274,83 +274,55 @@ export class ExecutionLayer {
       taskEventId: options?.taskEventId,
     };
 
-    // Infrastructure skills get bus and agent registry access.
-    // This is intentionally gated behind a manifest flag so normal skills
-    // cannot escalate their privileges by accessing the bus directly.
-    if (manifest.infrastructure) {
-      if (!this.bus || !this.agentRegistry) {
-        skillLogger.error(
-          { skillName },
-          'Infrastructure skill invoked but ExecutionLayer was not constructed with bus/agentRegistry/contactService',
-        );
-        return {
-          success: false,
-          error: this.wrapSkillError(`Infrastructure skill '${skillName}' cannot run: bus, agent registry, or contactService not available in ExecutionLayer — ensure all three are passed to the ExecutionLayer constructor`),
-        };
-      }
-      ctx.bus = this.bus;
-      ctx.agentRegistry = this.agentRegistry;
-      // outboundGateway is optional — only skills that send external messages need it.
-      // All outbound communication goes through the gateway, which enforces contact
-      // blocked checks and content filtering before dispatch.
-      if (this.outboundGateway) {
-        ctx.outboundGateway = this.outboundGateway;
-      }
-      // heldMessages is optional — only held-message skills need it
-      if (this.heldMessages) {
-        ctx.heldMessages = this.heldMessages;
-      }
-      // schedulerService is optional — only scheduler skills need it
-      if (this.schedulerService) {
-        ctx.schedulerService = this.schedulerService;
-      }
-      // entityMemory is optional — only skills that read/write the knowledge graph need it.
-      // When all three audit context fields and bus are available, wrap entityMemory in an
-      // observer that emits memory.store audit events after each node creation (#200).
-      // All three fields are required by createMemoryStore — guard all three together so the
-      // narrowed type flows into buildEntityMemoryObserver without unsafe casts.
-      if (this.entityMemory) {
-        const memAudit = options?.agentId && options?.conversationId && options?.parentEventId
-          ? { agentId: options.agentId, conversationId: options.conversationId, parentEventId: options.parentEventId, taskEventId: options.taskEventId }
-          : undefined;
+    // Capability-gated service injection.
+    // Skills declare which privileged services they need in manifest.capabilities.
+    // The loader validates the names and freezes the manifest at startup.
+    // We inject only the declared services — skills cannot escalate privilege.
+    const caps = manifest.capabilities ?? [];
+
+    // Fail-closed: if a declared capability is not available on this ExecutionLayer,
+    // refuse to run the skill. This catches configuration errors at invocation time.
+    const missingCaps = caps.filter(cap => {
+      if (cap === 'skillSearch') return false; // skillSearch is synthesized, not a field on `this`
+      return !(this as Record<string, unknown>)[cap];
+    });
+    if (missingCaps.length > 0) {
+      skillLogger.error(
+        { skillName, missingCapabilities: missingCaps },
+        'Skill declares capabilities not available on ExecutionLayer',
+      );
+      return {
+        success: false,
+        error: this.wrapSkillError(
+          `Skill '${skillName}' requires capabilities [${missingCaps.join(', ')}] ` +
+          `but they are not configured on the ExecutionLayer`,
+        ),
+      };
+    }
+
+    // Compute audit context for entityMemory observer (before the loop — used inside it).
+    const memAudit = options?.agentId && options?.conversationId && options?.parentEventId
+      ? { agentId: options.agentId, conversationId: options.conversationId, parentEventId: options.parentEventId, taskEventId: options.taskEventId }
+      : undefined;
+
+    for (const cap of caps) {
+      if (cap === 'entityMemory') {
+        // Special case: wrap with audit observer when audit context is available.
+        // Uses this.bus (ExecutionLayer's bus), not the skill's ctx.bus — the observer
+        // needs bus access for audit events even if the skill didn't declare 'bus'.
         ctx.entityMemory = memAudit && this.bus
-          ? buildEntityMemoryObserver(this.entityMemory, this.bus, memAudit, skillLogger)
+          ? buildEntityMemoryObserver(this.entityMemory!, this.bus, memAudit, skillLogger)
           : this.entityMemory;
+      } else if (cap === 'skillSearch') {
+        // Special case: skillSearch is a closure over the registry, not a service field.
+        // Filters out skill-registry itself to avoid circular self-discovery results.
+        ctx.skillSearch = (query: string) =>
+          this.registry.search(query)
+            .filter(s => s.manifest.name !== 'skill-registry')
+            .map(s => ({ name: s.manifest.name, description: s.manifest.description }));
+      } else {
+        (ctx as Record<string, unknown>)[cap] = (this as Record<string, unknown>)[cap];
       }
-      // nylasCalendarClient is optional — only calendar skills need it
-      if (this.nylasCalendarClient) {
-        ctx.nylasCalendarClient = this.nylasCalendarClient;
-      }
-      // bullpenService is optional — only the bullpen skill needs it
-      if (this.bullpenService) {
-        ctx.bullpenService = this.bullpenService;
-      }
-    }
-
-    // autonomyService is scoped to the autonomy skills only — not granted to all infrastructure skills.
-    // Limiting access here reduces blast radius if any other infrastructure skill is ever compromised.
-    if (this.autonomyService && (manifest.name === 'get-autonomy' || manifest.name === 'set-autonomy')) {
-      ctx.autonomyService = this.autonomyService;
-    }
-
-    // browserService is scoped to the web-browser skill only — not granted to all skills.
-    // A real browser can navigate to internal network addresses, exfiltrate page content,
-    // and fill forms. Limiting access here prevents any other skill (even if compromised
-    // or buggy) from invoking browser capabilities it never declared.
-    if (this.browserService && manifest.name === 'web-browser') {
-      ctx.browserService = this.browserService;
-    }
-
-    // skillSearch is scoped to the skill-registry built-in only.
-    // The closure captures this.registry at invocation time and filters out
-    // skill-registry itself to avoid circular self-discovery results.
-    // When #119 lands, this moves into SKILL_CAPABILITIES alongside the other
-    // name-gated services.
-    if (manifest.name === 'skill-registry') {
-      ctx.skillSearch = (query: string) =>
-        this.registry.search(query)
-          .filter(s => s.manifest.name !== 'skill-registry')
-          .map(s => ({ name: s.manifest.name, description: s.manifest.description }));
     }
 
     // entityContextAssembler — available to ALL skills (not just infrastructure).
