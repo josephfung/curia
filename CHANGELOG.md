@@ -13,32 +13,27 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+---
+
+## [0.19.7] — 2026-04-24 — "The Reading Room"
+
 ### Added
 
-- **`contact-rename` skill** — new skill that updates a contact's display name via `ContactService.updateDisplayName()`. Closes the gap where Curia could create contacts and set their role but had no tool to correct or expand a display name (e.g. from "Jodi" to "Jodi Arnott").
-- **LEAVE FOR CEO triage classification** — the observation-mode preamble now defines a fifth category for personal, sensitive, or judgment-dependent email where the CEO will read and handle it themselves. No archive, no draft, no notification. The "when in doubt" default has shifted from URGENT to LEAVE FOR CEO to stop over-notifying. Mirrored in `agents/coordinator.yaml`.
-- **CEO inbox read skills** (`email-list`, `email-get`, `email-draft-save`): account-aware email skills that route through `OutboundGateway`'s named-client map. `email-list` lists messages with folder/sender/search filters; `email-get` fetches the full body of a single message; `email-draft-save` saves a draft (with blocked-contact check) for CEO review. `ListMessagesOptions` extended with `folders`, `from`, `subject`, `searchQueryNative` filters. Coordinator pinned and prompted on all three skills. Closes CEO inbox Tasks 7–9.
+- **CEO inbox read skills** (`email-list`, `email-get`, `email-draft-save`) and a fifth triage category `LEAVE FOR CEO` for personal/sensitive email the CEO handles themselves
+- **`contact-rename` skill** — update a contact's display name
 
 ### Changed
 
-- **KG Explorer UX overhaul** — knowledge graph visualization is now explorable by click. Graph auto-loads the 20 most recently active nodes on first entry (no more blank canvas). Single-tap a node expands its neighbors in-place; double-tap zooms to fit the local neighborhood. Node size and edge width are now proportional to confidence; fast-decay nodes fade visually. Labels move below nodes with dark outlines for readability. Fact nodes are rendered as small indicators that only show labels when selected. Layout switched from `cose` to `fcose` for better separation and less overlap. Adds `cytoscape-fcose`, `cose-base`, and `layout-base` as runtime dependencies.
-- **Observation mode triage protocol moved to system prompt** — the ~40-line triage protocol (URGENT / ACTIONABLE / NEEDS DRAFT / LEAVE FOR CEO / NOISE classifications) has been moved from per-message user content into `agents/coordinator.yaml`'s system prompt. Only the `[OBSERVATION MODE]` marker and per-message identifiers (Message ID, Account) remain in user content. This makes the static protocol cacheable once prompt caching is active (issue #321, follows #320).
-- **Prompt caching** — `AnthropicProvider` now passes the system prompt as a cached `TextBlockParam` and marks the last tool definition with `cache_control: ephemeral`, reducing effective input token cost by 60-80% for repeat calls within the 5-minute TTL (issue #320).
-- **Default Anthropic model** bumped from `claude-sonnet-4-20250514` to `claude-sonnet-4-6` across agent configs, runtime fallback, tests, and docs. The old model reaches EOL on 2026-06-15.
-- **Observation-mode coordinator response is audit-only** — the dispatcher no longer converts the coordinator's final response into an `outbound.message` when the originating inbound was observation-mode. The preamble tells the coordinator its final text is for audit/logging only; outbound actions happen via explicit skill calls (email-archive, notify channels, email-draft-save for drafts). The `taskRouting` map gained an `observationMode` flag so `handleAgentResponse` can suppress the auto-reply path.
+- **KG Explorer** — click-to-explore: auto-loads 20 recent nodes, tap to expand neighbors in-place, node/edge size proportional to confidence, fcose layout. Adds `cytoscape-fcose`.
+- **Prompt caching** — system prompt and last tool definition marked cacheable; 60–80% input token reduction on repeat calls within the 5-minute TTL
+- **Observation mode** — triage protocol moved to system prompt (cacheable); coordinator response is now audit-only (outbound actions via explicit skill calls); default model bumped to `claude-sonnet-4-6`
 
 ### Fixed
 
-- **Coordinator now uses its own email and phone for tool calls** — `AgentConfig` gains a `channelAccounts` field (email, phone) sourced from `NYLAS_SELF_EMAIL` and `SIGNAL_PHONE_NUMBER`. The coordinator runtime appends a "Your Contact Details" block to the system prompt each turn, giving the LLM concrete values for its own accounts. Prevents the coordinator from guessing or falling back to the CEO's email when MCP tools (e.g. `workspace-mcp`'s `user_google_email`) ask for an account identifier.
-- **Outbound trust propagation** — replies to Curia-initiated emails no longer get held when the recipient's contact is still `provisional` or unknown (issue #330). Two complementary fixes: (A) the outbound gateway now promotes the recipient contact to `confirmed` (or creates one if none exists) after every successful send — the act of sending is the implicit trust confirmation; (B) the dispatcher checks the `audit_log` for a prior `outbound.message` in the same thread addressed to the same sender before holding a provisional/unknown message, and upgrades the contact to `confirmed` when found. The recipient filter on the thread check prevents the forwarding attack: a reply forwarded into the thread by a third party does not bypass the hold.
-- **`held-messages-process` idempotent identity link** — when `contact-merge` links a sender's channel identity before `held-messages-process` runs (e.g. the CEO merges contacts mid-conversation), the skill now treats the duplicate-key error as a no-op if the identity already belongs to the target contact, and proceeds to `markProcessed`. Previously both calls failed with a unique constraint violation, leaving the held message in `pending` status indefinitely and triggering a false "Held Messages Pending Your Review" alert from the scheduled scanner.
-- **research-analyst context flooding** — the research-analyst specialist now has `web-search` (Tavily) in its pinned skills and its system prompt instructs it to prefer search for broad discovery and limit `web-fetch` to at most 3–4 targeted follow-up fetches. Previously, having only `web-fetch` caused it to accumulate 50 KB/page of raw HTML until the context window was exhausted, stalling the coordinator. Closes #329.
-- **Specialist error response surfaces as failure** — `sendErrorResponse` in the runtime now sets `isError: true` on the published `agent.response`. The delegate skill checks this flag and returns `{ success: false }` so the coordinator can handle it explicitly, instead of forwarding the generic fallback message as if it were a real research result. **Public API note:** `AgentResponsePayload` in `src/bus/events.ts` gains an optional `isError?: boolean` field.
-- **Scheduler never completes job runs** — `pendingJobs.set()` was called after `bus.publish()` in `fireJob()`, but `bus.publish()` awaits all handlers synchronously. The agent would finish and emit `agent.response` before the tracking entry existed, so `handleCompletion` silently dropped every completion. The watchdog then reaped every run as timed-out, accumulating `consecutive_failures` until auto-suspend. All cron jobs were affected. Fix: set the tracking entry before publishing the task event.
-- **Dangling explanatory drafts on NOISE triage** — the coordinator's short final summary (e.g. "The email has been archived. This was a promotional newsletter…") was being wrapped in `outbound.message` by the dispatcher and saved as a draft reply by the email adapter under `draft_gate` policy. PR #304's prompt-only fix targeted `email-reply` (which wasn't being called); the actual mechanism was the dispatch-layer auto-reply of every `agent.response`. Root cause now fixed at the dispatch layer; the preamble's redundant "Do NOT call email-reply" guidance has been trimmed.
-- **Calendar ownership** — `calendar-register` now requires an explicit `contact_id`; the previous default to `ctx.caller?.contactId` caused Curia's own calendar to be registered under the CEO's contact during a CEO conversation (incident `kg-web-a7717246-1d7a-411c-9129-b6feb54bfc22`)
-- **Calendar disambiguation** — coordinator prompt now includes calendar disambiguation rules (parallel to inbox disambiguation) and a calendar exception in the Account Identity section, ensuring events are created on the CEO's calendar by default when scheduling on their behalf
-- **Calendar smoke test** — added `use-ceo-calendar` expectation to `calendar-create-event` smoke test to catch regressions
+- **Scheduler job completion** — tracking entry was set after async publish, so every run was reaped as timed-out; all cron jobs were accumulating failures and auto-suspending
+- **Outbound trust propagation** — replies to Curia-initiated emails no longer held; successful sends promote recipient to `confirmed`; forwarding attack closed (issue #330)
+- **Calendar ownership and disambiguation** — `calendar-register` now requires explicit `contact_id`; coordinator defaults to CEO's calendar when scheduling on their behalf
+- **Research analyst and held messages** — research-analyst caps `web-fetch` to 3–4 targeted fetches; duplicate identity links no longer stall held messages in `pending`
 
 ---
 
@@ -387,7 +382,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Bootstrap orchestrator** — `src/index.ts` wires all layers in dependency order
 - Architecture specs 00–08, contributor docs (CONTRIBUTING.md, CODE_OF_CONDUCT.md, SECURITY.md)
 
-[Unreleased]: https://github.com/josephfung/curia/compare/v0.18.1...HEAD
+[Unreleased]: https://github.com/josephfung/curia/compare/v0.19.7...HEAD
+[0.19.7]: https://github.com/josephfung/curia/compare/v0.18.1...v0.19.7
 [0.18.1]: https://github.com/josephfung/curia/compare/v0.18.0...v0.18.1
 [0.18.0]: https://github.com/josephfung/curia/compare/v0.17.0...v0.18.0
 [0.17.0]: https://github.com/josephfung/curia/compare/v0.16.0...v0.17.0
