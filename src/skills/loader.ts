@@ -14,6 +14,23 @@ import type { SkillRegistry } from './registry.js';
 import type { Logger } from '../logger.js';
 
 /**
+ * Fixed allowlist of valid capability names that skills may declare in their manifest.
+ * Each name corresponds to a privileged service on SkillContext.
+ *
+ * This set only changes when a new service type is added to the platform —
+ * not when a new skill is added. Adding a new skill that needs an existing
+ * capability is a skill.json-only change.
+ *
+ * Services NOT in this list (contactService, entityContextAssembler, agentPersona)
+ * are universal — available to every skill without declaration.
+ */
+export const VALID_CAPABILITIES: ReadonlySet<string> = new Set([
+  'bus', 'agentRegistry', 'outboundGateway', 'heldMessages',
+  'schedulerService', 'entityMemory', 'nylasCalendarClient',
+  'autonomyService', 'browserService', 'bullpenService', 'skillSearch',
+]);
+
+/**
  * Load all skills from a directory into the registry.
  *
  * Expects directory structure:
@@ -61,6 +78,20 @@ export async function loadSkillsFromDirectory(
       manifest.inputs ??= {};
       manifest.outputs ??= {};
 
+      // Validate declared capabilities against the fixed allowlist.
+      // Unknown names fail hard at startup — a typo in skill.json is a configuration
+      // error that must surface at boot, not silently produce a skill with wrong privileges.
+      if (manifest.capabilities !== undefined) {
+        for (const cap of manifest.capabilities) {
+          if (!VALID_CAPABILITIES.has(cap)) {
+            throw new Error(
+              `Skill '${manifest.name}' declares unknown capability '${cap}'. ` +
+              `Valid capabilities: ${[...VALID_CAPABILITIES].join(', ')}`,
+            );
+          }
+        }
+      }
+
       // Dynamically import the handler.
       // We look for handler.ts first (for tsx/development) then handler.js (for compiled).
       const handlerPath = fs.existsSync(path.join(skillDir, 'handler.ts'))
@@ -89,6 +120,13 @@ export async function loadSkillsFromDirectory(
         }
         handler = new HandlerClass();
       }
+
+      // Freeze the manifest to prevent runtime mutation — a handler cannot
+      // escalate its own privileges by pushing to capabilities[] or reassigning
+      // any manifest field. Object.freeze is shallow, so we freeze the capabilities
+      // array separately before freezing the manifest itself.
+      if (manifest.capabilities) Object.freeze(manifest.capabilities);
+      Object.freeze(manifest);
 
       registry.register(manifest, handler);
       logger.info({ skill: manifest.name, version: manifest.version }, 'Skill loaded');
