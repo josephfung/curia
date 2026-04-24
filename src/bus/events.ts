@@ -361,8 +361,15 @@ interface HumanDecisionPayload {
 }
 
 
-// Observation-mode triage classification categories. Shared type so downstream consumers
-// (#299 triage routing, monitoring) use the same vocabulary as the event payload.
+/**
+ * Observation-mode triage classification categories. Shared type so downstream consumers
+ * (#299 triage routing, monitoring) use the same vocabulary as the event payload.
+ *
+ * Token forms use spaces (e.g. `'NEEDS DRAFT'`, `'LEAVE FOR CEO'`) — these match the
+ * exact labels the coordinator emits and the dispatcher regex extracts. Log messages
+ * and prose may use underscored shorthand (`LEAVE_FOR_CEO`) for readability, but
+ * string-literal comparisons must use the spaced form defined here.
+ */
 export type TriageClassification = 'URGENT' | 'ACTIONABLE' | 'NEEDS DRAFT' | 'LEAVE FOR CEO' | 'NOISE' | 'unknown';
 
 // ObservationTriageCompletedPayload — emitted by the dispatch layer at the end of every
