@@ -33,8 +33,15 @@ export class ContactRenameHandler implements SkillHandler {
       };
     }
 
+    // Reject blank or whitespace-only names — a whitespace display name would break
+    // contact lookup and appear as an invisible entry in the CEO's contact list.
+    const trimmedName = display_name.trim();
+    if (trimmedName.length === 0) {
+      return { success: false, error: 'display_name must not be blank or whitespace-only' };
+    }
+
     // Input length limit — prevent oversized payloads reaching the DB
-    if (display_name.length > 200) {
+    if (trimmedName.length > 200) {
       return { success: false, error: 'Display name must be 200 characters or fewer' };
     }
 
@@ -46,10 +53,22 @@ export class ContactRenameHandler implements SkillHandler {
       };
     }
 
-    ctx.log.info({ contact_id, display_name }, 'Renaming contact');
+    // Pre-check contact existence so we can return a structured not-found response
+    // without relying on error-message string matching to distinguish not-found from
+    // unexpected errors (per project convention: use structured checks, not error text).
+    const existing = await ctx.contactService.getContact(contact_id);
+    if (!existing) {
+      ctx.log.warn({ contact_id }, 'Contact not found during rename — UUID may be stale or incorrect');
+      return {
+        success: false,
+        error: `No contact exists with id ${contact_id}. Use contact-lookup to verify the UUID, or contact-create to create a new contact.`,
+      };
+    }
+
+    ctx.log.info({ contact_id, display_name: trimmedName }, 'Renaming contact');
 
     try {
-      const updated = await ctx.contactService.updateDisplayName(contact_id, display_name);
+      const updated = await ctx.contactService.updateDisplayName(contact_id, trimmedName);
 
       // Log both the input ID and the service-returned ID so any discrepancy is visible
       ctx.log.info(
@@ -66,17 +85,8 @@ export class ContactRenameHandler implements SkillHandler {
         },
       };
     } catch (err) {
-      // ContactService.updateDisplayName() throws "Contact not found: <id>" as a normal
-      // control-flow case. Surface it as a distinct, actionable error so the
-      // agent knows to re-verify the UUID rather than retrying the same call.
-      if (err instanceof Error && err.message.startsWith('Contact not found:')) {
-        return {
-          success: false,
-          error: `No contact exists with id ${contact_id}. Use contact-lookup to verify the UUID, or contact-create to create a new contact.`,
-        };
-      }
       const message = err instanceof Error ? err.message : String(err);
-      ctx.log.error({ err, contact_id, display_name }, 'Failed to rename contact');
+      ctx.log.error({ err, contact_id, display_name: trimmedName }, 'Failed to rename contact');
       return { success: false, error: `Failed to rename contact: ${message}` };
     }
   }

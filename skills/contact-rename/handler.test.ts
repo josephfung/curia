@@ -52,6 +52,19 @@ describe('ContactRenameHandler', () => {
     expect((result as { success: false; error: string }).error).toMatch(/UUID/);
   });
 
+  it('returns error when display_name is whitespace-only', async () => {
+    const handler = new ContactRenameHandler();
+    const ctx = makeCtx({
+      input: { contact_id: '00000000-0000-0000-0000-000000000001', display_name: '   ' },
+      contactService,
+    });
+
+    const result = await handler.execute(ctx);
+
+    expect(result.success).toBe(false);
+    expect((result as { success: false; error: string }).error).toMatch(/blank/);
+  });
+
   it('returns error when display_name exceeds 200 characters', async () => {
     const handler = new ContactRenameHandler();
     const ctx = makeCtx({
