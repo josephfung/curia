@@ -4,7 +4,6 @@
   "version": "1.0.0",
   "sensitivity": "normal",
   "action_risk": "high",
-  "infrastructure": true,
   "inputs": {
     "calendarId": "string",
     "title": "string",
@@ -22,5 +21,8 @@
   },
   "permissions": [],
   "secrets": [],
-  "timeout": 30000
+  "timeout": 30000,
+  "capabilities": [
+    "nylasCalendarClient"
+  ]
 }

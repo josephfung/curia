@@ -4,7 +4,6 @@
   "version": "1.0.0",
   "sensitivity": "elevated",
   "action_risk": "medium",
-  "infrastructure": true,
   "inputs": {
     "held_message_id": "string",
     "action": "string",
@@ -18,5 +17,9 @@
   },
   "permissions": [],
   "secrets": [],
-  "timeout": 30000
+  "timeout": 30000,
+  "capabilities": [
+    "heldMessages",
+    "bus"
+  ]
 }

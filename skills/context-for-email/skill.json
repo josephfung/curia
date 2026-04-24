@@ -4,7 +4,6 @@
   "version": "1.0.0",
   "sensitivity": "normal",
   "action_risk": "none",
-  "infrastructure": true,
   "inputs": {
     "email_type": "string (meeting-request | reschedule | cancel | doc-request)",
     "recipient_name": "string (the recipient's name — used to look up contact info and meeting link)"
@@ -18,5 +17,8 @@
   },
   "permissions": [],
   "secrets": [],
-  "timeout": 30000
+  "timeout": 30000,
+  "capabilities": [
+    "entityMemory"
+  ]
 }

@@ -4,7 +4,6 @@
   "version": "1.0.0",
   "sensitivity": "normal",
   "action_risk": "none",
-  "infrastructure": true,
   "inputs": {
     "action": "string (generate | update | save | reset)",
     "refinement": "string? (required for update — a natural-language adjustment to the policy)",

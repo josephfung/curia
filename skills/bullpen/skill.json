@@ -4,7 +4,6 @@
   "version": "1.0.0",
   "sensitivity": "normal",
   "action_risk": "low",
-  "infrastructure": true,
   "inputs": {
     "action": "string (one of: 'post', 'reply', 'get_thread', 'close')",
     "topic": "string? (thread topic; required when action is 'post')",
@@ -21,5 +20,9 @@
   },
   "permissions": [],
   "secrets": [],
-  "timeout": 10000
+  "timeout": 10000,
+  "capabilities": [
+    "bus",
+    "bullpenService"
+  ]
 }

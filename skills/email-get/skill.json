@@ -4,7 +4,6 @@
   "version": "1.0.0",
   "sensitivity": "normal",
   "action_risk": "none",
-  "infrastructure": true,
   "inputs": {
     "message_id": "string (Nylas message ID of the email to fetch)",
     "account": "string? (named account to read from, as configured in channel_accounts.email. Defaults to the primary account.)"
@@ -14,5 +13,8 @@
   },
   "permissions": [],
   "secrets": [],
-  "timeout": 15000
+  "timeout": 15000,
+  "capabilities": [
+    "outboundGateway"
+  ]
 }

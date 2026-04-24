@@ -4,7 +4,6 @@
   "version": "1.0.0",
   "sensitivity": "normal",
   "action_risk": "none",
-  "infrastructure": true,
   "inputs": {
     "account": "string? (named account to read from, as configured in channel_accounts.email. Defaults to the primary account.)",
     "folder": "string? (folder to filter by, e.g. 'INBOX', 'SENT', 'DRAFTS'. Defaults to all folders.)",
@@ -20,5 +19,8 @@
   },
   "permissions": [],
   "secrets": [],
-  "timeout": 20000
+  "timeout": 20000,
+  "capabilities": [
+    "outboundGateway"
+  ]
 }

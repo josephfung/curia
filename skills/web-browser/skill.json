@@ -19,7 +19,12 @@
     "url": "string",
     "screenshot_base64": "string?"
   },
-  "permissions": ["network:https"],
+  "permissions": [
+    "network:https"
+  ],
   "secrets": [],
-  "timeout": 30000
+  "timeout": 30000,
+  "capabilities": [
+    "browserService"
+  ]
 }

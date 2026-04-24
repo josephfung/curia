@@ -4,7 +4,6 @@
   "version": "1.0.0",
   "sensitivity": "elevated",
   "action_risk": "low",
-  "infrastructure": true,
   "inputs": {
     "task": "string",
     "cron_expr": "string?",
@@ -14,8 +13,14 @@
     "error_budget": "object?",
     "timezone": "string? (IANA timezone name, e.g. America/Toronto — overrides Curia's default timezone for this job's cron schedule)"
   },
-  "outputs": { "jobId": "string", "agentTaskId": "string?" },
+  "outputs": {
+    "jobId": "string",
+    "agentTaskId": "string?"
+  },
   "permissions": [],
   "secrets": [],
-  "timeout": 15000
+  "timeout": 15000,
+  "capabilities": [
+    "schedulerService"
+  ]
 }

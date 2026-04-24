@@ -4,7 +4,6 @@
   "version": "1.0.0",
   "sensitivity": "normal",
   "action_risk": "none",
-  "infrastructure": true,
   "inputs": {
     "query": "string",
     "by": "string"

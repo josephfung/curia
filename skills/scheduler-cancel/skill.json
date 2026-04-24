@@ -4,10 +4,16 @@
   "version": "1.0.0",
   "sensitivity": "elevated",
   "action_risk": "low",
-  "infrastructure": true,
-  "inputs": { "job_id": "string" },
-  "outputs": { "cancelled": "boolean" },
+  "inputs": {
+    "job_id": "string"
+  },
+  "outputs": {
+    "cancelled": "boolean"
+  },
   "permissions": [],
   "secrets": [],
-  "timeout": 15000
+  "timeout": 15000,
+  "capabilities": [
+    "schedulerService"
+  ]
 }

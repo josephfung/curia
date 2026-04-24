@@ -4,7 +4,6 @@
   "version": "1.0.0",
   "sensitivity": "normal",
   "action_risk": "low",
-  "infrastructure": true,
   "inputs": {
     "text": "string (the message or turn text to extract relationships from)",
     "source": "string (provenance string, e.g. 'agent:coordinator/task:abc123/channel:cli')"
@@ -15,6 +14,11 @@
     "skipped": "boolean (true if the classifier gate determined no relationships were present)"
   },
   "permissions": [],
-  "secrets": ["ANTHROPIC_API_KEY"],
-  "timeout": 15000
+  "secrets": [
+    "ANTHROPIC_API_KEY"
+  ],
+  "timeout": 15000,
+  "capabilities": [
+    "entityMemory"
+  ]
 }

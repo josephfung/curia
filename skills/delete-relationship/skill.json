@@ -4,7 +4,6 @@
   "version": "1.0.0",
   "sensitivity": "normal",
   "action_risk": "low",
-  "infrastructure": true,
   "inputs": {
     "subject": "string (name or label of the source entity, e.g. 'Jane Doe')",
     "predicate": "string (the edge type to delete, e.g. 'spouse' or 'reports_to'. Must be a known edge type.)",
@@ -19,5 +18,8 @@
   },
   "permissions": [],
   "secrets": [],
-  "timeout": 10000
+  "timeout": 10000,
+  "capabilities": [
+    "entityMemory"
+  ]
 }

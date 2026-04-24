@@ -4,7 +4,6 @@
   "version": "1.0.0",
   "sensitivity": "normal",
   "action_risk": "none",
-  "infrastructure": true,
   "inputs": {
     "action": "string (store | retrieve)",
     "person_name": "string? (required for store, optional for retrieve — filter by person name)",
@@ -18,5 +17,8 @@
   },
   "permissions": [],
   "secrets": [],
-  "timeout": 30000
+  "timeout": 30000,
+  "capabilities": [
+    "entityMemory"
+  ]
 }

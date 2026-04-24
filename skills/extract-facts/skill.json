@@ -4,7 +4,6 @@
   "version": "1.0.0",
   "sensitivity": "normal",
   "action_risk": "low",
-  "infrastructure": true,
   "inputs": {
     "text": "string (the message or turn text to extract facts from)",
     "source": "string (provenance string, e.g. 'system:checkpoint/conversation:abc/agent:coordinator/channel:cli')"
@@ -15,6 +14,11 @@
     "failed": "number (facts that could not be persisted due to errors)"
   },
   "permissions": [],
-  "secrets": ["ANTHROPIC_API_KEY"],
-  "timeout": 15000
+  "secrets": [
+    "ANTHROPIC_API_KEY"
+  ],
+  "timeout": 15000,
+  "capabilities": [
+    "entityMemory"
+  ]
 }

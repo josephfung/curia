@@ -4,7 +4,6 @@
   "version": "1.0.0",
   "sensitivity": "normal",
   "action_risk": "none",
-  "infrastructure": true,
   "inputs": {
     "calendarIds": "string[] (list of calendar IDs to check for conflicts)",
     "proposedStart": "timestamp (start of proposed slot)",
@@ -16,5 +15,8 @@
   },
   "permissions": [],
   "secrets": [],
-  "timeout": 15000
+  "timeout": 15000,
+  "capabilities": [
+    "nylasCalendarClient"
+  ]
 }

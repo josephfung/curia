@@ -4,7 +4,6 @@
   "version": "1.0.0",
   "sensitivity": "elevated",
   "action_risk": "low",
-  "infrastructure": true,
   "inputs": {
     "primary_contact_id": "string",
     "secondary_contact_id": "string",
