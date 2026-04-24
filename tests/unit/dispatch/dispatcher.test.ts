@@ -1167,6 +1167,7 @@ describe('Dispatcher thread-originated trust bypass', () => {
   function makeContactService(overrides?: Partial<ContactService>): ContactService {
     return {
       setStatus: vi.fn().mockResolvedValue(undefined),
+      setTrustLevel: vi.fn().mockResolvedValue(undefined),
       createContact: vi.fn().mockResolvedValue({ id: 'new-contact-id' }),
       linkIdentity: vi.fn().mockResolvedValue(undefined),
       ...overrides,
@@ -1189,9 +1190,8 @@ describe('Dispatcher thread-originated trust bypass', () => {
       heldMessages,
       channelPolicies: { email: { trust: 'low', unknownSender: 'hold_and_notify' } },
       pool: pool as unknown as DbPool,
-      // Disable the trust-score floor so it doesn't re-hold the message after the
-      // thread-trust bypass — the floor is a separate protection tested elsewhere.
-      trustScoreFloor: 0,
+      // No trustScoreFloor override — the threadTrusted flag now bypasses the floor for
+      // thread-trusted messages, so this test exercises production behaviour.
     });
     dispatcher.register();
 
@@ -1210,8 +1210,9 @@ describe('Dispatcher thread-originated trust bypass', () => {
     // Must route to coordinator, not hold
     expect(held).toHaveLength(0);
     expect(tasks).toHaveLength(1);
-    // Must promote the provisional contact
+    // Must promote the provisional contact and set trust level high
     expect(contactService.setStatus).toHaveBeenCalledWith('test-contact-id', 'confirmed');
+    expect(contactService.setTrustLevel).toHaveBeenCalledWith('test-contact-id', 'high');
   });
 
   it('holds provisional sender when no thread trust detected', async () => {
@@ -1230,7 +1231,6 @@ describe('Dispatcher thread-originated trust bypass', () => {
       heldMessages,
       channelPolicies: { email: { trust: 'low', unknownSender: 'hold_and_notify' } },
       pool: pool as unknown as DbPool,
-      trustScoreFloor: 0,
     });
     dispatcher.register();
 
@@ -1265,7 +1265,7 @@ describe('Dispatcher thread-originated trust bypass', () => {
       heldMessages,
       channelPolicies: { email: { trust: 'low', unknownSender: 'hold_and_notify' } },
       pool: pool as unknown as DbPool,
-      trustScoreFloor: 0,
+      // No trustScoreFloor override — threadTrusted flag bypasses it for this message.
     });
     dispatcher.register();
 
@@ -1283,7 +1283,7 @@ describe('Dispatcher thread-originated trust bypass', () => {
 
     expect(held).toHaveLength(0);
     expect(tasks).toHaveLength(1);
-    // Creates a confirmed contact for the unknown sender
+    // Creates a confirmed contact for the unknown sender and sets trust level high
     expect(contactService.createContact).toHaveBeenCalledWith(expect.objectContaining({
       status: 'confirmed',
       source: 'ceo_stated',
@@ -1293,6 +1293,7 @@ describe('Dispatcher thread-originated trust bypass', () => {
       channelIdentifier: 'board@company.com',
       source: 'ceo_stated',
     }));
+    expect(contactService.setTrustLevel).toHaveBeenCalledWith('new-contact-id', 'high');
   });
 
   it('holds provisional sender normally when pool is not configured', async () => {
