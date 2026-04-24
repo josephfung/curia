@@ -105,6 +105,9 @@ describe('AgentRuntime', () => {
 
     expect(responses).toHaveLength(1);
     expect(responses[0]?.payload.content).toContain('unable to process');
+    // Error responses must be flagged so consumers (e.g. delegate skill) know not
+    // to treat the fallback message as a real result.
+    expect(responses[0]?.payload.isError).toBe(true);
   });
 
   it('includes conversation history in LLM context', async () => {

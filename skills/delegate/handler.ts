@@ -123,7 +123,14 @@ export class DelegateHandler implements SkillHandler {
           if (responseEvent.parentEventId === taskEvent.id) {
             settled = true;
             clearTimeout(timeoutHandle);
-            resolve(responseEvent.payload.content);
+            // isError means the specialist hit an unrecoverable error (context overflow,
+            // LLM failure, budget exhaustion). Reject so the catch block returns
+            // { success: false } instead of forwarding the fallback message as a result.
+            if (responseEvent.payload.isError) {
+              reject(new Error(`Specialist '${agent}' encountered an error and could not complete the task`));
+            } else {
+              resolve(responseEvent.payload.content);
+            }
           }
         } catch (err) {
           // Fail fast on malformed events rather than silently hanging until timeout

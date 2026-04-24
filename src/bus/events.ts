@@ -62,6 +62,10 @@ interface AgentResponsePayload {
   agentId: string;
   conversationId: string;
   content: string;
+  // Set to true when the agent encountered an unrecoverable error and the content
+  // is a generic fallback message rather than a real response. Consumers (e.g. the
+  // delegate skill) should treat this as a failure rather than a usable result.
+  isError?: boolean;
 }
 
 interface OutboundMessagePayload {
