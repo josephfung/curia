@@ -127,6 +127,39 @@ describe('DelegateHandler', () => {
     }
   });
 
+  it('returns failure when specialist responds with isError: true', async () => {
+    const agentRegistry = new AgentRegistry();
+    agentRegistry.register('coordinator', { role: 'coordinator', description: 'Main' });
+    agentRegistry.register('research-analyst', { role: 'specialist', description: 'Research' });
+    const bus = new EventBus(logger);
+
+    // Simulate the runtime's sendErrorResponse path — isError: true means the specialist
+    // hit an unrecoverable failure (context overflow, budget exhaustion, etc.)
+    bus.subscribe('agent.task', 'agent', async (event) => {
+      if (event.type === 'agent.task' && event.payload.agentId === 'research-analyst') {
+        const { createAgentResponse } = await import('../../../src/bus/events.js');
+        const response = createAgentResponse({
+          agentId: 'research-analyst',
+          conversationId: event.payload.conversationId,
+          content: "I'm sorry, I was unable to process that request. Please try again.",
+          isError: true,
+          parentEventId: event.id,
+        });
+        await bus.publish('agent', response);
+      }
+    });
+
+    const result = await handler.execute(makeCtx(
+      { agent: 'research-analyst', task: 'Research AI training costs', conversation_id: 'conv-2' },
+      { bus, agentRegistry },
+    ));
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error).toContain('error');
+    }
+  });
+
   it('delegates to specialist and returns its response', async () => {
     const agentRegistry = new AgentRegistry();
     agentRegistry.register('coordinator', { role: 'coordinator', description: 'Main' });

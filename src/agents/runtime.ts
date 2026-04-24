@@ -114,6 +114,9 @@ export class AgentRuntime {
           agentId: this.config.agentId,
           conversationId: taskEvent.payload.conversationId,
           content: "I'm sorry, an unexpected error occurred while processing your request.",
+          // Mark as an error response (same as sendErrorResponse) so delegate and other
+          // consumers don't treat this fallback message as a real agent result.
+          isError: true,
           parentEventId: taskEvent.id,
         });
         await this.config.bus.publish('agent', responseEvent);
@@ -816,6 +819,9 @@ export class AgentRuntime {
       agentId,
       conversationId,
       content: "I'm sorry, I was unable to process that request. Please try again.",
+      // Mark as an error response so consumers (e.g. the delegate skill) can distinguish
+      // a failure from a real specialist result and surface it as { success: false }.
+      isError: true,
       parentEventId: taskEvent.id,
     });
     await bus.publish('agent', responseEvent);
