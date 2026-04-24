@@ -25,6 +25,20 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ---
 
+## [0.19.8] — 2026-04-24
+
+### Security
+
+- **Per-capability skill registry** — replaces the all-or-nothing `infrastructure: true` manifest flag with per-capability `"capabilities": [...]` declarations. Skills now declare only the privileged services they actually need (e.g. `["outboundGateway"]`), eliminating the blast-radius risk where any infrastructure skill got bus, agent registry, calendar, memory, and scheduler access all at once. The loader validates names against a fixed allowlist at startup, rejects unknown capability names hard (crash, not silent skip), and freezes manifests after loading so handlers cannot self-escalate at runtime. Closes #119.
+
+### Changed
+
+- **`skill.json` schema** — `infrastructure: boolean` removed; `capabilities: string[]` added. **Breaking change to public API surface.** Skills that previously declared `infrastructure: true` now declare the specific capabilities they need (or nothing, if they only used universal services). See `docs/dev/adding-a-skill.md` for the full capabilities reference.
+- **`SkillManifest` type** — `infrastructure?: boolean` replaced by `capabilities?: string[]` in `src/skills/types.ts`.
+- **ExecutionLayer** — `if (manifest.infrastructure)` block and three name-gated conditionals replaced by a single capabilities loop with fail-closed behavior.
+
+---
+
 ## [0.19.7] — 2026-04-24 — "The Reading Room"
 
 ### Added
