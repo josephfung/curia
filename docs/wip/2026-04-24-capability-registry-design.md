@@ -120,8 +120,10 @@ Plus the three currently name-gated in separate conditionals:
 
 ## Per-Skill Capability Audit
 
-Capabilities inferred from reading each handler. Skills not listed here need no
-privileged services (they only use universal services or no services at all).
+Verified by grepping every handler.ts for `ctx.<service>` references. Skills not
+listed here need no privileged services — they only use universal services
+(`contactService`, `entityContextAssembler`, `agentPersona`) or no services at
+all.
 
 ### outboundGateway
 
@@ -140,7 +142,7 @@ privileged services (they only use universal services or no services at all).
 | Skill | Capabilities |
 |---|---|
 | `held-messages-list` | `heldMessages` |
-| `held-messages-process` | `heldMessages`, `outboundGateway` |
+| `held-messages-process` | `heldMessages`, `bus` |
 
 ### schedulerService
 
@@ -162,7 +164,6 @@ privileged services (they only use universal services or no services at all).
 | `calendar-delete-event` | `nylasCalendarClient` |
 | `calendar-check-conflicts` | `nylasCalendarClient` |
 | `calendar-find-free-time` | `nylasCalendarClient` |
-| `calendar-register` | `nylasCalendarClient`, `entityMemory` |
 
 ### entityMemory
 
@@ -173,30 +174,10 @@ privileged services (they only use universal services or no services at all).
 | `delete-relationship` | `entityMemory` |
 | `extract-facts` | `entityMemory` |
 | `context-for-email` | `entityMemory` |
-| `entity-context` | `entityMemory` |
 | `knowledge-meeting-links` | `entityMemory` |
 | `knowledge-loyalty-programs` | `entityMemory` |
 | `knowledge-travel-preferences` | `entityMemory` |
 | `knowledge-company-overview` | `entityMemory` |
-| `contact-create` | `entityMemory` |
-| `contact-list` | `entityMemory` |
-| `contact-lookup` | `entityMemory` |
-| `contact-merge` | `entityMemory` |
-| `contact-find-duplicates` | `entityMemory` |
-| `contact-set-role` | `entityMemory` |
-| `contact-link-identity` | `entityMemory` |
-| `contact-unlink-identity` | `entityMemory` |
-| `contact-grant-permission` | `entityMemory` |
-| `contact-revoke-permission` | `entityMemory` |
-
-### entityMemory + schedulerService
-
-| Skill | Capabilities |
-|---|---|
-| `template-meeting-request` | `entityMemory`, `schedulerService` |
-| `template-cancel` | `entityMemory`, `schedulerService` |
-| `template-reschedule` | `entityMemory`, `schedulerService` |
-| `template-doc-request` | `entityMemory` |
 
 ### bus / agentRegistry / bullpenService
 
@@ -214,21 +195,30 @@ privileged services (they only use universal services or no services at all).
 | `web-browser` | `browserService` |
 | `skill-registry` | `skillSearch` |
 
-### No capabilities needed
+### No capabilities needed (32 skills)
 
 These skills currently have `infrastructure: true` but only use universal
-services (`contactService`). They lose the flag and gain no capabilities entry:
+services. They lose the flag and gain no capabilities entry:
 
-- `contact-set-trust`
-- `contact-rename`
+**Contact skills** (all use only `contactService`):
+`contact-create`, `contact-list`, `contact-lookup`, `contact-merge`,
+`contact-find-duplicates`, `contact-set-role`, `contact-link-identity`,
+`contact-unlink-identity`, `contact-grant-permission`, `contact-revoke-permission`,
+`contact-set-trust`, `contact-rename`
+
+**Template skills** (all use only `agentPersona`):
+`template-meeting-request`, `template-cancel`, `template-reschedule`,
+`template-doc-request`
+
+**Other** (use only universal services):
+`entity-context` (uses `entityContextAssembler`),
+`calendar-register` (uses `contactService`)
 
 ## Implementation notes
 
-**Verify each handler before finalising its capabilities.** The audit above was
-inferred from handler code reading. Some skills — especially contact and
-template skills — may access more services than identified. Under-declaring is a
-runtime bug (skill silently loses access); over-declaring is a security issue.
-Read each handler at implementation time to confirm.
+**The audit above is verified.** Every handler.ts was grepped for privileged
+service references (`ctx.<service>`). The results are definitive — not inferred
+from names.
 
 **`entityContextAssembler` stays universal.** It is a read-only DB pipeline
 injected unconditionally (execution.ts lines 357-363). The issue's original
@@ -301,8 +291,10 @@ All 50 skill.json files are updated atomically in the same PR:
 - Remove `"infrastructure": true`
 - Add `"capabilities": [...]` with the per-skill list from the audit above
 
-Two skills (`contact-set-trust`, `contact-rename`) lose `infrastructure: true`
-and gain nothing — they only use universal services.
+18 skills lose `infrastructure: true` and gain no capabilities entry — they
+only use universal services (`contactService`, `entityContextAssembler`,
+`agentPersona`). The remaining 32 get a `capabilities` array with only the
+specific services they actually use.
 
 ## Versioning
 
