@@ -49,10 +49,18 @@ export interface SkillManifest {
   secrets: string[];
   /** Per-invocation timeout in ms. Default 30000. */
   timeout: number;
-  /** If true, this skill receives bus and agent registry access in its context.
-   *  This grants unrestricted bus publish/subscribe including layer impersonation.
-   *  Only for framework-internal skills like 'delegate' — external skills should never set this. */
-  infrastructure?: boolean;
+  /** Declares which privileged SkillContext services this skill needs.
+   *  Only known capability names are accepted — the loader validates against
+   *  a fixed allowlist at startup and rejects unknown names.
+   *  The manifest is frozen after loading — capabilities cannot be mutated at runtime.
+   *
+   *  Valid capabilities: bus, agentRegistry, outboundGateway, heldMessages,
+   *  schedulerService, entityMemory, nylasCalendarClient, autonomyService,
+   *  browserService, bullpenService, skillSearch.
+   *
+   *  Services NOT listed here (contactService, entityContextAssembler, agentPersona)
+   *  are universal — available to every skill without declaration. */
+  capabilities?: string[];
   /** Declares that the execution layer should automatically assemble entity context
    *  before invoking this skill's handler. The assembled EntityContext[] is injected
    *  into ctx.entityContext so the handler doesn't need to call entity-context directly.
@@ -109,23 +117,23 @@ export interface SkillContext {
   secret(name: string): string;
   /** Scoped pino child logger */
   log: Logger;
-  /** Bus access — only available to infrastructure skills (manifest.infrastructure: true) */
+  /** Bus access — available to skills declaring 'bus' in capabilities */
   bus?: import('../bus/bus.js').EventBus;
-  /** Agent registry — only available to infrastructure skills */
+  /** Agent registry — available to skills declaring 'agentRegistry' in capabilities */
   agentRegistry?: import('../agents/agent-registry.js').AgentRegistry;
   /** Contact service — available to all skills for caller-scoped lookups
    *  (e.g., resolving a caller's registered calendars, looking up contacts).
    *  Populated whenever the ExecutionLayer has a contactService instance. */
   contactService?: import('../contacts/contact-service.js').ContactService;
-  /** Outbound gateway — only available to infrastructure skills. All external
-   *  communication (email, future Signal/Telegram) goes through the gateway,
+  /** Outbound gateway — available to skills declaring 'outboundGateway' in capabilities.
+   *  All external communication (email, future Signal/Telegram) goes through the gateway,
    *  which enforces contact blocked checks and content filtering. */
   outboundGateway?: import('./outbound-gateway.js').OutboundGateway;
-  /** Held message service for infrastructure skills that manage held messages */
+  /** Held message service — available to skills declaring 'heldMessages' in capabilities */
   heldMessages?: import('../contacts/held-messages.js').HeldMessageService;
-  /** Scheduler service — only available to infrastructure skills */
+  /** Scheduler service — available to skills declaring 'schedulerService' in capabilities */
   schedulerService?: import('../scheduler/scheduler-service.js').SchedulerService;
-  /** Entity memory (knowledge graph) — only available to infrastructure skills.
+  /** Entity memory (knowledge graph) — available to skills declaring 'entityMemory' in capabilities.
    *  Provides semantic search, entity CRUD, and fact storage for skills that
    *  need to read or write long-term knowledge (templates, preferences, etc.). */
   entityMemory?: import('../memory/entity-memory.js').EntityMemory;
@@ -133,11 +141,11 @@ export interface SkillContext {
    *  coordinator's persona config. Available to all skills (not infrastructure-gated)
    *  so templates can reference the agent's identity without hardcoding it. */
   agentPersona?: AgentPersona;
-  /** Nylas calendar client — only available to infrastructure skills.
+  /** Nylas calendar client — available to skills declaring 'nylasCalendarClient' in capabilities.
    *  Provides CRUD operations on calendar events and free/busy queries
    *  via the Nylas unified API (provider-agnostic). */
   nylasCalendarClient?: import('../channels/calendar/nylas-calendar-client.js').NylasCalendarClient;
-  /** Bullpen service — available to infrastructure skills for inter-agent discussion threads */
+  /** Bullpen service — available to skills declaring 'bullpenService' in capabilities for inter-agent discussion threads */
   bullpenService?: import('../memory/bullpen.js').BullpenService;
   /** ID of the agent invoking this skill — injected by the execution layer */
   agentId?: string;
@@ -158,17 +166,15 @@ export interface SkillContext {
   /** The agent's own contactId — used by entity_enrichment when default is 'agent'.
    *  Seeded at bootstrap and injected by the execution layer. */
   agentContactId?: string;
-  /** Autonomy service — available to infrastructure skills that manage the global
-   *  autonomy score (get-autonomy, set-autonomy). Not available to normal skills. */
+  /** Autonomy service — available to skills declaring 'autonomyService' in capabilities.
+   *  Manages the global autonomy score (get-autonomy, set-autonomy). */
   autonomyService?: import('../autonomy/autonomy-service.js').AutonomyService;
-  /** Browser service — available to all skills (not infrastructure-gated).
+  /** Browser service — available to skills declaring 'browserService' in capabilities.
    *  Provides a warm Playwright Chromium instance with session management.
    *  Skills use this to interact with JS-rendered pages and web forms. */
   browserService?: import('../browser/browser-service.js').BrowserService;
-  /** Skill search — injected only for the skill-registry built-in.
-   *  Searches all registered skills by keyword, excluding skill-registry itself.
-   *  Follows the same name-gated injection pattern as autonomyService and browserService.
-   *  When #119 lands, this will move into the SKILL_CAPABILITIES registry. */
+  /** Skill search — available to skills declaring 'skillSearch' in capabilities.
+   *  Searches all registered skills by keyword, excluding skill-registry itself. */
   skillSearch?: (query: string) => Array<{ name: string; description: string }>;
 }
 
