@@ -79,7 +79,7 @@ The agent runtime maintains a sliding window of the last 10 tool invocations per
 
 A `known_failures` table records tool + error-type combinations that consistently fail across tasks. When an agent is about to invoke a tool that has a known failure pattern, the runtime injects a warning. This prevents different agents from hitting the same broken tool repeatedly.
 
-**For launch:** Per-task pattern detection is implemented. Cross-task learning is stored (the table exists) but not actively used for warnings — it's data collection for future use.
+**Not yet implemented:** Per-task pattern detection (sliding window of last 10 tool invocations) is not yet built — the runtime tracks `consecutiveErrors` against the error budget, but has no sliding-window tool-pattern logic. Cross-task learning (`known_failures` table) is also not yet implemented. Both are planned for a future iteration.
 
 ---
 
