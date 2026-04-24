@@ -167,7 +167,7 @@ Provider-specific errors are mapped to `ErrorType` inside the provider implement
 3. Either re-throw, return a structured error, or publish an error event
 4. Never: empty catch `{}`, `catch(e) { /* ignore */ }`, or `catch(e) { console.log(e) }`
 
-This is enforced by code review convention and a lint rule (`no-empty-catch` + custom rule requiring structured error handling).
+This is enforced by code review convention. A lint rule (`no-empty-catch` + custom rule requiring structured error handling) is planned but not yet implemented.
 
 ---
 
