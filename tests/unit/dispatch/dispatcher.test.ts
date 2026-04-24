@@ -778,6 +778,8 @@ describe('Dispatcher — observation mode preamble', () => {
     // It must NOT be duplicated here in the per-message user content.
     expect(content).not.toContain('TRIAGE');
     expect(content).not.toContain('URGENT');
+    expect(content).not.toContain('ACTIONABLE');
+    expect(content).not.toContain('NEEDS DRAFT');
     expect(content).not.toContain('NOISE');
     expect(content).not.toContain('LEAVE FOR CEO');
     expect(content).not.toContain('audit/logging only');
