@@ -13,10 +13,6 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
-### Changed
-
-- **KG Explorer UX overhaul** — knowledge graph visualization is now explorable by click. Graph auto-loads the 20 most recently active nodes on first entry (no more blank canvas). Single-tap a node expands its neighbors in-place; double-tap zooms to fit the local neighborhood. Node size and edge width are now proportional to confidence; fast-decay nodes fade visually. Labels move below nodes with dark outlines for readability. Fact nodes are rendered as small indicators that only show labels when selected. Layout switched from `cose` to `fcose` for better separation and less overlap. Adds `cytoscape-fcose`, `cose-base`, and `layout-base` as runtime dependencies.
-
 ### Added
 
 - **`contact-rename` skill** — new skill that updates a contact's display name via `ContactService.updateDisplayName()`. Closes the gap where Curia could create contacts and set their role but had no tool to correct or expand a display name (e.g. from "Jodi" to "Jodi Arnott").
@@ -25,6 +21,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
+- **KG Explorer UX overhaul** — knowledge graph visualization is now explorable by click. Graph auto-loads the 20 most recently active nodes on first entry (no more blank canvas). Single-tap a node expands its neighbors in-place; double-tap zooms to fit the local neighborhood. Node size and edge width are now proportional to confidence; fast-decay nodes fade visually. Labels move below nodes with dark outlines for readability. Fact nodes are rendered as small indicators that only show labels when selected. Layout switched from `cose` to `fcose` for better separation and less overlap. Adds `cytoscape-fcose`, `cose-base`, and `layout-base` as runtime dependencies.
 - **Observation mode triage protocol moved to system prompt** — the ~40-line triage protocol (URGENT / ACTIONABLE / NEEDS DRAFT / LEAVE FOR CEO / NOISE classifications) has been moved from per-message user content into `agents/coordinator.yaml`'s system prompt. Only the `[OBSERVATION MODE]` marker and per-message identifiers (Message ID, Account) remain in user content. This makes the static protocol cacheable once prompt caching is active (issue #321, follows #320).
 - **Prompt caching** — `AnthropicProvider` now passes the system prompt as a cached `TextBlockParam` and marks the last tool definition with `cache_control: ephemeral`, reducing effective input token cost by 60-80% for repeat calls within the 5-minute TTL (issue #320).
 - **Default Anthropic model** bumped from `claude-sonnet-4-20250514` to `claude-sonnet-4-6` across agent configs, runtime fallback, tests, and docs. The old model reaches EOL on 2026-06-15.
@@ -32,6 +29,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **Coordinator now uses its own email and phone for tool calls** — `AgentConfig` gains a `channelAccounts` field (email, phone) sourced from `NYLAS_SELF_EMAIL` and `SIGNAL_PHONE_NUMBER`. The coordinator runtime appends a "Your Contact Details" block to the system prompt each turn, giving the LLM concrete values for its own accounts. Prevents the coordinator from guessing or falling back to the CEO's email when MCP tools (e.g. `workspace-mcp`'s `user_google_email`) ask for an account identifier.
 - **Outbound trust propagation** — replies to Curia-initiated emails no longer get held when the recipient's contact is still `provisional` or unknown (issue #330). Two complementary fixes: (A) the outbound gateway now promotes the recipient contact to `confirmed` (or creates one if none exists) after every successful send — the act of sending is the implicit trust confirmation; (B) the dispatcher checks the `audit_log` for a prior `outbound.message` in the same thread addressed to the same sender before holding a provisional/unknown message, and upgrades the contact to `confirmed` when found. The recipient filter on the thread check prevents the forwarding attack: a reply forwarded into the thread by a third party does not bypass the hold.
 - **`held-messages-process` idempotent identity link** — when `contact-merge` links a sender's channel identity before `held-messages-process` runs (e.g. the CEO merges contacts mid-conversation), the skill now treats the duplicate-key error as a no-op if the identity already belongs to the target contact, and proceeds to `markProcessed`. Previously both calls failed with a unique constraint violation, leaving the held message in `pending` status indefinitely and triggering a false "Held Messages Pending Your Review" alert from the scheduled scanner.
 - **research-analyst context flooding** — the research-analyst specialist now has `web-search` (Tavily) in its pinned skills and its system prompt instructs it to prefer search for broad discovery and limit `web-fetch` to at most 3–4 targeted follow-up fetches. Previously, having only `web-fetch` caused it to accumulate 50 KB/page of raw HTML until the context window was exhausted, stalling the coordinator. Closes #329.
