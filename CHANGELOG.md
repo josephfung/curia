@@ -13,6 +13,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Changed
+
+- **KG Explorer UX overhaul** — knowledge graph visualization is now explorable by click. Graph auto-loads the 20 most recently active nodes on first entry (no more blank canvas). Single-tap a node expands its neighbors in-place; double-tap zooms to fit the local neighborhood. Node size and edge width are now proportional to confidence; fast-decay nodes fade visually. Labels move below nodes with dark outlines for readability. Fact nodes are rendered as small indicators that only show labels when selected. Layout switched from `cose` to `fcose` for better separation and less overlap. Adds `cytoscape-fcose`, `cose-base`, and `layout-base` as runtime dependencies.
+
 ### Added
 
 - **LEAVE FOR CEO triage classification** — the observation-mode preamble now defines a fifth category for personal, sensitive, or judgment-dependent email where the CEO will read and handle it themselves. No archive, no draft, no notification. The "when in doubt" default has shifted from URGENT to LEAVE FOR CEO to stop over-notifying. Mirrored in `agents/coordinator.yaml`.
