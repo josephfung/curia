@@ -138,7 +138,7 @@ export interface SkillContext {
    *  need to read or write long-term knowledge (templates, preferences, etc.). */
   entityMemory?: import('../memory/entity-memory.js').EntityMemory;
   /** Agent persona — display name, title, and email signature from the
-   *  coordinator's persona config. Available to all skills (not infrastructure-gated)
+   *  coordinator's persona config. Universal (not capability-gated)
    *  so templates can reference the agent's identity without hardcoding it. */
   agentPersona?: AgentPersona;
   /** Nylas calendar client — available to skills declaring 'nylasCalendarClient' in capabilities.
