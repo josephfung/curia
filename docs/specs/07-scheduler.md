@@ -210,3 +210,27 @@ Four skills available to agents:
 - All job executions are audit-logged (start, success, failure, suspension)
 - The health endpoint includes: number of active jobs, number of suspended jobs, next due job time
 - Suspended jobs generate a user notification via the configured alert channel
+
+---
+
+## Implementation Status
+
+| Item | Status |
+|---|---|
+| `scheduled_jobs` table (cron, one-shot, status, error tracking) | Done |
+| `scheduled_jobs` timezone column (per-job override) | Done |
+| `scheduled_jobs` prior run context columns (`last_run_outcome`, `last_run_summary`, `last_run_context`) | Done |
+| `agent_tasks` table (persistent tasks linked to `scheduled_jobs`) | Done |
+| `SchedulerService` class (job CRUD, shared by loop and skills) | Done |
+| Scheduler loop (30s poll, `FOR UPDATE SKIP LOCKED`, failure tracking) | Done |
+| Declarative schedules from agent YAML config (upserted at startup) | Done |
+| Skill: `scheduler-create` | Done |
+| Skill: `scheduler-list` | Done |
+| Skill: `scheduler-cancel` | Done |
+| Skill: `scheduler-report` (writes `last_run_summary` and `last_run_context`) | Done |
+| HTTP API routes (`POST/GET/PATCH/DELETE /api/jobs`) | Done |
+| Prior run context injection (structured system message prepended to task) | Done |
+| Timezone handling (per-job tz passed to `cron-parser`) | Done |
+| Suspension notifications (via Coordinator as synthetic `agent.task`) | Done |
+| Audit logging (`schedule.fired`, `schedule.suspended` events) | Done |
+| Health endpoint: scheduler stats (active jobs, suspended jobs, next due) | Not Done |
