@@ -95,11 +95,7 @@ describe('loader: capability validation', () => {
   });
 
   // ---------------------------------------------------------------------------
-  // Test 3: Frozen manifest cannot be mutated at runtime
-  // ---------------------------------------------------------------------------
-
-  // ---------------------------------------------------------------------------
-  // Test 3b: Manifest is frozen even when no capabilities are declared
+  // Test 3: Manifest is frozen even when no capabilities are declared
   // ---------------------------------------------------------------------------
 
   it('freezes the manifest even when no capabilities field is present', async () => {
