@@ -19,6 +19,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **`contact-rename` skill** — new skill that updates a contact's display name via `ContactService.updateDisplayName()`. Closes the gap where Curia could create contacts and set their role but had no tool to correct or expand a display name (e.g. from "Jodi" to "Jodi Arnott").
 - **LEAVE FOR CEO triage classification** — the observation-mode preamble now defines a fifth category for personal, sensitive, or judgment-dependent email where the CEO will read and handle it themselves. No archive, no draft, no notification. The "when in doubt" default has shifted from URGENT to LEAVE FOR CEO to stop over-notifying. Mirrored in `agents/coordinator.yaml`.
 - **CEO inbox read skills** (`email-list`, `email-get`, `email-draft-save`): account-aware email skills that route through `OutboundGateway`'s named-client map. `email-list` lists messages with folder/sender/search filters; `email-get` fetches the full body of a single message; `email-draft-save` saves a draft (with blocked-contact check) for CEO review. `ListMessagesOptions` extended with `folders`, `from`, `subject`, `searchQueryNative` filters. Coordinator pinned and prompted on all three skills. Closes CEO inbox Tasks 7–9.
 
