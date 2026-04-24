@@ -168,3 +168,28 @@ Provider-specific errors are mapped to `ErrorType` inside the provider implement
 4. Never: empty catch `{}`, `catch(e) { /* ignore */ }`, or `catch(e) { console.log(e) }`
 
 This is enforced by code review convention and a lint rule (`no-empty-catch` + custom rule requiring structured error handling).
+
+---
+
+## Implementation Status
+
+| Item | Status |
+|---|---|
+| Error budget: `max_turns` tracking per task | Done |
+| Error budget: `max_errors` (consecutive errors) tracking per task | Done |
+| Error budget: `max_cost_usd` tracking per task | Not Done |
+| State continuity: structured `<task_error>` XML injection into conversation | Done |
+| Progress extraction before aborting (summary stored in task record) | Not Done |
+| Per-task error pattern detection (sliding window of last 10 tool invocations) | Not Done |
+| Cross-task `known_failures` table (data collection for future warnings) | Not Done |
+| LLM call failure handling: rate limit retry with backoff | Done |
+| LLM call failure handling: timeout retry, auth error no-retry | Done |
+| LLM call failure handling: server error retry, fallback provider | Done |
+| Skill invocation failure handling (structured results, timeout) | Done |
+| Channel adapter failure handling: reconnection with exponential backoff | Partial — Signal only; email uses polling model |
+| Channel adapter failure handling: outbound message queue (max 100) for disconnected channels | Not Done |
+| Scheduled job failure handling (suspension after 3 failures, user notification) | Done |
+| Database unavailable: fail-fast at startup | Done |
+| Database unavailable: in-operation handling (retry in non-critical paths, bubble up in critical) | Partial — health check detects it; path-specific handling not verified |
+| `AgentError` structured type with `ErrorType` discriminated union | Done |
+| "Never Swallow" rule enforced via ESLint rule (`no-empty-catch`) | Not Done — convention only; rule absent from `eslint.config.js` |

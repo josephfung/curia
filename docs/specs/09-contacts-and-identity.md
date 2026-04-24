@@ -508,3 +508,25 @@ The migration depends on `kg_nodes` existing (for the foreign key), so it must r
 - [ ] Integration tests: reactive identity establishment (unknown sender flow)
 - [ ] Integration tests: external source enrichment (CRM/calendar → contact)
 - [ ] Integration tests: authorization check (role defaults + overrides + trust)
+
+---
+
+## Implementation Status
+
+| Item | Status |
+|---|---|
+| Migration: `contacts`, `contact_channel_identities`, `contact_auth_overrides` tables | Done |
+| Contact resolver in dispatch layer (sender lookup + message enrichment) | Done |
+| Participant extraction from email headers (To/CC → metadata.participants) | Done |
+| Contact management skills (`contact.create`, `contact.link-identity`, `contact.unlink-identity`, `contact.set-role`, `contact.grant-permission`, `contact.revoke-permission`, `contact.lookup`, `contact.list`, `contact.merge`) | Done |
+| Bus event types: `contact.resolved`, `contact.unknown` | Done |
+| Role defaults config (`config/role-defaults.yaml`) | Done |
+| Permissions registry config (`config/permissions.yaml`) | Done |
+| Unknown sender policy config and enforcement | Done |
+| Authorization check in Coordinator context assembly (role → overrides → trust) | Done |
+| Audit logging for identity resolution decisions | Done |
+| Audit logging for authorization decisions (allow/deny/escalate) | Not Done |
+| Integration tests: proactive identity establishment | Not Done |
+| Integration tests: reactive identity establishment (unknown sender flow) | Not Done |
+| Integration tests: external source enrichment (CRM/calendar → contact) | Not Done |
+| Integration tests: authorization check (role defaults + overrides + trust) | Partial — auth overrides tested in `contacts.test.ts`; full three-layer trust gate not covered |
