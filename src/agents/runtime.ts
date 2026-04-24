@@ -440,6 +440,11 @@ export class AgentRuntime {
       ? { contactId: callerSenderCtx.contactId, role: callerSenderCtx.role, channel: taskEvent.payload.channelId }
       : undefined;
 
+    // Accumulate skill names across all tool-use turns so we can report them
+    // on the agent.response event. Consumers (e.g. the dispatcher's observation-mode
+    // triage event) use this to know what the agent actually did during the task.
+    const skillsCalled: string[] = [];
+
     while (response.type === 'tool_use' && executionLayer) {
       // Check turn budget before processing this round of tool calls
       budget.turnsUsed++;
@@ -475,6 +480,7 @@ export class AgentRuntime {
       const toolResultBlocks: ContentBlock[] = [];
       for (const toolCall of response.toolCalls) {
         logger.info({ agentId, skill: toolCall.name, callId: toolCall.id }, 'Invoking skill');
+        skillsCalled.push(toolCall.name);
 
         // For delegate calls from scheduled tasks: inject timeout_ms from the task event's
         // expectedDurationSeconds so the specialist gets an appropriate wait window.
@@ -703,6 +709,7 @@ export class AgentRuntime {
       // isResponseError propagates to consumers (delegate, scheduler) so they can
       // distinguish a fallback message from a real agent result.
       ...(isResponseError && { isError: true }),
+      skillsCalled,
       parentEventId: taskEvent.id,
     });
     await bus.publish('agent', responseEvent);

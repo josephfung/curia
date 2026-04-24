@@ -13,6 +13,16 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Added
+
+- **Observation triage event** (`observation.triage.completed`) — structured bus event emitted after every observation-mode triage task, carrying classification, skills called, and action count for monitoring and alerting (#311)
+- **`AgentResponsePayload.skillsCalled`** — optional field listing skills invoked during a task (public API surface: additive, non-breaking)
+- **`TriageClassification` type** — exported union type for triage classification labels, shared across event consumers
+
+### Changed
+
+- **Dispatcher observation-mode branch** — now emits a `warn`-level log when a non-LEAVE_FOR_CEO classification completes with zero skill calls (defensive check for coordinator stalls)
+
 ---
 
 ## [0.19.7] — 2026-04-24 — "The Reading Room"

@@ -1,6 +1,7 @@
 import type { EventBus } from '../bus/bus.js';
 import type { InboundMessageEvent, AgentResponseEvent, AgentErrorEvent } from '../bus/events.js';
-import { createAgentTask, createOutboundMessage, createContactResolved, createContactUnknown, createMessageHeld, createMessageRejected, createConversationCheckpoint } from '../bus/events.js';
+import { createAgentTask, createOutboundMessage, createContactResolved, createContactUnknown, createMessageHeld, createMessageRejected, createConversationCheckpoint, createObservationTriageCompleted } from '../bus/events.js';
+import type { TriageClassification } from '../bus/events.js';
 import type { Logger } from '../logger.js';
 import type { ContactResolver } from '../contacts/contact-resolver.js';
 import type { ContactService } from '../contacts/contact-service.js';
@@ -754,6 +755,16 @@ export class Dispatcher {
     // the task — not via this auto-reply path. We still schedule a checkpoint
     // below so working memory is persisted.
     if (routing.observationMode) {
+      // Skip triage processing for error-path responses — isError means the runtime
+      // bailed before the coordinator produced a real classification. Emitting a
+      // triage event here would pollute monitoring with runtime failures.
+      if (event.payload.isError) {
+        this.logger.warn(
+          { conversationId: routing.conversationId, agentId: event.payload.agentId },
+          'observation-mode: skipping triage event for error-path response (isError)',
+        );
+        // Fall through to scheduleCheckpoint below.
+      } else {
       // Log at info (not debug) so the suppression is visible in default prod
       // log streams. If observationMode is ever flipped incorrectly (misrouted
       // metadata, config mistake, future refactor), real replies would vanish —
@@ -765,10 +776,12 @@ export class Dispatcher {
       // must not become a sensitive-data sink. We log only a bounded classification
       // token extracted from the response; full rationale stays in the
       // llm_call_archive (which has stricter retention + access controls).
-      const classification =
-        event.payload.content?.match(
+      const classification: TriageClassification =
+        (event.payload.content?.match(
           /\b(URGENT|ACTIONABLE|NEEDS DRAFT|LEAVE FOR CEO|NOISE)\b/,
-        )?.[0] ?? 'unknown';
+        )?.[0] as TriageClassification | undefined) ?? 'unknown';
+      const skillsCalled = event.payload.skillsCalled ?? [];
+
       this.logger.info(
         {
           conversationId: routing.conversationId,
@@ -781,6 +794,31 @@ export class Dispatcher {
         },
         'observation-mode: suppressed auto-reply outbound.message (audit-only response)',
       );
+
+      // Defensive check: zero skill calls for a non-LEAVE_FOR_CEO classification means
+      // the coordinator decided to do nothing when it should have taken action (archive,
+      // notify, draft). Warn so operators can detect prompt regressions or silent failures.
+      if (skillsCalled.length === 0 && classification !== 'LEAVE FOR CEO') {
+        this.logger.warn(
+          { conversationId: routing.conversationId, classification, senderId: routing.senderId },
+          'observation-mode: zero skill calls for non-LEAVE_FOR_CEO classification — possible coordinator stall',
+        );
+      }
+
+      // Emit structured triage completion event for downstream consumers (audit log,
+      // future monitoring/alerting). parentEventId traces back to the agent.task —
+      // safe to assert non-null because routing was found via event.parentEventId.
+      const triageEvent = createObservationTriageCompleted({
+        conversationId: routing.conversationId,
+        accountId: routing.accountId,
+        senderId: routing.senderId,
+        classification,
+        skillsCalled,
+        outboundActions: skillsCalled.length,
+        parentEventId: event.parentEventId!,
+      });
+      await this.bus.publish('dispatch', triageEvent);
+      }
     } else {
       // Publish outbound.message to the bus — the email adapter will pick it up
       // and route it through OutboundGateway (blocked-contact check + content filter).

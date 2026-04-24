@@ -66,6 +66,10 @@ interface AgentResponsePayload {
   // is a generic fallback message rather than a real response. Consumers (e.g. the
   // delegate skill) should treat this as a failure rather than a usable result.
   isError?: boolean;
+  // Names of skills invoked during the task (in call order, may contain duplicates).
+  // Populated by the agent runtime's tool-use loop; absent on error-path responses
+  // where the runtime bailed before completing the loop.
+  skillsCalled?: string[];
 }
 
 interface OutboundMessagePayload {
@@ -357,6 +361,23 @@ interface HumanDecisionPayload {
 }
 
 
+// Observation-mode triage classification categories. Shared type so downstream consumers
+// (#299 triage routing, monitoring) use the same vocabulary as the event payload.
+export type TriageClassification = 'URGENT' | 'ACTIONABLE' | 'NEEDS DRAFT' | 'LEAVE FOR CEO' | 'NOISE' | 'unknown';
+
+// ObservationTriageCompletedPayload — emitted by the dispatch layer at the end of every
+// observation-mode task. Captures the coordinator's classification decision and which
+// skills it invoked, providing an operational signal for monitoring, alerting, and
+// trend analysis without requiring log scraping.
+interface ObservationTriageCompletedPayload {
+  conversationId: string;
+  accountId?: string;
+  senderId: string;
+  classification: TriageClassification;
+  skillsCalled: string[];       // skills invoked during the task (from agent.response)
+  outboundActions: number;      // === skillsCalled.length
+}
+
 // -- Discriminated union --
 // The `type` field is the discriminant; `sourceLayer` records which layer emitted the event.
 
@@ -536,6 +557,15 @@ export interface SecretAccessedEvent extends BaseEvent {
   payload: SecretAccessedPayload;
 }
 
+// ObservationTriageCompletedEvent — published by the dispatch layer after every observation-mode
+// triage task completes. Subscribers (audit logger, future monitoring) use this to detect
+// misclassifications, zero-action failures, and classification drift over time.
+export interface ObservationTriageCompletedEvent extends BaseEvent {
+  type: 'observation.triage.completed';
+  sourceLayer: 'dispatch';
+  payload: ObservationTriageCompletedPayload;
+}
+
 interface ConversationCheckpointPayload {
   conversationId: string;
   agentId: string;
@@ -583,7 +613,8 @@ export type BusEvent =
   | ConversationCheckpointEvent // Checkpoint pipeline: Dispatch fires after inactivity window
   | LlmCallEvent             // Spec 10: LLM API call provenance (model, tokens, cost, hashes)
   | HumanDecisionEvent       // Spec 10: human-in-the-loop decision record (approve/deny/etc.)
-  | SecretAccessedEvent;     // Spec 06: secrets isolation audit trail (name only, never value)
+  | SecretAccessedEvent      // Spec 06: secrets isolation audit trail (name only, never value)
+  | ObservationTriageCompletedEvent; // Observation mode: triage classification + action summary (#311)
 
 // Convenience alias for use in handler maps / switch statements.
 export type EventType = BusEvent['type'];
@@ -979,6 +1010,21 @@ export function createSecretAccessed(
     type: 'secret.accessed',
     sourceLayer: 'execution',
     payload,
+    parentEventId,
+  };
+}
+
+export function createObservationTriageCompleted(
+  // parentEventId is required — triage completion must trace back to the agent.task that triggered it.
+  payload: ObservationTriageCompletedPayload & { parentEventId: string },
+): ObservationTriageCompletedEvent {
+  const { parentEventId, ...rest } = payload;
+  return {
+    id: randomUUID(),
+    timestamp: new Date(),
+    type: 'observation.triage.completed',
+    sourceLayer: 'dispatch',
+    payload: rest,
     parentEventId,
   };
 }
