@@ -130,3 +130,25 @@ Each adapter implements reconnection with exponential backoff:
 - Health endpoint reports adapter status (connected/disconnected/disabled)
 
 **Future note:** Voice/telephony adapters will need a `streaming: true` flag on `OutboundMessage` for real-time TTS. Not included at launch — trivial to add when needed.
+
+---
+
+## Implementation Status
+
+| Item | Status |
+|---|---|
+| `ChannelAdapter` interface (`start`, `stop`, `send`) | Partial — no shared TypeScript interface; each adapter implements the pattern independently |
+| `InboundMessage` type | Done — defined as `InboundMessagePayload` in `src/bus/events.ts` |
+| `OutboundMessage` type | Done — defined as `OutboundMessagePayload` in `src/bus/events.ts` |
+| CLI channel adapter | Done |
+| Email channel adapter (Nylas API, polling, participant extraction) | Done |
+| Signal channel adapter (signal-cli JSON-RPC subprocess) | Done |
+| HTTP API channel adapter (REST + SSE) | Done |
+| Trust levels assigned to each channel (`config/channel-trust.yaml`) | Done |
+| Sender allowlists per channel | Not Done — superseded by contact resolver (spec 09); no allowlist config present |
+| Email validation: SPF/DKIM/DMARC header check | Done |
+| Email validation: Reply-To vs From header consistency check | Not Done |
+| Reconnection with exponential backoff | Partial — Signal has full backoff; email uses polling (no reconnect path needed); HTTP/CLI not applicable |
+| After max retries: publish `channel.disconnected` and stop | Not Done — event type not emitted; Signal adapter stops but does not publish this event |
+| Health endpoint reports adapter status (connected/disconnected/disabled) | Not Done — health endpoint only reports DB, agents, and skills |
+| Outbound message queue for disconnected channels (max 100, delivered on reconnect) | Not Done |

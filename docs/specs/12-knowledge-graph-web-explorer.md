@@ -36,3 +36,15 @@ If `WEB_APP_BOOTSTRAP_SECRET` is missing, the feature is intentionally disabled.
 ## Notes
 
 This design intentionally keeps dependencies minimal and uses the existing Node.js runtime so operational dependencies stay aligned with Curia's current deployment profile.
+
+---
+
+## Implementation Status
+
+| Item | Status |
+|---|---|
+| `GET /kg` — serves the UI shell (Cytoscape.js single-page app) | Done |
+| `GET /api/kg/nodes` — text search with `query`, `type`, `limit` params | Done |
+| `GET /api/kg/graph` — neighborhood traversal with `node_id`, `depth`, `limit` params | Done |
+| `WEB_APP_BOOTSTRAP_SECRET` gating on all data API routes | Done |
+| Cytoscape.js served from `node_modules` (no external CDN dependency) | Done |

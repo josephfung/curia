@@ -307,5 +307,5 @@ curia/
 | Graceful shutdown — SIGTERM/SIGINT handler with ordered cleanup sequence | Done |
 | DB migrations via `node-pg-migrate` — auto-run on startup | Done |
 | Project directory structure — matches spec layout | Done |
-| Config validation against JSON Schema at startup | Not Done |
+| Config validation against JSON Schema at startup | Done |
 | `curia setup` CLI — guided onboarding wizard for credentials and channel setup | Not Done |

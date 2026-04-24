@@ -113,6 +113,26 @@ without cross-channel confirmation.
 
 ---
 
+## Implementation Status
+
+| Item | Status |
+|---|---|
+| `OutboundGateway` class — single chokepoint for all external messages | Done |
+| Blocked contact check in gateway pipeline | Done |
+| Content filter Stage 1 — deterministic rules (system prompt fragments, internal field names, secret patterns, contact data leakage) | Done |
+| Content filter Stage 2 — LLM-as-judge | Not Done — stub (always passes) |
+| `outbound.blocked` audit event published on filter block | Done |
+| Caller verification gate — elevated-skill check in execution layer | Partial — role-based gate exists; cross-channel challenge/response flow not built |
+| Display name sanitization — storage-time sanitization of inbound display names | Done |
+| Display name mismatch check — flag when display name matches known contact but address does not | Not Done |
+| CEO review-and-approve / edit / discard flow for blocked messages | Not Done |
+| Web UI for reviewing `outbound.blocked` events | Not Done |
+| Outbound rate limiting per recipient | Not Done |
+| Blocklist management skills (`outbound-block` / `outbound-unblock`) | Not Done |
+| `outbound.notification` event type (CEO notifications currently bypass the filter) | Not Done |
+
+---
+
 ## What's Not Here Yet
 
 - LLM-as-judge implementation (Stage 2 of content filter)
