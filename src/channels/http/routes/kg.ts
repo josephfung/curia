@@ -1239,6 +1239,10 @@ function createUiHtml(): string {
   </div>
 
   <script src="/assets/cytoscape.min.js"></script>
+  <!-- fcose layout extension: load dependency chain in order before registering the plugin -->
+  <script src="/assets/layout-base.js"></script>
+  <script src="/assets/cose-base.js"></script>
+  <script src="/assets/cytoscape-fcose.js"></script>
   <script>
     // ── State ──────────────────────────────────────────────────────────
     var cy = null;           // Cytoscape instance (lazy-initialised on first login)
@@ -1511,43 +1515,109 @@ function createUiHtml(): string {
     // ── Cytoscape ──────────────────────────────────────────────────────
     function initCytoscape() {
       if (cy) return;
+      // Register the fcose layout extension once, before creating the instance.
+      // cytoscapeFcose is the browser global set by /assets/cytoscape-fcose.js.
+      cytoscape.use(cytoscapeFcose);
       cy = cytoscape({
         container: document.getElementById('cy'),
         elements: [],
         style: [
+          // ── Base node style ──────────────────────────────────────────
           {
             selector: 'node',
             style: {
               label: 'data(label)',
-              'background-color': '#4174C8',  // --chart-2
+              'background-color': '#4174C8',
               color: '#FAFAFA',
-              'text-valign': 'center',
+              // Labels sit below the node circle so they don't compete with
+              // the node's size/colour encoding — biggest readability win.
+              'text-valign': 'bottom',
               'text-halign': 'center',
+              'text-margin-y': 5,
+              'text-outline-color': '#111827',
+              'text-outline-width': 2,
+              'text-wrap': 'ellipsis',
+              'text-max-width': '90px',
               'font-size': 10,
               'font-family': 'Manrope, system-ui, sans-serif',
+              // Base size is overridden per-type below; confidence scales
+              // add on top of the type base via mapData.
               width: 32,
               height: 32,
             },
           },
-          { selector: 'node[type="person"]',       style: { 'background-color': '#478189' } }, // teal accent
-          { selector: 'node[type="organization"]',  style: { 'background-color': '#6BAED6' } }, // --chart-1
-          { selector: 'node[type="project"]',       style: { 'background-color': '#555555' } }, // --accent
+          // ── Type colours ─────────────────────────────────────────────
+          { selector: 'node[type="person"]',       style: { 'background-color': '#478189' } }, // teal
+          { selector: 'node[type="organization"]',  style: { 'background-color': '#6BAED6' } }, // light blue
+          { selector: 'node[type="project"]',       style: { 'background-color': '#7E6BA8' } }, // purple
+          { selector: 'node[type="decision"]',      style: { 'background-color': '#C9874A' } }, // amber
+          { selector: 'node[type="event"]',         style: { 'background-color': '#5E9E6B' } }, // green
+          { selector: 'node[type="concept"]',       style: { 'background-color': '#888888' } }, // mid-grey
+          { selector: 'node[type="fact"]',          style: { 'background-color': '#444444' } }, // dark grey
+          // ── Type-based base sizes (issue 5) ─────────────────────────
+          // Entities that anchor the graph get more canvas real-estate so
+          // their labels are readable and they visually dominate leaf nodes.
+          { selector: 'node[type="person"]',       style: { width: 44, height: 44 } },
+          { selector: 'node[type="organization"]',  style: { width: 44, height: 44 } },
+          { selector: 'node[type="project"]',       style: { width: 36, height: 36 } },
+          { selector: 'node[type="decision"]',      style: { width: 32, height: 32 } },
+          { selector: 'node[type="event"]',         style: { width: 28, height: 28 } },
+          { selector: 'node[type="concept"]',       style: { width: 24, height: 24 } },
+          // Facts are tiny — they're leaf annotations, not key entities.
+          { selector: 'node[type="fact"]',          style: { width: 14, height: 14, 'font-size': 0 } },
+          // Show fact labels when selected (they're too small to show by default).
+          { selector: 'node[type="fact"]:selected', style: { 'font-size': 9 } },
+          // ── Confidence-based opacity (issue 2) ──────────────────────
+          // Stale / low-confidence nodes fade out so the high-signal nodes pop.
+          { selector: 'node[decayClass="fast_decay"]', style: { opacity: 0.45 } },
+          { selector: 'node[decayClass="slow_decay"]', style: { opacity: 0.75 } },
+          // permanent nodes keep full opacity (no rule needed — default is 1).
+          // ── Focal node highlight (issue 4) ───────────────────────────
+          {
+            selector: 'node.focal',
+            style: {
+              'border-width': 3,
+              'border-color': '#FAFAFA',
+              'border-opacity': 0.9,
+            },
+          },
+          // ── Edge style ───────────────────────────────────────────────
           {
             selector: 'edge',
             style: {
-              width: 1.5,
-              'line-color': 'rgba(255,255,255,0.15)',
+              // Width and opacity both reflect confidence so weak relationships
+              // visually recede behind strong ones.
+              width: 'mapData(confidence, 0, 1, 1, 3.5)',
+              opacity: 'mapData(confidence, 0, 1, 0.15, 0.7)',
+              'line-color': 'rgba(255,255,255,0.6)',
               'curve-style': 'bezier',
               'target-arrow-shape': 'triangle',
-              'target-arrow-color': 'rgba(255,255,255,0.15)',
+              'target-arrow-color': 'rgba(255,255,255,0.6)',
               label: 'data(label)',
-              'font-size': 9,
+              'font-size': 8,
               'font-family': 'Manrope, system-ui, sans-serif',
               color: '#ADADAD',
+              'text-outline-color': '#111827',
+              'text-outline-width': 1,
             },
           },
         ],
-        layout: { name: 'cose', animate: false },
+        // Initial layout runs via renderGraph(); this is a fallback only.
+        layout: { name: 'fcose', animate: false },
+      });
+
+      // ── Graph interaction handlers ───────────────────────────────────
+      // Single-tap a node: expand its neighborhood in-place (issue 4).
+      cy.on('tap', 'node', function(evt) {
+        expandNeighborhood(evt.target.id());
+      });
+
+      // Double-tap a node: zoom/pan to fit its immediate neighborhood (issue 4).
+      cy.on('dbltap', 'node', function(evt) {
+        cy.animate(
+          { fit: { eles: evt.target.closedNeighborhood(), padding: 60 } },
+          { duration: 300 }
+        );
       });
     }
 
@@ -1605,7 +1675,12 @@ function createUiHtml(): string {
         });
       }
       if (view === 'kg') {
-        search(); // auto-load all nodes when entering the KG view
+        search(); // populate the sidebar node list
+        // Auto-load a hero graph on first entry so the canvas is never blank.
+        // Only fires when the canvas is empty (fresh load or full reset).
+        if (cy && cy.elements().length === 0) {
+          loadDefaultGraph();
+        }
       }
       if (view === 'contacts') {
         loadContacts();
@@ -2013,19 +2088,91 @@ function createUiHtml(): string {
       });
     }
 
+    // Maps a node row from the API into a Cytoscape element descriptor.
+    // All metadata (confidence, decayClass) is forwarded so styles can encode
+    // it visually via mapData() and class selectors.
+    function nodeToElement(n) {
+      return {
+        data: {
+          id: n.id,
+          label: n.label,
+          type: n.type,
+          confidence: n.confidence != null ? n.confidence : 0.5,
+          decayClass: n.decayClass || 'permanent',
+        },
+      };
+    }
+
+    // Maps an edge row from the API into a Cytoscape element descriptor.
+    function edgeToElement(e) {
+      return {
+        data: {
+          id: e.id,
+          source: e.sourceNodeId,
+          target: e.targetNodeId,
+          label: e.type,
+          confidence: e.confidence != null ? e.confidence : 0.5,
+        },
+      };
+    }
+
+    // Shared fcose layout options — used by both full redraws and in-place expansions.
+    var FCOSE_OPTS_FULL    = { name: 'fcose', animate: false, fit: true,  nodeSeparation: 80, idealEdgeLength: 120, randomize: true };
+    var FCOSE_OPTS_EXPAND  = { name: 'fcose', animate: true,  fit: false, nodeSeparation: 80, idealEdgeLength: 120, randomize: false, animationDuration: 400 };
+
+    // Full graph replacement — called when loading a neighbourhood from the sidebar
+    // or when resetting to the hero view. Wipes the canvas and re-runs layout.
     function renderGraph(payload) {
       if (!cy) return;
-      var elements = [].concat(
-        payload.nodes.map(function(n) { return { data: { id: n.id, label: n.label, type: n.type } }; }),
-        payload.edges.map(function(e) { return { data: { id: e.id, source: e.sourceNodeId, target: e.targetNodeId, label: e.type } }; })
-      );
+      var elements = payload.nodes.map(nodeToElement).concat(payload.edges.map(edgeToElement));
       cy.elements().remove();
       cy.add(elements);
       // Force Cytoscape to re-measure the container before running layout.
       // Without this, the canvas may still be sized 0×0 from when main-app was
       // display:none (e.g. on first load or after navigating away and back).
       cy.resize();
-      cy.layout({ name: 'cose', animate: false, fit: true }).run();
+      cy.layout(FCOSE_OPTS_FULL).run();
+    }
+
+    // In-place expansion — adds only new nodes/edges so the existing graph context
+    // is preserved. Highlights the tapped node as the focal point.
+    function expandNeighborhood(nodeId) {
+      if (!cy) return;
+      setStatus('Expanding\u2026');
+      fetchJson('/api/kg/graph?node_id=' + encodeURIComponent(nodeId) + '&depth=1')
+        .then(function(data) {
+          var newNodes = data.nodes.filter(function(n) { return !cy.getElementById(n.id).length; });
+          var newEdges = data.edges.filter(function(e) { return !cy.getElementById(e.id).length; });
+          var newElements = newNodes.map(nodeToElement).concat(newEdges.map(edgeToElement));
+
+          if (newElements.length > 0) {
+            cy.add(newElements);
+            // Animate layout only over new elements + their neighbourhood so the
+            // rest of the existing graph doesn't jump around.
+            cy.layout(FCOSE_OPTS_EXPAND).run();
+          }
+
+          // Mark the tapped node as focal so it gets a white border highlight.
+          cy.elements().removeClass('focal');
+          cy.getElementById(nodeId).addClass('focal');
+
+          var totalNodes = cy.nodes().length;
+          var totalEdges = cy.edges().length;
+          setStatus(totalNodes + ' nodes \u00B7 ' + totalEdges + ' edges');
+        })
+        .catch(function(err) { setStatus(String(err), true); });
+    }
+
+    // Hero view — loaded automatically on first KG entry when the canvas is empty.
+    // Fetches the most recently active nodes (no node_id = top-N by last_confirmed_at).
+    function loadDefaultGraph() {
+      setStatus('Loading\u2026');
+      fetchJson('/api/kg/graph?limit=20')
+        .then(function(data) {
+          renderGraph(data);
+          setStatus(data.nodes.length + ' nodes \u00B7 ' + data.edges.length + ' edges');
+        })
+        .catch(function(err) { setStatus(String(err), true); });
     }
 
     function search() {
@@ -2039,11 +2186,15 @@ function createUiHtml(): string {
         .catch(function(err) { setStatus(String(err), true); });
     }
 
+    // Called from the sidebar node list — replaces the whole canvas with the
+    // selected node's depth-2 neighbourhood.
     function loadNeighborhood(nodeId) {
       setStatus('Loading\u2026');
       fetchJson('/api/kg/graph?node_id=' + encodeURIComponent(nodeId) + '&depth=2')
         .then(function(data) {
           renderGraph(data);
+          // Mark the selected node as focal after render.
+          cy.getElementById(nodeId).addClass('focal');
           setStatus(data.nodes.length + ' nodes \u00B7 ' + data.edges.length + ' edges');
         })
         .catch(function(err) { setStatus(String(err), true); });
@@ -2956,6 +3107,35 @@ export async function knowledgeGraphRoutes(
     const source = await readFile(cytoscapePath, 'utf8');
     // Long-lived cache — cytoscape is a pinned dependency; the version never
     // changes without a code change, so immutable caching is safe here.
+    reply
+      .type('application/javascript; charset=utf-8')
+      .header('Cache-Control', 'public, max-age=31536000, immutable')
+      .send(source);
+  });
+
+  // cytoscape-fcose layout extension — requires layout-base and cose-base as UMD globals.
+  // All three are served as self-hosted assets using the same createRequire pattern as cytoscape.
+  app.get('/assets/layout-base.js', async (_request, reply) => {
+    const require = createRequire(import.meta.url);
+    const source = await readFile(require.resolve('layout-base/layout-base.js'), 'utf8');
+    reply
+      .type('application/javascript; charset=utf-8')
+      .header('Cache-Control', 'public, max-age=31536000, immutable')
+      .send(source);
+  });
+
+  app.get('/assets/cose-base.js', async (_request, reply) => {
+    const require = createRequire(import.meta.url);
+    const source = await readFile(require.resolve('cose-base/cose-base.js'), 'utf8');
+    reply
+      .type('application/javascript; charset=utf-8')
+      .header('Cache-Control', 'public, max-age=31536000, immutable')
+      .send(source);
+  });
+
+  app.get('/assets/cytoscape-fcose.js', async (_request, reply) => {
+    const require = createRequire(import.meta.url);
+    const source = await readFile(require.resolve('cytoscape-fcose/cytoscape-fcose.js'), 'utf8');
     reply
       .type('application/javascript; charset=utf-8')
       .header('Cache-Control', 'public, max-age=31536000, immutable')

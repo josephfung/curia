@@ -33,6 +33,7 @@
     "chokidar": "^5.0.0",
     "cron-parser": "^5.5.0",
     "cytoscape": "^3.33.2",
+    "cytoscape-fcose": "^2.2.0",
     "fastify": "^5.8.5",
     "js-yaml": "^4.1.1",
     "luxon": "^3.7.2",
