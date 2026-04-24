@@ -747,7 +747,7 @@ describe('Dispatcher — rate limiting', () => {
 });
 
 describe('Dispatcher — observation mode preamble', () => {
-  it('prepends observation mode preamble to task content when observationMode is true', async () => {
+  it('prepends observation mode marker to task content when observationMode is true', async () => {
     const logger = createLogger('error');
     const bus = new EventBus(logger);
 
@@ -769,22 +769,20 @@ describe('Dispatcher — observation mode preamble', () => {
 
     expect(tasks).toHaveLength(1);
     const content = tasks[0]!.payload.content;
+    // The [OBSERVATION MODE] marker must be present so the coordinator can identify
+    // this as an observation-mode task and apply the triage protocol from its system prompt.
     expect(content).toContain('[OBSERVATION MODE');
     expect(content).toContain('testing if you read this');
-    expect(content).toContain('sign with your name');
-    expect(content).toContain('TRIAGE');
-    expect(content).toContain('URGENT');
-    expect(content).toContain('NOISE');
-    expect(content).toContain('email-archive');
-    // Five classifications — LEAVE FOR CEO was added so the coordinator has an
-    // explicit "do nothing, CEO will handle" option for personal / sensitive mail.
-    expect(content).toContain('LEAVE FOR CEO');
-    // The preamble must tell the coordinator its final text is audit-only, not a
-    // reply — paired with the dispatcher suppressing outbound.message for
-    // observation-mode tasks (see separate test below).
-    expect(content).toContain('audit/logging only');
-    // When in doubt, default to LEAVE FOR CEO (not URGENT) — avoids over-notifying.
-    expect(content).toContain('prefer LEAVE FOR CEO');
+    // The static triage protocol (TRIAGE, URGENT, NOISE, LEAVE FOR CEO, etc.) has moved
+    // to the coordinator's system prompt (agents/coordinator.yaml) so it is cacheable.
+    // It must NOT be duplicated here in the per-message user content.
+    expect(content).not.toContain('TRIAGE');
+    expect(content).not.toContain('URGENT');
+    expect(content).not.toContain('NOISE');
+    expect(content).not.toContain('LEAVE FOR CEO');
+    expect(content).not.toContain('audit/logging only');
+    expect(content).not.toContain('prefer LEAVE FOR CEO');
+    expect(content).not.toContain('sign with your name');
   });
 
   it('includes nylasMessageId and accountId in preamble when present in metadata', async () => {
