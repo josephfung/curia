@@ -932,6 +932,7 @@ async function main(): Promise<void> {
     bus,
     logger,
     contactResolver,
+    contactService,
     heldMessages,
     channelPolicies: authConfig?.channelPolicies,
     injectionScanner,

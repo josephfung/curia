@@ -72,6 +72,16 @@ interface OutboundMessagePayload {
    *  Absent for Signal, CLI, and other single-account channels. */
   accountId?: string;
   content: string;
+  /**
+   * The external recipient this message is addressed to (e.g. email address or phone
+   * number). Set by the dispatcher from the inbound routing table (senderId of the
+   * original inbound message). Used by the dispatcher to detect thread-originated trust:
+   * if a reply arrives from a provisional/unknown sender, we check for a prior outbound
+   * to that same address in this conversation before deciding whether to hold the message.
+   *
+   * Absent for non-reply outbound paths where no inbound routing entry exists.
+   */
+  recipientId?: string;
 }
 
 // OutboundBlockedPayload — emitted by the dispatch layer's content filter when an outbound

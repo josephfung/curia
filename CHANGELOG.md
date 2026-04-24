@@ -15,6 +15,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **Outbound trust propagation** — replies to Curia-initiated emails no longer get held when the recipient's contact is still `provisional` or unknown (issue #330). Two complementary fixes: (A) the outbound gateway now promotes the recipient contact to `confirmed` (or creates one if none exists) after every successful send — the act of sending is the implicit trust confirmation; (B) the dispatcher checks the `audit_log` for a prior `outbound.message` in the same thread addressed to the same sender before holding a provisional/unknown message, and upgrades the contact to `confirmed` when found. The recipient filter on the thread check prevents the forwarding attack: a reply forwarded into the thread by a third party does not bypass the hold.
 - **`held-messages-process` idempotent identity link** — when `contact-merge` links a sender's channel identity before `held-messages-process` runs (e.g. the CEO merges contacts mid-conversation), the skill now treats the duplicate-key error as a no-op if the identity already belongs to the target contact, and proceeds to `markProcessed`. Previously both calls failed with a unique constraint violation, leaving the held message in `pending` status indefinitely and triggering a false "Held Messages Pending Your Review" alert from the scheduled scanner.
 
 ### Changed

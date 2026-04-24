@@ -436,3 +436,148 @@ describe('OutboundGateway.getSignalGroupMembers', () => {
     await expect(gateway.getSignalGroupMembers('grpABC==')).rejects.toThrow('Signal client not configured');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Fix A — contact promotion after successful outbound send
+// ---------------------------------------------------------------------------
+
+describe('OutboundGateway contact promotion on successful send', () => {
+  function makeGateway(contactService: ContactService, nylasClient: NylasClient) {
+    const logger = createLogger('error');
+    const contentFilter = {
+      check: vi.fn().mockResolvedValue({ passed: true, findings: [] }),
+    } as unknown as OutboundContentFilter;
+    const bus = {
+      publish: vi.fn().mockResolvedValue(undefined),
+      subscribe: vi.fn(),
+    } as unknown as EventBus;
+    return new OutboundGateway({
+      nylasClients: new Map([['curia', nylasClient]]),
+      contactService,
+      contentFilter,
+      bus,
+      ceoEmail: 'ceo@example.com',
+      logger,
+    });
+  }
+
+  const baseRequest = {
+    channel: 'email' as const,
+    to: 'donna@example.com',
+    subject: 'Trailwalk scheduling',
+    body: 'Hi Donna!',
+  };
+
+  it('promotes a provisional contact to confirmed after a successful send', async () => {
+    const nylasClient = {
+      sendMessage: vi.fn().mockResolvedValue({ id: 'sent-1' }),
+    } as unknown as NylasClient;
+
+    const contactService = {
+      resolveByChannelIdentity: vi.fn()
+        // First call: blocked-contact check (returns provisional)
+        .mockResolvedValueOnce({ contactId: 'contact-donna', status: 'provisional', trustLevel: null })
+        // Second call: promotion lookup (returns provisional again)
+        .mockResolvedValueOnce({ contactId: 'contact-donna', status: 'provisional', trustLevel: null }),
+      setStatus: vi.fn().mockResolvedValue(undefined),
+    } as unknown as ContactService;
+
+    const gateway = makeGateway(contactService, nylasClient);
+    const result = await gateway.send(baseRequest);
+
+    expect(result.success).toBe(true);
+    expect(contactService.setStatus).toHaveBeenCalledOnce();
+    expect(contactService.setStatus).toHaveBeenCalledWith('contact-donna', 'confirmed');
+  });
+
+  it('creates a confirmed contact when no record exists for the recipient', async () => {
+    const nylasClient = {
+      sendMessage: vi.fn().mockResolvedValue({ id: 'sent-2' }),
+    } as unknown as NylasClient;
+
+    const contactService = {
+      // resolveByChannelIdentity returns null on both calls (blocked check + promotion lookup)
+      resolveByChannelIdentity: vi.fn().mockResolvedValue(null),
+      createContact: vi.fn().mockResolvedValue({ id: 'new-contact-id' }),
+      linkIdentity: vi.fn().mockResolvedValue(undefined),
+    } as unknown as ContactService;
+
+    const gateway = makeGateway(contactService, nylasClient);
+    const result = await gateway.send(baseRequest);
+
+    expect(result.success).toBe(true);
+    expect(contactService.createContact).toHaveBeenCalledOnce();
+    expect(contactService.createContact).toHaveBeenCalledWith(expect.objectContaining({
+      status: 'confirmed',
+      source: 'ceo_stated',
+    }));
+    expect(contactService.linkIdentity).toHaveBeenCalledOnce();
+    expect(contactService.linkIdentity).toHaveBeenCalledWith(expect.objectContaining({
+      contactId: 'new-contact-id',
+      channel: 'email',
+      channelIdentifier: 'donna@example.com',
+      source: 'ceo_stated',
+    }));
+  });
+
+  it('does not promote a contact that is already confirmed', async () => {
+    const nylasClient = {
+      sendMessage: vi.fn().mockResolvedValue({ id: 'sent-3' }),
+    } as unknown as NylasClient;
+
+    const contactService = {
+      resolveByChannelIdentity: vi.fn().mockResolvedValue({
+        contactId: 'contact-confirmed',
+        status: 'confirmed',
+        trustLevel: null,
+      }),
+      setStatus: vi.fn(),
+      createContact: vi.fn(),
+    } as unknown as ContactService;
+
+    const gateway = makeGateway(contactService, nylasClient);
+    const result = await gateway.send(baseRequest);
+
+    expect(result.success).toBe(true);
+    expect(contactService.setStatus).not.toHaveBeenCalled();
+    expect(contactService.createContact).not.toHaveBeenCalled();
+  });
+
+  it('does not promote on a failed send', async () => {
+    const nylasClient = {
+      sendMessage: vi.fn().mockRejectedValue(new Error('Nylas error')),
+    } as unknown as NylasClient;
+
+    const contactService = {
+      resolveByChannelIdentity: vi.fn().mockResolvedValue(null),
+      createContact: vi.fn(),
+      setStatus: vi.fn(),
+    } as unknown as ContactService;
+
+    const gateway = makeGateway(contactService, nylasClient);
+    const result = await gateway.send(baseRequest);
+
+    expect(result.success).toBe(false);
+    expect(contactService.createContact).not.toHaveBeenCalled();
+    expect(contactService.setStatus).not.toHaveBeenCalled();
+  });
+
+  it('succeeds even if contact promotion throws a DB error (fail-open)', async () => {
+    const nylasClient = {
+      sendMessage: vi.fn().mockResolvedValue({ id: 'sent-4' }),
+    } as unknown as NylasClient;
+
+    const contactService = {
+      // Blocked-contact check passes (null = no contact), promotion lookup also returns null
+      resolveByChannelIdentity: vi.fn().mockResolvedValue(null),
+      createContact: vi.fn().mockRejectedValue(new Error('DB connection timeout')),
+    } as unknown as ContactService;
+
+    const gateway = makeGateway(contactService, nylasClient);
+    const result = await gateway.send(baseRequest);
+
+    // The send succeeded; the promotion error must not surface as a send failure
+    expect(result.success).toBe(true);
+    expect(result.messageId).toBe('sent-4');
+  });
+});

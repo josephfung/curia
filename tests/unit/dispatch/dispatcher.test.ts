@@ -5,6 +5,8 @@ import { AgentRuntime } from '../../../src/agents/runtime.js';
 import { createInboundMessage, createAgentError, type OutboundMessageEvent, type MessageRejectedEvent, type AgentTaskEvent, type MessageHeldEvent, type ContactUnknownEvent } from '../../../src/bus/events.js';
 import type { LLMProvider } from '../../../src/agents/llm/provider.js';
 import type { ContactResolver } from '../../../src/contacts/contact-resolver.js';
+import type { ContactService } from '../../../src/contacts/contact-service.js';
+import type { DbPool } from '../../../src/db/connection.js';
 import type { InboundSenderContext, ContactStatus, TrustLevel } from '../../../src/contacts/types.js';
 import { HeldMessageService } from '../../../src/contacts/held-messages.js';
 import { createLogger } from '../../../src/logger.js';
@@ -1142,5 +1144,263 @@ describe('Dispatcher message size limit', () => {
 
     expect(rejected).toHaveLength(1);
     expect(rejected[0]?.payload.reason).toBe('message_too_large');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Fix B — thread-originated trust bypass
+// ---------------------------------------------------------------------------
+
+describe('Dispatcher thread-originated trust bypass', () => {
+  const logger = createLogger('error');
+
+  /**
+   * Build a mock DB pool that simulates the audit_log query for thread-originated trust.
+   * `hasOutbound = true` means the query returns a row (trust detected).
+   */
+  function makePool(hasOutbound: boolean) {
+    return {
+      query: vi.fn().mockResolvedValue({ rows: [{ exists: hasOutbound }] }),
+    };
+  }
+
+  function makeContactService(overrides?: Partial<ContactService>): ContactService {
+    return {
+      setStatus: vi.fn().mockResolvedValue(undefined),
+      createContact: vi.fn().mockResolvedValue({ id: 'new-contact-id' }),
+      linkIdentity: vi.fn().mockResolvedValue(undefined),
+      ...overrides,
+    } as unknown as ContactService;
+  }
+
+  it('routes provisional sender to coordinator when thread trust detected, and promotes contact', async () => {
+    const bus = new EventBus(logger);
+    const heldMessages = HeldMessageService.createInMemory();
+    const contactService = makeContactService();
+    const pool = makePool(true);
+
+    const resolver = makeResolverWithContact({ contactConfidence: 0, trustLevel: null, status: 'provisional' });
+
+    const dispatcher = new Dispatcher({
+      bus,
+      logger,
+      contactResolver: resolver,
+      contactService,
+      heldMessages,
+      channelPolicies: { email: { trust: 'low', unknownSender: 'hold_and_notify' } },
+      pool: pool as unknown as DbPool,
+      // Disable the trust-score floor so it doesn't re-hold the message after the
+      // thread-trust bypass — the floor is a separate protection tested elsewhere.
+      trustScoreFloor: 0,
+    });
+    dispatcher.register();
+
+    const held: MessageHeldEvent[] = [];
+    const tasks: AgentTaskEvent[] = [];
+    bus.subscribe('message.held', 'channel', (e) => held.push(e as MessageHeldEvent));
+    bus.subscribe('agent.task', 'agent', (e) => tasks.push(e as AgentTaskEvent));
+
+    await bus.publish('channel', createInboundMessage({
+      conversationId: 'email:thread-donna',
+      channelId: 'email',
+      senderId: 'donna@example.com',
+      content: 'Thanks for reaching out!',
+    }));
+
+    // Must route to coordinator, not hold
+    expect(held).toHaveLength(0);
+    expect(tasks).toHaveLength(1);
+    // Must promote the provisional contact
+    expect(contactService.setStatus).toHaveBeenCalledWith('test-contact-id', 'confirmed');
+  });
+
+  it('holds provisional sender when no thread trust detected', async () => {
+    const bus = new EventBus(logger);
+    const heldMessages = HeldMessageService.createInMemory();
+    const contactService = makeContactService();
+    const pool = makePool(false);
+
+    const resolver = makeResolverWithContact({ contactConfidence: 0, trustLevel: null, status: 'provisional' });
+
+    const dispatcher = new Dispatcher({
+      bus,
+      logger,
+      contactResolver: resolver,
+      contactService,
+      heldMessages,
+      channelPolicies: { email: { trust: 'low', unknownSender: 'hold_and_notify' } },
+      pool: pool as unknown as DbPool,
+      trustScoreFloor: 0,
+    });
+    dispatcher.register();
+
+    const held: MessageHeldEvent[] = [];
+    bus.subscribe('message.held', 'channel', (e) => held.push(e as MessageHeldEvent));
+
+    await bus.publish('channel', createInboundMessage({
+      conversationId: 'email:thread-cold',
+      channelId: 'email',
+      senderId: 'cold@example.com',
+      content: 'Hello, I found your email online.',
+    }));
+
+    // No prior outbound → should still be held
+    expect(held).toHaveLength(1);
+    expect(contactService.setStatus).not.toHaveBeenCalled();
+  });
+
+  it('routes unknown sender to coordinator when thread trust detected, and creates confirmed contact', async () => {
+    const bus = new EventBus(logger);
+    const heldMessages = HeldMessageService.createInMemory();
+    const contactService = makeContactService();
+    const pool = makePool(true);
+
+    const resolver = makeResolverWithNoContact();
+
+    const dispatcher = new Dispatcher({
+      bus,
+      logger,
+      contactResolver: resolver,
+      contactService,
+      heldMessages,
+      channelPolicies: { email: { trust: 'low', unknownSender: 'hold_and_notify' } },
+      pool: pool as unknown as DbPool,
+      trustScoreFloor: 0,
+    });
+    dispatcher.register();
+
+    const held: MessageHeldEvent[] = [];
+    const tasks: AgentTaskEvent[] = [];
+    bus.subscribe('message.held', 'channel', (e) => held.push(e as MessageHeldEvent));
+    bus.subscribe('agent.task', 'agent', (e) => tasks.push(e as AgentTaskEvent));
+
+    await bus.publish('channel', createInboundMessage({
+      conversationId: 'email:thread-board',
+      channelId: 'email',
+      senderId: 'board@company.com',
+      content: 'Following up on your email.',
+    }));
+
+    expect(held).toHaveLength(0);
+    expect(tasks).toHaveLength(1);
+    // Creates a confirmed contact for the unknown sender
+    expect(contactService.createContact).toHaveBeenCalledWith(expect.objectContaining({
+      status: 'confirmed',
+      source: 'ceo_stated',
+    }));
+    expect(contactService.linkIdentity).toHaveBeenCalledWith(expect.objectContaining({
+      channel: 'email',
+      channelIdentifier: 'board@company.com',
+      source: 'ceo_stated',
+    }));
+  });
+
+  it('holds provisional sender normally when pool is not configured', async () => {
+    // Without a pool, the thread trust check cannot run — fall through to normal hold
+    const bus = new EventBus(logger);
+    const heldMessages = HeldMessageService.createInMemory();
+    const contactService = makeContactService();
+
+    const resolver = makeResolverWithContact({ contactConfidence: 0, trustLevel: null, status: 'provisional' });
+
+    const dispatcher = new Dispatcher({
+      bus,
+      logger,
+      contactResolver: resolver,
+      contactService,
+      heldMessages,
+      channelPolicies: { email: { trust: 'low', unknownSender: 'hold_and_notify' } },
+      // pool intentionally omitted
+    });
+    dispatcher.register();
+
+    const held: MessageHeldEvent[] = [];
+    bus.subscribe('message.held', 'channel', (e) => held.push(e as MessageHeldEvent));
+
+    await bus.publish('channel', createInboundMessage({
+      conversationId: 'email:thread-nopool',
+      channelId: 'email',
+      senderId: 'nopool@example.com',
+      content: 'Hello',
+    }));
+
+    expect(held).toHaveLength(1);
+    expect(contactService.setStatus).not.toHaveBeenCalled();
+  });
+
+  it('holds provisional sender normally when audit_log query fails (fail-open)', async () => {
+    const bus = new EventBus(logger);
+    const heldMessages = HeldMessageService.createInMemory();
+    const contactService = makeContactService();
+
+    const pool = {
+      query: vi.fn().mockRejectedValue(new Error('DB connection lost')),
+    };
+
+    const resolver = makeResolverWithContact({ contactConfidence: 0, trustLevel: null, status: 'provisional' });
+
+    const dispatcher = new Dispatcher({
+      bus,
+      logger,
+      contactResolver: resolver,
+      contactService,
+      heldMessages,
+      channelPolicies: { email: { trust: 'low', unknownSender: 'hold_and_notify' } },
+      pool: pool as unknown as DbPool,
+    });
+    dispatcher.register();
+
+    const held: MessageHeldEvent[] = [];
+    bus.subscribe('message.held', 'channel', (e) => held.push(e as MessageHeldEvent));
+
+    await bus.publish('channel', createInboundMessage({
+      conversationId: 'email:thread-dberr',
+      channelId: 'email',
+      senderId: 'dberr@example.com',
+      content: 'Hello',
+    }));
+
+    // Query failed → fall through to hold (conservative)
+    expect(held).toHaveLength(1);
+    expect(contactService.setStatus).not.toHaveBeenCalled();
+  });
+
+  it('includes recipientId in outbound.message when routing an agent response', async () => {
+    // Verifies that the dispatcher populates recipientId from routing.senderId so the
+    // audit_log records have the information needed for the thread trust query.
+    const bus = new EventBus(logger);
+    const mockProvider: LLMProvider = {
+      id: 'mock',
+      chat: vi.fn().mockResolvedValue({
+        type: 'text' as const,
+        content: 'Reply from Coordinator',
+        usage: { inputTokens: 10, outputTokens: 5 },
+      }),
+    };
+    const coordinator = new AgentRuntime({
+      agentId: 'coordinator',
+      systemPrompt: 'You are a helpful assistant.',
+      provider: mockProvider,
+      bus,
+      logger,
+    });
+    coordinator.register();
+
+    const dispatcher = new Dispatcher({ bus, logger });
+    dispatcher.register();
+
+    const outboundEvents: OutboundMessageEvent[] = [];
+    bus.subscribe('outbound.message', 'channel', (e) => outboundEvents.push(e as OutboundMessageEvent));
+
+    await bus.publish('channel', createInboundMessage({
+      conversationId: 'email:thread-reply',
+      channelId: 'email',
+      senderId: 'alice@example.com',
+      content: 'Hello',
+    }));
+
+    expect(outboundEvents).toHaveLength(1);
+    expect(outboundEvents[0]?.payload.recipientId).toBe('alice@example.com');
+    expect(outboundEvents[0]?.payload.conversationId).toBe('email:thread-reply');
   });
 });
