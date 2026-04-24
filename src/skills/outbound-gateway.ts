@@ -372,8 +372,11 @@ export class OutboundGateway {
       return result;
     } else {
       const result = await this.dispatchSignal(request);
-      if (result.success) {
-        await this.promoteOrCreateRecipientContact(request.channel, recipientId);
+      // Only promote for 1:1 Signal sends — group sends use a groupId, not an individual
+      // phone number. Creating a contact for a group token would pollute the contacts table
+      // and would not help with inbound replies (which come from member numbers, not the group ID).
+      if (result.success && request.recipient) {
+        await this.promoteOrCreateRecipientContact('signal', request.recipient);
       }
       return result;
     }
@@ -444,6 +447,21 @@ export class OutboundGateway {
           { err, channel, recipientId: redactId(recipientId), orphanedContactId: created.id },
           'outbound-gateway: linkIdentity failed after createContact — orphaned confirmed contact exists; manual cleanup may be needed',
         );
+        return;
+      }
+
+      // Set trustLevel: 'high' so replies from this contact score above the trust floor.
+      // contactConfidence starts at 0 for new contacts (enriched later via KG), so without
+      // a trustLevel override the dispatcher's trust score formula produces ~0.12 — below the
+      // default floor of 0.2 — and the reply gets re-held even though the contact is confirmed.
+      // Failure is non-fatal: the contact was created and linked; warn so it's visible.
+      try {
+        await this.contactService.setTrustLevel(created.id, 'high');
+      } catch (err) {
+        this.log.warn(
+          { err, channel, recipientId: redactId(recipientId), contactId: created.id },
+          'outbound-gateway: setTrustLevel failed after contact creation — replies may still fall below trust floor',
+        );
       }
       return;
     }
@@ -471,6 +489,17 @@ export class OutboundGateway {
         this.log.warn(
           { err, channel, recipientId: redactId(recipientId), contactId: contact.contactId },
           'outbound-gateway: setStatus failed after successful send — recipient may still receive holds on replies',
+        );
+        return;
+      }
+      // Set trustLevel: 'high' so replies score above the trust floor (same reason as
+      // the new-contact path above — contactConfidence defaults to 0 after promotion).
+      try {
+        await this.contactService.setTrustLevel(contact.contactId, 'high');
+      } catch (err) {
+        this.log.warn(
+          { err, channel, recipientId: redactId(recipientId), contactId: contact.contactId },
+          'outbound-gateway: setTrustLevel failed after promotion — replies may still fall below trust floor',
         );
       }
       return;

@@ -227,7 +227,12 @@ export class Dispatcher {
     // Wrapped in try/catch so DB errors degrade gracefully (no sender context)
     // rather than silently dropping the message — the task still dispatches,
     // just without enriched sender info.
+    //
+    // threadTrusted: set when the thread-trust bypass fires (Fix B). Used below to exempt
+    // this message from the trust score floor — the contact was just promoted, so the
+    // stale senderContext values must not trigger a re-hold on the same message.
     let senderContext: InboundSenderContext | undefined;
+    let threadTrusted = false;
     if (this.contactResolver && !isObservationMode) {
       try {
         senderContext = await this.contactResolver.resolve(payload.channelId, payload.senderId);
@@ -292,6 +297,10 @@ export class Dispatcher {
                     'Dispatcher: thread-originated trust detected for provisional sender — promoting and routing to coordinator',
                   );
                   await this.promoteToConfirmedByThreadTrust(payload.channelId, payload.senderId, senderContext.contactId);
+                  // Exempt this message from the trust score floor below — senderContext still
+                  // holds the pre-promotion values (stale contactConfidence/trustLevel), so without
+                  // this flag the floor check would re-hold the very message we just decided to route.
+                  threadTrusted = true;
                   // Fall through to normal coordinator routing below.
                 } else {
                   try {
@@ -403,6 +412,8 @@ export class Dispatcher {
                 'Dispatcher: thread-originated trust detected for unknown sender — promoting and routing to coordinator',
               );
               await this.promoteToConfirmedByThreadTrust(payload.channelId, payload.senderId, undefined);
+              // Same stale-context exemption as the provisional path above.
+              threadTrusted = true;
               // Fall through to normal coordinator routing below.
             } else {
               try {
@@ -593,6 +604,7 @@ export class Dispatcher {
       const policy = this.channelPolicies[payload.channelId];
       if (
         !isObservationMode &&
+        !threadTrusted &&
         messageTrustScore < this.trustScoreFloor &&
         policy?.unknownSender !== 'ignore' &&
         this.heldMessages
@@ -977,6 +989,16 @@ export class Dispatcher {
           'Dispatcher: setStatus failed during thread-trust promotion — message will still route to coordinator',
         );
       }
+      // Set trustLevel: 'high' so future inbounds from this contact score above the trust floor.
+      // Failure is non-fatal: the status promotion already took effect; warn so it's visible.
+      try {
+        await this.contactService.setTrustLevel(contactId, 'high');
+      } catch (err) {
+        this.logger.warn(
+          { err, channelId, contactId, senderId: redactSenderId(senderId) },
+          'Dispatcher: setTrustLevel failed after thread-trust promotion — future messages may still fall below trust floor',
+        );
+      }
       return;
     }
 
@@ -1017,6 +1039,18 @@ export class Dispatcher {
       this.logger.error(
         { err, channelId, senderId: redactSenderId(senderId), orphanedContactId: created.id },
         'Dispatcher: linkIdentity failed after createContact during thread-trust promotion — orphaned confirmed contact exists; manual cleanup may be needed',
+      );
+      return;
+    }
+
+    // Set trustLevel: 'high' so future inbounds score above the trust floor.
+    // Failure is non-fatal: the contact was created and linked; warn so it's visible.
+    try {
+      await this.contactService.setTrustLevel(created.id, 'high');
+    } catch (err) {
+      this.logger.warn(
+        { err, channelId, contactId: created.id, senderId: redactSenderId(senderId) },
+        'Dispatcher: setTrustLevel failed after thread-trust contact creation — future messages may still fall below trust floor',
       );
     }
   }
