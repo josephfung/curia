@@ -35,6 +35,9 @@ importers:
       chokidar:
         specifier: ^5.0.0
         version: 5.0.0
+      cose-base:
+        specifier: ^2.2.0
+        version: 2.2.0
       cron-parser:
         specifier: ^5.5.0
         version: 5.5.0
@@ -50,6 +53,9 @@ importers:
       js-yaml:
         specifier: ^4.1.1
         version: 4.1.1
+      layout-base:
+        specifier: ^2.0.1
+        version: 2.0.1
       luxon:
         specifier: ^3.7.2
         version: 3.7.2

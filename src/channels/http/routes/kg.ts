@@ -2152,7 +2152,8 @@ function createUiHtml(): string {
             // positioned by the layout engine, so nothing jumps around.
             var fixedConstraints = [];
             cy.nodes().forEach(function(node) {
-              fixedConstraints.push({ nodeId: node.id(), position: node.position() });
+              var p = node.position();
+              fixedConstraints.push({ nodeId: node.id(), position: { x: p.x, y: p.y } });
             });
 
             cy.add(newElements);
