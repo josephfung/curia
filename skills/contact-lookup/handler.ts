@@ -6,7 +6,7 @@
 //   - "role": exact role match via findContactByRole()
 //   - "channel": resolves by "channel:identifier" via resolveByChannelIdentity()
 //
-// This is an infrastructure skill — it requires contactService access.
+// This skill uses contactService, which is a universal service.
 
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
 
@@ -40,7 +40,7 @@ export class ContactLookupHandler implements SkillHandler {
     if (!ctx.contactService) {
       return {
         success: false,
-        error: 'contact-lookup skill requires infrastructure access (contactService). Is infrastructure: true set in the manifest?',
+        error: 'contact-lookup skill requires contactService is a universal service — check ExecutionLayer configuration.',
       };
     }
 

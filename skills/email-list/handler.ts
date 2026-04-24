@@ -13,7 +13,7 @@ const DEFAULT_LIMIT = 20;
 export class EmailListHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {
     if (!ctx.outboundGateway) {
-      return { success: false, error: 'email-list requires outboundGateway (infrastructure: true)' };
+      return { success: false, error: 'email-list requires outboundGateway (capabilities: ["outboundGateway"])' };
     }
 
     // Handlers must never throw — destructuring a non-object ctx.input would.

@@ -6,7 +6,7 @@
 // calls (template policy + contact lookup + meeting link + etc.), this skill
 // gathers everything relevant in one call.
 //
-// This is an infrastructure skill because it needs:
+// This skill requires entityMemory because it needs:
 //   - entityMemory (to resolve email policies and meeting links from KG)
 //   - contactService (to look up recipient contact info)
 

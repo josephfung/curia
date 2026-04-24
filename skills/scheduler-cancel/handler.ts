@@ -10,7 +10,7 @@ export class SchedulerCancelHandler implements SkillHandler {
     if (!ctx.schedulerService) {
       return {
         success: false,
-        error: 'scheduler-cancel requires schedulerService in context. Is infrastructure: true set in the manifest?',
+        error: 'scheduler-cancel requires schedulerService in context. Declare "schedulerService" in capabilities.',
       };
     }
 

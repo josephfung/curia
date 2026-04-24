@@ -4,14 +4,14 @@
 // Optionally filters by channel. Returns a summary with sender, subject, preview,
 // and timestamp for each message.
 //
-// This is an infrastructure skill — it requires heldMessages service access.
+// This skill requires heldMessages service access — declare "heldMessages" in capabilities.
 
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
 
 export class HeldMessagesListHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {
     if (!ctx.heldMessages) {
-      return { success: false, error: 'Held messages service not available. Is infrastructure: true set?' };
+      return { success: false, error: 'Held messages service not available. Declare "heldMessages" in capabilities.' };
     }
 
     const { channel } = ctx.input as { channel?: string };

@@ -8,7 +8,7 @@ import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/t
 export class GetAutonomyHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {
     if (!ctx.autonomyService) {
-      return { success: false, error: 'get-autonomy requires autonomyService in context. Is infrastructure: true set in the manifest?' };
+      return { success: false, error: 'get-autonomy requires autonomyService in context. Declare "autonomyService" in capabilities.' };
     }
 
     try {

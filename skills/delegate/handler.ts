@@ -1,6 +1,6 @@
 // handler.ts — delegate skill implementation.
 //
-// This is an infrastructure skill — it has bus and agentRegistry access
+// This skill has bus and agentRegistry access (declared in capabilities)
 // that normal skills don't get. It publishes an agent.task event for the
 // target specialist, then waits for the specialist's agent.response.
 //
@@ -52,11 +52,12 @@ export class DelegateHandler implements SkillHandler {
       );
     }
 
-    // Infrastructure skills need bus and agent registry
+    // Defensive guard — ExecutionLayer already fails-closed if capabilities are missing,
+    // but guard here too in case the handler is invoked outside the execution layer.
     if (!ctx.bus || !ctx.agentRegistry) {
       return {
         success: false,
-        error: 'Delegate skill requires infrastructure access (bus, agentRegistry). Is infrastructure: true set in the manifest?',
+        error: 'Delegate skill requires bus and agentRegistry. Declare both in capabilities.',
       };
     }
 
@@ -88,7 +89,7 @@ export class DelegateHandler implements SkillHandler {
     // parentEventId uses a delegate-prefixed UUID. Ideally this would trace back
     // to the Coordinator's skill.invoke event, but SkillContext doesn't currently
     // carry the invoking event's ID. TODO: Add invokeEventId to SkillContext so
-    // infrastructure skills can maintain the full audit causal chain.
+    // capability-gated skills can maintain the full audit causal chain.
     const taskEvent = createAgentTask({
       agentId: agent,
       conversationId,

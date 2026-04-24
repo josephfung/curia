@@ -5,7 +5,7 @@
 //
 // The registry reference is injected by the execution layer as ctx.skillSearch —
 // a closure scoped to this skill by name, following the same name-gated pattern
-// used for autonomyService and browserService. No infrastructure: true needed.
+// used for autonomyService and browserService. Declare "skillSearch" in capabilities.
 
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
 

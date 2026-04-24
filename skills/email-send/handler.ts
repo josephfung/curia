@@ -88,7 +88,7 @@ export class EmailSendHandler implements SkillHandler {
     if (!ctx.outboundGateway) {
       return {
         success: false,
-        error: 'email-send skill requires outboundGateway access. Is infrastructure: true set in the manifest and outboundGateway passed to ExecutionLayer?',
+        error: 'email-send skill requires outboundGateway access. Declare "outboundGateway" in capabilities.',
       };
     }
 

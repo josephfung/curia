@@ -44,7 +44,7 @@ export class ContactSetTrustHandler implements SkillHandler {
     if (!ctx.contactService) {
       return {
         success: false,
-        error: 'contact-set-trust requires infrastructure access (contactService). Is infrastructure: true set in the manifest?',
+        error: 'contact-set-trust requires contactService is a universal service — check ExecutionLayer configuration.',
       };
     }
 
