@@ -596,11 +596,15 @@ export class AgentRuntime {
       if (!response) return; // chatWithRetry already published error events
     }
 
-    // Handle the final response (text or tool_use without execution layer)
+    // Handle the final response (text or tool_use without execution layer).
+    // isResponseError is set on any path that yields a generic fallback rather
+    // than a real result — consumers (delegate, scheduler) check this flag.
     let responseContent: string;
+    let isResponseError = false;
     if (response.type === 'tool_use') {
       // No execution layer configured — the LLM wanted tools but we can't run them
       logger.warn({ agentId }, 'LLM returned tool_use but no execution layer configured');
+      isResponseError = true;
       responseContent = response.content ?? "I wasn't able to complete that request — I hit my tool-use limit. Please try rephrasing.";
     } else if (response.type === 'text') {
       logger.info(
@@ -651,6 +655,7 @@ export class AgentRuntime {
             },
             'LLM returned empty text response after tool use — recovery also failed, sending fallback',
           );
+          isResponseError = true;
           responseContent = "I'm sorry, I wasn't able to formulate a response. Please try again.";
         }
       } else {
@@ -659,6 +664,7 @@ export class AgentRuntime {
     } else {
       // Shouldn't reach here — chatWithRetry handles errors — but be safe
       logger.error({ agentId, error: response.error }, 'LLM call failed after retries');
+      isResponseError = true;
       responseContent = "I'm sorry, I was unable to process that request. Please try again.";
     }
 
@@ -671,6 +677,9 @@ export class AgentRuntime {
       agentId,
       conversationId,
       content: responseContent,
+      // isResponseError propagates to consumers (delegate, scheduler) so they can
+      // distinguish a fallback message from a real agent result.
+      ...(isResponseError && { isError: true }),
       parentEventId: taskEvent.id,
     });
     await bus.publish('agent', responseEvent);

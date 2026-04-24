@@ -117,20 +117,16 @@ export class Scheduler {
    * Sets up bus subscribers for completion tracking, then starts the polling interval.
    */
   start(): void {
-    // Subscribe to agent.response on system layer to track completions.
-    // isError: true means the agent hit an unrecoverable failure (context overflow,
-    // budget exhaustion, etc.) — treat it as a failed run so consecutive_failures
-    // increments and eventual auto-suspend works correctly.
+    // Subscribe to agent.response on system layer to track successful completions.
+    // Error responses (isError: true) are skipped here — the agent.error subscriber
+    // below handles failures. This avoids a double handleCompletion call on the same
+    // parentEventId (the runtime emits both agent.error and agent.response on failure).
     this.bus.subscribe('agent.response', 'system', (event) => {
       const responseEvent = event as AgentResponseEvent;
+      if (responseEvent.payload.isError) return;
       if (responseEvent.parentEventId) {
-        const success = !responseEvent.payload.isError;
-        this.handleCompletion(
-          responseEvent.parentEventId,
-          success,
-          success ? undefined : responseEvent.payload.content,
-        ).catch((err) => {
-          this.logger.error({ err, parentEventId: responseEvent.parentEventId }, `Unhandled error in handleCompletion (${success ? 'success' : 'error-response'} path)`);
+        this.handleCompletion(responseEvent.parentEventId, true).catch((err) => {
+          this.logger.error({ err, parentEventId: responseEvent.parentEventId }, 'Unhandled error in handleCompletion (success path)');
         });
       }
     });
