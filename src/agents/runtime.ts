@@ -43,6 +43,15 @@ export interface AgentConfig {
    *  block is appended to the system prompt on every task so the date is always fresh.
    *  If omitted, no time block is injected. */
   timezone?: string;
+  /** Curia's own channel contact details, sourced from deployment env vars (NYLAS_SELF_EMAIL,
+   *  SIGNAL_PHONE_NUMBER). When provided, a "Your Contact Details" block is appended to the
+   *  system prompt so the LLM knows which accounts to use when tools ask for an email address
+   *  or phone number. Only the coordinator receives this — specialist agents work with
+   *  structured data and don't need self-identity injection. */
+  channelAccounts?: {
+    email?: string;
+    phone?: string;
+  };
   /** Error budget config — turn and consecutive error limits per task.
    * maxTurns is checked at the start of each tool-use iteration, so
    * the effective number of tool-calling rounds is maxTurns - 1. */
@@ -206,6 +215,20 @@ export class AgentRuntime {
         // Log at error (operator signal) and proceed without the time block.
         logger.error({ err, agentId, timezone }, 'formatTimeContextBlock failed — time context not injected; check TIMEZONE config');
       }
+    }
+
+    // Append Curia's own contact details — email and phone sourced from deployment env vars.
+    // This gives the LLM a concrete "acting as" identity so it doesn't guess or fall back
+    // to the CEO's details when tools require an account parameter.
+    const { channelAccounts } = this.config;
+    if (channelAccounts && (channelAccounts.email || channelAccounts.phone)) {
+      const lines: string[] = ['## Your Contact Details'];
+      lines.push('These are your own accounts. Use them when tools require an email address, phone number,');
+      lines.push('or similar "acting as" identifier — never substitute the CEO\'s details.');
+      lines.push('');
+      if (channelAccounts.email) lines.push(`- Email: ${channelAccounts.email}`);
+      if (channelAccounts.phone) lines.push(`- Phone: ${channelAccounts.phone}`);
+      effectiveSystemPrompt += '\n\n' + lines.join('\n');
     }
 
     // Append intent anchor — present only for persistent scheduler tasks that have a

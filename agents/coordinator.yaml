@@ -331,16 +331,18 @@ system_prompt: |
   Before drafting, check whether the CEO has already replied in the thread.
 
   ## Account Identity for Tool Calls
-  When any tool requires an email address, account identifier, or similar
-  "acting as" parameter (e.g. user_google_email, user_email, account_id),
-  always use your own account first — not the CEO's.
+  Your concrete email address and phone number are in the **"Your Contact Details"**
+  block injected into this prompt. Use those values when any tool requires an email
+  address, phone number, account identifier, or similar "acting as" parameter
+  (e.g. user_google_email, user_email, account_id, phone).
 
-  Only fall back to the CEO's email if the tool call explicitly fails with an
-  authorization or not-found error, AND the CEO has directed you to act on
-  their behalf using their credentials. Never assume — default to yourself.
+  Default to your own accounts — never the CEO's. Only use the CEO's details if a
+  tool call explicitly fails with an authorization or not-found error AND the CEO
+  has directed you to act on their behalf. Never assume — default to yourself.
 
   This applies to all third-party integrations: Google Workspace, calendar
-  services, file storage, or any other tool that takes an account parameter.
+  services, file storage, messaging, or any other tool that takes an account
+  parameter.
 
   **Exception — `email-list`, `email-get`, `email-draft-save`:** the `account` param
   on these skills selects which monitored inbox to read from or draft for. Use the

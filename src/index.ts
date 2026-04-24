@@ -802,6 +802,14 @@ async function main(): Promise<void> {
       // every task, so identity hot-reloads (file watcher or API PUT) take effect on the
       // next turn without a restart.
       officeIdentityService: agentConfig.role === 'coordinator' ? officeIdentityService : undefined,
+      // Curia's own contact details — sourced from NYLAS_SELF_EMAIL and SIGNAL_PHONE_NUMBER.
+      // Injected per-task so the coordinator knows which accounts to use when MCP tools
+      // ask for an email address or phone number (e.g. workspace-mcp's user_google_email).
+      // Only set for the coordinator; specialist agents work with structured data.
+      channelAccounts: agentConfig.role === 'coordinator' ? {
+        email: config.nylasSelfEmail || undefined,
+        phone: config.signalPhoneNumber || undefined,
+      } : undefined,
       // Map YAML snake_case fields to AgentConfig camelCase, falling back to
       // DEFAULT_ERROR_BUDGET values for any omitted fields.
       errorBudget: agentConfig.error_budget ? {
