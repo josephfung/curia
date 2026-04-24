@@ -39,7 +39,7 @@ skills/
 - `permissions`: declared capabilities, validated at load time
 - `timeout`: per-invocation timeout in ms; exceeded invocations return a failure result (default 30000)
 
-**Privilege access** — skills receive privileged services (bus, entity memory, calendar client, etc.) only via explicit name-based grants in the execution layer. There is no self-declaration mechanism in `skill.json` that grants privilege — any such declaration is ignored. See `src/skills/execution.ts` for the per-skill capability assignments. Issue #119 will codify these into a dedicated `src/skills/capabilities.ts` registry.
+**Privilege access** — skills declare which privileged services they need via `"capabilities": [...]` in `skill.json`. The loader validates names against a fixed allowlist (`VALID_CAPABILITIES` in `src/skills/loader.ts`) at startup and rejects unknown names. The manifest is frozen after loading. The execution layer injects only declared services into `SkillContext` — skills cannot self-escalate at runtime. Universal services (`contactService`, `entityContextAssembler`, `agentPersona`) are available to all skills without declaration. See the `capabilities` section in `docs/dev/adding-a-skill.md` for the full capability reference.
 
 ### Skill Handler Interface
 
@@ -219,7 +219,7 @@ These are not bundled but documented as recommended integrations:
 | Skill discovery — `allow_discovery: true` wired to runtime tool-list builder | Done — closes #274 |
 | Skill discovery — make discovered-but-not-pinned skills callable (dynamic tool-list expansion) | Done — `AgentRuntime` expands `workingToolDefs` per-task after each `skill-registry` success; `ExecutionLayer.getToolDefinitions()` provides schemas; closes #291 |
 | Safety gate for first-time elevated skill use — per-agent-skill `skill_approvals` table | Partial — role-based elevation gate exists (`caller.role === 'ceo'`); persist-once-ask-once flow not yet built |
-| Privilege scoping — per-skill capability assignments replacing `infrastructure` self-declaration | Partial — name-gated per-skill injection in `execution.ts`; full `capabilities.ts` registry pending (#119) |
+| Privilege scoping — per-skill `capabilities` array, load-time validation, frozen manifest | Done — `src/skills/loader.ts` (`VALID_CAPABILITIES`), `src/skills/execution.ts` (capabilities loop); closes #119 |
 | Resource boundaries — max 5 concurrent skill invocations per agent task | Not Done |
 | Resource boundaries — 1MB buffer cap on streaming skill responses | Not Done |
 | Built-in skill: `memory-query` | Not Done |
