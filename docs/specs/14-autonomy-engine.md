@@ -214,6 +214,22 @@ The `OutboundGateway` (see [15-outbound-safety.md](15-outbound-safety.md)) is al
 
 ---
 
+## Implementation Status
+
+| Item | Status |
+|---|---|
+| `autonomy_config` table (single-row, score + band) | Done |
+| `autonomy_history` table (append-only audit trail) | Done |
+| Skill: `get-autonomy` (reads score, band, last 3 history rows) | Done |
+| Skill: `set-autonomy` (validates, upserts config, appends history) | Done |
+| Autonomy block injected into Coordinator system prompt per-task | Done |
+| `action_risk` field required on all skill manifests, validated at startup | Done |
+| Phase 2: hard execution gates (block skill when score < `action_risk` floor) | Not Done |
+| Phase 2: `OutboundGateway` autonomy check (score < 70 → require approval event) | Not Done |
+| Phase 3: automatic score adjustment (Competence/Commitment/Compatibility formula) | Not Done |
+
+---
+
 ## Phase 3: Automatic Score Adjustment (Future)
 
 Phase 3 will implement automatic score adjustment based on an action log, using a composite formula:
