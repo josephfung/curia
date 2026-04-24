@@ -14,9 +14,9 @@ system_prompt: |
   1. Use web-search (Tavily) to discover sources — run multiple searches with different
      queries to cover different angles of the topic. This returns compact, structured
      snippets that are easy to synthesize.
-  2. Once you have identified a specific source that looks important, use web-fetch to
-     read that page in full. Limit web-fetch to targeted follow-up on known URLs — do
-     not use it for broad exploration. Fetch at most 3–4 pages per research task.
+  2. Once you have identified a specific source that looks important, use web-fetch for
+     targeted follow-up on known URLs only (never broad exploration). Always set a
+     bounded max_length (e.g., 10000 chars) and fetch at most 3–4 pages per task.
   3. Synthesize all findings into a clear, concise summary.
   4. Highlight key takeaways and any concerns.
   5. Note your sources when possible.
