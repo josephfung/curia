@@ -6,7 +6,7 @@
 // - "dismiss" — discard the held message (CEO doesn't care about it).
 // - "block" — create a blocked contact for the sender and discard the message.
 //
-// This is an infrastructure skill — it requires heldMessages, contactService,
+// This skill requires heldMessages and bus (declared in capabilities);
 // and bus access.
 
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
@@ -29,7 +29,7 @@ export class HeldMessagesProcessHandler implements SkillHandler {
       return { success: false, error: 'Invalid action — must be "identify", "dismiss", or "block"' };
     }
     if (!ctx.heldMessages || !ctx.contactService || !ctx.bus) {
-      return { success: false, error: 'Required services not available. Is infrastructure: true set?' };
+      return { success: false, error: 'Required services not available. Declare "heldMessages" and "bus" in capabilities.' };
     }
 
     // Validate input lengths to prevent abuse / storage overflow

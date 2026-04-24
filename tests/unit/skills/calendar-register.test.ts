@@ -25,7 +25,7 @@ describe('CalendarRegisterHandler', () => {
     const result = await handler.execute(makeCtx({ nylas_calendar_id: 'cal-1', label: 'Work' }));
     expect(result.success).toBe(false);
     if (!result.success) {
-      expect(result.error).toContain('infrastructure access');
+      expect(result.error).toContain('universal service');
     }
   });
 

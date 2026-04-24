@@ -1,6 +1,6 @@
 // handler.ts — bullpen skill implementation.
 //
-// This is an infrastructure skill that allows agents to open, reply to, read,
+// This skill allows agents to open, reply to, read,
 // and close inter-agent Bullpen discussion threads. It persists thread state
 // via BullpenService and publishes agent.discuss events so the BullpenDispatcher
 // can route reply tasks to mentioned agents.
@@ -24,7 +24,7 @@ export class BullpenHandler implements SkillHandler {
       return { success: false, error: 'BullpenService not available in context' };
     }
     if (!ctx.bus) {
-      return { success: false, error: 'Bus not available in context (infrastructure skill requires bus)' };
+      return { success: false, error: 'Bus not available in context (requires "bus" capability)' };
     }
     if (!ctx.agentId) {
       return { success: false, error: 'agentId not available in context' };

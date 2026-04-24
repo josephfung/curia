@@ -11,7 +11,7 @@ export class SchedulerCreateHandler implements SkillHandler {
     if (!ctx.schedulerService) {
       return {
         success: false,
-        error: 'scheduler-create requires schedulerService in context. Is infrastructure: true set in the manifest?',
+        error: 'scheduler-create requires schedulerService in context. Declare "schedulerService" in capabilities.',
       };
     }
 

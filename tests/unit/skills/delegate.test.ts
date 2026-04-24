@@ -27,7 +27,7 @@ describe('DelegateHandler', () => {
     const result = await handler.execute(makeCtx({ agent: 'research-analyst', task: 'do something' }));
     expect(result.success).toBe(false);
     if (!result.success) {
-      expect(result.error).toContain('infrastructure');
+      expect(result.error).toContain('capabilities');
     }
   });
 

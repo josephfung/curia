@@ -4,7 +4,7 @@
 // signal, telegram). Automatically creates a knowledge graph person node via
 // the ContactService.
 //
-// This is an infrastructure skill — it requires contactService access.
+// This skill uses contactService, which is a universal service.
 
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
 
@@ -50,7 +50,7 @@ export class ContactCreateHandler implements SkillHandler {
     if (!ctx.contactService) {
       return {
         success: false,
-        error: 'contact-create skill requires infrastructure access (contactService). Is infrastructure: true set in the manifest?',
+        error: 'contact-create skill requires contactService is a universal service — check ExecutionLayer configuration.',
       };
     }
 

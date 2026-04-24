@@ -32,7 +32,7 @@ export class EmailReplyHandler implements SkillHandler {
     if (!ctx.outboundGateway) {
       return {
         success: false,
-        error: 'email-reply skill requires outboundGateway access. Is infrastructure: true set in the manifest and outboundGateway passed to ExecutionLayer?',
+        error: 'email-reply skill requires outboundGateway access. Declare "outboundGateway" in capabilities.',
       };
     }
 

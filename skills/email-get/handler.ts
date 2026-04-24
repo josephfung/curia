@@ -9,7 +9,7 @@ import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/t
 export class EmailGetHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {
     if (!ctx.outboundGateway) {
-      return { success: false, error: 'email-get requires outboundGateway (infrastructure: true)' };
+      return { success: false, error: 'email-get requires outboundGateway (capabilities: ["outboundGateway"])' };
     }
 
     // Handlers must never throw — destructuring a non-object ctx.input would.
