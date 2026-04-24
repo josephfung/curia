@@ -6,12 +6,16 @@
 //   2. Unknown skill names are silently skipped
 //   3. Skills returned by skill-registry can have their tool defs retrieved and
 //      then be invoked — the full discover → call path works end-to-end with mocks
+//   4. Capability-gated service injection: only declared services reach ctx
 
 import { describe, it, expect, vi } from 'vitest';
 import pino from 'pino';
 import { SkillRegistry } from './registry.js';
 import { ExecutionLayer } from './execution.js';
 import type { SkillHandler, SkillManifest } from './types.js';
+import type { EventBus } from '../bus/bus.js';
+import type { OutboundGateway } from './outbound-gateway.js';
+import type { SchedulerService } from '../scheduler/scheduler-service.js';
 
 const logger = pino({ level: 'silent' });
 
@@ -151,5 +155,105 @@ describe('discover → invoke round-trip', () => {
     expect(expandedDefs).toHaveLength(3);
     expect(expandedDefs.map(d => d.name)).toContain('search_drive_files');
     expect(expandedDefs.map(d => d.name)).toContain('get_doc_content');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Capability-gated service injection
+// ---------------------------------------------------------------------------
+
+describe('capability-gated service injection', () => {
+  /** Manifest that declares specific capabilities. */
+  function makeCapManifest(name: string, capabilities: string[]): SkillManifest {
+    return {
+      name,
+      description: `${name} description`,
+      version: '1.0.0',
+      sensitivity: 'normal',
+      action_risk: 'none',
+      inputs: {},
+      outputs: {},
+      permissions: [],
+      secrets: [],
+      timeout: 5000,
+      capabilities,
+    };
+  }
+
+  it('injects only declared capabilities into context', async () => {
+    const registry = new SkillRegistry();
+    // Handler captures the context it received so we can inspect it
+    let capturedCtx: Record<string, unknown> = {};
+    const handler: SkillHandler = {
+      execute: vi.fn(async (ctx) => {
+        capturedCtx = ctx as unknown as Record<string, unknown>;
+        return { success: true, data: 'ok' };
+      }),
+    };
+    registry.register(makeCapManifest('outbound-only', ['outboundGateway']), handler);
+
+    const mockGateway = { send: vi.fn() } as unknown as OutboundGateway;
+    const mockBus = { publish: vi.fn() } as unknown as EventBus;
+    const mockScheduler = { createJob: vi.fn() } as unknown as SchedulerService;
+
+    const layer = new ExecutionLayer(registry, logger, {
+      outboundGateway: mockGateway,
+      bus: mockBus,
+      schedulerService: mockScheduler,
+    });
+
+    await layer.invoke('outbound-only', {});
+
+    // Should have outboundGateway — it was declared
+    expect(capturedCtx.outboundGateway).toBe(mockGateway);
+    // Should NOT have bus or schedulerService — not declared in capabilities
+    expect(capturedCtx.bus).toBeUndefined();
+    expect(capturedCtx.schedulerService).toBeUndefined();
+  });
+
+  it('injects no privileged services when capabilities is empty', async () => {
+    const registry = new SkillRegistry();
+    let capturedCtx: Record<string, unknown> = {};
+    const handler: SkillHandler = {
+      execute: vi.fn(async (ctx) => {
+        capturedCtx = ctx as unknown as Record<string, unknown>;
+        return { success: true, data: 'ok' };
+      }),
+    };
+    registry.register(makeCapManifest('no-caps', []), handler);
+
+    const mockBus = { publish: vi.fn() } as unknown as EventBus;
+    const mockGateway = { send: vi.fn() } as unknown as OutboundGateway;
+
+    const layer = new ExecutionLayer(registry, logger, {
+      bus: mockBus,
+      outboundGateway: mockGateway,
+    });
+
+    await layer.invoke('no-caps', {});
+
+    // No privileged services should be injected — capabilities is empty
+    expect(capturedCtx.bus).toBeUndefined();
+    expect(capturedCtx.outboundGateway).toBeUndefined();
+  });
+
+  it('returns skill error when declared capability is not available on ExecutionLayer', async () => {
+    const registry = new SkillRegistry();
+    const handler: SkillHandler = {
+      execute: vi.fn(async () => ({ success: true, data: 'ok' })),
+    };
+    registry.register(makeCapManifest('needs-scheduler', ['schedulerService']), handler);
+
+    // ExecutionLayer constructed WITHOUT schedulerService
+    const layer = new ExecutionLayer(registry, logger);
+
+    const result = await layer.invoke('needs-scheduler', {});
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error).toContain('schedulerService');
+    }
+    // Handler should NOT have been called — fail-closed
+    expect(handler.execute).not.toHaveBeenCalled();
   });
 });
