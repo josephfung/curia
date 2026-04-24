@@ -391,19 +391,38 @@ export class OutboundGateway {
    * as a send failure. Log at warn so anomalies are visible without alarming callers.
    */
   private async promoteOrCreateRecipientContact(channel: string, recipientId: string): Promise<void> {
+    let contact;
     try {
-      const contact = await this.contactService.resolveByChannelIdentity(channel, recipientId);
+      contact = await this.contactService.resolveByChannelIdentity(channel, recipientId);
+    } catch (err) {
+      this.log.warn(
+        { err, channel, recipientId: redactId(recipientId) },
+        'outbound-gateway: contact lookup failed after successful send — recipient may still receive holds on replies',
+      );
+      return;
+    }
 
-      if (contact === null) {
-        // No contact record yet — create one so replies from this person are not held.
-        // displayName defaults to the identifier (e.g. email address) as a placeholder
-        // until the contact is enriched or the CEO assigns a proper name.
-        const created = await this.contactService.createContact({
+    if (contact === null) {
+      // No contact record yet — create one so replies from this person are not held.
+      // displayName defaults to the identifier (e.g. email address) as a placeholder
+      // until the contact is enriched or the CEO assigns a proper name.
+      let created;
+      try {
+        created = await this.contactService.createContact({
           displayName: recipientId,
           fallbackDisplayName: recipientId,
           status: 'confirmed',
           source: 'ceo_stated',
         });
+      } catch (err) {
+        this.log.warn(
+          { err, channel, recipientId: redactId(recipientId) },
+          'outbound-gateway: createContact failed after successful send — recipient may still receive holds on replies',
+        );
+        return;
+      }
+
+      try {
         await this.contactService.linkIdentity({
           contactId: created.id,
           channel,
@@ -414,26 +433,50 @@ export class OutboundGateway {
           { channel, recipientId: redactId(recipientId), contactId: created.id },
           'outbound-gateway: created confirmed contact for outbound recipient',
         );
-        return;
+      } catch (err) {
+        // createContact committed but linkIdentity failed — the contact exists with no
+        // channel identity. resolveByChannelIdentity will still return null for this
+        // sender on future lookups, so the thread-trust bypass (Fix B) will re-attempt
+        // creation. Log at error so an operator can clean up the orphaned contact.
+        // TODO: once ContactService exposes a deleteContact method or a transactional
+        // createContactWithIdentity helper, use it here to avoid the orphan entirely.
+        this.log.error(
+          { err, channel, recipientId: redactId(recipientId), orphanedContactId: created.id },
+          'outbound-gateway: linkIdentity failed after createContact — orphaned confirmed contact exists; manual cleanup may be needed',
+        );
       }
+      return;
+    }
 
-      if (contact.status === 'provisional') {
+    if (contact.status === 'blocked') {
+      // Anomalous: the send proceeded despite the contact being blocked. This indicates
+      // either a race (contact was blocked between the initial check and the send) or
+      // a DB error on the earlier blocked-contact check that caused fail-open.
+      // Log at error so this is visible in alerting — a message reached a blocked recipient.
+      this.log.error(
+        { channel, recipientId: redactId(recipientId), contactId: contact.contactId },
+        'outbound-gateway: sent message to blocked contact — blocked-contact check may have been bypassed due to DB error',
+      );
+      return;
+    }
+
+    if (contact.status === 'provisional') {
+      try {
         await this.contactService.setStatus(contact.contactId, 'confirmed');
         this.log.info(
           { channel, recipientId: redactId(recipientId), contactId: contact.contactId },
           'outbound-gateway: promoted provisional contact to confirmed after outbound send',
         );
-        return;
+      } catch (err) {
+        this.log.warn(
+          { err, channel, recipientId: redactId(recipientId), contactId: contact.contactId },
+          'outbound-gateway: setStatus failed after successful send — recipient may still receive holds on replies',
+        );
       }
-
-      // Already confirmed or blocked — no action needed.
-    } catch (err) {
-      // Non-fatal: the message is already on its way. Log and move on.
-      this.log.warn(
-        { err, channel, recipientId: redactId(recipientId) },
-        'outbound-gateway: contact promotion failed after successful send — recipient may still receive holds on replies',
-      );
+      return;
     }
+
+    // Already confirmed — no action needed.
   }
 
   /**
