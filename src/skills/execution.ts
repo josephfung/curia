@@ -268,7 +268,7 @@ export class ExecutionLayer {
       // contactService is available to all skills — read-only contact lookups
       // (calendars, display names, etc.) are not a privilege escalation.
       contactService: this.contactService,
-      // Thread agentId and taskEventId into context unconditionally — infrastructure
+      // Thread agentId and taskEventId into context unconditionally — capability-gated
       // skills (bullpen) need these for event publishing; harmless for others.
       agentId: options?.agentId,
       taskEventId: options?.taskEventId,
@@ -284,7 +284,7 @@ export class ExecutionLayer {
     // refuse to run the skill. This catches configuration errors at invocation time.
     const missingCaps = caps.filter(cap => {
       if (cap === 'skillSearch') return false; // skillSearch is synthesized, not a field on `this`
-      return !(this as Record<string, unknown>)[cap];
+      return (this as Record<string, unknown>)[cap] === undefined;
     });
     if (missingCaps.length > 0) {
       skillLogger.error(
@@ -325,11 +325,10 @@ export class ExecutionLayer {
       }
     }
 
-    // entityContextAssembler — available to ALL skills (not just infrastructure).
+    // entityContextAssembler — universal (not capability-gated).
     // The assembler is a read-only DB pipeline; granting it unconditionally is no
-    // more privileged than contactService. Keeping it outside the infrastructure
-    // block means the entity-context skill does not need infrastructure: true,
-    // which would otherwise grant it full bus/registry access it doesn't need.
+    // more privileged than contactService. Keeping it universal means the
+    // entity-context skill needs no capabilities declaration at all.
     if (this.entityContextAssembler) {
       ctx.entityContextAssembler = this.entityContextAssembler;
     }
