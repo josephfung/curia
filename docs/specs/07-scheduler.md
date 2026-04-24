@@ -208,7 +208,7 @@ Four skills available to agents:
 ## Job Observability
 
 - All job executions are audit-logged (start, success, failure, suspension)
-- The health endpoint includes: number of active jobs, number of suspended jobs, next due job time
+- The health endpoint does not yet include scheduler stats (active jobs, suspended jobs, next due time) — see Implementation Status below
 - Suspended jobs generate a user notification via the configured alert channel
 
 ---
