@@ -243,3 +243,32 @@ Every LLM call records: provider, model, input tokens, output tokens, estimated 
 - Check for pending Bullpen threads on every `agent.task` routing
 - Subscribe to `agent.error` and notify the user on the originating channel
 - Mediate Bullpen discussions — escalate to user if agents are stuck
+
+---
+
+## Implementation Status
+
+| Item | Status |
+|---|---|
+| Coordinator agent — `role: coordinator` routing, `coordinator.yaml` config | Done |
+| Specialist agents — YAML-only config (expense-tracker, research-analyst, etc.) | Done |
+| TypeScript handler escape hatch (`handler:` field, custom lifecycle hooks) | Done |
+| Agent YAML config validation against JSON Schema at startup | Done |
+| Lifecycle hooks (`beforeLLMCall`, `afterLLMCall`, `beforeSkillInvoke`, `afterSkillResult`, `onTaskComplete`, `onTaskError`) | Not Done — no hook system in `AgentRuntime` |
+| Agent state model — stateful per-conversation, Postgres-backed, restart-safe | Done |
+| Agent presence — `GET /api/agents/status` snapshot endpoint | Partial — endpoint exists but all agents return hardcoded `state: 'idle'`; real-time state machine not built |
+| Agent presence — SSE stream at `GET /api/agents/status/stream` | Not Done |
+| Execution mode: reactive (message → respond) | Done |
+| Execution mode: persistent tasks (burst execution, `intent_anchor`, `progress` JSONB) | Done |
+| LLM provider abstraction (`LLMProvider` interface, `provider.ts`) | Done |
+| Anthropic provider | Done |
+| OpenAI provider | Not Done |
+| Ollama (local model) provider | Not Done |
+| Fallback provider (`model.fallback` in agent config) | Not Done |
+| Token tracking per LLM call (input/output tokens via `llm.call` event) | Done |
+| Cost tracking per LLM call (estimated USD in `llm.call` event) | Done |
+| Dispatch layer — route all inbound to Coordinator, enforce rate limits and policy | Done |
+| Dispatch layer — translate `agent.response` → `outbound.message` | Done |
+| Dispatch layer — inject office identity (display name, email signature) into outbound | Done |
+| Dispatch layer — check pending Bullpen threads on every routing | Done |
+| Dispatch layer — subscribe to `agent.error` and notify user | Done |
