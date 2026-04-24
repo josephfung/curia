@@ -155,7 +155,7 @@ export interface SkillContext {
    *  Guaranteed to be defined for elevated skills (execution layer rejects without it).
    *  Available but optional for normal skills. */
   caller?: CallerContext;
-  /** Entity context assembler — available to infrastructure skills.
+  /** Entity context assembler — available to all skills (universal, not capability-gated).
    *  Used by the entity-context skill to assemble EntityContext payloads on demand.
    *  Also used by the execution layer for entity_enrichment pre-enrichment. */
   entityContextAssembler?: import('../entity-context/assembler.js').EntityContextAssembler;
