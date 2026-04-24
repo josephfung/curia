@@ -1,0 +1,20 @@
+{
+  "name": "contact-rename",
+  "description": "Update a contact's display name (e.g. from 'Jodi' to 'Jodi Arnott'). contact_id must be a UUID obtained from contact-lookup or contact-list — do not invent or infer IDs.",
+  "version": "1.0.0",
+  "sensitivity": "elevated",
+  "action_risk": "low",
+  "infrastructure": true,
+  "inputs": {
+    "contact_id": "string (UUID from contact-lookup or contact-list)",
+    "display_name": "string (new display name)"
+  },
+  "outputs": {
+    "contact_id": "string",
+    "display_name": "string",
+    "role": "string | null"
+  },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 15000
+}
