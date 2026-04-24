@@ -109,9 +109,31 @@ A raw integer (0–100) may be used for precision when the named levels are too 
 
 **How Phase 2 gating will work:** When an agent calls a skill, the execution layer compares the skill's minimum required autonomy score against the live global score from `autonomy_config`. If the score is too low, the invocation returns an advisory failure (no throw, same `{ success: false, error }` shape as any other failure) and an audit event is emitted. The autonomy score is CEO-controlled via the `set-autonomy` skill. See `docs/specs/14-autonomy-engine.md` for the full spec.
 
-#### `infrastructure` (optional, default: `false`)
+#### `capabilities` (optional)
 
-Marks skills that are part of Curia's core infrastructure (email, calendar, contacts, scheduling, etc.) rather than user-contributed extensions. Infrastructure skills receive additional `SkillContext` fields: `bus`, `agentRegistry`, `outboundGateway`, `schedulerService`, `entityMemory`, etc. — see the `SkillContext` reference below. Omit this field for contributed skills.
+Declares which privileged `SkillContext` services this skill needs. The loader validates declared names against a fixed allowlist at startup and rejects unknown names. The manifest is frozen after loading — capabilities cannot be changed at runtime.
+
+```json
+"capabilities": ["outboundGateway"]
+```
+
+Valid capability names and what they grant:
+
+| Capability | Service | Use for |
+|---|---|---|
+| `bus` | `EventBus` | Publishing bus events directly (delegate, bullpen) |
+| `agentRegistry` | `AgentRegistry` | Looking up registered agents (delegate) |
+| `outboundGateway` | `OutboundGateway` | Sending email and Signal messages |
+| `heldMessages` | `HeldMessageService` | Reading / releasing held message queues |
+| `schedulerService` | `SchedulerService` | Creating and managing scheduled jobs |
+| `entityMemory` | `EntityMemory` | Reading and writing the knowledge graph |
+| `nylasCalendarClient` | `NylasCalendarClient` | Calendar CRUD operations |
+| `autonomyService` | `AutonomyService` | Reading or setting the autonomy score |
+| `browserService` | `BrowserService` | Controlling a real web browser |
+| `bullpenService` | `BullpenService` | Managing agent conversation threads |
+| `skillSearch` | `skillSearch` closure | Searching the skill registry by keyword |
+
+Services NOT in this list (`contactService`, `entityContextAssembler`, `agentPersona`) are **universal** — available to every skill without declaration. Omit `capabilities` entirely if your skill only uses universal services.
 
 #### `inputs` (required)
 
@@ -236,34 +258,34 @@ interface SkillContext {
   /** Scoped pino child logger (includes skill name and task ID in every line) */
   log: Logger;
 
-  // --- Infrastructure-only fields (only populated when manifest.infrastructure: true) ---
+  // --- Capability-gated fields (only populated when the skill declares the capability) ---
 
-  /** Outbound gateway — use this to send email from infrastructure skills.
+  /** Outbound gateway — declare "outboundGateway" in capabilities.
    *  Never access email credentials directly; go through the gateway. */
   outboundGateway?: OutboundGateway;
 
-  /** Nylas calendar client — for infrastructure skills that read/write calendar events */
+  /** Nylas calendar client — declare "nylasCalendarClient" in capabilities */
   nylasCalendarClient?: NylasCalendarClient;
 
-  /** Bus access — for infrastructure skills that need to publish events */
+  /** Bus access — declare "bus" in capabilities */
   bus?: EventBus;
 
-  /** Scheduler service — for infrastructure skills like scheduler-create */
+  /** Scheduler service — declare "schedulerService" in capabilities */
   schedulerService?: SchedulerService;
 
-  /** Entity memory (knowledge graph) — for infrastructure skills that read/write long-term knowledge */
+  /** Entity memory (knowledge graph) — declare "entityMemory" in capabilities */
   entityMemory?: EntityMemory;
 
-  // --- Available to all skills ---
+  /** Browser service — declare "browserService" in capabilities */
+  browserService?: BrowserService;
+
+  // --- Universal fields (available to all skills) ---
 
   /** Caller identity (role, channel). Guaranteed non-null for elevated skills. */
   caller?: CallerContext;
 
   /** Agent persona (display name, title, email signature) from coordinator config */
   agentPersona?: AgentPersona;
-
-  /** Browser service — warm Playwright instance for JS-rendered pages */
-  browserService?: BrowserService;
 }
 ```
 
@@ -424,6 +446,7 @@ When the risk is between two levels, use the higher one. It's easier to lower au
 
 - [ ] `action_risk` is declared in `skill.json`
 - [ ] `sensitivity` matches whether the skill has external effects (remember: `"elevated"` = CEO-or-CLI-only gate)
+- [ ] `capabilities` declares only the privileged services actually used — omit if using only universal services
 - [ ] All optional inputs are suffixed with `?` in the manifest
 - [ ] Handler exports a **class** implementing `SkillHandler`, not a bare function
 - [ ] Handler never throws — all errors returned as `{ success: false, error }`
