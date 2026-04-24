@@ -2146,10 +2146,21 @@ function createUiHtml(): string {
           var newElements = newNodes.map(nodeToElement).concat(newEdges.map(edgeToElement));
 
           if (newElements.length > 0) {
+            // Snapshot existing node positions BEFORE adding new elements so we
+            // can pass them as fixedNodeConstraint to fcose. This pins every
+            // pre-existing node in place — only the newly added nodes are
+            // positioned by the layout engine, so nothing jumps around.
+            var fixedConstraints = [];
+            cy.nodes().forEach(function(node) {
+              fixedConstraints.push({ nodeId: node.id(), position: node.position() });
+            });
+
             cy.add(newElements);
-            // Animate layout only over new elements + their neighbourhood so the
-            // rest of the existing graph doesn't jump around.
-            cy.layout(FCOSE_OPTS_EXPAND).run();
+
+            var expandOpts = Object.assign({}, FCOSE_OPTS_EXPAND, {
+              fixedNodeConstraint: fixedConstraints,
+            });
+            cy.layout(expandOpts).run();
           }
 
           // Mark the tapped node as focal so it gets a white border highlight.
