@@ -13,11 +13,6 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
-### Changed
-
-- **Prompt caching** — `AnthropicProvider` now passes the system prompt as a cached `TextBlockParam` and marks the last tool definition with `cache_control: ephemeral`, reducing effective input token cost by 60-80% for repeat calls within the 5-minute TTL (issue #320).
-- **Default Anthropic model** bumped from `claude-sonnet-4-20250514` to `claude-sonnet-4-6` across agent configs, runtime fallback, tests, and docs. The old model reaches EOL on 2026-06-15.
-
 ### Added
 
 - **LEAVE FOR CEO triage classification** — the observation-mode preamble now defines a fifth category for personal, sensitive, or judgment-dependent email where the CEO will read and handle it themselves. No archive, no draft, no notification. The "when in doubt" default has shifted from URGENT to LEAVE FOR CEO to stop over-notifying. Mirrored in `agents/coordinator.yaml`.
@@ -25,6 +20,9 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
+- **Observation mode triage protocol moved to system prompt** — the ~40-line triage protocol (URGENT / ACTIONABLE / NEEDS DRAFT / LEAVE FOR CEO / NOISE classifications) has been moved from per-message user content into `agents/coordinator.yaml`'s system prompt. Only the `[OBSERVATION MODE]` marker and per-message identifiers (Message ID, Account) remain in user content. This makes the static protocol cacheable once prompt caching is active (issue #321, follows #320).
+- **Prompt caching** — `AnthropicProvider` now passes the system prompt as a cached `TextBlockParam` and marks the last tool definition with `cache_control: ephemeral`, reducing effective input token cost by 60-80% for repeat calls within the 5-minute TTL (issue #320).
+- **Default Anthropic model** bumped from `claude-sonnet-4-20250514` to `claude-sonnet-4-6` across agent configs, runtime fallback, tests, and docs. The old model reaches EOL on 2026-06-15.
 - **Observation-mode coordinator response is audit-only** — the dispatcher no longer converts the coordinator's final response into an `outbound.message` when the originating inbound was observation-mode. The preamble tells the coordinator its final text is for audit/logging only; outbound actions happen via explicit skill calls (email-archive, notify channels, email-reply for drafts). The `taskRouting` map gained an `observationMode` flag so `handleAgentResponse` can suppress the auto-reply path.
 
 ### Fixed

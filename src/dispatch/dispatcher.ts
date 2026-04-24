@@ -655,13 +655,12 @@ export class Dispatcher {
       }
     }
 
-    // Observation-mode preamble: prepend an explicit directive so the coordinator
-    // LLM cannot miss the context. Relying solely on the system prompt was
-    // insufficient — in testing the model replied as itself rather than
-    // summarising. The preamble is injected after the injection scanner so it
-    // is never treated as potentially hostile user content.
-    // The preamble also injects the 4-way triage protocol and surfaces identifiers
-    // (nylasMessageId, accountId) so the coordinator can call skills like email-archive.
+    // Observation-mode marker: prepend an explicit [OBSERVATION MODE] label plus the
+    // per-message identifiers so the coordinator knows which mailbox and message to act on.
+    // The triage protocol (roles, classifications, rules) lives in the coordinator's system
+    // prompt (agents/coordinator.yaml) where it is static and therefore cacheable.
+    // Only message-specific identifiers — nylasMessageId and accountId — remain here.
+    // Injected after the injection scanner so it is never treated as potentially hostile content.
     if (isObservationMode) {
       // Extract identifiers needed for skill calls (e.g. email-archive) from payload metadata.
       const nylasMessageId = (payload.metadata as Record<string, unknown> | undefined)?.nylasMessageId as string | undefined;
@@ -675,33 +674,7 @@ export class Dispatcher {
 
       taskContent =
         `[OBSERVATION MODE — monitored inbox]\n` +
-        `This email arrived in a monitored inbox. You watch it on the CEO's behalf.\n` +
-        `You are NOT the recipient. NEVER reply to the sender as yourself or sign with your name.\n` +
-        `Your final response text is for audit/logging only — the dispatcher will NOT turn\n` +
-        `it into an outbound email. Keep it brief: just state your classification and action.\n\n` +
         identifierBlock +
-        `TRIAGE — evaluate in order:\n\n` +
-        `1. STANDING INSTRUCTIONS: use entity-context to look up the sender. If the CEO has\n` +
-        `   given you a standing instruction for this sender or email type, follow it.\n\n` +
-        `2. CLASSIFY and act:\n` +
-        `   - URGENT — time-sensitive, requires CEO decision, from a known contact:\n` +
-        `     Send the CEO a message on a high-urgency channel (e.g. Signal): sender, subject,\n` +
-        `     one-sentence summary, key ask. Do NOT reply to the sender.\n` +
-        `   - ACTIONABLE — calendar booking, add attendee, change location, clear task:\n` +
-        `     Do it using your existing skills. No notification. It will appear in the weekly log.\n` +
-        `   - NEEDS DRAFT — a reply is warranted and you can write it:\n` +
-        `     Save a draft with email-reply. The CEO will review before it sends.\n` +
-        `   - LEAVE FOR CEO — personal, sensitive, relationship-dependent, requires the CEO's\n` +
-        `     own voice or judgment, or you are not confident you understand it:\n` +
-        `     Do NOTHING. No archive, no draft, no notification. The CEO will read and\n` +
-        `     handle it themselves when they next check their inbox. Examples: personal\n` +
-        `     correspondence, LinkedIn DMs from specific individuals, offers/negotiations,\n` +
-        `     anything requiring the CEO's discretion.\n` +
-        `   - NOISE — receipt, newsletter, automated notification, no action needed:\n` +
-        `     Call email-archive. No other action. No notification.\n\n` +
-        `3. WHEN IN DOUBT: prefer LEAVE FOR CEO over acting. The CEO will see the email in\n` +
-        `   their inbox. URGENT is only for time-sensitive items that need an immediate\n` +
-        `   Signal ping. Do not over-notify.\n\n` +
         `--- Original message ---\n` +
         taskContent;
     }
