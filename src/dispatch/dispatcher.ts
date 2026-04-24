@@ -12,6 +12,12 @@ import type { DbPool } from '../db/connection.js';
 import { computeTrustScore, DEFAULT_TRUST_WEIGHTS } from './trust-scorer.js';
 import type { TrustScorerWeights } from './trust-scorer.js';
 
+/** Redact a channel identifier (email address or phone number) for safe log output. */
+function redactSenderId(value: string): string {
+  if (value.length <= 6) return '***';
+  return `${value.slice(0, 3)}***${value.slice(-3)}`;
+}
+
 export interface DispatcherConfig {
   bus: EventBus;
   logger: Logger;
@@ -928,11 +934,12 @@ export class Dispatcher {
       );
       return result.rows[0]?.exists ?? false;
     } catch (err) {
-      // Fail-open: if we can't check, fall through to the normal hold policy.
-      // This keeps message security conservative — an unexpected hold is safer than
-      // a DB error silently bypassing the policy.
+      // Fail-closed: if the DB is unavailable, default to holding the message.
+      // Returning false causes the caller to apply the normal hold policy, which is
+      // the safe choice — an unexpected hold is recoverable, but silently bypassing
+      // the hold policy on a DB error would be a security regression.
       this.logger.warn(
-        { err, conversationId },
+        { err, conversationId, senderId: redactSenderId(senderId) },
         'Dispatcher: audit_log thread-trust check failed — proceeding with normal hold policy',
       );
       return false;
@@ -957,36 +964,59 @@ export class Dispatcher {
   ): Promise<void> {
     if (!this.contactService) return;
 
-    try {
-      if (contactId) {
+    if (contactId) {
+      try {
         await this.contactService.setStatus(contactId, 'confirmed');
         this.logger.info(
           { channelId, contactId },
           'Dispatcher: promoted provisional contact to confirmed via thread-originated trust',
         );
-      } else {
-        // Unknown sender — create a confirmed contact so future messages are not held.
-        const created = await this.contactService.createContact({
-          displayName: senderId,
-          fallbackDisplayName: senderId,
-          status: 'confirmed',
-          source: 'ceo_stated',
-        });
-        await this.contactService.linkIdentity({
-          contactId: created.id,
-          channel: channelId,
-          channelIdentifier: senderId,
-          source: 'ceo_stated',
-        });
-        this.logger.info(
-          { channelId, contactId: created.id },
-          'Dispatcher: created confirmed contact for unknown sender via thread-originated trust',
+      } catch (err) {
+        this.logger.warn(
+          { err, channelId, contactId, senderId: redactSenderId(senderId) },
+          'Dispatcher: setStatus failed during thread-trust promotion — message will still route to coordinator',
         );
       }
+      return;
+    }
+
+    // Unknown sender — create a confirmed contact so future messages are not held.
+    let created;
+    try {
+      created = await this.contactService.createContact({
+        displayName: senderId,
+        fallbackDisplayName: senderId,
+        status: 'confirmed',
+        source: 'ceo_stated',
+      });
     } catch (err) {
       this.logger.warn(
-        { err, channelId, senderId },
-        'Dispatcher: contact promotion via thread-originated trust failed — message will still route to coordinator',
+        { err, channelId, senderId: redactSenderId(senderId) },
+        'Dispatcher: createContact failed during thread-trust promotion — message will still route to coordinator',
+      );
+      return;
+    }
+
+    try {
+      await this.contactService.linkIdentity({
+        contactId: created.id,
+        channel: channelId,
+        channelIdentifier: senderId,
+        source: 'ceo_stated',
+      });
+      this.logger.info(
+        { channelId, contactId: created.id },
+        'Dispatcher: created confirmed contact for unknown sender via thread-originated trust',
+      );
+    } catch (err) {
+      // createContact committed but linkIdentity failed — orphaned confirmed contact with no
+      // channel identity. Future lookups will still return null, so the thread-trust check
+      // will re-attempt creation. Log at error so an operator can clean up the orphaned row.
+      // TODO: once ContactService exposes a deleteContact or transactional create-with-identity
+      // helper, use it here to avoid the orphan.
+      this.logger.error(
+        { err, channelId, senderId: redactSenderId(senderId), orphanedContactId: created.id },
+        'Dispatcher: linkIdentity failed after createContact during thread-trust promotion — orphaned confirmed contact exists; manual cleanup may be needed',
       );
     }
   }
