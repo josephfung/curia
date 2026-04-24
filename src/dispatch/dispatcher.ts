@@ -3,6 +3,7 @@ import type { InboundMessageEvent, AgentResponseEvent, AgentErrorEvent } from '.
 import { createAgentTask, createOutboundMessage, createContactResolved, createContactUnknown, createMessageHeld, createMessageRejected, createConversationCheckpoint } from '../bus/events.js';
 import type { Logger } from '../logger.js';
 import type { ContactResolver } from '../contacts/contact-resolver.js';
+import type { ContactService } from '../contacts/contact-service.js';
 import type { HeldMessageService } from '../contacts/held-messages.js';
 import type { InboundSenderContext, ChannelPolicyConfig, TrustLevel, UnknownSenderPolicy } from '../contacts/types.js';
 import type { InboundScanner } from './inbound-scanner.js';
@@ -15,13 +16,20 @@ export interface DispatcherConfig {
   bus: EventBus;
   logger: Logger;
   contactResolver?: ContactResolver;
+  /**
+   * ContactService — used to promote or create confirmed contacts when thread-originated
+   * trust is detected (Fix B). When omitted, the trust bypass still routes the message
+   * to the coordinator, but no contact promotion occurs.
+   */
+  contactService?: ContactService;
   heldMessages?: HeldMessageService;
   channelPolicies?: Record<string, ChannelPolicyConfig>;
   /** Layer 1 prompt injection scanner. When provided, every inbound message is
    *  scanned before reaching the Coordinator — tags stripped, risk_score attached. */
   injectionScanner?: InboundScanner;
-  /** Postgres pool — used to query working_memory for checkpoint turns.
-   *  When omitted, checkpoint scheduling is disabled (e.g. in unit tests). */
+  /** Postgres pool — used to query working_memory for checkpoint turns and to check
+   *  the audit_log for prior outbound messages (thread-originated trust bypass).
+   *  When omitted, checkpoint scheduling and thread trust checks are disabled. */
   pool?: DbPool;
   /** Milliseconds of inactivity before conversation.checkpoint fires. Default: 600000. */
   conversationCheckpointDebounceMs?: number;
@@ -52,6 +60,7 @@ export class Dispatcher {
   private bus: EventBus;
   private logger: Logger;
   private contactResolver?: ContactResolver;
+  private contactService?: ContactService;
   private heldMessages?: HeldMessageService;
   private channelPolicies?: Record<string, ChannelPolicyConfig>;
   private injectionScanner?: InboundScanner;
@@ -90,6 +99,7 @@ export class Dispatcher {
     this.bus = config.bus;
     this.logger = config.logger;
     this.contactResolver = config.contactResolver;
+    this.contactService = config.contactService;
     this.heldMessages = config.heldMessages;
     this.channelPolicies = config.channelPolicies;
     this.injectionScanner = config.injectionScanner;
@@ -264,36 +274,51 @@ export class Dispatcher {
               }
 
               if (policy?.unknownSender === 'hold_and_notify' && this.heldMessages) {
-                try {
-                  const subject = (payload.metadata as Record<string, unknown> | undefined)?.subject as string | null ?? null;
-                  const heldId = await this.heldMessages.hold({
-                    channel: payload.channelId,
-                    senderId: payload.senderId,
-                    conversationId: payload.conversationId,
-                    content: payload.content,
-                    subject,
-                    metadata: payload.metadata ?? {},
-                  });
-
-                  await this.bus.publish('dispatch', createMessageHeld({
-                    heldMessageId: heldId,
-                    channel: payload.channelId,
-                    senderId: payload.senderId,
-                    subject,
-                    parentEventId: event.id,
-                  }));
-
+                // Belt-and-suspenders: before holding, check whether Curia previously sent
+                // an outbound to this exact address in this conversation. If so, the sender
+                // is implicitly trusted — promote their contact and route normally.
+                // Fix A (outbound-gateway) covers most cases; this catches the edge case
+                // where Fix A didn't run (e.g. DB error at send time, or historical sends
+                // before Fix A was deployed).
+                if (await this.hasOutboundToRecipientInConversation(payload.conversationId, payload.senderId)) {
                   this.logger.info(
-                    { heldMessageId: heldId, channel: payload.channelId, senderId: payload.senderId, contactId: senderContext.contactId },
-                    'Message held from provisional sender',
+                    { channel: payload.channelId, senderId: payload.senderId, contactId: senderContext.contactId, conversationId: payload.conversationId },
+                    'Dispatcher: thread-originated trust detected for provisional sender — promoting and routing to coordinator',
                   );
-                } catch (holdErr) {
-                  this.logger.error(
-                    { err: holdErr, channel: payload.channelId, senderId: payload.senderId },
-                    'Failed to hold provisional sender message — dropping (fail-closed)',
-                  );
+                  await this.promoteToConfirmedByThreadTrust(payload.channelId, payload.senderId, senderContext.contactId);
+                  // Fall through to normal coordinator routing below.
+                } else {
+                  try {
+                    const subject = (payload.metadata as Record<string, unknown> | undefined)?.subject as string | null ?? null;
+                    const heldId = await this.heldMessages.hold({
+                      channel: payload.channelId,
+                      senderId: payload.senderId,
+                      conversationId: payload.conversationId,
+                      content: payload.content,
+                      subject,
+                      metadata: payload.metadata ?? {},
+                    });
+
+                    await this.bus.publish('dispatch', createMessageHeld({
+                      heldMessageId: heldId,
+                      channel: payload.channelId,
+                      senderId: payload.senderId,
+                      subject,
+                      parentEventId: event.id,
+                    }));
+
+                    this.logger.info(
+                      { heldMessageId: heldId, channel: payload.channelId, senderId: payload.senderId, contactId: senderContext.contactId },
+                      'Message held from provisional sender',
+                    );
+                  } catch (holdErr) {
+                    this.logger.error(
+                      { err: holdErr, channel: payload.channelId, senderId: payload.senderId },
+                      'Failed to hold provisional sender message — dropping (fail-closed)',
+                    );
+                  }
+                  return;
                 }
-                return;
               }
 
               if (policy?.unknownSender === 'ignore') {
@@ -363,41 +388,53 @@ export class Dispatcher {
           }
 
           if (policy?.unknownSender === 'hold_and_notify' && this.heldMessages) {
-            try {
-              // Hold the message instead of routing to coordinator
-              const subject = (payload.metadata as Record<string, unknown> | undefined)?.subject as string | null ?? null;
-              const heldId = await this.heldMessages.hold({
-                channel: payload.channelId,
-                senderId: payload.senderId,
-                conversationId: payload.conversationId,
-                content: payload.content,
-                subject,
-                metadata: payload.metadata ?? {},
-              });
-
-              // Publish held event so CLI can notify and audit can log
-              await this.bus.publish('dispatch', createMessageHeld({
-                heldMessageId: heldId,
-                channel: payload.channelId,
-                senderId: payload.senderId,
-                subject,
-                parentEventId: event.id,
-              }));
-
+            // Belt-and-suspenders: before holding, check whether Curia previously sent
+            // an outbound to this exact address in this conversation. If so, the sender
+            // is implicitly trusted — promote them and route normally.
+            if (await this.hasOutboundToRecipientInConversation(payload.conversationId, payload.senderId)) {
               this.logger.info(
-                { heldMessageId: heldId, channel: payload.channelId, senderId: payload.senderId },
-                'Message held from unknown sender',
+                { channel: payload.channelId, senderId: payload.senderId, conversationId: payload.conversationId },
+                'Dispatcher: thread-originated trust detected for unknown sender — promoting and routing to coordinator',
               );
-            } catch (holdErr) {
-              // Fail closed: if we can't hold the message, drop it rather than
-              // routing an unknown sender's message to the coordinator.
-              // This is a security boundary — prefer message loss over policy bypass.
-              this.logger.error(
-                { err: holdErr, channel: payload.channelId, senderId: payload.senderId },
-                'Failed to hold unknown sender message — dropping (fail-closed)',
-              );
+              await this.promoteToConfirmedByThreadTrust(payload.channelId, payload.senderId, undefined);
+              // Fall through to normal coordinator routing below.
+            } else {
+              try {
+                // Hold the message instead of routing to coordinator
+                const subject = (payload.metadata as Record<string, unknown> | undefined)?.subject as string | null ?? null;
+                const heldId = await this.heldMessages.hold({
+                  channel: payload.channelId,
+                  senderId: payload.senderId,
+                  conversationId: payload.conversationId,
+                  content: payload.content,
+                  subject,
+                  metadata: payload.metadata ?? {},
+                });
+
+                // Publish held event so CLI can notify and audit can log
+                await this.bus.publish('dispatch', createMessageHeld({
+                  heldMessageId: heldId,
+                  channel: payload.channelId,
+                  senderId: payload.senderId,
+                  subject,
+                  parentEventId: event.id,
+                }));
+
+                this.logger.info(
+                  { heldMessageId: heldId, channel: payload.channelId, senderId: payload.senderId },
+                  'Message held from unknown sender',
+                );
+              } catch (holdErr) {
+                // Fail closed: if we can't hold the message, drop it rather than
+                // routing an unknown sender's message to the coordinator.
+                // This is a security boundary — prefer message loss over policy bypass.
+                this.logger.error(
+                  { err: holdErr, channel: payload.channelId, senderId: payload.senderId },
+                  'Failed to hold unknown sender message — dropping (fail-closed)',
+                );
+              }
+              return; // Always return — whether hold succeeded or failed
             }
-            return; // Always return — whether hold succeeded or failed
           }
 
           if (policy?.unknownSender === 'ignore') {
@@ -762,6 +799,9 @@ export class Dispatcher {
         channelId: routing.channelId,
         accountId: routing.accountId,
         content: event.payload.content,
+        // senderId is the person we're replying to — record it as recipientId so the
+        // dispatcher can later verify thread-originated trust when their reply arrives.
+        recipientId: routing.senderId,
         parentEventId: event.id,
       });
       await this.bus.publish('dispatch', outbound);
@@ -851,6 +891,103 @@ export class Dispatcher {
       );
     } catch (err) {
       this.logger.error({ err, conversationId, agentId }, 'Failed to fire conversation checkpoint');
+    }
+  }
+
+  /**
+   * Check whether Curia has previously sent an outbound message to `senderId` in
+   * `conversationId`. Used to detect thread-originated trust: if the CEO directed Curia
+   * to email someone and they reply on the same thread, the reply should not be held even
+   * if the contact is still provisional or unknown in the contact book.
+   *
+   * The recipient filter (`payload->>'recipientId'`) is essential for security: without it,
+   * a forwarding attack is possible — Person1 receives our email, forwards to Person2 who
+   * replies on the same thread, and Person2 bypasses the hold without ever being emailed
+   * by Curia directly.
+   *
+   * Returns false (safe default — hold the message) if:
+   *   - pool is not configured
+   *   - conversationId is empty
+   *   - the DB query fails
+   */
+  private async hasOutboundToRecipientInConversation(
+    conversationId: string,
+    senderId: string,
+  ): Promise<boolean> {
+    if (!this.pool || !conversationId) return false;
+
+    try {
+      const result = await this.pool.query<{ exists: boolean }>(
+        `SELECT EXISTS (
+           SELECT 1 FROM audit_log
+           WHERE event_type = 'outbound.message'
+             AND conversation_id = $1
+             AND payload->>'recipientId' = $2
+         ) AS exists`,
+        [conversationId, senderId],
+      );
+      return result.rows[0]?.exists ?? false;
+    } catch (err) {
+      // Fail-open: if we can't check, fall through to the normal hold policy.
+      // This keeps message security conservative — an unexpected hold is safer than
+      // a DB error silently bypassing the policy.
+      this.logger.warn(
+        { err, conversationId },
+        'Dispatcher: audit_log thread-trust check failed — proceeding with normal hold policy',
+      );
+      return false;
+    }
+  }
+
+  /**
+   * Promote a sender's contact to confirmed status when thread-originated trust is detected.
+   * Called by both the provisional-sender and unknown-sender hold paths when we find a prior
+   * outbound to this person in the same conversation.
+   *
+   * - If the contact has a contactId (provisional): calls setStatus(confirmed).
+   * - If no contactId (unknown sender): creates a new confirmed contact with the channel
+   *   identifier as a placeholder display name.
+   * - Fails silently on error — the message will still be routed to the coordinator even
+   *   if the promotion fails.
+   */
+  private async promoteToConfirmedByThreadTrust(
+    channelId: string,
+    senderId: string,
+    contactId: string | undefined,
+  ): Promise<void> {
+    if (!this.contactService) return;
+
+    try {
+      if (contactId) {
+        await this.contactService.setStatus(contactId, 'confirmed');
+        this.logger.info(
+          { channelId, contactId },
+          'Dispatcher: promoted provisional contact to confirmed via thread-originated trust',
+        );
+      } else {
+        // Unknown sender — create a confirmed contact so future messages are not held.
+        const created = await this.contactService.createContact({
+          displayName: senderId,
+          fallbackDisplayName: senderId,
+          status: 'confirmed',
+          source: 'ceo_stated',
+        });
+        await this.contactService.linkIdentity({
+          contactId: created.id,
+          channel: channelId,
+          channelIdentifier: senderId,
+          source: 'ceo_stated',
+        });
+        this.logger.info(
+          { channelId, contactId: created.id },
+          'Dispatcher: created confirmed contact for unknown sender via thread-originated trust',
+        );
+      }
+    } catch (err) {
+      this.logger.warn(
+        { err, channelId, senderId },
+        'Dispatcher: contact promotion via thread-originated trust failed — message will still route to coordinator',
+      );
     }
   }
 }

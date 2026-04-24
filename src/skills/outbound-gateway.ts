@@ -359,12 +359,80 @@ export class OutboundGateway {
     }
 
     // ------------------------------------------------------------------
-    // Step 3: Channel dispatch
+    // Step 3: Channel dispatch + contact promotion
     // ------------------------------------------------------------------
+    // After a successful send, promote the recipient contact from provisional →
+    // confirmed (or create one if none exists). The act of sending is the CEO's
+    // implicit trust confirmation — replies from this person should never be held.
     if (request.channel === 'email') {
-      return this.dispatchEmail(request);
+      const result = await this.dispatchEmail(request);
+      if (result.success) {
+        await this.promoteOrCreateRecipientContact('email', recipientId);
+      }
+      return result;
     } else {
-      return this.dispatchSignal(request);
+      const result = await this.dispatchSignal(request);
+      if (result.success) {
+        await this.promoteOrCreateRecipientContact(request.channel, recipientId);
+      }
+      return result;
+    }
+  }
+
+  /**
+   * After a successful outbound send, ensure the recipient has a confirmed contact record.
+   *
+   * - If the contact exists and is provisional: promote to confirmed.
+   * - If no contact record exists: create one with status confirmed, using the
+   *   channel identifier as a placeholder display name (enrichment happens later).
+   * - If the contact is already confirmed or blocked: no-op.
+   *
+   * Fail-open: the message was already sent, so a DB error here must not surface
+   * as a send failure. Log at warn so anomalies are visible without alarming callers.
+   */
+  private async promoteOrCreateRecipientContact(channel: string, recipientId: string): Promise<void> {
+    try {
+      const contact = await this.contactService.resolveByChannelIdentity(channel, recipientId);
+
+      if (contact === null) {
+        // No contact record yet — create one so replies from this person are not held.
+        // displayName defaults to the identifier (e.g. email address) as a placeholder
+        // until the contact is enriched or the CEO assigns a proper name.
+        const created = await this.contactService.createContact({
+          displayName: recipientId,
+          fallbackDisplayName: recipientId,
+          status: 'confirmed',
+          source: 'ceo_stated',
+        });
+        await this.contactService.linkIdentity({
+          contactId: created.id,
+          channel,
+          channelIdentifier: recipientId,
+          source: 'ceo_stated',
+        });
+        this.log.info(
+          { channel, recipientId: redactId(recipientId), contactId: created.id },
+          'outbound-gateway: created confirmed contact for outbound recipient',
+        );
+        return;
+      }
+
+      if (contact.status === 'provisional') {
+        await this.contactService.setStatus(contact.contactId, 'confirmed');
+        this.log.info(
+          { channel, recipientId: redactId(recipientId), contactId: contact.contactId },
+          'outbound-gateway: promoted provisional contact to confirmed after outbound send',
+        );
+        return;
+      }
+
+      // Already confirmed or blocked — no action needed.
+    } catch (err) {
+      // Non-fatal: the message is already on its way. Log and move on.
+      this.log.warn(
+        { err, channel, recipientId: redactId(recipientId) },
+        'outbound-gateway: contact promotion failed after successful send — recipient may still receive holds on replies',
+      );
     }
   }
 
