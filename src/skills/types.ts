@@ -93,8 +93,8 @@ export interface CallerContext {
 /**
  * The agent persona — display name, title, and optional email signature.
  * Sourced from the coordinator's persona config in agents/coordinator.yaml.
- * Available to all skills (not gated behind infrastructure) so templates
- * and outbound-facing skills can reference the agent's identity without
+ * Universal (not capability-gated) so templates and outbound-facing skills
+ * can reference the agent's identity without
  * hardcoding it.
  */
 export interface AgentPersona {
