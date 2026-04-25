@@ -18,6 +18,19 @@ export class EmailReplyHandler implements SkillHandler {
       body?: string;
     };
 
+    // Hard block in observation mode — email-reply sends immediately, which is never
+    // appropriate when Curia is monitoring the CEO's inbox on their behalf.
+    // All obs-mode outbound drafts must go through email-draft-save so the CEO
+    // reviews before anything is sent. This produces an auditable error rather than
+    // a silent reply that the CEO did not request.
+    if (ctx.taskMetadata?.observationMode === true) {
+      ctx.log.warn('email-reply blocked: called in observation mode');
+      return {
+        success: false,
+        error: 'email-reply is blocked in observation mode. Use email-draft-save with triage_classification: "NEEDS DRAFT" to save a draft for CEO review.',
+      };
+    }
+
     if (!replyToMessageId || typeof replyToMessageId !== 'string') {
       return { success: false, error: 'Missing required input: reply_to_message_id (string)' };
     }
