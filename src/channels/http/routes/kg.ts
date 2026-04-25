@@ -2254,17 +2254,44 @@ function createUiHtml(): string {
 
     function setColorMode(mode) {
       if (!cy) return;
+
+      // Fetch buttons early — if the DOM is not ready (e.g. KG view re-entered while
+      // hidden) these will be null and we bail rather than throwing a silent TypeError.
+      var btnType = document.getElementById('color-btn-type');
+      var btnSens = document.getElementById('color-btn-sensitivity');
+      var btnDecay = document.getElementById('color-btn-decay');
+      if (!btnType || !btnSens || !btnDecay) return;
+
+      // Reject unknown modes rather than silently falling through to type behaviour,
+      // which would leave no toggle button active and mislead the user.
+      if (mode !== 'type' && mode !== 'sensitivity' && mode !== 'decay') {
+        console.warn('[KG] setColorMode: unknown mode', mode);
+        return;
+      }
+
       colorMode = mode;
 
       if (mode === 'sensitivity') {
         cy.nodes().forEach(function(node) {
           var sens = node.data('sensitivity') || 'internal';
-          node.style('background-color', SENS_COLORS[sens] || SENS_COLORS.internal);
+          var color = SENS_COLORS[sens];
+          if (!color) {
+            // Unknown sensitivity tier — show a visually distinct grey rather than
+            // silently defaulting to internal/blue, which would look like a known value.
+            console.warn('[KG] unknown sensitivity value:', sens);
+            color = '#888888';
+          }
+          node.style('background-color', color);
         });
       } else if (mode === 'decay') {
         cy.nodes().forEach(function(node) {
           var decay = node.data('decayClass') || 'slow_decay';
-          node.style('background-color', DECAY_COLORS[decay] || DECAY_COLORS.slow_decay);
+          var color = DECAY_COLORS[decay];
+          if (!color) {
+            console.warn('[KG] unknown decayClass value:', decay);
+            color = '#888888';
+          }
+          node.style('background-color', color);
         });
       } else {
         // type mode: remove element-level overrides so the stylesheet type-colour
@@ -2273,9 +2300,9 @@ function createUiHtml(): string {
       }
 
       // Update toggle button active state
-      document.getElementById('color-btn-type').classList.toggle('active', mode === 'type');
-      document.getElementById('color-btn-sensitivity').classList.toggle('active', mode === 'sensitivity');
-      document.getElementById('color-btn-decay').classList.toggle('active', mode === 'decay');
+      btnType.classList.toggle('active', mode === 'type');
+      btnSens.classList.toggle('active', mode === 'sensitivity');
+      btnDecay.classList.toggle('active', mode === 'decay');
     }
 
     // Computes the edge-count (degree) for every node and stores it as element
@@ -2367,7 +2394,11 @@ function createUiHtml(): string {
 
       function fmtDate(iso) {
         if (!iso) return '\u2014';
-        try { return new Date(iso).toLocaleString(); } catch (_) { return iso; }
+        // new Date() never throws — invalid strings produce a Date with NaN getTime().
+        // Check explicitly so corrupt timestamps render as em-dash, not "Invalid Date".
+        var d = new Date(iso);
+        if (isNaN(d.getTime())) return '\u2014';
+        return d.toLocaleString();
       }
       addField('Created', fmtDate(data.createdAt));
       addField('Last confirmed', fmtDate(data.lastConfirmedAt));
@@ -2448,7 +2479,7 @@ function createUiHtml(): string {
 
         var meta = document.createElement('div');
         meta.style.cssText = 'font-size: 0.75rem; color: var(--fg-muted);';
-        meta.textContent = node.type + ' \u00B7 ' + node.confidence.toFixed(2);
+        meta.textContent = node.type + ' \u00B7 ' + (node.confidence != null ? node.confidence.toFixed(2) : '\u2014');
 
         card.append(label, meta);
         card.addEventListener('click', function() { loadNeighborhood(node.id); });
