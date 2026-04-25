@@ -87,22 +87,23 @@ export class MemoryStoreHandler implements SkillHandler {
       // fall back to a direct ID lookup — this allows callers to pass either
       // a human-readable name or a UUID obtained from a previous KG query.
 
-      let entityNode = await resolveEntity(ctx, entity);
+      const resolved = await resolveEntity(ctx, entity);
 
-      if (entityNode === 'ambiguous') {
+      if (resolved.kind === 'ambiguous') {
         // Multiple nodes share the same label — caller must disambiguate.
-        const matches = await ctx.entityMemory.findEntities(entity);
-        ctx.log.debug({ entity, count: matches.length }, 'memory-store: ambiguous entity label');
+        // We reuse the candidates already fetched by resolveEntity rather than
+        // calling findEntities a second time (avoids a race window and extra DB round-trip).
+        ctx.log.debug({ entity, count: resolved.candidates.length }, 'memory-store: ambiguous entity label');
         return {
           success: true,
           data: {
             ambiguous: true,
-            candidates: matches.map(n => ({ id: n.id, label: n.label, type: n.type })),
+            candidates: resolved.candidates.map(n => ({ id: n.id, label: n.label, type: n.type })),
           },
         };
       }
 
-      if (entityNode === 'not_found') {
+      if (resolved.kind === 'not_found') {
         ctx.log.debug({ entity }, 'memory-store: entity not found in KG');
         return {
           success: true,
@@ -113,6 +114,8 @@ export class MemoryStoreHandler implements SkillHandler {
           },
         };
       }
+
+      const entityNode = resolved.node;
 
       // --- Fact storage ---
       //
@@ -134,6 +137,15 @@ export class MemoryStoreHandler implements SkillHandler {
       });
 
       if (result.stored) {
+        // The execution-layer observer logs sensitivityFallback via the audit event,
+        // but if this handler is called outside that observer (e.g. in a direct test or
+        // future CLI integration), the fallback would otherwise be silent. Log defensively.
+        if (result.sensitivityFallback) {
+          ctx.log.warn(
+            { entity, field, nodeId: result.nodeId, sensitivity: result.sensitivity },
+            'memory-store: sensitivity in result may be inaccurate — stored node was unreadable after update (race/transient DB error)',
+          );
+        }
         ctx.log.info(
           { entity, field, action: result.action, nodeId: result.nodeId },
           'memory-store: fact stored',
@@ -185,29 +197,33 @@ export class MemoryStoreHandler implements SkillHandler {
 
 // -- Helpers --
 
+type KgNode = import('../../src/memory/types.js').KgNode;
+
+/** Discriminated result from entity resolution. */
+type ResolveResult =
+  | { kind: 'found'; node: KgNode }
+  | { kind: 'ambiguous'; candidates: KgNode[] }
+  | { kind: 'not_found' };
+
 /** Resolve an entity by label or direct ID.
  *
- * Returns:
- *   - A KgNode when exactly one match is found (by label or ID)
- *   - 'ambiguous' when multiple nodes share the same label
- *   - 'not_found' when no match is found by either method
+ * Returns candidates directly in the ambiguous case so the handler can build
+ * the response without a second findEntities call, which would introduce a
+ * race window and duplicate DB work.
  */
-async function resolveEntity(
-  ctx: SkillContext,
-  entity: string,
-): Promise<import('../../src/memory/types.js').KgNode | 'ambiguous' | 'not_found'> {
+async function resolveEntity(ctx: SkillContext, entity: string): Promise<ResolveResult> {
   const mem = ctx.entityMemory!;
 
   const matches = await mem.findEntities(entity);
 
-  if (matches.length === 1) return matches[0]!;
-  if (matches.length > 1) return 'ambiguous';
+  if (matches.length === 1) return { kind: 'found', node: matches[0]! };
+  if (matches.length > 1) return { kind: 'ambiguous', candidates: matches };
 
   // Zero label matches — try interpreting `entity` as a direct node ID.
   // This handles callers that have a UUID from a previous KG query and
   // want to attach a fact without doing another findEntities round-trip.
   const byId = await mem.getEntity(entity);
-  if (byId) return byId;
+  if (byId) return { kind: 'found', node: byId };
 
-  return 'not_found';
+  return { kind: 'not_found' };
 }
