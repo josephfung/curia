@@ -22,6 +22,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Changed
 
 - **Dispatcher observation-mode branch** — now emits a `warn`-level log when a non-`LEAVE FOR CEO` classification completes with zero skill calls (defensive check for coordinator stalls)
+- **Defense-in-depth: skill-layer block for observation-mode triage** (closes #305)
+  - `email-reply` is hard-blocked when `observationMode` is set in task metadata — the skill returns a structured error rather than silently sending a reply from the CEO's inbox.
+  - `email-draft-save` requires `triage_classification: "NEEDS DRAFT"` in observation mode. Calls with NOISE, LEAVE FOR CEO, or no classification are rejected with an auditable error.
+  - Task metadata (`observationMode`, future signals) is now threaded from the `agent.task` event through `ExecutionLayer.invoke()` into `SkillContext`, making task-level context available to any handler without bus access.
 
 ---
 
@@ -406,8 +410,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Bootstrap orchestrator** — `src/index.ts` wires all layers in dependency order
 - Architecture specs 00–08, contributor docs (CONTRIBUTING.md, CODE_OF_CONDUCT.md, SECURITY.md)
 
-[Unreleased]: https://github.com/josephfung/curia/compare/v0.19.9...HEAD
-[0.19.9]: https://github.com/josephfung/curia/compare/v0.19.8...v0.19.9
+[Unreleased]: https://github.com/josephfung/curia/compare/v0.19.7...HEAD
 [0.19.7]: https://github.com/josephfung/curia/compare/v0.18.1...v0.19.7
 [0.18.1]: https://github.com/josephfung/curia/compare/v0.18.0...v0.18.1
 [0.18.0]: https://github.com/josephfung/curia/compare/v0.17.0...v0.18.0
