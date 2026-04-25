@@ -310,6 +310,7 @@ function nodeToElement(n) {
       source: n.source || '',
       createdAt: n.createdAt || '',
       lastConfirmedAt: n.lastConfirmedAt || '',
+      degree: 0,  // updated by updateDegrees() after elements are added
     },
   };
 }
@@ -327,31 +328,89 @@ Expected: all tests pass.
 
 ```bash
 git -C /path/to/worktree add src/channels/http/routes/kg.ts
-git -C /path/to/worktree commit -m "feat: pass sensitivity and full node metadata through nodeToElement (#200)"
+git -C /path/to/worktree commit -m "feat: pass sensitivity and full node metadata through nodeToElement"
 ```
 
 ---
 
-## Task 5: Frontend — sensitivity color tokens and Cytoscape styles
+## Task 5: Frontend — color tokens, stylesheet encoding changes, and Cytoscape styles
 
 **Files:**
 - Modify: `src/channels/http/routes/kg.ts` (CSS `:root` block and Cytoscape `initCytoscape()` styles)
 
-- [ ] **Step 5.1: Add sensitivity color tokens to CSS `:root`**
+- [ ] **Step 5.1: Add color tokens to CSS `:root`**
 
-Inside the `<style>` block, find the `:root { ... }` section. Add four new CSS variables after the existing `--chart-*` tokens:
+Inside the `<style>` block, find the `:root { ... }` section. Add these CSS variables after the existing `--chart-*` tokens:
 
 ```css
-/* Sensitivity level colours (issue #200) */
+/* Sensitivity level colours */
 --sens-public:       #5E9E6B;   /* green   — no restrictions */
 --sens-internal:     #4174C8;   /* blue    — neutral default */
 --sens-confidential: #C9874A;   /* amber   — elevated caution */
 --sens-restricted:   #E86040;   /* red     — matches --destructive */
+
+/* Decay class colours */
+--decay-permanent:  #5E9E6B;   /* green — stable, no decay */
+--decay-slow:       #4174C8;   /* blue  — fading slowly */
+--decay-fast:       #E86040;   /* red   — fading quickly, needs reconfirmation */
 ```
 
-- [ ] **Step 5.2: No stylesheet changes needed**
+- [ ] **Step 5.2: Update `initCytoscape()` stylesheet — replace type-size and decay-opacity rules**
 
-Sensitivity colors are applied via per-element style overrides in `setColorMode()` (Step 5.3), not via Cytoscape stylesheet selectors. The existing `initCytoscape()` stylesheet stays unchanged — type colours remain the default and are restored when switching back to type mode by removing the element-level overrides.
+Two sets of existing rules in the `style: [...]` array inside `cy = cytoscape({ ... })` need to be replaced.
+
+**Remove** the seven type-based size rules (they start with `node[type="person"] { width: 44 ...}`):
+
+```javascript
+// DELETE these seven rules:
+{ selector: 'node[type="person"]',       style: { width: 44, height: 44 } },
+{ selector: 'node[type="organization"]',  style: { width: 44, height: 44 } },
+{ selector: 'node[type="project"]',       style: { width: 36, height: 36 } },
+{ selector: 'node[type="decision"]',      style: { width: 32, height: 32 } },
+{ selector: 'node[type="event"]',         style: { width: 28, height: 28 } },
+{ selector: 'node[type="concept"]',       style: { width: 24, height: 24 } },
+{ selector: 'node[type="fact"]',          style: { width: 14, height: 14, 'font-size': 0 } },
+```
+
+**Remove** the two decay-class opacity rules:
+
+```javascript
+// DELETE these two rules:
+{ selector: 'node[decayClass="fast_decay"]', style: { opacity: 0.45 } },
+{ selector: 'node[decayClass="slow_decay"]', style: { opacity: 0.75 } },
+```
+
+**Add** two new rules in their place (insert after the base `node` style block, before the type colour rules):
+
+```javascript
+// Degree-based size: nodes with more edges are visually larger.
+// 'degree' is set as element data by updateDegrees() after every cy.add().
+// Range: isolated node (0 edges) = 20px, hub node (15+ edges) = 52px.
+{
+  selector: 'node',
+  style: {
+    width:  'mapData(degree, 0, 15, 20, 52)',
+    height: 'mapData(degree, 0, 15, 20, 52)',
+  },
+},
+// Confidence-based opacity: lower confidence = more transparent.
+// Replaces the old decay-class opacity encoding.
+{
+  selector: 'node',
+  style: {
+    opacity: 'mapData(confidence, 0, 1, 0.15, 1.0)',
+  },
+},
+```
+
+Also update the fact-node rule that was hiding labels — since type-based sizes are gone, the fact-node label suppression needs a different approach. Replace the old fact size+label rule with just the label rule:
+
+```javascript
+// Facts: hide label at default size; show when selected.
+// (Size is now degree-based — the width/height rule above handles all types.)
+{ selector: 'node[type="fact"]',          style: { 'font-size': 0 } },
+{ selector: 'node[type="fact"]:selected', style: { 'font-size': 9 } },
+```
 
 - [ ] **Step 5.3: Add the `setColorMode()` function and `colorMode` variable**
 
@@ -359,10 +418,11 @@ Find the `// ── KG API helpers` comment that precedes the `setStatus` functi
 
 ```javascript
 // ── Color mode ────────────────────────────────────────────────────────
-// Tracks the active node colour encoding: 'type' (default) or 'sensitivity'.
+// Tracks the active node colour encoding: 'type' (default), 'sensitivity',
+// or 'decay'.
 var colorMode = 'type';
 
-// Sensitivity hex palette — kept in sync with the sensitivity badge colours.
+// Color palette maps — kept in sync with CSS tokens added in Step 5.1.
 var SENS_COLORS = {
   public:       '#5E9E6B',
   internal:     '#4174C8',
@@ -370,35 +430,60 @@ var SENS_COLORS = {
   restricted:   '#E86040',
 };
 
+var DECAY_COLORS = {
+  permanent:  '#5E9E6B',
+  slow_decay: '#4174C8',
+  fast_decay: '#E86040',
+};
+
 function setColorMode(mode) {
   if (!cy) return;
   colorMode = mode;
 
   if (mode === 'sensitivity') {
-    // Apply an inline element-level background-color override to every node.
-    // Element-level styles take precedence over stylesheet selector rules,
-    // so this overrides the type colours without touching the stylesheet.
     cy.nodes().forEach(function(node) {
       var sens = node.data('sensitivity') || 'internal';
       node.style('background-color', SENS_COLORS[sens] || SENS_COLORS.internal);
     });
+  } else if (mode === 'decay') {
+    cy.nodes().forEach(function(node) {
+      var decay = node.data('decayClass') || 'slow_decay';
+      node.style('background-color', DECAY_COLORS[decay] || DECAY_COLORS.slow_decay);
+    });
   } else {
-    // Remove element-level overrides — stylesheet type-colour selectors
-    // (from initCytoscape) will take effect again automatically.
+    // type mode: remove element-level overrides so stylesheet type-colour
+    // selectors take effect again automatically.
     cy.nodes().removeStyle('background-color');
   }
 
   // Update toggle button active state
   document.getElementById('color-btn-type').classList.toggle('active', mode === 'type');
   document.getElementById('color-btn-sensitivity').classList.toggle('active', mode === 'sensitivity');
+  document.getElementById('color-btn-decay').classList.toggle('active', mode === 'decay');
 }
 ```
 
-- [ ] **Step 5.4: Re-apply color mode after graph renders**
+- [ ] **Step 5.4: Add `updateDegrees()` helper**
 
-When `renderGraph()` or `expandNeighborhood()` adds new nodes, those nodes won't have the sensitivity color override if the user is already in sensitivity mode. Fix this by calling `setColorMode(colorMode)` at the end of both functions.
+`mapData(degree, ...)` in the stylesheet reads from `node.data('degree')`. Since degree is not part of the API payload (it's a graph-topology property), it must be computed client-side after every `cy.add()` call.
 
-Find `function renderGraph(payload)` and add the call after `cy.layout(FCOSE_OPTS_FULL).run()`:
+Just after the `setColorMode` function, add:
+
+```javascript
+// Computes the edge-count (degree) for every node and stores it as element
+// data so the mapData(degree, ...) stylesheet rule can size nodes correctly.
+// Must be called after every cy.add() — degree changes as edges are added.
+function updateDegrees() {
+  if (!cy) return;
+  cy.nodes().forEach(function(node) {
+    node.data('degree', node.degree());
+  });
+}
+```
+
+- [ ] **Step 5.5: Hook `updateDegrees()` and `setColorMode()` into render functions**
+
+Find `function renderGraph(payload)`. Replace the whole function body:
 
 ```javascript
 function renderGraph(payload) {
@@ -406,23 +491,25 @@ function renderGraph(payload) {
   var elements = payload.nodes.map(nodeToElement).concat(payload.edges.map(edgeToElement));
   cy.elements().remove();
   cy.add(elements);
+  updateDegrees();          // must run before layout so sizes are correct
   cy.resize();
   cy.layout(FCOSE_OPTS_FULL).run();
   setColorMode(colorMode);  // re-apply active color mode to new nodes
 }
 ```
 
-Find `function expandNeighborhood(nodeId)` and add the call after new elements are added and laid out. Inside the `.then()` callback, after the `cy.layout(...)` call (or after `cy.add(newElements)` if there is no layout in the expansion path), add:
+Find `function expandNeighborhood(nodeId)`. Inside its `.then()` callback, after `cy.add(newElements)` and the layout call, add both calls:
 
 ```javascript
+updateDegrees();          // recalculate all degrees now that edges changed
 setColorMode(colorMode);  // re-apply active color mode to newly added nodes
 ```
 
-- [ ] **Step 5.4: Commit**
+- [ ] **Step 5.6: Commit**
 
 ```bash
 git -C /path/to/worktree add src/channels/http/routes/kg.ts
-git -C /path/to/worktree commit -m "feat: add sensitivity color palette and color mode toggle logic (#200)"
+git -C /path/to/worktree commit -m "feat: add color-by toggle (type/sensitivity/decay), degree-based sizing, confidence opacity"
 ```
 
 ---
@@ -498,6 +585,7 @@ Wrap the canvas wrapper in a column flex container and insert the toolbar above:
     <div class="toggle-btn-group">
       <button id="color-btn-type" class="toggle-btn active" onclick="setColorMode('type')">Type</button>
       <button id="color-btn-sensitivity" class="toggle-btn" onclick="setColorMode('sensitivity')">Sensitivity</button>
+      <button id="color-btn-decay" class="toggle-btn" onclick="setColorMode('decay')">Decay</button>
     </div>
   </div>
   <!-- Cytoscape canvas -->

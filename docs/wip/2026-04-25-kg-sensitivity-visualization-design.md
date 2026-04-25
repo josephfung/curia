@@ -1,6 +1,6 @@
 # KG Sensitivity Visualization — Design Spec
 
-**Issue:** josephfung/curia#200
+**Issue:** josephfung/curia#350
 **Date:** 2026-04-25
 **Status:** Approved for implementation
 
@@ -25,9 +25,10 @@ Existing nodes in the DB have `sensitivity = 'internal'` (the column default app
 ## Scope
 
 1. **API** — expose `sensitivity` and `properties` from both KG routes
-2. **Color toggle** — let the user switch node color encoding between Type and Sensitivity
-3. **Detail drawer** — a right-side panel that shows all node attributes when a node is selected
-4. **Unit tests** — cover the two unchecked AC items from the issue
+2. **Color toggle** — let the user switch node color encoding between Type, Sensitivity, and Decay class
+3. **Visual encodings** — node size encodes edge degree (more connections = larger); opacity encodes confidence (lower confidence = more transparent)
+4. **Detail drawer** — a right-side panel that shows all node attributes when a node is selected
+5. **Unit tests** — cover the two unchecked AC items from the issue
 
 ---
 
@@ -90,7 +91,7 @@ nodes: result.rows.map((row) => ({
 
 ### Placement
 
-A `Color by:` button group sits in a thin toolbar strip above the Cytoscape canvas, left-aligned. Two buttons: **Type** (default, active on load) and **Sensitivity**.
+A `Color by:` button group sits in a thin toolbar strip above the Cytoscape canvas, left-aligned. Three buttons: **Type** (default, active on load), **Sensitivity**, and **Decay**.
 
 ### Sensitivity color palette
 
@@ -101,9 +102,17 @@ A `Color by:` button group sits in a thin toolbar strip above the Cytoscape canv
 | `confidential` | `#C9874A` | Amber — elevated caution |
 | `restricted` | `#E86040` | Red — matches `--destructive` token |
 
+### Decay class color palette
+
+| Class | Hex | Rationale |
+|---|---|---|
+| `permanent` | `#5E9E6B` | Green — never expires |
+| `slow_decay` | `#4174C8` | Blue — fades slowly |
+| `fast_decay` | `#E86040` | Red/orange — fades quickly |
+
 ### Technical implementation
 
-`sensitivity` is added to each Cytoscape element's `data` object in `nodeToElement()`:
+`sensitivity`, `degree`, and other new fields are added to each Cytoscape element's `data` object in `nodeToElement()`:
 
 ```javascript
 function nodeToElement(n) {
@@ -119,27 +128,70 @@ function nodeToElement(n) {
       source: n.source || '',                      // NEW (used by drawer)
       createdAt: n.createdAt || '',                // NEW (used by drawer)
       lastConfirmedAt: n.lastConfirmedAt || '',    // NEW (used by drawer)
+      degree: 0,                                   // NEW — populated by updateDegrees() after cy.add()
     },
   };
 }
 ```
 
-Switching color mode calls `cy.style()` to hot-swap only the node background-color rules. All other styles (size, opacity, edge width) are untouched. A JS variable `colorMode` ('type' | 'sensitivity') tracks the active mode.
+Switching color mode uses per-element `node.style('background-color', color)` overrides (not stylesheet rebuilding). All other styles (size, opacity, edge width) are untouched. A JS variable `colorMode` ('type' | 'sensitivity' | 'decay') tracks the active mode. Reverting to type mode calls `nodes().removeStyle('background-color')` to restore the type stylesheet rules.
 
-Sensitivity-mode selectors added to the stylesheet:
+Color maps:
 
 ```javascript
-{ selector: 'node[sensitivity="public"]',       style: { 'background-color': '#5E9E6B' } },
-{ selector: 'node[sensitivity="internal"]',     style: { 'background-color': '#4174C8' } },
-{ selector: 'node[sensitivity="confidential"]', style: { 'background-color': '#C9874A' } },
-{ selector: 'node[sensitivity="restricted"]',   style: { 'background-color': '#E86040' } },
+const SENS_COLORS = {
+  public: '#5E9E6B', internal: '#4174C8',
+  confidential: '#C9874A', restricted: '#E86040',
+};
+const DECAY_COLORS = {
+  permanent: '#5E9E6B', slow_decay: '#4174C8', fast_decay: '#E86040',
+};
 ```
 
-These are applied only when the mode is `'sensitivity'`; in `'type'` mode the existing type selectors apply.
+In `'sensitivity'` mode each node gets `SENS_COLORS[node.data('sensitivity')]`; in `'decay'` mode each node gets `DECAY_COLORS[node.data('decayClass')]`; in `'type'` mode all per-element overrides are cleared.
 
 ---
 
-## 3. Frontend — Detail Drawer
+## 3. Frontend — Visual Encodings (Size and Opacity)
+
+Two additional channels encode node attributes independently of color, so all three color modes remain informative simultaneously.
+
+### Node size — edge degree
+
+Node size encodes the number of edges touching each node (its degree in the graph). More-connected nodes are visually larger, making structural hubs immediately apparent regardless of which color mode is active.
+
+After every `cy.add()` call (both initial render and neighborhood expansion), an `updateDegrees()` helper stores the computed degree back into each node's data:
+
+```javascript
+function updateDegrees() {
+  cy.nodes().forEach((node) => {
+    node.data('degree', node.degree());
+  });
+}
+```
+
+The Cytoscape stylesheet uses `mapData` to scale size continuously:
+
+```javascript
+{ selector: 'node', style: { width: 'mapData(degree, 0, 15, 20, 52)',
+                              height: 'mapData(degree, 0, 15, 20, 52)' } }
+```
+
+This replaces the previous type-based size rules (which assigned different fixed sizes to `Person`, `Organization`, etc.).
+
+### Node opacity — confidence
+
+Node opacity encodes the classifier's confidence score. Low-confidence nodes are semi-transparent; high-confidence nodes are fully opaque. This lets the user visually filter out uncertain nodes without hiding them entirely.
+
+```javascript
+{ selector: 'node', style: { opacity: 'mapData(confidence, 0, 1, 0.15, 1.0)' } }
+```
+
+This replaces the previous decay-class-based opacity rules (which used two fixed levels for `slow_decay` and `fast_decay`).
+
+---
+
+## 4. Frontend — Detail Drawer  <!-- was §3 before visual-encodings section was added -->
 
 ### Layout
 
@@ -176,7 +228,7 @@ The existing `cy.on('tap', 'node', ...)` already calls `expandNeighborhood()`. T
 
 ---
 
-## 4. Unit Tests
+## 5. Unit Tests
 
 Two tests to close the remaining AC items from the issue:
 
@@ -196,7 +248,7 @@ The second test exercises the classifier directly — no database required, fast
 
 | File | Change |
 |---|---|
-| `src/channels/http/routes/kg.ts` | Add `sensitivity` to `KgNodeRow`, all SQL SELECTs, all response mappings, `nodeToElement()`, color-toggle UI, and detail drawer UI |
+| `src/channels/http/routes/kg.ts` | Add `sensitivity` to `KgNodeRow`, all SQL SELECTs, all response mappings, `nodeToElement()`; add degree-based sizing, confidence opacity, three-button color toggle (type/sensitivity/decay), `updateDegrees()` helper, and detail drawer UI |
 | `src/memory/knowledge-graph.upsert.test.ts` | Add default-sensitivity unit test |
 | `src/memory/sensitivity.test.ts` | New file — add financial auto-classification unit test |
 | `CHANGELOG.md` | Add entry under `[Unreleased]` |
