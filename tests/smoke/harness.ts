@@ -106,16 +106,17 @@ export async function createHarness(): Promise<CuriaHarness> {
   // Agent registry — tracks all running agents for delegation and listing.
   const agentRegistry = new AgentRegistry();
 
-  // Nylas client — optional, same as src/index.ts. EmailAdapter is intentionally
+  // Nylas clients — optional, same as src/index.ts. EmailAdapter is intentionally
   // skipped here: smoke tests should not start polling for real emails during runs.
-  // The nylasClient is used to construct an OutboundGateway so email skills can be
-  // invoked if a smoke test explicitly calls email-send or email-reply.
-  let nylasClient: NylasClient | undefined;
+  // The nylasClientMap is used to construct an OutboundGateway so email skills can
+  // be invoked if a smoke test explicitly exercises email-send or email-reply.
+  // Keyed by grantId, mirroring how src/index.ts builds its nylasClientMap.
+  const nylasClientMap = new Map<string, NylasClient>();
   if (config.nylasApiKey && config.nylasGrantId) {
-    nylasClient = new NylasClient(config.nylasApiKey, config.nylasGrantId, logger);
+    nylasClientMap.set(config.nylasGrantId, new NylasClient(config.nylasApiKey, config.nylasGrantId, logger));
   }
 
-  // Outbound gateway — wraps nylasClient with contact-blocked checks and content
+  // Outbound gateway — wraps nylasClients with contact-blocked checks and content
   // filtering. Constructed here (without Nylas credentials) using an empty content
   // filter so smoke tests that don't exercise email sending don't crash.
   // When Nylas credentials ARE present the gateway is fully functional.
@@ -127,9 +128,9 @@ export async function createHarness(): Promise<CuriaHarness> {
     ceoEmail: config.nylasSelfEmail ?? '',
   });
   let outboundGateway: OutboundGateway | undefined;
-  if (nylasClient && config.nylasSelfEmail) {
+  if (nylasClientMap.size > 0 && config.nylasSelfEmail) {
     outboundGateway = new OutboundGateway({
-      nylasClient,
+      nylasClients: nylasClientMap,
       contactService,
       contentFilter,
       bus,
@@ -164,18 +165,11 @@ export async function createHarness(): Promise<CuriaHarness> {
 
     let systemPrompt = agentConfig.system_prompt;
     if (agentConfig.role === 'coordinator') {
-      const now = new Date();
-      const currentDate = now.toLocaleDateString('en-CA', {
-        timeZone: config.timezone,
-        year: 'numeric',
-        month: '2-digit',
-        day: '2-digit',
-        weekday: 'long',
-      });
+      // currentDate and timezone are no longer baked in here — AgentRuntime injects
+      // them fresh on every task turn via the timezone option below, keeping them
+      // current for long-running smoke runs. See src/index.ts pass-2 comment.
       systemPrompt = interpolateRuntimeContext(systemPrompt, {
         availableSpecialists: agentRegistry.specialistSummary(),
-        currentDate,
-        timezone: config.timezone,
       });
     }
 
@@ -190,6 +184,9 @@ export async function createHarness(): Promise<CuriaHarness> {
       executionLayer,
       pinnedSkills: agentPinnedSkills,
       skillToolDefs: agentToolDefs,
+      // Coordinator gets per-turn date/timezone injection so the agent always
+      // has a current date (replacing the old baked-in currentDate approach).
+      timezone: agentConfig.role === 'coordinator' ? config.timezone : undefined,
     });
     agent.register();
   }
