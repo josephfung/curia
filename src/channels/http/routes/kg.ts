@@ -53,6 +53,7 @@ interface KgNodeRow {
   source: string;
   created_at: string;
   last_confirmed_at: string;
+  sensitivity: string;
 }
 
 interface KgEdgeRow {
@@ -3168,7 +3169,7 @@ export async function knowledgeGraphRoutes(
     const typeFilter = query.type?.trim();
 
     const result = await pool.query<KgNodeRow>(
-      `SELECT id, type, label, properties, confidence, decay_class, source, created_at, last_confirmed_at
+      `SELECT id, type, label, properties, confidence, decay_class, source, created_at, last_confirmed_at, sensitivity
        FROM kg_nodes
        WHERE ($1::text IS NULL OR type = $1)
          AND (
@@ -3186,11 +3187,13 @@ export async function knowledgeGraphRoutes(
         id: row.id,
         type: row.type,
         label: row.label,
+        properties: row.properties,
         confidence: row.confidence,
         decayClass: row.decay_class,
         source: row.source,
         createdAt: row.created_at,
         lastConfirmedAt: row.last_confirmed_at,
+        sensitivity: row.sensitivity,
       })),
     });
   });
@@ -3233,7 +3236,7 @@ export async function knowledgeGraphRoutes(
              WHERE t.depth < $2
                AND NOT (CASE WHEN e.source_node_id = t.id THEN e.target_node_id ELSE e.source_node_id END = ANY(t.visited))
            )
-           SELECT DISTINCT n.id, n.type, n.label, n.properties, n.confidence, n.decay_class, n.source, n.created_at, n.last_confirmed_at
+           SELECT DISTINCT n.id, n.type, n.label, n.properties, n.confidence, n.decay_class, n.source, n.created_at, n.last_confirmed_at, n.sensitivity
            FROM traversal t
            JOIN kg_nodes n ON n.id = t.id
            ORDER BY n.last_confirmed_at DESC
@@ -3241,7 +3244,7 @@ export async function knowledgeGraphRoutes(
           [nodeId, depth, limit],
         )
       : await pool.query<KgNodeRow>(
-          `SELECT id, type, label, properties, confidence, decay_class, source, created_at, last_confirmed_at
+          `SELECT id, type, label, properties, confidence, decay_class, source, created_at, last_confirmed_at, sensitivity
            FROM kg_nodes
            ORDER BY last_confirmed_at DESC
            LIMIT $1`,
@@ -3270,11 +3273,13 @@ export async function knowledgeGraphRoutes(
         id: row.id,
         type: row.type,
         label: row.label,
+        properties: row.properties,
         confidence: row.confidence,
         decayClass: row.decay_class,
         source: row.source,
         createdAt: row.created_at,
         lastConfirmedAt: row.last_confirmed_at,
+        sensitivity: row.sensitivity,
       })),
       edges: edgeResult.rows.map((row) => ({
         id: row.id,
