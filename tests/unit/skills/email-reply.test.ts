@@ -37,7 +37,11 @@ describe('EmailReplyHandler', () => {
       ),
     );
     expect(result.success).toBe(false);
-    if (!result.success) expect(result.error).toMatch(/observation mode/i);
+    if (!result.success) {
+      expect(result.error).toMatch(/observation mode/i);
+      // Verify the error redirects callers to the correct alternative
+      expect(result.error).toMatch(/email-draft-save/i);
+    }
     expect(gateway.getEmailMessage).not.toHaveBeenCalled();
     expect(gateway.send).not.toHaveBeenCalled();
   });
