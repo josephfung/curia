@@ -124,6 +124,17 @@ function createUiHtml(): string {
       --chart-2:      #4174C8;   /* default node colour */
       --chart-1:      #6BAED6;   /* organization node */
 
+      /* Sensitivity level colours */
+      --sens-public:       #5E9E6B;   /* green   — no restrictions */
+      --sens-internal:     #4174C8;   /* blue    — neutral default */
+      --sens-confidential: #C9874A;   /* amber   — elevated caution */
+      --sens-restricted:   #E86040;   /* red     — matches --destructive */
+
+      /* Decay class colours */
+      --decay-permanent:  #5E9E6B;   /* green — stable, no decay */
+      --decay-slow:       #4174C8;   /* blue  — fading slowly */
+      --decay-fast:       #E86040;   /* red   — fading quickly, needs reconfirmation */
+
       --radius-sm: 6px;
       --radius-md: 8px;
       --radius-lg: 10px;
@@ -1541,10 +1552,13 @@ function createUiHtml(): string {
               'text-max-width': '90px',
               'font-size': 10,
               'font-family': 'Manrope, system-ui, sans-serif',
-              // Base size is overridden per-type below; confidence scales
-              // add on top of the type base via mapData.
-              width: 32,
-              height: 32,
+              // Degree-based size: nodes with more edges are visually larger.
+              // 'degree' is set as element data by updateDegrees() after every cy.add().
+              // Range: isolated node (0 edges) = 20px, hub node (15+ edges) = 52px.
+              width: 'mapData(degree, 0, 15, 20, 52)',
+              height: 'mapData(degree, 0, 15, 20, 52)',
+              // Confidence-based opacity: lower confidence = more transparent.
+              opacity: 'mapData(confidence, 0, 1, 0.15, 1.0)',
             },
           },
           // ── Type colours ─────────────────────────────────────────────
@@ -1555,24 +1569,10 @@ function createUiHtml(): string {
           { selector: 'node[type="event"]',         style: { 'background-color': '#5E9E6B' } }, // green
           { selector: 'node[type="concept"]',       style: { 'background-color': '#888888' } }, // mid-grey
           { selector: 'node[type="fact"]',          style: { 'background-color': '#444444' } }, // dark grey
-          // ── Type-based base sizes (issue 5) ─────────────────────────
-          // Entities that anchor the graph get more canvas real-estate so
-          // their labels are readable and they visually dominate leaf nodes.
-          { selector: 'node[type="person"]',       style: { width: 44, height: 44 } },
-          { selector: 'node[type="organization"]',  style: { width: 44, height: 44 } },
-          { selector: 'node[type="project"]',       style: { width: 36, height: 36 } },
-          { selector: 'node[type="decision"]',      style: { width: 32, height: 32 } },
-          { selector: 'node[type="event"]',         style: { width: 28, height: 28 } },
-          { selector: 'node[type="concept"]',       style: { width: 24, height: 24 } },
-          // Facts are tiny — they're leaf annotations, not key entities.
-          { selector: 'node[type="fact"]',          style: { width: 14, height: 14, 'font-size': 0 } },
-          // Show fact labels when selected (they're too small to show by default).
+          // Facts: hide label at default size; show when selected.
+          // (Size is now degree-based — the width/height rule above handles all types.)
+          { selector: 'node[type="fact"]',          style: { 'font-size': 0 } },
           { selector: 'node[type="fact"]:selected', style: { 'font-size': 9 } },
-          // ── Confidence-based opacity (issue 2) ──────────────────────
-          // Stale / low-confidence nodes fade out so the high-signal nodes pop.
-          { selector: 'node[decayClass="fast_decay"]', style: { opacity: 0.45 } },
-          { selector: 'node[decayClass="slow_decay"]', style: { opacity: 0.75 } },
-          // permanent nodes keep full opacity (no rule needed — default is 1).
           // ── Focal node highlight (issue 4) ───────────────────────────
           {
             selector: 'node.focal',
@@ -2044,6 +2044,61 @@ function createUiHtml(): string {
         });
     }
 
+    // ── Color mode ────────────────────────────────────────────────────────
+    // Tracks the active node colour encoding: 'type' (default), 'sensitivity',
+    // or 'decay'.
+    var colorMode = 'type';
+
+    // Color palette maps — kept in sync with CSS tokens added to :root.
+    var SENS_COLORS = {
+      public:       '#5E9E6B',
+      internal:     '#4174C8',
+      confidential: '#C9874A',
+      restricted:   '#E86040',
+    };
+
+    var DECAY_COLORS = {
+      permanent:  '#5E9E6B',
+      slow_decay: '#4174C8',
+      fast_decay: '#E86040',
+    };
+
+    function setColorMode(mode) {
+      if (!cy) return;
+      colorMode = mode;
+
+      if (mode === 'sensitivity') {
+        cy.nodes().forEach(function(node) {
+          var sens = node.data('sensitivity') || 'internal';
+          node.style('background-color', SENS_COLORS[sens] || SENS_COLORS.internal);
+        });
+      } else if (mode === 'decay') {
+        cy.nodes().forEach(function(node) {
+          var decay = node.data('decayClass') || 'slow_decay';
+          node.style('background-color', DECAY_COLORS[decay] || DECAY_COLORS.slow_decay);
+        });
+      } else {
+        // type mode: remove element-level overrides so the stylesheet type-colour
+        // selectors take effect again automatically.
+        cy.nodes().removeStyle('background-color');
+      }
+
+      // Update toggle button active state
+      document.getElementById('color-btn-type').classList.toggle('active', mode === 'type');
+      document.getElementById('color-btn-sensitivity').classList.toggle('active', mode === 'sensitivity');
+      document.getElementById('color-btn-decay').classList.toggle('active', mode === 'decay');
+    }
+
+    // Computes the edge-count (degree) for every node and stores it as element
+    // data so the mapData(degree, ...) stylesheet rule can size nodes correctly.
+    // Must be called after every cy.add() — degree changes as edges are added.
+    function updateDegrees() {
+      if (!cy) return;
+      cy.nodes().forEach(function(node) {
+        node.data('degree', node.degree());
+      });
+    }
+
     // ── KG API helpers ─────────────────────────────────────────────────
     function setStatus(msg, isError) {
       statusEl.textContent = msg;
@@ -2134,11 +2189,13 @@ function createUiHtml(): string {
       var elements = payload.nodes.map(nodeToElement).concat(payload.edges.map(edgeToElement));
       cy.elements().remove();
       cy.add(elements);
+      updateDegrees();         // must run before layout so sizes are correct
       // Force Cytoscape to re-measure the container before running layout.
       // Without this, the canvas may still be sized 0×0 from when main-app was
       // display:none (e.g. on first load or after navigating away and back).
       cy.resize();
       cy.layout(FCOSE_OPTS_FULL).run();
+      setColorMode(colorMode); // re-apply active color mode to new nodes
     }
 
     // In-place expansion — adds only new nodes/edges so the existing graph context
@@ -2164,6 +2221,8 @@ function createUiHtml(): string {
             });
 
             cy.add(newElements);
+            updateDegrees();         // recalculate all degrees now that edges changed
+            setColorMode(colorMode); // re-apply active color mode to newly added nodes
 
             var expandOpts = Object.assign({}, FCOSE_OPTS_EXPAND, {
               fixedNodeConstraint: fixedConstraints,
