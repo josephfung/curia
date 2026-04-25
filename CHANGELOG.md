@@ -19,10 +19,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
-- **KG explorer: node detail drawer** — tapping any node opens a 320px right-side panel showing all node attributes (label, type, sensitivity, confidence, decay class, source, timestamps, properties); canvas shrinks to accommodate the drawer rather than being overlaid (#350)
-- **KG explorer: color-by toggle** — button group above the graph canvas lets the user switch node colour encoding between Type (default), Sensitivity (public/internal/confidential/restricted), and Decay class (permanent/slow_decay/fast_decay) (#350)
-- **KG explorer: degree-based node sizing** — node size now reflects edge count (more connections = larger node), replacing the previous fixed type-based sizes; makes structural hubs immediately apparent (#350)
-- **KG explorer: confidence opacity** — node opacity now encodes the classifier's confidence score (low confidence = semi-transparent), replacing the previous decay-class-based opacity levels (#350)
+- **KG explorer: sensitivity visualization** — node detail drawer (tap any node to inspect all attributes), color-by toggle (Type / Sensitivity / Decay class), degree-based node sizing, and confidence-based opacity (#350)
 - **KG API: `sensitivity` and `properties` fields** — `/api/kg/nodes` and `/api/kg/graph` now return both fields on every node response (#350)
 - **`SensitivityClassifier` unit tests** — 5 tests covering keyword matching, property-value matching, category hint bypass, and most-restrictive-wins behaviour (#350)
 
