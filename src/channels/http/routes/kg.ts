@@ -1087,9 +1087,9 @@ function createUiHtml(): string {
             <div class="graph-toolbar">
               <span class="graph-toolbar-label">Color by:</span>
               <div class="toggle-btn-group">
-                <button id="color-btn-type" class="toggle-btn active" onclick="setColorMode('type')">Type</button>
-                <button id="color-btn-sensitivity" class="toggle-btn" onclick="setColorMode('sensitivity')">Sensitivity</button>
-                <button id="color-btn-decay" class="toggle-btn" onclick="setColorMode('decay')">Decay</button>
+                <button id="color-btn-type" type="button" class="toggle-btn active" aria-pressed="true" onclick="setColorMode('type')">Type</button>
+                <button id="color-btn-sensitivity" type="button" class="toggle-btn" aria-pressed="false" onclick="setColorMode('sensitivity')">Sensitivity</button>
+                <button id="color-btn-decay" type="button" class="toggle-btn" aria-pressed="false" onclick="setColorMode('decay')">Decay</button>
               </div>
             </div>
             <!-- Cytoscape canvas -->
@@ -2299,10 +2299,13 @@ function createUiHtml(): string {
         cy.nodes().removeStyle('background-color');
       }
 
-      // Update toggle button active state
+      // Update toggle button active state and aria-pressed for assistive tech
       btnType.classList.toggle('active', mode === 'type');
       btnSens.classList.toggle('active', mode === 'sensitivity');
       btnDecay.classList.toggle('active', mode === 'decay');
+      btnType.setAttribute('aria-pressed', String(mode === 'type'));
+      btnSens.setAttribute('aria-pressed', String(mode === 'sensitivity'));
+      btnDecay.setAttribute('aria-pressed', String(mode === 'decay'));
     }
 
     // Computes the edge-count (degree) for every node and stores it as element
