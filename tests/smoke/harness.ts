@@ -113,7 +113,11 @@ export async function createHarness(): Promise<CuriaHarness> {
   // Keyed by grantId, mirroring how src/index.ts builds its nylasClientMap.
   const nylasClientMap = new Map<string, NylasClient>();
   if (config.nylasApiKey && config.nylasGrantId) {
-    nylasClientMap.set(config.nylasGrantId, new NylasClient(config.nylasApiKey, config.nylasGrantId, logger));
+    // Key must match the backward-compat account name from resolveChannelAccounts
+    // (which resolves to 'curia', not the raw grant ID). Skills pass a logical
+    // account name as accountId when targeting a specific account; the primary-client
+    // path (no accountId) uses the first map entry regardless of key.
+    nylasClientMap.set('curia', new NylasClient(config.nylasApiKey, config.nylasGrantId, logger));
   }
 
   // Outbound gateway — wraps nylasClients with contact-blocked checks and content
