@@ -48,7 +48,7 @@ export class EmailDraftSaveHandler implements SkillHandler {
       );
       return {
         success: false,
-        error: `email-draft-save blocked in observation mode: triage_classification must be "NEEDS DRAFT" (got: "${triageClassification ?? 'absent'}")`,
+        error: `email-draft-save blocked in observation mode: triage_classification must be "NEEDS DRAFT" (got: ${triageClassification !== undefined ? `"${triageClassification}"` : '(field absent)'})`,
       };
     }
 

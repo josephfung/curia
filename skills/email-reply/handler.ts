@@ -24,7 +24,7 @@ export class EmailReplyHandler implements SkillHandler {
     // reviews before anything is sent. This produces an auditable error rather than
     // a silent reply that the CEO did not request.
     if (ctx.taskMetadata?.observationMode === true) {
-      ctx.log.warn('email-reply blocked: called in observation mode');
+      ctx.log.warn({ replyToMessageId }, 'email-reply blocked: called in observation mode');
       return {
         success: false,
         error: 'email-reply is blocked in observation mode. Use email-draft-save with triage_classification: "NEEDS DRAFT" to save a draft for CEO review.',
