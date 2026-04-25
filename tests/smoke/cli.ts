@@ -2,7 +2,7 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync } from 'node:fs';
 import * as path from 'node:path';
 import { loadTestCases } from './loader.js';
-import { createHarness } from './harness.js';
+import { createHarness, RESPONSE_TIMEOUT_MS } from './harness.js';
 import { runTestCases } from './runner.js';
 import { evaluateCases } from './evaluator.js';
 import { generateReport } from './report.js';
@@ -39,8 +39,10 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
+  const timeoutSec = Math.round(RESPONSE_TIMEOUT_MS / 1000);
   process.stdout.write(`\nCuria Smoke Test\n`);
-  process.stdout.write(`   ${cases.length} test cases loaded\n\n`);
+  process.stdout.write(`   ${cases.length} test cases loaded\n`);
+  process.stdout.write(`   Response timeout: ${timeoutSec}s (override with SMOKE_TIMEOUT_MS)\n\n`);
 
   // Boot harness
   process.stdout.write('   Booting Curia stack...\n');
@@ -58,10 +60,13 @@ async function main(): Promise<void> {
   // Run test cases
   process.stdout.write('-- Running Test Cases --\n\n');
   const executions = await runTestCases(harness, cases, {
+    onWarmUp: () => {
+      process.stdout.write('   Warming up stack...\n');
+    },
     onCaseComplete: (exec, index, total) => {
       const status = exec.error
-        ? 'ERROR'
-        : `${exec.responses.reduce((sum, r) => sum + r.durationMs, 0)}ms`;
+        ? `ERROR (${exec.error})`
+        : exec.responses.map(r => `${r.durationMs}ms`).join(' + ');
       process.stdout.write(`   [${index}/${total}] ${exec.testCase.name}... ${status}\n`);
     },
   });

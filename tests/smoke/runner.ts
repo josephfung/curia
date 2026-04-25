@@ -5,14 +5,24 @@ import type { TestCase, CaseExecution, CapturedResponse } from './types.js';
 
 /**
  * Execute all test cases against a live Curia harness.
- * Each case gets a unique conversationId to avoid cross-contamination.
+ * Sends a warm-up message first to absorb cold-start latency (DB pool warm-up,
+ * first Anthropic API round-trip), then runs each case with a unique
+ * conversationId to avoid cross-contamination.
  * Multi-turn cases send turns sequentially with configured delays.
  */
 export async function runTestCases(
   harness: CuriaHarness,
   cases: TestCase[],
-  options?: { onCaseComplete?: (exec: CaseExecution, index: number, total: number) => void },
+  options?: {
+    onCaseComplete?: (exec: CaseExecution, index: number, total: number) => void;
+    onWarmUp?: () => void;
+  },
 ): Promise<CaseExecution[]> {
+  // Prime the stack so the first real test case doesn't pay cold-start cost.
+  // warmUp() swallows its own errors — harness failures surface through cases.
+  options?.onWarmUp?.();
+  await harness.warmUp();
+
   const results: CaseExecution[] = [];
 
   for (let i = 0; i < cases.length; i++) {

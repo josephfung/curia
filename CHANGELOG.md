@@ -13,6 +13,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Smoke test timeouts** — increased per-turn response timeout from 60s to 120s (configurable via `SMOKE_TIMEOUT_MS`); added a warm-up message before the first test case to absorb cold-start latency; error output now shows the actual timeout value and per-turn timings
+
 ### Added
 
 - **Observation triage event** (`observation.triage.completed`) — structured bus event emitted after every observation-mode triage task, carrying classification, skills called, and action count for monitoring and alerting (#311)
