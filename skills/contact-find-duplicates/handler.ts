@@ -23,7 +23,7 @@ export class ContactFindDuplicatesHandler implements SkillHandler {
     if (!ctx.contactService) {
       return {
         success: false,
-        error: 'contact-find-duplicates requires contactService is a universal service — check ExecutionLayer configuration.',
+        error: 'contact-find-duplicates: contactService not available — this is a universal service, check ExecutionLayer configuration.',
       };
     }
 

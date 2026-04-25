@@ -46,11 +46,11 @@ export class ContactCreateHandler implements SkillHandler {
       }
     }
 
-    // Infrastructure skills need contactService
+    // contactService is a universal service — always injected by ExecutionLayer
     if (!ctx.contactService) {
       return {
         success: false,
-        error: 'contact-create skill requires contactService is a universal service — check ExecutionLayer configuration.',
+        error: 'contact-create: contactService not available — this is a universal service, check ExecutionLayer configuration.',
       };
     }
 

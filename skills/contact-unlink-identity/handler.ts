@@ -14,7 +14,7 @@ export class ContactUnlinkIdentityHandler implements SkillHandler {
       return { success: false, error: 'Missing required input: identity_id (string)' };
     }
     if (!ctx.contactService) {
-      return { success: false, error: 'Contact service not available. contactService is a universal service — check ExecutionLayer configuration.' };
+      return { success: false, error: 'contact-unlink-identity: contactService not available — this is a universal service, check ExecutionLayer configuration.' };
     }
 
     try {

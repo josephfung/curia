@@ -16,7 +16,7 @@ import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/t
 export class CalendarRegisterHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {
     if (!ctx.contactService) {
-      return { success: false, error: 'calendar-register contactService is a universal service — check ExecutionLayer configuration' };
+      return { success: false, error: 'calendar-register: contactService not available — this is a universal service, check ExecutionLayer configuration.' };
     }
 
     const { nylas_calendar_id, label, contact_id, is_primary } = ctx.input as {
