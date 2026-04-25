@@ -2100,6 +2100,12 @@ function createUiHtml(): string {
           type: n.type,
           confidence: n.confidence != null ? n.confidence : 0.5,
           decayClass: n.decayClass || 'permanent',
+          sensitivity: n.sensitivity || 'internal',
+          properties: n.properties || {},
+          source: n.source || '',
+          createdAt: n.createdAt || '',
+          lastConfirmedAt: n.lastConfirmedAt || '',
+          degree: 0, // updated by updateDegrees() after elements are added
         },
       };
     }
