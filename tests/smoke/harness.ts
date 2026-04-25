@@ -32,15 +32,31 @@ import { OutboundGateway } from '../../src/skills/outbound-gateway.js';
 import { createInboundMessage, type OutboundMessageEvent } from '../../src/bus/events.js';
 import type { Logger } from '../../src/logger.js';
 
+// How long each sendMessage() call waits for an outbound.message response.
+// Agentic flows that invoke multiple skills (contact lookup → KG search →
+// calendar check) can legitimately take 60-90s. Default is 120s, tunable
+// via SMOKE_TIMEOUT_MS without code changes.
+export const RESPONSE_TIMEOUT_MS = Number(process.env.SMOKE_TIMEOUT_MS ?? '120000');
+
 export interface CuriaHarness {
   bus: EventBus;
   logger: Logger;
+  /**
+   * Send a single user message and wait for the outbound response.
+   * Rejects if no response arrives within RESPONSE_TIMEOUT_MS.
+   */
   sendMessage(options: {
     conversationId: string;
     content: string;
     senderId?: string;
     channelId?: string;
   }): Promise<{ content: string; durationMs: number }>;
+  /**
+   * Send a no-op warm-up message to absorb cold-start latency (DB pool
+   * warm-up, first LLM API round-trip) before real test cases run.
+   * The response is discarded — we only care that the stack is primed.
+   */
+  warmUp(): Promise<void>;
   shutdown(): Promise<void>;
 }
 
@@ -219,12 +235,13 @@ export async function createHarness(): Promise<CuriaHarness> {
     return new Promise((resolve, reject) => {
       const start = Date.now();
 
+      const timeoutSec = Math.round(RESPONSE_TIMEOUT_MS / 1000);
       const timeout = setTimeout(() => {
         if (pendingResponses.has(options.conversationId)) {
           pendingResponses.delete(options.conversationId);
-          reject(new Error('Timeout waiting for response (60s)'));
+          reject(new Error(`Timeout waiting for response (${timeoutSec}s)`));
         }
-      }, 60_000);
+      }, RESPONSE_TIMEOUT_MS);
 
       pendingResponses.set(options.conversationId, { resolve, reject, start, timeout });
 
@@ -253,9 +270,24 @@ export async function createHarness(): Promise<CuriaHarness> {
     });
   }
 
+  async function warmUp(): Promise<void> {
+    // Send a throwaway message to absorb cold-start latency: DB connection pool
+    // warm-up, first Anthropic API round-trip, skill registry init, etc.
+    // Failures are swallowed — if the stack is broken, real test cases will
+    // surface it with clearer context.
+    try {
+      await sendMessage({
+        conversationId: `smoke-warmup-${Date.now()}`,
+        content: 'hello',
+      });
+    } catch {
+      // intentionally ignored — warm-up is best-effort
+    }
+  }
+
   async function shutdown(): Promise<void> {
     await pool.end();
   }
 
-  return { bus, logger, sendMessage, shutdown };
+  return { bus, logger, sendMessage, warmUp, shutdown };
 }
