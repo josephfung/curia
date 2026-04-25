@@ -125,3 +125,28 @@ describe('KnowledgeGraphStore.upsertNode', () => {
     expect(c2).toBe(true); // fact nodes are always new inserts, not upserts
   });
 });
+
+describe('KnowledgeGraphStore sensitivity defaults', () => {
+  it('defaults sensitivity to internal when not specified on createNode', async () => {
+    const store = makeStore();
+    const node = await store.createNode({
+      type: 'fact',
+      label: 'quarterly target',
+      properties: {},
+      source: 'test',
+    });
+    expect(node.sensitivity).toBe('internal');
+  });
+
+  it('preserves explicit sensitivity when provided', async () => {
+    const store = makeStore();
+    const node = await store.createNode({
+      type: 'fact',
+      label: 'board minutes',
+      properties: {},
+      source: 'test',
+      sensitivity: 'restricted',
+    });
+    expect(node.sensitivity).toBe('restricted');
+  });
+});
