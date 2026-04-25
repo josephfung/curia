@@ -12,7 +12,7 @@ import { describe, it, expect, vi } from 'vitest';
 import pino from 'pino';
 import { SkillRegistry } from './registry.js';
 import { ExecutionLayer } from './execution.js';
-import type { SkillHandler, SkillManifest, SkillResult } from './types.js';
+import type { SkillHandler, SkillManifest, SkillResult, SkillContext } from './types.js';
 import type { EventBus } from '../bus/bus.js';
 import type { OutboundGateway } from './outbound-gateway.js';
 import type { SchedulerService } from '../scheduler/scheduler-service.js';
@@ -255,5 +255,44 @@ describe('capability-gated service injection', () => {
     }
     // Handler should NOT have been called — fail-closed
     expect(handler.execute).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// taskMetadata pass-through
+// ---------------------------------------------------------------------------
+
+describe('taskMetadata pass-through', () => {
+  it('passes taskMetadata to the skill context', async () => {
+    const registry = new SkillRegistry();
+    const layer = new ExecutionLayer(registry, logger);
+
+    let capturedCtx: SkillContext | undefined;
+    const capturingHandler: SkillHandler = {
+      async execute(ctx) { capturedCtx = ctx; return { success: true, data: 'ok' }; },
+    };
+
+    // Register a test skill with the capturing handler
+    registry.register(
+      {
+        name: 'test-meta',
+        description: '',
+        version: '1.0.0',
+        sensitivity: 'normal',
+        action_risk: 'none',
+        inputs: {},
+        outputs: {},
+        permissions: [],
+        secrets: [],
+        timeout: 5000,
+      },
+      capturingHandler,
+    );
+
+    await layer.invoke('test-meta', {}, undefined, {
+      taskMetadata: { observationMode: true, extra: 'value' },
+    });
+
+    expect(capturedCtx?.taskMetadata).toEqual({ observationMode: true, extra: 'value' });
   });
 });

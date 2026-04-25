@@ -529,6 +529,9 @@ export class AgentRuntime {
           agentId,
           conversationId,
           parentEventId: invokeEvent.id,
+          // Pass task-level metadata (e.g. observationMode) so skill handlers can
+          // inspect task-wide signals without bus or dispatcher access.
+          taskMetadata: taskEvent.payload.metadata,
         });
         const durationMs = Date.now() - startTime;
 

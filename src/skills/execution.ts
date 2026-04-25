@@ -164,7 +164,7 @@ export class ExecutionLayer {
     skillName: string,
     input: Record<string, unknown>,
     caller?: CallerContext,
-    options?: { taskEventId?: string; agentId?: string; conversationId?: string; parentEventId?: string },
+    options?: { taskEventId?: string; agentId?: string; conversationId?: string; parentEventId?: string; taskMetadata?: Record<string, unknown> },
   ): Promise<SkillResult> {
     const skill = this.registry.get(skillName);
 
@@ -272,6 +272,9 @@ export class ExecutionLayer {
       // skills (bullpen) need these for event publishing; harmless for others.
       agentId: options?.agentId,
       taskEventId: options?.taskEventId,
+      // Forward task-level metadata (e.g. observationMode) so skills can adjust
+      // their behaviour without needing a separate out-of-band signalling channel.
+      taskMetadata: options?.taskMetadata,
     };
 
     // Capability-gated service injection.
