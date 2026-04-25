@@ -275,6 +275,136 @@ function createUiHtml(): string {
     .toggle-btn:hover  { background: var(--accent); color: var(--fg); }
     .toggle-btn.active { background: var(--muted); color: var(--fg); border-color: var(--teal); }
 
+    /* ── Node detail drawer ──────────────────────────────────────────────── */
+    .node-detail-drawer {
+      flex: none;
+      width: 320px;
+      border-left: 1px solid var(--border);
+      background: var(--card);
+      display: none;   /* hidden until a node is tapped */
+      flex-direction: column;
+      overflow: hidden;
+    }
+    .node-detail-drawer.open { display: flex; }
+
+    .drawer-header {
+      flex: none;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 14px;
+      border-bottom: 1px solid var(--border);
+    }
+    .drawer-title {
+      font-size: 0.8125rem;
+      font-weight: 600;
+      color: var(--fg-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+    .drawer-close {
+      background: none;
+      border: none;
+      color: var(--fg-muted);
+      cursor: pointer;
+      font-size: 1.1rem;
+      line-height: 1;
+      padding: 2px 4px;
+      border-radius: var(--radius-sm);
+      transition: color 0.1s, background 0.1s;
+    }
+    .drawer-close:hover { color: var(--fg); background: var(--accent); }
+
+    .drawer-body {
+      flex: 1;
+      overflow-y: auto;
+      padding: 16px 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+    .drawer-node-label {
+      font-family: 'Lora', Georgia, serif;
+      font-size: 1.125rem;
+      font-weight: 500;
+      color: var(--fg);
+      line-height: 1.3;
+      word-break: break-word;
+    }
+    .drawer-badges {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+    .badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 99px;
+      font-size: 0.6875rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: #fff;
+    }
+    .badge-type-person       { background: #478189; }
+    .badge-type-organization { background: #6BAED6; color: #111; }
+    .badge-type-project      { background: #7E6BA8; }
+    .badge-type-decision     { background: #C9874A; }
+    .badge-type-event        { background: #5E9E6B; }
+    .badge-type-concept      { background: #888888; }
+    .badge-type-fact         { background: #444444; }
+    .badge-sens-public       { background: #5E9E6B; }
+    .badge-sens-internal     { background: #4174C8; }
+    .badge-sens-confidential { background: #C9874A; }
+    .badge-sens-restricted   { background: #E86040; }
+
+    .drawer-fields {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .drawer-field {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+    .drawer-field-label {
+      font-size: 0.6875rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--fg-muted);
+    }
+    .drawer-field-value {
+      font-size: 0.8125rem;
+      color: var(--fg);
+      word-break: break-all;
+    }
+    .drawer-field-value.mono {
+      font-family: 'Menlo', 'Monaco', 'Consolas', monospace;
+      font-size: 0.75rem;
+    }
+
+    .drawer-props-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.75rem;
+    }
+    .drawer-props-table td {
+      padding: 3px 0;
+      vertical-align: top;
+    }
+    .drawer-props-table td:first-child {
+      color: var(--fg-muted);
+      padding-right: 10px;
+      white-space: nowrap;
+      font-weight: 500;
+    }
+    .drawer-props-table td:last-child {
+      color: var(--fg);
+      word-break: break-all;
+    }
+
     /* ── Cytoscape canvas ─────────────────────────────────────────────── */
     /* Use absolute positioning so #cy fills its position:relative parent
        regardless of whether the flex chain gives the parent a definite height.
@@ -968,6 +1098,17 @@ function createUiHtml(): string {
             </div>
           </div>
 
+          <!-- Node detail drawer (right panel, hidden until node tap) -->
+          <div id="node-detail-drawer" class="node-detail-drawer">
+            <div class="drawer-header">
+              <span class="drawer-title">Node detail</span>
+              <button class="drawer-close" onclick="closeNodeDrawer()" title="Close">&times;</button>
+            </div>
+            <div class="drawer-body" id="drawer-body-content">
+              <!-- populated by openNodeDrawer() -->
+            </div>
+          </div>
+
         </div>
       </div>
 
@@ -1658,6 +1799,7 @@ function createUiHtml(): string {
       // Single-tap a node: expand its neighborhood in-place (issue 4).
       cy.on('tap', 'node', function(evt) {
         expandNeighborhood(evt.target.id());
+        openNodeDrawer(evt.target.data());
       });
 
       // Double-tap a node: zoom/pan to fit its immediate neighborhood (issue 4).
@@ -2144,6 +2286,129 @@ function createUiHtml(): string {
       cy.nodes().forEach(function(node) {
         node.data('degree', node.degree());
       });
+    }
+
+    // ── Node detail drawer ────────────────────────────────────────────────
+
+    function closeNodeDrawer() {
+      document.getElementById('node-detail-drawer').classList.remove('open');
+    }
+
+    // Sensitivity badge CSS class lookup
+    var SENS_BADGE_CLASS = {
+      public:       'badge-sens-public',
+      internal:     'badge-sens-internal',
+      confidential: 'badge-sens-confidential',
+      restricted:   'badge-sens-restricted',
+    };
+
+    // Type badge CSS class lookup — mirrors the type colour palette
+    var TYPE_BADGE_CLASS = {
+      person:       'badge-type-person',
+      organization: 'badge-type-organization',
+      project:      'badge-type-project',
+      decision:     'badge-type-decision',
+      event:        'badge-type-event',
+      concept:      'badge-type-concept',
+      fact:         'badge-type-fact',
+    };
+
+    function openNodeDrawer(data) {
+      var drawer = document.getElementById('node-detail-drawer');
+      var body   = document.getElementById('drawer-body-content');
+
+      body.replaceChildren();
+
+      // ── Label ────────────────────────────────────────────────────────────
+      var labelEl = document.createElement('div');
+      labelEl.className = 'drawer-node-label';
+      labelEl.textContent = data.label || '(no label)';
+      body.appendChild(labelEl);
+
+      // ── Type + Sensitivity badges ─────────────────────────────────────────
+      var badges = document.createElement('div');
+      badges.className = 'drawer-badges';
+
+      var typeBadge = document.createElement('span');
+      typeBadge.className = 'badge ' + (TYPE_BADGE_CLASS[data.type] || 'badge-type-fact');
+      typeBadge.textContent = data.type || 'unknown';
+      badges.appendChild(typeBadge);
+
+      var sens = data.sensitivity || 'internal';
+      var sensBadge = document.createElement('span');
+      sensBadge.className = 'badge ' + (SENS_BADGE_CLASS[sens] || 'badge-sens-internal');
+      sensBadge.textContent = sens;
+      badges.appendChild(sensBadge);
+
+      body.appendChild(badges);
+
+      // ── Scalar fields ─────────────────────────────────────────────────────
+      var fields = document.createElement('div');
+      fields.className = 'drawer-fields';
+
+      function addField(labelText, valueText, mono) {
+        var field = document.createElement('div');
+        field.className = 'drawer-field';
+
+        var lbl = document.createElement('div');
+        lbl.className = 'drawer-field-label';
+        lbl.textContent = labelText;
+
+        var val = document.createElement('div');
+        val.className = 'drawer-field-value' + (mono ? ' mono' : '');
+        val.textContent = valueText || '\u2014'; // em-dash for empty values
+        field.append(lbl, val);
+        fields.appendChild(field);
+      }
+
+      addField('Confidence', data.confidence != null ? data.confidence.toFixed(3) : null);
+      addField('Decay class', data.decayClass);
+      addField('Source', data.source, true);
+
+      function fmtDate(iso) {
+        if (!iso) return '\u2014';
+        try { return new Date(iso).toLocaleString(); } catch (_) { return iso; }
+      }
+      addField('Created', fmtDate(data.createdAt));
+      addField('Last confirmed', fmtDate(data.lastConfirmedAt));
+
+      body.appendChild(fields);
+
+      // ── Properties table (omitted if empty) ───────────────────────────────
+      var props = data.properties;
+      if (props && typeof props === 'object') {
+        var keys = Object.keys(props);
+        if (keys.length > 0) {
+          var propSection = document.createElement('div');
+          propSection.className = 'drawer-field';
+
+          var propLabel = document.createElement('div');
+          propLabel.className = 'drawer-field-label';
+          propLabel.textContent = 'Properties';
+          propSection.appendChild(propLabel);
+
+          var table = document.createElement('table');
+          table.className = 'drawer-props-table';
+
+          keys.forEach(function(key) {
+            var tr = document.createElement('tr');
+            var tdKey = document.createElement('td');
+            tdKey.textContent = key;
+            var tdVal = document.createElement('td');
+            var raw = props[key];
+            tdVal.textContent = (raw !== null && raw !== undefined)
+              ? (typeof raw === 'object' ? JSON.stringify(raw) : String(raw))
+              : '\u2014';
+            tr.append(tdKey, tdVal);
+            table.appendChild(tr);
+          });
+
+          propSection.appendChild(table);
+          body.appendChild(propSection);
+        }
+      }
+
+      drawer.classList.add('open');
     }
 
     // ── KG API helpers ─────────────────────────────────────────────────
