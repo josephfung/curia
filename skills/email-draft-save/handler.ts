@@ -17,18 +17,36 @@ export class EmailDraftSaveHandler implements SkillHandler {
     // Handlers must never throw — destructuring a non-object ctx.input would.
     const input =
       ctx.input && typeof ctx.input === 'object' ? (ctx.input as Record<string, unknown>) : {};
-    const { to: rawTo, subject, body, account, reply_to_message_id } = input as {
+    const { to: rawTo, subject, body, account, reply_to_message_id, triage_classification } = input as {
       to?: string;
       subject?: string;
       body?: string;
       account?: string;
       reply_to_message_id?: string;
+      triage_classification?: string;
     };
 
     const to = typeof rawTo === 'string' ? rawTo.trim() : undefined;
     if (!to) return { success: false, error: 'Missing required input: to (string)' };
     if (!subject || typeof subject !== 'string') return { success: false, error: 'Missing required input: subject (string)' };
     if (!body || typeof body !== 'string') return { success: false, error: 'Missing required input: body (string)' };
+
+    // Observation mode guard — the coordinator must only save drafts for NEEDS DRAFT emails.
+    // Calling email-draft-save for NOISE or LEAVE FOR CEO (or without declaring a classification)
+    // is a model slip: block it hard so the error is auditable rather than silently creating
+    // a draft the CEO did not request. Outside observation mode, triage_classification is ignored.
+    const triageClassification =
+      typeof triage_classification === 'string' ? triage_classification.trim() : undefined;
+    if (ctx.taskMetadata?.observationMode === true && triageClassification !== 'NEEDS DRAFT') {
+      ctx.log.warn(
+        { triageClassification: triageClassification ?? '(absent)' },
+        'email-draft-save: blocked in observation mode — triage_classification must be "NEEDS DRAFT"',
+      );
+      return {
+        success: false,
+        error: `email-draft-save blocked in observation mode: triage_classification must be "NEEDS DRAFT" (got: "${triageClassification ?? 'absent'}")`,
+      };
+    }
 
     const accountId = typeof account === 'string' && account.trim() ? account.trim() : undefined;
     const replyToMessageId = typeof reply_to_message_id === 'string' && reply_to_message_id.trim()
