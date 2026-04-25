@@ -19,6 +19,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **`memory-store` skill** — general-purpose KG fact write path: agents can now explicitly store a named attribute fact about a known entity with full control over confidence, decay class, and sensitivity. Resolves entity by label or node ID; returns one of four outcomes (`created`, `updated`, `conflict`, `rejected`) so the agent can surface contradictions to the CEO before proceeding (closes spec §03, #297)
+- **`StoreFactResult.action`** — `storeFact()` now returns the pipeline outcome (`created | updated | conflict | rejected`) alongside `stored`; attribute-based facts now route through contradiction detection automatically
+- **`StoreFactResult.existingNodeId`** — populated when a fact write produces a `conflict`, letting callers surface the contradicting node to the CEO
+
 - **KG explorer: sensitivity visualization** — node detail drawer (tap any node to inspect all attributes), color-by toggle (Type / Sensitivity / Decay class), degree-based node sizing, and confidence-based opacity (#350)
 - **KG API: `sensitivity` and `properties` fields** — `/api/kg/nodes` and `/api/kg/graph` now return both fields on every node response (#350)
 - **`SensitivityClassifier` unit tests** — 5 tests covering keyword matching, property-value matching, category hint bypass, and most-restrictive-wins behaviour (#350)
