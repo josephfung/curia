@@ -36,7 +36,15 @@ import type { Logger } from '../../src/logger.js';
 // Agentic flows that invoke multiple skills (contact lookup → KG search →
 // calendar check) can legitimately take 60-90s. Default is 120s, tunable
 // via SMOKE_TIMEOUT_MS without code changes.
-export const RESPONSE_TIMEOUT_MS = Number(process.env.SMOKE_TIMEOUT_MS ?? '120000');
+//
+// Defensive parse: Number('') === 0 and Number('30s') === NaN, both of which
+// would cause setTimeout to fire immediately. Validate and fall back to the
+// default so a misconfigured env var fails loudly at parse time rather than
+// silently making every test time out.
+const _rawTimeout = parseInt(process.env.SMOKE_TIMEOUT_MS ?? '', 10);
+export const RESPONSE_TIMEOUT_MS = Number.isFinite(_rawTimeout) && _rawTimeout > 0
+  ? _rawTimeout
+  : 120_000;
 
 export interface CuriaHarness {
   bus: EventBus;
@@ -110,7 +118,9 @@ export async function createHarness(): Promise<CuriaHarness> {
   // skipped here: smoke tests should not start polling for real emails during runs.
   // The nylasClientMap is used to construct an OutboundGateway so email skills can
   // be invoked if a smoke test explicitly exercises email-send or email-reply.
-  // Keyed by grantId, mirroring how src/index.ts builds its nylasClientMap.
+  // Keyed by account name (not grantId), mirroring how src/index.ts uses
+  // account.name from resolveChannelAccounts. The backward-compat single-account
+  // path in resolveChannelAccounts resolves to the name 'curia'.
   const nylasClientMap = new Map<string, NylasClient>();
   if (config.nylasApiKey && config.nylasGrantId) {
     // Key must match the backward-compat account name from resolveChannelAccounts
