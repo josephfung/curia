@@ -2319,6 +2319,9 @@ function createUiHtml(): string {
 
     function closeNodeDrawer() {
       document.getElementById('node-detail-drawer').classList.remove('open');
+      // Defer resize so the browser has painted the narrower layout before
+      // Cytoscape re-measures — without this the canvas still sees the old width.
+      requestAnimationFrame(function() { if (cy) cy.resize(); });
     }
 
     // Sensitivity badge CSS class lookup
@@ -2440,6 +2443,9 @@ function createUiHtml(): string {
       }
 
       drawer.classList.add('open');
+      // Defer resize so the browser has painted the wider layout (drawer now
+      // occupies 320px) before Cytoscape re-measures the shrunken canvas.
+      requestAnimationFrame(function() { if (cy) cy.resize(); });
     }
 
     // ── KG API helpers ─────────────────────────────────────────────────
