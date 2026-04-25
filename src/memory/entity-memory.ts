@@ -45,6 +45,9 @@ export interface CreateEntityOptions {
 
 export interface StoreFactResult {
   stored: boolean;
+  /** The pipeline outcome — lets callers distinguish create/update from conflict/rejected
+   *  and take action accordingly (e.g. surfacing a conflict to the CEO). */
+  action: 'created' | 'updated' | 'conflict' | 'rejected';
   /** The ID of the persisted (or existing) fact node, if stored is true. */
   nodeId?: string;
   /** The sensitivity level that was assigned to the node (for audit event emission). */
@@ -56,6 +59,10 @@ export interface StoreFactResult {
   sensitivityFallback?: boolean;
   /** Human-readable reason for a conflict or rate-limit rejection. */
   conflict?: string;
+  /** The ID of the existing fact node that conflicts with the incoming fact.
+   *  Populated only when action === 'conflict' — lets the caller surface the
+   *  conflict to the CEO along with the contradicting node's details. */
+  existingNodeId?: string;
 }
 
 export interface QueryResult {
@@ -250,7 +257,20 @@ export class EntityMemory {
    * they have attribute metadata and a confidence value to compare against.
    */
   async storeFact(options: StoreFactOptions): Promise<StoreFactResult> {
-    const result = await this.validator.validate(options);
+    // Use contradiction detection when the fact carries `attribute` metadata,
+    // since an attribute-based fact can directly contradict an existing one
+    // (same entity, same attribute, different value). For facts without attribute
+    // metadata, fall back to plain dedup + rate-limit validation.
+    const hasAttribute = (options.properties as Record<string, unknown> | undefined)?.attribute !== undefined;
+    const result = hasAttribute
+      ? await this.validator.validateContradiction({
+          ...options,
+          // validateContradiction requires a concrete confidence value for its
+          // conflict reason message; use the caller's value or the same default
+          // that storeFact would apply when persisting the node.
+          confidence: options.confidence ?? 0.7,
+        })
+      : await this.validator.validate(options);
 
     switch (result.action) {
       case 'create': {
@@ -308,7 +328,7 @@ export class EntityMemory {
         }
 
         this.validator.recordWrite(options.source);
-        return { stored: true, nodeId: persistedNode.id, sensitivity };
+        return { stored: true, action: 'created', nodeId: persistedNode.id, sensitivity };
       }
 
       case 'update': {
@@ -342,14 +362,19 @@ export class EntityMemory {
           await this.store.updateNode(result.existingNodeId, { sensitivity });
         }
 
-        return { stored: true, nodeId: result.existingNodeId, sensitivity, sensitivityFallback };
+        return { stored: true, action: 'updated', nodeId: result.existingNodeId, sensitivity, sensitivityFallback };
       }
 
       case 'conflict':
-        return { stored: false, conflict: result.reason };
+        return {
+          stored: false,
+          action: 'conflict',
+          conflict: result.reason,
+          existingNodeId: result.existingNodeId,
+        };
 
       case 'rejected':
-        return { stored: false, conflict: result.reason };
+        return { stored: false, action: 'rejected', conflict: result.reason };
     }
   }
 

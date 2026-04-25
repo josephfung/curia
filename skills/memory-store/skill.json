@@ -1,0 +1,33 @@
+{
+  "name": "memory-store",
+  "description": "Write a named fact about a known entity to the knowledge graph. Resolves the entity by name or node ID. Returns one of four outcomes: created (new fact node), updated (near-duplicate merged), conflict (contradicts an existing attribute fact — surface to CEO before proceeding), or rejected (rate limit exceeded or entity not found). When multiple entities share the same name, returns an ambiguous response with candidates for disambiguation.",
+  "version": "1.0.0",
+  "sensitivity": "normal",
+  "action_risk": "low",
+  "inputs": {
+    "entity": "string (the entity name or knowledge-graph node ID to attach the fact to, e.g. 'Jane Doe' or 'uuid-...')",
+    "field": "string (the attribute name, e.g. 'preferred_airline' or 'current_role')",
+    "value": "string (the value to store, e.g. 'Air Canada' or 'VP of Engineering')",
+    "source": "string (provenance string, e.g. 'agent:coordinator/task:abc123/channel:cli')",
+    "confidence": "number? (confidence score 0–1, defaults to 0.8)",
+    "decay_class": "string? (one of: permanent, slow_decay, fast_decay; defaults to slow_decay)",
+    "sensitivity": "string? (one of: public, internal, confidential, restricted; when omitted the engine auto-classifies from content and defaults to internal)",
+    "sensitivity_category": "string? (optional category hint for the auto-classifier, e.g. 'financial'; only used when sensitivity is omitted)"
+  },
+  "outputs": {
+    "stored": "boolean — true when the fact was persisted (created or updated)",
+    "action": "string — one of: created, updated, conflict, rejected",
+    "node_id": "string — ID of the persisted or existing fact node (present when stored is true)",
+    "sensitivity": "string — the sensitivity level actually assigned to the node (present when stored is true)",
+    "reason": "string — human-readable explanation when action is conflict or rejected",
+    "existing_node_id": "string — ID of the contradicting fact node (present when action is conflict)",
+    "ambiguous": "boolean — true when multiple entities matched the given name",
+    "candidates": "array of {id, label, type} — populated when ambiguous is true"
+  },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 15000,
+  "capabilities": [
+    "entityMemory"
+  ]
+}
