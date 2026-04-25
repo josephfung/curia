@@ -295,4 +295,34 @@ describe('taskMetadata pass-through', () => {
 
     expect(capturedCtx?.taskMetadata).toEqual({ observationMode: true, extra: 'value' });
   });
+
+  it('leaves taskMetadata undefined when options omit it', async () => {
+    const registry = new SkillRegistry();
+    const layer = new ExecutionLayer(registry, logger);
+
+    let capturedCtx: SkillContext | undefined;
+    const capturingHandler: SkillHandler = {
+      async execute(ctx) { capturedCtx = ctx; return { success: true, data: 'ok' }; },
+    };
+
+    registry.register(
+      {
+        name: 'test-meta-absent',
+        description: '',
+        version: '1.0.0',
+        sensitivity: 'normal',
+        action_risk: 'none',
+        inputs: {},
+        outputs: {},
+        permissions: [],
+        secrets: [],
+        timeout: 5000,
+      },
+      capturingHandler,
+    );
+
+    await layer.invoke('test-meta-absent', {}, undefined, {});
+
+    expect(capturedCtx?.taskMetadata).toBeUndefined();
+  });
 });

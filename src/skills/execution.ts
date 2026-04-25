@@ -42,6 +42,17 @@ import type { BrowserService } from '../browser/browser-service.js';
 // reaches the LLM context window.
 const DEFAULT_SKILL_OUTPUT_MAX_LENGTH = 200_000;
 
+/** Options passed to ExecutionLayer.invoke() by the agent runtime. */
+export interface InvokeOptions {
+  taskEventId?: string;
+  agentId?: string;
+  conversationId?: string;
+  parentEventId?: string;
+  /** Task-level metadata forwarded from the agent.task event payload.
+   *  Used by skill handlers to inspect task-wide signals (e.g. observationMode). */
+  taskMetadata?: Record<string, unknown>;
+}
+
 export class ExecutionLayer {
   private registry: SkillRegistry;
   private logger: Logger;
@@ -164,7 +175,7 @@ export class ExecutionLayer {
     skillName: string,
     input: Record<string, unknown>,
     caller?: CallerContext,
-    options?: { taskEventId?: string; agentId?: string; conversationId?: string; parentEventId?: string; taskMetadata?: Record<string, unknown> },
+    options?: InvokeOptions,
   ): Promise<SkillResult> {
     const skill = this.registry.get(skillName);
 
