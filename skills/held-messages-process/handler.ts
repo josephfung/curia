@@ -6,8 +6,8 @@
 // - "dismiss" — discard the held message (CEO doesn't care about it).
 // - "block" — create a blocked contact for the sender and discard the message.
 //
-// This skill requires heldMessages and bus (declared in capabilities);
-// and bus access.
+// This skill requires heldMessages and bus (declared in capabilities).
+// contactService is a universal service and is always injected by ExecutionLayer.
 
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
 import { createInboundMessage } from '../../src/bus/events.js';
@@ -28,7 +28,7 @@ export class HeldMessagesProcessHandler implements SkillHandler {
     if (!action || !['identify', 'dismiss', 'block'].includes(action)) {
       return { success: false, error: 'Invalid action — must be "identify", "dismiss", or "block"' };
     }
-    if (!ctx.heldMessages || !ctx.contactService || !ctx.bus) {
+    if (!ctx.heldMessages || !ctx.bus) {
       return { success: false, error: 'Required services not available. Declare "heldMessages" and "bus" in capabilities.' };
     }
 
