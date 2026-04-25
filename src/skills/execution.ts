@@ -280,11 +280,28 @@ export class ExecutionLayer {
     // We inject only the declared services — skills cannot escalate privilege.
     const caps = manifest.capabilities ?? [];
 
+    // Explicit lookup map — enumerates every capability-gated service by name.
+    // Using a map rather than `(this as Record<string, unknown>)[cap]` keeps TypeScript
+    // aware that each field is read, satisfying noUnusedLocals.
+    // Field names here MUST match the VALID_CAPABILITIES set in loader.ts.
+    const capabilityServices: Record<string, unknown> = {
+      bus: this.bus,
+      agentRegistry: this.agentRegistry,
+      outboundGateway: this.outboundGateway,
+      heldMessages: this.heldMessages,
+      schedulerService: this.schedulerService,
+      entityMemory: this.entityMemory,
+      nylasCalendarClient: this.nylasCalendarClient,
+      autonomyService: this.autonomyService,
+      browserService: this.browserService,
+      bullpenService: this.bullpenService,
+    };
+
     // Fail-closed: if a declared capability is not available on this ExecutionLayer,
     // refuse to run the skill. This catches configuration errors at invocation time.
     const missingCaps = caps.filter(cap => {
       if (cap === 'skillSearch') return false; // skillSearch is synthesized, not a field on `this`
-      return (this as Record<string, unknown>)[cap] === undefined;
+      return capabilityServices[cap] === undefined;
     });
     if (missingCaps.length > 0) {
       skillLogger.error(
@@ -321,7 +338,7 @@ export class ExecutionLayer {
             .filter(s => s.manifest.name !== 'skill-registry')
             .map(s => ({ name: s.manifest.name, description: s.manifest.description }));
       } else {
-        (ctx as Record<string, unknown>)[cap] = (this as Record<string, unknown>)[cap];
+        (ctx as unknown as Record<string, unknown>)[cap] = capabilityServices[cap];
       }
     }
 

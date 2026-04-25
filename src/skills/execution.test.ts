@@ -12,7 +12,7 @@ import { describe, it, expect, vi } from 'vitest';
 import pino from 'pino';
 import { SkillRegistry } from './registry.js';
 import { ExecutionLayer } from './execution.js';
-import type { SkillHandler, SkillManifest } from './types.js';
+import type { SkillHandler, SkillManifest, SkillResult } from './types.js';
 import type { EventBus } from '../bus/bus.js';
 import type { OutboundGateway } from './outbound-gateway.js';
 import type { SchedulerService } from '../scheduler/scheduler-service.js';
@@ -185,7 +185,7 @@ describe('capability-gated service injection', () => {
     // Handler captures the context it received so we can inspect it
     let capturedCtx: Record<string, unknown> = {};
     const handler: SkillHandler = {
-      execute: vi.fn(async (ctx) => {
+      execute: vi.fn(async (ctx): Promise<SkillResult> => {
         capturedCtx = ctx as unknown as Record<string, unknown>;
         return { success: true, data: 'ok' };
       }),
@@ -215,7 +215,7 @@ describe('capability-gated service injection', () => {
     const registry = new SkillRegistry();
     let capturedCtx: Record<string, unknown> = {};
     const handler: SkillHandler = {
-      execute: vi.fn(async (ctx) => {
+      execute: vi.fn(async (ctx): Promise<SkillResult> => {
         capturedCtx = ctx as unknown as Record<string, unknown>;
         return { success: true, data: 'ok' };
       }),
@@ -240,7 +240,7 @@ describe('capability-gated service injection', () => {
   it('returns skill error when declared capability is not available on ExecutionLayer', async () => {
     const registry = new SkillRegistry();
     const handler: SkillHandler = {
-      execute: vi.fn(async () => ({ success: true, data: 'ok' })),
+      execute: vi.fn(async (): Promise<SkillResult> => ({ success: true, data: 'ok' })),
     };
     registry.register(makeCapManifest('needs-scheduler', ['schedulerService']), handler);
 
