@@ -7,12 +7,13 @@ const logger = pino({ level: 'silent' });
 
 function makeCtx(input: Record<string, unknown>, gateway?: Partial<{
   createEmailDraft: (...args: unknown[]) => unknown;
-}>): SkillContext {
+}>, taskMetadata?: Record<string, unknown>): SkillContext {
   return {
     input,
     secret: () => { throw new Error('no secrets'); },
     log: logger,
     outboundGateway: gateway as never,
+    taskMetadata,
   };
 }
 
@@ -94,5 +95,63 @@ describe('EmailDraftSaveHandler', () => {
     const result = await handler.execute(makeCtx({ to: 'r@example.com', subject: 'Hi', body: 'Hello' }, gateway));
     expect(result.success).toBe(false);
     if (!result.success) expect(result.error).toContain('Failed to save draft');
+  });
+
+  describe('observation mode guard', () => {
+    it('blocks when observationMode is true and triage_classification is absent', async () => {
+      const gateway = { createEmailDraft: vi.fn() };
+      const result = await handler.execute(makeCtx(
+        { to: 'ceo@example.com', subject: 'Re: Hi', body: 'Hello', account: 'joseph', reply_to_message_id: 'msg-1' },
+        gateway,
+        { observationMode: true },
+      ));
+      expect(result.success).toBe(false);
+      if (!result.success) expect(result.error).toMatch(/observation mode/i);
+      expect(gateway.createEmailDraft).not.toHaveBeenCalled();
+    });
+
+    it('blocks when observationMode is true and triage_classification is NOISE', async () => {
+      const gateway = { createEmailDraft: vi.fn() };
+      const result = await handler.execute(makeCtx(
+        { to: 'ceo@example.com', subject: 'Re: Hi', body: 'Hello', account: 'joseph', triage_classification: 'NOISE' },
+        gateway,
+        { observationMode: true },
+      ));
+      expect(result.success).toBe(false);
+      if (!result.success) expect(result.error).toMatch(/observation mode/i);
+      expect(gateway.createEmailDraft).not.toHaveBeenCalled();
+    });
+
+    it('blocks when observationMode is true and triage_classification is LEAVE FOR CEO', async () => {
+      const gateway = { createEmailDraft: vi.fn() };
+      const result = await handler.execute(makeCtx(
+        { to: 'ceo@example.com', subject: 'Re: Hi', body: 'Hello', account: 'joseph', triage_classification: 'LEAVE FOR CEO' },
+        gateway,
+        { observationMode: true },
+      ));
+      expect(result.success).toBe(false);
+      if (!result.success) expect(result.error).toMatch(/observation mode/i);
+      expect(gateway.createEmailDraft).not.toHaveBeenCalled();
+    });
+
+    it('allows the call when observationMode is true and triage_classification is NEEDS DRAFT', async () => {
+      const gateway = { createEmailDraft: vi.fn().mockResolvedValue({ success: true, draftId: 'd-obs-1' }) };
+      const result = await handler.execute(makeCtx(
+        { to: 'ceo@example.com', subject: 'Re: Hi', body: 'Hello', account: 'joseph', reply_to_message_id: 'msg-1', triage_classification: 'NEEDS DRAFT' },
+        gateway,
+        { observationMode: true },
+      ));
+      expect(result.success).toBe(true);
+      if (result.success) expect((result.data as { draft_id: string }).draft_id).toBe('d-obs-1');
+    });
+
+    it('does not apply obs mode guard when taskMetadata is absent', async () => {
+      const gateway = { createEmailDraft: vi.fn().mockResolvedValue({ success: true, draftId: 'd-normal' }) };
+      const result = await handler.execute(makeCtx(
+        { to: 'r@example.com', subject: 'Hi', body: 'Hello' },
+        gateway,
+      ));
+      expect(result.success).toBe(true);
+    });
   });
 });
