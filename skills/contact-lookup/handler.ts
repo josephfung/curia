@@ -36,11 +36,11 @@ export class ContactLookupHandler implements SkillHandler {
       return { success: false, error: 'Query must be 500 characters or fewer' };
     }
 
-    // Infrastructure skills need contactService
+    // contactService is a universal service — always injected by ExecutionLayer
     if (!ctx.contactService) {
       return {
         success: false,
-        error: 'contact-lookup skill requires contactService is a universal service — check ExecutionLayer configuration.',
+        error: 'contact-lookup: contactService not available — this is a universal service, check ExecutionLayer configuration.',
       };
     }
 

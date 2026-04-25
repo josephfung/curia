@@ -44,7 +44,7 @@ export class ContactSetTrustHandler implements SkillHandler {
     if (!ctx.contactService) {
       return {
         success: false,
-        error: 'contact-set-trust requires contactService is a universal service — check ExecutionLayer configuration.',
+        error: 'contact-set-trust: contactService not available — this is a universal service, check ExecutionLayer configuration.',
       };
     }
 

@@ -42,11 +42,11 @@ export class ContactLinkIdentityHandler implements SkillHandler {
       return { success: false, error: `Invalid channel '${channel}'. Allowed: ${ALLOWED_CHANNELS.join(', ')}` };
     }
 
-    // Infrastructure skills need contactService
+    // contactService is a universal service — always injected by ExecutionLayer
     if (!ctx.contactService) {
       return {
         success: false,
-        error: 'contact-link-identity skill requires contactService is a universal service — check ExecutionLayer configuration.',
+        error: 'contact-link-identity: contactService not available — this is a universal service, check ExecutionLayer configuration.',
       };
     }
 

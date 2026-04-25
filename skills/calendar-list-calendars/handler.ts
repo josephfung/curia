@@ -13,7 +13,7 @@ export class CalendarListCalendarsHandler implements SkillHandler {
       return { success: false, error: 'Calendar not configured — Nylas credentials missing' };
     }
     if (!ctx.contactService) {
-      return { success: false, error: 'calendar-list-calendars contactService is a universal service — check ExecutionLayer configuration' };
+      return { success: false, error: 'calendar-list-calendars: contactService not available — this is a universal service, check ExecutionLayer configuration.' };
     }
 
     // Hoisted so the catch block can reference the partial result for log context.

@@ -705,8 +705,8 @@ async function main(): Promise<void> {
 
   const scheduler = new Scheduler({ pool, bus, logger, schedulerService, driftDetector, dreamEngine });
 
-  // Execution layer — now with bus, agent registry, and outbound gateway for
-  // infrastructure skills. outboundGateway gives email skills their send path.
+  // Execution layer — services wired here are injected per-skill based on their
+  // capability-gated declarations. outboundGateway gives email skills their send path.
   // entityContextAssembler enables entity_enrichment pre-enrichment and the
   // entity-context skill. agentContactId enables entity_enrichment default='agent'.
   const executionLayer = new ExecutionLayer(skillRegistry, logger, { bus, agentRegistry, contactService, outboundGateway, heldMessages, schedulerService, entityMemory, agentPersona, nylasCalendarClient, entityContextAssembler, agentContactId: agentIdentityContactId, autonomyService, browserService, bullpenService, timezone: config.timezone, skillOutputMaxLength: yamlConfig.skillOutput?.maxLength });

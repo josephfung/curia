@@ -22,7 +22,7 @@ export class ContactRevokePermissionHandler implements SkillHandler {
       return { success: false, error: 'Permission name must be lowercase alphanumeric with underscores (e.g., view_financial_reports)' };
     }
     if (!ctx.contactService) {
-      return { success: false, error: 'Contact service not available. contactService is a universal service — check ExecutionLayer configuration.' };
+      return { success: false, error: 'contact-revoke-permission: contactService not available — this is a universal service, check ExecutionLayer configuration.' };
     }
 
     try {

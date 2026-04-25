@@ -45,11 +45,11 @@ export class ContactRenameHandler implements SkillHandler {
       return { success: false, error: 'Display name must be 200 characters or fewer' };
     }
 
-    // Infrastructure skills need contactService
+    // contactService is a universal service — always injected by ExecutionLayer
     if (!ctx.contactService) {
       return {
         success: false,
-        error: 'contact-rename skill requires contactService is a universal service — check ExecutionLayer configuration.',
+        error: 'contact-rename: contactService not available — this is a universal service, check ExecutionLayer configuration.',
       };
     }
 

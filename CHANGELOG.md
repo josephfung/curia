@@ -25,7 +25,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ---
 
-## [0.19.8] — 2026-04-24
+## [0.20.0] — 2026-04-24
 
 ### Security
 

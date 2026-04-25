@@ -40,7 +40,7 @@ export class ContactMergeHandler implements SkillHandler {
       return { success: false, error: 'primary_contact_id and secondary_contact_id must not be the same contact.' };
     }
     if (!ctx.contactService) {
-      return { success: false, error: 'contact-merge requires contactService is a universal service — check ExecutionLayer configuration.' };
+      return { success: false, error: 'contact-merge: contactService not available — this is a universal service, check ExecutionLayer configuration.' };
     }
     // Elevated skill — execution layer guarantees caller is set, but guard explicitly
     // so a broken invariant produces a clear error instead of a cryptic TypeError.

@@ -18,11 +18,11 @@ export class ContactListHandler implements SkillHandler {
       return { success: false, error: 'Role must be 200 characters or fewer' };
     }
 
-    // Infrastructure skills need contactService
+    // contactService is a universal service — always injected by ExecutionLayer
     if (!ctx.contactService) {
       return {
         success: false,
-        error: 'contact-list skill requires contactService is a universal service — check ExecutionLayer configuration.',
+        error: 'contact-list: contactService not available — this is a universal service, check ExecutionLayer configuration.',
       };
     }
 
