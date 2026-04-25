@@ -35,8 +35,12 @@ export class EmailDraftSaveHandler implements SkillHandler {
     // Calling email-draft-save for NOISE or LEAVE FOR CEO (or without declaring a classification)
     // is a model slip: block it hard so the error is auditable rather than silently creating
     // a draft the CEO did not request. Outside observation mode, triage_classification is ignored.
+    // Treat whitespace-only strings as absent — mirrors the pattern used for accountId and
+    // replyToMessageId below, and ensures the error message emits 'absent' rather than '""'.
     const triageClassification =
-      typeof triage_classification === 'string' ? triage_classification.trim() : undefined;
+      typeof triage_classification === 'string' && triage_classification.trim()
+        ? triage_classification.trim()
+        : undefined;
     if (ctx.taskMetadata?.observationMode === true && triageClassification !== 'NEEDS DRAFT') {
       ctx.log.warn(
         { triageClassification: triageClassification ?? '(absent)' },

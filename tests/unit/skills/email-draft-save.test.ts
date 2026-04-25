@@ -153,5 +153,16 @@ describe('EmailDraftSaveHandler', () => {
       ));
       expect(result.success).toBe(true);
     });
+
+    it('does not apply obs mode guard when observationMode is false', async () => {
+      const gateway = { createEmailDraft: vi.fn().mockResolvedValue({ success: true, draftId: 'd-not-obs' }) };
+      const result = await handler.execute(makeCtx(
+        { to: 'r@example.com', subject: 'Hi', body: 'Hello' },
+        gateway,
+        { observationMode: false },
+      ));
+      expect(result.success).toBe(true);
+      expect(gateway.createEmailDraft).toHaveBeenCalled();
+    });
   });
 });
