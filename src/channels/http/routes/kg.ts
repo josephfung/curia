@@ -240,6 +240,41 @@ function createUiHtml(): string {
     .btn-primary:hover    { opacity: 0.88; }
     .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
 
+    /* ── Graph toolbar (color-by toggle, sits above the canvas) ─────────── */
+    .graph-toolbar {
+      flex: none;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 10px;
+      border-bottom: 1px solid var(--border);
+      background: var(--card);
+    }
+    .graph-toolbar-label {
+      font-size: 0.75rem;
+      color: var(--fg-muted);
+      font-weight: 500;
+      white-space: nowrap;
+    }
+    .toggle-btn-group {
+      display: flex;
+      gap: 2px;
+    }
+    .toggle-btn {
+      padding: 3px 10px;
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--border);
+      background: none;
+      color: var(--fg-muted);
+      font-family: inherit;
+      font-size: 0.75rem;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background 0.1s, color 0.1s, border-color 0.1s;
+    }
+    .toggle-btn:hover  { background: var(--accent); color: var(--fg); }
+    .toggle-btn.active { background: var(--muted); color: var(--fg); border-color: var(--teal); }
+
     /* ── Cytoscape canvas ─────────────────────────────────────────────── */
     /* Use absolute positioning so #cy fills its position:relative parent
        regardless of whether the flex chain gives the parent a definite height.
@@ -916,9 +951,21 @@ function createUiHtml(): string {
             <div id="results"></div>
           </div>
 
-          <!-- Cytoscape graph -->
-          <div style="flex: 1; position: relative; overflow: hidden;">
-            <div id="cy"></div>
+          <!-- Canvas column: color-by toolbar + cytoscape canvas -->
+          <div style="flex: 1; display: flex; flex-direction: column; overflow: hidden;">
+            <!-- Color-by toolbar -->
+            <div class="graph-toolbar">
+              <span class="graph-toolbar-label">Color by:</span>
+              <div class="toggle-btn-group">
+                <button id="color-btn-type" class="toggle-btn active" onclick="setColorMode('type')">Type</button>
+                <button id="color-btn-sensitivity" class="toggle-btn" onclick="setColorMode('sensitivity')">Sensitivity</button>
+                <button id="color-btn-decay" class="toggle-btn" onclick="setColorMode('decay')">Decay</button>
+              </div>
+            </div>
+            <!-- Cytoscape canvas -->
+            <div style="position: relative; flex: 1; overflow: hidden;">
+              <div id="cy"></div>
+            </div>
           </div>
 
         </div>
