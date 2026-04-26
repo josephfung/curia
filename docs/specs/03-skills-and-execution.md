@@ -184,6 +184,7 @@ The framework ships with these skills (in `skills/` as part of core):
 - `get-autonomy` / `set-autonomy` — read and write the global autonomy score (CEO only)
 - `bullpen` — inter-agent discussion threads
 - Template skills (`template-meeting-request`, `template-reschedule`, etc.) — structured outbound templates
+- `image-generate` — generate an image from a text prompt via DALL-E 3; returns a temporary CDN URL (~1hr TTL)
 
 **Not yet built:** `memory-query` (freeform KG search), `memory-store` (write-with-validation), `file-reader`, `file-writer`
 
@@ -224,6 +225,7 @@ These are not bundled but documented as recommended integrations:
 | Resource boundaries — max 5 concurrent skill invocations per agent task | Not Done |
 | Resource boundaries — 1MB buffer cap on streaming skill responses | Not Done |
 | Built-in skill: `config-store` (generic namespaced agent config store) | Done — `skills/config-store/` |
+| Built-in skill: `image-generate` (DALL-E 3 image generation) | Done — `skills/image-generate/`; closes #354 |
 | Built-in skill: `memory-query` | Not Done |
 | Built-in skill: `memory-store` | Not Done |
 | Built-in skill: `file-reader` | Not Done |
