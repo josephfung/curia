@@ -11,10 +11,6 @@ import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/t
 
 const OPENAI_API_URL = 'https://api.openai.com/v1/images/generations';
 
-const VALID_SIZES = new Set(['1024x1024', '1792x1024', '1024x1792']);
-const VALID_QUALITIES = new Set(['standard', 'hd']);
-const VALID_STYLES = new Set(['vivid', 'natural']);
-
 interface OpenAIImageItem {
   url?: string;
   revised_prompt?: string;
@@ -48,20 +44,11 @@ export class ImageGenerateHandler implements SkillHandler {
       return { success: false, error: 'OpenAI API key not configured — set OPENAI_API_KEY in the environment' };
     }
 
-    // Apply defaults; reject unknown values to surface misconfiguration early
+    // Apply defaults; all three are passed through to the API as-is — validation
+    // is the API's responsibility (allows future model swaps without skill changes)
     const resolvedSize = size ?? '1792x1024';
     const resolvedQuality = quality ?? 'hd';
     const resolvedStyle = style ?? 'vivid';
-
-    if (!VALID_SIZES.has(resolvedSize)) {
-      return { success: false, error: `Invalid size: ${resolvedSize}. Must be one of: 1024x1024, 1792x1024, 1024x1792` };
-    }
-    if (!VALID_QUALITIES.has(resolvedQuality)) {
-      return { success: false, error: `Invalid quality: ${resolvedQuality}. Must be: standard or hd` };
-    }
-    if (!VALID_STYLES.has(resolvedStyle)) {
-      return { success: false, error: `Invalid style: ${resolvedStyle}. Must be: vivid or natural` };
-    }
 
     ctx.log.info({ promptLength: prompt.length, size: resolvedSize, quality: resolvedQuality }, 'Generating image via DALL-E 3');
 
