@@ -663,7 +663,10 @@ export class EntityMemory {
    *
    * Returns SearchResult[] sorted by score descending (most similar first).
    */
-  async search(query: string, options?: { limit?: number }): Promise<SearchResult[]> {
+  async search(
+    query: string,
+    options?: { limit?: number; type?: NodeType; maxSensitivity?: Sensitivity },
+  ): Promise<SearchResult[]> {
     return this.store.semanticSearch(query, options);
   }
 

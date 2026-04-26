@@ -1,0 +1,23 @@
+{
+  "name": "memory-query",
+  "description": "Freeform semantic search across the knowledge graph. Embeds the query and returns the most similar nodes by cosine similarity. Use this when you need to find everything known about a topic without knowing which specific entity to target — e.g. 'find everything related to investor relations'. Optionally filter by node type or sensitivity ceiling.",
+  "version": "1.0.0",
+  "sensitivity": "normal",
+  "action_risk": "none",
+  "inputs": {
+    "query": "string (natural language search string, e.g. 'investor relations' or 'Q3 board meeting')",
+    "type": "string? (optional node type filter — one of: person, organization, project, decision, event, concept, fact)",
+    "limit": "number? (max results to return; defaults to 10, capped at 50)",
+    "max_sensitivity": "string? (optional sensitivity ceiling — one of: public, internal, confidential, restricted. When provided, only nodes at or below this level are returned. Omit to return nodes of any sensitivity.)"
+  },
+  "outputs": {
+    "results": "array of {id, type, label, properties, confidence, decay_class, sensitivity, last_confirmed_at, score}",
+    "count": "number — total results returned"
+  },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 15000,
+  "capabilities": [
+    "entityMemory"
+  ]
+}
