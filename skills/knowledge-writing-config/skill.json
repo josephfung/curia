@@ -1,0 +1,23 @@
+{
+  "name": "knowledge-writing-config",
+  "description": "Store or retrieve writing configuration in the knowledge graph. Use 'store' to save a configuration value (e.g. writing_guide_url, essays_index_url). Use 'retrieve' to fetch all stored writing configuration values. Agents and coordinators use this to share deploy-agnostic writing workflow config that the CEO provides via chat.",
+  "version": "1.0.0",
+  "sensitivity": "normal",
+  "action_risk": "low",
+  "inputs": {
+    "action": "string (store | retrieve)",
+    "field": "string? (required for store — the config field name, e.g. 'writing_guide_url', 'essays_index_url')",
+    "value": "string? (required for store — the config value)"
+  },
+  "outputs": {
+    "stored": "boolean? (true when a value was persisted)",
+    "field": "string? (the field that was stored)",
+    "config": "array? (for retrieve — list of {field, value} objects)"
+  },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 30000,
+  "capabilities": [
+    "entityMemory"
+  ]
+}
