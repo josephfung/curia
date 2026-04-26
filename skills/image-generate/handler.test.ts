@@ -11,15 +11,20 @@ import pino from 'pino';
 
 // A minimal SkillContext factory. image-generate needs:
 //   ctx.input    — the skill inputs
-//   ctx.secret() — returns the API key
+//   ctx.secret() — returns the API key, or throws when secretThrows is true
 //   ctx.log      — pino logger (silenced)
 function makeCtx(
   input: Record<string, unknown>,
-  secretValue = 'test-api-key',
+  { secretThrows = false } = {},
 ): SkillContext {
   return {
     input,
-    secret: (_name: string) => secretValue,
+    secret: (_name: string) => {
+      if (secretThrows) {
+        throw new Error("Secret 'openai_api_key' is declared but not set in the environment");
+      }
+      return 'test-api-key';
+    },
     log: pino({ level: 'silent' }),
   } as unknown as SkillContext;
 }
@@ -62,7 +67,8 @@ describe('ImageGenerateHandler', () => {
   });
 
   it('returns error when API key is not configured', async () => {
-    const ctx = makeCtx({ prompt: 'a red fox' }, '');
+    // In production ctx.secret() throws when the env var is unset — mirror that here.
+    const ctx = makeCtx({ prompt: 'a red fox' }, { secretThrows: true });
     const result = await handler.execute(ctx);
     expect(result.success).toBe(false);
     if (!result.success) expect(result.error).toMatch(/api key/i);

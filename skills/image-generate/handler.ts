@@ -38,17 +38,13 @@ export class ImageGenerateHandler implements SkillHandler {
       return { success: false, error: 'Missing required input: prompt (non-empty string)' };
     }
 
-    // Resolve and validate API key
+    // Resolve API key — ctx.secret() throws if the env var is unset or empty,
+    // so no further emptiness check is needed after the try/catch.
     let apiKey: string;
     try {
       apiKey = ctx.secret('openai_api_key');
     } catch (err) {
       ctx.log.error({ err }, 'Failed to resolve OpenAI API key');
-      return { success: false, error: 'OpenAI API key not configured — set OPENAI_API_KEY in the environment' };
-    }
-
-    if (!apiKey) {
-      ctx.log.error('OpenAI API key resolved to empty string — check secret configuration');
       return { success: false, error: 'OpenAI API key not configured — set OPENAI_API_KEY in the environment' };
     }
 
