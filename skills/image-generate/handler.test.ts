@@ -222,6 +222,18 @@ describe('ImageGenerateHandler', () => {
     }
   });
 
+  it('returns error on non-OK response with non-JSON body', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      new Response('Internal Server Error', { status: 500 }),
+    );
+
+    const ctx = makeCtx({ prompt: 'anything' });
+    const result = await handler.execute(ctx);
+
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error).toMatch(/500/);
+  });
+
   it('returns error when response JSON is malformed', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
       new Response('not json', { status: 200 }),

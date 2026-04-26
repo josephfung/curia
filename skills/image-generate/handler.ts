@@ -48,6 +48,7 @@ export class ImageGenerateHandler implements SkillHandler {
     }
 
     if (!apiKey) {
+      ctx.log.error('OpenAI API key resolved to empty string — check secret configuration');
       return { success: false, error: 'OpenAI API key not configured — set OPENAI_API_KEY in the environment' };
     }
 
@@ -101,8 +102,11 @@ export class ImageGenerateHandler implements SkillHandler {
       try {
         const errBody = await response.json() as { error?: { message?: string } };
         detail = errBody?.error?.message ? `: ${errBody.error.message}` : '';
-      } catch { /* ignore parse errors on error responses */ }
-      ctx.log.error({ status: response.status }, 'OpenAI Images API returned non-OK status');
+      } catch (parseErr) {
+        // Non-JSON error body — common from gateway errors; HTTP status still surfaces to caller
+        ctx.log.debug({ parseErr }, 'Could not parse error response body from OpenAI');
+      }
+      ctx.log.error({ status: response.status, detail }, 'OpenAI Images API returned non-OK status');
       return { success: false, error: `OpenAI API returned HTTP ${response.status}${detail}` };
     }
 
