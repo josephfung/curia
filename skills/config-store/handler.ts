@@ -161,9 +161,13 @@ export class ConfigStoreHandler implements SkillHandler {
       }
 
       const allFacts = await Promise.all(indexNodes.map((n) => ctx.entityMemory!.getFacts(n.id)));
-      const namespaces = allFacts.flat().map(
-        (f) => (f.properties.namespace as string | undefined) ?? f.label,
-      );
+      // Deduplicate — registerNamespace may have appended the same namespace more than once
+      // if storeFact does not enforce label uniqueness on the index node.
+      const namespaces = [
+        ...new Set(
+          allFacts.flat().map((f) => (f.properties.namespace as string | undefined) ?? f.label),
+        ),
+      ];
 
       ctx.log.info({ namespaceCount: namespaces.length }, 'Listed config namespaces');
       return { success: true, data: { namespaces } };
@@ -203,6 +207,13 @@ export class ConfigStoreHandler implements SkillHandler {
     } else {
       indexNodeId = indexNodes[0]!.id;
     }
+
+    // Guard: only register if this namespace isn't already in the index.
+    // storeFact appends rather than upserts, so calling it repeatedly would
+    // accumulate duplicate facts and cause list_namespaces to return duplicates.
+    const existingFacts = await ctx.entityMemory!.getFacts(indexNodeId);
+    const alreadyRegistered = existingFacts.some((f) => f.label === namespace);
+    if (alreadyRegistered) return;
 
     await ctx.entityMemory!.storeFact({
       entityNodeId: indexNodeId,
