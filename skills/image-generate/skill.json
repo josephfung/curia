@@ -1,0 +1,20 @@
+{
+  "name": "image-generate",
+  "description": "Generate an image from a text prompt using DALL-E 3. Returns a temporary URL to the generated image (valid ~1 hour — download and store immediately if persistence is needed).",
+  "version": "1.0.0",
+  "sensitivity": "normal",
+  "action_risk": "low",
+  "inputs": {
+    "prompt": "string",
+    "size": "string? (1024x1024 | 1792x1024 | 1024x1792, default: 1792x1024)",
+    "quality": "string? (standard | hd, default: hd)",
+    "style": "string? (vivid | natural, default: vivid)"
+  },
+  "outputs": {
+    "url": "string",
+    "revised_prompt": "string?"
+  },
+  "permissions": ["network:https"],
+  "secrets": ["openai_api_key"],
+  "timeout": 60000
+}
