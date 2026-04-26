@@ -1,0 +1,28 @@
+{
+  "name": "config-store",
+  "description": "Store or retrieve agent configuration in the knowledge graph. Use 'store' to save a key-value pair under a namespace (e.g. namespace='writing_config', key='writing_guide_url'). Use 'retrieve' to read one key or all keys in a namespace. Use 'list_namespaces' to see which namespaces have been written to. Values are permanent — use this for deploy-agnostic config the CEO provides once via chat.",
+  "version": "1.0.0",
+  "sensitivity": "normal",
+  "action_risk": "low",
+  "inputs": {
+    "action": "string (store | retrieve | list_namespaces)",
+    "namespace": "string? (required for store and retrieve — logical grouping, e.g. 'writing_config', 'travel')",
+    "key": "string? (required for store, optional for retrieve — the config key, e.g. 'writing_guide_url')",
+    "value": "string? (required for store — the config value)"
+  },
+  "outputs": {
+    "stored": "boolean? (true when a value was persisted)",
+    "namespace": "string? (the namespace operated on)",
+    "key": "string? (the key operated on)",
+    "found": "boolean? (for retrieve-single — whether the key exists)",
+    "value": "string? (for retrieve-single — the stored value)",
+    "entries": "array? (for retrieve-all — list of {key, value} objects)",
+    "namespaces": "array? (for list_namespaces — list of namespace strings)"
+  },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 30000,
+  "capabilities": [
+    "entityMemory"
+  ]
+}
