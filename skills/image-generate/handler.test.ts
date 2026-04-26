@@ -135,25 +135,27 @@ describe('ImageGenerateHandler', () => {
     expect(body.style).toBe('natural');
   });
 
-  it('returns error for invalid size', async () => {
-    const ctx = makeCtx({ prompt: 'anything', size: '512x512' });
-    const result = await handler.execute(ctx);
-    expect(result.success).toBe(false);
-    if (!result.success) expect(result.error).toMatch(/invalid size/i);
-  });
+  it('passes arbitrary size and style values through to the API without validation', async () => {
+    // size/quality/style are not validated against an allowlist — the API decides.
+    // This allows future model swaps without changing the skill.
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      new Response(
+        JSON.stringify(makeOpenAIResponse('https://example.com/image.png')),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      ),
+    );
 
-  it('returns error for invalid quality', async () => {
-    const ctx = makeCtx({ prompt: 'anything', quality: 'ultra' });
+    const ctx = makeCtx({ prompt: 'a red fox', size: '1200x628', style: 'watercolour', quality: 'ultra' });
     const result = await handler.execute(ctx);
-    expect(result.success).toBe(false);
-    if (!result.success) expect(result.error).toMatch(/invalid quality/i);
-  });
 
-  it('returns error for invalid style', async () => {
-    const ctx = makeCtx({ prompt: 'anything', style: 'cartoon' });
-    const result = await handler.execute(ctx);
-    expect(result.success).toBe(false);
-    if (!result.success) expect(result.error).toMatch(/invalid style/i);
+    // The skill forwarded the call — result depends on the (mocked) API, not our validation
+    expect(fetchSpy).toHaveBeenCalledOnce();
+    const body = JSON.parse((fetchSpy.mock.calls[0][1] as RequestInit).body as string);
+    expect(body.size).toBe('1200x628');
+    expect(body.style).toBe('watercolour');
+    expect(body.quality).toBe('ultra');
+    // Mock returned success — confirm it came through
+    expect(result.success).toBe(true);
   });
 
   it('returns url and revised_prompt on success', async () => {
