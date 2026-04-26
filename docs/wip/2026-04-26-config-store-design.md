@@ -200,25 +200,38 @@ Unit tests mock `entityMemory`. Coverage:
 
 ## Files
 
+### `curia` — this PR
+
 | File | Change |
 |---|---|
 | `skills/config-store/skill.json` | New — manifest |
 | `skills/config-store/handler.ts` | New — handler |
 | `skills/config-store/handler.test.ts` | New — unit tests |
 | `agents/coordinator.yaml` | Add `config-store` to `pinned_skills` |
-| `docs/specs/03-skills-and-execution.md` | Document `config-store` |
+| `docs/specs/03-skills-and-execution.md` | Document `config-store`; remove `knowledge-writing-config` entry |
+| `docs/dev/adding-an-agent.md` | Add `config-store` to the built-in skills table; add guidance section on using it for agent-level persistent config |
+| `docs/dev/adding-a-skill.md` | Add a note in the skills guide: do not write a new `knowledge-*` skill for persistent config — use `config-store` instead |
 | `CHANGELOG.md` | Add entry under `[Unreleased]` |
 | `package.json` | Minor version bump (new skill) |
 
-**`curia-deploy` (separate PR against curia-deploy#18):**
+### `schemas/` — review only, no changes expected
+
+The existing schemas already cover `config-store` without modification:
+- `skill-manifest.schema.json` — `capabilities` accepts any string array; `entityMemory` is valid without a schema change. Valid capability names are enforced by the allowlist in `src/skills/loader.ts`, not the JSON schema.
+- `agent-config.schema.json` — `pinned_skills` is an untyped string array; adding `config-store` requires no schema change.
+
+If during implementation the loader's capability allowlist is found to be missing `entityMemory` (unlikely — it's used by all existing knowledge skills), add it there, not in the schema.
+
+### `curia-deploy` — separate PR against curia-deploy#18
+
 | File | Change |
 |---|---|
-| `custom/agents/essay-editor.yaml` | Replace `knowledge-writing-config` with `config-store` in pinned_skills and system prompt |
+| `custom/agents/essay-editor.yaml` | Replace `knowledge-writing-config` with `config-store` in `pinned_skills` and system prompt |
 
-**`curia` PR #356 (before merge):**
+### `curia` PR #356 — cleanup before merge
+
 | File | Change |
 |---|---|
 | `skills/knowledge-writing-config/` | Delete entire directory |
 | `agents/coordinator.yaml` | Remove `knowledge-writing-config` from `pinned_skills` |
-| `docs/specs/03-skills-and-execution.md` | Remove `knowledge-writing-config` entry |
-| `CHANGELOG.md` | Remove `knowledge-writing-config` entry |
+| `CHANGELOG.md` | Remove `knowledge-writing-config` bullet |
