@@ -24,7 +24,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **`StoreFactResult.existingNodeId`** — populated when a fact write produces a `conflict`, letting callers surface the contradicting node to the CEO
 - **`memory-query` skill** — freeform semantic search over the knowledge graph via pgvector cosine similarity; supports optional `type`, `max_sensitivity` ceiling, and `limit` filters; returns `decay_class` and `sensitivity` on every result node (spec §03, #298)
 - **`semanticSearch` filter options** — `KnowledgeGraphStore.semanticSearch()`, `EntityMemory.search()`, and both backends now accept `type` and `maxSensitivity` filter options applied in-query before results are returned
-
+- **`config-store` skill** — Generic namespaced key-value configuration store backed by the knowledge graph. Agents declare a namespace in their system prompt (`writing_config`, `travel`, etc.) and call `store`/`retrieve`/`list_namespaces` without needing a bespoke `knowledge-*` skill. Values use permanent decay class. Supersedes the per-domain `knowledge-*` pattern for new agents; existing `knowledge-*` skills are unchanged (cleanup tracked in #357).
 - **KG explorer: sensitivity visualization** — node detail drawer (tap any node to inspect all attributes), color-by toggle (Type / Sensitivity / Decay class), degree-based node sizing, and confidence-based opacity (#350)
 - **KG API: `sensitivity` and `properties` fields** — `/api/kg/nodes` and `/api/kg/graph` now return both fields on every node response (#350)
 - **`SensitivityClassifier` unit tests** — 5 tests covering keyword matching, property-value matching, category hint bypass, and most-restrictive-wins behaviour (#350)
