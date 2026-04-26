@@ -22,6 +22,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **`memory-store` skill** — general-purpose KG fact write path: agents can now explicitly store a named attribute fact about a known entity with full control over confidence, decay class, and sensitivity. Resolves entity by label or node ID; returns one of four outcomes (`created`, `updated`, `conflict`, `rejected`) so the agent can surface contradictions to the CEO before proceeding (closes spec §03, #297)
 - **`StoreFactResult.action`** — `storeFact()` now returns the pipeline outcome (`created | updated | conflict | rejected`) alongside `stored`; attribute-based facts now route through contradiction detection automatically
 - **`StoreFactResult.existingNodeId`** — populated when a fact write produces a `conflict`, letting callers surface the contradicting node to the CEO
+- **`memory-query` skill** — freeform semantic search over the knowledge graph via pgvector cosine similarity; supports optional `type`, `max_sensitivity` ceiling, and `limit` filters; returns `decay_class` and `sensitivity` on every result node (spec §03, #298)
+- **`semanticSearch` filter options** — `KnowledgeGraphStore.semanticSearch()`, `EntityMemory.search()`, and both backends now accept `type` and `maxSensitivity` filter options applied in-query before results are returned
 
 - **KG explorer: sensitivity visualization** — node detail drawer (tap any node to inspect all attributes), color-by toggle (Type / Sensitivity / Decay class), degree-based node sizing, and confidence-based opacity (#350)
 - **KG API: `sensitivity` and `properties` fields** — `/api/kg/nodes` and `/api/kg/graph` now return both fields on every node response (#350)

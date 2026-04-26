@@ -10,7 +10,7 @@ import type {
   SearchResult,
   TraversalResult,
 } from './types.js';
-import { createNodeId, createEdgeId } from './types.js';
+import { createNodeId, createEdgeId, SENSITIVITY_LEVELS } from './types.js';
 import { EmbeddingService } from './embedding.js';
 
 // -- Public option interfaces --
@@ -70,7 +70,11 @@ interface KnowledgeGraphBackend {
   // fact nodes always insert as new regardless of label collision.
   upsertNode(node: KgNode): Promise<{ node: KgNode; created: boolean }>;
   traverse(startNodeId: string, maxDepth: number): Promise<TraversalResult>;
-  semanticSearch(queryEmbedding: number[], limit: number): Promise<SearchResult[]>;
+  semanticSearch(
+    queryEmbedding: number[],
+    limit: number,
+    filters?: { type?: NodeType; maxSensitivity?: Sensitivity },
+  ): Promise<SearchResult[]>;
 }
 
 /**
@@ -321,11 +325,14 @@ export class KnowledgeGraphStore {
    */
   async semanticSearch(
     query: string,
-    options?: { limit?: number },
+    options?: { limit?: number; type?: NodeType; maxSensitivity?: Sensitivity },
   ): Promise<SearchResult[]> {
     const limit = options?.limit ?? 10;
     const queryEmbedding = await this.embeddingService.embed(query);
-    return this.backend.semanticSearch(queryEmbedding, limit);
+    return this.backend.semanticSearch(queryEmbedding, limit, {
+      type: options?.type,
+      maxSensitivity: options?.maxSensitivity,
+    });
   }
 }
 
@@ -596,16 +603,39 @@ class PostgresBackend implements KnowledgeGraphBackend {
     return { nodes, edges };
   }
 
-  async semanticSearch(queryEmbedding: number[], limit: number): Promise<SearchResult[]> {
+  async semanticSearch(
+    queryEmbedding: number[],
+    limit: number,
+    filters?: { type?: NodeType; maxSensitivity?: Sensitivity },
+  ): Promise<SearchResult[]> {
     const embeddingStr = `[${queryEmbedding.join(',')}]`;
+    const params: unknown[] = [embeddingStr, limit];
+    const extraClauses: string[] = [];
+
+    if (filters?.type) {
+      params.push(filters.type);
+      extraClauses.push(`AND type = $${params.length}`);
+    }
+
+    if (filters?.maxSensitivity !== undefined) {
+      // Build the allowed sensitivity set from the ordered SENSITIVITY_LEVELS array.
+      // SENSITIVITY_LEVELS is ['public','internal','confidential','restricted'], so
+      // slice(0, rank+1) gives all levels at or below the ceiling.
+      const maxRank = SENSITIVITY_LEVELS.indexOf(filters.maxSensitivity);
+      const allowedLevels = SENSITIVITY_LEVELS.slice(0, maxRank + 1) as string[];
+      params.push(allowedLevels);
+      extraClauses.push(`AND sensitivity = ANY($${params.length}::text[])`);
+    }
+
     const result = await this.pool.query<PgNodeRow & { similarity: number }>(
       `SELECT *, 1 - (embedding <=> $1::vector) AS similarity
        FROM kg_nodes
        WHERE embedding IS NOT NULL
          AND archived_at IS NULL
+         ${extraClauses.join('\n         ')}
        ORDER BY embedding <=> $1::vector
        LIMIT $2`,
-      [embeddingStr, limit],
+      params,
     );
 
     return result.rows.map((row) => ({
@@ -947,13 +977,31 @@ class InMemoryBackend implements KnowledgeGraphBackend {
    * and all node embeddings, return top results sorted by similarity.
    * Archived nodes are excluded from results.
    */
-  async semanticSearch(queryEmbedding: number[], limit: number): Promise<SearchResult[]> {
+  async semanticSearch(
+    queryEmbedding: number[],
+    limit: number,
+    filters?: { type?: NodeType; maxSensitivity?: Sensitivity },
+  ): Promise<SearchResult[]> {
     const scored: SearchResult[] = [];
+    // Pre-compute sensitivity ceiling rank once outside the loop
+    const maxSensitivityRank =
+      filters?.maxSensitivity !== undefined
+        ? SENSITIVITY_LEVELS.indexOf(filters.maxSensitivity)
+        : undefined;
 
     for (const node of this.nodes.values()) {
       if (!node.embedding) continue;
       // Archived nodes must not appear in semantic search results
       if (this.archivedNodes.has(node.id)) continue;
+      // Apply type filter
+      if (filters?.type && node.type !== filters.type) continue;
+      // Apply sensitivity ceiling filter
+      if (
+        maxSensitivityRank !== undefined &&
+        SENSITIVITY_LEVELS.indexOf(node.sensitivity) > maxSensitivityRank
+      ) {
+        continue;
+      }
       const score = EmbeddingService.cosineSimilarity(queryEmbedding, node.embedding);
       scored.push({ node, score, edges: [] });
     }
