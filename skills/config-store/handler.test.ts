@@ -162,6 +162,28 @@ describe('ConfigStoreHandler', () => {
     expect(mem.storeFact.mock.calls[0][0].entityNodeId).toBe('anchor-existing');
   });
 
+  it('skips namespace registration when namespace is already in the meta-index', async () => {
+    const handler = new ConfigStoreHandler();
+    const mem = makeEntityMemory({
+      findEntities: vi.fn()
+        .mockResolvedValueOnce([{ id: 'anchor-existing' }]) // anchor lookup
+        .mockResolvedValueOnce([{ id: 'index-existing' }]), // index lookup
+      // getFacts returns the namespace already registered in the index
+      getFacts: vi.fn().mockResolvedValue([
+        { id: 'nf1', label: 'travel', properties: { namespace: 'travel' } },
+      ]),
+    });
+    const ctx = makeCtx(mem, { action: 'store', namespace: 'travel', key: 'aeroplan', value: 'AC123456' });
+
+    const result = await handler.execute(ctx);
+
+    expect(result.success).toBe(true);
+    // storeFact called once — for the value fact only; namespace already registered, skipped
+    expect(mem.storeFact).toHaveBeenCalledTimes(1);
+    expect(mem.storeFact.mock.calls[0][0].entityNodeId).toBe('anchor-existing');
+    expect(mem.storeFact.mock.calls[0][0].label).toBe('aeroplan');
+  });
+
   // ── Retrieve: input validation ───────────────────────────────────────────
 
   it('returns error when namespace is missing on retrieve', async () => {
