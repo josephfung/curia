@@ -30,7 +30,7 @@ function makeOpenAIResponse(url: string, revisedPrompt?: string) {
     data: [
       {
         url,
-        revised_prompt: revisedPrompt,
+        ...(revisedPrompt !== undefined && { revised_prompt: revisedPrompt }),
       },
     ],
   };
@@ -92,6 +92,21 @@ describe('ImageGenerateHandler', () => {
     expect(body.n).toBe(1);
   });
 
+  it('trims whitespace from prompt before sending to OpenAI', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      new Response(
+        JSON.stringify(makeOpenAIResponse('https://example.com/image.png')),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      ),
+    );
+
+    const ctx = makeCtx({ prompt: '  a mountain at sunset  ' });
+    await handler.execute(ctx);
+
+    const body = JSON.parse((fetchSpy.mock.calls[0][1] as RequestInit).body as string);
+    expect(body.prompt).toBe('a mountain at sunset');
+  });
+
   it('respects size, quality, and style overrides', async () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
       new Response(
@@ -112,6 +127,27 @@ describe('ImageGenerateHandler', () => {
     expect(body.size).toBe('1024x1024');
     expect(body.quality).toBe('standard');
     expect(body.style).toBe('natural');
+  });
+
+  it('returns error for invalid size', async () => {
+    const ctx = makeCtx({ prompt: 'anything', size: '512x512' });
+    const result = await handler.execute(ctx);
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error).toMatch(/invalid size/i);
+  });
+
+  it('returns error for invalid quality', async () => {
+    const ctx = makeCtx({ prompt: 'anything', quality: 'ultra' });
+    const result = await handler.execute(ctx);
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error).toMatch(/invalid quality/i);
+  });
+
+  it('returns error for invalid style', async () => {
+    const ctx = makeCtx({ prompt: 'anything', style: 'cartoon' });
+    const result = await handler.execute(ctx);
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error).toMatch(/invalid style/i);
   });
 
   it('returns url and revised_prompt on success', async () => {
@@ -167,7 +203,10 @@ describe('ImageGenerateHandler', () => {
     const result = await handler.execute(ctx);
 
     expect(result.success).toBe(false);
-    if (!result.success) expect(result.error).toMatch(/429/);
+    if (!result.success) {
+      expect(result.error).toMatch(/429/);
+      expect(result.error).toMatch(/rate limit/i);
+    }
   });
 
   it('returns error when fetch throws (network failure)', async () => {
@@ -177,7 +216,10 @@ describe('ImageGenerateHandler', () => {
     const result = await handler.execute(ctx);
 
     expect(result.success).toBe(false);
-    if (!result.success) expect(result.error).toMatch(/ECONNREFUSED/);
+    if (!result.success) {
+      expect(result.error).toMatch(/request failed/i);
+      expect(result.error).toMatch(/ECONNREFUSED/);
+    }
   });
 
   it('returns error when response JSON is malformed', async () => {
