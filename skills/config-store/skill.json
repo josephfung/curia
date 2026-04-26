@@ -17,7 +17,8 @@
     "found": "boolean? (for retrieve-single — whether the key exists)",
     "value": "string? (for retrieve-single — the stored value)",
     "entries": "array? (for retrieve-all — list of {key, value} objects)",
-    "namespaces": "array? (for list_namespaces — list of namespace strings)"
+    "namespaces": "array? (for list_namespaces — list of namespace strings)",
+    "message": "string? (informational note, e.g. when a namespace has no entries yet)"
   },
   "permissions": [],
   "secrets": [],

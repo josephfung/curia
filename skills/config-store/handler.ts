@@ -55,8 +55,8 @@ export class ConfigStoreHandler implements SkillHandler {
     if (!key || typeof key !== 'string') {
       return { success: false, error: 'Missing required input: key' };
     }
-    if (!value || typeof value !== 'string') {
-      return { success: false, error: 'Missing required input: value' };
+    if (typeof value !== 'string' || value.length === 0) {
+      return { success: false, error: 'value must be a non-empty string' };
     }
     if (namespace.length > 100) {
       return { success: false, error: 'namespace must be 100 characters or fewer' };
