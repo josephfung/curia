@@ -622,6 +622,12 @@ class PostgresBackend implements KnowledgeGraphBackend {
       // SENSITIVITY_LEVELS is ['public','internal','confidential','restricted'], so
       // slice(0, rank+1) gives all levels at or below the ceiling.
       const maxRank = SENSITIVITY_LEVELS.indexOf(filters.maxSensitivity);
+      // Fail loudly rather than silently returning an empty result set.
+      // An unrecognized value means the caller has a bug — returning zero rows
+      // with no error would make that invisible.
+      if (maxRank === -1) {
+        throw new Error(`semanticSearch: unknown maxSensitivity value "${filters.maxSensitivity}"`);
+      }
       const allowedLevels = SENSITIVITY_LEVELS.slice(0, maxRank + 1) as string[];
       params.push(allowedLevels);
       extraClauses.push(`AND sensitivity = ANY($${params.length}::text[])`);
@@ -983,11 +989,16 @@ class InMemoryBackend implements KnowledgeGraphBackend {
     filters?: { type?: NodeType; maxSensitivity?: Sensitivity },
   ): Promise<SearchResult[]> {
     const scored: SearchResult[] = [];
-    // Pre-compute sensitivity ceiling rank once outside the loop
+    // Pre-compute sensitivity ceiling rank once outside the loop.
+    // Throw on an unrecognized value rather than silently returning an empty set —
+    // a caller with a bad maxSensitivity bug should see an error, not ghost results.
     const maxSensitivityRank =
       filters?.maxSensitivity !== undefined
         ? SENSITIVITY_LEVELS.indexOf(filters.maxSensitivity)
         : undefined;
+    if (maxSensitivityRank === -1) {
+      throw new Error(`semanticSearch: unknown maxSensitivity value "${filters!.maxSensitivity}"`);
+    }
 
     for (const node of this.nodes.values()) {
       if (!node.embedding) continue;
@@ -995,12 +1006,13 @@ class InMemoryBackend implements KnowledgeGraphBackend {
       if (this.archivedNodes.has(node.id)) continue;
       // Apply type filter
       if (filters?.type && node.type !== filters.type) continue;
-      // Apply sensitivity ceiling filter
-      if (
-        maxSensitivityRank !== undefined &&
-        SENSITIVITY_LEVELS.indexOf(node.sensitivity) > maxSensitivityRank
-      ) {
-        continue;
+      // Apply sensitivity ceiling filter.
+      // Nodes with unrecognized sensitivity values are treated as fail-closed:
+      // indexOf returns -1, which is never <= any valid ceiling rank, so they
+      // are excluded rather than leaked through the filter.
+      if (maxSensitivityRank !== undefined) {
+        const nodeRank = SENSITIVITY_LEVELS.indexOf(node.sensitivity);
+        if (nodeRank === -1 || nodeRank > maxSensitivityRank) continue;
       }
       const score = EmbeddingService.cosineSimilarity(queryEmbedding, node.embedding);
       scored.push({ node, score, edges: [] });
