@@ -85,7 +85,7 @@ export class MemoryQueryHandler implements SkillHandler {
         // confidential/restricted facts must not be included in outbound messages
         // without explicit CEO approval.
         sensitivity: node.sensitivity,
-        last_confirmed_at: node.temporal.lastConfirmedAt,
+        last_confirmed_at: node.temporal.lastConfirmedAt.toISOString(),
         score,
       }));
 
