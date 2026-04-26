@@ -178,7 +178,8 @@ The framework ships with these skills (in `skills/` as part of core):
 - `held-messages-list` / `held-messages-process` — review and act on held/deferred messages
 - Calendar skills (`calendar-list-calendars`, `calendar-list-events`, `calendar-create-event`, etc.) — Nylas calendar CRUD
 - Contact skills (`contact-create`, `contact-lookup`, `contact-merge`, etc.) — contact management and KG linking
-- Knowledge skills (`knowledge-company-overview`, `knowledge-meeting-links`, etc.) — structured KG queries
+- Knowledge skills (`knowledge-company-overview`, `knowledge-meeting-links`, etc.) — structured KG queries (legacy pattern — use `config-store` for new agents)
+- `config-store` — generic namespaced key-value store for persistent agent configuration; backs writing-config, travel preferences, and any future per-agent config needs
 - `entity-context` — assemble full context for a list of contacts/entities
 - `get-autonomy` / `set-autonomy` — read and write the global autonomy score (CEO only)
 - `bullpen` — inter-agent discussion threads
@@ -222,6 +223,7 @@ These are not bundled but documented as recommended integrations:
 | Privilege scoping — per-skill `capabilities` array, load-time validation, frozen manifest | Done — `src/skills/loader.ts` (`VALID_CAPABILITIES`), `src/skills/execution.ts` (capabilities loop); closes #119 |
 | Resource boundaries — max 5 concurrent skill invocations per agent task | Not Done |
 | Resource boundaries — 1MB buffer cap on streaming skill responses | Not Done |
+| Built-in skill: `config-store` (generic namespaced agent config store) | Done — `skills/config-store/` |
 | Built-in skill: `memory-query` | Not Done |
 | Built-in skill: `memory-store` | Not Done |
 | Built-in skill: `file-reader` | Not Done |
