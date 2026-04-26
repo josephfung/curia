@@ -163,7 +163,39 @@ Current built-in skills include (see `skills/` for the full list):
 | **Autonomy** | `get-autonomy`, `set-autonomy` |
 | **Context** | `entity-context`, `context-for-email`, `held-messages-list`, `held-messages-process` |
 | **Templates** | `template-meeting-request`, `template-reschedule`, `template-cancel`, `template-doc-request` |
-| **Knowledge** | `knowledge-company-overview`, `knowledge-meeting-links`, `knowledge-travel-preferences`, `knowledge-loyalty-programs` |
+| **Knowledge** | `knowledge-company-overview`, `knowledge-meeting-links`, `knowledge-travel-preferences`, `knowledge-loyalty-programs` (legacy — see Config below) |
+| **Config** | `config-store` — generic key-value agent config; namespace-scoped, KG-backed, permanent decay |
+
+#### Using `config-store` for persistent agent config
+
+If your agent needs to store configuration values that persist across runs — URLs, account
+numbers, preferences, or any other settings the CEO provides once via chat — pin
+`config-store` and use it directly. Do not write a new `knowledge-*` skill.
+
+```yaml
+pinned_skills:
+  - config-store
+```
+
+**Namespace:** pick a short, stable string owned by your agent (e.g. `travel` for a travel
+coordinator, `writing_config` for an essay editor). Bake it into your system prompt.
+
+**Store** (coordinator does this when CEO provides a value via chat):
+```
+config-store { action: "store", namespace: "writing_config", key: "writing_guide_url", value: "https://..." }
+```
+
+**Retrieve** (agent does this at the start of each run):
+```
+config-store { action: "retrieve", namespace: "writing_config", key: "writing_guide_url" }
+# → { found: true, value: "https://..." }
+
+config-store { action: "retrieve", namespace: "writing_config" }
+# → { entries: [{ key: "writing_guide_url", value: "..." }, ...] }
+```
+
+The values are stored with `decayClass: permanent` — they persist across Curia restarts
+and are not subject to KG decay.
 
 #### Specialists don't own outbound comms
 
