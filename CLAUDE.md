@@ -124,9 +124,9 @@ Do **not** create `docs/superpowers/`, `docs/plans/`, or `docs/specs/designs/` �
 
 ### Every PR must update CHANGELOG.md
 
-Add entries under `## [Unreleased]` before creating the PR. Exception: PRs that are
-solely bumping the version and moving `[Unreleased]` to a release heading (like this one)
-don't need a separate entry — the release heading itself is the record.
+Add entries under `## [Unreleased]` before creating the PR. Exception: the release PR
+itself (see *Preparing a release* below) doesn't need a separate CHANGELOG entry — the
+new release heading is the record.
 
 Use these sections as needed:
 - **Added** — new skills, agents, channels, specs, or features
@@ -140,7 +140,9 @@ Reference spec numbers where relevant (e.g. "spec 14").
 
 ### When to bump the version number
 
-Bump `package.json` version in the same PR as the changelog entry. If the version number is bumped, be sure to tag the PR with the version number. Use this table:
+**Do not bump the version during regular commits or PRs.** All in-progress work accumulates in CHANGELOG under `## [Unreleased]`. The version is bumped only when deliberately cutting a release — see *Preparing a release* below.
+
+When cutting a release, use this table to determine the bump size:
 
 | Change type | Bump | Examples |
 |---|---|---|
@@ -160,6 +162,75 @@ Bump `package.json` version in the same PR as the changelog entry. If the versio
 **1.0.0** is reserved for when these surfaces are stable enough to commit to — do not bump to
 1.0.0 without explicit discussion. The milestone is API stability + production deployment,
 not just "it works."
+
+### Preparing a release
+
+A release is a deliberate, standalone step — separate from day-to-day PR work. Follow these steps in order.
+
+**1. Read the unreleased changes**
+
+Open `CHANGELOG.md` and review all entries under `## [Unreleased]`. Read for themes: what capabilities shipped, what was fixed, what changed under the hood.
+
+**2. Name the release and determine the version bump**
+
+Pick a short, evocative release name that captures the dominant theme (e.g. "Memory Stabilization", "Autonomy Foundations", "Signal Clarity"). Keep it dignified — not whimsical, not corporate.
+
+Use the bump table above to determine the version bump. If the unreleased batch mixes types, the highest applicable bump wins (any minor → minor; all patches → patch).
+
+**3. Update CHANGELOG.md**
+
+- Create a new heading immediately after `## [Unreleased]`:
+  ```
+  ## [X.Y.Z] — YYYY-MM-DD — "Release Name"
+  ```
+- Move all `[Unreleased]` bullets under it. Leave `## [Unreleased]` in place above it, empty, ready for the next batch.
+- Condense and group the bullets — aim for clarity over completeness. Merge related entries, cut implementation detail, and make it readable to someone who uses Curia but didn't write the code. The CHANGELOG is a reader document, not a commit log.
+
+**4. Update version numbers**
+
+- `package.json` → `"version": "X.Y.Z"`
+- `README.md` line 18 → update the shields.io badge URL (`version-X.Y.Z`) and its `alt` attribute (`Version: X.Y.Z`)
+
+**5. Generate a release haiku**
+
+Write a haiku thematically aligned with the release — drawn from the changes, the fixes, the dominant mood. It should feel like a small hidden gift at the end of the release notes, not a gimmick. Tone: quiet, precise, a little wry.
+
+**6. Open a release PR**
+
+- Branch: `chore/release-X.Y.Z`
+- PR title: `chore: release vX.Y.Z — Release Name`
+- PR body: the new CHANGELOG section, followed by the haiku
+- No other code changes — this PR is the release commit only
+- Watch CI; wait for merge before proceeding
+
+**7. After merge: tag and publish**
+
+Once the release PR is merged, first confirm the merge landed, then tag `origin/main` directly (do not rely on local branch state — the release worktree is on `chore/release-X.Y.Z`, not `main`):
+
+```bash
+# Confirm the merge landed — grep must return a result before proceeding
+git -C /path/to/repo fetch origin main
+git -C /path/to/repo show origin/main:CHANGELOG.md | grep "X.Y.Z"
+
+# Tag origin/main directly — no checkout or pull needed
+git -C /path/to/repo tag -a vX.Y.Z -m "vX.Y.Z — Release Name" origin/main
+git -C /path/to/repo push origin vX.Y.Z
+```
+
+Then write the release notes (rewrite the CHANGELOG bullets into natural, friendly prose — past tense, as if narrating what changed; prioritize what a user of Curia would care about; close with a horizontal rule and the haiku) and create the GitHub release:
+
+```bash
+gh release create vX.Y.Z \
+  --title 'vX.Y.Z — "Release Name"' \
+  --notes "$(cat <<'EOF'
+[release prose here]
+
+---
+
+[haiku here]
+EOF
+)"
+```
 
 ## Scope Discipline
 
