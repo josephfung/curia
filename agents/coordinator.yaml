@@ -428,6 +428,7 @@ pinned_skills:
   - knowledge-meeting-links
   - knowledge-travel-preferences
   - knowledge-loyalty-programs
+  - config-store
   - context-for-email
   - calendar-list-calendars
   - calendar-register
