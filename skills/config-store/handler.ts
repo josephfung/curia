@@ -33,6 +33,7 @@ export class ConfigStoreHandler implements SkillHandler {
     }
 
     if (!ctx.entityMemory) {
+      ctx.log.error('config-store: entity memory not available — KG may be misconfigured');
       return { success: false, error: 'Knowledge graph not available — cannot access config store' };
     }
 
@@ -67,8 +68,10 @@ export class ConfigStoreHandler implements SkillHandler {
       return { success: false, error: 'value must be 2000 characters or fewer' };
     }
 
+    // Phase 1: write the value fact. If this fails, nothing was stored — return error.
+    let anchor: { id: string };
     try {
-      const anchor = await this.findOrCreateAnchor(ctx, namespace);
+      anchor = await this.findOrCreateAnchor(ctx, namespace);
 
       await ctx.entityMemory!.storeFact({
         entityNodeId: anchor.id,
@@ -80,16 +83,27 @@ export class ConfigStoreHandler implements SkillHandler {
         source: 'skill:config-store',
       });
 
-      // Register the namespace in the meta-index so list_namespaces can find it
-      await this.registerNamespace(ctx, namespace);
-
       ctx.log.info({ namespace, key }, 'Stored config value');
-      return { success: true, data: { stored: true, namespace, key } };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       ctx.log.error({ err, namespace, key }, 'Failed to store config value');
       return { success: false, error: `Failed to store: ${message}` };
     }
+
+    // Phase 2: register the namespace in the meta-index (best-effort).
+    // The value fact is already committed. A failure here leaves list_namespaces
+    // stale but does not affect retrieve — data is accessible by namespace anchor label.
+    try {
+      await this.registerNamespace(ctx, namespace);
+    } catch (err) {
+      ctx.log.error(
+        { err, namespace, key },
+        'Config value stored but meta-index registration failed — list_namespaces may not include this namespace',
+      );
+      // Still return success: the value IS stored. The meta-index is a projection.
+    }
+
+    return { success: true, data: { stored: true, namespace, key } };
   }
 
   private async retrieve(ctx: SkillContext): Promise<SkillResult> {
@@ -99,11 +113,16 @@ export class ConfigStoreHandler implements SkillHandler {
       return { success: false, error: 'Missing required input: namespace' };
     }
 
+    // Declared before try so the catch block can include them even if the error
+    // occurs after they are assigned. If the error occurs before assignment,
+    // they remain undefined and pino will simply omit them from the log object.
+    let anchorIds: string[] | undefined;
     try {
       const anchors = await ctx.entityMemory!.findEntities(anchorLabel(namespace));
 
       if (anchors.length === 0) {
         // Namespace has never been written to
+        ctx.log.debug({ namespace, key }, 'Namespace anchor not found — no config stored yet');
         if (key) {
           return { success: true, data: { found: false, key } };
         }
@@ -118,6 +137,7 @@ export class ConfigStoreHandler implements SkillHandler {
 
       // Collect facts across all anchor nodes for this namespace. Multiple anchors
       // can exist if findOrCreateAnchor races (same pattern as knowledge-company-overview).
+      anchorIds = anchors.map((a) => a.id);
       const allFacts = await Promise.all(anchors.map((a) => ctx.entityMemory!.getFacts(a.id)));
       const facts = allFacts.flat();
 
@@ -147,12 +167,15 @@ export class ConfigStoreHandler implements SkillHandler {
       return { success: true, data: { entries } };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      ctx.log.error({ err, namespace }, 'Failed to retrieve config');
+      ctx.log.error({ err, namespace, anchorIds }, 'Failed to retrieve config');
       return { success: false, error: `Failed to retrieve: ${message}` };
     }
   }
 
   private async listNamespaces(ctx: SkillContext): Promise<SkillResult> {
+    // Declared before try so the catch block can include them even if the error
+    // occurs after they are assigned.
+    let indexNodeIds: string[] | undefined;
     try {
       const indexNodes = await ctx.entityMemory!.findEntities(INDEX_LABEL);
 
@@ -160,6 +183,7 @@ export class ConfigStoreHandler implements SkillHandler {
         return { success: true, data: { namespaces: [] } };
       }
 
+      indexNodeIds = indexNodes.map((n) => n.id);
       const allFacts = await Promise.all(indexNodes.map((n) => ctx.entityMemory!.getFacts(n.id)));
       // Deduplicate — registerNamespace may have appended the same namespace more than once
       // if storeFact does not enforce label uniqueness on the index node.
@@ -173,7 +197,7 @@ export class ConfigStoreHandler implements SkillHandler {
       return { success: true, data: { namespaces } };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      ctx.log.error({ err }, 'Failed to list namespaces');
+      ctx.log.error({ err, indexNodeIds }, 'Failed to list namespaces');
       return { success: false, error: `Failed to list namespaces: ${message}` };
     }
   }
@@ -213,7 +237,10 @@ export class ConfigStoreHandler implements SkillHandler {
     // accumulate duplicate facts and cause list_namespaces to return duplicates.
     const existingFacts = await ctx.entityMemory!.getFacts(indexNodeId);
     const alreadyRegistered = existingFacts.some((f) => f.label === namespace);
-    if (alreadyRegistered) return;
+    if (alreadyRegistered) {
+      ctx.log.debug({ namespace }, 'Namespace already in meta-index — skipping duplicate registration');
+      return;
+    }
 
     await ctx.entityMemory!.storeFact({
       entityNodeId: indexNodeId,
