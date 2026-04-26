@@ -13,6 +13,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Changed
+
+- **Release process** — CLAUDE.md now documents the full release workflow: version bumps happen only when cutting a release (not per-PR), with a dedicated "Preparing a release" section covering naming, CHANGELOG condensing, version updates, release PR, tagging, and GitHub release publication including a thematic haiku
+
 ### Fixed
 
 - **Smoke test timeouts** — increased per-turn response timeout from 60s to 120s (configurable via `SMOKE_TIMEOUT_MS`); added a warm-up message before the first test case to absorb cold-start latency; error output now shows the actual timeout value and per-turn timings
