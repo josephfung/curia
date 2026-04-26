@@ -181,7 +181,7 @@ Use the bump table above to determine the version bump. If the unreleased batch 
 
 - Create a new heading immediately after `## [Unreleased]`:
   ```
-  ## [X.Y.Z] — Release Name — YYYY-MM-DD
+  ## [X.Y.Z] — YYYY-MM-DD — "Release Name"
   ```
 - Move all `[Unreleased]` bullets under it. Leave `## [Unreleased]` in place above it, empty, ready for the next batch.
 - Condense and group the bullets — aim for clarity over completeness. Merge related entries, cut implementation detail, and make it readable to someone who uses Curia but didn't write the code. The CHANGELOG is a reader document, not a commit log.
@@ -189,7 +189,7 @@ Use the bump table above to determine the version bump. If the unreleased batch 
 **4. Update version numbers**
 
 - `package.json` → `"version": "X.Y.Z"`
-- `README.md` → update any version badge or version reference
+- `README.md` line 18 → update the shields.io badge URL (`version-X.Y.Z`) and its `alt` attribute (`Version: X.Y.Z`)
 
 **5. Generate a release haiku**
 
@@ -205,19 +205,32 @@ Write a haiku thematically aligned with the release — drawn from the changes, 
 
 **7. After merge: tag and publish**
 
-Once the release PR is merged, fetch and tag the merge commit:
+Once the release PR is merged, first confirm the merge landed, then tag `origin/main` directly (do not rely on local branch state — the release worktree is on `chore/release-X.Y.Z`, not `main`):
 
 ```bash
+# Confirm the merge landed — grep must return a result before proceeding
 git -C /path/to/repo fetch origin main
-git -C /path/to/repo pull origin main
-git -C /path/to/repo tag -a vX.Y.Z -m "vX.Y.Z — Release Name"
+git -C /path/to/repo show origin/main:CHANGELOG.md | grep "X.Y.Z"
+
+# Tag origin/main directly — no checkout or pull needed
+git -C /path/to/repo tag -a vX.Y.Z -m "vX.Y.Z — Release Name" origin/main
 git -C /path/to/repo push origin vX.Y.Z
 ```
 
-Then create a GitHub release (`gh release create`):
-- **Title:** `vX.Y.Z — Release Name`
-- **Tag:** `vX.Y.Z`
-- **Body:** rewrite the CHANGELOG bullets into natural, friendly prose — past tense, as if narrating what changed. Prioritize what a user of Curia would care about. Close with a horizontal rule and the haiku.
+Then write the release notes (rewrite the CHANGELOG bullets into natural, friendly prose — past tense, as if narrating what changed; prioritize what a user of Curia would care about; close with a horizontal rule and the haiku) and create the GitHub release:
+
+```bash
+gh release create vX.Y.Z \
+  --title 'vX.Y.Z — "Release Name"' \
+  --notes "$(cat <<'EOF'
+[release prose here]
+
+---
+
+[haiku here]
+EOF
+)"
+```
 
 ## Scope Discipline
 
