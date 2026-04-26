@@ -126,6 +126,7 @@ export class ConfigStoreHandler implements SkillHandler {
         if (!fact) {
           return { success: true, data: { found: false, key } };
         }
+        ctx.log.info({ namespace, key }, 'Retrieved config value');
         return {
           success: true,
           data: {
