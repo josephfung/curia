@@ -35,7 +35,7 @@ export class MemoryQueryHandler implements SkillHandler {
     }
 
     if (!ctx.entityMemory) {
-      ctx.log.error('memory-query: entity memory not available');
+      ctx.log.error({ query }, 'memory-query: entity memory not available');
       return { success: false, error: 'Entity memory not available — database not configured' };
     }
 
@@ -53,7 +53,12 @@ export class MemoryQueryHandler implements SkillHandler {
       };
     }
 
-    // Cap limit at MAX_LIMIT; apply default when not provided
+    // Cap limit at MAX_LIMIT; apply default when not provided.
+    // Guard against NaN/Infinity: a non-finite value would reach the SQL LIMIT
+    // parameter and cause a driver error rather than a clear validation message.
+    if (limitInput !== undefined && !Number.isFinite(limitInput)) {
+      return { success: false, error: 'Invalid limit: must be a finite number' };
+    }
     const limit = limitInput !== undefined
       ? Math.min(Math.max(1, Math.floor(limitInput)), MAX_LIMIT)
       : DEFAULT_LIMIT;
