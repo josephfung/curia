@@ -170,8 +170,8 @@ describe('OutboundGateway', () => {
       const result = await gateway.send(baseRequest);
 
       expect(result.success).toBe(false);
-      // nylasClient.sendMessage may be called once for the CEO notification, but
-      // NOT for the original blocked message. We verify the result is blocked.
+      // The original blocked message must not be sent via nylasClient. The CEO
+      // notification now routes through the bus as outbound.notification (#206).
       expect(result.blockedReason).toBe('Content blocked by filter');
     });
 
@@ -195,20 +195,21 @@ describe('OutboundGateway', () => {
 
       await gateway.send(baseRequest);
 
-      expect(mocks.bus.publish).toHaveBeenCalledOnce();
+      // Two bus.publish calls: outbound.blocked + outbound.notification (#206)
+      expect(mocks.bus.publish).toHaveBeenCalledTimes(2);
       // bus.publish(layer, event) — event is the second argument (index 1)
-      const publishedEvent = (mocks.bus.publish as ReturnType<typeof vi.fn>).mock.calls[0][1] as BusEvent;
-      expect(publishedEvent.type).toBe('outbound.blocked');
+      const blockedEvent = (mocks.bus.publish as ReturnType<typeof vi.fn>).mock.calls[0][1] as BusEvent;
+      expect(blockedEvent.type).toBe('outbound.blocked');
       // The payload must contain the channel and recipient for downstream consumers
-      if (publishedEvent.type === 'outbound.blocked') {
-        expect(publishedEvent.payload.channelId).toBe('email');
-        expect(publishedEvent.payload.recipientId).toBe('recipient@example.com');
+      if (blockedEvent.type === 'outbound.blocked') {
+        expect(blockedEvent.payload.channelId).toBe('email');
+        expect(blockedEvent.payload.recipientId).toBe('recipient@example.com');
       }
     });
 
-    it('sends CEO notification via nylasClient when filter rejects', async () => {
-      // The CEO notification is the human-in-the-loop safety signal. It must
-      // be sent directly (not through the filter pipeline) to avoid recursion.
+    it('publishes outbound.notification event for CEO alert when filter rejects', async () => {
+      // The CEO notification routes through the bus as an outbound.notification event
+      // so it goes through the same safety pipeline as regular outbound messages (#206).
       (mocks.contentFilter.check as ReturnType<typeof vi.fn>).mockResolvedValue({
         passed: false,
         findings: [{ rule: 'secret-pattern', detail: 'API key detected' }],
@@ -226,16 +227,22 @@ describe('OutboundGateway', () => {
 
       await gateway.send(baseRequest);
 
-      // nylasClient.sendMessage should be called exactly once — for the CEO notification
-      expect(mocks.nylasClient.sendMessage).toHaveBeenCalledOnce();
-      const sendArgs = (mocks.nylasClient.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0][0];
-      expect(sendArgs.to).toEqual([{ email: 'ceo@example.com' }]);
-      expect(sendArgs.subject).toMatch(/blocked/i);
+      // The second bus.publish call is the outbound.notification event
+      const notificationEvent = (mocks.bus.publish as ReturnType<typeof vi.fn>).mock.calls[1][1] as BusEvent;
+      expect(notificationEvent.type).toBe('outbound.notification');
+      if (notificationEvent.type === 'outbound.notification') {
+        expect(notificationEvent.payload.notificationType).toBe('blocked_content');
+        expect(notificationEvent.payload.ceoEmail).toBe('ceo@example.com');
+        expect(notificationEvent.payload.subject).toMatch(/blocked/i);
+      }
+      // nylasClient.sendMessage must NOT be called — the gateway no longer sends
+      // the notification directly; the EmailAdapter handles delivery.
+      expect(mocks.nylasClient.sendMessage).not.toHaveBeenCalled();
     });
 
-    it('sends CEO notification body with no sensitive content but includes block ID', async () => {
-      // The notification must never echo the blocked body or rule details back to
-      // any inbox — it is purely a "something was blocked, check the logs" signal.
+    it('notification payload contains no sensitive content but includes block ID', async () => {
+      // The notification must never echo the blocked body or rule details —
+      // it is purely a "something was blocked, check the logs" signal.
       // The block ID ties the notification to the outbound.blocked event in the audit trail.
       const sensitiveBody = 'My API key is sk-ant-abcdefghijklmnopqrst1234567890AB';
       (mocks.contentFilter.check as ReturnType<typeof vi.fn>).mockResolvedValue({
@@ -255,16 +262,19 @@ describe('OutboundGateway', () => {
 
       await gateway.send({ ...baseRequest, body: sensitiveBody });
 
-      const sendArgs = (mocks.nylasClient.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0][0];
-      // Must NOT contain the blocked content
-      expect(sendArgs.body).not.toContain(sensitiveBody);
-      // Must NOT contain the detailed rule finding (could include key value)
-      expect(sendArgs.body).not.toContain('sk-ant-abcdefghijklmnopqrst1234567890AB');
-      // MUST contain the block ID so the CEO can cross-reference with logs
-      expect(sendArgs.body).toMatch(/block_[0-9a-f-]{36}/);
+      const notificationEvent = (mocks.bus.publish as ReturnType<typeof vi.fn>).mock.calls[1][1] as BusEvent;
+      expect(notificationEvent.type).toBe('outbound.notification');
+      if (notificationEvent.type === 'outbound.notification') {
+        // Must NOT contain the blocked content
+        expect(notificationEvent.payload.body).not.toContain(sensitiveBody);
+        // Must NOT contain the detailed rule finding (could include key value)
+        expect(notificationEvent.payload.body).not.toContain('sk-ant-abcdefghijklmnopqrst1234567890AB');
+        // MUST contain a block ID so the CEO can cross-reference with logs
+        expect(notificationEvent.payload.blockId).toMatch(/^block_/);
+      }
     });
 
-    it('fails closed when filter crashes — blocks send and notifies CEO', async () => {
+    it('fails closed when filter crashes — blocks send and publishes notification', async () => {
       // If the content filter itself throws, we must treat it as blocked (fail-closed).
       // A crashing filter is a security anomaly; we'd rather miss a send than let
       // potentially dangerous content through an unchecked pipeline.
@@ -285,8 +295,12 @@ describe('OutboundGateway', () => {
 
       // Filter crash must block the send
       expect(result.success).toBe(false);
-      // CEO notification is sent even when the filter crashes
-      expect(mocks.nylasClient.sendMessage).toHaveBeenCalledOnce();
+      // CEO notification is published to the bus as outbound.notification
+      const publishCalls = (mocks.bus.publish as ReturnType<typeof vi.fn>).mock.calls;
+      const notificationCalls = publishCalls.filter(
+        (call: unknown[]) => (call[1] as BusEvent).type === 'outbound.notification',
+      );
+      expect(notificationCalls).toHaveLength(1);
     });
 
     it('allows send when filter passes and calls check with correct params', async () => {

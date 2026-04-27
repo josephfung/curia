@@ -156,15 +156,11 @@ When `outbound.blocked` fires, the CEO receives a **short, opaque notification e
   - A note to review via CLI or web app using that ID
 - **No blocked content, no rule details, no thread context in the email**
 
-**Implementation note (spec deviation):** The notification email is sent directly via
-`nylasClient.sendMessage()` rather than routing through the bus → filter → email-adapter
-pipeline. This is a conscious deviation from the original "no bypass" principle, accepted
-because the notification is a fixed template with only an opaque block ID and a sender
-email address — it cannot carry sensitive content by construction.
-
-**This deviation must not be extended.** Before adding any other direct-send path, an
-`outbound.notification` event type must be built so that system notifications route
-through the filter pipeline automatically. See the `@TODO` in `dispatcher.ts`.
+**Implementation note (spec deviation — resolved):** This deviation was closed by #206.
+CEO notifications now route through the bus → filter → email-adapter pipeline via the
+`outbound.notification` event type. `OutboundGateway.sendNotification()` publishes the
+event; the EmailAdapter subscribes and calls `outboundGateway.send()` so the notification
+goes through the same content filter and blocked-contact check as regular outbound messages.
 
 The `blockId` is the handle for future tooling:
 - Today: usable in CLI to inspect the blocked event details
@@ -192,9 +188,7 @@ logging mechanism required.
 
 ### Out of scope (future work)
 
-- `outbound.notification` event type — required before adding any new direct-send paths.
-  The current CEO notification bypasses the filter pipeline (see deviation note above).
-  This is the **first priority** follow-up for this feature.
+- ~~`outbound.notification` event type~~ — Done (#206). See resolved deviation note above.
 - LLM-as-judge implementation (Stage 2 is stub only) — see project memory for intent
 - CEO review-and-approve/edit/discard flow
 - Web app UI for reviewing blocked messages
