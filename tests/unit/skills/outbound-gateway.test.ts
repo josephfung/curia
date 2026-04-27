@@ -363,6 +363,220 @@ describe('OutboundGateway', () => {
 });
 
 // ---------------------------------------------------------------------------
+// createEmailDraft + CEO notification
+// ---------------------------------------------------------------------------
+
+describe('OutboundGateway.createEmailDraft', () => {
+  // The notification is fire-and-forget (.catch(), not await). After
+  // createEmailDraft returns, the notification promise is still in-flight.
+  // Flushing a macrotask ensures all pending microtasks (mock promise chains
+  // inside notifyCeoDraftCreated → dispatchEmail → sendMessage) have settled.
+  const flushNotification = () => new Promise<void>((r) => setTimeout(r, 0));
+
+  const draftRequest = {
+    channel: 'email' as const,
+    to: 'partner@example.com',
+    accountId: 'joseph',
+    subject: 'Partnership follow-up',
+    body: 'Thanks for the meeting!',
+  };
+
+  /** Build a gateway with full email + CEO notification capability. */
+  function makeGateway(overrides: {
+    nylasClient?: Partial<NylasClient>;
+    contactService?: Partial<ContactService>;
+    ceoEmail?: string;
+    nylasClients?: Map<string, NylasClient>;
+  } = {}) {
+    const logger = createLogger('error');
+    const nylasClient = {
+      createDraft: vi.fn().mockResolvedValue({ id: 'draft-abc' }),
+      sendMessage: vi.fn().mockResolvedValue({ id: 'notif-1' }),
+      ...overrides.nylasClient,
+    } as unknown as NylasClient;
+    const contactService = {
+      resolveByChannelIdentity: vi.fn().mockResolvedValue(null),
+      ...overrides.contactService,
+    } as unknown as ContactService;
+    const contentFilter = {
+      check: vi.fn().mockResolvedValue({ passed: true, findings: [] }),
+    } as unknown as OutboundContentFilter;
+    const bus = {
+      publish: vi.fn().mockResolvedValue(undefined),
+      subscribe: vi.fn(),
+    } as unknown as EventBus;
+
+    const nylasClients = overrides.nylasClients ?? new Map([['joseph', nylasClient]]);
+
+    const gateway = new OutboundGateway({
+      nylasClients,
+      contactService,
+      contentFilter,
+      bus,
+      ceoEmail: overrides.ceoEmail ?? 'ceo@example.com',
+      logger,
+    });
+
+    return { gateway, nylasClient, contactService };
+  }
+
+  it('creates a Nylas draft and returns the draftId', async () => {
+    const { gateway, nylasClient } = makeGateway();
+    const result = await gateway.createEmailDraft(draftRequest);
+
+    expect(result.success).toBe(true);
+    expect(result.draftId).toBe('draft-abc');
+    expect(nylasClient.createDraft).toHaveBeenCalledOnce();
+  });
+
+  it('sends CEO a notification email after successful draft creation', async () => {
+    const { gateway, nylasClient } = makeGateway();
+    await gateway.createEmailDraft(draftRequest);
+    await flushNotification();
+
+    // sendMessage is called once — for the CEO notification (not for the draft itself,
+    // which goes through createDraft). Verify the notification targets the CEO.
+    expect(nylasClient.sendMessage).toHaveBeenCalledOnce();
+    const sendArgs = (nylasClient.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(sendArgs.to).toEqual([{ email: 'ceo@example.com' }]);
+    expect(sendArgs.subject).toContain('Draft reply awaiting review');
+    expect(sendArgs.subject).toContain('Partnership follow-up');
+  });
+
+  it('notification body includes recipient, subject, account, and draft ID', async () => {
+    const { gateway, nylasClient } = makeGateway();
+    await gateway.createEmailDraft(draftRequest);
+    await flushNotification();
+
+    const sendArgs = (nylasClient.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    // Body is HTML (markdownToHtml converts the plain-text template), so check
+    // for the key content fragments without assuming exact HTML structure.
+    expect(sendArgs.body).toContain('partner@example.com');
+    expect(sendArgs.body).toContain('Partnership follow-up');
+    expect(sendArgs.body).toContain('joseph');
+    expect(sendArgs.body).toContain('draft-abc');
+  });
+
+  it('returns success even when the CEO notification email fails to send', async () => {
+    const { gateway, nylasClient } = makeGateway({
+      nylasClient: {
+        createDraft: vi.fn().mockResolvedValue({ id: 'draft-456' }),
+        // Notification send fails — must not affect the draft result
+        sendMessage: vi.fn().mockRejectedValue(new Error('SMTP timeout')),
+      },
+    });
+
+    const result = await gateway.createEmailDraft(draftRequest);
+    await flushNotification();
+
+    // Draft creation succeeded — the notification failure is swallowed
+    expect(result.success).toBe(true);
+    expect(result.draftId).toBe('draft-456');
+  });
+
+  it('returns success even when dispatchEmail returns { success: false } for the notification', async () => {
+    const { gateway } = makeGateway({
+      nylasClient: {
+        createDraft: vi.fn().mockResolvedValue({ id: 'draft-789' }),
+        // sendMessage resolves but returns no id (indicates soft failure in dispatchEmail)
+        sendMessage: vi.fn().mockResolvedValue({ id: undefined }),
+      },
+    });
+
+    const result = await gateway.createEmailDraft(draftRequest);
+    await flushNotification();
+
+    expect(result.success).toBe(true);
+    expect(result.draftId).toBe('draft-789');
+  });
+
+  it('skips CEO notification when ceoEmail is not configured', async () => {
+    const { gateway, nylasClient } = makeGateway({ ceoEmail: '' });
+
+    const result = await gateway.createEmailDraft(draftRequest);
+    await flushNotification();
+
+    expect(result.success).toBe(true);
+    expect(result.draftId).toBe('draft-abc');
+    // sendMessage should never be called — notification was skipped
+    expect(nylasClient.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('skips CEO notification when no email client is configured', async () => {
+    const sendMessage = vi.fn();
+    const { gateway } = makeGateway({
+      nylasClients: new Map(), // empty — no primary client
+    });
+
+    const result = await gateway.createEmailDraft(draftRequest);
+    await flushNotification();
+
+    // Draft creation fails (no client), but the failure path is clean
+    expect(result.success).toBe(false);
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('blocks draft creation for a blocked contact', async () => {
+    const { gateway, nylasClient } = makeGateway({
+      contactService: {
+        resolveByChannelIdentity: vi.fn().mockResolvedValue({
+          contactId: 'contact-blocked',
+          status: 'blocked',
+          trustLevel: null,
+        }),
+      },
+    });
+
+    const result = await gateway.createEmailDraft(draftRequest);
+    await flushNotification();
+
+    expect(result.success).toBe(false);
+    expect(result.blockedReason).toBe('Recipient is blocked');
+    // Neither draft nor notification should be attempted
+    expect(nylasClient.createDraft).not.toHaveBeenCalled();
+    expect(nylasClient.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('blocks draft creation when contact resolution throws (fail-closed)', async () => {
+    const { gateway, nylasClient } = makeGateway({
+      contactService: {
+        resolveByChannelIdentity: vi.fn().mockRejectedValue(new Error('DB unavailable')),
+      },
+    });
+
+    const result = await gateway.createEmailDraft(draftRequest);
+    await flushNotification();
+
+    // Unlike send() which fail-opens on contact resolution errors, createEmailDraft
+    // fail-closes: a draft for a blocked contact could be sent by a human later.
+    expect(result.success).toBe(false);
+    expect(result.blockedReason).toContain('Contact resolution failed');
+    expect(nylasClient.createDraft).not.toHaveBeenCalled();
+    expect(nylasClient.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('uses the actual primary account name when request.accountId is absent', async () => {
+    const nylasClient = {
+      createDraft: vi.fn().mockResolvedValue({ id: 'draft-no-acct' }),
+      sendMessage: vi.fn().mockResolvedValue({ id: 'notif-1' }),
+    } as unknown as NylasClient;
+    // Primary account is named "curia" — this is what should appear in the notification
+    const nylasClients = new Map([['curia', nylasClient]]);
+    const { gateway } = makeGateway({ nylasClients });
+
+    const requestWithoutAccountId = { ...draftRequest, accountId: undefined };
+    await gateway.createEmailDraft(requestWithoutAccountId);
+    await flushNotification();
+
+    const sendArgs = (nylasClient.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    // The notification body should say "curia" not "primary" or "unknown"
+    expect(sendArgs.body).toContain('curia');
+    expect(sendArgs.body).not.toContain('"primary"');
+    expect(sendArgs.body).not.toContain('"unknown"');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Helper: build a minimal SignalRpcClient mock with a configurable group list.
 // Defined outside the describe block so it is available at module scope.
 // ---------------------------------------------------------------------------

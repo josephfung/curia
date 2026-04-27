@@ -410,7 +410,7 @@ export class EmailAdapter {
     if (draftResult.success) {
       logger.info(
         { ...logCtx, accountId: this.config.accountId, draftId: draftResult.draftId },
-        'Email reply saved as draft — CEO notified to review and send',
+        'Email reply saved as draft — CEO notification queued',
       );
     } else if (draftResult.blockedReason === 'Recipient is blocked') {
       // Intentional block — not an infrastructure failure
