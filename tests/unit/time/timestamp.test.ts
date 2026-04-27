@@ -48,6 +48,15 @@ describe('formatDisplayTimezone', () => {
     expect(label).toBe('UTC');
   });
 
+  it('handles zones without a named abbreviation', () => {
+    // Asia/Kolkata has no DST; luxon's ZZZZ returns "GMT+5:30" (not a named abbr).
+    // The dedup guard doesn't catch this format, so the output includes both.
+    // Mildly redundant but not incorrect — only matters if Curia is deployed
+    // in a zone without a standard abbreviation.
+    const label = formatDisplayTimezone('Asia/Kolkata', new Date('2026-04-06T15:30:00Z'));
+    expect(label).toBe('GMT+5:30 (UTC+05:30)');
+  });
+
   it('throws on invalid timezone', () => {
     expect(() => formatDisplayTimezone('Not/A/Zone', new Date())).toThrow('invalid timezone');
   });
