@@ -20,6 +20,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **Calendar timezone display** — calendar skill handlers (`calendar-list-events`, `calendar-find-free-time`, `calendar-check-conflicts`) now return timestamps in the user's local timezone instead of UTC. Previously, event times were returned as UTC Z-suffix strings and the LLM was expected to convert them, which it did unreliably — causing all events to display shifted by the UTC offset. Added `toLocalIso()` and `formatDisplayTimezone()` utilities, and exposed `timezone` on `SkillContext` (additive, non-breaking public API surface change). Fixes #362
 - **`held-messages-process` block idempotency** — `block` action now handles duplicate-key errors from `linkIdentity` the same way `identify` does: if the identity is already linked to a blocked contact on retry, it proceeds to `discard` rather than failing and leaving the held message stuck in `pending` (closes #335)
 
 ---
