@@ -458,7 +458,7 @@ describe('OutboundGateway.createEmailDraft', () => {
   });
 
   it('returns success even when the CEO notification email fails to send', async () => {
-    const { gateway, nylasClient } = makeGateway({
+    const { gateway } = makeGateway({
       nylasClient: {
         createDraft: vi.fn().mockResolvedValue({ id: 'draft-456' }),
         // Notification send fails — must not affect the draft result
