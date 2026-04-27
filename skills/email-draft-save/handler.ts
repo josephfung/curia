@@ -57,6 +57,19 @@ export class EmailDraftSaveHandler implements SkillHandler {
       ? reply_to_message_id.trim()
       : undefined;
 
+    // Warn when a non-observation-mode draft omits the account param. In practice this
+    // means a CEO-initiated request ("draft this from me") fell through without the
+    // coordinator specifying which account to target — the draft will silently land in
+    // the primary (Curia) account, which is almost never what the CEO intended.
+    if (!accountId && ctx.taskMetadata?.observationMode !== true) {
+      ctx.log.warn(
+        { to, subject },
+        'email-draft-save: no account specified for non-observation-mode draft — '
+        + 'draft will land in the primary (agent) account. '
+        + 'Did the coordinator mean to pass the CEO account name?',
+      );
+    }
+
     ctx.log.info({ to, subject, accountId, replyToMessageId }, 'email-draft-save: saving draft');
 
     let result: Awaited<ReturnType<typeof ctx.outboundGateway.createEmailDraft>>;

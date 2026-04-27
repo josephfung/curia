@@ -165,4 +165,51 @@ describe('EmailDraftSaveHandler', () => {
       expect(gateway.createEmailDraft).toHaveBeenCalled();
     });
   });
+
+  describe('missing-account warning for non-observation-mode drafts', () => {
+    it('logs a warning when account is omitted and not in observation mode', async () => {
+      const gateway = { createEmailDraft: vi.fn().mockResolvedValue({ success: true, draftId: 'd-1' }) };
+      const warnSpy = vi.fn();
+      const ctx = makeCtx(
+        { to: 'r@example.com', subject: 'Hi', body: 'Hello' },
+        gateway,
+      );
+      // Override the warn method to capture the call
+      ctx.log = { ...logger, warn: warnSpy } as never;
+      await handler.execute(ctx);
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ to: 'r@example.com', subject: 'Hi' }),
+        expect.stringContaining('no account specified'),
+      );
+    });
+
+    it('does not warn when account is provided', async () => {
+      const gateway = { createEmailDraft: vi.fn().mockResolvedValue({ success: true, draftId: 'd-1' }) };
+      const warnSpy = vi.fn();
+      const ctx = makeCtx(
+        { to: 'r@example.com', subject: 'Hi', body: 'Hello', account: 'ceo-account' },
+        gateway,
+      );
+      ctx.log = { ...logger, warn: warnSpy } as never;
+      await handler.execute(ctx);
+      expect(warnSpy).not.toHaveBeenCalled();
+    });
+
+    it('does not warn in observation mode (even without account)', async () => {
+      const gateway = { createEmailDraft: vi.fn().mockResolvedValue({ success: true, draftId: 'd-1' }) };
+      const warnSpy = vi.fn();
+      const ctx = makeCtx(
+        { to: 'r@example.com', subject: 'Hi', body: 'Hello', triage_classification: 'NEEDS DRAFT' },
+        gateway,
+        { observationMode: true },
+      );
+      ctx.log = { ...logger, warn: warnSpy } as never;
+      await handler.execute(ctx);
+      // The obs-mode guard warn may fire, but the missing-account warn should not
+      const missingAccountWarns = warnSpy.mock.calls.filter(
+        (args: unknown[]) => typeof args[1] === 'string' && (args[1] as string).includes('no account specified'),
+      );
+      expect(missingAccountWarns).toHaveLength(0);
+    });
+  });
 });
