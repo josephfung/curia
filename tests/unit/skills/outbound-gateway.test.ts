@@ -474,11 +474,13 @@ describe('OutboundGateway.createEmailDraft', () => {
     expect(result.draftId).toBe('draft-456');
   });
 
-  it('returns success even when dispatchEmail returns { success: false } for the notification', async () => {
+  it('returns success even when notification sendMessage resolves with no messageId', async () => {
     const { gateway } = makeGateway({
       nylasClient: {
         createDraft: vi.fn().mockResolvedValue({ id: 'draft-789' }),
-        // sendMessage resolves but returns no id (indicates soft failure in dispatchEmail)
+        // sendMessage resolves but returns no id — dispatchEmail treats this as
+        // { success: true, messageId: undefined }, so the notification "succeeds"
+        // with a missing id. Draft result must still be unaffected.
         sendMessage: vi.fn().mockResolvedValue({ id: undefined }),
       },
     });
@@ -503,7 +505,6 @@ describe('OutboundGateway.createEmailDraft', () => {
   });
 
   it('skips CEO notification when no email client is configured', async () => {
-    const sendMessage = vi.fn();
     const { gateway } = makeGateway({
       nylasClients: new Map(), // empty — no primary client
     });
@@ -511,9 +512,9 @@ describe('OutboundGateway.createEmailDraft', () => {
     const result = await gateway.createEmailDraft(draftRequest);
     await flushNotification();
 
-    // Draft creation fails (no client), but the failure path is clean
+    // Draft creation fails (no client) — notification never attempted
     expect(result.success).toBe(false);
-    expect(sendMessage).not.toHaveBeenCalled();
+    expect(result.blockedReason).toBe('Email client not configured');
   });
 
   it('blocks draft creation for a blocked contact', async () => {
