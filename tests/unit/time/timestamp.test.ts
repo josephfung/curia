@@ -45,7 +45,7 @@ describe('formatDisplayTimezone', () => {
 
   it('formats UTC timezone label', () => {
     const label = formatDisplayTimezone('UTC', new Date('2026-04-06T15:30:00Z'));
-    expect(label).toContain('UTC');
+    expect(label).toBe('UTC');
   });
 
   it('throws on invalid timezone', () => {
