@@ -339,7 +339,11 @@ describe('HeldMessagesProcessHandler — block action', () => {
     ));
 
     expect(result.success).toBe(false);
-    if (!result.success) expect(result.error).toContain('non-blocked contact');
+    if (!result.success) {
+      // Error includes the owning contact ID and status so the caller knows what to fix
+      expect(result.error).toContain(CONTACT_ID);
+      expect(result.error).toContain('status: confirmed');
+    }
     expect(heldMessages.discard).not.toHaveBeenCalled();
   });
 
