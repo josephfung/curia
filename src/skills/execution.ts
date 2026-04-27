@@ -286,6 +286,9 @@ export class ExecutionLayer {
       // Forward task-level metadata (e.g. observationMode) so skills can adjust
       // their behaviour without needing a separate out-of-band signalling channel.
       taskMetadata: options?.taskMetadata,
+      // Expose the configured timezone so skills can format output timestamps
+      // in the user's local time. See toLocalIso() in src/time/timestamp.ts.
+      timezone: this.timezone,
     };
 
     // Capability-gated service injection.
