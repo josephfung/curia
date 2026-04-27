@@ -4,6 +4,7 @@
 // the busy periods returned by the Nylas free/busy API.
 
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import { toLocalIso, formatDisplayTimezone } from '../../src/time/timestamp.js';
 
 export class CalendarFindFreeTimeHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {
@@ -81,14 +82,16 @@ export class CalendarFindFreeTimeHandler implements SkillHandler {
         ? freeWindows.filter((w) => w.end - w.start >= minSeconds)
         : freeWindows;
 
-      // Format timestamps as UTC ISO strings — LLMs can't reliably convert raw Unix seconds.
-      const freeWindowsIso = filtered.map((w) => ({
-        start: new Date(w.start * 1000).toISOString(),
-        end: new Date(w.end * 1000).toISOString(),
+      // Format timestamps in the user's local timezone so the LLM reads correct
+      // wall-clock times. Falls back to UTC Z-suffix when timezone is not configured.
+      const tz = ctx.timezone;
+      const freeWindowsFormatted = filtered.map((w) => ({
+        start: tz ? toLocalIso(w.start, tz) : new Date(w.start * 1000).toISOString(),
+        end: tz ? toLocalIso(w.end, tz) : new Date(w.end * 1000).toISOString(),
       }));
 
-      ctx.log.info({ calendarCount: calendarIds.length, freeWindowCount: freeWindowsIso.length }, 'Found free time');
-      return { success: true, data: { freeWindows: freeWindowsIso } };
+      ctx.log.info({ calendarCount: calendarIds.length, freeWindowCount: freeWindowsFormatted.length }, 'Found free time');
+      return { success: true, data: { freeWindows: freeWindowsFormatted, displayTimezone: tz ? formatDisplayTimezone(tz, new Date()) : null } };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       ctx.log.error({ err }, 'Failed to find free time');

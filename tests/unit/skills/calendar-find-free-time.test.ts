@@ -91,4 +91,57 @@ describe('CalendarFindFreeTimeHandler', () => {
       ]);
     }
   });
+
+  it('formats free window timestamps in the configured timezone', async () => {
+    // Use realistic timestamps: busy 9:00-10:00 AM EDT on 2026-04-06
+    // 1775480400 = 2026-04-06T13:00:00Z = 9:00 AM EDT
+    // 1775484000 = 2026-04-06T14:00:00Z = 10:00 AM EDT
+    const nylasCalendarClient = {
+      getFreeBusy: vi.fn().mockResolvedValue([{
+        email: 'cal-1',
+        timeSlots: [{ startTime: 1775480400, endTime: 1775484000, status: 'busy' }],
+      }]),
+    };
+
+    // Query range: 8:00 AM - 12:00 PM EDT
+    // 1775476800 = 2026-04-06T12:00:00Z = 8:00 AM EDT
+    // 1775491200 = 2026-04-06T16:00:00Z = 12:00 PM EDT
+    const result = await handler.execute(makeCtx(
+      { calendarIds: ['cal-1'], timeMin: '2026-04-06T12:00:00Z', timeMax: '2026-04-06T16:00:00Z' },
+      { nylasCalendarClient: nylasCalendarClient as never, timezone: 'America/Toronto' },
+    ));
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const data = result.data as { freeWindows: Array<{ start: string; end: string }>; displayTimezone: string };
+      // Free: 8:00-9:00 AM EDT, 10:00 AM-12:00 PM EDT
+      expect(data.freeWindows[0].start).toBe('2026-04-06T08:00:00.000-04:00');
+      expect(data.freeWindows[0].end).toBe('2026-04-06T09:00:00.000-04:00');
+      expect(data.freeWindows[1].start).toBe('2026-04-06T10:00:00.000-04:00');
+      expect(data.freeWindows[1].end).toBe('2026-04-06T12:00:00.000-04:00');
+      expect(data.displayTimezone).toContain('EDT');
+    }
+  });
+
+  it('falls back to UTC when timezone is not provided', async () => {
+    const nylasCalendarClient = {
+      getFreeBusy: vi.fn().mockResolvedValue([{
+        email: 'cal-1',
+        timeSlots: [{ startTime: 1775480400, endTime: 1775484000, status: 'busy' }],
+      }]),
+    };
+
+    const result = await handler.execute(makeCtx(
+      { calendarIds: ['cal-1'], timeMin: '2026-04-06T12:00:00Z', timeMax: '2026-04-06T16:00:00Z' },
+      { nylasCalendarClient: nylasCalendarClient as never },
+    ));
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const data = result.data as { freeWindows: Array<{ start: string; end: string }>; displayTimezone: null };
+      // UTC Z-suffix when no timezone configured
+      expect(data.freeWindows[0].start).toBe('2026-04-06T12:00:00.000Z');
+      expect(data.displayTimezone).toBeNull();
+    }
+  });
 });
