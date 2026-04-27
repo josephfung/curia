@@ -13,38 +13,33 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
-### Changed
+---
 
-- **Release process** — CLAUDE.md now documents the full release workflow: version bumps happen only when cutting a release (not per-PR), with a dedicated "Preparing a release" section covering naming, CHANGELOG condensing, version updates, release PR, tagging, and GitHub release publication including a thematic haiku
-
-### Fixed
-
-- **Smoke test timeouts** — increased per-turn response timeout from 60s to 120s (configurable via `SMOKE_TIMEOUT_MS`); added a warm-up message before the first test case to absorb cold-start latency; error output now shows the actual timeout value and per-turn timings
+## [0.22.0] — 2026-04-26 — "Knowledge Surface"
 
 ### Added
 
-- **`memory-store` skill** — general-purpose KG fact write path: agents can now explicitly store a named attribute fact about a known entity with full control over confidence, decay class, and sensitivity. Resolves entity by label or node ID; returns one of four outcomes (`created`, `updated`, `conflict`, `rejected`) so the agent can surface contradictions to the CEO before proceeding (closes spec §03, #297)
-- **`StoreFactResult.action`** — `storeFact()` now returns the pipeline outcome (`created | updated | conflict | rejected`) alongside `stored`; attribute-based facts now route through contradiction detection automatically
-- **`StoreFactResult.existingNodeId`** — populated when a fact write produces a `conflict`, letting callers surface the contradicting node to the CEO
-- **`memory-query` skill** — freeform semantic search over the knowledge graph via pgvector cosine similarity; supports optional `type`, `max_sensitivity` ceiling, and `limit` filters; returns `decay_class` and `sensitivity` on every result node (spec §03, #298)
-- **`semanticSearch` filter options** — `KnowledgeGraphStore.semanticSearch()`, `EntityMemory.search()`, and both backends now accept `type` and `maxSensitivity` filter options applied in-query before results are returned
-- **`config-store` skill** — Generic namespaced key-value configuration store backed by the knowledge graph. Agents declare a namespace in their system prompt (`writing_config`, `travel`, etc.) and call `store`/`retrieve`/`list_namespaces` without needing a bespoke `knowledge-*` skill. Values use permanent decay class. Supersedes the per-domain `knowledge-*` pattern for new agents; existing `knowledge-*` skills are unchanged (cleanup tracked in #357).
-- **`image-generate` skill** — Wraps DALL-E 3 via OpenAI API. Generates an image from a text prompt; returns a temporary CDN URL. Generic skill, not essay-specific. Prerequisite for the essay-editor specialist agent.
-- **KG explorer: sensitivity visualization** — node detail drawer (tap any node to inspect all attributes), color-by toggle (Type / Sensitivity / Decay class), degree-based node sizing, and confidence-based opacity (#350)
-- **KG API: `sensitivity` and `properties` fields** — `/api/kg/nodes` and `/api/kg/graph` now return both fields on every node response (#350)
-- **`SensitivityClassifier` unit tests** — 5 tests covering keyword matching, property-value matching, category hint bypass, and most-restrictive-wins behaviour (#350)
-
-- **Observation triage event** (`observation.triage.completed`) — structured bus event emitted after every observation-mode triage task, carrying classification, skills called, and action count for monitoring and alerting (#311)
-- **`AgentResponsePayload.skillsCalled`** — optional field listing skills invoked during a task (public API surface: additive, non-breaking)
-- **`TriageClassification` type** — exported union type for triage classification labels, shared across event consumers
+- **`memory-store` skill** — agents can now write facts directly to the knowledge graph: store named attribute facts about any entity with explicit control over confidence, decay class, and sensitivity. Returns one of four outcomes (`created`, `updated`, `conflict`, `rejected`), surfacing contradictions to the CEO before writing (spec §03, #297).
+- **`memory-query` skill** — freeform semantic search over the knowledge graph via pgvector cosine similarity; supports `type`, `max_sensitivity`, and `limit` filters (spec §03, #298).
+- **`config-store` skill** — generic namespaced key-value store backed by the knowledge graph. Agents declare a namespace in their system prompt and call `store`/`retrieve`/`list_namespaces` without a bespoke per-domain skill. Supersedes the `knowledge-*` pattern for new agents.
+- **`image-generate` skill** — generates images via DALL-E 3; returns a CDN URL. General-purpose prerequisite for the upcoming essay-editor agent.
+- **KG explorer: sensitivity visualization** — node detail drawer, color-by toggle (type / sensitivity / decay class), degree-based node sizing, and confidence-based opacity (#350). `/api/kg/nodes` and `/api/kg/graph` now return `sensitivity` and `properties` on every node.
+- **Observation triage event** (`observation.triage.completed`) — structured bus event emitted after every observation-mode triage task, carrying classification, skills called, and action count (#311). `AgentResponsePayload.skillsCalled` added to the public API (additive, non-breaking).
 
 ### Changed
 
-- **Dispatcher observation-mode branch** — now emits a `warn`-level log when a non-`LEAVE FOR CEO` classification completes with zero skill calls (defensive check for coordinator stalls)
-- **Defense-in-depth: skill-layer block for observation-mode triage** (closes #305)
-  - `email-reply` is hard-blocked when `observationMode` is set in task metadata — the skill returns a structured error rather than silently sending a reply from the CEO's inbox.
-  - `email-draft-save` requires `triage_classification: "NEEDS DRAFT"` in observation mode. Calls with NOISE, LEAVE FOR CEO, or no classification are rejected with an auditable error.
-  - Task metadata (`observationMode`, future signals) is now threaded from the `agent.task` event through `ExecutionLayer.invoke()` into `SkillContext`, making task-level context available to any handler without bus access.
+- **Observation-mode hardening** — `email-reply` is hard-blocked in observation mode at the skill layer; `email-draft-save` requires `triage_classification: "NEEDS DRAFT"`. Task metadata is now threaded end-to-end from the `agent.task` event into `SkillContext`, making task-level signals available to any handler (closes #305).
+- **Release process** — CLAUDE.md now documents the full release workflow: version bump timing, CHANGELOG condensing, PR format, tag and publish steps.
+
+### Fixed
+
+- **Smoke test timeouts** — per-turn timeout raised from 60s to 120s (configurable via `SMOKE_TIMEOUT_MS`); a warm-up message absorbs cold-start latency; error output now includes per-turn timings.
+
+---
+
+*Facts inscribed in graph —*  
+*agent writes, the record keeps,*  
+*intent stays its course.*
 
 ---
 
