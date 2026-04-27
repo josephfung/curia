@@ -175,6 +175,8 @@ export class OutboundGateway {
    * notifications (blocked-content CEO alerts) when no accountId is specified.
    */
   private readonly primaryNylasClient: NylasClient | undefined;
+  /** Account name that owns primaryNylasClient (first key in nylasClients). */
+  private readonly primaryAccountId: string | undefined;
   private readonly signalClient?: SignalRpcClient;
   private readonly signalPhoneNumber?: string;
   private readonly contactService: ContactService;
@@ -186,6 +188,7 @@ export class OutboundGateway {
   constructor(config: OutboundGatewayConfig) {
     this.nylasClients = config.nylasClients ?? new Map();
     this.primaryNylasClient = this.nylasClients.values().next().value;
+    this.primaryAccountId = this.nylasClients.keys().next().value;
     this.signalClient = config.signalClient;
     this.signalPhoneNumber = config.signalPhoneNumber;
     this.contactService = config.contactService;
@@ -759,16 +762,19 @@ export class OutboundGateway {
 
     const subject = request.subject ?? '(no subject)';
     // Resolve the drafting account name for the notification body. Falls back to the
-    // first registered account name (the actual primary), not the string literal
+    // primary account name (cached at construction time), not the string literal
     // 'primary' which has no meaning to the CEO reading the notification email.
-    const accountId = request.accountId ?? this.nylasClients.keys().next().value ?? 'unknown';
+    const accountId = request.accountId ?? this.primaryAccountId ?? 'unknown';
 
+    // Wrap interpolated values in backticks so markdownToHtml renders them as
+    // literal code spans. Subject and recipient come from inbound thread metadata
+    // which could contain markdown-significant characters (links, emphasis, etc.).
     const body = [
-      `There is a draft email reply to ${request.to} about "${subject}" waiting in your Drafts folder on account "${accountId}".`,
+      `There is a draft email reply to \`${request.to}\` about \`${subject}\` waiting in your Drafts folder on account \`${accountId}\`.`,
       '',
       'Please review it and click send when you are ready.',
       '',
-      `Draft ID: ${draftId}`,
+      `Draft ID: \`${draftId}\``,
     ].join('\n');
 
     try {
