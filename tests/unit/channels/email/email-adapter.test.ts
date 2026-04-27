@@ -53,7 +53,6 @@ function createMocks() {
 
   const outboundGateway = {
     send: vi.fn().mockResolvedValue({ success: true, messageId: 'sent-1' }),
-    sendNotification: vi.fn().mockResolvedValue(undefined),
     listEmailMessages: vi.fn().mockResolvedValue([]),
   } as unknown as OutboundGateway;
 
@@ -78,20 +77,23 @@ function makeAdapter(mocks: ReturnType<typeof createMocks>) {
 /** Flush pending microtasks and macrotasks so an initial poll triggered by start() can complete. */
 const flushPoll = () => new Promise<void>(resolve => setTimeout(resolve, 0));
 
-// Trigger the outbound.message handler directly by capturing the subscriber
-// registered during start() and calling it with a synthetic event.
-function captureOutboundHandler(mocks: ReturnType<typeof createMocks>): (event: BusEvent) => Promise<void> {
-  // start() calls bus.subscribe('outbound.message', ...). Capture that callback.
-  let handler: ((event: BusEvent) => Promise<void>) | undefined;
+// Capture the bus.subscribe handler for a given event type by intercepting the
+// subscribe call during start(). Supports multiple event types simultaneously
+// by storing handlers in a shared map keyed by eventType.
+function captureHandler(
+  eventType: string,
+  mocks: ReturnType<typeof createMocks>,
+): (event: BusEvent) => Promise<void> {
+  const handlers = ((mocks.bus.subscribe as ReturnType<typeof vi.fn>).__handlerMap ??= {}) as
+    Record<string, (event: BusEvent) => Promise<void>>;
   (mocks.bus.subscribe as ReturnType<typeof vi.fn>).mockImplementation(
-    (eventType: string, _layer: string, cb: (event: BusEvent) => Promise<void>) => {
-      if (eventType === 'outbound.message') {
-        handler = cb;
-      }
+    (et: string, _layer: string, cb: (event: BusEvent) => Promise<void>) => {
+      handlers[et] = cb;
     },
   );
   return (...args) => {
-    if (!handler) throw new Error('outbound.message handler not registered — did you call adapter.start()?');
+    const handler = handlers[eventType];
+    if (!handler) throw new Error(`${eventType} handler not registered — did you call adapter.start()?`);
     return handler(...args);
   };
 }
@@ -112,7 +114,7 @@ describe('EmailAdapter — sendOutboundReply', () => {
 
   beforeEach(() => {
     mocks = createMocks();
-    triggerOutbound = captureOutboundHandler(mocks);
+    triggerOutbound = captureHandler('outbound.message', mocks);
     adapter = makeAdapter(mocks);
     // start() registers the bus subscriber without starting the poll timer
     // (pollingIntervalMs is huge, and we don't await the initial poll)
@@ -388,22 +390,6 @@ describe('EmailAdapter — inbound poll: observationMode', () => {
 // outbound.notification subscriber (#206)
 // ---------------------------------------------------------------------------
 
-// Capture the outbound.notification handler registered during start().
-function captureNotificationHandler(mocks: ReturnType<typeof createMocks>): (event: BusEvent) => Promise<void> {
-  let handler: ((event: BusEvent) => Promise<void>) | undefined;
-  (mocks.bus.subscribe as ReturnType<typeof vi.fn>).mockImplementation(
-    (eventType: string, _layer: string, cb: (event: BusEvent) => Promise<void>) => {
-      if (eventType === 'outbound.notification') {
-        handler = cb;
-      }
-    },
-  );
-  return (...args) => {
-    if (!handler) throw new Error('outbound.notification handler not registered — did you call adapter.start()?');
-    return handler(...args);
-  };
-}
-
 describe('EmailAdapter — outbound.notification subscriber', () => {
   let mocks: ReturnType<typeof createMocks>;
 
@@ -412,7 +398,7 @@ describe('EmailAdapter — outbound.notification subscriber', () => {
   });
 
   it('delivers a notification via outboundGateway.send() with skipNotificationOnBlock', async () => {
-    const handleNotification = captureNotificationHandler(mocks);
+    const handleNotification = captureHandler('outbound.notification', mocks);
     const adapter = makeAdapter(mocks);
     await adapter.start();
 
@@ -442,7 +428,7 @@ describe('EmailAdapter — outbound.notification subscriber', () => {
   });
 
   it('only the primary account (curia) handles notifications', async () => {
-    const handleNotification = captureNotificationHandler(mocks);
+    const handleNotification = captureHandler('outbound.notification', mocks);
     // Create adapter with non-primary accountId
     const adapter = new EmailAdapter({
       accountId: 'joseph',
@@ -478,8 +464,9 @@ describe('EmailAdapter — outbound.notification subscriber', () => {
       success: false,
       blockedReason: 'Content blocked by filter',
     });
+    const errorSpy = vi.spyOn(mocks.logger, 'error');
 
-    const handleNotification = captureNotificationHandler(mocks);
+    const handleNotification = captureHandler('outbound.notification', mocks);
     const adapter = makeAdapter(mocks);
     await adapter.start();
 
@@ -496,6 +483,13 @@ describe('EmailAdapter — outbound.notification subscriber', () => {
     await handleNotification(event);
 
     expect(mocks.outboundGateway.send).toHaveBeenCalledOnce();
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        notificationType: 'blocked_content',
+        reason: 'Content blocked by filter',
+      }),
+      expect.stringContaining('failed to deliver outbound.notification'),
+    );
     await adapter.stop();
   });
 });

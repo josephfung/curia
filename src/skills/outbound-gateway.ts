@@ -309,19 +309,19 @@ export class OutboundGateway {
       const fullReason = filterFindings.map((f) => `${f.rule}: ${f.detail}`).join('; ');
 
       // Publish the blocked event for audit logging and downstream consumers.
+      // Capture the event so we can link the outbound.notification to it via parentEventId.
+      const blockedEvent = createOutboundBlocked({
+        blockId,
+        conversationId: '',
+        channelId: request.channel,
+        content: messageBody,
+        recipientId,
+        reason: fullReason,
+        findings: filterFindings,
+        parentEventId: '',
+      });
       try {
-        await this.bus.publish('dispatch',
-          createOutboundBlocked({
-            blockId,
-            conversationId: '',
-            channelId: request.channel,
-            content: messageBody,
-            recipientId,
-            reason: fullReason,
-            findings: filterFindings,
-            parentEventId: '',
-          }),
-        );
+        await this.bus.publish('dispatch', blockedEvent);
       } catch (publishErr) {
         this.log.warn(
           { publishErr, blockId },
@@ -361,6 +361,7 @@ export class OutboundGateway {
             originalChannel: request.channel,
             originalRecipientId: recipientId,
           },
+          blockedEvent.id,
         );
       } else if (options?.skipNotificationOnBlock) {
         // This branch fires when a notification delivery itself gets blocked by the

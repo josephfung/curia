@@ -140,7 +140,6 @@ without cross-channel confirmation.
 - Web UI for reviewing `outbound.blocked` events
 - Outbound rate limiting per recipient
 - Blocklist management skills (`outbound-block` / `outbound-unblock`)
-- ~~`outbound.notification` event type~~ — Done (#206). CEO notifications now route through the filter pipeline via `OutboundGateway.sendNotification()` → bus → EmailAdapter → `send()`
 
 > **TODO:** Replace this section with a proper "What's Implemented / What's Planned" table
 > once the feature is complete. The outstanding items above are the main gaps.
