@@ -83,13 +83,24 @@ export class HeldMessagesProcessHandler implements SkillHandler {
           if (!isDuplicate) throw linkErr;
 
           // Identity already linked — check who owns it.
-          const resolved = await ctx.contactService.resolveByChannelIdentity(
-            heldMsg.channel,
-            heldMsg.senderId,
-          );
+          // If resolveByChannelIdentity itself throws, the error propagates to the
+          // outer catch. Log the orphan contact ID here so it's traceable.
+          let resolved: Awaited<ReturnType<typeof ctx.contactService.resolveByChannelIdentity>>;
+          try {
+            resolved = await ctx.contactService.resolveByChannelIdentity(
+              heldMsg.channel,
+              heldMsg.senderId,
+            );
+          } catch (resolveErr) {
+            ctx.log.error(
+              { err: resolveErr, channel: heldMsg.channel, senderId: heldMsg.senderId, orphanContactId: contact.id },
+              'resolveByChannelIdentity failed after 23505 (block path) — contact was created but identity not linked',
+            );
+            throw resolveErr;
+          }
           if (!resolved) {
             ctx.log.error(
-              { channel: heldMsg.channel, senderId: heldMsg.senderId },
+              { channel: heldMsg.channel, senderId: heldMsg.senderId, orphanContactId: contact.id },
               'Duplicate-key on linkIdentity (block) but resolveByChannelIdentity returned null — possible orphaned identity',
             );
             return {
@@ -98,10 +109,14 @@ export class HeldMessagesProcessHandler implements SkillHandler {
             };
           }
           if (resolved.status !== 'blocked') {
+            ctx.log.warn(
+              { channel: heldMsg.channel, senderId: heldMsg.senderId, owningContactId: resolved.contactId, owningStatus: resolved.status, orphanContactId: contact.id },
+              'Cannot block sender — identity already linked to a non-blocked contact',
+            );
             return {
               success: false,
               error:
-                `Cannot block ${heldMsg.senderId} — that identity is already linked to a non-blocked contact. Update the contact status or use contact-merge first.`,
+                `Cannot block ${heldMsg.senderId} — that identity is already linked to contact ${resolved.contactId} (status: ${resolved.status}). Update the contact status or use contact-merge first.`,
             };
           }
           // Already linked to a blocked contact — idempotent, proceed to discard.
