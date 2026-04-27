@@ -742,10 +742,17 @@ export class OutboundGateway {
    * can be extended to notify via Signal instead of (or in addition to) email.
    */
   private async notifyCeoDraftCreated(request: EmailSendRequest, draftId: string): Promise<void> {
-    if (!this.ceoEmail || !this.primaryNylasClient) {
-      this.log.error(
+    if (!this.ceoEmail) {
+      this.log.warn(
         { accountId: request.accountId, draftId },
-        'outbound-gateway: draft-created notification skipped — no CEO email or primary email client configured',
+        'outbound-gateway: draft-created notification skipped — ceoEmail not configured',
+      );
+      return;
+    }
+    if (!this.primaryNylasClient) {
+      this.log.warn(
+        { accountId: request.accountId, draftId },
+        'outbound-gateway: draft-created notification skipped — no primary email client configured',
       );
       return;
     }
