@@ -56,6 +56,7 @@ const BUS_EVENT_TYPE_NAMES: string[] = [
   'agent.response',
   'outbound.message',
   'outbound.blocked',
+  'outbound.notification',
   'skill.invoke',
   'skill.result',
   'memory.store',

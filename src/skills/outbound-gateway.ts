@@ -27,7 +27,8 @@ import type { TrustLevel } from '../contacts/types.js';
 import type { OutboundContentFilter } from '../dispatch/outbound-filter.js';
 import type { EventBus } from '../bus/bus.js';
 import type { Logger } from '../logger.js';
-import { createOutboundBlocked } from '../bus/events.js';
+import { createOutboundBlocked, createOutboundNotification } from '../bus/events.js';
+import type { OutboundNotificationPayload } from '../bus/events.js';
 import { markdownToHtml } from '../channels/email/markdown-to-html.js';
 
 // ---------------------------------------------------------------------------
@@ -205,8 +206,17 @@ export class OutboundGateway {
    *   1. Contact blocked check
    *   2. Content filter (fail-closed)
    *   3. Channel dispatch (email → Nylas, signal → signal-cli RPC)
+   *
+   * @param options.skipNotificationOnBlock  When true, suppress the CEO notification
+   *   if the content filter blocks this message. Used by the EmailAdapter's
+   *   outbound.notification subscriber to break the recursion cycle: without this
+   *   guard, a broken content filter (crash → fail-closed) would trigger
+   *   send → block → sendNotification → EmailAdapter → send → block → ... infinitely.
    */
-  async send(request: OutboundSendRequest): Promise<OutboundSendResult> {
+  async send(
+    request: OutboundSendRequest,
+    options?: { skipNotificationOnBlock?: boolean },
+  ): Promise<OutboundSendResult> {
     // Derive a stable recipient identifier for the blocked-contact check and logging.
     // Email: the To address. Signal: phone number (1:1) or base64 group ID.
     const recipientId = request.channel === 'email'
@@ -299,19 +309,19 @@ export class OutboundGateway {
       const fullReason = filterFindings.map((f) => `${f.rule}: ${f.detail}`).join('; ');
 
       // Publish the blocked event for audit logging and downstream consumers.
+      // Capture the event so we can link the outbound.notification to it via parentEventId.
+      const blockedEvent = createOutboundBlocked({
+        blockId,
+        conversationId: '',
+        channelId: request.channel,
+        content: messageBody,
+        recipientId,
+        reason: fullReason,
+        findings: filterFindings,
+        parentEventId: '',
+      });
       try {
-        await this.bus.publish('dispatch',
-          createOutboundBlocked({
-            blockId,
-            conversationId: '',
-            channelId: request.channel,
-            content: messageBody,
-            recipientId,
-            reason: fullReason,
-            findings: filterFindings,
-            parentEventId: '',
-          }),
-        );
+        await this.bus.publish('dispatch', blockedEvent);
       } catch (publishErr) {
         this.log.warn(
           { publishErr, blockId },
@@ -319,43 +329,52 @@ export class OutboundGateway {
         );
       }
 
-      // Notify the CEO about the blocked message via email.
-      // We always use the email channel for this notification, even when the blocked
-      // message was a Signal send — this avoids a potential Signal → block → Signal
-      // notification loop, and email is the canonical out-of-band channel for system alerts.
+      // Publish an outbound.notification event so the CEO alert routes through the
+      // standard safety pipeline via EmailAdapter, rather than bypassing the content
+      // filter with a direct dispatchEmail() call (#206).
       //
-      // Uses the primary email account (first in nylasClients map) for notifications.
-      // If email is not configured (no accounts or no ceoEmail), we log.error and rely
-      // on the audit log. A future Signal notification fallback can be added here.
-      // TODO: add Signal-based blocked-content notification when email is absent.
-      if (this.ceoEmail && this.primaryNylasClient) {
-        // dispatchEmail bypasses this.send() to avoid infinite recursion.
-        // The notification body is a hardcoded template — no user-supplied content.
-        // dispatchEmail skips the content filter entirely, so triggerSource is irrelevant.
-        const notifyResult = await this.dispatchEmail({
-          channel: 'email',
-          to: this.ceoEmail,
-          subject: 'Action needed — blocked outbound reply',
-          body: [
-            'An outbound message was blocked by the content filter.',
-            '',
-            `Block ID: ${blockId}`,
-            `Channel: ${request.channel}`,
-            `Intended recipient: ${recipientId}`,
-            '',
-            'Please review the audit log for details.',
-          ].join('\n'),
-        });
-        if (!notifyResult.success) {
-          this.log.error(
-            { blockId, ceoEmail: redactId(this.ceoEmail), reason: notifyResult.blockedReason },
-            'Failed to send CEO notification for blocked outbound content',
-          );
-        }
+      // Recursion safety (two layers):
+      //   1. The notification body is a hardcoded template addressed to ceoEmail (in the
+      //      content filter allowlist), so the filter always passes under normal operation.
+      //   2. The EmailAdapter passes skipNotificationOnBlock: true when calling send() for
+      //      a notification delivery. If the filter is broken (crash → fail-closed), this
+      //      flag prevents send() from re-publishing outbound.notification, breaking the
+      //      cycle: send → block → sendNotification → EmailAdapter → send(skip) → block → stop.
+      if (this.ceoEmail && !options?.skipNotificationOnBlock) {
+        // sendNotification() catches errors internally — await is safe and ensures
+        // the bus.publish call completes before we return the blocked result.
+        await this.sendNotification(
+          {
+            notificationType: 'blocked_content',
+            ceoEmail: this.ceoEmail,
+            subject: 'Action needed — blocked outbound reply',
+            body: [
+              'An outbound message was blocked by the content filter.',
+              '',
+              `Block ID: ${blockId}`,
+              `Channel: ${request.channel}`,
+              `Intended recipient: ${recipientId}`,
+              '',
+              'Please review the audit log for details.',
+            ].join('\n'),
+            blockId,
+            originalChannel: request.channel,
+            originalRecipientId: recipientId,
+          },
+          blockedEvent.id,
+        );
+      } else if (options?.skipNotificationOnBlock) {
+        // This branch fires when a notification delivery itself gets blocked by the
+        // content filter (e.g. the filter is in a broken state). The recursion guard
+        // prevents an infinite loop. The CEO will not receive this alert.
+        this.log.error(
+          { blockId, channel: request.channel },
+          'outbound-gateway: notification delivery was blocked by content filter — recursion guard active, CEO will NOT receive this alert',
+        );
       } else {
         this.log.error(
           { blockId, channel: request.channel, recipientId: redactId(recipientId) },
-          'outbound-gateway: CEO notification skipped — no email client configured. Block recorded in audit log only.',
+          'outbound-gateway: CEO notification skipped — ceoEmail not configured. Block recorded in audit log only.',
         );
       }
       return { success: false, blockedReason: 'Content blocked by filter' };
@@ -382,6 +401,38 @@ export class OutboundGateway {
         await this.promoteOrCreateRecipientContact('signal', request.recipient);
       }
       return result;
+    }
+  }
+
+  /**
+   * Publish a system notification event to the bus so it routes through the standard
+   * outbound safety pipeline (content filter + blocked-contact check) via the
+   * EmailAdapter's outbound.notification subscriber.
+   *
+   * This replaces the former direct dispatchEmail() calls that bypassed the content
+   * filter. The notification body is always a hardcoded template (no LLM-generated
+   * content) addressed to the CEO email (which is in the content filter allowlist),
+   * so the filter will always pass.
+   *
+   * Callers: the blocked-content path in send() and SignalAdapter.notifyCeoGroupHeld().
+   */
+  async sendNotification(
+    payload: OutboundNotificationPayload,
+    parentEventId?: string,
+  ): Promise<void> {
+    try {
+      await this.bus.publish(
+        'dispatch',
+        createOutboundNotification({ ...payload, parentEventId }),
+      );
+    } catch (err) {
+      // Non-fatal — the original block/hold is already recorded. Log so the anomaly
+      // is visible in alerting but do not throw; the caller's primary operation (block
+      // or hold) has already completed successfully.
+      this.log.error(
+        { err, notificationType: payload.notificationType },
+        'outbound-gateway: failed to publish outbound.notification event',
+      );
     }
   }
 

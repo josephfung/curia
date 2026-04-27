@@ -51,6 +51,7 @@ function makeMockRpcClient() {
 function makeMockGateway() {
   return {
     send: vi.fn().mockResolvedValue({ success: true }),
+    sendNotification: vi.fn().mockResolvedValue(undefined),
     getSignalGroupMembers: vi.fn().mockRejectedValue(new Error('Signal client not configured')),
   } as unknown as OutboundGateway;
 }
@@ -427,11 +428,13 @@ describe('SignalAdapter', () => {
       await new Promise((r) => setTimeout(r, 30));
 
       expect(published).toHaveLength(0);
-      expect(gateway.send).toHaveBeenCalledWith(
+      // The group-held notification now routes through sendNotification() → bus (#206)
+      expect(gateway.sendNotification).toHaveBeenCalledWith(
         expect.objectContaining({
-          channel: 'email',
-          to: 'ceo@example.com',
+          notificationType: 'group_held',
+          ceoEmail: 'ceo@example.com',
           subject: 'Signal group message held — member verification needed',
+          originalChannel: 'signal',
         }),
       );
     });

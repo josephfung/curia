@@ -129,7 +129,7 @@ without cross-channel confirmation.
 | Web UI for reviewing `outbound.blocked` events | Not Done |
 | Outbound rate limiting per recipient | Not Done |
 | Blocklist management skills (`outbound-block` / `outbound-unblock`) | Not Done |
-| `outbound.notification` event type (CEO notifications currently bypass the filter) | Not Done |
+| `outbound.notification` event type (CEO notifications route through the filter pipeline) | Done |
 
 ---
 
@@ -140,8 +140,6 @@ without cross-channel confirmation.
 - Web UI for reviewing `outbound.blocked` events
 - Outbound rate limiting per recipient
 - Blocklist management skills (`outbound-block` / `outbound-unblock`)
-- `outbound.notification` event type (currently CEO notifications bypass the filter pipeline
-  via a hardcoded template — this deviation must not be extended; see `@TODO` in `dispatcher.ts`)
 
 > **TODO:** Replace this section with a proper "What's Implemented / What's Planned" table
 > once the feature is complete. The outstanding items above are the main gaps.

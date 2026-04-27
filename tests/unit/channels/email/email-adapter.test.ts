@@ -14,7 +14,7 @@ import type { ContactService } from '../../../../src/contacts/contact-service.js
 import type { EventBus } from '../../../../src/bus/bus.js';
 import type { NylasMessage } from '../../../../src/channels/email/nylas-client.js';
 import type { BusEvent } from '../../../../src/bus/events.js';
-import { createOutboundMessage } from '../../../../src/bus/events.js';
+import { createOutboundMessage, createOutboundNotification } from '../../../../src/bus/events.js';
 
 const SELF_EMAIL = 'curia@example.com';
 const CEO_EMAIL = 'ceo@example.com';
@@ -77,20 +77,23 @@ function makeAdapter(mocks: ReturnType<typeof createMocks>) {
 /** Flush pending microtasks and macrotasks so an initial poll triggered by start() can complete. */
 const flushPoll = () => new Promise<void>(resolve => setTimeout(resolve, 0));
 
-// Trigger the outbound.message handler directly by capturing the subscriber
-// registered during start() and calling it with a synthetic event.
-function captureOutboundHandler(mocks: ReturnType<typeof createMocks>): (event: BusEvent) => Promise<void> {
-  // start() calls bus.subscribe('outbound.message', ...). Capture that callback.
-  let handler: ((event: BusEvent) => Promise<void>) | undefined;
+// Capture the bus.subscribe handler for a given event type by intercepting the
+// subscribe call during start(). Supports multiple event types simultaneously
+// by storing handlers in a shared map keyed by eventType.
+function captureHandler(
+  eventType: string,
+  mocks: ReturnType<typeof createMocks>,
+): (event: BusEvent) => Promise<void> {
+  const handlers = ((mocks.bus.subscribe as ReturnType<typeof vi.fn>).__handlerMap ??= {}) as
+    Record<string, (event: BusEvent) => Promise<void>>;
   (mocks.bus.subscribe as ReturnType<typeof vi.fn>).mockImplementation(
-    (eventType: string, _layer: string, cb: (event: BusEvent) => Promise<void>) => {
-      if (eventType === 'outbound.message') {
-        handler = cb;
-      }
+    (et: string, _layer: string, cb: (event: BusEvent) => Promise<void>) => {
+      handlers[et] = cb;
     },
   );
   return (...args) => {
-    if (!handler) throw new Error('outbound.message handler not registered — did you call adapter.start()?');
+    const handler = handlers[eventType];
+    if (!handler) throw new Error(`${eventType} handler not registered — did you call adapter.start()?`);
     return handler(...args);
   };
 }
@@ -111,7 +114,7 @@ describe('EmailAdapter — sendOutboundReply', () => {
 
   beforeEach(() => {
     mocks = createMocks();
-    triggerOutbound = captureOutboundHandler(mocks);
+    triggerOutbound = captureHandler('outbound.message', mocks);
     adapter = makeAdapter(mocks);
     // start() registers the bus subscriber without starting the poll timer
     // (pollingIntervalMs is huge, and we don't await the initial poll)
@@ -379,6 +382,114 @@ describe('EmailAdapter — inbound poll: observationMode', () => {
     expect(inboundCall).toBeDefined();
     expect(inboundCall![1].payload.metadata.observationMode).toBeUndefined();
 
+    await adapter.stop();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// outbound.notification subscriber (#206)
+// ---------------------------------------------------------------------------
+
+describe('EmailAdapter — outbound.notification subscriber', () => {
+  let mocks: ReturnType<typeof createMocks>;
+
+  beforeEach(() => {
+    mocks = createMocks();
+  });
+
+  it('delivers a notification via outboundGateway.send() with skipNotificationOnBlock', async () => {
+    const handleNotification = captureHandler('outbound.notification', mocks);
+    const adapter = makeAdapter(mocks);
+    await adapter.start();
+
+    const event = createOutboundNotification({
+      notificationType: 'blocked_content',
+      ceoEmail: CEO_EMAIL,
+      subject: 'Action needed — blocked outbound reply',
+      body: 'Block ID: block_test123',
+      blockId: 'block_test123',
+      originalChannel: 'email',
+      originalRecipientId: 'target@example.com',
+    });
+
+    await handleNotification(event);
+
+    expect(mocks.outboundGateway.send).toHaveBeenCalledOnce();
+    // Verify skipNotificationOnBlock is passed as the second argument
+    const sendCall = (mocks.outboundGateway.send as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(sendCall[0]).toEqual(expect.objectContaining({
+      channel: 'email',
+      to: CEO_EMAIL,
+      subject: 'Action needed — blocked outbound reply',
+    }));
+    expect(sendCall[1]).toEqual({ skipNotificationOnBlock: true });
+
+    await adapter.stop();
+  });
+
+  it('only the primary account (curia) handles notifications', async () => {
+    const handleNotification = captureHandler('outbound.notification', mocks);
+    // Create adapter with non-primary accountId
+    const adapter = new EmailAdapter({
+      accountId: 'joseph',
+      outboundPolicy: 'direct',
+      bus: mocks.bus,
+      logger: mocks.logger,
+      outboundGateway: mocks.outboundGateway,
+      contactService: mocks.contactService,
+      pollingIntervalMs: 999999,
+      selfEmail: 'joseph@example.com',
+      observationMode: false,
+      excludedSenderEmails: [],
+    });
+    await adapter.start();
+
+    const event = createOutboundNotification({
+      notificationType: 'blocked_content',
+      ceoEmail: CEO_EMAIL,
+      subject: 'Test',
+      body: 'Test body',
+    });
+
+    await handleNotification(event);
+
+    // Non-primary adapter should not call send
+    expect(mocks.outboundGateway.send).not.toHaveBeenCalled();
+
+    await adapter.stop();
+  });
+
+  it('logs error when notification delivery fails (send returns success: false)', async () => {
+    (mocks.outboundGateway.send as ReturnType<typeof vi.fn>).mockResolvedValue({
+      success: false,
+      blockedReason: 'Content blocked by filter',
+    });
+    const errorSpy = vi.spyOn(mocks.logger, 'error');
+
+    const handleNotification = captureHandler('outbound.notification', mocks);
+    const adapter = makeAdapter(mocks);
+    await adapter.start();
+
+    const event = createOutboundNotification({
+      notificationType: 'blocked_content',
+      ceoEmail: CEO_EMAIL,
+      subject: 'Test',
+      body: 'Test body',
+      blockId: 'block_test456',
+      originalChannel: 'email',
+    });
+
+    // Should not throw — errors are caught and logged
+    await handleNotification(event);
+
+    expect(mocks.outboundGateway.send).toHaveBeenCalledOnce();
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        notificationType: 'blocked_content',
+        reason: 'Content blocked by filter',
+      }),
+      expect.stringContaining('failed to deliver outbound.notification'),
+    );
     await adapter.stop();
   });
 });
