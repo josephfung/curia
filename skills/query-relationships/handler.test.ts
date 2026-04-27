@@ -109,6 +109,26 @@ describe('QueryRelationshipsHandler', () => {
     expect((result as { success: false; error: string }).error).toMatch(/unknown edge type/i);
   });
 
+  it('returns last_confirmed_at as an ISO 8601 string, not a Date object', async () => {
+    const mem = makeEntityMemory();
+    const { entity: a } = await mem.createEntity({ type: 'person', label: 'Alice', properties: {}, source: 'test' });
+    const { entity: b } = await mem.createEntity({ type: 'person', label: 'Bob', properties: {}, source: 'test' });
+    await mem.upsertEdge(a.id, b.id, 'colleague', {}, 'test', 0.7);
+
+    const handler = new QueryRelationshipsHandler();
+    const ctx = makeCtx(mem, { entity: 'Alice' });
+    const result = await handler.execute(ctx);
+
+    expect(result.success).toBe(true);
+    const data = (result as { success: true; data: { relationships: Array<{ last_confirmed_at: unknown }> } }).data;
+    const ts = data.relationships[0]!.last_confirmed_at;
+    // Must be a string, not a Date object
+    expect(typeof ts).toBe('string');
+    // Must be a valid ISO 8601 date string
+    expect(() => new Date(ts as string).toISOString()).not.toThrow();
+    expect(new Date(ts as string).toISOString()).toBe(ts);
+  });
+
   it('labels outbound and inbound direction correctly', async () => {
     const mem = makeEntityMemory();
     const { entity: joseph } = await mem.createEntity({ type: 'person', label: 'Jane Doe', properties: {}, source: 'test' });
