@@ -14,7 +14,7 @@ import type { ContactService } from '../../contacts/contact-service.js';
 import type { AutonomyService } from '../../autonomy/autonomy-service.js';
 import type { OutboundPolicy } from '../../config.js';
 import { convertNylasMessage } from './message-converter.js';
-import { createInboundMessage, type OutboundMessageEvent } from '../../bus/events.js';
+import { createInboundMessage, type OutboundMessageEvent, type OutboundNotificationEvent } from '../../bus/events.js';
 import { sanitizeOutput } from '../../skills/sanitize.js';
 
 export interface EmailAdapterConfig {
@@ -93,6 +93,56 @@ export class EmailAdapter {
       } catch (err) {
         logger.error({ err, conversationId: outbound.payload.conversationId },
           'Failed to send email response');
+      }
+    });
+
+    // Subscribe to system notification events (blocked-content alerts, group-held alerts).
+    // outbound.notification events are published by OutboundGateway.sendNotification()
+    // and route through the filter pipeline like any other outbound message.
+    //
+    // Only the primary account ('curia') handles notifications to avoid duplicate sends
+    // when multiple email accounts are configured. This matches the accountId fallback
+    // convention used in the outbound.message subscription above.
+    // TODO: replace hardcoded 'curia' with an isPrimaryAccount config flag once
+    // multi-account primary detection is formalized.
+    bus.subscribe('outbound.notification', 'channel', async (event) => {
+      if (this.config.accountId !== 'curia') return;
+
+      const notification = event as OutboundNotificationEvent;
+      try {
+        // skipNotificationOnBlock prevents infinite recursion: if the content filter
+        // is broken and blocks this notification, the gateway will NOT re-publish
+        // outbound.notification, breaking the cycle.
+        const result = await this.config.outboundGateway.send(
+          {
+            channel: 'email',
+            to: notification.payload.ceoEmail,
+            subject: notification.payload.subject,
+            body: notification.payload.body,
+          },
+          { skipNotificationOnBlock: true },
+        );
+        if (!result.success) {
+          logger.error(
+            {
+              notificationType: notification.payload.notificationType,
+              reason: result.blockedReason,
+              blockId: notification.payload.blockId,
+              originalChannel: notification.payload.originalChannel,
+              ceoEmail: notification.payload.ceoEmail,
+            },
+            'EmailAdapter: failed to deliver outbound.notification — CEO will NOT receive this alert',
+          );
+        }
+      } catch (err) {
+        logger.error(
+          {
+            err,
+            notificationType: notification.payload.notificationType,
+            blockId: notification.payload.blockId,
+          },
+          'EmailAdapter: unexpected error delivering outbound.notification',
+        );
       }
     });
 

@@ -373,9 +373,9 @@ export class SignalAdapter {
   }
 
   /**
-   * Send the CEO an email notification when a group message is held due to
-   * unverified members. Uses the outbound gateway so the email goes through
-   * the normal content filter pipeline.
+   * Notify the CEO via email when a group message is held due to unverified members.
+   * Publishes an outbound.notification event through the gateway so the notification
+   * routes through the standard safety pipeline (#206).
    *
    * The CLI is not assumed to be monitored, so email is the reliable async
    * channel for this notification.
@@ -403,15 +403,17 @@ export class SignalAdapter {
     ].join('\n');
 
     try {
-      await outboundGateway.send({
-        channel: 'email',
-        to: ceoEmail,
+      await outboundGateway.sendNotification({
+        notificationType: 'group_held',
+        ceoEmail,
         subject: 'Signal group message held — member verification needed',
         body,
+        originalChannel: 'signal',
+        originalRecipientId: groupId,
       });
     } catch (err) {
       // Non-fatal — the message is still held. Log at error so it's visible in alerting.
-      this.log.error({ err, groupId }, 'Signal adapter: failed to send CEO group-held notification via email');
+      this.log.error({ err, groupId }, 'Signal adapter: failed to publish group-held notification');
     }
   }
 }

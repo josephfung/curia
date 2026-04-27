@@ -15,6 +15,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **`outbound.notification` event type** — system notifications (blocked-content CEO alerts, Signal group-held alerts) now route through the bus and the outbound content filter pipeline instead of bypassing it via direct `dispatchEmail()` calls. New `OutboundGateway.sendNotification()` method publishes the event; EmailAdapter subscribes and delivers via `send()`. Closes the spec deviation noted in the outbound safety design (#206)
 - **draft_gate CEO notification** — when a Nylas draft is created via the `draft_gate` outbound policy, Curia now sends the CEO a brief email notification ("there is a draft reply to X about Y waiting in your Drafts folder"). The CEO reviews and clicks send from their email client. Closes the first piece of #278.
 
 ### Fixed
