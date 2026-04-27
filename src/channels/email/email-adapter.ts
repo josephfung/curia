@@ -28,8 +28,8 @@ export interface EmailAdapterConfig {
    * How outbound replies from this account are handled.
    *
    * - direct:          send immediately via OutboundGateway (current behavior)
-   * - draft_gate:      save as a Nylas draft; human approves before sending
-   *                    TODO(#278): wire up notification → approval → send flow
+   * - draft_gate:      save as a Nylas draft; CEO is notified and reviews in Gmail
+   *                    (approval interface + send-on-approval deferred — see #278)
    * - autonomy_gated:  send only when autonomy score >= autonomyThreshold
    */
   outboundPolicy: OutboundPolicy;
@@ -248,7 +248,7 @@ export class EmailAdapter {
    *
    * The actual send behaviour is controlled by this account's outboundPolicy:
    *   - direct:         send immediately via OutboundGateway
-   *   - draft_gate:     save as Nylas draft for human approval (TODO(#278): full flow)
+   *   - draft_gate:     save as Nylas draft; CEO notified and reviews in Gmail (#278)
    *   - autonomy_gated: check autonomy score before sending; hold as draft if below threshold
    */
   private async sendOutboundReply(outbound: OutboundMessageEvent): Promise<void> {
@@ -404,13 +404,13 @@ export class EmailAdapter {
       }
     }
 
-    // draft_gate (and autonomy_gated fallback): save as draft for human approval.
-    // TODO(#278): after draft creation, notify the CEO and wire up the approval flow.
+    // draft_gate (and autonomy_gated fallback): save as draft for human review.
+    // The gateway notifies the CEO via email after a successful draft creation (#278).
     const draftResult = await outboundGateway.createEmailDraft(sendRequest);
     if (draftResult.success) {
       logger.info(
         { ...logCtx, accountId: this.config.accountId, draftId: draftResult.draftId },
-        'Email reply saved as draft pending human approval (TODO(#278): wire up notification+approval)',
+        'Email reply saved as draft — CEO notified to review and send',
       );
     } else if (draftResult.blockedReason === 'Recipient is blocked') {
       // Intentional block — not an infrastructure failure

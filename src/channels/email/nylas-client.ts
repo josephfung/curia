@@ -255,8 +255,8 @@ export class NylasClient {
    * Draft and Message share the same BaseMessage shape in the Nylas SDK, so the
    * response can be normalised with the same helper as a sent message.
    *
-   * TODO(#278): wire up the CEO notification → approval → send flow that turns
-   * a draft created here into an actually-sent reply.
+   * After this returns, OutboundGateway.createEmailDraft() notifies the CEO via email.
+   * The CEO reviews the draft in their Gmail Drafts folder and clicks send when ready (#278).
    */
   async createDraft(options: SendEmailOptions): Promise<NylasMessage> {
     this.log.debug(
