@@ -13,6 +13,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`held-messages-process` block idempotency** — `block` action now handles duplicate-key errors from `linkIdentity` the same way `identify` does: if the identity is already linked to a blocked contact on retry, it proceeds to `discard` rather than failing and leaving the held message stuck in `pending` (closes #335)
+
 ---
 
 ## [0.22.0] — 2026-04-26 — "Knowledge Surface"
