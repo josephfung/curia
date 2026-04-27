@@ -59,6 +59,11 @@ export class CalendarCheckConflictsHandler implements SkillHandler {
         for (const slot of result.timeSlots) {
           // Check overlap: busy slot overlaps the proposed range
           if (slot.startTime < proposedEndTs && slot.endTime > proposedStartTs) {
+            // Guard non-finite and non-positive values the same way calendar-list-events does.
+            if (!Number.isFinite(slot.startTime) || slot.startTime <= 0 || !Number.isFinite(slot.endTime) || slot.endTime <= 0) {
+              ctx.log.warn({ calendarId: result.email, startTime: slot.startTime, endTime: slot.endTime }, 'calendar-check-conflicts: suspicious slot timestamp — skipping');
+              continue;
+            }
             // Format timestamps in the user's local timezone so the LLM reads correct
             // wall-clock times. Falls back to UTC Z-suffix when timezone is not configured.
             conflicts.push({
@@ -73,8 +78,11 @@ export class CalendarCheckConflictsHandler implements SkillHandler {
       }
 
       const clear = conflicts.length === 0;
+      // Derive displayTimezone from the proposed start time rather than "now" so
+      // the label's DST offset matches the offsets baked into the conflict timestamps.
+      const labelDate = new Date(proposedStart);
       ctx.log.info({ calendarCount: calendarIds.length, conflictCount: conflicts.length }, 'Checked conflicts');
-      return { success: true, data: { conflicts, clear, displayTimezone: tz ? formatDisplayTimezone(tz, new Date()) : null } };
+      return { success: true, data: { conflicts, clear, displayTimezone: tz && !clear ? formatDisplayTimezone(tz, labelDate) : null } };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       ctx.log.error({ err }, 'Failed to check conflicts');
