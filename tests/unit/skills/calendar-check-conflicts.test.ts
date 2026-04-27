@@ -95,4 +95,69 @@ describe('CalendarCheckConflictsHandler', () => {
       expect(data.clear).toBe(true);
     }
   });
+
+  it('formats conflict timestamps in the configured timezone', async () => {
+    const nylasCalendarClient = {
+      getFreeBusy: vi.fn().mockResolvedValue([{
+        email: 'cal-1',
+        timeSlots: [
+          // Busy: 2026-04-06T13:00:00Z - 14:00:00Z = 9:00-10:00 AM EDT
+          { startTime: 1775480400, endTime: 1775484000, status: 'busy' },
+        ],
+      }]),
+    };
+    const contactService = {
+      resolveCalendar: vi.fn().mockResolvedValue({ contactId: 'c1' }),
+      getContact: vi.fn().mockResolvedValue({ id: 'c1', displayName: 'Jane Doe' }),
+    };
+
+    // Proposed time overlaps the busy period
+    const result = await handler.execute(makeCtx(
+      { calendarIds: ['cal-1'], proposedStart: '2026-04-06T12:30:00Z', proposedEnd: '2026-04-06T13:30:00Z' },
+      {
+        nylasCalendarClient: nylasCalendarClient as never,
+        contactService: contactService as never,
+        timezone: 'America/Toronto',
+      },
+    ));
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const data = result.data as {
+        conflicts: Array<{ startTime: string; endTime: string }>;
+        clear: boolean;
+        displayTimezone: string;
+      };
+      expect(data.clear).toBe(false);
+      expect(data.conflicts).toHaveLength(1);
+      // Timestamps should be in EDT (UTC-4), not UTC
+      expect(data.conflicts[0].startTime).toBe('2026-04-06T09:00:00.000-04:00');
+      expect(data.conflicts[0].endTime).toBe('2026-04-06T10:00:00.000-04:00');
+      expect(data.displayTimezone).toContain('EDT');
+    }
+  });
+
+  it('falls back to UTC when timezone is not provided', async () => {
+    const nylasCalendarClient = {
+      getFreeBusy: vi.fn().mockResolvedValue([{
+        email: 'cal-1',
+        timeSlots: [
+          { startTime: 1775480400, endTime: 1775484000, status: 'busy' },
+        ],
+      }]),
+    };
+
+    const result = await handler.execute(makeCtx(
+      { calendarIds: ['cal-1'], proposedStart: '2026-04-06T12:30:00Z', proposedEnd: '2026-04-06T13:30:00Z' },
+      { nylasCalendarClient: nylasCalendarClient as never },
+    ));
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const data = result.data as { conflicts: Array<{ startTime: string }>; displayTimezone: null };
+      // UTC Z-suffix when no timezone configured
+      expect(data.conflicts[0].startTime).toBe('2026-04-06T13:00:00.000Z');
+      expect(data.displayTimezone).toBeNull();
+    }
+  });
 });

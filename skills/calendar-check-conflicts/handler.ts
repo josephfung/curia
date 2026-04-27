@@ -5,6 +5,7 @@
 // Returns an empty array (clear=true) if the time is free.
 
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import { toLocalIso, formatDisplayTimezone } from '../../src/time/timestamp.js';
 
 export class CalendarCheckConflictsHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {
@@ -34,6 +35,8 @@ export class CalendarCheckConflictsHandler implements SkillHandler {
       const proposedStartTs = Math.floor(new Date(proposedStart).getTime() / 1000);
       const proposedEndTs = Math.floor(new Date(proposedEnd).getTime() / 1000);
 
+      const tz = ctx.timezone;
+
       const conflicts: Array<{
         calendarId: string;
         contactName: string | null;
@@ -56,12 +59,13 @@ export class CalendarCheckConflictsHandler implements SkillHandler {
         for (const slot of result.timeSlots) {
           // Check overlap: busy slot overlaps the proposed range
           if (slot.startTime < proposedEndTs && slot.endTime > proposedStartTs) {
-            // Format timestamps as UTC ISO strings — LLMs can't reliably convert raw Unix seconds.
+            // Format timestamps in the user's local timezone so the LLM reads correct
+            // wall-clock times. Falls back to UTC Z-suffix when timezone is not configured.
             conflicts.push({
               calendarId: result.email,
               contactName,
-              startTime: new Date(slot.startTime * 1000).toISOString(),
-              endTime: new Date(slot.endTime * 1000).toISOString(),
+              startTime: tz ? toLocalIso(slot.startTime, tz) : new Date(slot.startTime * 1000).toISOString(),
+              endTime: tz ? toLocalIso(slot.endTime, tz) : new Date(slot.endTime * 1000).toISOString(),
               status: slot.status,
             });
           }
@@ -70,7 +74,7 @@ export class CalendarCheckConflictsHandler implements SkillHandler {
 
       const clear = conflicts.length === 0;
       ctx.log.info({ calendarCount: calendarIds.length, conflictCount: conflicts.length }, 'Checked conflicts');
-      return { success: true, data: { conflicts, clear } };
+      return { success: true, data: { conflicts, clear, displayTimezone: tz ? formatDisplayTimezone(tz, new Date()) : null } };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       ctx.log.error({ err }, 'Failed to check conflicts');
