@@ -13,6 +13,7 @@
 
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
 import type { NylasCalendarEvent } from '../../src/channels/calendar/nylas-calendar-client.js';
+import { toLocalIso, formatDisplayTimezone } from '../../src/time/timestamp.js';
 
 export class CalendarListEventsHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {
@@ -121,22 +122,22 @@ export class CalendarListEventsHandler implements SkillHandler {
       }
 
       // Format events for LLM consumption.
-      // Nylas returns timed event timestamps as Unix seconds. LLMs can't reliably
-      // do Unix epoch arithmetic (they produce wrong wall-clock times), so we
-      // convert to UTC ISO 8601 strings here. The LLM already knows the user's
-      // timezone from the system prompt's time context block and can display ISO
-      // strings correctly.
+      // Nylas returns timed event timestamps as Unix seconds. Convert to the user's
+      // local timezone so the wall-clock digits in the ISO string match local time.
+      // The LLM reads these digits directly — it cannot reliably do UTC conversion.
+      // Falls back to UTC Z-suffix when timezone is not configured (defensive).
       //
       // Guard non-finite and non-positive values: Unix 0 is never a real calendar
       // event time, and passing "1970-01-01T00:00:00Z" to the LLM would be silently
       // wrong. Log and null-out rather than propagate corrupted data.
+      const tz = ctx.timezone;
       const toIso = (unix: number | null, field: string, eventId: string): string | null => {
         if (unix === null) return null;
         if (!Number.isFinite(unix) || unix <= 0) {
           ctx.log.warn({ eventId, field, value: unix }, `calendar-list-events: suspicious ${field} value — omitting`);
           return null;
         }
-        return new Date(unix * 1000).toISOString();
+        return tz ? toLocalIso(unix, tz) : new Date(unix * 1000).toISOString();
       };
       const formattedEvents = events.map((evt) => ({
         ...evt,
@@ -145,7 +146,11 @@ export class CalendarListEventsHandler implements SkillHandler {
       }));
 
       ctx.log.info({ calendarIds, count: formattedEvents.length, failedCalendarIds }, 'Listed events');
-      const data: Record<string, unknown> = { events: formattedEvents, count: formattedEvents.length };
+      const data: Record<string, unknown> = {
+        events: formattedEvents,
+        count: formattedEvents.length,
+        displayTimezone: tz ? formatDisplayTimezone(tz, new Date()) : null,
+      };
       // Surface partial failures so the LLM can inform the user
       if (failedCalendarIds.length > 0) {
         data.warnings = [`Failed to fetch events from ${failedCalendarIds.length} calendar(s): ${failedCalendarIds.join(', ')}`];

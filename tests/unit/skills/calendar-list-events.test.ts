@@ -218,8 +218,9 @@ describe('CalendarListEventsHandler', () => {
     }
   });
 
-  it('formats timed event timestamps as UTC ISO strings for LLM consumption', async () => {
-    // 1775489400 Unix seconds = 2026-04-06T15:30:00.000Z (11:30 AM EDT)
+  it('formats timed event timestamps in the configured timezone', async () => {
+    // 1775489400 Unix seconds = 2026-04-06T15:30:00Z = 11:30 AM EDT (UTC-4)
+    // 1775491200 Unix seconds = 2026-04-06T16:00:00Z = 12:00 PM EDT (UTC-4)
     const timedEvent = {
       id: 'evt-timed',
       title: 'Catchup',
@@ -241,14 +242,50 @@ describe('CalendarListEventsHandler', () => {
 
     const result = await handler.execute(makeCtx(
       { calendarId: 'cal-1', timeMin: '2026-04-06T00:00:00Z', timeMax: '2026-04-07T00:00:00Z' },
+      { nylasCalendarClient: nylasCalendarClient as never, timezone: 'America/Toronto' },
+    ));
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const data = result.data as { events: Array<{ startTime: string; endTime: string }>; displayTimezone: string };
+      // Wall-clock digits should be in EDT (UTC-4), not UTC
+      expect(data.events[0].startTime).toBe('2026-04-06T11:30:00.000-04:00');
+      expect(data.events[0].endTime).toBe('2026-04-06T12:00:00.000-04:00');
+      expect(data.displayTimezone).toContain('EDT');
+    }
+  });
+
+  it('falls back to UTC ISO strings when timezone is not provided', async () => {
+    const timedEvent = {
+      id: 'evt-timed',
+      title: 'Catchup',
+      description: '',
+      participants: [],
+      startTime: 1775489400,
+      endTime: 1775491200,
+      startDate: null,
+      endDate: null,
+      location: '',
+      conferencing: null,
+      status: 'confirmed',
+      calendarId: 'cal-1',
+      busy: true,
+    };
+    const nylasCalendarClient = {
+      listEvents: vi.fn().mockResolvedValue([timedEvent]),
+    };
+
+    // No timezone in context — should fall back to UTC Z-suffix
+    const result = await handler.execute(makeCtx(
+      { calendarId: 'cal-1', timeMin: '2026-04-06T00:00:00Z', timeMax: '2026-04-07T00:00:00Z' },
       { nylasCalendarClient: nylasCalendarClient as never },
     ));
 
     expect(result.success).toBe(true);
     if (result.success) {
-      const data = result.data as { events: Array<{ startTime: string; endTime: string }> };
+      const data = result.data as { events: Array<{ startTime: string }>; displayTimezone: null };
       expect(data.events[0].startTime).toBe('2026-04-06T15:30:00.000Z');
-      expect(data.events[0].endTime).toBe('2026-04-06T16:00:00.000Z');
+      expect(data.displayTimezone).toBeNull();
     }
   });
 
