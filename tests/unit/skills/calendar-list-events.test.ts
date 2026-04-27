@@ -283,8 +283,9 @@ describe('CalendarListEventsHandler', () => {
 
     expect(result.success).toBe(true);
     if (result.success) {
-      const data = result.data as { events: Array<{ startTime: string }>; displayTimezone: null };
+      const data = result.data as { events: Array<{ startTime: string; endTime: string }>; displayTimezone: null };
       expect(data.events[0].startTime).toBe('2026-04-06T15:30:00.000Z');
+      expect(data.events[0].endTime).toBe('2026-04-06T16:00:00.000Z');
       expect(data.displayTimezone).toBeNull();
     }
   });
