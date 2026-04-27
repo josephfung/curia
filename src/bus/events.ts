@@ -105,6 +105,28 @@ interface OutboundBlockedPayload {
   findings: Array<{ rule: string; detail: string }>;
 }
 
+// OutboundNotificationPayload — published by the dispatch layer (via OutboundGateway.sendNotification)
+// when a system-level CEO alert needs to be sent. Routing through the bus ensures the notification
+// goes through the same safety pipeline as regular outbound messages, closing the prior direct
+// dispatchEmail() bypass. See #206.
+//
+// notificationType discriminates between alert categories:
+//   - 'blocked_content': CEO alert that an outbound message was blocked by the content filter
+//   - 'group_held':      CEO alert that a Signal group message was held due to unverified members
+export interface OutboundNotificationPayload {
+  notificationType: 'blocked_content' | 'group_held';
+  /** Recipient email for this notification (always the CEO email today). */
+  ceoEmail: string;
+  subject: string;
+  body: string;
+  /** Present for blocked_content notifications — links back to the outbound.blocked event. */
+  blockId?: string;
+  /** Channel of the original blocked or held message (e.g. 'email', 'signal'). */
+  originalChannel?: string;
+  /** Intended recipient of the original blocked or held message. */
+  originalRecipientId?: string;
+}
+
 interface SkillInvokePayload {
   agentId: string;
   conversationId: string;
@@ -422,6 +444,16 @@ export interface OutboundBlockedEvent extends BaseEvent {
   payload: OutboundBlockedPayload;
 }
 
+// OutboundNotificationEvent — published by the dispatch layer when a system-level CEO
+// notification needs to be sent (blocked-content alert, group-held alert, etc.).
+// Channel adapters subscribe to route it through the outbound safety pipeline.
+// System layer subscribes for audit logging and security monitoring.
+export interface OutboundNotificationEvent extends BaseEvent {
+  type: 'outbound.notification';
+  sourceLayer: 'dispatch';
+  payload: OutboundNotificationPayload;
+}
+
 export interface SkillInvokeEvent extends BaseEvent {
   type: 'skill.invoke';
   sourceLayer: 'agent';
@@ -611,6 +643,7 @@ export type BusEvent =
   | MessageHeldEvent      // Unknown sender policy: message held for CEO review
   | MessageRejectedEvent  // Unknown sender policy: message rejected, signals HTTP adapter to return 403
   | OutboundBlockedEvent  // Outbound content filter: message blocked before delivery (#38)
+  | OutboundNotificationEvent // System notifications routed through safety pipeline (#206)
   | ScheduleCreatedEvent   // Scheduler: job created
   | ScheduleFiredEvent     // Scheduler: job fired
   | ScheduleSuspendedEvent   // Scheduler: job auto-suspended
@@ -697,6 +730,22 @@ export function createOutboundBlocked(
     id: randomUUID(),
     timestamp: new Date(),
     type: 'outbound.blocked',
+    sourceLayer: 'dispatch',
+    payload: rest,
+    parentEventId,
+  };
+}
+
+export function createOutboundNotification(
+  // parentEventId is optional — blocked_content notifications should pass the outbound.blocked
+  // event's ID for traceability; group_held notifications have no parent bus event.
+  payload: OutboundNotificationPayload & { parentEventId?: string },
+): OutboundNotificationEvent {
+  const { parentEventId, ...rest } = payload;
+  return {
+    id: randomUUID(),
+    timestamp: new Date(),
+    type: 'outbound.notification',
     sourceLayer: 'dispatch',
     payload: rest,
     parentEventId,
