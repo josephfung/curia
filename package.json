@@ -29,7 +29,7 @@
     "@ghostery/adblocker-playwright": "^2.14.1",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@openredaction/openredaction": "^1.0.4",
-    "ajv": "^8.18.0",
+    "ajv": "^8.20.0",
     "chokidar": "^5.0.0",
     "cose-base": "^2.2.0",
     "cron-parser": "^5.5.0",
