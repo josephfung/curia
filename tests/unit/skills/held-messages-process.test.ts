@@ -277,12 +277,16 @@ describe('HeldMessagesProcessHandler — block action', () => {
     // Simulates a retry where linkIdentity succeeded in the first attempt but
     // discard failed — so the identity is already on a blocked contact and
     // linkIdentity now throws 23505. We should still proceed to discard.
+    // Use a distinct ORPHAN_CONTACT_ID for createContact so the assertion on
+    // contact_id actually proves the handler returns the resolved contact (the
+    // one that already owns the identity), not the freshly created orphan.
+    const ORPHAN_CONTACT_ID = '11111111-2222-3333-4444-555555555555';
     const heldMessages = {
       getById: vi.fn().mockResolvedValue(pendingMsg),
       discard: vi.fn().mockResolvedValue(true),
     };
     const contactService = {
-      createContact: vi.fn().mockResolvedValue({ id: BLOCKED_CONTACT_ID }),
+      createContact: vi.fn().mockResolvedValue({ id: ORPHAN_CONTACT_ID }),
       linkIdentity: vi.fn().mockRejectedValue(
         Object.assign(
           new Error('duplicate key value violates unique constraint "contact_channel_identities_channel_channel_identifier_key"'),
@@ -307,6 +311,7 @@ describe('HeldMessagesProcessHandler — block action', () => {
     expect(result.success).toBe(true);
     expect(contactService.resolveByChannelIdentity).toHaveBeenCalledWith('email', 'donna@example.com');
     expect(heldMessages.discard).toHaveBeenCalledWith(HELD_MSG_ID);
+    // Must return the resolved contact ID (the existing blocked contact), not the orphan
     if (result.success) expect(result.data).toMatchObject({ result: 'blocked', contact_id: BLOCKED_CONTACT_ID });
   });
 
