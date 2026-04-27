@@ -182,6 +182,10 @@ export interface SkillContext {
    *  e.g. suppressing outbound sends when observationMode === true.
    *  Skills that do not need it can ignore this field entirely. */
   taskMetadata?: Record<string, unknown>;
+  /** IANA timezone name (e.g. "America/Toronto") for formatting user-facing timestamps.
+   *  Populated from the global config timezone. Skills returning timestamps for display
+   *  should use toLocalIso() with this value rather than returning raw UTC strings. */
+  timezone?: string;
 }
 
 /**
