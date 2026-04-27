@@ -65,7 +65,7 @@ export class QueryRelationshipsHandler implements SkillHandler {
         object: direction === 'outbound' ? node.label : entity,
         direction,
         confidence: edge.temporal.confidence,
-        last_confirmed_at: edge.temporal.lastConfirmedAt,
+        last_confirmed_at: edge.temporal.lastConfirmedAt.toISOString(),
       }));
 
       ctx.log.info({ entity, count: relationships.length }, 'query-relationships: complete');

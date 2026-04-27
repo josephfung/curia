@@ -55,6 +55,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **`SkillManifest` type** — `infrastructure?: boolean` replaced by `capabilities?: string[]` in `src/skills/types.ts`.
 - **ExecutionLayer** — `if (manifest.infrastructure)` block and three name-gated conditionals replaced by a single capabilities loop with fail-closed behavior.
 
+### Fixed
+
+- **`query-relationships` skill** — `last_confirmed_at` in relationship output now serializes as an ISO 8601 string instead of a raw `Date` object, consistent with all other skills that surface timestamps (#359)
+
 ---
 
 ## [0.19.7] — 2026-04-24 — "The Reading Room"
