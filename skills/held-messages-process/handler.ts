@@ -65,15 +65,55 @@ export class HeldMessagesProcessHandler implements SkillHandler {
           status: 'blocked',
           source: 'ceo_stated',
         });
-        await ctx.contactService.linkIdentity({
-          contactId: contact.id,
-          channel: heldMsg.channel,
-          channelIdentifier: heldMsg.senderId,
-          source: 'ceo_stated',
-        });
+        // Wrap linkIdentity with the same duplicate-key guard used in the "identify"
+        // path: if a prior partial run already linked this identity (linkIdentity
+        // succeeded but discard failed), a retry will hit the 23505 unique constraint.
+        // Treat it as a no-op when the identity is already on a blocked contact —
+        // the CEO's intent is already satisfied — and proceed to discard.
+        let resolvedContactId = contact.id;
+        try {
+          await ctx.contactService.linkIdentity({
+            contactId: contact.id,
+            channel: heldMsg.channel,
+            channelIdentifier: heldMsg.senderId,
+            source: 'ceo_stated',
+          });
+        } catch (linkErr) {
+          const isDuplicate = (linkErr as { code?: string }).code === '23505';
+          if (!isDuplicate) throw linkErr;
+
+          // Identity already linked — check who owns it.
+          const resolved = await ctx.contactService.resolveByChannelIdentity(
+            heldMsg.channel,
+            heldMsg.senderId,
+          );
+          if (!resolved) {
+            ctx.log.error(
+              { channel: heldMsg.channel, senderId: heldMsg.senderId },
+              'Duplicate-key on linkIdentity (block) but resolveByChannelIdentity returned null — possible orphaned identity',
+            );
+            return {
+              success: false,
+              error: `Internal error: ${heldMsg.senderId} caused a duplicate-key error but no owning contact was found.`,
+            };
+          }
+          if (resolved.status !== 'blocked') {
+            return {
+              success: false,
+              error:
+                `Cannot block ${heldMsg.senderId} — that identity is already linked to a non-blocked contact. Update the contact status or use contact-merge first.`,
+            };
+          }
+          // Already linked to a blocked contact — idempotent, proceed to discard.
+          resolvedContactId = resolved.contactId;
+          ctx.log.info(
+            { channel: heldMsg.channel, senderId: heldMsg.senderId, contactId: resolved.contactId },
+            'Channel identity already linked to a blocked contact — skipping linkIdentity',
+          );
+        }
         await ctx.heldMessages.discard(held_message_id);
-        ctx.log.info({ heldMessageId: held_message_id, contactId: contact.id }, 'Sender blocked');
-        return { success: true, data: { result: 'blocked', contact_id: contact.id } };
+        ctx.log.info({ heldMessageId: held_message_id, contactId: resolvedContactId }, 'Sender blocked');
+        return { success: true, data: { result: 'blocked', contact_id: resolvedContactId } };
       }
 
       // action === 'identify'

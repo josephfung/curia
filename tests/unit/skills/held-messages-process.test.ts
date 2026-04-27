@@ -1,7 +1,8 @@
 // Tests for the held-messages-process skill handler.
 //
-// Focuses on the "identify" action and the idempotent linkIdentity path —
-// specifically the case where contact-merge has already linked the sender's
+// Covers the "identify", "dismiss", and "block" actions, including the
+// idempotent linkIdentity paths for both "identify" and "block" — the cases
+// where a prior partial run or contact-merge has already linked the sender's
 // channel identity before held-messages-process runs.
 
 import { describe, it, expect, vi } from 'vitest';
@@ -236,5 +237,159 @@ describe('HeldMessagesProcessHandler — dismiss action', () => {
     expect(result.success).toBe(true);
     expect(heldMessages.discard).toHaveBeenCalledWith(HELD_MSG_ID);
     if (result.success) expect(result.data).toMatchObject({ result: 'dismissed' });
+  });
+});
+
+const BLOCKED_CONTACT_ID = 'cccccccc-dddd-eeee-ffff-000000000000';
+
+describe('HeldMessagesProcessHandler — block action', () => {
+  const handler = new HeldMessagesProcessHandler();
+
+  it('creates a blocked contact, links identity, and discards the message', async () => {
+    const heldMessages = {
+      getById: vi.fn().mockResolvedValue(pendingMsg),
+      discard: vi.fn().mockResolvedValue(true),
+    };
+    const contactService = {
+      createContact: vi.fn().mockResolvedValue({ id: BLOCKED_CONTACT_ID }),
+      linkIdentity: vi.fn().mockResolvedValue({ id: 'identity-1' }),
+      resolveByChannelIdentity: vi.fn(),
+    };
+    const bus = makeBus();
+
+    const result = await handler.execute(makeCtx(
+      { held_message_id: HELD_MSG_ID, action: 'block', contact_name: 'Spammer' },
+      { heldMessages: heldMessages as never, contactService: contactService as never, bus: bus as never },
+    ));
+
+    expect(result.success).toBe(true);
+    expect(contactService.createContact).toHaveBeenCalledWith(expect.objectContaining({ status: 'blocked' }));
+    expect(contactService.linkIdentity).toHaveBeenCalledWith(expect.objectContaining({
+      contactId: BLOCKED_CONTACT_ID,
+      channel: 'email',
+      channelIdentifier: 'donna@example.com',
+    }));
+    expect(heldMessages.discard).toHaveBeenCalledWith(HELD_MSG_ID);
+    if (result.success) expect(result.data).toMatchObject({ result: 'blocked', contact_id: BLOCKED_CONTACT_ID });
+  });
+
+  it('treats duplicate-key error as no-op when identity is already linked to a blocked contact (retry scenario)', async () => {
+    // Simulates a retry where linkIdentity succeeded in the first attempt but
+    // discard failed — so the identity is already on a blocked contact and
+    // linkIdentity now throws 23505. We should still proceed to discard.
+    const heldMessages = {
+      getById: vi.fn().mockResolvedValue(pendingMsg),
+      discard: vi.fn().mockResolvedValue(true),
+    };
+    const contactService = {
+      createContact: vi.fn().mockResolvedValue({ id: BLOCKED_CONTACT_ID }),
+      linkIdentity: vi.fn().mockRejectedValue(
+        Object.assign(
+          new Error('duplicate key value violates unique constraint "contact_channel_identities_channel_channel_identifier_key"'),
+          { code: '23505' },
+        ),
+      ),
+      resolveByChannelIdentity: vi.fn().mockResolvedValue({
+        contactId: BLOCKED_CONTACT_ID,
+        displayName: 'Spammer',
+        role: null,
+        status: 'blocked',
+        trustLevel: null,
+      }),
+    };
+    const bus = makeBus();
+
+    const result = await handler.execute(makeCtx(
+      { held_message_id: HELD_MSG_ID, action: 'block' },
+      { heldMessages: heldMessages as never, contactService: contactService as never, bus: bus as never },
+    ));
+
+    expect(result.success).toBe(true);
+    expect(contactService.resolveByChannelIdentity).toHaveBeenCalledWith('email', 'donna@example.com');
+    expect(heldMessages.discard).toHaveBeenCalledWith(HELD_MSG_ID);
+    if (result.success) expect(result.data).toMatchObject({ result: 'blocked', contact_id: BLOCKED_CONTACT_ID });
+  });
+
+  it('returns failure when identity is already linked to a non-blocked contact', async () => {
+    const heldMessages = {
+      getById: vi.fn().mockResolvedValue(pendingMsg),
+      discard: vi.fn(),
+    };
+    const contactService = {
+      createContact: vi.fn().mockResolvedValue({ id: BLOCKED_CONTACT_ID }),
+      linkIdentity: vi.fn().mockRejectedValue(
+        Object.assign(
+          new Error('duplicate key value violates unique constraint "contact_channel_identities_channel_channel_identifier_key"'),
+          { code: '23505' },
+        ),
+      ),
+      resolveByChannelIdentity: vi.fn().mockResolvedValue({
+        contactId: CONTACT_ID,
+        displayName: 'Donna',
+        role: null,
+        status: 'confirmed',  // not blocked — real conflict
+        trustLevel: null,
+      }),
+    };
+    const bus = makeBus();
+
+    const result = await handler.execute(makeCtx(
+      { held_message_id: HELD_MSG_ID, action: 'block' },
+      { heldMessages: heldMessages as never, contactService: contactService as never, bus: bus as never },
+    ));
+
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error).toContain('non-blocked contact');
+    expect(heldMessages.discard).not.toHaveBeenCalled();
+  });
+
+  it('returns data-integrity error when resolveByChannelIdentity returns null after duplicate', async () => {
+    const heldMessages = {
+      getById: vi.fn().mockResolvedValue(pendingMsg),
+      discard: vi.fn(),
+    };
+    const contactService = {
+      createContact: vi.fn().mockResolvedValue({ id: BLOCKED_CONTACT_ID }),
+      linkIdentity: vi.fn().mockRejectedValue(
+        Object.assign(
+          new Error('duplicate key value violates unique constraint "contact_channel_identities_channel_channel_identifier_key"'),
+          { code: '23505' },
+        ),
+      ),
+      resolveByChannelIdentity: vi.fn().mockResolvedValue(null),  // orphaned identity
+    };
+    const bus = makeBus();
+
+    const result = await handler.execute(makeCtx(
+      { held_message_id: HELD_MSG_ID, action: 'block' },
+      { heldMessages: heldMessages as never, contactService: contactService as never, bus: bus as never },
+    ));
+
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error).toContain('Internal error');
+    expect(heldMessages.discard).not.toHaveBeenCalled();
+  });
+
+  it('re-throws non-duplicate errors from linkIdentity', async () => {
+    const heldMessages = {
+      getById: vi.fn().mockResolvedValue(pendingMsg),
+      discard: vi.fn(),
+    };
+    const contactService = {
+      createContact: vi.fn().mockResolvedValue({ id: BLOCKED_CONTACT_ID }),
+      linkIdentity: vi.fn().mockRejectedValue(new Error('connection timeout')),
+      resolveByChannelIdentity: vi.fn(),
+    };
+    const bus = makeBus();
+
+    const result = await handler.execute(makeCtx(
+      { held_message_id: HELD_MSG_ID, action: 'block' },
+      { heldMessages: heldMessages as never, contactService: contactService as never, bus: bus as never },
+    ));
+
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error).toContain('connection timeout');
+    expect(contactService.resolveByChannelIdentity).not.toHaveBeenCalled();
+    expect(heldMessages.discard).not.toHaveBeenCalled();
   });
 });
