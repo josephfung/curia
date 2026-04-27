@@ -13,6 +13,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Added
+
+- **draft_gate CEO notification** — when a Nylas draft is created via the `draft_gate` outbound policy, Curia now sends the CEO a brief email notification ("there is a draft reply to X about Y waiting in your Drafts folder"). The CEO reviews and clicks send from their email client. Closes the first piece of #278.
+
 ### Fixed
 
 - **`held-messages-process` block idempotency** — `block` action now handles duplicate-key errors from `linkIdentity` the same way `identify` does: if the identity is already linked to a blocked contact on retry, it proceeds to `discard` rather than failing and leaving the held message stuck in `pending` (closes #335)
