@@ -28,7 +28,7 @@ export class ExecutiveProfileUpdateHandler implements SkillHandler {
     }
 
     const { writing_voice } = ctx.input as { writing_voice?: PartialWritingVoiceInput };
-    if (!writing_voice || typeof writing_voice !== 'object') {
+    if (!writing_voice || typeof writing_voice !== 'object' || Array.isArray(writing_voice)) {
       return { success: false, error: 'Input must include a "writing_voice" object with the fields to update.' };
     }
 
@@ -57,11 +57,13 @@ export class ExecutiveProfileUpdateHandler implements SkillHandler {
       const changes = buildChangesSummary(currentVoice, merged);
 
       // Persist — validation happens inside update().
-      const changedBy = ctx.caller?.contactId ?? ctx.caller?.role ?? 'system';
+      // changedBy uses a fixed source label (not caller identity) to keep the
+      // audit trail filterable. Actor identity goes in the note.
+      const actor = ctx.caller?.contactId ?? ctx.caller?.role ?? 'unknown';
       await ctx.executiveProfileService.update(
         { writingVoice: merged },
-        changedBy,
-        `Skill update: ${changes}`,
+        'skill',
+        `${changes} (by ${actor})`,
       );
 
       const updated = ctx.executiveProfileService.get();

@@ -7,27 +7,8 @@
 import { describe, it, expect } from 'vitest';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import * as os from 'node:os';
 import yaml from 'js-yaml';
 import type { ExecutiveProfile } from '../../../src/executive/types.js';
-
-// We can't easily unit-test the full service (it needs a DB pool and bus), but we can
-// test the YAML mapping and validation by exercising the private methods indirectly
-// via the constructor + loadFromFile path. For the prompt compiler, we test via a
-// thin wrapper that constructs a service with a pre-cached profile.
-
-// Helper: create a temp YAML file and return its path.
-function writeTempYaml(content: object): { dir: string; path: string } {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'curia-exec-test-'));
-  const filePath = path.join(dir, 'executive-profile.yaml');
-  fs.writeFileSync(filePath, yaml.dump(content));
-  return { dir, path: filePath };
-}
-
-// Helper: clean up temp directory.
-function cleanup(dir: string): void {
-  fs.rmSync(dir, { recursive: true });
-}
 
 describe('Executive profile YAML schema', () => {
   it('loads the default config/executive-profile.yaml', () => {
