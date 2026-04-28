@@ -67,6 +67,7 @@ export class ExecutionLayer {
   private nylasCalendarClient?: NylasCalendarClient;
   private entityContextAssembler?: EntityContextAssembler;
   private autonomyService?: AutonomyService;
+  private executiveProfileService?: import('../executive/service.js').ExecutiveProfileService;
   private browserService?: BrowserService;
   private bullpenService?: import('../memory/bullpen.js').BullpenService;
   /** The agent's own contactId — injected into ctx.agentContactId for entity_enrichment default='agent' */
@@ -88,6 +89,7 @@ export class ExecutionLayer {
     nylasCalendarClient?: NylasCalendarClient;
     entityContextAssembler?: EntityContextAssembler;
     autonomyService?: AutonomyService;
+    executiveProfileService?: import('../executive/service.js').ExecutiveProfileService;
     browserService?: BrowserService;
     bullpenService?: import('../memory/bullpen.js').BullpenService;
     agentContactId?: string;
@@ -107,6 +109,7 @@ export class ExecutionLayer {
     this.nylasCalendarClient = options?.nylasCalendarClient;
     this.entityContextAssembler = options?.entityContextAssembler;
     this.autonomyService = options?.autonomyService;
+    this.executiveProfileService = options?.executiveProfileService;
     this.browserService = options?.browserService;
     this.bullpenService = options?.bullpenService;
     this.agentContactId = options?.agentContactId;
@@ -312,6 +315,7 @@ export class ExecutionLayer {
       autonomyService: this.autonomyService,
       browserService: this.browserService,
       bullpenService: this.bullpenService,
+      executiveProfileService: this.executiveProfileService,
     };
 
     // Fail-closed: if a declared capability is not available on this ExecutionLayer,

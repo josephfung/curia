@@ -1,0 +1,13 @@
+{
+  "name": "executive-profile-get",
+  "description": "Return the executive's current writing voice profile — tone, formality, patterns, vocabulary, and sign-off. Use when the CEO asks about their current voice settings, before making profile changes, or when you need to understand the current voice configuration.",
+  "version": "1.0.0",
+  "sensitivity": "normal",
+  "capabilities": ["executiveProfileService"],
+  "inputs": {},
+  "outputs": { "profile": "object", "summary": "string" },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 10000,
+  "action_risk": "none"
+}
