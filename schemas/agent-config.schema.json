@@ -66,6 +66,11 @@
         }
       }
     },
+    "expected_duration_seconds": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Expected wall-clock duration for tasks delegated to this agent, in seconds. Used by the runtime to inject timeout_ms into delegate calls."
+    },
     "error_budget": {
       "type": "object",
       "additionalProperties": false,

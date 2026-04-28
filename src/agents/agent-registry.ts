@@ -10,12 +10,16 @@ export interface AgentRegistryEntry {
   name: string;
   role: string;
   description: string;
+  /** Expected wall-clock duration for delegate calls targeting this agent, in seconds.
+   *  When set, the runtime injects timeout_ms into delegate calls that don't already
+   *  carry an explicit timeout. See issue #387. */
+  expectedDurationSeconds?: number;
 }
 
 export class AgentRegistry {
   private agents = new Map<string, AgentRegistryEntry>();
 
-  register(name: string, info: { role: string; description: string }): void {
+  register(name: string, info: { role: string; description: string; expectedDurationSeconds?: number }): void {
     if (this.agents.has(name)) {
       throw new Error(`Agent '${name}' is already registered`);
     }
