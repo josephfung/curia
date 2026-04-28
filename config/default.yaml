@@ -46,6 +46,27 @@ channels:
 #
 # channel_accounts: {}
 
+# Google Workspace account configuration.
+#
+# channel_accounts.google_workspace defines one or more named Google Workspace accounts
+# available to all agents for Google Drive, Google Docs, and other Workspace MCP tools.
+# Each account has a google_email and an optional primary flag. The primary account is
+# used by default when tools require a `user_google_email` parameter.
+#
+# Credential values may be supplied inline or as env-var references using the
+# `env:VAR_NAME` syntax (recommended):
+#
+#   channel_accounts:
+#     google_workspace:
+#       curia:
+#         google_email: "env:PRIMARY_GOOGLE_EMAIL"
+#         primary: true
+#       joseph:
+#         google_email: "env:SECONDARY_GOOGLE_EMAIL"
+#
+# Environment variable names must be generic and role-based — never use
+# deployment-specific names (no personal names) in env vars.
+
 browser:
   # How long a browser session stays alive after its last action (ms).
   sessionTtlMs: 600000   # 10 minutes
