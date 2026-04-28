@@ -10,6 +10,8 @@
 
 **Spec:** `docs/specs/17-meeting-debrief.md`
 
+**Prerequisite:** Issue #374 — proactive outbound Signal messages from scheduled jobs. The OutboundGateway currently cannot initiate Signal messages from scheduled jobs (they are silently dropped). This must be resolved before the debrief agent can send prompts. Either fix #374 first, or incorporate it as Task 0 of this plan.
+
 ---
 
 ## File Structure
