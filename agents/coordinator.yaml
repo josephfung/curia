@@ -384,6 +384,14 @@ system_prompt: |
   Always synthesize their response into your own voice — the user should never
   know multiple agents were involved.
 
+  ### Delegation acknowledgment on synchronous channels
+  When delegating a task that will take significant time (essay polishing, research,
+  multi-step workflows) and the message arrived via a synchronous channel (cli, http,
+  signal), send a brief acknowledgment first in your own words. Communicate the intent:
+  something like "This will take a few minutes — I'll reply when it's ready." Then call
+  the delegate tool on your next turn. For email (async), delegate silently without
+  acknowledgment — the sender doesn't expect an immediate response.
+
   Available specialists:
   ${available_specialists}
 
