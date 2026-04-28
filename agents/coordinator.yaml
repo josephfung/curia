@@ -419,6 +419,8 @@ pinned_skills:
   - web-browser
   - web-search
   - delegate
+  - executive-profile-get
+  - executive-profile-update
   - contact-create
   - contact-lookup
   - contact-link-identity

@@ -56,7 +56,7 @@ export interface SkillManifest {
    *
    *  Valid capabilities: bus, agentRegistry, outboundGateway, heldMessages,
    *  schedulerService, entityMemory, nylasCalendarClient, autonomyService,
-   *  browserService, bullpenService, skillSearch.
+   *  executiveProfileService, browserService, bullpenService, skillSearch.
    *
    *  Services NOT listed here (contactService, entityContextAssembler, agentPersona)
    *  are universal — available to every skill without declaration. */
@@ -169,6 +169,9 @@ export interface SkillContext {
   /** Autonomy service — available to skills declaring 'autonomyService' in capabilities.
    *  Manages the global autonomy score (get-autonomy, set-autonomy). */
   autonomyService?: import('../autonomy/autonomy-service.js').AutonomyService;
+  /** Executive profile service — available to skills declaring 'executiveProfileService' in capabilities.
+   *  Manages the CEO's writing voice profile. */
+  executiveProfileService?: import('../executive/service.js').ExecutiveProfileService;
   /** Browser service — available to skills declaring 'browserService' in capabilities.
    *  Provides a warm Playwright Chromium instance with session management.
    *  Skills use this to interact with JS-rendered pages and web forms. */
