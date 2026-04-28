@@ -19,7 +19,7 @@
 
 import * as path from 'node:path';
 import { runner } from 'node-pg-migrate';
-import { loadConfig, loadYamlConfig, resolveChannelAccounts } from './config.js';
+import { loadConfig, loadYamlConfig, resolveChannelAccounts, resolveGoogleWorkspaceAccounts } from './config.js';
 import { createLogger } from './logger.js';
 import { HttpAdapter } from './channels/http/http-adapter.js';
 import { createPool } from './db/connection.js';
@@ -410,6 +410,13 @@ async function main(): Promise<void> {
   // EmailAdapters are constructed further below, after OutboundGateway is ready,
   // and started after the dispatcher is registered to avoid dropping inbound messages.
   const resolvedEmailAccounts = resolveChannelAccounts(yamlConfig, config);
+  const resolvedGoogleWorkspaceAccounts = resolveGoogleWorkspaceAccounts(yamlConfig);
+  if (resolvedGoogleWorkspaceAccounts.length > 0) {
+    logger.info(
+      { accounts: resolvedGoogleWorkspaceAccounts.map(a => ({ name: a.name, primary: a.primary })) },
+      `Google Workspace: ${resolvedGoogleWorkspaceAccounts.length} account(s) configured`,
+    );
+  }
   const nylasClientMap = new Map<string, NylasClient>();
 
   if (!config.nylasApiKey) {
@@ -763,6 +770,7 @@ async function main(): Promise<void> {
       agentRegistry.register(agentConfig.name, {
         role: agentConfig.role ?? 'specialist',
         description: agentConfig.description ?? agentConfig.name,
+        expectedDurationSeconds: agentConfig.expected_duration_seconds,
       });
     }
   } catch (err) {
@@ -847,13 +855,20 @@ async function main(): Promise<void> {
       executiveProfileService: agentConfig.role === 'coordinator' ? executiveProfileService : undefined,
       executiveDisplayName: agentConfig.role === 'coordinator' ? executiveDisplayName : undefined,
       // Curia's own contact details — sourced from NYLAS_SELF_EMAIL and SIGNAL_PHONE_NUMBER.
-      // Injected per-task so the coordinator knows which accounts to use when MCP tools
-      // ask for an email address or phone number (e.g. workspace-mcp's user_google_email).
-      // Only set for the coordinator; specialist agents work with structured data.
-      channelAccounts: agentConfig.role === 'coordinator' ? {
+      // Injected per-task so agents know which accounts to use when MCP tools ask for an
+      // email address or phone number. Injected into ALL agents (#387) — specialists like
+      // essay-editor need this to avoid hallucinating account identifiers.
+      channelAccounts: {
         email: config.nylasSelfEmail || undefined,
         phone: config.signalPhoneNumber || undefined,
-      } : undefined,
+      },
+      // Google Workspace accounts — injected into ALL agents so they know which account
+      // to use for Google Drive/Docs MCP tools, preventing email hallucination (#387).
+      googleWorkspaceAccounts: resolvedGoogleWorkspaceAccounts.length > 0
+        ? resolvedGoogleWorkspaceAccounts : undefined,
+      // Agent registry — allows the runtime to look up the target agent's
+      // expected_duration_seconds when injecting delegate timeouts (#387).
+      agentRegistry,
       // Map YAML snake_case fields to AgentConfig camelCase, falling back to
       // DEFAULT_ERROR_BUDGET values for any omitted fields.
       errorBudget: agentConfig.error_budget ? {
