@@ -126,6 +126,36 @@ describe('ExecutiveProfileUpdateHandler', () => {
     expect(updatedConfig.writingVoice.signOff).toBe('Best, Joseph');
   });
 
+  it('handles signOff update (camelCase — LLM may emit either convention)', async () => {
+    const service = {
+      get: () => baseProfile,
+      update: vi.fn(async () => {}),
+    };
+
+    await handler.execute(makeCtx(
+      { writing_voice: { signOff: 'Cheers,\n\nJoseph' } },
+      service,
+    ));
+
+    const updatedConfig = service.update.mock.calls[0][0] as ExecutiveProfile;
+    expect(updatedConfig.writingVoice.signOff).toBe('Cheers,\n\nJoseph');
+  });
+
+  it('prefers sign_off over signOff when both are present', async () => {
+    const service = {
+      get: () => baseProfile,
+      update: vi.fn(async () => {}),
+    };
+
+    await handler.execute(makeCtx(
+      { writing_voice: { sign_off: 'from snake_case', signOff: 'from camelCase' } },
+      service,
+    ));
+
+    const updatedConfig = service.update.mock.calls[0][0] as ExecutiveProfile;
+    expect(updatedConfig.writingVoice.signOff).toBe('from snake_case');
+  });
+
   it('includes changes description in output', async () => {
     const service = {
       get: () => baseProfile,
