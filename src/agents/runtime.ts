@@ -15,6 +15,8 @@ import { formatTimeContextBlock } from '../time/time-context.js';
 import type { OfficeIdentityService } from '../identity/service.js';
 import type { ExecutiveProfileService } from '../executive/service.js';
 import { formatBullpenContext, type BullpenService } from '../memory/bullpen.js';
+import type { AgentRegistry } from './agent-registry.js';
+import type { ResolvedGoogleWorkspaceAccount } from '../config.js';
 
 export interface AgentConfig {
   agentId: string;
@@ -54,12 +56,19 @@ export interface AgentConfig {
   /** Curia's own channel contact details, sourced from deployment env vars (NYLAS_SELF_EMAIL,
    *  SIGNAL_PHONE_NUMBER). When provided, a "Your Contact Details" block is appended to the
    *  system prompt so the LLM knows which accounts to use when tools ask for an email address
-   *  or phone number. Only the coordinator receives this — specialist agents work with
-   *  structured data and don't need self-identity injection. */
+   *  or phone number. Injected into all agents — specialists need this too (#387). */
   channelAccounts?: {
     email?: string;
     phone?: string;
   };
+  /** Resolved Google Workspace accounts from config. When provided, a "Your Google Workspace
+   *  Accounts" block is appended to the system prompt so agents know which account to use when
+   *  Google Workspace MCP tools require a `user_google_email` parameter. Injected into all
+   *  agents to prevent LLM hallucination of email addresses (#387). */
+  googleWorkspaceAccounts?: ResolvedGoogleWorkspaceAccount[];
+  /** Agent registry — used to look up target agent's expectedDurationSeconds when a delegate
+   *  call is made, so the runtime can inject an appropriate timeout_ms. See #387. */
+  agentRegistry?: AgentRegistry;
   /** Error budget config — turn and consecutive error limits per task.
    * maxTurns is checked at the start of each tool-use iteration, so
    * the effective number of tool-calling rounds is maxTurns - 1. */
@@ -244,6 +253,7 @@ export class AgentRuntime {
     // Append Curia's own contact details — email and phone sourced from deployment env vars.
     // This gives the LLM a concrete "acting as" identity so it doesn't guess or fall back
     // to the CEO's details when tools require an account parameter.
+    // Injected into ALL agents (coordinator + specialists) so every agent knows its identity.
     const { channelAccounts } = this.config;
     if (channelAccounts && (channelAccounts.email || channelAccounts.phone)) {
       const lines: string[] = ['## Your Contact Details'];
@@ -252,6 +262,25 @@ export class AgentRuntime {
       lines.push('');
       if (channelAccounts.email) lines.push(`- Email: ${channelAccounts.email}`);
       if (channelAccounts.phone) lines.push(`- Phone: ${channelAccounts.phone}`);
+      effectiveSystemPrompt += '\n\n' + lines.join('\n');
+    }
+
+    // Append Google Workspace account details so agents know which account to use when
+    // Google Drive, Docs, or other Workspace MCP tools require a `user_google_email` param.
+    // Without this, the LLM hallucinates email addresses (#387 root cause 1).
+    // Injected into ALL agents — specialists like essay-editor need this too.
+    const { googleWorkspaceAccounts } = this.config;
+    if (googleWorkspaceAccounts && googleWorkspaceAccounts.length > 0) {
+      const lines: string[] = ['## Your Google Workspace Accounts'];
+      lines.push('When calling Google Drive, Google Docs, or other Google Workspace tools that');
+      lines.push('require a `user_google_email` parameter, use your primary account. If the tool');
+      lines.push('returns an authentication error, retry with the next available account before');
+      lines.push('reporting failure.');
+      lines.push('');
+      for (const acct of googleWorkspaceAccounts) {
+        const marker = acct.primary ? ' (primary)' : '';
+        lines.push(`- ${acct.name}: ${acct.googleEmail}${marker}`);
+      }
       effectiveSystemPrompt += '\n\n' + lines.join('\n');
     }
 
@@ -506,29 +535,42 @@ export class AgentRuntime {
         logger.info({ agentId, skill: toolCall.name, callId: toolCall.id }, 'Invoking skill');
         skillsCalled.push(toolCall.name);
 
-        // For delegate calls from scheduled tasks: inject timeout_ms from the task event's
-        // expectedDurationSeconds so the specialist gets an appropriate wait window.
-        // Only injected when: (a) the skill is 'delegate', (b) the task carries a duration
-        // hint from the scheduler, and (c) the LLM hasn't already supplied a timeout_ms.
+        // For delegate calls: inject timeout_ms so the specialist gets an appropriate wait
+        // window. Two sources, checked in priority order:
+        //   1. Scheduled task: the task event's expectedDurationSeconds (from the scheduler)
+        //   2. Target agent config: the target agent's expected_duration_seconds (from YAML)
+        // The LLM's explicit timeout_ms always wins if provided.
         // This is transparent to the LLM — it doesn't need to know about scheduling internals.
         let skillInput = toolCall.input;
-        if (
-          toolCall.name === 'delegate' &&
-          taskEvent.payload.expectedDurationSeconds !== undefined
-        ) {
+        if (toolCall.name === 'delegate') {
           const inputRecord = skillInput as Record<string, unknown>;
           if (!('timeout_ms' in inputRecord) || inputRecord['timeout_ms'] === undefined) {
-            const timeoutMs = taskEvent.payload.expectedDurationSeconds * 1000;
-            // Guard against non-integer results from floating-point expectedDurationSeconds
-            // stored via out-of-band DB writes — the delegate handler would silently fall back,
-            // but we log here so the root cause is visible in audit logs.
-            if (Number.isInteger(timeoutMs) && timeoutMs > 0) {
-              skillInput = { ...inputRecord, timeout_ms: timeoutMs };
-            } else {
-              logger.warn(
-                { agentId, taskEventId: taskEvent.id, expectedDurationSeconds: taskEvent.payload.expectedDurationSeconds, computedTimeoutMs: timeoutMs },
-                'Computed timeout_ms from expectedDurationSeconds is not a valid positive integer — skipping injection; delegate will use default timeout',
-              );
+            // Source 1: scheduler's expectedDurationSeconds on the task event
+            let durationSeconds = taskEvent.payload.expectedDurationSeconds;
+
+            // Source 2: target agent's expected_duration_seconds from agent YAML config
+            // Only used when the scheduler didn't provide a value.
+            if (durationSeconds === undefined && this.config.agentRegistry) {
+              const targetAgentName = typeof inputRecord['agent'] === 'string' ? inputRecord['agent'] : undefined;
+              if (targetAgentName) {
+                const targetEntry = this.config.agentRegistry.get(targetAgentName);
+                durationSeconds = targetEntry?.expectedDurationSeconds;
+              }
+            }
+
+            if (durationSeconds !== undefined) {
+              const timeoutMs = durationSeconds * 1000;
+              // Guard against non-integer results from floating-point expectedDurationSeconds
+              // stored via out-of-band DB writes — the delegate handler would silently fall back,
+              // but we log here so the root cause is visible in audit logs.
+              if (Number.isInteger(timeoutMs) && timeoutMs > 0) {
+                skillInput = { ...inputRecord, timeout_ms: timeoutMs };
+              } else {
+                logger.warn(
+                  { agentId, taskEventId: taskEvent.id, expectedDurationSeconds: durationSeconds, computedTimeoutMs: timeoutMs },
+                  'Computed timeout_ms from expectedDurationSeconds is not a valid positive integer — skipping injection; delegate will use default timeout',
+                );
+              }
             }
           }
         }
