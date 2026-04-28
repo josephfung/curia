@@ -43,6 +43,10 @@ export interface AgentYamlConfig {
     /** Expected wall-clock duration in seconds. Drives stuck-job recovery timeout. */
     expectedDurationSeconds?: number;
   }>;
+  /** Expected wall-clock duration for delegate calls targeting this agent, in seconds.
+   *  When set, the runtime injects timeout_ms = expected_duration_seconds * 1000 into
+   *  delegate calls that don't already carry an explicit timeout. */
+  expected_duration_seconds?: number;
   error_budget?: {
     max_turns?: number;
     max_cost_usd?: number;
