@@ -1,0 +1,35 @@
+# Executive profile for this Curia instance.
+# Defines how the system represents the executive in drafted content.
+# The executive's identity (name, title, org) lives in the contact system.
+#
+# Changes here take effect on the next coordinator turn (hot reload).
+# All changes are versioned in the database.
+#
+# This file is the default for new deployments. Once the profile has been
+# updated via API or wizard, the DB version takes precedence — edits here
+# will still trigger a hot reload and create a new DB version.
+
+executive:
+  writing_voice:
+    # Free-form tone descriptors (1–3). No predefined set — describe
+    # the executive's voice in whatever words feel right.
+    tone:
+      - "direct"
+      - "warm"
+
+    # 0–100; 0 = casual Slack DM, 100 = board letter.
+    formality: 50
+
+    # How the executive writes — ordered by importance.
+    # Read these aloud: do they sound like the executive?
+    patterns:
+      - "Concise and to the point"
+      - "Professional but approachable"
+
+    # Words the executive prefers and avoids.
+    vocabulary:
+      prefer: []
+      avoid: []
+
+    # Email sign-off when drafting in the executive's voice.
+    sign_off: ""
