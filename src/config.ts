@@ -68,6 +68,33 @@ export interface ResolvedEmailAccount {
   excludedSenderEmails: string[];
 }
 
+// ---------------------------------------------------------------------------
+// Google Workspace account config types
+// ---------------------------------------------------------------------------
+
+/**
+ * Raw per-account Google Workspace entry as read from config/default.yaml.
+ * Values may be literal strings or "env:VAR_NAME" env-var references.
+ */
+export interface RawGoogleWorkspaceAccountConfig {
+  google_email: string;
+  /** When true, this is the default account for Google Workspace MCP tools. */
+  primary?: boolean;
+}
+
+/**
+ * Fully resolved Google Workspace account config with env-var references expanded.
+ * Injected into all agent system prompts so LLMs know which account to use when
+ * Google Workspace tools require a `user_google_email` parameter.
+ */
+export interface ResolvedGoogleWorkspaceAccount {
+  /** Logical name for this account as declared in the YAML (e.g. "curia", "joseph"). */
+  name: string;
+  googleEmail: string;
+  /** When true, this is the default account for Google Workspace MCP tools. */
+  primary: boolean;
+}
+
 export interface Config {
   databaseUrl: string;
   anthropicApiKey: string | undefined;
@@ -142,6 +169,7 @@ export interface YamlConfig {
    */
   channel_accounts?: {
     email?: Record<string, RawEmailAccountConfig>;
+    google_workspace?: Record<string, RawGoogleWorkspaceAccountConfig>;
   };
   browser?: {
     sessionTtlMs?: number;
@@ -491,6 +519,38 @@ export function loadYamlConfig(configDir: string): YamlConfig {
     }
   }
 
+  // Validate channel_accounts.google_workspace if present
+  const googleWorkspaceAccounts = config.channel_accounts?.google_workspace;
+  if (googleWorkspaceAccounts !== undefined) {
+    if (googleWorkspaceAccounts === null || typeof googleWorkspaceAccounts !== 'object' || Array.isArray(googleWorkspaceAccounts)) {
+      throw new Error('channel_accounts.google_workspace must be a YAML mapping');
+    }
+    let primaryCount = 0;
+    for (const [accountName, rawAccount] of Object.entries(googleWorkspaceAccounts)) {
+      if (typeof rawAccount !== 'object' || rawAccount === null || Array.isArray(rawAccount)) {
+        throw new Error(`channel_accounts.google_workspace.${accountName} must be a YAML mapping`);
+      }
+      if (typeof rawAccount.google_email !== 'string' || !rawAccount.google_email) {
+        throw new Error(`channel_accounts.google_workspace.${accountName}.google_email must be a non-empty string`);
+      }
+      if (rawAccount.primary !== undefined && typeof rawAccount.primary !== 'boolean') {
+        throw new Error(
+          `channel_accounts.google_workspace.${accountName}.primary must be a boolean, got: ${typeof rawAccount.primary}`,
+        );
+      }
+      if (rawAccount.primary === true) {
+        primaryCount++;
+      }
+    }
+    // At most one account may be marked primary. If none is marked, the runtime
+    // will use the first account in iteration order as the default.
+    if (primaryCount > 1) {
+      throw new Error(
+        `channel_accounts.google_workspace: at most one account may be marked primary, found ${primaryCount}`,
+      );
+    }
+  }
+
   const drift = config.intentDrift;
   if (drift !== undefined) {
     // Reject non-object roots (e.g. `intentDrift: false`, `intentDrift: "off"`, `intentDrift: []`).
@@ -647,6 +707,31 @@ export function resolveChannelAccounts(yamlConfig: YamlConfig, config: Config): 
 
   // No credentials available — email channel will be disabled
   return [];
+}
+
+/**
+ * Resolve Google Workspace accounts from the YAML config.
+ *
+ * Returns an empty array when the google_workspace section is absent — agents
+ * will not receive Google Workspace account injection, matching pre-#387 behavior.
+ */
+export function resolveGoogleWorkspaceAccounts(yamlConfig: YamlConfig): ResolvedGoogleWorkspaceAccount[] {
+  const googleAccounts = yamlConfig.channel_accounts?.google_workspace;
+  if (googleAccounts === undefined) {
+    return [];
+  }
+
+  return Object.entries(googleAccounts).map(([name, raw]) => {
+    const googleEmail = resolveEnvValue(
+      raw.google_email,
+      `channel_accounts.google_workspace.${name}.google_email`,
+    );
+    return {
+      name,
+      googleEmail,
+      primary: raw.primary ?? false,
+    };
+  });
 }
 
 export function loadConfig(): Config {
