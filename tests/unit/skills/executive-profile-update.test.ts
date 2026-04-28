@@ -144,7 +144,7 @@ describe('ExecutiveProfileUpdateHandler', () => {
     }
   });
 
-  it('passes caller contactId as changedBy', async () => {
+  it('uses fixed "skill" label for changedBy, puts actor in note', async () => {
     const service = {
       get: () => baseProfile,
       update: vi.fn(async () => {}),
@@ -156,7 +156,11 @@ describe('ExecutiveProfileUpdateHandler', () => {
       { contactId: 'ceo-contact-uuid' },
     ));
 
-    expect(service.update.mock.calls[0][1]).toBe('ceo-contact-uuid');
+    // changedBy is a fixed source label, not the caller identity
+    expect(service.update.mock.calls[0][1]).toBe('skill');
+    // Actor identity goes in the note
+    const note = service.update.mock.calls[0][2] as string;
+    expect(note).toContain('ceo-contact-uuid');
   });
 
   it('handles numeric string for formality (LLM may pass strings)', async () => {

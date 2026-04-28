@@ -427,8 +427,8 @@ export class ExecutiveProfileService {
     }
     const voice = config.writingVoice;
 
-    if (!Array.isArray(voice.tone)) {
-      throw new Error('writingVoice.tone must be an array');
+    if (!Array.isArray(voice.tone) || !voice.tone.every(item => typeof item === 'string')) {
+      throw new Error('writingVoice.tone must be an array of strings');
     }
     if (voice.tone.length > 3) {
       throw new Error(`writingVoice.tone may contain at most 3 descriptors; got ${voice.tone.length}`);
@@ -440,12 +440,18 @@ export class ExecutiveProfileService {
       throw new Error(`writingVoice.formality must be an integer between 0 and 100; got ${voice.formality}`);
     }
 
-    if (!Array.isArray(voice.patterns)) {
-      throw new Error('writingVoice.patterns must be an array');
+    if (!Array.isArray(voice.patterns) || !voice.patterns.every(item => typeof item === 'string')) {
+      throw new Error('writingVoice.patterns must be an array of strings');
     }
 
-    if (!voice.vocabulary || !Array.isArray(voice.vocabulary.prefer) || !Array.isArray(voice.vocabulary.avoid)) {
-      throw new Error('writingVoice.vocabulary must have prefer and avoid arrays');
+    if (
+      !voice.vocabulary ||
+      !Array.isArray(voice.vocabulary.prefer) ||
+      !voice.vocabulary.prefer.every(item => typeof item === 'string') ||
+      !Array.isArray(voice.vocabulary.avoid) ||
+      !voice.vocabulary.avoid.every(item => typeof item === 'string')
+    ) {
+      throw new Error('writingVoice.vocabulary must have prefer and avoid string arrays');
     }
 
     if (typeof voice.signOff !== 'string') {
