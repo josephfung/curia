@@ -2,7 +2,7 @@
 // excluded_sender_emails fields added for CEO inbox monitoring (#273).
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { resolveChannelAccounts, loadYamlConfig } from '../../src/config.js';
+import { resolveChannelAccounts, resolveGoogleWorkspaceAccounts, loadYamlConfig } from '../../src/config.js';
 import type { Config } from '../../src/config.js';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -207,5 +207,112 @@ describe('resolveChannelAccounts — backward-compat single-account path', () =>
     expect(accounts[0]?.name).toBe('curia');
     expect(accounts[0]?.observationMode).toBe(false);
     expect(accounts[0]?.excludedSenderEmails).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Google Workspace account resolution (#387)
+// ---------------------------------------------------------------------------
+
+describe('resolveGoogleWorkspaceAccounts', () => {
+  it('returns empty array when google_workspace section is absent', () => {
+    const yamlConfig = loadYamlConfig(tempDir); // default.yaml is empty
+    const accounts = resolveGoogleWorkspaceAccounts(yamlConfig);
+    expect(accounts).toEqual([]);
+  });
+
+  it('resolves literal google_email values', () => {
+    writeLocalYaml(`
+channel_accounts:
+  google_workspace:
+    curia:
+      google_email: curia@gmail.com
+      primary: true
+    joseph:
+      google_email: joseph@example.com
+`);
+    const yamlConfig = loadYamlConfig(tempDir);
+    const accounts = resolveGoogleWorkspaceAccounts(yamlConfig);
+    expect(accounts).toHaveLength(2);
+    expect(accounts[0]).toEqual({ name: 'curia', googleEmail: 'curia@gmail.com', primary: true });
+    expect(accounts[1]).toEqual({ name: 'joseph', googleEmail: 'joseph@example.com', primary: false });
+  });
+
+  it('resolves env: references in google_email', () => {
+    const prev = process.env['TEST_GOOGLE_EMAIL'];
+    process.env['TEST_GOOGLE_EMAIL'] = 'resolved@gmail.com';
+    try {
+      writeLocalYaml(`
+channel_accounts:
+  google_workspace:
+    curia:
+      google_email: "env:TEST_GOOGLE_EMAIL"
+      primary: true
+`);
+      const yamlConfig = loadYamlConfig(tempDir);
+      const accounts = resolveGoogleWorkspaceAccounts(yamlConfig);
+      expect(accounts[0]?.googleEmail).toBe('resolved@gmail.com');
+    } finally {
+      if (prev === undefined) {
+        delete process.env['TEST_GOOGLE_EMAIL'];
+      } else {
+        process.env['TEST_GOOGLE_EMAIL'] = prev;
+      }
+    }
+  });
+
+  it('defaults primary to false when omitted', () => {
+    writeLocalYaml(`
+channel_accounts:
+  google_workspace:
+    curia:
+      google_email: curia@gmail.com
+`);
+    const yamlConfig = loadYamlConfig(tempDir);
+    const accounts = resolveGoogleWorkspaceAccounts(yamlConfig);
+    expect(accounts[0]?.primary).toBe(false);
+  });
+
+  it('throws when google_email is missing', () => {
+    writeLocalYaml(`
+channel_accounts:
+  google_workspace:
+    curia:
+      primary: true
+`);
+    expect(() => loadYamlConfig(tempDir)).toThrow('google_email must be a non-empty string');
+  });
+
+  it('throws when primary is not a boolean', () => {
+    writeLocalYaml(`
+channel_accounts:
+  google_workspace:
+    curia:
+      google_email: curia@gmail.com
+      primary: "yes"
+`);
+    expect(() => loadYamlConfig(tempDir)).toThrow('primary must be a boolean');
+  });
+
+  it('throws when multiple accounts are marked primary', () => {
+    writeLocalYaml(`
+channel_accounts:
+  google_workspace:
+    curia:
+      google_email: curia@gmail.com
+      primary: true
+    joseph:
+      google_email: joseph@example.com
+      primary: true
+`);
+    expect(() => loadYamlConfig(tempDir)).toThrow('at most one account may be marked primary');
+  });
+
+  it('throws when google_workspace is not a mapping', () => {
+    writeLocalYaml(`
+channel_accounts:
+  google_workspace: "invalid"
+`);
+    expect(() => loadYamlConfig(tempDir)).toThrow('google_workspace must be a YAML mapping');
   });
 });
