@@ -32,7 +32,9 @@ import { jobRoutes } from './routes/jobs.js';
 import { messageRoutes } from './routes/messages.js';
 import { knowledgeGraphRoutes } from './routes/kg.js';
 import { identityRoutes } from './routes/identity.js';
+import { executiveRoutes } from './routes/executive.js';
 import type { OfficeIdentityService } from '../../identity/service.js';
+import type { ExecutiveProfileService } from '../../executive/service.js';
 import type { ContactService } from '../../contacts/contact-service.js';
 import { type SessionStore } from './session-auth.js';
 
@@ -49,6 +51,7 @@ export interface HttpAdapterConfig {
   skillNames: string[];
   schedulerService?: SchedulerService;
   identityService?: OfficeIdentityService;
+  executiveProfileService?: ExecutiveProfileService;
   contactService: ContactService;
 }
 
@@ -166,6 +169,16 @@ export class HttpAdapter {
         webAppBootstrapSecret,
         sessions,
         pool,
+      });
+    }
+
+    // Executive profile routes — same auth pattern as identity routes.
+    // Only registered when the service is available (non-fatal initialization).
+    if (webAppBootstrapSecret && this.config.executiveProfileService) {
+      await this.app.register(executiveRoutes, {
+        executiveProfileService: this.config.executiveProfileService,
+        webAppBootstrapSecret,
+        sessions,
       });
     }
 

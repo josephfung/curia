@@ -72,6 +72,7 @@ import { bootstrapCeoContact } from './contacts/ceo-bootstrap.js';
 import { AutonomyService } from './autonomy/autonomy-service.js';
 import { BrowserService } from './browser/browser-service.js';
 import { OfficeIdentityService } from './identity/service.js';
+import { ExecutiveProfileService } from './executive/service.js';
 import { SensitivityClassifier } from './memory/sensitivity.js';
 import { DreamEngine } from './memory/dream-engine.js';
 import type { DecayConfig } from './memory/dream-engine.js';
@@ -182,6 +183,23 @@ async function main(): Promise<void> {
   } catch (err) {
     logger.fatal({ err }, 'Failed to initialize office identity service');
     process.exit(1);
+  }
+
+  // 4c. Executive profile — System-layer service that owns the executive (CEO)
+  // writing voice and style preferences. Separate from office identity (which is
+  // the assistant's persona). The executive's identity (name, title) lives in the
+  // contact system — this is purely about how the system represents them.
+  // Non-fatal on failure: drafts will use generic voice. The ${executive_voice_block}
+  // placeholder stays literal in the system prompt, making misconfiguration visible.
+  const executiveConfigPath = path.resolve(import.meta.dirname, '../config/executive-profile.yaml');
+  let executiveProfileService: ExecutiveProfileService | undefined;
+  try {
+    executiveProfileService = new ExecutiveProfileService(pool, logger, bus, executiveConfigPath);
+    await executiveProfileService.initialize();
+    logger.info('Executive profile initialized');
+  } catch (err) {
+    logger.error({ err }, 'Failed to initialize executive profile service — CEO voice guidance unavailable; drafts will use generic voice');
+    executiveProfileService = undefined;
   }
 
   // 5. LLM provider — hard fail early rather than discovering the missing
@@ -357,6 +375,27 @@ async function main(): Promise<void> {
     }
   } else {
     logger.warn('CEO_PRIMARY_EMAIL not set — CEO contact bootstrap skipped. Set this to prevent CEO emails from being held on first contact.');
+  }
+
+  // Look up the CEO's display name from the contact system for the executive voice
+  // block. The name lives in the contacts table (single source of truth), not in the
+  // executive profile. Falls back to 'the executive' if no CEO contact exists.
+  let executiveDisplayName = 'the executive';
+  if (config.ceoPrimaryEmail) {
+    try {
+      const nameResult = await pool.query<{ display_name: string }>(
+        `SELECT c.display_name
+         FROM contacts c
+         JOIN contact_channel_identities ci ON ci.contact_id = c.id
+         WHERE ci.channel = 'email' AND ci.channel_identifier = $1`,
+        [config.ceoPrimaryEmail],
+      );
+      if (nameResult.rows[0]?.display_name) {
+        executiveDisplayName = nameResult.rows[0].display_name;
+      }
+    } catch (err) {
+      logger.warn({ err }, 'Failed to look up CEO display name for executive voice block — using fallback');
+    }
   }
 
   // Held messages — stores messages from unknown senders pending CEO review.
@@ -802,6 +841,11 @@ async function main(): Promise<void> {
       // every task, so identity hot-reloads (file watcher or API PUT) take effect on the
       // next turn without a restart.
       officeIdentityService: agentConfig.role === 'coordinator' ? officeIdentityService : undefined,
+      // The coordinator gets per-turn executive voice block injection. This replaces the
+      // ${executive_voice_block} placeholder with the CEO's writing voice guidance, compiled
+      // fresh each turn for hot-reload support. The display name comes from the contact system.
+      executiveProfileService: agentConfig.role === 'coordinator' ? executiveProfileService : undefined,
+      executiveDisplayName: agentConfig.role === 'coordinator' ? executiveDisplayName : undefined,
       // Curia's own contact details — sourced from NYLAS_SELF_EMAIL and SIGNAL_PHONE_NUMBER.
       // Injected per-task so the coordinator knows which accounts to use when MCP tools
       // ask for an email address or phone number (e.g. workspace-mcp's user_google_email).
@@ -997,6 +1041,7 @@ async function main(): Promise<void> {
     skillNames: skillRegistry.list().map(s => s.manifest.name),
     schedulerService,
     identityService: officeIdentityService,
+    executiveProfileService,
     contactService,
   });
 
@@ -1028,6 +1073,13 @@ async function main(): Promise<void> {
       await officeIdentityService.stop();
     } catch (err) {
       logger.error({ err }, 'Error stopping office identity file watcher during shutdown');
+    }
+    if (executiveProfileService) {
+      try {
+        await executiveProfileService.stop();
+      } catch (err) {
+        logger.error({ err }, 'Error stopping executive profile file watcher during shutdown');
+      }
     }
     try {
       await httpAdapter.stop();
