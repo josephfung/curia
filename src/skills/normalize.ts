@@ -21,7 +21,7 @@
 export function normalizeKeysToSnakeCase(
   obj: Record<string, unknown>,
 ): Record<string, unknown> {
-  const result: Record<string, unknown> = {};
+  const result: Record<string, unknown> = Object.create(null);
 
   for (const [key, value] of Object.entries(obj)) {
     const snakeKey = key.replace(/[A-Z]/g, c => `_${c.toLowerCase()}`);
@@ -30,7 +30,7 @@ export function normalizeKeysToSnakeCase(
     // snake_case keys always take precedence — if a snake_case key was
     // already set by itself (or will be), don't let a camelCase variant
     // overwrite it.
-    if (isAlreadySnakeCase || !(snakeKey in result)) {
+    if (isAlreadySnakeCase || !Object.hasOwn(result, snakeKey)) {
       result[snakeKey] = value;
     }
   }
