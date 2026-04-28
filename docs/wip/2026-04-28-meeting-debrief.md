@@ -17,7 +17,7 @@
 ### New files
 | File | Responsibility |
 |---|---|
-| `src/db/migrations/029_create_conversation_claims.sql` | Postgres table for durable claims |
+| `src/db/migrations/NNN_create_conversation_claims.sql` | Postgres table for durable claims (next available number after rebase — verify with `ls src/db/migrations/ \| sort`) |
 | `src/dispatch/conversation-claims.ts` | ConversationClaimRegistry class (CRUD + expiry) |
 | `src/dispatch/conversation-claims.test.ts` | Unit tests for claim registry |
 | `skills/claim-conversation/skill.json` | Manifest for claim/release skill |
@@ -43,12 +43,12 @@
 ## Task 1: Conversation Claims — DB Migration
 
 **Files:**
-- Create: `src/db/migrations/029_create_conversation_claims.sql`
+- Create: `src/db/migrations/NNN_create_conversation_claims.sql` (verify next available number with `ls src/db/migrations/ | sort`)
 
 - [ ] **Step 1: Write the migration**
 
 ```sql
--- 029_create_conversation_claims.sql
+-- NNN_create_conversation_claims.sql
 --
 -- Conversation claims allow specialist agents to own user-facing
 -- conversation threads for proactive communication patterns.
