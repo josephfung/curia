@@ -7,6 +7,7 @@
 
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
 import type { WritingVoice } from '../../src/executive/types.js';
+import { normalizeKeysToSnakeCase } from '../../src/skills/normalize.js';
 
 // Shape of the partial input the LLM provides. All fields are optional —
 // only the fields being changed need to be included.
@@ -27,10 +28,16 @@ export class ExecutiveProfileUpdateHandler implements SkillHandler {
       return { success: false, error: 'executive-profile-update requires executiveProfileService in context. Is the executive profile configured?' };
     }
 
-    const { writing_voice } = ctx.input as { writing_voice?: PartialWritingVoiceInput };
-    if (!writing_voice || typeof writing_voice !== 'object' || Array.isArray(writing_voice)) {
+    const { writing_voice: rawVoice } = ctx.input as { writing_voice?: Record<string, unknown> };
+    if (!rawVoice || typeof rawVoice !== 'object' || Array.isArray(rawVoice)) {
       return { success: false, error: 'Input must include a "writing_voice" object with the fields to update.' };
     }
+
+    // Normalize camelCase keys to snake_case — the tool schema defines writing_voice
+    // as a bare "object" with no nested properties, so the LLM may emit either convention.
+    // sign_off is the only current field affected (all others are single words), but this
+    // guards against future multi-word fields too.
+    const writing_voice = normalizeKeysToSnakeCase(rawVoice) as PartialWritingVoiceInput;
 
     try {
       // Read the current profile as the base for merging.

@@ -13,6 +13,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Fixed
+
+- **executive-profile-update** sign_off field not persisting when LLM emits camelCase key (`signOff`) instead of snake_case (`sign_off`). Added shared `normalizeKeysToSnakeCase` utility in `src/skills/normalize.ts` that any handler can use for bare-object inputs.
+
 ---
 
 ## [0.23.0] — 2026-04-28 — "Own Voice"
