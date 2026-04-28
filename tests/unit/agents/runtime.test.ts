@@ -1354,4 +1354,273 @@ describe('AgentRuntime chatWithRetry', () => {
       expect(systemText).not.toContain('risk score');
     });
   });
+
+  // ---------------------------------------------------------------------------
+  // Google Workspace account injection (#387)
+  // ---------------------------------------------------------------------------
+
+  describe('Google Workspace account injection', () => {
+    it('injects Google Workspace accounts into system prompt for all agents', async () => {
+      const logger = createLogger('error');
+      const bus = new EventBus(logger);
+      const capturedMessages: Array<{ role: string; content: string | unknown }> = [];
+      const provider: LLMProvider = {
+        id: 'mock',
+        chat: vi.fn().mockImplementation(async (params: { messages: Array<{ role: string; content: string | unknown }> }) => {
+          capturedMessages.push(...params.messages);
+          return { type: 'text' as const, content: 'ok', usage: { inputTokens: 10, outputTokens: 5 } };
+        }),
+      };
+
+      // Specialist agent (not coordinator) — should still get Google Workspace accounts
+      const agent = new AgentRuntime({
+        agentId: 'essay-editor',
+        systemPrompt: 'You are an essay editor.',
+        provider,
+        bus,
+        logger,
+        googleWorkspaceAccounts: [
+          { name: 'curia', googleEmail: 'curia@gmail.com', primary: true },
+          { name: 'joseph', googleEmail: 'joseph@example.com', primary: false },
+        ],
+      });
+      agent.register();
+
+      const task = createAgentTask({
+        agentId: 'essay-editor',
+        conversationId: 'conv-gw',
+        channelId: 'internal',
+        senderId: 'coordinator',
+        content: 'Polish this essay',
+        parentEventId: 'parent-gw',
+      });
+      await bus.publish('dispatch', task);
+
+      const systemPrompt = capturedMessages.find(m => m.role === 'system')?.content as string;
+      expect(systemPrompt).toContain('Your Google Workspace Accounts');
+      expect(systemPrompt).toContain('curia: curia@gmail.com (primary)');
+      expect(systemPrompt).toContain('joseph: joseph@example.com');
+      // Non-primary should NOT have (primary) marker
+      expect(systemPrompt).not.toContain('joseph@example.com (primary)');
+    });
+
+    it('does not inject Google Workspace block when no accounts configured', async () => {
+      const logger = createLogger('error');
+      const bus = new EventBus(logger);
+      const capturedMessages: Array<{ role: string; content: string | unknown }> = [];
+      const provider: LLMProvider = {
+        id: 'mock',
+        chat: vi.fn().mockImplementation(async (params: { messages: Array<{ role: string; content: string | unknown }> }) => {
+          capturedMessages.push(...params.messages);
+          return { type: 'text' as const, content: 'ok', usage: { inputTokens: 10, outputTokens: 5 } };
+        }),
+      };
+
+      const agent = new AgentRuntime({
+        agentId: 'coordinator',
+        systemPrompt: 'You are an assistant.',
+        provider,
+        bus,
+        logger,
+        // googleWorkspaceAccounts omitted
+      });
+      agent.register();
+
+      const task = createAgentTask({
+        agentId: 'coordinator',
+        conversationId: 'conv-no-gw',
+        channelId: 'cli',
+        senderId: 'user',
+        content: 'Hello',
+        parentEventId: 'parent-no-gw',
+      });
+      await bus.publish('dispatch', task);
+
+      const systemPrompt = capturedMessages.find(m => m.role === 'system')?.content as string;
+      expect(systemPrompt).not.toContain('Google Workspace');
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Delegate timeout injection from agent config (#387)
+  // ---------------------------------------------------------------------------
+
+  describe('delegate timeout injection from agent registry', () => {
+    it('injects timeout_ms from target agent expectedDurationSeconds', async () => {
+      const logger = createLogger('error');
+      const bus = new EventBus(logger);
+
+      // Mock provider: first call returns delegate tool_use, second call returns text
+      let callCount = 0;
+      const provider: LLMProvider = {
+        id: 'mock',
+        chat: vi.fn().mockImplementation(async () => {
+          callCount++;
+          if (callCount === 1) {
+            return {
+              type: 'tool_use' as const,
+              toolCalls: [{ id: 'call-delegate', name: 'delegate', input: { agent: 'essay-editor', task: 'polish essay' } }],
+              usage: { inputTokens: 100, outputTokens: 50 },
+            };
+          }
+          return { type: 'text' as const, content: 'Done', usage: { inputTokens: 200, outputTokens: 60 } };
+        }),
+      };
+
+      // Mock agent registry with expectedDurationSeconds
+      const { AgentRegistry } = await import('../../../src/agents/agent-registry.js');
+      const agentRegistry = new AgentRegistry();
+      agentRegistry.register('essay-editor', { role: 'specialist', description: 'Essay editor', expectedDurationSeconds: 600 });
+
+      const mockExecution = {
+        invoke: vi.fn().mockResolvedValue({ success: true, data: { response: 'Polished!', agent: 'essay-editor' } }),
+      } as unknown as ExecutionLayer;
+
+      const agent = new AgentRuntime({
+        agentId: 'coordinator',
+        systemPrompt: 'You are an assistant.',
+        provider,
+        bus,
+        logger,
+        executionLayer: mockExecution,
+        skillToolDefs: [{ name: 'delegate', description: 'Delegate', input_schema: { type: 'object' as const, properties: { agent: { type: 'string' }, task: { type: 'string' } }, required: ['agent', 'task'] } }],
+        agentRegistry,
+      });
+      agent.register();
+
+      const task = createAgentTask({
+        agentId: 'coordinator',
+        conversationId: 'conv-timeout',
+        channelId: 'cli',
+        senderId: 'user',
+        content: 'Polish my essay',
+        parentEventId: 'parent-timeout',
+      });
+      await bus.publish('dispatch', task);
+
+      // Verify the execution layer received the injected timeout_ms
+      expect(mockExecution.invoke).toHaveBeenCalledWith(
+        'delegate',
+        expect.objectContaining({ timeout_ms: 600000 }),
+        undefined,
+        expect.any(Object),
+      );
+    });
+
+    it('does not inject timeout_ms when LLM already provides one', async () => {
+      const logger = createLogger('error');
+      const bus = new EventBus(logger);
+
+      let callCount = 0;
+      const provider: LLMProvider = {
+        id: 'mock',
+        chat: vi.fn().mockImplementation(async () => {
+          callCount++;
+          if (callCount === 1) {
+            return {
+              type: 'tool_use' as const,
+              toolCalls: [{ id: 'call-delegate-2', name: 'delegate', input: { agent: 'essay-editor', task: 'polish', timeout_ms: 30000 } }],
+              usage: { inputTokens: 100, outputTokens: 50 },
+            };
+          }
+          return { type: 'text' as const, content: 'Done', usage: { inputTokens: 200, outputTokens: 60 } };
+        }),
+      };
+
+      const { AgentRegistry } = await import('../../../src/agents/agent-registry.js');
+      const agentRegistry = new AgentRegistry();
+      agentRegistry.register('essay-editor', { role: 'specialist', description: 'Essay editor', expectedDurationSeconds: 600 });
+
+      const mockExecution = {
+        invoke: vi.fn().mockResolvedValue({ success: true, data: { response: 'Polished!', agent: 'essay-editor' } }),
+      } as unknown as ExecutionLayer;
+
+      const agent = new AgentRuntime({
+        agentId: 'coordinator',
+        systemPrompt: 'You are an assistant.',
+        provider,
+        bus,
+        logger,
+        executionLayer: mockExecution,
+        skillToolDefs: [{ name: 'delegate', description: 'Delegate', input_schema: { type: 'object' as const, properties: {}, required: [] } }],
+        agentRegistry,
+      });
+      agent.register();
+
+      const task = createAgentTask({
+        agentId: 'coordinator',
+        conversationId: 'conv-timeout-2',
+        channelId: 'cli',
+        senderId: 'user',
+        content: 'Polish essay',
+        parentEventId: 'parent-timeout-2',
+      });
+      await bus.publish('dispatch', task);
+
+      // LLM's explicit timeout_ms should be preserved, not overwritten
+      expect(mockExecution.invoke).toHaveBeenCalledWith(
+        'delegate',
+        expect.objectContaining({ timeout_ms: 30000 }),
+        undefined,
+        expect.any(Object),
+      );
+    });
+
+    it('falls back to default when agent has no expectedDurationSeconds', async () => {
+      const logger = createLogger('error');
+      const bus = new EventBus(logger);
+
+      let callCount = 0;
+      const provider: LLMProvider = {
+        id: 'mock',
+        chat: vi.fn().mockImplementation(async () => {
+          callCount++;
+          if (callCount === 1) {
+            return {
+              type: 'tool_use' as const,
+              toolCalls: [{ id: 'call-delegate-3', name: 'delegate', input: { agent: 'research-analyst', task: 'research' } }],
+              usage: { inputTokens: 100, outputTokens: 50 },
+            };
+          }
+          return { type: 'text' as const, content: 'Done', usage: { inputTokens: 200, outputTokens: 60 } };
+        }),
+      };
+
+      const { AgentRegistry } = await import('../../../src/agents/agent-registry.js');
+      const agentRegistry = new AgentRegistry();
+      // No expectedDurationSeconds — should fall through to delegate handler's default
+      agentRegistry.register('research-analyst', { role: 'specialist', description: 'Research' });
+
+      const mockExecution = {
+        invoke: vi.fn().mockResolvedValue({ success: true, data: { response: 'Found info', agent: 'research-analyst' } }),
+      } as unknown as ExecutionLayer;
+
+      const agent = new AgentRuntime({
+        agentId: 'coordinator',
+        systemPrompt: 'You are an assistant.',
+        provider,
+        bus,
+        logger,
+        executionLayer: mockExecution,
+        skillToolDefs: [{ name: 'delegate', description: 'Delegate', input_schema: { type: 'object' as const, properties: {}, required: [] } }],
+        agentRegistry,
+      });
+      agent.register();
+
+      const task = createAgentTask({
+        agentId: 'coordinator',
+        conversationId: 'conv-timeout-3',
+        channelId: 'cli',
+        senderId: 'user',
+        content: 'Research this',
+        parentEventId: 'parent-timeout-3',
+      });
+      await bus.publish('dispatch', task);
+
+      // No timeout_ms should be injected — the delegate handler will use its 90s default
+      const invokeCall = (mockExecution.invoke as ReturnType<typeof vi.fn>).mock.calls[0];
+      const inputArg = invokeCall?.[1] as Record<string, unknown>;
+      expect(inputArg).not.toHaveProperty('timeout_ms');
+    });
+  });
 });
