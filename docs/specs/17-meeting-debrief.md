@@ -348,13 +348,28 @@ These are out of scope for this feature but identified during design:
 
 ---
 
-## 12. Implementation Sequence
+## 12. Implementation Status
 
-1. **Conversation claims infrastructure** — ADR-017 + Postgres migration + claim registry + dispatcher change + `claim-conversation` skill + tests
-2. **Meeting-debrief agent** — YAML config, detection pipeline (Stage 1 + Stage 2), state management in progress JSON
-3. **Prompt delivery** — outbound message via configured channel, claim registration, reminder scheduling
-4. **Response processing** — parse notes, execute follow-up actions, confirm on thread, cross-specialist work via Bullpen
-5. **Debrief status skill** — read-only skill for coordinator to query state
-6. **Preference learning** — store CEO feedback as KG facts, wire into Stage 2 judgment
-7. **Audit + cleanup** — audit events on state transitions, progress pruning, claim expiry
-8. **Integration + smoke tests** — end-to-end verification
+| Number | Item | Status |
+|---|---|---|
+| 0 | Proactive outbound Signal from scheduled jobs (#374) — prerequisite | Not Done |
+| 1 | ADR-017 — conversation claims architectural decision record | Not Done |
+| 2 | Conversation claims DB migration (`conversation_claims` table) | Not Done |
+| 3 | `ConversationClaimRegistry` — Postgres-backed claim CRUD + TTL expiry | Not Done |
+| 4 | Dispatcher integration — claim check before coordinator routing | Not Done |
+| 5 | `claim-conversation` skill — agents claim/release conversation threads | Not Done |
+| 6 | `debrief:` config block in `config/default.yaml` + startup validation | Not Done |
+| 7 | `meeting-debrief` agent YAML config (prompt, skills, schedule) | Not Done |
+| 8 | Detection pipeline — calendar scan + internal/external classification | Not Done |
+| 9 | LLM judgment — Stage 2 contextual assessment of debrief-worthiness | Not Done |
+| 10 | Prompt delivery — outbound via configured channel, claim registration | Not Done |
+| 11 | Reminder scheduling — one-shot job for nudge if no response | Not Done |
+| 12 | Response processing — parse CEO notes, execute follow-up actions | Not Done |
+| 13 | Cross-specialist work via Bullpen — research delegation pattern | Not Done |
+| 14 | State persistence — `scheduler-report` context between cron runs | Not Done |
+| 15 | `debrief-status` skill — coordinator queries pending/completed debriefs | Not Done |
+| 16 | Preference learning — store CEO feedback as KG facts, wire into judgment | Not Done |
+| 17 | Audit events — state transitions, expired entry pruning, claim lifecycle | Not Done |
+| 18 | Unit tests — claim registry, detection pipeline, state management | Not Done |
+| 19 | Integration tests — end-to-end flows, reminder, preference learning | Not Done |
+| 20 | Smoke tests — GPT-4o judge scenarios for debrief detection and actions | Not Done |
