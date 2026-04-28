@@ -15,7 +15,16 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **Specialist delegation** — three compounding failures that caused essay-editor (and any long-running specialist) to fail reliably (#387):
+  - **Google Workspace account hallucination** — agents now receive their Google Workspace account list in the system prompt, eliminating LLM-guessed email addresses for MCP tools. New `channel_accounts.google_workspace` config section with env-var resolution.
+  - **Delegate timeout too short** — agents can now declare `expected_duration_seconds` in their YAML config. The runtime injects the appropriate `timeout_ms` into delegate calls, replacing the fixed 90s default for agents that need more time.
+  - **No acknowledgment on synchronous channels** — the coordinator now sends a brief ack before delegating long-running tasks on cli/http/signal channels, so the user isn't left watching a dead screen.
 - **executive-profile-update** sign_off field not persisting when LLM emits camelCase key (`signOff`) instead of snake_case (`sign_off`). Added shared `normalizeKeysToSnakeCase` utility in `src/skills/normalize.ts` that any handler can use for bare-object inputs.
+
+### Changed
+
+- **Channel account injection** — `channelAccounts` (email, phone) and Google Workspace accounts are now injected into ALL agents' system prompts, not just the coordinator. Specialist agents need identity context too.
+- **Agent YAML schema** *(public API surface)* — new optional `expected_duration_seconds` field (integer, minimum 1).
 
 ---
 
