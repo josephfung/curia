@@ -13,6 +13,7 @@ import { DEFAULT_ERROR_BUDGET, type AgentError, type ErrorBudget } from '../erro
 import { AutonomyService } from '../autonomy/autonomy-service.js';
 import { formatTimeContextBlock } from '../time/time-context.js';
 import type { OfficeIdentityService } from '../identity/service.js';
+import type { ExecutiveProfileService } from '../executive/service.js';
 import { formatBullpenContext, type BullpenService } from '../memory/bullpen.js';
 
 export interface AgentConfig {
@@ -39,6 +40,13 @@ export interface AgentConfig {
    *  This enables hot-reload: identity changes via the API or file watcher take effect
    *  on the very next coordinator turn without a restart. Only the coordinator uses this. */
   officeIdentityService?: OfficeIdentityService;
+  /** Optional executive profile service — when provided, ${executive_voice_block} in
+   *  the system prompt is replaced with the freshly-compiled writing voice block on
+   *  every task turn. The executive's display name is needed for prompt compilation. */
+  executiveProfileService?: ExecutiveProfileService;
+  /** The executive's display name from the contact system. Used by the executive voice
+   *  block compiler to personalize prompt guidance (e.g. "When drafting under Joseph's name..."). */
+  executiveDisplayName?: string;
   /** IANA timezone name (e.g. "America/Toronto"). When provided, the current date/time
    *  block is appended to the system prompt on every task so the date is always fresh.
    *  If omitted, no time block is injected. */
@@ -156,7 +164,7 @@ export class AgentRuntime {
   }
 
   private async processTask(taskEvent: AgentTaskEvent): Promise<void> {
-    const { agentId, systemPrompt, provider, bus, logger, memory, executionLayer, skillToolDefs, autonomyService, officeIdentityService } = this.config;
+    const { agentId, systemPrompt, provider, bus, logger, memory, executionLayer, skillToolDefs, autonomyService, officeIdentityService, executiveProfileService, executiveDisplayName } = this.config;
     const { content, conversationId } = taskEvent.payload;
 
     // Per-task mutable working copy of the tool list so discovered skills can be
@@ -183,6 +191,22 @@ export class AgentRuntime {
       }
     }
 
+    // Replace the ${executive_voice_block} placeholder with the freshly-compiled
+    // writing voice block. Same per-turn pattern as the identity block above —
+    // hot-reloaded profile changes take effect on the next coordinator turn.
+    // The executive's display name comes from the contact system (not the profile)
+    // so that identity data has a single source of truth.
+    if (executiveProfileService) {
+      try {
+        effectiveSystemPrompt = effectiveSystemPrompt.replace(
+          '${executive_voice_block}',
+          executiveProfileService.compileWritingVoiceBlock(executiveDisplayName ?? 'the executive'),
+        );
+      } catch (err) {
+        logger.error({ err, agentId }, 'Failed to compile executive voice block — ${executive_voice_block} placeholder left in prompt');
+      }
+    }
+
     // Load the current autonomy config and append its behavioral block to the
     // system prompt. This runs per-task (not at startup) so a CEO score change
     // mid-session takes effect on Curia's next action without a restart.
@@ -190,7 +214,7 @@ export class AgentRuntime {
       try {
         const autonomyConfig = await autonomyService.getConfig();
         if (autonomyConfig) {
-          effectiveSystemPrompt = systemPrompt + '\n\n' + AutonomyService.formatPromptBlock(autonomyConfig);
+          effectiveSystemPrompt += '\n\n' + AutonomyService.formatPromptBlock(autonomyConfig);
         }
       } catch (err) {
         // An unexpected DB error loading the autonomy config should not abort the task entirely.
