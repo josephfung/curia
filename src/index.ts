@@ -344,9 +344,12 @@ async function main(): Promise<void> {
   // status=confirmed and verified=true before the email adapter starts polling.
   // Without this, the first inbound email from the CEO auto-creates them as
   // provisional (the extractParticipants default), causing their messages to be held.
+  // Also creates (or backfills) a KG person node so entity context enrichment works
+  // for the CEO. See issue #380.
   if (config.ceoPrimaryEmail) {
     try {
-      await bootstrapCeoContact(config.ceoPrimaryEmail, 'CEO', pool, logger);
+      const ceoBootstrap = await bootstrapCeoContact(config.ceoPrimaryEmail, 'CEO', pool, logger);
+      logger.info({ contactId: ceoBootstrap.contactId, kgNodeId: ceoBootstrap.kgNodeId }, 'CEO identity ready');
     } catch (err) {
       // Non-fatal: log and continue. Severity depends on whether the email adapter is active:
       // - With email configured: the CEO's first message will be held if the contact doesn't

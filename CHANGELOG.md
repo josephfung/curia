@@ -21,6 +21,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **CEO entity context enrichment** — `bootstrapCeoContact()` now creates a KG person node and links it via `kg_node_id` on the CEO contact. Previously the contact was created with `kg_node_id = NULL`, making entity enrichment, standing instructions, and relationship queries non-functional for the CEO. Existing contacts without a KG node are backfilled automatically on next startup. Closes #380.
+
 - **Specialist delegation** — three compounding failures that caused essay-editor (and any long-running specialist) to fail reliably (#387):
   - **Google Workspace account hallucination** — agents now receive their Google Workspace account list in the system prompt, eliminating LLM-guessed email addresses for MCP tools. New `channel_accounts.google_workspace` config section with env-var resolution.
   - **Delegate timeout too short** — agents can now declare `expected_duration_seconds` in their YAML config. The runtime injects the appropriate `timeout_ms` into delegate calls, replacing the fixed 90s default for agents that need more time.
