@@ -79,6 +79,10 @@
         "max_cost_usd": { "type": "number", "minimum": 0 },
         "max_errors": { "type": "integer", "minimum": 1 }
       }
+    },
+    "inject_specialists": {
+      "type": "boolean",
+      "description": "When true, ${available_specialists} in the system_prompt is replaced at bootstrap with the list of registered specialist agents."
     }
   }
 }
