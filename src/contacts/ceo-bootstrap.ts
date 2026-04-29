@@ -168,18 +168,36 @@ export async function bootstrapCeoContact(
         [ceoPrimaryEmail],
       );
       if (winner.rows[0]) {
+        const winnerContactId = winner.rows[0].contact_id;
         let winnerKgNodeId = winner.rows[0].kg_node_id;
         if (!winnerKgNodeId) {
           // Winner ran old code — link the orphaned KG node we already created to them.
           await pool.query(
             `UPDATE contacts SET kg_node_id = $1, updated_at = now() WHERE id = $2 AND kg_node_id IS NULL`,
-            [kgNodeId, winner.rows[0].contact_id],
+            [kgNodeId, winnerContactId],
           );
-          winnerKgNodeId = kgNodeId;
+          // Re-SELECT to confirm the rescue UPDATE landed — a third concurrent process may
+          // have beaten us to it, in which case the winner's kg_node_id is theirs, not ours.
+          const recheck = await pool.query<{ kg_node_id: string | null }>(
+            `SELECT kg_node_id FROM contacts WHERE id = $1`,
+            [winnerContactId],
+          );
+          winnerKgNodeId = recheck.rows[0]?.kg_node_id ?? null;
+          if (!winnerKgNodeId) {
+            throw new Error(
+              `ceo-bootstrap: winner contact ${winnerContactId} still has no kg_node_id after rescue UPDATE — inspect contacts table`,
+            );
+          }
         }
-        logger.info({ contactId: winner.rows[0].contact_id, kgNodeId: winnerKgNodeId, email: ceoPrimaryEmail }, 'ceo-bootstrap: concurrent startup race resolved — existing CEO contact used');
-        return { contactId: winner.rows[0].contact_id, kgNodeId: winnerKgNodeId, alreadyExisted: true };
+        logger.info({ contactId: winnerContactId, kgNodeId: winnerKgNodeId, email: ceoPrimaryEmail }, 'ceo-bootstrap: concurrent startup race resolved — existing CEO contact used');
+        return { contactId: winnerContactId, kgNodeId: winnerKgNodeId, alreadyExisted: true };
       }
+      // 23505 fired but the winner re-query returned no rows — the winning contact may have
+      // been deleted between the violation and the re-query, or a different constraint fired.
+      logger.warn(
+        { pgCode, email: ceoPrimaryEmail },
+        'ceo-bootstrap: 23505 unique violation but winner re-query returned no rows — re-throwing',
+      );
     }
     throw err;
   } finally {
@@ -202,10 +220,11 @@ async function insertKgPersonNode(displayName: string, pool: DbPool): Promise<st
      RETURNING id`,
     [displayName],
   );
-  if (!result.rows[0]) {
-    throw new Error('ceo-bootstrap: INSERT INTO kg_nodes returned no rows — check migration 004 was applied');
+  const id = result.rows[0]?.id;
+  if (!id) {
+    throw new Error('ceo-bootstrap: INSERT INTO kg_nodes returned no rows or no id — check migration 004 was applied');
   }
-  return result.rows[0].id;
+  return id;
 }
 
 /**
