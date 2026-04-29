@@ -15,6 +15,14 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **email-triage specialist agent** (`agents/email-triage.yaml`): new specialist that owns
+  observation-mode inbox triage end-to-end. Classifies inbound email into five categories
+  (URGENT, ACTIONABLE, NEEDS DRAFT, LEAVE FOR CEO, NOISE), executes email-domain actions
+  directly, and routes out-of-domain ACTIONABLE items via bullpen. Capability-aware:
+  consults the available-specialists list to determine the current ACTIONABLE scope rather
+  than hardcoding action types.
+- **`inject_specialists` YAML field**: opt-in mechanism for specialist agents that need the
+  `${available_specialists}` runtime injection (previously coordinator-only).
 - **Proactive Signal sends from scheduled jobs** — `signal-send` skill pinned in coordinator's tool list so it is always available during scheduler runs (no extra discovery turn required). Closes #374, unblocks spec 17 item 0 (meeting-debrief prerequisite).
 - **Missing coordinator skills pinned** — `contact-rename`, `contact-set-trust`, `memory-query`, `memory-store`, `image-generate`, and `skill-registry` added to the coordinator's `pinned_skills` list. These skills existed and were functional but were absent from the pinned list, causing the coordinator to claim it lacked capabilities it actually had (e.g. renaming a contact's display name).
 - **CLAUDE.md: pin skills checklist step** — "New Skill" instructions now include an explicit step to add the skill to `pinned_skills` in at least one agent YAML, with a note on the infrastructure-skill exception.
@@ -31,6 +39,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
+- **Coordinator**: removed ~45 lines of observation-mode triage protocol; replaced with a
+  ~15-line delegation rule that immediately hands off `[OBSERVATION MODE]` messages to the
+  `email-triage` specialist. Coordinator echoes the classification keyword in its own
+  response so the dispatcher's classification extraction is unchanged.
 - **Channel account injection** — `channelAccounts` (email, phone) and Google Workspace accounts are now injected into ALL agents' system prompts, not just the coordinator. Specialist agents need identity context too.
 - **Agent YAML schema** *(public API surface)* — new optional `expected_duration_seconds` field (integer, minimum 1).
 
