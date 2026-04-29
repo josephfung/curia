@@ -16,6 +16,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Added
 
 - **Proactive Signal sends from scheduled jobs** — `signal-send` skill pinned in coordinator's tool list so it is always available during scheduler runs (no extra discovery turn required). Closes #374, unblocks spec 17 item 0 (meeting-debrief prerequisite).
+- **Missing coordinator skills pinned** — `contact-rename`, `contact-set-trust`, `memory-query`, `memory-store`, `image-generate`, and `skill-registry` added to the coordinator's `pinned_skills` list. These skills existed and were functional but were absent from the pinned list, causing the coordinator to claim it lacked capabilities it actually had (e.g. renaming a contact's display name).
+- **CLAUDE.md: pin skills checklist step** — "New Skill" instructions now include an explicit step to add the skill to `pinned_skills` in at least one agent YAML, with a note on the infrastructure-skill exception.
 
 ### Fixed
 

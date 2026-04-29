@@ -68,7 +68,8 @@ Cross-cutting: Audit Logger, Memory Engine, Scheduler.
 1. Create `skills/<name>/skill.json` (manifest) + `handler.ts`
 2. Declare permissions and secrets in the manifest
 3. Write `handler.test.ts`
-4. **Timestamps:** When a skill returns timestamps for user-facing display, use `toLocalIso()` from `src/time/timestamp.ts` to convert to the user's local timezone (available as `ctx.timezone`). Never return raw UTC Z-suffix strings for times the user will see — LLMs cannot reliably perform timezone conversion. Include `displayTimezone: formatDisplayTimezone(ctx.timezone)` in the result data so the LLM can label its output.
+4. **Pin it to at least one agent.** Add the skill name to `pinned_skills` in the relevant agent YAML (`agents/coordinator.yaml` for most skills). A skill that isn't pinned to any agent is invisible to that agent unless dynamic discovery happens to surface it — which is unreliable. Exception: pure infrastructure skills invoked by the system (e.g. `extract-facts`, `extract-relationships`, `scheduler-report`) intentionally have no agent owner.
+5. **Timestamps:** When a skill returns timestamps for user-facing display, use `toLocalIso()` from `src/time/timestamp.ts` to convert to the user's local timezone (available as `ctx.timezone`). Never return raw UTC Z-suffix strings for times the user will see — LLMs cannot reliably perform timezone conversion. Include `displayTimezone: formatDisplayTimezone(ctx.timezone)` in the result data so the LLM can label its output.
 
 ### Autonomy Awareness
 
