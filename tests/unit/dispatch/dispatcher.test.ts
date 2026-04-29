@@ -881,6 +881,160 @@ describe('Dispatcher — observation mode preamble', () => {
   });
 });
 
+describe('Dispatcher — CC role preamble', () => {
+  it('prepends [OWNER CC] preamble when curiaRole is "cc"', async () => {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+
+    const tasks: AgentTaskEvent[] = [];
+    bus.subscribe('agent.task', 'agent', (e) => tasks.push(e as AgentTaskEvent));
+
+    const dispatcher = new Dispatcher({ bus, logger });
+    dispatcher.register();
+
+    const event = createInboundMessage({
+      conversationId: 'email:thread-cc-intro',
+      channelId: 'email',
+      senderId: 'joseph@example.com',
+      content: 'Hey Nik, feel free to hit up my EA.',
+      metadata: { curiaRole: 'cc', primaryRecipientEmails: ['nik@example.com'] },
+    });
+
+    await bus.publish('channel', event);
+
+    expect(tasks).toHaveLength(1);
+    const content = tasks[0]!.payload.content;
+    expect(content).toContain('[OWNER CC');
+    expect(content).toContain('nik@example.com');
+    expect(content).toContain('Hey Nik, feel free to hit up my EA.');
+  });
+
+  it('does not prepend [OWNER CC] preamble when curiaRole is "to"', async () => {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+
+    const tasks: AgentTaskEvent[] = [];
+    bus.subscribe('agent.task', 'agent', (e) => tasks.push(e as AgentTaskEvent));
+
+    const dispatcher = new Dispatcher({ bus, logger });
+    dispatcher.register();
+
+    const event = createInboundMessage({
+      conversationId: 'email:thread-direct',
+      channelId: 'email',
+      senderId: 'joseph@example.com',
+      content: 'Can you look up Nik for me?',
+      metadata: { curiaRole: 'to', primaryRecipientEmails: [] },
+    });
+
+    await bus.publish('channel', event);
+
+    expect(tasks).toHaveLength(1);
+    const content = tasks[0]!.payload.content;
+    expect(content).not.toContain('[OWNER CC');
+    expect(content).toBe('Can you look up Nik for me?');
+  });
+
+  it('does not prepend [OWNER CC] preamble when curiaRole metadata is absent', async () => {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+
+    const tasks: AgentTaskEvent[] = [];
+    bus.subscribe('agent.task', 'agent', (e) => tasks.push(e as AgentTaskEvent));
+
+    const dispatcher = new Dispatcher({ bus, logger });
+    dispatcher.register();
+
+    const event = createInboundMessage({
+      conversationId: 'email:thread-no-role',
+      channelId: 'email',
+      senderId: 'joseph@example.com',
+      content: 'Just a plain email.',
+    });
+
+    await bus.publish('channel', event);
+
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0]!.payload.content).not.toContain('[OWNER CC');
+  });
+
+  it('does not prepend [OWNER CC] preamble for non-email channels', async () => {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+
+    const tasks: AgentTaskEvent[] = [];
+    bus.subscribe('agent.task', 'agent', (e) => tasks.push(e as AgentTaskEvent));
+
+    const dispatcher = new Dispatcher({ bus, logger });
+    dispatcher.register();
+
+    const event = createInboundMessage({
+      conversationId: 'signal:conv-1',
+      channelId: 'signal',
+      senderId: '+15551234567',
+      content: 'Hey, check this out.',
+      metadata: { curiaRole: 'cc' }, // curiaRole on non-email channel should be ignored
+    });
+
+    await bus.publish('channel', event);
+
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0]!.payload.content).not.toContain('[OWNER CC');
+  });
+
+  it('does not prepend [OWNER CC] preamble for observation-mode emails (they have their own marker)', async () => {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+
+    const tasks: AgentTaskEvent[] = [];
+    bus.subscribe('agent.task', 'agent', (e) => tasks.push(e as AgentTaskEvent));
+
+    const dispatcher = new Dispatcher({ bus, logger });
+    dispatcher.register();
+
+    const event = createInboundMessage({
+      conversationId: 'email:thread-obs-cc',
+      channelId: 'email',
+      senderId: 'someone@example.com',
+      content: 'An observed email where Curia is also CC\'d.',
+      metadata: { observationMode: true, curiaRole: 'cc', primaryRecipientEmails: ['joseph@example.com'] },
+    });
+
+    await bus.publish('channel', event);
+
+    expect(tasks).toHaveLength(1);
+    const content = tasks[0]!.payload.content;
+    expect(content).toContain('[OBSERVATION MODE');
+    expect(content).not.toContain('[OWNER CC');
+  });
+
+  it('handles missing primaryRecipientEmails gracefully', async () => {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+
+    const tasks: AgentTaskEvent[] = [];
+    bus.subscribe('agent.task', 'agent', (e) => tasks.push(e as AgentTaskEvent));
+
+    const dispatcher = new Dispatcher({ bus, logger });
+    dispatcher.register();
+
+    const event = createInboundMessage({
+      conversationId: 'email:thread-cc-no-list',
+      channelId: 'email',
+      senderId: 'joseph@example.com',
+      content: 'CC\'d without recipient list.',
+      metadata: { curiaRole: 'cc' }, // no primaryRecipientEmails
+    });
+
+    await bus.publish('channel', event);
+
+    expect(tasks).toHaveLength(1);
+    const content = tasks[0]!.payload.content;
+    expect(content).toContain('[OWNER CC');
+    expect(content).toContain('unknown recipients');
+  });
+});
+
 describe('Dispatcher — observation mode outbound suppression', () => {
   /**
    * These tests verify the dispatcher does NOT turn the coordinator's final

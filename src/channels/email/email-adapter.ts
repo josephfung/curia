@@ -222,7 +222,7 @@ export class EmailAdapter {
         }
 
         try {
-          const converted = convertNylasMessage(msg);
+          const converted = convertNylasMessage(msg, this.config.selfEmail);
 
           if (this.config.observationMode) {
             // Observation mode: Curia monitors this inbox on behalf of the CEO but is

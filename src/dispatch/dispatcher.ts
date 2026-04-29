@@ -680,6 +680,26 @@ export class Dispatcher {
         taskContent;
     }
 
+    // CC role marker: when the email adapter determined that Curia was CC'd rather than
+    // directly addressed, prepend a context block so the coordinator knows it was an
+    // observer on this email (e.g. the CEO looping Curia in on a message to a third party).
+    // Injected after the observation-mode block so it always appears first in the task
+    // content. Not injected for observation-mode emails — those already have their own
+    // preamble and are processed by the email-triage specialist, not the main CC logic.
+    if (!isObservationMode && payload.channelId === 'email') {
+      const meta = payload.metadata as Record<string, unknown> | undefined;
+      const curiaRole = meta?.curiaRole as string | undefined;
+      if (curiaRole === 'cc') {
+        const primaryRecipients = (meta?.primaryRecipientEmails as string[] | undefined) ?? [];
+        const recipientList = primaryRecipients.length > 0
+          ? primaryRecipients.join(', ')
+          : 'unknown recipients';
+        taskContent =
+          `[OWNER CC — this email was addressed to ${recipientList}; you were CC'd, not the primary recipient]\n\n` +
+          taskContent;
+      }
+    }
+
     const taskEvent = createAgentTask({
       agentId: 'coordinator',
       conversationId: payload.conversationId,

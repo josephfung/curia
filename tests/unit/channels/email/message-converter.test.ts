@@ -165,6 +165,105 @@ describe('convertNylasMessage', () => {
 });
 
 // ---------------------------------------------------------------------------
+// curiaRole and primaryRecipientEmails — CC role detection
+// ---------------------------------------------------------------------------
+
+describe('convertNylasMessage — curiaRole and primaryRecipientEmails', () => {
+  const SELF_EMAIL = 'nathan@curia.com';
+
+  it('sets curiaRole to "to" when selfEmail is in the To field', () => {
+    const result = convertNylasMessage(
+      mockMessage({ to: [{ email: SELF_EMAIL, name: 'Nathan' }] }),
+      SELF_EMAIL,
+    );
+    expect(result.metadata.curiaRole).toBe('to');
+  });
+
+  it('sets primaryRecipientEmails to empty when only selfEmail is in To', () => {
+    const result = convertNylasMessage(
+      mockMessage({ to: [{ email: SELF_EMAIL, name: 'Nathan' }] }),
+      SELF_EMAIL,
+    );
+    expect(result.metadata.primaryRecipientEmails).toEqual([]);
+  });
+
+  it('sets curiaRole to "cc" when selfEmail is in the CC field', () => {
+    const result = convertNylasMessage(
+      mockMessage({
+        to: [{ email: 'nik@example.com', name: 'Nik' }],
+        cc: [{ email: SELF_EMAIL, name: 'Nathan' }],
+      }),
+      SELF_EMAIL,
+    );
+    expect(result.metadata.curiaRole).toBe('cc');
+  });
+
+  it('populates primaryRecipientEmails from To when curiaRole is "cc"', () => {
+    const result = convertNylasMessage(
+      mockMessage({
+        to: [
+          { email: 'nik@example.com', name: 'Nik' },
+          { email: 'alice@example.com', name: 'Alice' },
+        ],
+        cc: [{ email: SELF_EMAIL, name: 'Nathan' }],
+      }),
+      SELF_EMAIL,
+    );
+    expect(result.metadata.primaryRecipientEmails).toEqual([
+      'nik@example.com',
+      'alice@example.com',
+    ]);
+  });
+
+  it('excludes selfEmail from primaryRecipientEmails when curiaRole is "to" with multiple To addresses', () => {
+    const result = convertNylasMessage(
+      mockMessage({
+        to: [
+          { email: SELF_EMAIL, name: 'Nathan' },
+          { email: 'nik@example.com', name: 'Nik' },
+        ],
+        cc: [],
+      }),
+      SELF_EMAIL,
+    );
+    expect(result.metadata.curiaRole).toBe('to');
+    expect(result.metadata.primaryRecipientEmails).toEqual(['nik@example.com']);
+  });
+
+  it('is case-insensitive when matching selfEmail', () => {
+    const result = convertNylasMessage(
+      mockMessage({
+        to: [{ email: 'nik@example.com' }],
+        cc: [{ email: 'NATHAN@CURIA.COM' }],
+      }),
+      'nathan@curia.com',
+    );
+    expect(result.metadata.curiaRole).toBe('cc');
+  });
+
+  it('defaults curiaRole to "to" when selfEmail is not found in To or CC (BCC fallback)', () => {
+    const result = convertNylasMessage(
+      mockMessage({
+        to: [{ email: 'nik@example.com' }],
+        cc: [],
+      }),
+      SELF_EMAIL,
+    );
+    // selfEmail is not in To or CC — genuine BCC; defaults to 'to' (fail-safe)
+    expect(result.metadata.curiaRole).toBe('to');
+    expect(result.metadata.primaryRecipientEmails).toEqual([]);
+  });
+
+  it('defaults curiaRole to "to" and primaryRecipientEmails to [] when selfEmail is omitted', () => {
+    // Backward-compatible: calling without selfEmail should not throw and
+    // should produce stable defaults.
+    const result = convertNylasMessage(mockMessage());
+    expect(result.metadata.curiaRole).toBe('to');
+    expect(result.metadata.primaryRecipientEmails).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // parseSenderVerified — Authentication-Results header parsing
 // ---------------------------------------------------------------------------
 

@@ -13,6 +13,15 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Added
+- **CC role detection** — `convertNylasMessage` now accepts a `selfEmail` parameter and computes `curiaRole` (`'to'` | `'cc'` | `'bcc'`) and `primaryRecipientEmails` in the converted email metadata, so the dispatcher can distinguish emails addressed directly to Curia from emails where Curia was CC'd.
+
+### Changed
+- **CC role preamble in dispatcher** — when Curia is CC'd on an email (non-observation mode), the coordinator task content is prepended with `[OWNER CC — addressed to <recipients>; you were CC'd]`, giving the coordinator unambiguous context about its role without polluting the email body.
+- **Coordinator: CC'd email behavior** — new principle-based guidance for `[OWNER CC]` tasks: read holistically, look up third parties before responding, infer intent without asking the CEO to repeat themselves, and raise clarifications out-of-band only when genuinely irresolvable.
+- **Coordinator: contact-lookup-first** — strengthened rule prohibiting any comment on a contact record (role, existence, details) before running `contact-lookup`.
+- **Coordinator: trust narration suppression** — coordinator no longer proactively informs the CEO that their message arrived via a lower-trust channel; channel trust is only raised when declining a specific request because of it.
+
 ---
 
 ## [0.24.0] — 2026-04-29 — "Delegated Authority"
