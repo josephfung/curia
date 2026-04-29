@@ -828,9 +828,14 @@ async function main(): Promise<void> {
     } else if (agentConfig.inject_specialists) {
       // Specialists that need to know about available agents (e.g. email-triage)
       // opt in via inject_specialists: true in their YAML.
-      systemPrompt = interpolateRuntimeContext(systemPrompt, {
-        availableSpecialists: agentRegistry.specialistSummary(),
-      });
+      try {
+        systemPrompt = interpolateRuntimeContext(systemPrompt, {
+          availableSpecialists: agentRegistry.specialistSummary(),
+        });
+      } catch (err) {
+        logger.error({ err, agentName: agentConfig.name }, 'Failed to interpolate specialists into agent system prompt');
+        throw err;
+      }
     }
 
     const agent = new AgentRuntime({
