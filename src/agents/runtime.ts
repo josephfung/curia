@@ -551,10 +551,26 @@ export class AgentRuntime {
             // Source 2: target agent's expected_duration_seconds from agent YAML config
             // Only used when the scheduler didn't provide a value.
             if (durationSeconds === undefined && this.config.agentRegistry) {
-              const targetAgentName = typeof inputRecord['agent'] === 'string' ? inputRecord['agent'] : undefined;
-              if (targetAgentName) {
-                const targetEntry = this.config.agentRegistry.get(targetAgentName);
-                durationSeconds = targetEntry?.expectedDurationSeconds;
+              const rawAgent = inputRecord['agent'];
+              if (typeof rawAgent !== 'string') {
+                // LLM produced a malformed delegate call — agent field missing or non-string.
+                // Warn so the audit log shows the root cause rather than a silent timeout miss.
+                logger.warn(
+                  { agentId, taskEventId: taskEvent.id, agentFieldType: typeof rawAgent },
+                  'delegate call has non-string agent field — cannot look up expected_duration_seconds; delegate will use default timeout',
+                );
+              } else {
+                const targetEntry = this.config.agentRegistry.get(rawAgent);
+                if (targetEntry === undefined) {
+                  // Agent name is valid but unknown to the registry — likely a YAML typo or a
+                  // newly added agent that hasn't been registered yet.
+                  logger.warn(
+                    { agentId, taskEventId: taskEvent.id, targetAgent: rawAgent },
+                    'delegate target agent not found in registry — cannot look up expected_duration_seconds; delegate will use default timeout',
+                  );
+                } else {
+                  durationSeconds = targetEntry.expectedDurationSeconds;
+                }
               }
             }
 
