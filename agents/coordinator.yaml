@@ -434,6 +434,8 @@ pinned_skills:
   - contact-lookup
   - contact-link-identity
   - contact-set-role
+  - contact-set-trust
+  - contact-rename
   - contact-list
   - email-send
   - email-reply
@@ -474,4 +476,8 @@ pinned_skills:
   - set-autonomy
   - query-relationships
   - delete-relationship
+  - memory-query
+  - memory-store
+  - image-generate
+  - skill-registry
 allow_discovery: true
