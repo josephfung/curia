@@ -34,6 +34,26 @@ export interface ConvertedEmail {
      * to messages that failed sender verification.
      */
     senderVerified: boolean;
+    /**
+     * Curia's role in this email's recipient fields.
+     * - 'to': Curia was directly addressed as a primary recipient
+     * - 'cc': Curia was copied; someone else is the primary recipient
+     * - 'bcc': Curia was blind-copied — not currently detectable from MIME headers
+     *          alone, so this value is never set by the converter today.
+     *
+     * @TODO: BCC detection requires a provider-level signal (e.g. Nylas injecting a
+     *        dedicated header when the grant email appears only in the BCC envelope).
+     *        Until that signal is available, emails where Curia appears in neither To
+     *        nor CC (i.e. genuine BCC) are indistinguishable from direct sends and
+     *        default to 'to'. Track in a GitHub issue.
+     */
+    curiaRole: 'to' | 'cc' | 'bcc';
+    /**
+     * Email addresses from the To field, excluding Curia's own address.
+     * Populated only when selfEmail is provided to convertNylasMessage.
+     * Empty array when selfEmail is unknown or the email was sent directly to Curia.
+     */
+    primaryRecipientEmails: string[];
   };
 }
 
@@ -72,6 +92,43 @@ export function parseSenderVerified(headers?: Array<{ name: string; value: strin
 }
 
 /**
+ * Determine Curia's role in the email (To vs CC) and collect the primary recipients.
+ *
+ * Case-insensitive comparison — email addresses are case-insensitive per RFC 5321.
+ *
+ * Returns 'to' as the fail-safe default when selfEmail is absent or not found in
+ * either To or CC (e.g. genuine BCC, which is not currently detectable).
+ */
+function resolveCuriaRole(
+  toList: Array<{ email: string }>,
+  ccList: Array<{ email: string }>,
+  selfEmail: string,
+): { curiaRole: 'to' | 'cc' | 'bcc'; primaryRecipientEmails: string[] } {
+  const self = selfEmail.toLowerCase();
+
+  const inTo = toList.some((p) => p.email.toLowerCase() === self);
+  if (inTo) {
+    // Curia is a primary recipient — other To addresses (if any) are also primary.
+    const primaryRecipientEmails = toList
+      .map((p) => p.email)
+      .filter((e) => e.toLowerCase() !== self);
+    return { curiaRole: 'to', primaryRecipientEmails };
+  }
+
+  const inCc = ccList.some((p) => p.email.toLowerCase() === self);
+  if (inCc) {
+    // Curia was copied — the To addresses are the true primary recipients.
+    const primaryRecipientEmails = toList.map((p) => p.email);
+    return { curiaRole: 'cc', primaryRecipientEmails };
+  }
+
+  // selfEmail not found in To or CC — likely BCC, which MIME headers don't expose.
+  // Default to 'to' (fail-safe: treat as a direct message rather than silently
+  // misclassifying). BCC detection requires provider-level support; see @TODO above.
+  return { curiaRole: 'to', primaryRecipientEmails: [] };
+}
+
+/**
  * Convert a Nylas message to a Curia inbound message shape.
  *
  * Decisions made here:
@@ -83,8 +140,16 @@ export function parseSenderVerified(headers?: Array<{ name: string; value: strin
  * - All participants (from/to/cc) are surfaced so the contact system can
  *   upsert or update relationship records in one pass.
  * - senderVerified is derived from the Authentication-Results header (if present).
+ * - curiaRole and primaryRecipientEmails are derived from selfEmail when provided,
+ *   allowing the dispatcher to surface whether Curia was directly addressed or CC'd.
+ *
+ * @param msg - The Nylas message to convert.
+ * @param selfEmail - Curia's own email address for this account. When provided,
+ *   the converter determines whether Curia appears in the To or CC field and
+ *   populates curiaRole and primaryRecipientEmails accordingly. When omitted,
+ *   curiaRole defaults to 'to' and primaryRecipientEmails is empty.
  */
-export function convertNylasMessage(msg: NylasMessage): ConvertedEmail {
+export function convertNylasMessage(msg: NylasMessage, selfEmail?: string): ConvertedEmail {
   // Use ?? 'unknown' so an empty from array doesn't throw
   const fromEmail = msg.from[0]?.email ?? 'unknown';
 
@@ -113,6 +178,12 @@ export function convertNylasMessage(msg: NylasMessage): ConvertedEmail {
     ...msg.cc.map((p) => ({ email: p.email, name: p.name, role: 'cc' as const })),
   ];
 
+  // Determine Curia's role in this email (To vs CC) when selfEmail is known.
+  // Defaults to 'to' / empty primary recipients when selfEmail is not provided.
+  const { curiaRole, primaryRecipientEmails } = selfEmail
+    ? resolveCuriaRole(msg.to, msg.cc, selfEmail)
+    : { curiaRole: 'to' as const, primaryRecipientEmails: [] };
+
   return {
     conversationId,
     channelId: 'email',
@@ -126,6 +197,8 @@ export function convertNylasMessage(msg: NylasMessage): ConvertedEmail {
       // Nylas stores timestamps as Unix seconds; Date expects milliseconds
       receivedAt: new Date(msg.date * 1000),
       senderVerified: parseSenderVerified(msg.headers),
+      curiaRole,
+      primaryRecipientEmails,
     },
   };
 }
