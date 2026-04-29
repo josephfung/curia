@@ -209,20 +209,28 @@ export async function bootstrapCeoContact(
 }
 
 /**
- * Insert a new KG person node for the CEO and return its id.
+ * Upsert a KG person node for the CEO and return its id.
  * Uses decay_class='permanent' and confidence=1.0 to match the agent identity pattern —
  * bootstrap nodes are never decayed by the DreamEngine.
+ *
+ * Uses ON CONFLICT on the idx_kg_nodes_unique index (migration 016) rather than a blind
+ * INSERT, because a person node with the same label may already exist — either from a
+ * concurrent startup or from email-based contact extraction that ran before bootstrap.
+ * Without this, a blind INSERT would 23505 outside the contact-identity recovery block
+ * and propagate as an unhandled error.
  */
 async function insertKgPersonNode(displayName: string, pool: DbPool): Promise<string> {
   const result = await pool.query<{ id: string }>(
     `INSERT INTO kg_nodes (type, label, properties, confidence, decay_class, source, created_at, last_confirmed_at)
      VALUES ('person', $1, '{}', 1.0, 'permanent', 'bootstrap', now(), now())
+     ON CONFLICT (lower(label), type) WHERE type != 'fact' AND archived_at IS NULL
+     DO UPDATE SET last_confirmed_at = now()
      RETURNING id`,
     [displayName],
   );
   const id = result.rows[0]?.id;
   if (!id) {
-    throw new Error('ceo-bootstrap: INSERT INTO kg_nodes returned no rows or no id — check migration 004 was applied');
+    throw new Error('ceo-bootstrap: INSERT INTO kg_nodes returned no rows or no id — check migrations 004 and 016 were applied');
   }
   return id;
 }
