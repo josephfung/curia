@@ -854,12 +854,14 @@ async function main(): Promise<void> {
       // fresh each turn for hot-reload support. The display name comes from the contact system.
       executiveProfileService: agentConfig.role === 'coordinator' ? executiveProfileService : undefined,
       executiveDisplayName: agentConfig.role === 'coordinator' ? executiveDisplayName : undefined,
-      // Curia's own contact details — sourced from NYLAS_SELF_EMAIL and SIGNAL_PHONE_NUMBER.
-      // Injected per-task so agents know which accounts to use when MCP tools ask for an
-      // email address or phone number. Injected into ALL agents (#387) — specialists like
-      // essay-editor need this to avoid hallucinating account identifiers.
+      // Curia's own contact details — injected per-task so agents know which accounts to
+      // use when MCP tools ask for an email address or phone number. Injected into ALL
+      // agents (#387) — specialists like essay-editor need this to avoid hallucinating
+      // account identifiers.
+      // Email: use the first non-observation-mode account (Curia's direct send account),
+      // not the legacy config.nylasSelfEmail, so multi-account setups stay consistent.
       channelAccounts: {
-        email: config.nylasSelfEmail || undefined,
+        email: resolvedEmailAccounts.find(a => !a.observationMode)?.selfEmail || undefined,
         phone: config.signalPhoneNumber || undefined,
       },
       // Google Workspace accounts — injected into ALL agents so they know which account

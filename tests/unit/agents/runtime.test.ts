@@ -1404,6 +1404,47 @@ describe('AgentRuntime chatWithRetry', () => {
       expect(systemPrompt).not.toContain('joseph@example.com (primary)');
     });
 
+    it('injects channelAccounts email block without Google Workspace accounts', async () => {
+      // Regression guard: agents with channelAccounts.email but no googleWorkspaceAccounts
+      // should still get the "Your Contact Details" identity block in their system prompt.
+      const logger = createLogger('error');
+      const bus = new EventBus(logger);
+      const capturedMessages: Array<{ role: string; content: string | unknown }> = [];
+      const provider: LLMProvider = {
+        id: 'mock',
+        chat: vi.fn().mockImplementation(async (params: { messages: Array<{ role: string; content: string | unknown }> }) => {
+          capturedMessages.push(...params.messages);
+          return { type: 'text' as const, content: 'ok', usage: { inputTokens: 10, outputTokens: 5 } };
+        }),
+      };
+
+      const agent = new AgentRuntime({
+        agentId: 'essay-editor',
+        systemPrompt: 'You are an essay editor.',
+        provider,
+        bus,
+        logger,
+        channelAccounts: { email: 'curia@example.com' },
+        // googleWorkspaceAccounts intentionally omitted
+      });
+      agent.register();
+
+      const task = createAgentTask({
+        agentId: 'essay-editor',
+        conversationId: 'conv-ch-only',
+        channelId: 'internal',
+        senderId: 'coordinator',
+        content: 'Polish this',
+        parentEventId: 'parent-ch-only',
+      });
+      await bus.publish('dispatch', task);
+
+      const systemPrompt = capturedMessages.find(m => m.role === 'system')?.content as string;
+      expect(systemPrompt).toContain('Your Contact Details');
+      expect(systemPrompt).toContain('curia@example.com');
+      expect(systemPrompt).not.toContain('Google Workspace');
+    });
+
     it('does not inject Google Workspace block when no accounts configured', async () => {
       const logger = createLogger('error');
       const bus = new EventBus(logger);
@@ -1561,6 +1602,71 @@ describe('AgentRuntime chatWithRetry', () => {
       expect(mockExecution.invoke).toHaveBeenCalledWith(
         'delegate',
         expect.objectContaining({ timeout_ms: 30000 }),
+        undefined,
+        expect.any(Object),
+      );
+    });
+
+    it('task scheduler expectedDurationSeconds takes precedence over agent YAML', async () => {
+      // Priority chain: LLM explicit > task scheduler > agent YAML > default.
+      // This test verifies the scheduler slot (source 1) beats the agent YAML slot (source 2).
+      const logger = createLogger('error');
+      const bus = new EventBus(logger);
+
+      let callCount = 0;
+      const provider: LLMProvider = {
+        id: 'mock',
+        chat: vi.fn().mockImplementation(async () => {
+          callCount++;
+          if (callCount === 1) {
+            // LLM does NOT provide timeout_ms — so injection logic should run
+            return {
+              type: 'tool_use' as const,
+              toolCalls: [{ id: 'call-delegate-sched', name: 'delegate', input: { agent: 'essay-editor', task: 'polish essay' } }],
+              usage: { inputTokens: 100, outputTokens: 50 },
+            };
+          }
+          return { type: 'text' as const, content: 'Done', usage: { inputTokens: 200, outputTokens: 60 } };
+        }),
+      };
+
+      const { AgentRegistry } = await import('../../../src/agents/agent-registry.js');
+      const agentRegistry = new AgentRegistry();
+      // Agent YAML declares 600s — scheduler overrides with 120s
+      agentRegistry.register('essay-editor', { role: 'specialist', description: 'Essay editor', expectedDurationSeconds: 600 });
+
+      const mockExecution = {
+        invoke: vi.fn().mockResolvedValue({ success: true, data: { response: 'Polished!', agent: 'essay-editor' } }),
+      } as unknown as ExecutionLayer;
+
+      const agent = new AgentRuntime({
+        agentId: 'coordinator',
+        systemPrompt: 'You are an assistant.',
+        provider,
+        bus,
+        logger,
+        executionLayer: mockExecution,
+        skillToolDefs: [{ name: 'delegate', description: 'Delegate', input_schema: { type: 'object' as const, properties: { agent: { type: 'string' }, task: { type: 'string' } }, required: ['agent', 'task'] } }],
+        agentRegistry,
+      });
+      agent.register();
+
+      const task = createAgentTask({
+        agentId: 'coordinator',
+        conversationId: 'conv-timeout-sched',
+        channelId: 'cli',
+        senderId: 'user',
+        content: 'Polish my essay',
+        parentEventId: 'parent-timeout-sched',
+        // Scheduler provides 120s — should win over the agent YAML's 600s
+        expectedDurationSeconds: 120,
+      });
+      await bus.publish('dispatch', task);
+
+      // Scheduler's 120s (120000ms) must win over agent YAML's 600s (600000ms)
+      expect(mockExecution.invoke).toHaveBeenCalledWith(
+        'delegate',
+        expect.objectContaining({ timeout_ms: 120000 }),
         undefined,
         expect.any(Object),
       );
