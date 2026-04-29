@@ -721,7 +721,7 @@ export function resolveGoogleWorkspaceAccounts(yamlConfig: YamlConfig): Resolved
     return [];
   }
 
-  return Object.entries(googleAccounts).map(([name, raw]) => {
+  const resolved = Object.entries(googleAccounts).map(([name, raw]) => {
     const googleEmail = resolveEnvValue(
       raw.google_email,
       `channel_accounts.google_workspace.${name}.google_email`,
@@ -732,6 +732,15 @@ export function resolveGoogleWorkspaceAccounts(yamlConfig: YamlConfig): Resolved
       primary: raw.primary ?? false,
     };
   });
+
+  // If no account is explicitly marked primary, promote the first one.
+  // The runtime prompt instructs agents to "use your primary account" — without
+  // a primary marker the LLM has no guidance on which account to default to.
+  if (resolved.length > 0 && !resolved.some(a => a.primary)) {
+    resolved[0]!.primary = true;
+  }
+
+  return resolved;
 }
 
 export function loadConfig(): Config {

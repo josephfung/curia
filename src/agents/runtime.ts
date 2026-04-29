@@ -543,49 +543,58 @@ export class AgentRuntime {
         // This is transparent to the LLM — it doesn't need to know about scheduling internals.
         let skillInput = toolCall.input;
         if (toolCall.name === 'delegate') {
-          const inputRecord = skillInput as Record<string, unknown>;
-          if (!('timeout_ms' in inputRecord) || inputRecord['timeout_ms'] === undefined) {
-            // Source 1: scheduler's expectedDurationSeconds on the task event
-            let durationSeconds = taskEvent.payload.expectedDurationSeconds;
+          // Guard: only proceed if the input is a plain non-null object. The `in` operator
+          // throws a TypeError on null or primitives, and an array input is malformed anyway.
+          if (typeof skillInput !== 'object' || skillInput === null || Array.isArray(skillInput)) {
+            logger.warn(
+              { agentId, taskEventId: taskEvent.id, inputType: Array.isArray(skillInput) ? 'array' : typeof skillInput },
+              'delegate call has non-object input — skipping timeout injection; delegate will use default timeout',
+            );
+          } else {
+            const inputRecord = skillInput as Record<string, unknown>;
+            if (!('timeout_ms' in inputRecord) || inputRecord['timeout_ms'] === undefined) {
+              // Source 1: scheduler's expectedDurationSeconds on the task event
+              let durationSeconds = taskEvent.payload.expectedDurationSeconds;
 
-            // Source 2: target agent's expected_duration_seconds from agent YAML config
-            // Only used when the scheduler didn't provide a value.
-            if (durationSeconds === undefined && this.config.agentRegistry) {
-              const rawAgent = inputRecord['agent'];
-              if (typeof rawAgent !== 'string') {
-                // LLM produced a malformed delegate call — agent field missing or non-string.
-                // Warn so the audit log shows the root cause rather than a silent timeout miss.
-                logger.warn(
-                  { agentId, taskEventId: taskEvent.id, agentFieldType: typeof rawAgent },
-                  'delegate call has non-string agent field — cannot look up expected_duration_seconds; delegate will use default timeout',
-                );
-              } else {
-                const targetEntry = this.config.agentRegistry.get(rawAgent);
-                if (targetEntry === undefined) {
-                  // Agent name is valid but unknown to the registry — likely a YAML typo or a
-                  // newly added agent that hasn't been registered yet.
+              // Source 2: target agent's expected_duration_seconds from agent YAML config
+              // Only used when the scheduler didn't provide a value.
+              if (durationSeconds === undefined && this.config.agentRegistry) {
+                const rawAgent = inputRecord['agent'];
+                if (typeof rawAgent !== 'string') {
+                  // LLM produced a malformed delegate call — agent field missing or non-string.
+                  // Warn so the audit log shows the root cause rather than a silent timeout miss.
                   logger.warn(
-                    { agentId, taskEventId: taskEvent.id, targetAgent: rawAgent },
-                    'delegate target agent not found in registry — cannot look up expected_duration_seconds; delegate will use default timeout',
+                    { agentId, taskEventId: taskEvent.id, agentFieldType: typeof rawAgent },
+                    'delegate call has non-string agent field — cannot look up expected_duration_seconds; delegate will use default timeout',
                   );
                 } else {
-                  durationSeconds = targetEntry.expectedDurationSeconds;
+                  const targetEntry = this.config.agentRegistry.get(rawAgent);
+                  if (targetEntry === undefined) {
+                    // Agent name is valid but unknown to the registry — likely a YAML typo or a
+                    // newly added agent that hasn't been registered yet.
+                    logger.warn(
+                      { agentId, taskEventId: taskEvent.id, targetAgent: rawAgent },
+                      'delegate target agent not found in registry — cannot look up expected_duration_seconds; delegate will use default timeout',
+                    );
+                  } else {
+                    durationSeconds = targetEntry.expectedDurationSeconds;
+                  }
                 }
               }
-            }
 
-            if (durationSeconds !== undefined) {
-              const timeoutMs = durationSeconds * 1000;
-              // Guard against non-integer results from floating-point expectedDurationSeconds
-              // stored via out-of-band DB writes — the delegate handler would silently fall back,
-              // but we log here so the root cause is visible in audit logs.
-              if (Number.isInteger(timeoutMs) && timeoutMs > 0) {
-                skillInput = { ...inputRecord, timeout_ms: timeoutMs };
-              } else {
-                logger.warn(
-                  { agentId, taskEventId: taskEvent.id, expectedDurationSeconds: durationSeconds, computedTimeoutMs: timeoutMs },
-                  'Computed timeout_ms from expectedDurationSeconds is not a valid positive integer — skipping injection; delegate will use default timeout',
-                );
+              if (durationSeconds !== undefined) {
+                const timeoutMs = durationSeconds * 1000;
+                // Guard against non-integer results from floating-point expectedDurationSeconds
+                // stored via out-of-band DB writes — the delegate handler would silently fall back,
+                // but we log here so the root cause is visible in audit logs.
+                if (Number.isInteger(timeoutMs) && timeoutMs > 0) {
+                  skillInput = { ...inputRecord, timeout_ms: timeoutMs };
+                } else {
+                  logger.warn(
+                    { agentId, taskEventId: taskEvent.id, expectedDurationSeconds: durationSeconds, computedTimeoutMs: timeoutMs },
+                    'Computed timeout_ms from expectedDurationSeconds is not a valid positive integer — skipping injection; delegate will use default timeout',
+                  );
+                }
               }
             }
           }

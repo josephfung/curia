@@ -261,7 +261,10 @@ channel_accounts:
     }
   });
 
-  it('defaults primary to false when omitted', () => {
+  it('auto-assigns primary to the first account when none is marked', () => {
+    // If no account declares primary: true, resolveGoogleWorkspaceAccounts promotes the
+    // first entry — the runtime prompt says "use your primary account", so at least one
+    // account must be identifiable as primary.
     writeLocalYaml(`
 channel_accounts:
   google_workspace:
@@ -270,7 +273,7 @@ channel_accounts:
 `);
     const yamlConfig = loadYamlConfig(tempDir);
     const accounts = resolveGoogleWorkspaceAccounts(yamlConfig);
-    expect(accounts[0]?.primary).toBe(false);
+    expect(accounts[0]?.primary).toBe(true);
   });
 
   it('throws when google_email is missing', () => {
