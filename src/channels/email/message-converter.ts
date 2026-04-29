@@ -51,7 +51,9 @@ export interface ConvertedEmail {
     /**
      * Email addresses from the To field, excluding Curia's own address.
      * Populated only when selfEmail is provided to convertNylasMessage.
-     * Empty array when selfEmail is unknown or the email was sent directly to Curia.
+     * Empty array when selfEmail is unknown, or when Curia is the only To recipient.
+     * If Curia appears in To alongside other recipients, those other To addresses
+     * are retained.
      */
     primaryRecipientEmails: string[];
   };

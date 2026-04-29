@@ -700,12 +700,18 @@ export class Dispatcher {
         // the injection scanner has already run on payload.content. Without sanitization,
         // a crafted email address could embed prompt injection patterns that bypass Layer 1.
         // RFC 5321 limits email addresses to 254 characters; anything longer is malformed.
-        const sanitizedRecipients = primaryRecipients.map((addr) =>
-          String(addr).replace(/[\n\r\[\]<>]/g, '').slice(0, 254),
-        );
-        const recipientList = sanitizedRecipients.length > 0
+        const MAX_RECIPIENTS_IN_PREAMBLE = 10;
+        const sanitizedRecipients = primaryRecipients
+          .map((addr) => String(addr).replace(/[\n\r\[\]<>]/g, '').trim().slice(0, 254))
+          .filter((addr) => addr.length > 0)
+          .slice(0, MAX_RECIPIENTS_IN_PREAMBLE);
+        const omittedCount = Math.max(0, primaryRecipients.length - sanitizedRecipients.length);
+        const recipientListBase = sanitizedRecipients.length > 0
           ? sanitizedRecipients.join(', ')
           : 'unknown recipients';
+        const recipientList = omittedCount > 0
+          ? `${recipientListBase}, +${omittedCount} more`
+          : recipientListBase;
         this.logger.info(
           { channelId: payload.channelId, senderId: payload.senderId, primaryRecipients: recipientList },
           'CC role preamble injected — Curia was not the primary recipient',
