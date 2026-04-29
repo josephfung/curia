@@ -354,7 +354,7 @@ system_prompt: |
     [OBSERVATION MODE — email-triage delegation]
     Message ID: <nylasMessageId from preamble>
     Account: <Account identifier from preamble>
-    Timezone: <timezone from your current context>
+    Timezone: <the CEO's IANA timezone — use the timezone value injected into your own system context>
 
     --- Original message ---
     <paste the full email content, preserving the [OBSERVATION MODE] preamble>
