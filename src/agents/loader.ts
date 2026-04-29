@@ -52,6 +52,12 @@ export interface AgentYamlConfig {
     max_cost_usd?: number;
     max_errors?: number;
   };
+  /**
+   * When true, ${available_specialists} in the system_prompt is replaced at bootstrap
+   * with the list of registered specialist agents. Used by specialists that need to
+   * know what other agents are available (e.g. to make ACTIONABLE routing decisions).
+   */
+  inject_specialists?: boolean;
 }
 
 /**
