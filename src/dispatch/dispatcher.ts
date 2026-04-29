@@ -690,10 +690,26 @@ export class Dispatcher {
       const meta = payload.metadata as Record<string, unknown> | undefined;
       const curiaRole = meta?.curiaRole as string | undefined;
       if (curiaRole === 'cc') {
-        const primaryRecipients = (meta?.primaryRecipientEmails as string[] | undefined) ?? [];
-        const recipientList = primaryRecipients.length > 0
-          ? primaryRecipients.join(', ')
+        // Runtime type guard — metadata values cross a Record<string, unknown> boundary,
+        // so a bare `as string[]` cast could silently accept a non-array from a future
+        // code path. Mirrors the isFinite guard on injectionRiskScore above.
+        const rawRecipients = meta?.primaryRecipientEmails;
+        const primaryRecipients = Array.isArray(rawRecipients) ? (rawRecipients as string[]) : [];
+        // Sanitize each address before interpolation — primaryRecipientEmails comes from
+        // the Nylas To-field (attacker-controlled) and is injected into taskContent AFTER
+        // the injection scanner has already run on payload.content. Without sanitization,
+        // a crafted email address could embed prompt injection patterns that bypass Layer 1.
+        // RFC 5321 limits email addresses to 254 characters; anything longer is malformed.
+        const sanitizedRecipients = primaryRecipients.map((addr) =>
+          String(addr).replace(/[\n\r\[\]<>]/g, '').slice(0, 254),
+        );
+        const recipientList = sanitizedRecipients.length > 0
+          ? sanitizedRecipients.join(', ')
           : 'unknown recipients';
+        this.logger.info(
+          { channelId: payload.channelId, senderId: payload.senderId, primaryRecipients: recipientList },
+          'CC role preamble injected — Curia was not the primary recipient',
+        );
         taskContent =
           `[OWNER CC — this email was addressed to ${recipientList}; you were CC'd, not the primary recipient]\n\n` +
           taskContent;
