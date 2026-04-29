@@ -61,7 +61,7 @@ channels:
 #       curia:
 #         google_email: "env:PRIMARY_GOOGLE_EMAIL"
 #         primary: true
-#       joseph:
+#       secondary:
 #         google_email: "env:SECONDARY_GOOGLE_EMAIL"
 #
 # Environment variable names must be generic and role-based — never use
