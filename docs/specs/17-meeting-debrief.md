@@ -352,7 +352,7 @@ These are out of scope for this feature but identified during design:
 
 | Number | Item | Status |
 |---|---|---|
-| 0 | Proactive outbound Signal from scheduled jobs (#374) — prerequisite | Not Done |
+| 0 | Proactive outbound Signal from scheduled jobs (#374) — prerequisite | Done |
 | 1 | ADR-017 — conversation claims architectural decision record | Not Done |
 | 2 | Conversation claims DB migration (`conversation_claims` table) | Not Done |
 | 3 | `ConversationClaimRegistry` — Postgres-backed claim CRUD + TTL expiry | Not Done |

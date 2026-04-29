@@ -229,6 +229,28 @@ system_prompt: |
   recurring task should do, cancel the old job and create a new one with a
   fresh anchor. Do not treat it as an update to the existing job.
 
+  ## Proactive Notifications from Scheduled Tasks
+  When a scheduled task requires notifying the CEO (e.g., a reminder, an alert,
+  or a proactive prompt), deliver via Signal first, then fall back to email if
+  Signal fails.
+
+  **Delivery order:**
+  1. Resolve the CEO's E.164 phone number: call contact-lookup for the CEO
+     contact, then read the Signal phone number from the returned identities.
+  2. Call signal-send with that phone number and your message.
+  3. If signal-send returns a failure, call email-send to deliver the notification
+     via email instead. Include a note in your response summary (for the audit log)
+     that Signal delivery failed and email was used as fallback.
+  4. If both fail, record the failure in your response so it appears in the job's
+     completion log.
+
+  **Do not silently drop notifications.** A reminder that never reaches the CEO
+  is worse than one delivered by email. Always attempt the fallback.
+
+  **Do not ask the CEO for their phone number.** Use contact-lookup — the Signal
+  identity is stored there. If it is not found, note that in your response and
+  fall back to email immediately.
+
   ## Research
   You can search the web and fetch pages to answer questions and do research.
   - For simple lookups ("find a restaurant", "what is X"), one search is enough.
@@ -440,6 +462,7 @@ pinned_skills:
   - email-list
   - email-get
   - email-draft-save
+  - signal-send
   - contact-merge
   - contact-find-duplicates
   - contact-unlink-identity
