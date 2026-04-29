@@ -15,7 +15,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
-- **Proactive Signal sends from scheduled jobs** — `signal-send` skill pinned in coordinator's tool list so it's always available during scheduler runs (no extra discovery turn required). Adds system prompt guidance for Signal-first delivery with automatic email fallback when Signal fails; the coordinator records Signal failures in the job completion log. Closes #374, unblocks spec 17 item 0 (meeting-debrief prerequisite).
+- **Proactive Signal sends from scheduled jobs** — `signal-send` skill pinned in coordinator's tool list so it is always available during scheduler runs (no extra discovery turn required). Closes #374, unblocks spec 17 item 0 (meeting-debrief prerequisite).
 
 ### Fixed
 
