@@ -13,6 +13,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Changed
+
+- **README** — updated messaging to align with "Digital Office of the CEO" positioning: reframed problem statement around CEO pain points, led with capabilities over technical comparisons, added governance-first framing and autonomy row to comparison table
+
 ### Added
 - **CC role detection** — `convertNylasMessage` now accepts a `selfEmail` parameter and computes `curiaRole` (`'to'` | `'cc'` | `'bcc'`) and `primaryRecipientEmails` in the converted email metadata, so the dispatcher can distinguish emails addressed directly to Curia from emails where Curia was CC'd.
 

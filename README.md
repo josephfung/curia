@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <strong>The AI executive staff your C-Suite will use and your Board will trust.</strong><br/>
+  <strong>An open-source Digital Office of the CEO — communications, scheduling, research, and knowledge work with governance-first architecture.</strong><br/>
   <em>Curia — the Roman administrative court. Where governance happened.</em>
 </p>
 
@@ -26,41 +26,43 @@
 
 ## The Problem
 
-AI agents are powerful. They're also black boxes with root access.
+CEOs of knowledge-work companies are buried in digital work — email, scheduling, research, information processing. The traditional answer is an executive assistant, but the cycle is brutal: hire at $10k+/month, invest six months training them on your world, then watch all that institutional knowledge walk out the door when they leave.
 
-Most agent frameworks treat security as a configuration option and audit trails as an afterthought. They give agents unrestricted tool access, swallow errors silently, and lose context across restarts. When something goes wrong — and it will — there's no way to trace what happened or why.
+Meanwhile, AI agent frameworks promise automation but deliver black boxes with root access. They treat security as a configuration option, audit trails as an afterthought, and lose all context across restarts. That's fine for a demo. It's not fine when the agent is reading your email, managing your calendar, or acting on your behalf.
 
-That's fine for a demo. It's not fine when the agent is reading your email, tracking your expenses, or acting on your behalf.
-
-**Curia was built for the people who can't afford "it probably won't go rogue."**
+**Curia was built for the people who need superhuman digital operations — and can't afford "it probably won't go rogue."**
 
 ---
 
 ## What Is Curia?
 
-A multi-agent AI platform designed for executives and their teams. It runs continuously on your own server, handles real workflows across multiple channels, and maintains a sophisticated memory of your world — all with the security posture and audit trail that enterprise governance demands.
+Your Digital Office of the CEO. A coordinator and team of specialist agents handle your communications, scheduling, research, and knowledge work — running continuously on your own server, across multiple channels, with institutional memory that compounds over time and never walks out the door.
 
-Think of it as a digital executive office: specialized agents sit at their desks, collaborate in the bullpen, use shared tools, and report to you. Every action is logged. Every decision is traceable. Every agent stays in its lane.
+Every action is logged. Every decision is traceable. Every agent stays in its lane. The architecture doesn't just discourage misuse — it prevents it.
 
 ### What It Actually Does
 
-- **Reads your email** and extracts action items, receipts, and scheduling requests
-- **Tracks expenses** from receipts and bank notifications, categorized and summarized
+- **Manages your email** — triages your inbox, extracts action items, drafts replies, sends on your behalf
+- **Handles your calendar** — creates and updates events, finds free time, detects conflicts, with full context about attendees and past interactions
 - **Researches topics** across multiple sessions, building on previous findings
-- **Manages your calendar** with context about attendees and past interactions
-- **Responds on your behalf** across Signal and email — with your voice and your boundaries
-- **Remembers everything that matters** — who people are, what was decided, what's still pending — in a knowledge graph that gets smarter over time
+- **Tracks expenses** from receipts and bank notifications, categorized and summarized
+- **Communicates on your behalf** across email, Signal, and HTTP API — with your voice and your boundaries
+- **Builds institutional memory** — who people are, what was decided, what's still pending — in a knowledge graph that gets smarter over time
+- **Extends with your own agents and skills** — YAML-based agent definition, 65+ built-in skills, and MCP integration
 
-### What Makes It Different
+### Why Governance-First?
+
+When a system handles your inbox, your calendar, and your communications, "it probably won't go rogue" isn't good enough. Curia was designed so that every action is auditable, every boundary is enforced architecturally, and every decision can be traced back to its origin.
 
 | | Typical Agent Framework | Curia |
 |---|---|---|
 | **Security model** | "Trust the agent" | Hard-enforced layer separation — channel adapters *physically cannot* invoke tools |
 | **Audit trail** | Console.log | Append-only Postgres with causal tracing across every event |
-| **Memory** | Conversation history (lost on restart) | Knowledge graph + entity memory + temporal awareness (survives restarts, ages gracefully) |
+| **Institutional memory** | Conversation history (lost on restart) | Knowledge graph + entity memory + temporal awareness (survives restarts, ages gracefully) |
 | **Error handling** | Retry and hope | Error budgets, state continuity, pattern detection — agents resume, not restart |
-| **Agent communication** | Agents work in isolation | The Bullpen — structured, auditable, threaded inter-agent discussions |
+| **Agent coordination** | Agents work in isolation | The Bullpen — structured, auditable, threaded inter-agent discussions |
 | **Multi-channel** | Single chat interface | Email, Signal, CLI, HTTP API — same agent, any channel |
+| **Autonomy** | All or nothing | Five configurable bands — from advisory-only to fully independent, with intent drift detection |
 
 ---
 
@@ -307,5 +309,5 @@ We evaluate code quality, not authorship. AI-generated contributions are held to
 
 <p align="center">
   <strong>Auditable. Secure. Memory that lasts.</strong><br/>
-  <em>The executive AI platform built for the people who sign the checks.</em>
+  <em>Your Digital Office of the CEO — governance-first, open source, built for the people who sign the checks.</em>
 </p>
