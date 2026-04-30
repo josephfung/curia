@@ -245,9 +245,9 @@ export class OutboundGateway {
               currentScore: autonomyConfig.score,
               requiredScore: 70,
             }));
-          } catch (publishErr) {
+          } catch (err) {
             this.log.warn(
-              { publishErr, channel: request.channel },
+              { err, channel: request.channel },
               'outbound-gateway: failed to publish autonomy.send_blocked event',
             );
           }
