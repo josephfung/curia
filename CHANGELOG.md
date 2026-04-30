@@ -13,6 +13,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Added
+
+- **Logo assets** — added SVG wordmark (`logo-curia-wordmark.svg`) and mark (`logo-curia-mark.svg`) to `docs/assets/`; replaced text-based "CURIA" placeholders in the Knowledge Graph UI (sidebar, auth wall, onboarding wizard) with the inline SVG wordmark
+
 ### Fixed
 
 - **held-messages-process** — `identify` action (new-contact path) no longer crashes with `23505` when the sender's channel identity already exists in `contact_channel_identities`; the skill now resolves the owning contact, cleans up the orphaned newly-created contact, and marks the held message processed (fixes #406)
