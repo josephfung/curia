@@ -670,6 +670,18 @@ export class ContactService {
     };
   }
 
+  /**
+   * Delete a contact by ID. Should only be called after any FK-referenced rows
+   * (identities, auth overrides) have been re-pointed or deleted, otherwise the
+   * DB will reject with a foreign-key constraint error.
+   *
+   * Primarily used during contact merge (to remove the secondary) and during
+   * error recovery (to remove orphaned contacts created by a failed identify).
+   */
+  async deleteContact(id: string): Promise<void> {
+    await this.backend.deleteContact(id);
+  }
+
   private computeGoldenRecord(
     primary: Contact,
     primaryIdentities: ChannelIdentity[],

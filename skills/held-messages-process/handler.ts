@@ -220,6 +220,16 @@ export class HeldMessagesProcessHandler implements SkillHandler {
               heldMsg.senderId,
             );
           } catch (resolveErr) {
+            // Best-effort orphan cleanup before surfacing — each stuck retry would
+            // otherwise create a new orphaned contact row.
+            try {
+              await ctx.contactService.deleteContact(contact.id);
+            } catch (cleanupErr) {
+              ctx.log.warn(
+                { err: cleanupErr, orphanContactId: contact.id },
+                'held-messages-process: failed to clean up orphan contact before re-throwing resolveErr',
+              );
+            }
             ctx.log.error(
               { err: resolveErr, channel: heldMsg.channel, senderId: heldMsg.senderId, orphanContactId: contact.id },
               'resolveByChannelIdentity failed after 23505 (new-contact identify path) — orphaned contact exists',
@@ -231,6 +241,16 @@ export class HeldMessagesProcessHandler implements SkillHandler {
               { channel: heldMsg.channel, senderId: heldMsg.senderId, orphanContactId: contact.id },
               'Duplicate-key on linkIdentity (new-contact identify) but resolveByChannelIdentity returned null — possible orphaned identity',
             );
+            // Best-effort orphan cleanup — contact has no linked identity, so it
+            // will never be found by future lookups and should not persist.
+            try {
+              await ctx.contactService.deleteContact(contact.id);
+            } catch (cleanupErr) {
+              ctx.log.warn(
+                { err: cleanupErr, orphanContactId: contact.id },
+                'held-messages-process: failed to clean up orphan contact (null-resolve path) — manual cleanup may be needed',
+              );
+            }
             return {
               success: false,
               error: `Internal error: ${heldMsg.senderId} caused a duplicate-key error but no owning contact was found.`,
