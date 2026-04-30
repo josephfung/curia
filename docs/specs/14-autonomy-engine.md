@@ -1,6 +1,6 @@
 # 14 — Autonomy Engine
 
-**Status:** Implemented (Phase 1)
+**Status:** Implemented (Phase 1 & 2)
 
 ---
 
@@ -202,12 +202,12 @@ See [adding-an-agent.md](../dev/adding-an-agent.md) for the full agent setup gui
 
 ## Phase 2: Hard Execution Gates (Implemented)
 
-When Phase 2 is implemented, these are the first gate candidates:
+Phase 2 enforces three hard gates:
 
 | Condition | Gate |
 |---|---|
 | `score < skill.action_risk_floor` | Skill invocation returns advisory failure — no throw, same `{ success: false }` shape |
-| `score < 70` | `OutboundGateway` requires an explicit approval event before dispatching any external message |
+| `score < 70` | `OutboundGateway.send()` blocks direct outbound dispatch; draft creation remains available as the intended fallback |
 | `score >= 90` | Elevated skills callable without per-action CEO confirmation |
 
 The `OutboundGateway` (see [15-outbound-safety.md](15-outbound-safety.md)) is already the natural choke point — adding an autonomy check there requires no architectural change.
@@ -225,7 +225,7 @@ The `OutboundGateway` (see [15-outbound-safety.md](15-outbound-safety.md)) is al
 | Autonomy block injected into Coordinator system prompt per-task | Done |
 | `action_risk` field required on all skill manifests, validated at startup | Done |
 | Phase 2: hard execution gates (block skill when score < `action_risk` floor) | Done |
-| Phase 2: `OutboundGateway` autonomy check (score < 70 → require approval event) | Done |
+| Phase 2: `OutboundGateway` autonomy check (score < 70 → block direct send, drafts unaffected) | Done |
 | Phase 3: automatic score adjustment (Competence/Commitment/Compatibility formula) | Not Done |
 
 ---

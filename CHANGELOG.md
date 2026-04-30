@@ -17,28 +17,21 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 - **Autonomy hard gates (spec 14, Phase 2):** execution layer blocks skill invocations when the live autonomy score is below the skill's declared `action_risk` threshold. Full restriction (score < 60) blocks all non-read skills. `OutboundGateway.send()` independently blocks direct sends when score < 70 — drafts remain available as the intended fallback. Both gates emit audit events (`autonomy.skill_blocked`, `autonomy.send_blocked`) and return advisory failures that surface the required score to the agent.
 - **Logo assets** — added SVG wordmark (`logo-curia-wordmark.svg`) and mark (`logo-curia-mark.svg`) to `docs/assets/`; replaced text-based "CURIA" placeholders in the Knowledge Graph UI (sidebar, auth wall, onboarding wizard) with the inline SVG wordmark; updated README header to use the SVG wordmark and removed the old `curia-header.png`
-
-### Fixed
-
-- **held-messages-process** — `identify` action (new-contact path) no longer crashes with `23505` when the sender's channel identity already exists in `contact_channel_identities`; the skill now resolves the owning contact, cleans up the orphaned newly-created contact, and marks the held message processed (fixes #406)
-- **held-messages-process** — `identify` action now sets `trust_level = 'high'` on the confirmed contact so subsequent inbound messages from that sender score above the dispatcher trust floor and are not re-held (fixes #407)
+- **CC role detection** — `convertNylasMessage` now accepts a `selfEmail` parameter and computes `curiaRole` (`'to'` | `'cc'` | `'bcc'`) and `primaryRecipientEmails` in the converted email metadata, so the dispatcher can distinguish emails addressed directly to Curia from emails where Curia was CC'd.
 
 ### Changed
 
 - **`action_risk` enforcement:** `SkillRegistry.register()` now throws at startup if a skill manifest is missing the `action_risk` field (previously accepted silently).
-
 - **README** — updated messaging to align with "Digital Office of the CEO" positioning: reframed problem statement around CEO pain points, led with capabilities over technical comparisons, added governance-first framing and autonomy row to comparison table
-
-### Added
-- **CC role detection** — `convertNylasMessage` now accepts a `selfEmail` parameter and computes `curiaRole` (`'to'` | `'cc'` | `'bcc'`) and `primaryRecipientEmails` in the converted email metadata, so the dispatcher can distinguish emails addressed directly to Curia from emails where Curia was CC'd.
-
-### Changed
 - **CC role preamble in dispatcher** — when Curia is CC'd on an email (non-observation mode), the coordinator task content is prepended with `[OWNER CC — addressed to <recipients>; you were CC'd]`, giving the coordinator unambiguous context about its role without polluting the email body.
 - **Coordinator: CC'd email behavior** — new principle-based guidance for `[OWNER CC]` tasks: read holistically, look up third parties before responding, infer intent without asking the CEO to repeat themselves, and raise clarifications out-of-band only when genuinely irresolvable.
 - **Coordinator: contact-lookup-first** — strengthened rule prohibiting any comment on a contact record (role, existence, details) before running `contact-lookup`.
 - **Coordinator: trust narration suppression** — coordinator no longer proactively informs the CEO that their message arrived via a lower-trust channel; channel trust is only raised when declining a specific request because of it.
 
 ### Fixed
+
+- **held-messages-process** — `identify` action (new-contact path) no longer crashes with `23505` when the sender's channel identity already exists in `contact_channel_identities`; the skill now resolves the owning contact, cleans up the orphaned newly-created contact, and marks the held message processed (fixes #406)
+- **held-messages-process** — `identify` action now sets `trust_level = 'high'` on the confirmed contact so subsequent inbound messages from that sender score above the dispatcher trust floor and are not re-held (fixes #407)
 - **Silent email drafts** — `OutboundGateway.createEmailDraft()` no longer sends an immediate per-draft email notification to the CEO after every observation-mode triage draft. The notification was counterproductive: if the CEO wasn't going to see the original email, they weren't going to see the notification either. Drafts are now created silently; discovery moves to the end-of-day Signal digest (see issue #403). Removes `notifyCeoDraftCreated` and its private `primaryAccountId` field from `OutboundGateway`.
 
 ---

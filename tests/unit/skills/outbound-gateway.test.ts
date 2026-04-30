@@ -841,6 +841,36 @@ describe('autonomy gate on send()', () => {
     expect(result.success).toBe(true);
   });
 
+  it('fails open when getConfig returns null (pre-migration)', async () => {
+    const mocks = createMocks();
+    const nullService = {
+      getConfig: vi.fn().mockResolvedValue(null),
+    } as unknown as AutonomyService;
+
+    const gateway = new OutboundGateway({
+      nylasClients: new Map([['curia', mocks.nylasClient]]),
+      contactService: mocks.contactService,
+      contentFilter: mocks.contentFilter,
+      bus: mocks.bus,
+      ceoEmail: 'ceo@example.com',
+      logger: mocks.logger,
+      autonomyService: nullService,
+    });
+
+    const result = await gateway.send({
+      channel: 'email',
+      to: 'recipient@example.com',
+      subject: 'Hello',
+      body: 'Hi there!',
+    });
+
+    expect(result.success).toBe(true);
+    expect(mocks.bus.publish).not.toHaveBeenCalledWith(
+      'dispatch',
+      expect.objectContaining({ type: 'autonomy.send_blocked' }),
+    );
+  });
+
   it('fails open when getConfig throws (DB error)', async () => {
     const mocks = createMocks();
     const throwingService = {
