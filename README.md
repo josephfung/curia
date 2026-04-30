@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/curia-header.png" alt="Curia" width="800" />
+  <img src="docs/assets/logo-curia-wordmark.svg" alt="Curia" height="48" />
 </p>
 
 <p align="center">
