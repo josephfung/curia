@@ -652,6 +652,7 @@ async function main(): Promise<void> {
       // notifications addressed to Curia's inbox were never visible to the CEO.
       ceoEmail: config.ceoPrimaryEmail || undefined,
       logger,
+      autonomyService,
     });
     logger.info({
       emailAccounts: [...nylasClientMap.keys()],
