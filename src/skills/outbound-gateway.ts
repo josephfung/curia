@@ -239,18 +239,16 @@ export class OutboundGateway {
             { channel: request.channel, currentScore: autonomyConfig.score },
             'outbound-gateway: send blocked by autonomy gate — score < 70',
           );
-          try {
-            await this.bus.publish('dispatch', createAutonomySendBlocked({
-              channel: request.channel,
-              currentScore: autonomyConfig.score,
-              requiredScore: 70,
-            }));
-          } catch (err) {
+          this.bus.publish('dispatch', createAutonomySendBlocked({
+            channel: request.channel,
+            currentScore: autonomyConfig.score,
+            requiredScore: 70,
+          })).catch((err) => {
             this.log.warn(
               { err, channel: request.channel },
               'outbound-gateway: failed to publish autonomy.send_blocked event',
             );
-          }
+          });
           return {
             success: false,
             blockedReason:
