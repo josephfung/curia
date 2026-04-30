@@ -186,7 +186,7 @@ The framework ships with these skills (in `skills/` as part of core):
 - Template skills (`template-meeting-request`, `template-reschedule`, etc.) — structured outbound templates
 - `image-generate` — generate an image from a text prompt via DALL-E 3; returns a temporary CDN URL (~1hr TTL)
 
-**Not yet built:** `memory-query` (freeform KG search), `memory-store` (write-with-validation), `file-reader`, `file-writer`
+**Not yet built:** `file-reader`, `file-writer`
 
 ---
 
@@ -215,18 +215,18 @@ These are not bundled but documented as recommended integrations:
 | Output sanitization — tag stripping, secret redaction, truncation, error wrapping | Done |
 | Resource boundaries — per-invocation timeout enforcement from manifest | Done |
 | Secrets access — `ctx.secret()` scoped to manifest `secrets` array, audit-logged | Done |
-| MCP skills — MCP client, stdio/StreamableHTTP transport, `tools/list` discovery | Done — `config/skills.yaml`, `src/skills/mcp-client.ts`, `src/skills/mcp-loader.ts`; closes #270 |
+| MCP skills — MCP client, stdio/StreamableHTTP transport, `tools/list` discovery | Done |
 | MCP `headers` config field — per-server auth headers for hosted MCP servers | Done |
-| Built-in skill: `skill-registry` (agent-invocable search) | Done — `skills/skill-registry/`; closes #274 |
-| Skill discovery — `allow_discovery: true` wired to runtime tool-list builder | Done — closes #274 |
-| Skill discovery — make discovered-but-not-pinned skills callable (dynamic tool-list expansion) | Done — `AgentRuntime` expands `workingToolDefs` per-task after each `skill-registry` success; `ExecutionLayer.getToolDefinitions()` provides schemas; closes #291 |
-| Safety gate for first-time elevated skill use — per-agent-skill `skill_approvals` table | Partial — role-based elevation gate exists (`caller.role === 'ceo'`); persist-once-ask-once flow not yet built |
-| Privilege scoping — per-skill `capabilities` array, load-time validation, frozen manifest | Done — `src/skills/loader.ts` (`VALID_CAPABILITIES`), `src/skills/execution.ts` (capabilities loop); closes #119 |
+| Built-in skill: `skill-registry` (agent-invocable search) | Done |
+| Skill discovery — `allow_discovery: true` wired to runtime tool-list builder | Done |
+| Skill discovery — dynamic tool-list expansion for discovered skills | Done |
+| Safety gate for first-time elevated skill use — per-agent-skill `skill_approvals` table | Partial — role-based elevation gate exists; persist-once-ask-once flow not yet built |
+| Privilege scoping — per-skill `capabilities` array, load-time validation, frozen manifest | Done |
 | Resource boundaries — max 5 concurrent skill invocations per agent task | Not Done |
 | Resource boundaries — 1MB buffer cap on streaming skill responses | Not Done |
-| Built-in skill: `config-store` (generic namespaced agent config store) | Done — `skills/config-store/` |
-| Built-in skill: `image-generate` (DALL-E 3 image generation) | Done — `skills/image-generate/`; closes #354 |
-| Built-in skill: `memory-query` | Not Done |
-| Built-in skill: `memory-store` | Not Done |
+| Built-in skill: `config-store` (generic namespaced agent config store) | Done |
+| Built-in skill: `image-generate` (DALL-E 3 image generation) | Done |
+| Built-in skill: `memory-query` (freeform KG search) | Done |
+| Built-in skill: `memory-store` (write-with-validation) | Done |
 | Built-in skill: `file-reader` | Not Done |
 | Built-in skill: `file-writer` | Not Done |
