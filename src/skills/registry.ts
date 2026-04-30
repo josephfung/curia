@@ -45,21 +45,25 @@ export class SkillRegistry {
     if (this.skills.has(manifest.name)) {
       throw new Error(`Skill '${manifest.name}' is already registered`);
     }
-    if (manifest.action_risk !== undefined) {
-      const risk = manifest.action_risk;
-      if (typeof risk === 'number') {
-        if (!Number.isInteger(risk) || risk < 0 || risk > 100) {
-          throw new Error(
-            `Skill '${manifest.name}' has invalid action_risk: ${risk}. ` +
-            `Numeric action_risk must be an integer between 0 and 100.`,
-          );
-        }
-      } else if (!ACTION_RISK_LABELS.has(risk as string)) {
+    if (manifest.action_risk === undefined || manifest.action_risk === null) {
+      throw new Error(
+        `Skill '${manifest.name}' is missing required field 'action_risk'. ` +
+        `All skills must declare action_risk. See docs/dev/adding-a-skill.md.`,
+      );
+    }
+    const risk = manifest.action_risk;
+    if (typeof risk === 'number') {
+      if (!Number.isInteger(risk) || risk < 0 || risk > 100) {
         throw new Error(
-          `Skill '${manifest.name}' has invalid action_risk label: "${String(risk)}". ` +
-          `Expected one of: ${[...ACTION_RISK_LABELS].join(', ')}.`,
+          `Skill '${manifest.name}' has invalid action_risk: ${risk}. ` +
+          `Numeric action_risk must be an integer between 0 and 100.`,
         );
       }
+    } else if (!ACTION_RISK_LABELS.has(risk as string)) {
+      throw new Error(
+        `Skill '${manifest.name}' has invalid action_risk label: "${String(risk)}". ` +
+        `Expected one of: ${[...ACTION_RISK_LABELS].join(', ')}.`,
+      );
     }
     this.skills.set(manifest.name, { manifest, handler, mcpInputSchema });
   }
