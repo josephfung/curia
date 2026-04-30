@@ -27,7 +27,8 @@ import type { TrustLevel } from '../contacts/types.js';
 import type { OutboundContentFilter } from '../dispatch/outbound-filter.js';
 import type { EventBus } from '../bus/bus.js';
 import type { Logger } from '../logger.js';
-import { createOutboundBlocked, createOutboundNotification } from '../bus/events.js';
+import { createOutboundBlocked, createOutboundNotification, createAutonomySendBlocked } from '../bus/events.js';
+import type { AutonomyService } from '../autonomy/autonomy-service.js';
 import type { OutboundNotificationPayload } from '../bus/events.js';
 import { markdownToHtml } from '../channels/email/markdown-to-html.js';
 
@@ -142,6 +143,13 @@ export interface OutboundGatewayConfig {
   ceoEmail?: string;
 
   logger: Logger;
+
+  /**
+   * Autonomy service — used to enforce the score < 70 outbound gate.
+   * When the live score is below 70, send() blocks the dispatch and returns
+   * an advisory. Optional — when absent, the gate is skipped (fail-open).
+   */
+  autonomyService?: AutonomyService;
 }
 
 // ---------------------------------------------------------------------------
@@ -183,6 +191,7 @@ export class OutboundGateway {
   private readonly bus: EventBus;
   private readonly ceoEmail: string;
   private readonly log: Logger;
+  private readonly autonomyService?: AutonomyService;
 
   constructor(config: OutboundGatewayConfig) {
     this.nylasClients = config.nylasClients ?? new Map();
@@ -194,6 +203,7 @@ export class OutboundGateway {
     this.bus = config.bus;
     this.ceoEmail = config.ceoEmail ?? '';
     this.log = config.logger.child({ component: 'outbound-gateway' });
+    this.autonomyService = config.autonomyService;
   }
 
   /**
@@ -214,6 +224,49 @@ export class OutboundGateway {
     request: OutboundSendRequest,
     options?: { skipNotificationOnBlock?: boolean },
   ): Promise<OutboundSendResult> {
+    // ------------------------------------------------------------------
+    // Step 0: Autonomy gate — score < 70 blocks all outbound sends
+    // ------------------------------------------------------------------
+    // Belt-and-suspenders for medium+ skills: even if the execution layer
+    // allowed the skill, the gateway independently blocks the actual send
+    // when the score is too low. Fail-open if the service is not wired
+    // or the config table is missing.
+    if (this.autonomyService) {
+      try {
+        const autonomyConfig = await this.autonomyService.getConfig();
+        if (autonomyConfig !== null && autonomyConfig.score < 70) {
+          this.log.info(
+            { channel: request.channel, currentScore: autonomyConfig.score },
+            'outbound-gateway: send blocked by autonomy gate — score < 70',
+          );
+          try {
+            await this.bus.publish('dispatch', createAutonomySendBlocked({
+              channel: request.channel,
+              currentScore: autonomyConfig.score,
+              requiredScore: 70,
+            }));
+          } catch (publishErr) {
+            this.log.warn(
+              { publishErr, channel: request.channel },
+              'outbound-gateway: failed to publish autonomy.send_blocked event',
+            );
+          }
+          return {
+            success: false,
+            blockedReason:
+              `Autonomy score is ${autonomyConfig.score} — direct sends require a score of at least 70. ` +
+              `Use createEmailDraft() for drafts, or ask the CEO to raise the score with set-autonomy.`,
+          };
+        }
+      } catch (err) {
+        // DB error — fail-open. Log at warn so anomalies are visible in alerting.
+        this.log.warn(
+          { err, channel: request.channel },
+          'outbound-gateway: autonomy gate failed to read config — proceeding without gate (fail-open)',
+        );
+      }
+    }
+
     // Derive a stable recipient identifier for the blocked-contact check and logging.
     // Email: the To address. Signal: phone number (1:1) or base64 group ID.
     const recipientId = request.channel === 'email'
