@@ -1,7 +1,7 @@
 // pii/scrubber.ts — synchronous PII scrubber for error strings and log output.
 //
-// Uses regex patterns extracted from @openredaction/openredaction at module-load
-// time. Keeping the scrubber synchronous is a deliberate choice — it plugs into
+// Uses regex patterns extracted from openredaction at module-load time. Keeping
+// the scrubber synchronous is a deliberate choice — it plugs into
 // sanitizeOutput() and sanitizeMessage(), which are both sync. Making those async
 // would cascade through the entire error normalization path.
 //
@@ -12,7 +12,7 @@
 // false-positive on UUID segments (e.g. "0000-0000-0000-0001" looks like a card
 // number). We protect UUIDs before scrubbing and restore them after.
 
-import { allPatterns as _allPatterns } from '@openredaction/openredaction';
+import { allPatterns as _allPatterns } from 'openredaction';
 
 /** A compiled PII pattern ready for synchronous scrubbing. */
 export interface PiiPattern {
@@ -35,40 +35,56 @@ const UUID_RE = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\
  * Returns null if the type is not found (library version drift).
  */
 function extractPattern(typeName: string): RegExp | null {
-  // allPatterns is typed as unknown[] in some library versions; cast carefully.
   const patterns = _allPatterns as Array<{ type: string; regex: unknown }>;
   const entry = patterns.find((p) => p.type === typeName);
   if (!entry || !(entry.regex instanceof RegExp)) return null;
+
+  let source = entry.regex.source;
+
+  // The library's PHONE_US regex uses \b (word boundary) anchors, which don't
+  // match before '(' in the common "(NXX) NXX-XXXX" format — \b requires a
+  // word/non-word transition, but space-then-paren is non-word to non-word.
+  // Replace \b with digit-boundary assertions so parenthesized numbers match.
+  if (typeName === 'PHONE_US') {
+    source = source.replace(/^\\b/, '(?<!\\d)').replace(/\\b$/, '(?!\\d)');
+  }
+
   // Clone with explicit global flag — the library's regexes use global already,
   // but we clone to avoid shared lastIndex state across concurrent calls.
-  return new RegExp(entry.regex.source, entry.regex.flags.includes('g') ? entry.regex.flags : entry.regex.flags + 'g');
+  const flags = entry.regex.flags.includes('g') ? entry.regex.flags : entry.regex.flags + 'g';
+  return new RegExp(source, flags);
 }
 
 /**
- * Built-in PII patterns sourced from @openredaction/openredaction.
+ * Built-in PII patterns sourced from openredaction.
  *
  * Deliberately narrow: only include patterns with low false-positive risk
  * in the context of structured application logs and error messages.
  *
  * Intentionally excluded:
  *   - PHONE_INTERNATIONAL: too broad, matches many numeric IDs
+ *   - PHONE_UK: the openredaction v1.1 regex makes the +44/0 prefix optional,
+ *     matching arbitrary 9-12 digit sequences (order IDs, reference numbers).
+ *     PHONE_UK_MOBILE (requires 7xxx prefix) is specific enough for UK coverage.
  *   - CANADIAN_SIN: `\d{3}[-\s]?\d{3}[-\s]?\d{3}` matches too many 9-digit
  *     sequences in application data (order IDs, reference numbers, etc.)
  *   - ADDRESS_*: high false-positive rate in log strings
  *   - NAME: extremely high false-positive rate
  *
+ * CREDIT_CARD is listed before PHONE patterns to prevent partial matches —
+ * a phone regex could eat part of a card number if it ran first.
+ *
  * All built-in patterns are applied with UUID protection (see scrubPii).
  */
 function buildBuiltInPatterns(): PiiPattern[] {
   const entries: Array<{ typeName: string; replacement: string }> = [
-    { typeName: 'EMAIL',       replacement: '[EMAIL]'       },
-    { typeName: 'PHONE_US',    replacement: '[PHONE]'       },
-    { typeName: 'PHONE_UK',    replacement: '[PHONE]'       },
-    { typeName: 'PHONE_UK_MOBILE', replacement: '[PHONE]'   },
-    { typeName: 'CREDIT_CARD', replacement: '[CREDIT_CARD]' },
+    { typeName: 'EMAIL',           replacement: '[EMAIL]'       },
+    { typeName: 'CREDIT_CARD',     replacement: '[CREDIT_CARD]' },
+    { typeName: 'PHONE_US',        replacement: '[PHONE]'       },
+    { typeName: 'PHONE_UK_MOBILE', replacement: '[PHONE]'       },
     // SSN: the library's pattern requires an "SSN" / "social security" keyword
     // prefix, making it safe from false positives on bare digit sequences.
-    { typeName: 'SSN',         replacement: '[SSN]'         },
+    { typeName: 'SSN',             replacement: '[SSN]'         },
   ];
 
   const result: PiiPattern[] = [];
@@ -87,7 +103,7 @@ function buildBuiltInPatterns(): PiiPattern[] {
   return result;
 }
 
-// Names of built-in patterns that failed to load from @openredaction/openredaction.
+// Names of built-in patterns that failed to load from openredaction.
 // Populated during module init; read by index.ts via getMissingBuiltInPatterns().
 const missingPatternTypes: string[] = [];
 
