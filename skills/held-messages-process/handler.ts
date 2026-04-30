@@ -209,7 +209,20 @@ export class HeldMessagesProcessHandler implements SkillHandler {
           contactId = contact.id;
         } catch (linkErr) {
           const isDuplicate = (linkErr as { code?: string }).code === '23505';
-          if (!isDuplicate) throw linkErr;
+          if (!isDuplicate) {
+            // Any linkIdentity failure (timeout, constraint other than 23505, etc.)
+            // leaves the just-created contact as an orphan. Best-effort cleanup so
+            // retries don't stack orphan rows.
+            try {
+              await ctx.contactService.deleteContact(contact.id);
+            } catch (cleanupErr) {
+              ctx.log.warn(
+                { err: cleanupErr, orphanContactId: contact.id },
+                'held-messages-process: failed to clean up orphan contact after non-duplicate linkIdentity failure',
+              );
+            }
+            throw linkErr;
+          }
 
           // Identity already linked — find the owning contact and use it.
           // The contact we just created is an orphan; clean it up.

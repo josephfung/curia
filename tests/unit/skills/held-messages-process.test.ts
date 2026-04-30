@@ -372,6 +372,7 @@ describe('HeldMessagesProcessHandler — identify action', () => {
         ),
       ),
       resolveByChannelIdentity: vi.fn().mockResolvedValue(null),
+      deleteContact: vi.fn().mockResolvedValue(undefined),
     };
     const bus = makeBus();
 
@@ -382,6 +383,8 @@ describe('HeldMessagesProcessHandler — identify action', () => {
 
     expect(result.success).toBe(false);
     if (!result.success) expect(result.error).toContain('Internal error');
+    // Orphan must still be cleaned up even when resolve returns null
+    expect(contactService.deleteContact).toHaveBeenCalledWith(ORPHAN_ID);
     expect(bus.publish).not.toHaveBeenCalled();
     expect(heldMessages.markProcessed).not.toHaveBeenCalled();
   });
