@@ -155,6 +155,20 @@ New events must be registered in the publish/subscribe allowlists:
 
 ---
 
+## Documentation Updates
+
+The following files already document `action_risk` as required or future-required. Update their language from "Phase 2 will reject" / "future" to present tense ("rejects at startup") as part of the implementation PR:
+
+1. **`docs/dev/adding-a-skill.md`** — primary skill creation guide; sections: "The Manifest", "`action_risk` (required)", "Picking the Right `action_risk`", and the PR checklist
+2. **`docs/specs/03-skills-and-execution.md`** — architecture spec, skill manifest section
+3. **`docs/specs/14-autonomy-engine.md`** — autonomy spec, "Skill `action_risk` Declaration" section; update Phase 2 status from "future" to "implemented"
+4. **`CLAUDE.md`** — "Autonomy Awareness" section under "Adding Things > New Skill"
+5. **`CONTRIBUTING.md`** — "Adding a New Skill" section
+
+These are minor wording changes (tense updates, status labels), not structural doc rewrites.
+
+---
+
 ## Out of Scope
 
 - **Inline CEO approval (Issue #147, Item 5):** A mechanism for the CEO to approve a specific pending action without changing the global score. Deferred to a follow-on issue.
