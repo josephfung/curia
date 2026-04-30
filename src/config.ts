@@ -10,8 +10,8 @@ import * as path from 'node:path';
  * Outbound send policy for a named email account.
  *
  * - direct:          send immediately (default for Curia's own account)
- * - draft_gate:      create a Nylas draft and notify the CEO via email; CEO reviews in
- *                    Gmail and clicks send when ready (approval interface deferred — #278)
+ * - draft_gate:      create a Nylas draft silently; CEO discovers pending drafts via the
+ *                    end-of-day Signal digest and reviews in Gmail (#403, #278)
  * - autonomy_gated:  send autonomously only when the global autonomy score meets or
  *                    exceeds the account's autonomy_threshold value
  */

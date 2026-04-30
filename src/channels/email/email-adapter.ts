@@ -28,8 +28,8 @@ export interface EmailAdapterConfig {
    * How outbound replies from this account are handled.
    *
    * - direct:          send immediately via OutboundGateway (current behavior)
-   * - draft_gate:      save as a Nylas draft; CEO is notified and reviews in Gmail
-   *                    (approval interface + send-on-approval deferred — see #278)
+   * - draft_gate:      save as a Nylas draft silently; CEO discovers via end-of-day
+   *                    Signal digest and reviews in Gmail (#403, #278)
    * - autonomy_gated:  send only when autonomy score >= autonomyThreshold
    */
   outboundPolicy: OutboundPolicy;
@@ -298,7 +298,7 @@ export class EmailAdapter {
    *
    * The actual send behaviour is controlled by this account's outboundPolicy:
    *   - direct:         send immediately via OutboundGateway
-   *   - draft_gate:     save as Nylas draft; CEO notified and reviews in Gmail (#278)
+   *   - draft_gate:     save as Nylas draft silently; CEO discovers via Signal digest (#403, #278)
    *   - autonomy_gated: check autonomy score before sending; hold as draft if below threshold
    */
   private async sendOutboundReply(outbound: OutboundMessageEvent): Promise<void> {
