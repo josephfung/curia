@@ -6,6 +6,7 @@ import type { ContactService } from '../../../src/contacts/contact-service.js';
 import type { OutboundContentFilter } from '../../../src/dispatch/outbound-filter.js';
 import type { EventBus } from '../../../src/bus/bus.js';
 import type { BusEvent } from '../../../src/bus/events.js';
+import type { AutonomyService, AutonomyConfig } from '../../../src/autonomy/autonomy-service.js';
 
 /**
  * Build fresh vi.fn() mocks for each test. Using beforeEach + createMocks()
@@ -33,6 +34,19 @@ function createMocks() {
     subscribe: vi.fn(),
   } as unknown as EventBus;
   return { logger, nylasClient, contactService, contentFilter, bus };
+}
+
+/** Build a stub AutonomyService that returns a fixed score. */
+function makeAutonomyService(score: number): AutonomyService {
+  const config: AutonomyConfig = {
+    score,
+    band: score >= 90 ? 'full' : score >= 80 ? 'spot-check' : score >= 70 ? 'approval-required' : score >= 60 ? 'draft-only' : 'restricted',
+    updatedAt: new Date(),
+    updatedBy: 'test',
+  };
+  return {
+    getConfig: vi.fn().mockResolvedValue(config),
+  } as unknown as AutonomyService;
 }
 
 describe('OutboundGateway', () => {
@@ -718,5 +732,138 @@ describe('OutboundGateway contact promotion on successful send', () => {
     // The send succeeded; the promotion error must not surface as a send failure
     expect(result.success).toBe(true);
     expect(result.messageId).toBe('sent-4');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Autonomy gate — score < 70 blocks outbound sends
+// ---------------------------------------------------------------------------
+
+describe('autonomy gate on send()', () => {
+  it('blocks send when score < 70', async () => {
+    const mocks = createMocks();
+    const gateway = new OutboundGateway({
+      nylasClients: new Map([['curia', mocks.nylasClient]]),
+      contactService: mocks.contactService,
+      contentFilter: mocks.contentFilter,
+      bus: mocks.bus,
+      ceoEmail: 'ceo@example.com',
+      logger: mocks.logger,
+      autonomyService: makeAutonomyService(65),
+    });
+
+    const result = await gateway.send({
+      channel: 'email',
+      to: 'recipient@example.com',
+      subject: 'Hello',
+      body: 'Hi there!',
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.blockedReason).toContain('autonomy');
+    expect(mocks.nylasClient.sendMessage).not.toHaveBeenCalled();
+    expect(mocks.contactService.resolveByChannelIdentity).not.toHaveBeenCalled();
+  });
+
+  it('allows send when score >= 70', async () => {
+    const mocks = createMocks();
+    const gateway = new OutboundGateway({
+      nylasClients: new Map([['curia', mocks.nylasClient]]),
+      contactService: mocks.contactService,
+      contentFilter: mocks.contentFilter,
+      bus: mocks.bus,
+      ceoEmail: 'ceo@example.com',
+      logger: mocks.logger,
+      autonomyService: makeAutonomyService(75),
+    });
+
+    const result = await gateway.send({
+      channel: 'email',
+      to: 'recipient@example.com',
+      subject: 'Hello',
+      body: 'Hi there!',
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it('emits autonomy.send_blocked event when send is blocked', async () => {
+    const mocks = createMocks();
+    const gateway = new OutboundGateway({
+      nylasClients: new Map([['curia', mocks.nylasClient]]),
+      contactService: mocks.contactService,
+      contentFilter: mocks.contentFilter,
+      bus: mocks.bus,
+      ceoEmail: 'ceo@example.com',
+      logger: mocks.logger,
+      autonomyService: makeAutonomyService(65),
+    });
+
+    await gateway.send({
+      channel: 'email',
+      to: 'recipient@example.com',
+      subject: 'Hello',
+      body: 'Hi there!',
+    });
+
+    expect(mocks.bus.publish).toHaveBeenCalledWith(
+      'dispatch',
+      expect.objectContaining({
+        type: 'autonomy.send_blocked',
+        payload: expect.objectContaining({
+          channel: 'email',
+          currentScore: 65,
+          requiredScore: 70,
+        }),
+      }),
+    );
+  });
+
+  it('skips gate when autonomyService is not wired (fail-open)', async () => {
+    const mocks = createMocks();
+    const gateway = new OutboundGateway({
+      nylasClients: new Map([['curia', mocks.nylasClient]]),
+      contactService: mocks.contactService,
+      contentFilter: mocks.contentFilter,
+      bus: mocks.bus,
+      ceoEmail: 'ceo@example.com',
+      logger: mocks.logger,
+      // autonomyService intentionally omitted
+    });
+
+    const result = await gateway.send({
+      channel: 'email',
+      to: 'recipient@example.com',
+      subject: 'Hello',
+      body: 'Hi there!',
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it('does not gate createEmailDraft', async () => {
+    const mocks = createMocks();
+    (mocks.nylasClient as unknown as { createDraft: ReturnType<typeof vi.fn> }).createDraft =
+      vi.fn().mockResolvedValue({ id: 'draft-1' });
+
+    const gateway = new OutboundGateway({
+      nylasClients: new Map([['curia', mocks.nylasClient]]),
+      contactService: mocks.contactService,
+      contentFilter: mocks.contentFilter,
+      bus: mocks.bus,
+      ceoEmail: 'ceo@example.com',
+      logger: mocks.logger,
+      autonomyService: makeAutonomyService(50), // well below 70
+    });
+
+    const result = await gateway.createEmailDraft({
+      channel: 'email',
+      to: 'recipient@example.com',
+      subject: 'Hello',
+      body: 'Draft body',
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.draftId).toBe('draft-1');
   });
 });
