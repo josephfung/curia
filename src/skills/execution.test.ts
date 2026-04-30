@@ -16,6 +16,7 @@ import type { SkillHandler, SkillManifest, SkillResult, SkillContext } from './t
 import type { EventBus } from '../bus/bus.js';
 import type { OutboundGateway } from './outbound-gateway.js';
 import type { SchedulerService } from '../scheduler/scheduler-service.js';
+import type { AutonomyService, AutonomyConfig } from '../autonomy/autonomy-service.js';
 
 const logger = pino({ level: 'silent' });
 
@@ -39,6 +40,35 @@ function makeManifest(name: string, description = `${name} description`): SkillM
 function makeHandler(data: unknown): SkillHandler {
   return {
     execute: vi.fn().mockResolvedValue({ success: true, data }),
+  };
+}
+
+/** Build a stub AutonomyService that returns a fixed config. */
+function makeAutonomyService(score: number): AutonomyService {
+  const config: AutonomyConfig = {
+    score,
+    band: score >= 90 ? 'full' : score >= 80 ? 'spot-check' : score >= 70 ? 'approval-required' : score >= 60 ? 'draft-only' : 'restricted',
+    updatedAt: new Date(),
+    updatedBy: 'test',
+  };
+  return {
+    getConfig: vi.fn().mockResolvedValue(config),
+  } as unknown as AutonomyService;
+}
+
+/** Build a manifest with a specific action_risk. */
+function makeRiskyManifest(name: string, actionRisk: 'none' | 'low' | 'medium' | 'high' | 'critical'): SkillManifest {
+  return {
+    name,
+    description: `${name} description`,
+    version: '1.0.0',
+    sensitivity: 'normal',
+    action_risk: actionRisk,
+    inputs: {},
+    outputs: {},
+    permissions: [],
+    secrets: [],
+    timeout: 5000,
   };
 }
 
@@ -324,5 +354,135 @@ describe('taskMetadata pass-through', () => {
     await layer.invoke('test-meta-absent', {}, undefined, {});
 
     expect(capturedCtx?.taskMetadata).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Autonomy gates
+// ---------------------------------------------------------------------------
+
+describe('autonomy gates', () => {
+  it('blocks skill when score is below action_risk threshold', async () => {
+    const registry = new SkillRegistry();
+    const handler = makeHandler('should not run');
+    registry.register(makeRiskyManifest('send-email', 'medium'), handler); // requires 70
+
+    const mockBus = { publish: vi.fn().mockResolvedValue(undefined) } as unknown as EventBus;
+    const layer = new ExecutionLayer(registry, logger, {
+      autonomyService: makeAutonomyService(65), // below 70
+      bus: mockBus,
+    });
+
+    const result = await layer.invoke('send-email', {});
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error).toContain('autonomy');
+      expect(result.error).toContain('70');
+    }
+    expect(handler.execute).not.toHaveBeenCalled();
+  });
+
+  it('allows skill when score meets action_risk threshold', async () => {
+    const registry = new SkillRegistry();
+    const handler = makeHandler('ok');
+    registry.register(makeRiskyManifest('send-email', 'medium'), handler); // requires 70
+
+    const layer = new ExecutionLayer(registry, logger, {
+      autonomyService: makeAutonomyService(75), // above 70
+    });
+
+    const result = await layer.invoke('send-email', {});
+
+    expect(result.success).toBe(true);
+  });
+
+  it('always allows action_risk: none regardless of score', async () => {
+    const registry = new SkillRegistry();
+    const handler = makeHandler('ok');
+    registry.register(makeRiskyManifest('search-docs', 'none'), handler);
+
+    const layer = new ExecutionLayer(registry, logger, {
+      autonomyService: makeAutonomyService(10), // very low
+    });
+
+    const result = await layer.invoke('search-docs', {});
+
+    expect(result.success).toBe(true);
+  });
+
+  it('blocks all non-none skills when score < 60 (full restriction)', async () => {
+    const registry = new SkillRegistry();
+    const handler = makeHandler('should not run');
+    registry.register(makeRiskyManifest('store-fact', 'low'), handler); // requires 60
+
+    const mockBus = { publish: vi.fn().mockResolvedValue(undefined) } as unknown as EventBus;
+    const layer = new ExecutionLayer(registry, logger, {
+      autonomyService: makeAutonomyService(55), // below 60
+      bus: mockBus,
+    });
+
+    const result = await layer.invoke('store-fact', {});
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error).toContain('restricted');
+    }
+    expect(handler.execute).not.toHaveBeenCalled();
+  });
+
+  it('emits autonomy.skill_blocked event when skill is blocked', async () => {
+    const registry = new SkillRegistry();
+    registry.register(makeRiskyManifest('send-email', 'medium'), makeHandler('no'));
+
+    const mockBus = { publish: vi.fn().mockResolvedValue(undefined) } as unknown as EventBus;
+    const layer = new ExecutionLayer(registry, logger, {
+      autonomyService: makeAutonomyService(65),
+      bus: mockBus,
+    });
+
+    await layer.invoke('send-email', {});
+
+    expect(mockBus.publish).toHaveBeenCalledWith(
+      'execution',
+      expect.objectContaining({
+        type: 'autonomy.skill_blocked',
+        payload: expect.objectContaining({
+          skillName: 'send-email',
+          currentScore: 65,
+          requiredScore: 70,
+        }),
+      }),
+    );
+  });
+
+  it('skips gate when autonomyService is not wired (fail-open)', async () => {
+    const registry = new SkillRegistry();
+    const handler = makeHandler('ok');
+    registry.register(makeRiskyManifest('send-email', 'medium'), handler);
+
+    // No autonomyService — gate should be skipped
+    const layer = new ExecutionLayer(registry, logger);
+
+    const result = await layer.invoke('send-email', {});
+
+    expect(result.success).toBe(true);
+  });
+
+  it('skips gate when getConfig returns null (pre-migration)', async () => {
+    const registry = new SkillRegistry();
+    const handler = makeHandler('ok');
+    registry.register(makeRiskyManifest('send-email', 'medium'), handler);
+
+    const nullService = {
+      getConfig: vi.fn().mockResolvedValue(null),
+    } as unknown as AutonomyService;
+    const layer = new ExecutionLayer(registry, logger, {
+      autonomyService: nullService,
+    });
+
+    const result = await layer.invoke('send-email', {});
+
+    expect(result.success).toBe(true);
   });
 });
