@@ -841,6 +841,32 @@ describe('autonomy gate on send()', () => {
     expect(result.success).toBe(true);
   });
 
+  it('fails open when getConfig throws (DB error)', async () => {
+    const mocks = createMocks();
+    const throwingService = {
+      getConfig: vi.fn().mockRejectedValue(new Error('connection refused')),
+    } as unknown as AutonomyService;
+
+    const gateway = new OutboundGateway({
+      nylasClients: new Map([['curia', mocks.nylasClient]]),
+      contactService: mocks.contactService,
+      contentFilter: mocks.contentFilter,
+      bus: mocks.bus,
+      ceoEmail: 'ceo@example.com',
+      logger: mocks.logger,
+      autonomyService: throwingService,
+    });
+
+    const result = await gateway.send({
+      channel: 'email',
+      to: 'recipient@example.com',
+      subject: 'Hello',
+      body: 'Hi there!',
+    });
+
+    expect(result.success).toBe(true);
+  });
+
   it('does not gate createEmailDraft', async () => {
     const mocks = createMocks();
     (mocks.nylasClient as unknown as { createDraft: ReturnType<typeof vi.fn> }).createDraft =
