@@ -13,6 +13,11 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Fixed
+
+- **held-messages-process** — `identify` action (new-contact path) no longer crashes with `23505` when the sender's channel identity already exists in `contact_channel_identities`; the skill now resolves the owning contact, cleans up the orphaned newly-created contact, and marks the held message processed (fixes #406)
+- **held-messages-process** — `identify` action now sets `trust_level = 'high'` on the confirmed contact so subsequent inbound messages from that sender score above the dispatcher trust floor and are not re-held (fixes #407)
+
 ### Changed
 
 - **README** — updated messaging to align with "Digital Office of the CEO" positioning: reframed problem statement around CEO pain points, led with capabilities over technical comparisons, added governance-first framing and autonomy row to comparison table

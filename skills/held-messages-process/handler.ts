@@ -195,13 +195,80 @@ export class HeldMessagesProcessHandler implements SkillHandler {
           status: 'confirmed',
           source: 'ceo_stated',
         });
-        await ctx.contactService.linkIdentity({
-          contactId: contact.id,
-          channel: heldMsg.channel,
-          channelIdentifier: heldMsg.senderId,
-          source: 'ceo_stated',
-        });
-        contactId = contact.id;
+        // Wrap linkIdentity with the same duplicate-key guard used by the block
+        // action and the existing_contact_id path: a prior partial run may have
+        // created the identity already (linkIdentity succeeded but markProcessed
+        // failed), leaving us in a retry with the identity already linked.
+        try {
+          await ctx.contactService.linkIdentity({
+            contactId: contact.id,
+            channel: heldMsg.channel,
+            channelIdentifier: heldMsg.senderId,
+            source: 'ceo_stated',
+          });
+          contactId = contact.id;
+        } catch (linkErr) {
+          const isDuplicate = (linkErr as { code?: string }).code === '23505';
+          if (!isDuplicate) throw linkErr;
+
+          // Identity already linked — find the owning contact and use it.
+          // The contact we just created is an orphan; clean it up.
+          let resolved: Awaited<ReturnType<typeof ctx.contactService.resolveByChannelIdentity>>;
+          try {
+            resolved = await ctx.contactService.resolveByChannelIdentity(
+              heldMsg.channel,
+              heldMsg.senderId,
+            );
+          } catch (resolveErr) {
+            ctx.log.error(
+              { err: resolveErr, channel: heldMsg.channel, senderId: heldMsg.senderId, orphanContactId: contact.id },
+              'resolveByChannelIdentity failed after 23505 (new-contact identify path) — orphaned contact exists',
+            );
+            throw resolveErr;
+          }
+          if (!resolved) {
+            ctx.log.error(
+              { channel: heldMsg.channel, senderId: heldMsg.senderId, orphanContactId: contact.id },
+              'Duplicate-key on linkIdentity (new-contact identify) but resolveByChannelIdentity returned null — possible orphaned identity',
+            );
+            return {
+              success: false,
+              error: `Internal error: ${heldMsg.senderId} caused a duplicate-key error but no owning contact was found.`,
+            };
+          }
+          contactId = resolved.contactId;
+          ctx.log.info(
+            { channel: heldMsg.channel, senderId: heldMsg.senderId, contactId, orphanContactId: contact.id },
+            'Channel identity already linked to existing contact — using it; cleaning up orphaned new contact',
+          );
+          // Best-effort orphan cleanup: non-fatal because the held message will
+          // still be processed even if delete fails. The orphan is traceable via
+          // the log above.
+          try {
+            await ctx.contactService.deleteContact(contact.id);
+          } catch (deleteErr) {
+            ctx.log.warn(
+              { err: deleteErr, orphanContactId: contact.id, contactId },
+              'held-messages-process: failed to delete orphaned contact — manual cleanup may be needed',
+            );
+          }
+        }
+      }
+
+      // Set trust_level = 'high' so subsequent messages from this sender score
+      // above the trust floor. contactConfidence starts at 0 for new contacts
+      // (enriched later via KG), so without this override the dispatcher's
+      // formula produces ~0.12 — below the default floor of 0.2 — and the next
+      // email gets re-held even though the CEO explicitly confirmed the contact.
+      // Mirrors the same call in outbound-gateway.enrichContactAfterSend.
+      // Failure is non-fatal: the contact is identified and will be marked processed.
+      try {
+        await ctx.contactService.setTrustLevel(contactId, 'high');
+      } catch (err) {
+        ctx.log.warn(
+          { err, contactId },
+          'held-messages-process: setTrustLevel failed — subsequent messages from this contact may fall below trust floor',
+        );
       }
 
       // Replay the held message through normal processing.
