@@ -10,7 +10,7 @@
 | 00 | This file | Architecture, layers, bus, message flow, design principles | ✅ Implemented |
 | 01 | [Memory System](01-memory-system.md) | Knowledge graph, entity memory, working memory, Bullpen, embeddings | ✅ Implemented |
 | 02 | [Agent System](02-agent-system.md) | Agent definition, lifecycle, state, execution modes, LLM providers | ✅ Implemented |
-| 03 | [Skills & Execution](03-skills-and-execution.md) | Local skills, MCP, discovery, secrets, permissions | Partial — local skills implemented; MCP discovery planned |
+| 03 | [Skills & Execution](03-skills-and-execution.md) | Local skills, MCP, discovery, secrets, permissions | Partial — concurrency limits and streaming buffer caps not yet built |
 | 04 | [Channels](04-channels.md) | Adapter interface, CLI, HTTP, Signal, Email channels, message normalization | ✅ Implemented |
 | 05 | [Error Recovery](05-error-recovery.md) | Error budgets, state continuity, pattern detection, failure model | ✅ Implemented |
 | 06 | [Audit & Security](06-audit-and-security.md) | Audit log, redaction, tool sanitization, intent drift, security | Partial — only bulk export gates remaining |
@@ -21,7 +21,7 @@
 | 11 | [Entity Context Enrichment](11-entity-context-enrichment.md) | Entity model, KG-backed sender/entity profiles, context assembly, agent self-identity, skill convention for entity-scoped operations | Partial - Phase 1 done, Phase 2 and 3 pending  |
 | 12 | [Knowledge Graph Web Explorer](12-knowledge-graph-web-explorer.md) | Knowledge graph browser, relationship visualization, entity memory viewer | ✅ Implemented |
 | 13 | [Office Identity](13-office-identity.md) | Persona config, voice settings, runtime identity injection | ✅ Implemented |
-| 14 | [Autonomy Engine](14-autonomy-engine.md) | Global score, autonomy bands, skill action_risk, per-task prompt injection, CEO controls | Partial — core implemented; self-monitoring & tuning planned |
+| 14 | [Autonomy Engine](14-autonomy-engine.md) | Global score, autonomy bands, skill action_risk, per-task prompt injection, CEO controls | Partial — Phase 1 & 2 implemented; Phase 3 (automatic score adjustment) planned |
 | 15 | [Outbound Safety](15-outbound-safety.md) | Content filter, display name sanitization, caller verification, LLM-as-judge gateway | Partial — deterministic rules done; LLM-as-judge planned |
 | 16 | [Smoke Test Framework](16-smoke-test-framework.md) | Chat-based test cases, LLM-as-judge evaluation, HTML reports | ✅ Implemented |
 
