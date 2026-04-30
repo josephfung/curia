@@ -240,9 +240,13 @@ export class ExecutionLayer {
     }
 
     // Autonomy gates — Phase 2 hard enforcement.
+    // Elevated skills are exempt — they have their own, stricter access control
+    // via CallerContext (sensitivity: 'elevated' gate above). Gating them on
+    // autonomy score would create a deadlock: set-autonomy requires score 80
+    // but is the only way to raise the score.
     // Read the live score once per invocation. Fail-open if the service is not
     // wired or the config table doesn't exist yet (getConfig returns null).
-    if (this.autonomyService) {
+    if (this.autonomyService && manifest.sensitivity !== 'elevated') {
       let autonomyConfig: AutonomyConfig | null = null;
       try {
         autonomyConfig = await this.autonomyService.getConfig();
