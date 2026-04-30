@@ -493,6 +493,24 @@ describe('autonomy gates', () => {
     expect(handler.execute).toHaveBeenCalledOnce();
   });
 
+  it('fails open when getConfig throws (DB error)', async () => {
+    const registry = new SkillRegistry();
+    const handler = makeHandler('ok');
+    registry.register(makeRiskyManifest('send-email', 'medium'), handler);
+
+    const throwingService = {
+      getConfig: vi.fn().mockRejectedValue(new Error('connection refused')),
+    } as unknown as AutonomyService;
+    const layer = new ExecutionLayer(registry, logger, {
+      autonomyService: throwingService,
+    });
+
+    const result = await layer.invoke('send-email', {});
+
+    expect(result.success).toBe(true);
+    expect(handler.execute).toHaveBeenCalledOnce();
+  });
+
   it('skips gate when getConfig returns null (pre-migration)', async () => {
     const registry = new SkillRegistry();
     const handler = makeHandler('ok');
