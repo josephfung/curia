@@ -21,6 +21,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
+- **PII scrubber dependency** — replaced deprecated `@openredaction/openredaction` with the actively maintained unscoped `openredaction` package (v1.1.2); same API, no code changes beyond the import path (fixes #252)
 - **`action_risk` enforcement:** `SkillRegistry.register()` now throws at startup if a skill manifest is missing the `action_risk` field (previously accepted silently).
 - **README** — updated messaging to align with "Digital Office of the CEO" positioning: reframed problem statement around CEO pain points, led with capabilities over technical comparisons, added governance-first framing and autonomy row to comparison table
 - **CC role preamble in dispatcher** — when Curia is CC'd on an email (non-observation mode), the coordinator task content is prepended with `[OWNER CC — addressed to <recipients>; you were CC'd]`, giving the coordinator unambiguous context about its role without polluting the email body.
