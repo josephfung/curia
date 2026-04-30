@@ -93,7 +93,7 @@ The elevated check is per-call, not per-agent-pair — there is no stored approv
 
 #### `action_risk` (required)
 
-Declares the risk level of this skill's primary action. Used by the **autonomy engine** in Phase 2 to gate skill execution against the global autonomy score. All skills must declare this field — manifests without it will be rejected at startup once Phase 2 gating is wired, and it is required now so skills are correctly labeled when that goes live.
+Declares the risk level of this skill's primary action. Used by the **autonomy engine** in Phase 2 to gate skill execution against the global autonomy score. All skills must declare this field — manifests without it are rejected at startup. The execution layer enforces this against the live autonomy score: if the score is below the skill's action_risk threshold, the invocation returns an advisory failure.
 
 | Value | Min autonomy score | Capability class |
 |---|---|---|
@@ -105,9 +105,9 @@ Declares the risk level of this skill's primary action. Used by the **autonomy e
 
 A raw integer (0–100) may be used for precision when the named levels are too coarse. Values outside `[0, 100]` produce a validation error at skill load time.
 
-**Phase 1 status:** `action_risk` is declared and validated at load time but not yet enforced at runtime — the hard gate is Phase 2 work.
+**Status:** `action_risk` is validated at load time and enforced at runtime. Skills whose action_risk exceeds the current autonomy score are blocked with an advisory failure.
 
-**How Phase 2 gating will work:** When an agent calls a skill, the execution layer compares the skill's minimum required autonomy score against the live global score from `autonomy_config`. If the score is too low, the invocation returns an advisory failure (no throw, same `{ success: false, error }` shape as any other failure) and an audit event is emitted. The autonomy score is CEO-controlled via the `set-autonomy` skill. See `docs/specs/14-autonomy-engine.md` for the full spec.
+**How gating works:** When an agent calls a skill, the execution layer compares the skill's minimum required autonomy score against the live global score from `autonomy_config`. If the score is too low, the invocation returns an advisory failure (no throw, same `{ success: false, error }` shape as any other failure) and an `autonomy.skill_blocked` audit event is emitted. The autonomy score is CEO-controlled via the `set-autonomy` skill. See `docs/specs/14-autonomy-engine.md` for the full spec.
 
 #### `capabilities` (optional)
 
@@ -478,4 +478,4 @@ See [Adding an Agent — Using config-store](adding-an-agent.md#using-config-sto
 - [Skills & Execution Spec](../specs/03-skills-and-execution.md) — full execution layer design
 - [Adding an Agent](adding-an-agent.md) — wire your new skill into an agent
 - [Audit & Security](../specs/06-audit-and-security.md) — what gets logged
-- [Autonomy Engine](../specs/14-autonomy-engine.md) — how `action_risk` gates execution (Phase 2 hard gates, Phase 3 auto-adjustment)
+- [Autonomy Engine](../specs/14-autonomy-engine.md) — how `action_risk` gates execution (hard gates, Phase 3 auto-adjustment)

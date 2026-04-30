@@ -9,7 +9,7 @@
 A single global autonomy score (0–100) governs how independently Curia operates across all agents and skills. The score is CEO-controlled, Postgres-persisted, and injected into the Coordinator's system prompt on every task — so Curia self-governs in real time without a restart.
 
 **Phase 1 (implemented):** Score storage, CEO read/write skills, behavioral prompt injection.
-**Phase 2 (future):** Hard execution gates — skill invocations blocked when score is below the skill's declared `action_risk` floor.
+**Phase 2 (implemented):** Hard execution gates — skill invocations blocked when score is below the skill's declared `action_risk` floor.
 **Phase 3 (future):** Automatic score adjustment driven by a structured action log and a Competence / Commitment / Compatibility scoring formula.
 
 ---
@@ -176,7 +176,7 @@ Named labels map to minimum score thresholds:
 
 A raw integer (0–100) may be used for precision (e.g. `75` for a skill that should unlock just above `approval-required` but below `spot-check`). Values outside `[0, 100]` produce a validation error at skill load time and prevent startup.
 
-**This field is required in all skill manifests.** Phase 1 validates presence at load time. Phase 2 will enforce it at runtime by blocking skill execution when the live score is below the skill's floor.
+**This field is required in all skill manifests.** Validated at load time (startup rejects missing fields). Enforced at runtime: the execution layer blocks skill invocations when the live score is below the skill's floor.
 
 ### Quick reference by capability class
 
@@ -200,7 +200,7 @@ See [adding-an-agent.md](../dev/adding-an-agent.md) for the full agent setup gui
 
 ---
 
-## Phase 2: Hard Execution Gates (Future)
+## Phase 2: Hard Execution Gates (Implemented)
 
 When Phase 2 is implemented, these are the first gate candidates:
 
@@ -224,8 +224,8 @@ The `OutboundGateway` (see [15-outbound-safety.md](15-outbound-safety.md)) is al
 | Skill: `set-autonomy` (validates, upserts config, appends history) | Done |
 | Autonomy block injected into Coordinator system prompt per-task | Done |
 | `action_risk` field required on all skill manifests, validated at startup | Done |
-| Phase 2: hard execution gates (block skill when score < `action_risk` floor) | Not Done |
-| Phase 2: `OutboundGateway` autonomy check (score < 70 → require approval event) | Not Done |
+| Phase 2: hard execution gates (block skill when score < `action_risk` floor) | Done |
+| Phase 2: `OutboundGateway` autonomy check (score < 70 → require approval event) | Done |
 | Phase 3: automatic score adjustment (Competence/Commitment/Compatibility formula) | Not Done |
 
 ---
