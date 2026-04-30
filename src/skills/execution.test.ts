@@ -469,6 +469,30 @@ describe('autonomy gates', () => {
     expect(result.success).toBe(true);
   });
 
+  it('exempts elevated skills from autonomy gate (prevents set-autonomy deadlock)', async () => {
+    const registry = new SkillRegistry();
+    const handler = makeHandler('score updated');
+    const elevatedManifest: SkillManifest = {
+      ...makeRiskyManifest('set-autonomy', 'high'), // requires 80
+      sensitivity: 'elevated',
+    };
+    registry.register(elevatedManifest, handler);
+
+    const layer = new ExecutionLayer(registry, logger, {
+      autonomyService: makeAutonomyService(65), // well below 80
+    });
+
+    // Must provide CEO caller context for elevated skills
+    const result = await layer.invoke('set-autonomy', { score: 90 }, {
+      contactId: 'primary-user',
+      role: 'ceo',
+      channel: 'cli',
+    });
+
+    expect(result.success).toBe(true);
+    expect(handler.execute).toHaveBeenCalledOnce();
+  });
+
   it('skips gate when getConfig returns null (pre-migration)', async () => {
     const registry = new SkillRegistry();
     const handler = makeHandler('ok');
