@@ -21,7 +21,7 @@ import type { SkillResult, SkillContext, CallerContext, AgentPersona, ToolDefini
 import { normalizeTimestamp } from '../time/timestamp.js';
 import type { SkillRegistry } from './registry.js';
 import { sanitizeOutput } from './sanitize.js';
-import { createSecretAccessed } from '../bus/events.js';
+import { createSecretAccessed, createAutonomySkillBlocked } from '../bus/events.js';
 import type { Logger } from '../logger.js';
 import type { EventBus } from '../bus/bus.js';
 import type { AgentRegistry } from '../agents/agent-registry.js';
@@ -34,7 +34,8 @@ import type { StoreFactOptions } from '../memory/types.js';
 import { createMemoryStore } from '../bus/events.js';
 import type { NylasCalendarClient } from '../channels/calendar/nylas-calendar-client.js';
 import type { EntityContextAssembler } from '../entity-context/assembler.js';
-import type { AutonomyService } from '../autonomy/autonomy-service.js';
+import { AutonomyService } from '../autonomy/autonomy-service.js';
+import type { AutonomyConfig } from '../autonomy/autonomy-service.js';
 import type { BrowserService } from '../browser/browser-service.js';
 
 // Default max output length — used when no value is configured in default.yaml.
@@ -235,6 +236,85 @@ export class ExecutionLayer {
           success: false,
           error: this.wrapSkillError(`Skill '${skillName}' requires elevated privileges — caller role '${caller.role ?? 'none'}' on channel '${caller.channel}' is not authorized`),
         };
+      }
+    }
+
+    // Autonomy gates — Phase 2 hard enforcement.
+    // Read the live score once per invocation. Fail-open if the service is not
+    // wired or the config table doesn't exist yet (getConfig returns null).
+    if (this.autonomyService) {
+      let autonomyConfig: AutonomyConfig | null = null;
+      try {
+        autonomyConfig = await this.autonomyService.getConfig();
+      } catch (err) {
+        // DB error reading autonomy_config — fail-open with a warn log.
+        // A transient DB issue should not silently disable the agent.
+        skillLogger.warn({ err, skillName }, 'autonomy gate: failed to read autonomy_config — skipping gate (fail-open)');
+      }
+
+      if (autonomyConfig !== null) {
+        const currentScore = autonomyConfig.score;
+
+        // Gate A: Full restriction — score < 60 blocks all non-read skills.
+        // action_risk: 'none' is exempt (reads, retrieval, summarisation).
+        if (currentScore < 60 && manifest.action_risk !== 'none') {
+          skillLogger.info(
+            { skillName, currentScore, actionRisk: manifest.action_risk },
+            'autonomy gate: skill blocked — agent is in restricted mode (score < 60)',
+          );
+          if (this.bus) {
+            this.bus.publish('execution', createAutonomySkillBlocked({
+              skillName,
+              actionRisk: manifest.action_risk,
+              currentScore,
+              requiredScore: 60,
+              agentId: options?.agentId,
+              taskEventId: options?.taskEventId,
+            })).catch((err) => {
+              skillLogger.warn({ err, skillName }, 'autonomy gate: failed to publish autonomy.skill_blocked event');
+            });
+          }
+          return {
+            success: false,
+            error: this.wrapSkillError(
+              `Skill '${skillName}' blocked — autonomy score is ${currentScore} (restricted mode). ` +
+              `All non-read skills require a score of at least 60. ` +
+              `The CEO can raise the score with the set-autonomy skill.`,
+            ),
+          };
+        }
+
+        // Gate B: Per-skill action_risk threshold.
+        const requiredScore = AutonomyService.minScoreForActionRisk(manifest.action_risk);
+        if (currentScore < requiredScore) {
+          skillLogger.info(
+            { skillName, currentScore, requiredScore, actionRisk: manifest.action_risk },
+            'autonomy gate: skill blocked — score below action_risk threshold',
+          );
+          if (this.bus) {
+            this.bus.publish('execution', createAutonomySkillBlocked({
+              skillName,
+              actionRisk: manifest.action_risk,
+              currentScore,
+              requiredScore,
+              agentId: options?.agentId,
+              taskEventId: options?.taskEventId,
+            })).catch((err) => {
+              skillLogger.warn({ err, skillName }, 'autonomy gate: failed to publish autonomy.skill_blocked event');
+            });
+          }
+          return {
+            success: false,
+            error: this.wrapSkillError(
+              `Skill '${skillName}' blocked — autonomy score is ${currentScore}, ` +
+              `but this skill (action_risk: ${String(manifest.action_risk)}) requires ${requiredScore}. ` +
+              `The CEO can raise the score with the set-autonomy skill.`,
+            ),
+          };
+        }
+      } else {
+        // autonomyConfig is null — pre-migration or empty table. Fail-open.
+        skillLogger.warn({ skillName }, 'autonomy gate: autonomy_config not found — skipping gate (fail-open, pre-migration?)');
       }
     }
 
