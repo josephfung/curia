@@ -34,7 +34,7 @@ skills/
 ```
 
 - `sensitivity`: `"normal"` (auto-approvable) or `"elevated"` — **target behaviour**: requires human approval on first use by that agent; **current behaviour**: not yet enforced — the execution layer applies role-gating instead (caller must have `role: ceo`); the persist-once-ask-once flow is deferred (see Safety Gate section below)
-- `action_risk`: required on all manifests. Named labels — `none`, `low`, `medium`, `high`, `critical` — map to minimum autonomy score thresholds. Raw integers (0–100) are also accepted for precision.
+- `action_risk`: required on all manifests. Named labels — `none`, `low`, `medium`, `high`, `critical` — map to minimum autonomy score thresholds. Raw integers (0–100) are also accepted for precision. Enforced by the execution layer against the live autonomy score.
 - `secrets`: declares which env-var-backed secrets the skill will request via `ctx.secret()`
 - `permissions`: declared capabilities, validated at load time
 - `timeout`: per-invocation timeout in ms; exceeded invocations return a failure result (default 30000)
