@@ -48,7 +48,7 @@ Every action is logged. Every decision is traceable. Every agent stays in its la
 - **Tracks expenses** from receipts and bank notifications, categorized and summarized
 - **Communicates on your behalf** across email, Signal, and HTTP API — with your voice and your boundaries
 - **Builds institutional memory** — who people are, what was decided, what's still pending — in a knowledge graph that gets smarter over time
-- **Extends with your own agents and skills** — YAML-based agent definition, 65+ built-in skills, and MCP integration
+- **Extends with your own agents and skills** — YAML-based agent definition, 60+ built-in skills, and MCP integration
 
 ### Why Governance-First?
 
