@@ -15,6 +15,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **Autonomy hard gates (spec 14, Phase 2):** execution layer blocks skill invocations when the live autonomy score is below the skill's declared `action_risk` threshold. Full restriction (score < 60) blocks all non-read skills. `OutboundGateway.send()` independently blocks direct sends when score < 70 — drafts remain available as the intended fallback. Both gates emit audit events (`autonomy.skill_blocked`, `autonomy.send_blocked`) and return advisory failures that surface the required score to the agent.
 - **Logo assets** — added SVG wordmark (`logo-curia-wordmark.svg`) and mark (`logo-curia-mark.svg`) to `docs/assets/`; replaced text-based "CURIA" placeholders in the Knowledge Graph UI (sidebar, auth wall, onboarding wizard) with the inline SVG wordmark; updated README header to use the SVG wordmark and removed the old `curia-header.png`
 
 ### Fixed
@@ -23,6 +24,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **held-messages-process** — `identify` action now sets `trust_level = 'high'` on the confirmed contact so subsequent inbound messages from that sender score above the dispatcher trust floor and are not re-held (fixes #407)
 
 ### Changed
+
+- **`action_risk` enforcement:** `SkillRegistry.register()` now throws at startup if a skill manifest is missing the `action_risk` field (previously accepted silently).
 
 - **README** — updated messaging to align with "Digital Office of the CEO" positioning: reframed problem statement around CEO pain points, led with capabilities over technical comparisons, added governance-first framing and autonomy row to comparison table
 
