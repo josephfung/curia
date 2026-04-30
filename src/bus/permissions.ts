@@ -21,10 +21,10 @@ import type { Layer, EventType } from './events.js';
 //          observation-mode task; system layer subscribes for audit logging and monitoring.
 const publishAllowlist: Record<Layer, Set<EventType>> = {
   channel: new Set(['inbound.message']),
-  dispatch: new Set(['agent.task', 'outbound.message', 'outbound.blocked', 'outbound.notification', 'contact.resolved', 'contact.unknown', 'message.held', 'message.rejected', 'contact.duplicate_detected', 'contact.merged', 'conversation.checkpoint', 'human.decision', 'observation.triage.completed']),
+  dispatch: new Set(['agent.task', 'outbound.message', 'outbound.blocked', 'outbound.notification', 'contact.resolved', 'contact.unknown', 'message.held', 'message.rejected', 'contact.duplicate_detected', 'contact.merged', 'conversation.checkpoint', 'human.decision', 'observation.triage.completed', 'autonomy.send_blocked']),
   agent: new Set(['agent.response', 'agent.error', 'skill.invoke', 'skill.result', 'memory.store', 'memory.query', 'agent.discuss', 'llm.call']),
-  execution: new Set(['skill.result', 'secret.accessed']),
-  system: new Set(['inbound.message', 'agent.task', 'agent.response', 'agent.error', 'outbound.message', 'outbound.blocked', 'outbound.notification', 'skill.invoke', 'skill.result', 'memory.store', 'memory.query', 'contact.resolved', 'contact.unknown', 'message.held', 'message.rejected', 'schedule.created', 'schedule.fired', 'schedule.suspended', 'schedule.recovered', 'schedule.drift_paused', 'config.change', 'contact.duplicate_detected', 'contact.merged', 'agent.discuss', 'conversation.checkpoint', 'llm.call', 'human.decision', 'secret.accessed', 'observation.triage.completed']),
+  execution: new Set(['skill.result', 'secret.accessed', 'autonomy.skill_blocked']),
+  system: new Set(['inbound.message', 'agent.task', 'agent.response', 'agent.error', 'outbound.message', 'outbound.blocked', 'outbound.notification', 'skill.invoke', 'skill.result', 'memory.store', 'memory.query', 'contact.resolved', 'contact.unknown', 'message.held', 'message.rejected', 'schedule.created', 'schedule.fired', 'schedule.suspended', 'schedule.recovered', 'schedule.drift_paused', 'config.change', 'contact.duplicate_detected', 'contact.merged', 'agent.discuss', 'conversation.checkpoint', 'llm.call', 'human.decision', 'secret.accessed', 'observation.triage.completed', 'autonomy.skill_blocked', 'autonomy.send_blocked']),
 };
 
 // agent.discuss subscribe for 'dispatch': used by BullpenDispatcher (wired in index.ts after agent registration).
@@ -33,7 +33,7 @@ const subscribeAllowlist: Record<Layer, Set<EventType>> = {
   dispatch: new Set(['inbound.message', 'agent.response', 'agent.error', 'agent.discuss']),
   agent: new Set(['agent.task', 'skill.result']),
   execution: new Set(['skill.invoke']),
-  system: new Set(['inbound.message', 'agent.task', 'agent.response', 'agent.error', 'outbound.message', 'outbound.blocked', 'outbound.notification', 'skill.invoke', 'skill.result', 'memory.store', 'memory.query', 'contact.resolved', 'contact.unknown', 'message.held', 'message.rejected', 'schedule.created', 'schedule.fired', 'schedule.suspended', 'schedule.recovered', 'schedule.drift_paused', 'config.change', 'contact.duplicate_detected', 'contact.merged', 'agent.discuss', 'conversation.checkpoint', 'llm.call', 'human.decision', 'secret.accessed', 'observation.triage.completed']),
+  system: new Set(['inbound.message', 'agent.task', 'agent.response', 'agent.error', 'outbound.message', 'outbound.blocked', 'outbound.notification', 'skill.invoke', 'skill.result', 'memory.store', 'memory.query', 'contact.resolved', 'contact.unknown', 'message.held', 'message.rejected', 'schedule.created', 'schedule.fired', 'schedule.suspended', 'schedule.recovered', 'schedule.drift_paused', 'config.change', 'contact.duplicate_detected', 'contact.merged', 'agent.discuss', 'conversation.checkpoint', 'llm.call', 'human.decision', 'secret.accessed', 'observation.triage.completed', 'autonomy.skill_blocked', 'autonomy.send_blocked']),
 };
 
 export function canPublish(layer: Layer, eventType: EventType): boolean {

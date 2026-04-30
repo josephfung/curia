@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { ErrorType } from '../errors/types.js';
 import type { DedupConfidence } from '../contacts/types.js';
 import type { Sensitivity } from '../memory/types.js';
+import type { ActionRisk } from '../skills/types.js';
 
 // -- Base event shape --
 // Every event on the bus shares these fields; parentEventId forms the causal chain.
@@ -356,6 +357,30 @@ interface SecretAccessedPayload {
   taskEventId?: string;   // causal chain: the agent.task that triggered this invocation
 }
 
+// AutonomySkillBlockedPayload — published by the execution layer when a skill
+// invocation is blocked because the live autonomy score is below the skill's
+// action_risk threshold. Advisory-only — the agent receives a { success: false }
+// result and can escalate to the CEO.
+interface AutonomySkillBlockedPayload {
+  skillName: string;
+  actionRisk: ActionRisk;
+  currentScore: number;
+  requiredScore: number;
+  agentId?: string;
+  taskEventId?: string;
+}
+
+// AutonomySendBlockedPayload — published by the outbound gateway when an outbound
+// send is blocked because the live autonomy score is below 70. The agent receives
+// a { success: false, blockedReason } result.
+interface AutonomySendBlockedPayload {
+  channel: string;
+  currentScore: number;
+  requiredScore: number;
+  agentId?: string;
+  taskEventId?: string;
+}
+
 // HumanDecisionPayload — emitted by the dispatch layer when a human approves, denies, or
 // reviews an agent action. Captures the full decision context for compliance and audit.
 // Spec 10 (audit log hardening): required by EU AI Act Article 14, HITL audit standards.
@@ -596,6 +621,22 @@ export interface SecretAccessedEvent extends BaseEvent {
   payload: SecretAccessedPayload;
 }
 
+// AutonomySkillBlockedEvent — execution layer blocked a skill invocation
+// due to insufficient autonomy score.
+export interface AutonomySkillBlockedEvent extends BaseEvent {
+  type: 'autonomy.skill_blocked';
+  sourceLayer: 'execution';
+  payload: AutonomySkillBlockedPayload;
+}
+
+// AutonomySendBlockedEvent — outbound gateway blocked a send due to
+// insufficient autonomy score (< 70).
+export interface AutonomySendBlockedEvent extends BaseEvent {
+  type: 'autonomy.send_blocked';
+  sourceLayer: 'dispatch';
+  payload: AutonomySendBlockedPayload;
+}
+
 // ObservationTriageCompletedEvent — published by the dispatch layer after every observation-mode
 // triage task completes. Subscribers (audit logger, future monitoring) use this to detect
 // misclassifications, zero-action failures, and classification drift over time.
@@ -654,6 +695,8 @@ export type BusEvent =
   | LlmCallEvent             // Spec 10: LLM API call provenance (model, tokens, cost, hashes)
   | HumanDecisionEvent       // Spec 10: human-in-the-loop decision record (approve/deny/etc.)
   | SecretAccessedEvent      // Spec 06: secrets isolation audit trail (name only, never value)
+  | AutonomySkillBlockedEvent  // Autonomy Phase 2: skill blocked by action_risk gate
+  | AutonomySendBlockedEvent   // Autonomy Phase 2: outbound send blocked by score < 70 gate
   | ObservationTriageCompletedEvent; // Observation mode: triage classification + action summary (#311)
 
 // Convenience alias for use in handler maps / switch statements.
@@ -1065,6 +1108,34 @@ export function createSecretAccessed(
     timestamp: new Date(),
     type: 'secret.accessed',
     sourceLayer: 'execution',
+    payload,
+    parentEventId,
+  };
+}
+
+export function createAutonomySkillBlocked(
+  payload: AutonomySkillBlockedPayload,
+  parentEventId?: string,
+): AutonomySkillBlockedEvent {
+  return {
+    id: randomUUID(),
+    timestamp: new Date(),
+    type: 'autonomy.skill_blocked',
+    sourceLayer: 'execution',
+    payload,
+    parentEventId,
+  };
+}
+
+export function createAutonomySendBlocked(
+  payload: AutonomySendBlockedPayload,
+  parentEventId?: string,
+): AutonomySendBlockedEvent {
+  return {
+    id: randomUUID(),
+    timestamp: new Date(),
+    type: 'autonomy.send_blocked',
+    sourceLayer: 'dispatch',
     payload,
     parentEventId,
   };
