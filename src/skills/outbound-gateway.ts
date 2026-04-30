@@ -176,8 +176,6 @@ export class OutboundGateway {
    * notifications (blocked-content CEO alerts) when no accountId is specified.
    */
   private readonly primaryNylasClient: NylasClient | undefined;
-  /** Account name that owns primaryNylasClient (first key in nylasClients). */
-  private readonly primaryAccountId: string | undefined;
   private readonly signalClient?: SignalRpcClient;
   private readonly signalPhoneNumber?: string;
   private readonly contactService: ContactService;
@@ -189,7 +187,6 @@ export class OutboundGateway {
   constructor(config: OutboundGatewayConfig) {
     this.nylasClients = config.nylasClients ?? new Map();
     this.primaryNylasClient = this.nylasClients.values().next().value;
-    this.primaryAccountId = this.nylasClients.keys().next().value;
     this.signalClient = config.signalClient;
     this.signalPhoneNumber = config.signalPhoneNumber;
     this.contactService = config.contactService;
@@ -593,20 +590,20 @@ export class OutboundGateway {
   }
 
   /**
-   * Create a Nylas draft without sending it — used by the draft_gate outbound policy.
+   * Create a Nylas draft without sending it — used by the draft_gate outbound policy
+   * and by observation-mode email triage (NEEDS DRAFT classification).
    *
    * Runs the same blocked-contact check as send() but skips the content filter
    * (the filter is designed for messages leaving Curia's control; drafts stay in the
    * mailbox until explicitly sent). The reply goes through the full pipeline when the
    * draft is eventually approved and sent.
    *
-   * After a successful draft creation, notifies the CEO via email so they know a reply
-   * is waiting in their Drafts folder. The CEO reviews and clicks send from their email
-   * client when ready (approval + send is intentionally human-operated for draft_gate).
+   * Drafts are created silently — no notification is sent. The CEO discovers them
+   * through the end-of-day Signal digest (see the scheduled digest job) or by checking
+   * their Drafts folder directly.
    *
    * TODO(#278): approval interface and send-on-approval remain deferred — see issue for
-   * future options (CLI command, Signal reply, webhook). The notification + Gmail flow
-   * is the first piece of the three-part plan described in issue #278.
+   * future options (CLI command, Signal reply, webhook).
    */
   async createEmailDraft(request: EmailSendRequest): Promise<OutboundDraftResult> {
     const recipientId = request.to;
@@ -634,22 +631,7 @@ export class OutboundGateway {
       return { success: false, blockedReason: 'Contact resolution failed; draft not created' };
     }
 
-    const result = await this.dispatchEmailDraft(request);
-
-    // Notify the CEO that a draft is waiting for their review. Non-fatal — the draft
-    // was created successfully regardless of whether the notification sends.
-    // Use .catch() (not await) so any unexpected throw inside notifyCeoDraftCreated
-    // cannot propagate here and break the returned draft result.
-    if (result.success && result.draftId) {
-      this.notifyCeoDraftCreated(request, result.draftId).catch((err) => {
-        this.log.error(
-          { err, draftId: result.draftId },
-          'outbound-gateway: notifyCeoDraftCreated threw unexpectedly — draft result unaffected',
-        );
-      });
-    }
-
-    return result;
+    return this.dispatchEmailDraft(request);
   }
 
   /**
@@ -779,73 +761,6 @@ export class OutboundGateway {
         'outbound-gateway: Nylas createDraft failed',
       );
       return { success: false, blockedReason: `Draft creation failed: ${message}` };
-    }
-  }
-
-  /**
-   * Send the CEO a brief email letting them know a draft reply is waiting in their
-   * Drafts folder. Called immediately after a successful draft creation.
-   *
-   * Uses dispatchEmail() directly (bypasses send() to avoid infinite recursion and the
-   * content filter — the notification body is a hardcoded template, not user content).
-   * Uses the primary email account regardless of which account created the draft, so
-   * the notification always lands in the same inbox (consistent with the blocked-content
-   * alert pattern). Non-fatal: errors are logged but do not affect the draft result.
-   *
-   * Future: if a CEO Signal phone number is added to OutboundGatewayConfig, this method
-   * can be extended to notify via Signal instead of (or in addition to) email.
-   */
-  private async notifyCeoDraftCreated(request: EmailSendRequest, draftId: string): Promise<void> {
-    if (!this.ceoEmail) {
-      this.log.warn(
-        { accountId: request.accountId, draftId },
-        'outbound-gateway: draft-created notification skipped — ceoEmail not configured',
-      );
-      return;
-    }
-    if (!this.primaryNylasClient) {
-      this.log.warn(
-        { accountId: request.accountId, draftId },
-        'outbound-gateway: draft-created notification skipped — no primary email client configured',
-      );
-      return;
-    }
-
-    const subject = request.subject ?? '(no subject)';
-    // Resolve the drafting account name for the notification body. Falls back to the
-    // primary account name (cached at construction time), not the string literal
-    // 'primary' which has no meaning to the CEO reading the notification email.
-    const accountId = request.accountId ?? this.primaryAccountId ?? 'unknown';
-
-    // Wrap interpolated values in backticks so markdownToHtml renders them as
-    // literal code spans. Subject and recipient come from inbound thread metadata
-    // which could contain markdown-significant characters (links, emphasis, etc.).
-    const body = [
-      `There is a draft email reply to \`${request.to}\` about \`${subject}\` waiting in your Drafts folder on account \`${accountId}\`.`,
-      '',
-      'Please review it and click send when you are ready.',
-      '',
-      `Draft ID: \`${draftId}\``,
-    ].join('\n');
-
-    try {
-      const result = await this.dispatchEmail({
-        channel: 'email',
-        to: this.ceoEmail,
-        subject: `Draft reply awaiting review — ${subject}`,
-        body,
-      });
-      if (!result.success) {
-        this.log.error(
-          { draftId, accountId, ceoEmail: redactId(this.ceoEmail), reason: result.blockedReason },
-          'outbound-gateway: failed to send CEO draft-created notification',
-        );
-      }
-    } catch (err) {
-      this.log.error(
-        { err, draftId, accountId },
-        'outbound-gateway: unexpected error sending CEO draft-created notification',
-      );
     }
   }
 
