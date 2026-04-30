@@ -1,9 +1,9 @@
 // Tests for the held-messages-process skill handler.
 //
-// Covers the "identify", "dismiss", and "block" actions, including the
-// idempotent linkIdentity paths for both "identify" and "block" — the cases
-// where a prior partial run or contact-merge has already linked the sender's
-// channel identity before held-messages-process runs.
+// Covers the "identify", "dismiss", and "block" actions, including:
+// - Idempotent linkIdentity paths for both "identify" and "block"
+// - Issue #406: new-contact identify path with duplicate identity (23505)
+// - Issue #407: trust_level is set to 'high' after identify (both paths)
 
 import { describe, it, expect, vi } from 'vitest';
 import { HeldMessagesProcessHandler } from '../../../skills/held-messages-process/handler.js';
@@ -77,6 +77,7 @@ describe('HeldMessagesProcessHandler — identify action', () => {
     const contactService = {
       linkIdentity: vi.fn().mockResolvedValue({ id: 'identity-1' }),
       resolveByChannelIdentity: vi.fn(),
+      setTrustLevel: vi.fn().mockResolvedValue({ id: CONTACT_ID, trustLevel: 'high' }),
     };
     const bus = makeBus();
 
@@ -91,6 +92,7 @@ describe('HeldMessagesProcessHandler — identify action', () => {
       channel: 'email',
       channelIdentifier: 'donna@example.com',
     }));
+    expect(contactService.setTrustLevel).toHaveBeenCalledWith(CONTACT_ID, 'high');
     expect(bus.publish).toHaveBeenCalledOnce();
     expect(heldMessages.markProcessed).toHaveBeenCalledWith(HELD_MSG_ID, CONTACT_ID);
     if (result.success) expect(result.data).toMatchObject({ result: 'identified_and_replayed' });
@@ -119,6 +121,7 @@ describe('HeldMessagesProcessHandler — identify action', () => {
         status: 'confirmed',
         trustLevel: null,
       }),
+      setTrustLevel: vi.fn().mockResolvedValue({ id: CONTACT_ID, trustLevel: 'high' }),
     };
     const bus = makeBus();
 
@@ -214,6 +217,172 @@ describe('HeldMessagesProcessHandler — identify action', () => {
     expect(result.success).toBe(false);
     if (!result.success) expect(result.error).toContain('connection timeout');
     expect(contactService.resolveByChannelIdentity).not.toHaveBeenCalled();
+    expect(heldMessages.markProcessed).not.toHaveBeenCalled();
+  });
+
+  // --- Issue #407: trust_level must be set to 'high' after identify ---
+
+  it('sets trust_level = high after identify so future messages clear the trust floor', async () => {
+    // Regression: held-messages-process was creating contacts without setting
+    // trust_level, so subsequent emails from confirmed contacts were re-held.
+    const heldMessages = {
+      getById: vi.fn().mockResolvedValue(pendingMsg),
+      markProcessed: vi.fn().mockResolvedValue(true),
+    };
+    const contactService = {
+      linkIdentity: vi.fn().mockResolvedValue({ id: 'identity-1' }),
+      resolveByChannelIdentity: vi.fn(),
+      setTrustLevel: vi.fn().mockResolvedValue({ id: CONTACT_ID, trustLevel: 'high' }),
+    };
+    const bus = makeBus();
+
+    const result = await handler.execute(makeCtx(
+      { held_message_id: HELD_MSG_ID, action: 'identify', existing_contact_id: CONTACT_ID },
+      { heldMessages: heldMessages as never, contactService: contactService as never, bus: bus as never },
+    ));
+
+    expect(result.success).toBe(true);
+    expect(contactService.setTrustLevel).toHaveBeenCalledWith(CONTACT_ID, 'high');
+    // setTrustLevel must be called before markProcessed — the trust annotation is
+    // a prerequisite for the contact being fully set up, even if non-fatal.
+    const setTrustOrder = contactService.setTrustLevel.mock.invocationCallOrder[0];
+    const markProcessedOrder = heldMessages.markProcessed.mock.invocationCallOrder[0];
+    expect(setTrustOrder).toBeLessThan(markProcessedOrder);
+  });
+
+  it('setTrustLevel failure is non-fatal — identify still succeeds', async () => {
+    const heldMessages = {
+      getById: vi.fn().mockResolvedValue(pendingMsg),
+      markProcessed: vi.fn().mockResolvedValue(true),
+    };
+    const contactService = {
+      linkIdentity: vi.fn().mockResolvedValue({ id: 'identity-1' }),
+      resolveByChannelIdentity: vi.fn(),
+      setTrustLevel: vi.fn().mockRejectedValue(new Error('DB connection lost')),
+    };
+    const bus = makeBus();
+
+    const result = await handler.execute(makeCtx(
+      { held_message_id: HELD_MSG_ID, action: 'identify', existing_contact_id: CONTACT_ID },
+      { heldMessages: heldMessages as never, contactService: contactService as never, bus: bus as never },
+    ));
+
+    // The identify still succeeds — setTrustLevel failure is non-fatal
+    expect(result.success).toBe(true);
+    expect(contactService.setTrustLevel).toHaveBeenCalledWith(CONTACT_ID, 'high');
+    expect(bus.publish).toHaveBeenCalledOnce();
+    expect(heldMessages.markProcessed).toHaveBeenCalledWith(HELD_MSG_ID, CONTACT_ID);
+  });
+
+  // --- Issue #406: new-contact path must handle duplicate identity (23505) ---
+
+  const NEW_CONTACT_ID = 'dddddddd-eeee-ffff-aaaa-bbbbbbbbbbbb';
+  const ORPHAN_ID = '99999999-8888-7777-6666-555555555555';
+
+  it('new-contact identify: succeeds when sender identity already exists (23505), uses existing contact and cleans up orphan', async () => {
+    // Regression: held-messages-process created a contact then crashed when
+    // linkIdentity threw 23505, leaving the message permanently stuck.
+    const heldMessages = {
+      getById: vi.fn().mockResolvedValue(pendingMsg),
+      markProcessed: vi.fn().mockResolvedValue(true),
+    };
+    const contactService = {
+      createContact: vi.fn().mockResolvedValue({ id: ORPHAN_ID }),
+      linkIdentity: vi.fn().mockRejectedValue(
+        Object.assign(
+          new Error('duplicate key value violates unique constraint "contact_channel_identities_channel_channel_identifier_key"'),
+          { code: '23505' },
+        ),
+      ),
+      resolveByChannelIdentity: vi.fn().mockResolvedValue({
+        contactId: NEW_CONTACT_ID,
+        displayName: 'Donna',
+        role: null,
+        status: 'confirmed',
+        trustLevel: null,
+      }),
+      deleteContact: vi.fn().mockResolvedValue(undefined),
+      setTrustLevel: vi.fn().mockResolvedValue({ id: NEW_CONTACT_ID, trustLevel: 'high' }),
+    };
+    const bus = makeBus();
+
+    const result = await handler.execute(makeCtx(
+      { held_message_id: HELD_MSG_ID, action: 'identify', contact_name: 'Donna' },
+      { heldMessages: heldMessages as never, contactService: contactService as never, bus: bus as never },
+    ));
+
+    expect(result.success).toBe(true);
+    // The existing contact (not the orphan) must be used for processing
+    expect(heldMessages.markProcessed).toHaveBeenCalledWith(HELD_MSG_ID, NEW_CONTACT_ID);
+    // Orphan must be cleaned up
+    expect(contactService.deleteContact).toHaveBeenCalledWith(ORPHAN_ID);
+    // trust_level must still be set on the existing contact
+    expect(contactService.setTrustLevel).toHaveBeenCalledWith(NEW_CONTACT_ID, 'high');
+    expect(bus.publish).toHaveBeenCalledOnce();
+    if (result.success) expect(result.data).toMatchObject({ result: 'identified_and_replayed', contact_id: NEW_CONTACT_ID });
+  });
+
+  it('new-contact identify: orphan delete failure is non-fatal — message still processed', async () => {
+    const heldMessages = {
+      getById: vi.fn().mockResolvedValue(pendingMsg),
+      markProcessed: vi.fn().mockResolvedValue(true),
+    };
+    const contactService = {
+      createContact: vi.fn().mockResolvedValue({ id: ORPHAN_ID }),
+      linkIdentity: vi.fn().mockRejectedValue(
+        Object.assign(
+          new Error('duplicate key value violates unique constraint "contact_channel_identities_channel_channel_identifier_key"'),
+          { code: '23505' },
+        ),
+      ),
+      resolveByChannelIdentity: vi.fn().mockResolvedValue({
+        contactId: NEW_CONTACT_ID,
+        displayName: 'Donna',
+        role: null,
+        status: 'confirmed',
+        trustLevel: null,
+      }),
+      deleteContact: vi.fn().mockRejectedValue(new Error('delete failed')),
+      setTrustLevel: vi.fn().mockResolvedValue({ id: NEW_CONTACT_ID, trustLevel: 'high' }),
+    };
+    const bus = makeBus();
+
+    const result = await handler.execute(makeCtx(
+      { held_message_id: HELD_MSG_ID, action: 'identify', contact_name: 'Donna' },
+      { heldMessages: heldMessages as never, contactService: contactService as never, bus: bus as never },
+    ));
+
+    // Orphan delete failure must NOT prevent the held message from being processed
+    expect(result.success).toBe(true);
+    expect(heldMessages.markProcessed).toHaveBeenCalledWith(HELD_MSG_ID, NEW_CONTACT_ID);
+    expect(bus.publish).toHaveBeenCalledOnce();
+  });
+
+  it('new-contact identify: returns internal error when resolveByChannelIdentity returns null after 23505', async () => {
+    const heldMessages = {
+      getById: vi.fn().mockResolvedValue(pendingMsg),
+      markProcessed: vi.fn(),
+    };
+    const contactService = {
+      createContact: vi.fn().mockResolvedValue({ id: ORPHAN_ID }),
+      linkIdentity: vi.fn().mockRejectedValue(
+        Object.assign(
+          new Error('duplicate key value violates unique constraint "contact_channel_identities_channel_channel_identifier_key"'),
+          { code: '23505' },
+        ),
+      ),
+      resolveByChannelIdentity: vi.fn().mockResolvedValue(null),
+    };
+    const bus = makeBus();
+
+    const result = await handler.execute(makeCtx(
+      { held_message_id: HELD_MSG_ID, action: 'identify', contact_name: 'Donna' },
+      { heldMessages: heldMessages as never, contactService: contactService as never, bus: bus as never },
+    ));
+
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error).toContain('Internal error');
+    expect(bus.publish).not.toHaveBeenCalled();
     expect(heldMessages.markProcessed).not.toHaveBeenCalled();
   });
 });
