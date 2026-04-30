@@ -26,6 +26,9 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Coordinator: contact-lookup-first** — strengthened rule prohibiting any comment on a contact record (role, existence, details) before running `contact-lookup`.
 - **Coordinator: trust narration suppression** — coordinator no longer proactively informs the CEO that their message arrived via a lower-trust channel; channel trust is only raised when declining a specific request because of it.
 
+### Fixed
+- **Silent email drafts** — `OutboundGateway.createEmailDraft()` no longer sends an immediate per-draft email notification to the CEO after every observation-mode triage draft. The notification was counterproductive: if the CEO wasn't going to see the original email, they weren't going to see the notification either. Drafts are now created silently; discovery moves to the end-of-day Signal digest (see issue #403). Removes `notifyCeoDraftCreated` and its private `primaryAccountId` field from `OutboundGateway`.
+
 ---
 
 ## [0.24.0] — 2026-04-29 — "Delegated Authority"

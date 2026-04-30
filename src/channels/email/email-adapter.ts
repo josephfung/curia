@@ -387,8 +387,9 @@ export class EmailAdapter {
    *
    * - direct:         send immediately through the gateway (blocked-contact +
    *                   content filter run inside gateway.send)
-   * - draft_gate:     save as a Nylas draft for human review; the notification +
-   *                   approval + send flow is deferred (TODO(#278))
+   * - draft_gate:     save as a Nylas draft for human review; no notification is
+   *                   sent — the CEO discovers drafts via the end-of-day Signal
+   *                   digest (#403). Approval + send remain deferred (TODO(#278)).
    * - autonomy_gated: check the current global autonomy score; if it meets the
    *                   configured threshold, send directly; otherwise draft-gate
    */
@@ -455,12 +456,13 @@ export class EmailAdapter {
     }
 
     // draft_gate (and autonomy_gated fallback): save as draft for human review.
-    // The gateway notifies the CEO via email after a successful draft creation (#278).
+    // The gateway creates the draft silently — no per-draft email notification is sent.
+    // The CEO discovers pending drafts via the end-of-day Signal digest (#403).
     const draftResult = await outboundGateway.createEmailDraft(sendRequest);
     if (draftResult.success) {
       logger.info(
         { ...logCtx, accountId: this.config.accountId, draftId: draftResult.draftId },
-        'Email reply saved as draft — CEO notification queued',
+        'Email reply saved as draft for CEO review',
       );
     } else if (draftResult.blockedReason === 'Recipient is blocked') {
       // Intentional block — not an infrastructure failure
