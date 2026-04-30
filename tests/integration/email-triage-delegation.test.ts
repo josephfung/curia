@@ -31,6 +31,7 @@ describe('Email-triage delegation integration', () => {
       description: 'Delegate a task to a specialist agent',
       version: '1.0.0',
       sensitivity: 'normal',
+      action_risk: 'none',
       capabilities: ['bus', 'agentRegistry'],
       inputs: { agent: 'string', task: 'string', conversation_id: 'string?' },
       outputs: { response: 'string', agent: 'string' },

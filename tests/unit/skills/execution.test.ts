@@ -14,6 +14,7 @@ function makeManifest(overrides: Partial<SkillManifest> = {}): SkillManifest {
     description: 'A test skill',
     version: '1.0.0',
     sensitivity: 'normal',
+    action_risk: 'none',
     inputs: { query: 'string' },
     outputs: { result: 'string' },
     permissions: [],
