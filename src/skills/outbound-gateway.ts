@@ -499,14 +499,19 @@ export class OutboundGateway {
     // After a successful send, promote the recipient contact from provisional →
     // confirmed (or create one if none exists). The act of sending is the CEO's
     // implicit trust confirmation — replies from this person should never be held.
+    //
+    // IMPORTANT: pass redactedBody here, not request.body / request.message.
+    // The dispatch methods read the body/message field from the request object
+    // they receive — if we pass the original `request`, the unredacted content
+    // reaches Nylas / signal-cli even though redactedBody was computed above.
     if (request.channel === 'email') {
-      const result = await this.dispatchEmail(request);
+      const result = await this.dispatchEmail({ ...request, body: redactedBody });
       if (result.success) {
         await this.promoteOrCreateRecipientContact('email', recipientId);
       }
       return result;
     } else {
-      const result = await this.dispatchSignal(request);
+      const result = await this.dispatchSignal({ ...request, message: redactedBody });
       // Only promote for 1:1 Signal sends — group sends use a groupId, not an individual
       // phone number. Creating a contact for a group token would pollute the contacts table
       // and would not help with inbound replies (which come from member numbers, not the group ID).
