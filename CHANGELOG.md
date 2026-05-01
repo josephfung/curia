@@ -20,12 +20,16 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Added
 
 - **Autonomy web UI** — dedicated settings page for viewing and adjusting the autonomy score, with paginated change history. New REST endpoints: `GET/PUT /api/autonomy`, `GET /api/autonomy/history`. Closes #409.
+- **PII outbound redaction** — configurable per-channel PII redaction for outbound messages. Detected PII (credit cards, phone numbers, SSNs, etc.) is redacted in email and Signal replies based on channel policy (`channel_policies` in config). CEO trust level bypasses redaction. Publishes `outbound.pii-redacted` audit event. New `PiiRedactor` class at `src/dispatch/pii-redactor.ts`. (#249)
+- **`detectPii()` function** — shared PII detection foundation extracted from `scrubPii()`. Returns `PiiMatch[]` with labels and positions. Used by both the log/LLM scrubber and the outbound PII redactor. (#249)
 - **Autonomy hard gates (spec 14, Phase 2):** execution layer blocks skill invocations when the live autonomy score is below the skill's declared `action_risk` threshold. Full restriction (score < 60) blocks all non-read skills. `OutboundGateway.send()` independently blocks direct sends when score < 70 — drafts remain available as the intended fallback. Both gates emit audit events (`autonomy.skill_blocked`, `autonomy.send_blocked`) and return advisory failures that surface the required score to the agent.
 - **Logo assets** — added SVG wordmark (`logo-curia-wordmark.svg`) and mark (`logo-curia-mark.svg`) to `docs/assets/`; replaced text-based "CURIA" placeholders in the Knowledge Graph UI (sidebar, auth wall, onboarding wizard) with the inline SVG wordmark; updated README header to use the SVG wordmark and removed the old `curia-header.png`
 - **CC role detection** — `convertNylasMessage` now accepts a `selfEmail` parameter and computes `curiaRole` (`'to'` | `'cc'` | `'bcc'`) and `primaryRecipientEmails` in the converted email metadata, so the dispatcher can distinguish emails addressed directly to Curia from emails where Curia was CC'd.
 
 ### Changed
 
+- **Trust levels** — added `'ceo'` trust level above `'high'` with ordinal comparison via `meetsMinimumTrust()` helper in `src/contacts/types.ts`. CEO bootstrap sets `trust_level = 'ceo'` for the CEO contact. (#249)
+- **`checkContactDataLeak`** — recipient trust now determined via `meetsMinimumTrust(trustLevel, 'high')` instead of direct equality check; CEO identified by trust level rather than email address comparison. (#249)
 - **PII scrubber dependency** — replaced deprecated `@openredaction/openredaction` with the actively maintained unscoped `openredaction` package (v1.1.2); dropped PHONE_UK pattern (v1.1 regex too broad for log scrubbing — PHONE_UK_MOBILE provides UK coverage); reordered CREDIT_CARD before PHONE patterns to prevent partial matches; added PHONE_US regex fixup for parenthesized `(NXX) NXX-XXXX` format (fixes #252)
 - **`action_risk` enforcement:** `SkillRegistry.register()` now throws at startup if a skill manifest is missing the `action_risk` field (previously accepted silently).
 - **README** — updated messaging to align with "Digital Office of the CEO" positioning: reframed problem statement around CEO pain points, led with capabilities over technical comparisons, added governance-first framing and autonomy row to comparison table
