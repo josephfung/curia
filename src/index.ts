@@ -60,6 +60,8 @@ import { InboundScanner } from './dispatch/inbound-scanner.js';
 import { RateLimiter } from './dispatch/rate-limiter.js';
 import { loadExtraInjectionPatterns, type ExtraInjectionPattern } from './dispatch/security-config-loader.js';
 import { parseExtraPiiPatterns, getMissingBuiltInPatterns, getBuiltInPatternCount } from './pii/scrubber.js';
+import type { PiiPattern } from './pii/scrubber.js';
+import { PiiRedactor } from './dispatch/pii-redactor.js';
 import { setErrorPiiPatterns } from './errors/classify.js';
 import type { TrustScorerWeights } from './dispatch/trust-scorer.js';
 import { SchedulerService } from './scheduler/scheduler-service.js';
@@ -653,6 +655,7 @@ async function main(): Promise<void> {
       ceoEmail: config.ceoPrimaryEmail || undefined,
       logger,
       autonomyService,
+      piiRedactor,
     });
     logger.info({
       emailAccounts: [...nylasClientMap.keys()],
@@ -932,18 +935,48 @@ async function main(): Promise<void> {
   // An invalid extra pattern is treated as fatal: the operator's intent was to
   // protect a specific PII type and silently ignoring their config would mean
   // that data flows unredacted to the LLM without any warning.
+  //
+  // extraPatterns is declared at outer scope so it can be passed to PiiRedactor below
+  // (outbound redaction reuses the same custom patterns as the inbound scrubber).
   const piiPatternEntries = yamlConfig.pii?.extra_patterns ?? [];
-  let extraPiiPatternCount = 0;
+  let extraPatterns: PiiPattern[] = [];
   if (piiPatternEntries.length > 0) {
     // Errors here are intentionally not caught — parseExtraPiiPatterns throws on
     // invalid regex or missing fields, which is treated as a startup-blocking misconfiguration.
-    const extraPiiPatterns = parseExtraPiiPatterns(
+    extraPatterns = parseExtraPiiPatterns(
       piiPatternEntries,
       path.join(configDir, 'default.yaml'),
     );
-    setErrorPiiPatterns(extraPiiPatterns);
-    extraPiiPatternCount = extraPiiPatterns.length;
+    setErrorPiiPatterns(extraPatterns);
   }
+  const extraPiiPatternCount = extraPatterns.length;
+
+  // Outbound PII redactor — sits between the agent response and the channel
+  // adapter. Strips PII from outbound messages based on channel policy and
+  // recipient trust level before content validation or delivery.
+  // Config defaults: enabled=true, trust_override=['ceo'], default='block'.
+  const outboundRedactionConfig = {
+    enabled: yamlConfig.pii?.outbound_redaction?.enabled ?? true,
+    trust_override: yamlConfig.pii?.outbound_redaction?.trust_override ?? ['ceo'],
+    default: (yamlConfig.pii?.outbound_redaction?.default ?? 'block') as 'block' | 'allow',
+    // Normalize channel_policies: the YAML type allows `allow` to be optional on
+    // each entry, but OutboundRedactionConfig requires it. Default to [] per entry.
+    channel_policies: Object.fromEntries(
+      Object.entries(yamlConfig.pii?.outbound_redaction?.channel_policies ?? {}).map(
+        ([ch, policy]) => [ch, { allow: policy.allow ?? [] }],
+      ),
+    ),
+  };
+  const piiRedactor = new PiiRedactor({
+    config: outboundRedactionConfig,
+    bus,
+    logger,
+    extraPatterns, // same patterns used by the inbound scrubber
+  });
+  logger.info(
+    { enabled: outboundRedactionConfig.enabled, trustOverride: outboundRedactionConfig.trust_override },
+    'Outbound PII redactor initialized',
+  );
 
   // Log the scrubber status after the logger is available (patterns are loaded at module
   // init time, before pino exists, so any load-time failures are deferred to here).
