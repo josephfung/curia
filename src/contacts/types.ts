@@ -129,7 +129,28 @@ export interface PermissionDef {
   sensitivity: 'high' | 'medium' | 'low';
 }
 
-export type TrustLevel = 'high' | 'medium' | 'low';
+export type TrustLevel = 'ceo' | 'high' | 'medium' | 'low';
+
+// Ordinal ranking for trust level comparison. Higher rank = more trusted.
+// Used by meetsMinimumTrust() so callers don't need to enumerate every level.
+const TRUST_RANK: Record<TrustLevel, number> = {
+  low: 0,
+  medium: 1,
+  high: 2,
+  ceo: 3,
+};
+
+/**
+ * Check whether an actual trust level meets or exceeds a required minimum.
+ * Returns false for null (unknown contacts default to untrusted).
+ */
+export function meetsMinimumTrust(
+  actual: TrustLevel | null,
+  required: TrustLevel,
+): boolean {
+  if (actual === null) return false;
+  return TRUST_RANK[actual] >= TRUST_RANK[required];
+}
 
 export interface AuthorizationResult {
   allowed: string[];
