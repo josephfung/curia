@@ -52,7 +52,14 @@ function extractPattern(typeName: string): RegExp | null {
   // Clone with explicit global flag — the library's regexes use global already,
   // but we clone to avoid shared lastIndex state across concurrent calls.
   const flags = entry.regex.flags.includes('g') ? entry.regex.flags : entry.regex.flags + 'g';
-  return new RegExp(source, flags);
+  try {
+    return new RegExp(source, flags);
+  } catch {
+    // The regex fixup (or a library change) produced an invalid pattern.
+    // Return null so buildBuiltInPatterns() records this in missingPatternTypes
+    // and index.ts logs the failure at error level once the logger is available.
+    return null;
+  }
 }
 
 /**
