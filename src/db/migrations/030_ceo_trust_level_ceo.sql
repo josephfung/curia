@@ -1,27 +1,19 @@
--- Migration 030: Elevate CEO contact trust level from 'high' to 'ceo'
+-- Migration 030: Widen trust_level check constraint to include the 'ceo' tier
 --
--- The 'ceo' level sits above 'high' in the ordinal ranking, enabling
--- trust-based policy decisions (e.g. PII redaction bypass) that should
--- only apply to the principal, not all high-trust contacts.
+-- Schema change only — no data migration. The CEO contact's trust_level is set to
+-- 'ceo' by the bootstrap process (src/contacts/ceo-bootstrap.ts), which resolves
+-- the CEO contact by email address (config.ceoPrimaryEmail) and uses the contact's
+-- own id — not a role/title comparison — to perform the update. The bootstrap is
+-- idempotent and runs on every startup, so no SQL data migration is needed here.
 --
--- Requires widening the contacts_trust_level_check constraint (added in
--- migration 020) to include the new 'ceo' value before the UPDATE can run.
+-- This migration must run before the first startup that expects trust_level = 'ceo'
+-- to be a valid value in the check constraint.
 --
--- Reversal:
---   UPDATE contacts SET trust_level = 'high', updated_at = now()
---     WHERE trust_level = 'ceo' AND role = 'ceo';
+-- Reversal (drops 'ceo' from the allowed set — only safe after bootstrap is reverted):
 --   ALTER TABLE contacts DROP CONSTRAINT contacts_trust_level_check;
 --   ALTER TABLE contacts ADD CONSTRAINT contacts_trust_level_check
 --     CHECK (trust_level IN ('high', 'medium', 'low') OR trust_level IS NULL);
 
--- Widen the trust_level constraint to allow the new 'ceo' tier.
 ALTER TABLE contacts DROP CONSTRAINT contacts_trust_level_check;
 ALTER TABLE contacts ADD CONSTRAINT contacts_trust_level_check
   CHECK (trust_level IN ('ceo', 'high', 'medium', 'low') OR trust_level IS NULL);
-
--- Elevate the CEO contact to the new 'ceo' trust level.
-UPDATE contacts
-SET    trust_level = 'ceo',
-       updated_at  = now()
-WHERE  trust_level = 'high'
-AND    role = 'ceo';

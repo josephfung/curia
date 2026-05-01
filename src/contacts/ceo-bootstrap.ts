@@ -68,19 +68,19 @@ export async function bootstrapCeoContact(
     const { contact_id, contact_status, identity_verified, display_name: existingName } = existing.rows[0];
     let { kg_node_id } = existing.rows[0];
 
-    // Always ensure role = 'ceo' and trust_level = 'high' on the CEO contact regardless
+    // Always ensure role = 'ceo' and trust_level = 'ceo' on the CEO contact regardless
     // of which path brought us here. This is idempotent — the UPDATE is a no-op when both
-    // are already correct. Without trust_level = 'high', a second CEO email address linked
+    // are already correct. Without trust_level = 'ceo', a second CEO email address linked
     // to the same contact would not match the single CEO_PRIMARY_EMAIL config string and
     // would fail the outbound filter's trust check. Setting role keeps metadata consistent
     // even if the contact was initially auto-created without a role.
     await pool.query(
       `UPDATE contacts
        SET role = 'ceo',
-           trust_level = 'high',
+           trust_level = 'ceo',
            updated_at = now()
        WHERE id = $1
-         AND (role IS DISTINCT FROM 'ceo' OR trust_level IS DISTINCT FROM 'high')`,
+         AND (role IS DISTINCT FROM 'ceo' OR trust_level IS DISTINCT FROM 'ceo')`,
       [contact_id],
     );
 
@@ -142,7 +142,7 @@ export async function bootstrapCeoContact(
     await client.query('BEGIN');
     await client.query(
       `INSERT INTO contacts (id, kg_node_id, display_name, role, status, trust_level, created_at, updated_at)
-       VALUES ($1, $2, $3, 'ceo', 'confirmed', 'high', now(), now())`,
+       VALUES ($1, $2, $3, 'ceo', 'confirmed', 'ceo', now(), now())`,
       [contactId, kgNodeId, displayName],
     );
     await client.query(
