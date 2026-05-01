@@ -241,4 +241,41 @@ export class AutonomyService {
       changedAt: row.changed_at,
     }));
   }
+
+  /**
+   * Return paginated history entries (newest first) with total count.
+   * Used by the web UI's "Show more" pagination.
+   */
+  async getHistoryPaginated(limit = 5, offset = 0): Promise<{ rows: AutonomyHistoryEntry[]; total: number }> {
+    const countResult = await this.pool.query<{ count: string }>(
+      'SELECT COUNT(*)::text AS count FROM autonomy_history',
+    );
+    const total = parseInt(countResult.rows[0]!.count, 10);
+
+    const result = await this.pool.query<{
+      id: number;
+      score: number;
+      previous_score: number | null;
+      band: string;
+      changed_by: string;
+      reason: string | null;
+      changed_at: Date;
+    }>(
+      'SELECT id, score, previous_score, band, changed_by, reason, changed_at FROM autonomy_history ORDER BY changed_at DESC LIMIT $1 OFFSET $2',
+      [limit, offset],
+    );
+
+    return {
+      total,
+      rows: result.rows.map(row => ({
+        id: row.id,
+        score: row.score,
+        previousScore: row.previous_score,
+        band: row.band as AutonomyBand,
+        changedBy: row.changed_by,
+        reason: row.reason,
+        changedAt: row.changed_at,
+      })),
+    };
+  }
 }
