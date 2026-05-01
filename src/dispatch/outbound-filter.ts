@@ -13,6 +13,7 @@
 // the two boundaries and risk one change silently weakening the other.
 
 import type { TrustLevel } from '../contacts/types.js';
+import { meetsMinimumTrust } from '../contacts/types.js';
 
 export interface FilterCheckInput {
   content: string;
@@ -292,10 +293,9 @@ export class OutboundContentFilter {
    * Allow condition:
    *   no third-party email OR recipientIsTrusted
    *
-   * recipientIsTrusted is true when:
-   *   - recipientEmail matches ceoEmail (the principal always qualifies), OR
-   *   - the recipient contact has trustLevel === 'high' in the contact DB
-   *     (e.g. the CEO's EA or CFO, explicitly elevated by the CEO)
+   * recipientIsTrusted is true when meetsMinimumTrust(recipientTrustLevel, 'high').
+   * This covers trustLevel='high' (explicit CEO designation, e.g. EA or CFO) and
+   * trustLevel='ceo' (the principal), both of which outrank the 'high' threshold.
    *
    * Trusted recipients can receive third-party contact data regardless of whether
    * the message was triggered by a user request or a scheduled routine — this
@@ -316,11 +316,10 @@ export class OutboundContentFilter {
     ]);
 
     // Determine if the recipient qualifies as trusted.
-    // The CEO's own email always qualifies (checked via config.ceoEmail comparison).
-    // A high-trust contact also qualifies — trustLevel='high' is an explicit CEO designation.
-    const recipientIsTrusted =
-      (this.config.ceoEmail !== '' && recipientEmail.toLowerCase() === this.config.ceoEmail.toLowerCase()) ||
-      recipientTrustLevel === 'high';
+    // Uses meetsMinimumTrust() against the 'high' threshold so that both
+    // trustLevel='high' (explicit CEO designation, e.g. EA or CFO) and
+    // trustLevel='ceo' (the principal) are accepted. Null (unknown contact) is false.
+    const recipientIsTrusted = meetsMinimumTrust(recipientTrustLevel, 'high');
 
     // Trusted recipient: allow third-party emails in content without scanning.
     // This handles both user-initiated requests ("what is Hamilton's email?") and
