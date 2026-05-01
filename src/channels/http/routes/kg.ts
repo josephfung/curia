@@ -3380,6 +3380,10 @@ function createUiHtml(): string {
           autonomySavedScore = data.autonomy.score;
           renderAutonomyState(data.autonomy.score, data.autonomy.band, data.autonomy.bandDescription);
           document.getElementById('autonomy-slider').value = data.autonomy.score;
+        })
+        .catch(function() {
+          document.getElementById('autonomy-current').textContent =
+            'Failed to load autonomy settings.';
         });
 
       // Reset and load history
@@ -3451,6 +3455,9 @@ function createUiHtml(): string {
 
           var btn = document.getElementById('autonomy-show-more-btn');
           btn.style.display = (autonomyHistoryOffset < autonomyHistoryTotal) ? 'inline-block' : 'none';
+        })
+        .catch(function() {
+          document.getElementById('autonomy-show-more-btn').style.display = 'none';
         });
     }
 
