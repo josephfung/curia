@@ -42,10 +42,13 @@ describe('AutonomyService.getHistoryPaginated', () => {
       `INSERT INTO autonomy_config (id, score, band, updated_by) VALUES (1, 80, 'spot-check', 'test')`
     );
     for (let i = 1; i <= 8; i++) {
+      // Compute the timestamp in JavaScript so we can pass it as a parameter
+      // rather than interpolating into the SQL string (policy: parameterized queries only)
+      const changedAt = new Date(Date.now() - (9 - i) * 60 * 60 * 1000);
       await pool.query(
         `INSERT INTO autonomy_history (score, previous_score, band, changed_by, reason, changed_at)
-         VALUES ($1, $2, $3, $4, $5, now() - interval '${9 - i} hours')`,
-        [50 + i * 5, 50 + (i - 1) * 5, 'approval-required', 'test', `Change ${i}`]
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        [50 + i * 5, 50 + (i - 1) * 5, 'approval-required', 'test', `Change ${i}`, changedAt]
       );
     }
   });
