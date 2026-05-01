@@ -204,6 +204,14 @@
           }
         }
       }
+    },
+    "contact_creation_limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "max_per_message": { "type": "integer", "minimum": 1 },
+        "max_per_hour": { "type": "integer", "minimum": 1 }
+      }
     }
   }
 }
