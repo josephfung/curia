@@ -55,7 +55,8 @@ export function loadAuthConfig(configDir: string): AuthConfig {
 
   const permissions: Record<string, PermissionDef> = {};
   for (const [permName, entry] of Object.entries(permsTyped.permissions)) {
-    const sensitivity = entry.sensitivity as TrustLevel;
+    // Permission sensitivity uses only high/medium/low — 'ceo' is a contact trust level, not a sensitivity.
+    const sensitivity = entry.sensitivity as 'high' | 'medium' | 'low';
     if (!['high', 'medium', 'low'].includes(sensitivity)) {
       throw new Error(`Invalid sensitivity '${sensitivity}' for permission '${permName}'`);
     }

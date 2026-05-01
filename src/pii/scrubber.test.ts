@@ -209,10 +209,10 @@ describe('detectPii', () => {
     const text = 'Contact user@example.com for help';
     const matches = detectPii(text);
     expect(matches).toHaveLength(1);
-    expect(matches[0].label).toMatch(/email/i);
-    expect(matches[0].matched).toBe('user@example.com');
-    expect(matches[0].start).toBe(8);
-    expect(matches[0].end).toBe(24);
+    expect(matches[0]!.label).toMatch(/email/i);
+    expect(matches[0]!.matched).toBe('user@example.com');
+    expect(matches[0]!.start).toBe(8);
+    expect(matches[0]!.end).toBe(24);
   });
 
   it('detects a credit card number', () => {
@@ -234,16 +234,16 @@ describe('detectPii', () => {
     const text = 'from alice@example.com to bob@other.org';
     const matches = detectPii(text);
     expect(matches).toHaveLength(2);
-    expect(matches[0].start).toBeLessThan(matches[1].start);
-    expect(matches[0].matched).toBe('alice@example.com');
-    expect(matches[1].matched).toBe('bob@other.org');
+    expect(matches[0]!.start).toBeLessThan(matches[1]!.start);
+    expect(matches[0]!.matched).toBe('alice@example.com');
+    expect(matches[1]!.matched).toBe('bob@other.org');
   });
 
   it('match positions reference the original text', () => {
     const text = 'error for user@example.com in task';
     const matches = detectPii(text);
     expect(matches).toHaveLength(1);
-    const m = matches[0];
+    const m = matches[0]!;
     expect(text.slice(m.start, m.end)).toBe(m.matched);
   });
 

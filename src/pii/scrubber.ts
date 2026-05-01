@@ -216,7 +216,8 @@ export function scrubPii(text: string, extraPatterns: PiiPattern[] = []): string
   // string length changes with each substitution.
   let result = text;
   for (let i = matches.length - 1; i >= 0; i--) {
-    const match = matches[i];
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+    const match = matches[i]!;  // safe: i is a valid index (0 ≤ i < matches.length)
     const replacement = replacementByName.get(match.label) ?? `[${match.label.toUpperCase()}]`;
     result = result.slice(0, match.start) + replacement + result.slice(match.end);
   }
