@@ -21,6 +21,7 @@ describe('meetsMinimumTrust', () => {
   });
 
   it('medium meets medium and below', () => {
+    expect(meetsMinimumTrust('medium', 'ceo')).toBe(false);
     expect(meetsMinimumTrust('medium', 'high')).toBe(false);
     expect(meetsMinimumTrust('medium', 'medium')).toBe(true);
     expect(meetsMinimumTrust('medium', 'low')).toBe(true);

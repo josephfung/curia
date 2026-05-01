@@ -13,6 +13,7 @@ import type {
   ContactStatus,
   TrustLevel,
 } from './types.js';
+import { TRUST_RANK } from './types.js';
 
 interface AuthOverrideInput {
   permission: string;
@@ -25,14 +26,6 @@ export interface AuthEvaluateInput {
   channel: string;
   overrides: AuthOverrideInput[];
 }
-
-// Trust level numeric values for comparison. 'ceo' ranks above 'high'.
-const TRUST_RANK: Record<TrustLevel, number> = {
-  ceo: 4,
-  high: 3,
-  medium: 2,
-  low: 1,
-};
 
 /**
  * Deterministic authorization service.
