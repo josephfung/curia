@@ -625,6 +625,56 @@ async function main(): Promise<void> {
     logger.info({ markerCount: systemPromptMarkers.length }, 'Outbound content filter initialized');
   }
 
+  // PII scrubbing for LLM-facing error strings — loads extra patterns from
+  // config/default.yaml pii.extra_patterns and injects them into classify.ts.
+  // An invalid extra pattern is treated as fatal: the operator's intent was to
+  // protect a specific PII type and silently ignoring their config would mean
+  // that data flows unredacted to the LLM without any warning.
+  //
+  // extraPatterns is also passed to PiiRedactor below for outbound redaction
+  // (outbound redaction reuses the same custom patterns as the inbound scrubber).
+  const piiPatternEntries = yamlConfig.pii?.extra_patterns ?? [];
+  let extraPatterns: PiiPattern[] = [];
+  if (piiPatternEntries.length > 0) {
+    // Errors here are intentionally not caught — parseExtraPiiPatterns throws on
+    // invalid regex or missing fields, which is treated as a startup-blocking misconfiguration.
+    extraPatterns = parseExtraPiiPatterns(
+      piiPatternEntries,
+      path.join(configDir, 'default.yaml'),
+    );
+    setErrorPiiPatterns(extraPatterns);
+  }
+  const extraPiiPatternCount = extraPatterns.length;
+
+  // Outbound PII redactor — sits between the agent response and the channel
+  // adapter. Strips PII from outbound messages based on channel policy and
+  // recipient trust level before content validation or delivery.
+  // Config defaults: enabled=true, trust_override=['ceo'], default='block'.
+  //
+  // Must be constructed BEFORE OutboundGateway, which receives it as a constructor arg.
+  const outboundRedactionConfig = {
+    enabled: yamlConfig.pii?.outbound_redaction?.enabled ?? true,
+    trust_override: yamlConfig.pii?.outbound_redaction?.trust_override ?? ['ceo'],
+    default: (yamlConfig.pii?.outbound_redaction?.default ?? 'block') as 'block' | 'allow',
+    // Normalize channel_policies: the YAML type allows `allow` to be optional on
+    // each entry, but OutboundRedactionConfig requires it. Default to [] per entry.
+    channel_policies: Object.fromEntries(
+      Object.entries(yamlConfig.pii?.outbound_redaction?.channel_policies ?? {}).map(
+        ([ch, policy]) => [ch, { allow: policy.allow ?? [] }],
+      ),
+    ),
+  };
+  const piiRedactor = new PiiRedactor({
+    config: outboundRedactionConfig,
+    bus,
+    logger,
+    extraPatterns, // same patterns used by the inbound scrubber
+  });
+  logger.info(
+    { enabled: outboundRedactionConfig.enabled, trustOverride: outboundRedactionConfig.trust_override },
+    'Outbound PII redactor initialized',
+  );
+
   // Outbound gateway — single choke-point for all outbound external communication.
   // Runs blocked-contact checks and content filtering before any message leaves Curia.
   //
@@ -929,54 +979,6 @@ async function main(): Promise<void> {
   }
   scheduler.start();
   logger.info('Scheduler started');
-
-  // PII scrubbing for LLM-facing error strings — loads extra patterns from
-  // config/default.yaml pii.extra_patterns and injects them into classify.ts.
-  // An invalid extra pattern is treated as fatal: the operator's intent was to
-  // protect a specific PII type and silently ignoring their config would mean
-  // that data flows unredacted to the LLM without any warning.
-  //
-  // extraPatterns is declared at outer scope so it can be passed to PiiRedactor below
-  // (outbound redaction reuses the same custom patterns as the inbound scrubber).
-  const piiPatternEntries = yamlConfig.pii?.extra_patterns ?? [];
-  let extraPatterns: PiiPattern[] = [];
-  if (piiPatternEntries.length > 0) {
-    // Errors here are intentionally not caught — parseExtraPiiPatterns throws on
-    // invalid regex or missing fields, which is treated as a startup-blocking misconfiguration.
-    extraPatterns = parseExtraPiiPatterns(
-      piiPatternEntries,
-      path.join(configDir, 'default.yaml'),
-    );
-    setErrorPiiPatterns(extraPatterns);
-  }
-  const extraPiiPatternCount = extraPatterns.length;
-
-  // Outbound PII redactor — sits between the agent response and the channel
-  // adapter. Strips PII from outbound messages based on channel policy and
-  // recipient trust level before content validation or delivery.
-  // Config defaults: enabled=true, trust_override=['ceo'], default='block'.
-  const outboundRedactionConfig = {
-    enabled: yamlConfig.pii?.outbound_redaction?.enabled ?? true,
-    trust_override: yamlConfig.pii?.outbound_redaction?.trust_override ?? ['ceo'],
-    default: (yamlConfig.pii?.outbound_redaction?.default ?? 'block') as 'block' | 'allow',
-    // Normalize channel_policies: the YAML type allows `allow` to be optional on
-    // each entry, but OutboundRedactionConfig requires it. Default to [] per entry.
-    channel_policies: Object.fromEntries(
-      Object.entries(yamlConfig.pii?.outbound_redaction?.channel_policies ?? {}).map(
-        ([ch, policy]) => [ch, { allow: policy.allow ?? [] }],
-      ),
-    ),
-  };
-  const piiRedactor = new PiiRedactor({
-    config: outboundRedactionConfig,
-    bus,
-    logger,
-    extraPatterns, // same patterns used by the inbound scrubber
-  });
-  logger.info(
-    { enabled: outboundRedactionConfig.enabled, trustOverride: outboundRedactionConfig.trust_override },
-    'Outbound PII redactor initialized',
-  );
 
   // Log the scrubber status after the logger is available (patterns are loaded at module
   // init time, before pino exists, so any load-time failures are deferred to here).
