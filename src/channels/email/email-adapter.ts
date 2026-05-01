@@ -86,8 +86,8 @@ export class EmailAdapter {
 
   /** Sliding-window counter for the per-hour rate limit. */
   private hourlyContactCount = 0;
-  /** Start of the current hourly sliding window (epoch ms). */
-  private hourlyWindowStart = Date.now();
+  /** Start of the current hourly window (epoch ms). Zero means the window hasn't started yet. */
+  private hourlyWindowStart = 0;
 
   /** Epoch-ms timestamp of the last rate-limit notification per limit type, for dedup. */
   private lastNotifiedPerMessage = 0;
@@ -532,9 +532,11 @@ export class EmailAdapter {
   ): Promise<void> {
     const { contactService, logger, selfEmail, contactCreationMaxPerMessage, contactCreationMaxPerHour } = this.config;
 
-    // Reset the hourly window if it has expired
+    // Reset (or lazily start) the hourly window if it has expired.
+    // hourlyWindowStart = 0 means the window hasn't opened yet — treat it as always-expired
+    // so the window anchors to the first actual contact creation, not process startup.
     const now = Date.now();
-    if (now - this.hourlyWindowStart > 3_600_000) {
+    if (now - this.hourlyWindowStart >= 3_600_000) {
       this.hourlyContactCount = 0;
       this.hourlyWindowStart = now;
     }
