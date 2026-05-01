@@ -986,7 +986,7 @@ describe('PII redaction pipeline step', () => {
       redactions: [{ patternLabel: 'credit_card', channelId: 'email', replacedWith: '[REDACTED: CREDIT_CARD]' }],
     }));
 
-    const { gateway, contentFilter } = makeGateway(piiRedactor);
+    const { gateway, contentFilter, nylasClient } = makeGateway(piiRedactor);
     const result = await gateway.send(piiRequest);
 
     expect(result.success).toBe(true);
@@ -999,6 +999,14 @@ describe('PII redaction pipeline step', () => {
     expect(contentFilter.check).not.toHaveBeenCalledWith(expect.objectContaining({
       content: piiRequest.body,
     }));
+
+    // Verify dispatch also received redacted content (not the original with PII).
+    // The body goes through markdownToHtml() before reaching Nylas, so we
+    // serialise the entire sendMessage call args and check for the redaction
+    // marker rather than an exact string match.
+    const sendCall = (nylasClient.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(JSON.stringify(sendCall)).toContain('[REDACTED:');
+    expect(JSON.stringify(sendCall)).not.toContain('4111');
   });
 
   it('does NOT redact PII for CEO recipients (trust_override bypasses redaction)', async () => {
