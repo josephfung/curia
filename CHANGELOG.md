@@ -13,6 +13,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Delegate @-prefix normalization** — LLMs sometimes pass agent names with a leading `@` (e.g. `@essay-editor` instead of `essay-editor`), causing registry lookup misses and lost timeout injection. The runtime now strips leading `@` from delegate agent names before registry lookup and handler dispatch.
+
 ### Added
 
 - **Autonomy hard gates (spec 14, Phase 2):** execution layer blocks skill invocations when the live autonomy score is below the skill's declared `action_risk` threshold. Full restriction (score < 60) blocks all non-read skills. `OutboundGateway.send()` independently blocks direct sends when score < 70 — drafts remain available as the intended fallback. Both gates emit audit events (`autonomy.skill_blocked`, `autonomy.send_blocked`) and return advisory failures that surface the required score to the agent.

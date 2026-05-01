@@ -1728,5 +1728,66 @@ describe('AgentRuntime chatWithRetry', () => {
       const inputArg = invokeCall?.[1] as Record<string, unknown>;
       expect(inputArg).not.toHaveProperty('timeout_ms');
     });
+
+    it('strips leading @ from agent name and still injects timeout_ms', async () => {
+      const logger = createLogger('error');
+      const bus = new EventBus(logger);
+
+      let callCount = 0;
+      const provider: LLMProvider = {
+        id: 'mock',
+        chat: vi.fn().mockImplementation(async () => {
+          callCount++;
+          if (callCount === 1) {
+            return {
+              type: 'tool_use' as const,
+              // LLM uses @-mention style — runtime should strip the '@'
+              toolCalls: [{ id: 'call-delegate-at', name: 'delegate', input: { agent: '@essay-editor', task: 'polish essay' } }],
+              usage: { inputTokens: 100, outputTokens: 50 },
+            };
+          }
+          return { type: 'text' as const, content: 'Done', usage: { inputTokens: 200, outputTokens: 60 } };
+        }),
+      };
+
+      const { AgentRegistry } = await import('../../../src/agents/agent-registry.js');
+      const agentRegistry = new AgentRegistry();
+      agentRegistry.register('essay-editor', { role: 'specialist', description: 'Essay editor', expectedDurationSeconds: 600 });
+
+      const mockExecution = {
+        invoke: vi.fn().mockResolvedValue({ success: true, data: { response: 'Polished!', agent: 'essay-editor' } }),
+      } as unknown as ExecutionLayer;
+
+      const agent = new AgentRuntime({
+        agentId: 'coordinator',
+        systemPrompt: 'You are an assistant.',
+        provider,
+        bus,
+        logger,
+        executionLayer: mockExecution,
+        skillToolDefs: [{ name: 'delegate', description: 'Delegate', input_schema: { type: 'object' as const, properties: { agent: { type: 'string' }, task: { type: 'string' } }, required: ['agent', 'task'] } }],
+        agentRegistry,
+      });
+      agent.register();
+
+      const task = createAgentTask({
+        agentId: 'coordinator',
+        conversationId: 'conv-at-prefix',
+        channelId: 'cli',
+        senderId: 'user',
+        content: 'Polish my essay',
+        parentEventId: 'parent-at-prefix',
+      });
+      await bus.publish('dispatch', task);
+
+      // The execution layer should receive the normalized agent name (no @)
+      // AND the injected timeout_ms (proving registry lookup worked after stripping @)
+      expect(mockExecution.invoke).toHaveBeenCalledWith(
+        'delegate',
+        expect.objectContaining({ agent: 'essay-editor', timeout_ms: 600000 }),
+        undefined,
+        expect.any(Object),
+      );
+    });
   });
 });

@@ -552,6 +552,19 @@ export class AgentRuntime {
             );
           } else {
             const inputRecord = skillInput as Record<string, unknown>;
+
+            // Normalize agent name: LLMs sometimes produce "@agent-name" (bullpen @-mention
+            // style). Strip the leading '@' so the registry lookup and downstream handler
+            // see the canonical registered name.
+            if (typeof inputRecord['agent'] === 'string' && (inputRecord['agent'] as string).startsWith('@')) {
+              const rawName = inputRecord['agent'] as string;
+              inputRecord['agent'] = rawName.slice(1);
+              logger.info(
+                { agentId, rawAgent: rawName, normalizedAgent: inputRecord['agent'] },
+                'Stripped leading @ from delegate agent name',
+              );
+            }
+
             if (!('timeout_ms' in inputRecord) || inputRecord['timeout_ms'] === undefined) {
               // Source 1: scheduler's expectedDurationSeconds on the task event
               let durationSeconds = taskEvent.payload.expectedDurationSeconds;
