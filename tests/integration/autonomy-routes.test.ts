@@ -9,7 +9,7 @@ import { AutonomyService } from '../../src/autonomy/autonomy-service.js';
 const logger = pino({ level: 'silent' });
 
 describe('Autonomy REST routes', () => {
-  const app = Fastify();
+  let app: ReturnType<typeof Fastify>;
   let pool: pg.Pool;
   let autonomyService: AutonomyService;
 
@@ -19,6 +19,7 @@ describe('Autonomy REST routes', () => {
   const AUTH_HEADER = { 'x-web-bootstrap-secret': TEST_SECRET };
 
   beforeAll(async () => {
+    app = Fastify();
     pool = new pg.Pool({ connectionString: process.env['DATABASE_URL'] });
     autonomyService = new AutonomyService(pool, logger);
 
@@ -89,6 +90,14 @@ describe('Autonomy REST routes', () => {
   });
 
   describe('PUT /api/autonomy', () => {
+    beforeAll(async () => {
+      // Reset score to 75 so PUT tests start from a known state
+      await pool.query(
+        `UPDATE autonomy_config SET score = 75, band = 'approval-required', updated_by = 'test' WHERE id = 1`
+      );
+      await pool.query('DELETE FROM autonomy_history');
+    });
+
     it('sets score and returns new config', async () => {
       const res = await app.inject({
         method: 'PUT',
@@ -136,8 +145,18 @@ describe('Autonomy REST routes', () => {
   });
 
   describe('GET /api/autonomy/history', () => {
+    beforeAll(async () => {
+      // Ensure at least one history entry exists by making a known PUT
+      await app.inject({
+        method: 'PUT',
+        url: '/api/autonomy',
+        headers: { ...AUTH_HEADER, 'content-type': 'application/json' },
+        payload: { score: 85, reason: 'Testing increase' },
+      });
+    });
+
     it('returns paginated history with total', async () => {
-      // The PUT above created 1 history entry
+      // At least one entry was inserted by the beforeAll above
       const res = await app.inject({
         method: 'GET',
         url: '/api/autonomy/history?limit=5&offset=0',
