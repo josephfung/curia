@@ -13,7 +13,9 @@
 import type { TrustLevel } from '../contacts/types.js';
 
 // Normalized weight per trust level — used to convert enum → float for the formula.
+// 'ceo' is treated identically to 'high' for scoring (maximally trusted channel weight).
 const CHANNEL_TRUST_NORMALIZED: Record<TrustLevel, number> = {
+  ceo: 1.0,
   high: 1.0,
   medium: 0.6,
   low: 0.3,

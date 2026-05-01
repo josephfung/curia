@@ -948,7 +948,7 @@ class PostgresContactBackend implements ContactServiceBackend {
       // Validate trust_level against the allowed enum — the DB CHECK constraint prevents
       // invalid values under normal operation, but a direct DB edit or future migration
       // could introduce an unexpected value that produces NaN via an undefined lookup.
-      trustLevel: (['high', 'medium', 'low'] as TrustLevel[]).includes(row.trust_level as TrustLevel)
+      trustLevel: (['ceo', 'high', 'medium', 'low'] as TrustLevel[]).includes(row.trust_level as TrustLevel)
         ? row.trust_level as TrustLevel
         : null,
     };
@@ -1154,7 +1154,7 @@ class PostgresContactBackend implements ContactServiceBackend {
         const v = parseFloat(row.contact_confidence);
         return isFinite(v) ? v : 0.0;
       })(),
-      trustLevel: (['high', 'medium', 'low'] as TrustLevel[]).includes(row.trust_level as TrustLevel)
+      trustLevel: (['ceo', 'high', 'medium', 'low'] as TrustLevel[]).includes(row.trust_level as TrustLevel)
         ? row.trust_level as TrustLevel
         : null,
       lastSeenAt: row.last_seen_at,

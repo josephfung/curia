@@ -26,8 +26,9 @@ export interface AuthEvaluateInput {
   overrides: AuthOverrideInput[];
 }
 
-// Trust level numeric values for comparison.
+// Trust level numeric values for comparison. 'ceo' ranks above 'high'.
 const TRUST_RANK: Record<TrustLevel, number> = {
+  ceo: 4,
   high: 3,
   medium: 2,
   low: 1,
