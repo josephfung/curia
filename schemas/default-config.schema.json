@@ -179,6 +179,31 @@
               "replacement": { "type": "string", "minLength": 1 }
             }
           }
+        },
+        "outbound_redaction": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "trust_override": {
+              "type": "array",
+              "items": { "type": "string", "enum": ["ceo", "high", "medium", "low"] }
+            },
+            "default": { "type": "string", "enum": ["block", "allow"] },
+            "channel_policies": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "allow": {
+                    "type": "array",
+                    "items": { "type": "string", "minLength": 1 }
+                  }
+                }
+              }
+            }
+          }
         }
       }
     },

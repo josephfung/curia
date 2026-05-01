@@ -234,6 +234,27 @@ export interface YamlConfig {
      * Changes take effect on restart.
      */
     extra_patterns?: Array<{ regex: string; replacement: string }>;
+    /**
+     * Outbound PII redaction policy - controls which PII patterns are redacted
+     * in outbound channel messages (email, Signal).
+     *
+     * Detection uses the same openredaction library as the log/LLM scrubber.
+     * This config controls only the policy: which detected patterns are allowed
+     * on which channels. Patterns not in a channel's allow list are redacted.
+     */
+    outbound_redaction?: {
+      /** Kill switch. Default: true. */
+      enabled?: boolean;
+      /** Trust levels that bypass all redaction entirely. Default: ['ceo']. */
+      trust_override?: string[];
+      /** Default action for unlisted pattern/channel combos. Default: 'block'. */
+      default?: 'block' | 'allow';
+      /** Per-channel allow lists. Patterns listed here pass through unredacted. */
+      channel_policies?: Record<string, {
+        /** Pattern labels (lowercase) allowed on this channel. */
+        allow?: string[];
+      }>;
+    };
   };
   intentDrift?: {
     /** Enable intent drift detection. Default: true. */

@@ -205,6 +205,28 @@ pii:
   # These patterns run on every LLM-facing error message.
   extra_patterns: []
 
+  # Outbound PII redaction policy - controls which PII patterns are redacted
+  # in outbound channel messages (email, Signal replies).
+  #
+  # Detection uses openredaction (same library as the log/LLM scrubber).
+  # This config controls only policy: which detected patterns pass through
+  # on which channels. Patterns not in a channel's allow list are redacted.
+  #
+  # trust_override: recipients at these trust levels bypass redaction entirely.
+  # CEO can ask "what phone number do we have for X?" without friction.
+  #
+  # default: 'block' means all detected PII not explicitly allowed is redacted.
+  # Configure exceptions, not rules.
+  outbound_redaction:
+    enabled: true
+    trust_override: [ceo]
+    default: block
+    channel_policies:
+      email:
+        allow: [email]         # email addresses are fine in email replies
+      signal:
+        allow: []              # everything blocked for Signal (except CEO)
+
 # Trust-gated action thresholds (spec §06-audit-and-security.md).
 # The Coordinator checks messageTrustScore against these thresholds before
 # taking actions on behalf of a sender. Enforced via the Coordinator's system prompt.
