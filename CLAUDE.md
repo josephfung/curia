@@ -94,6 +94,24 @@ When adding a new agent, ensure it receives the autonomy block via the runtime i
 1. Create `agents/<name>.yaml` with required fields (name, description, model, system_prompt)
 2. Optionally add `handler: ./<name>.handler.ts` for custom logic
 
+## Creating Issues
+
+When creating a new GitHub issue:
+
+1. **Apply pre-existing labels** — query the repo's labels and apply all applicable ones. Never leave an issue uncategorized. Never invent new labels without asking.
+
+2. **Add a size label** — every issue must have exactly one `size:` label estimating implementation effort:
+   - `size:XS` — 0-9 lines (one-line fix, config change, adding a log statement)
+   - `size:S` — 10-29 lines (small guard clause, simple bug fix, adding a warning)
+   - `size:M` — 30-99 lines (moderate change, adding a field + migration, small feature)
+   - `size:L` — 100-499 lines (new skill handler, moderate feature, refactor)
+   - `size:XL` — 500-999 lines (significant feature, new agent, new service)
+   - `size:XXL` — 1000+ lines (major feature, new system layer, multi-file epic)
+
+   Estimate based on the implementation PR, ignoring generated files and tests. When in doubt, round up.
+
+3. **Include acceptance criteria** — every issue must list specific, testable conditions that define when the work is done.
+
 ## Architecture Decision Records (ADRs)
 
 ADRs live in `docs/adr/`. Each ADR documents a significant architectural decision — the context, the choice made, and the consequences.
