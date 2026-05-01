@@ -257,6 +257,12 @@ export interface YamlConfig {
       };
     };
   };
+  contact_creation_limits?: {
+    /** Maximum new contacts created from a single email's participant list. Default: 10. */
+    max_per_message?: number;
+    /** Maximum new contacts created per hour, per email account. Default: 100. */
+    max_per_hour?: number;
+  };
 }
 
 /**
@@ -615,6 +621,22 @@ export function loadYamlConfig(configDir: string): YamlConfig {
           throw new Error(`dreaming.decay.halfLifeDays.permanent must be null (permanent nodes never decay), got: ${String(halfLifeDays.permanent)}`);
         }
       }
+    }
+  }
+
+  // Validate contact_creation_limits if present
+  const contactLimits = config.contact_creation_limits;
+  if (contactLimits !== undefined) {
+    if (typeof contactLimits !== 'object' || contactLimits === null || Array.isArray(contactLimits)) {
+      throw new Error('contact_creation_limits must be a YAML mapping');
+    }
+    const maxPerMessage = contactLimits.max_per_message;
+    if (maxPerMessage !== undefined && (!Number.isInteger(maxPerMessage) || maxPerMessage <= 0)) {
+      throw new Error(`contact_creation_limits.max_per_message must be a positive integer, got: ${maxPerMessage}`);
+    }
+    const maxPerHour = contactLimits.max_per_hour;
+    if (maxPerHour !== undefined && (!Number.isInteger(maxPerHour) || maxPerHour <= 0)) {
+      throw new Error(`contact_creation_limits.max_per_hour must be a positive integer, got: ${maxPerHour}`);
     }
   }
 

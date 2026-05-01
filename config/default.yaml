@@ -46,6 +46,13 @@ channels:
 #
 # channel_accounts: {}
 
+# Rate limits for automatic contact creation from email participants.
+# Prevents spam campaigns from flooding the contacts table.
+# Both limits are anti-flood guardrails — normal business email should never hit them.
+contact_creation_limits:
+  max_per_message: 10    # max new contacts created from a single email's participant list
+  max_per_hour: 100      # max new contacts created per hour, per email account
+
 # Google Workspace account configuration.
 #
 # channel_accounts.google_workspace defines one or more named Google Workspace accounts
