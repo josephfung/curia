@@ -83,25 +83,18 @@ export class EmailAdapter {
 
   // ── Contact auto-creation rate limiting (#36) ──────────────────────────────
   // In-memory counters — reset on process restart, which is fine for anti-flood.
-  // @TODO Task 4: Wire these into autoCreateContactsFromParticipants().
 
-  /** Sliding-window counter for the per-hour rate limit. Used in Task 4. */
-  private hourlyContactCount!: number;
-  /** Sliding-window start timestamp. Used in Task 4. */
-  private hourlyWindowStart!: number;
+  /** Sliding-window counter for the per-hour rate limit. */
+  private hourlyContactCount = 0;
+  /** Start of the current hourly sliding window (epoch ms). */
+  private hourlyWindowStart = Date.now();
 
-  /** Timestamps of the last rate-limit notification per limit type, for dedup. Used in Task 4. */
-  private lastNotifiedPerMessage!: number;
-  private lastNotifiedPerHour!: number;
+  /** Epoch-ms timestamp of the last rate-limit notification per limit type, for dedup. */
+  private lastNotifiedPerMessage = 0;
+  private lastNotifiedPerHour = 0;
 
   constructor(config: EmailAdapterConfig) {
     this.config = config;
-    // Initialize rate-limit state (used in Task 4).
-    this.hourlyContactCount = 0;
-    this.hourlyWindowStart = Date.now();
-    this.lastNotifiedPerMessage = 0;
-    this.lastNotifiedPerHour = 0;
-    // Fields are all read by the rate-limit logic in extractParticipants / notifyRateLimitHit.
   }
 
   async start(): Promise<void> {
