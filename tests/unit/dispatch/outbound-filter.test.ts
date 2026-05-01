@@ -368,7 +368,7 @@ describe('OutboundContentFilter', () => {
     // The rule uses a single axis: recipient trust level.
     //
     // Block condition: third-party email AND !recipientIsTrusted
-    // Allow condition: no third-party email OR recipientIsTrusted (ceoEmail match OR trustLevel='high')
+    // Allow condition: no third-party email OR recipientIsTrusted (meetsMinimumTrust(trustLevel, 'high'))
     //
     // The trigger source (routine vs user-initiated) is irrelevant — trusted recipients
     // may receive third-party contact data in both scheduled routines (daily briefing with
