@@ -93,6 +93,20 @@ interface OutboundMessagePayload {
   recipientId?: string;
 }
 
+// OutboundPiiRedactedPayload — emitted by the dispatch layer (via PiiRedactor)
+// when PII is redacted from an outbound message before delivery. The message is
+// still sent (with redacted content); this event provides an audit trail.
+// No subscriber initially — available for future audit UI and alerting rules.
+interface OutboundPiiRedactedPayload {
+  channelId: string;
+  recipientId: string;
+  conversationId: string;
+  redactions: Array<{
+    patternLabel: string;     // e.g. "credit_card"
+    replacedWith: string;     // e.g. "[REDACTED: CREDIT_CARD]"
+  }>;
+}
+
 // OutboundBlockedPayload — emitted by the dispatch layer's content filter when an outbound
 // message is blocked before delivery. `findings` lists each rule that triggered and why,
 // providing an audit trail for security review and incident response.
@@ -470,6 +484,15 @@ export interface OutboundBlockedEvent extends BaseEvent {
   payload: OutboundBlockedPayload;
 }
 
+// OutboundPiiRedactedEvent — published by the dispatch layer when PII is redacted from
+// an outbound message before delivery. The message is still sent (with redacted content).
+// No subscriber initially — event is available for future audit UI and alerting rules.
+export interface OutboundPiiRedactedEvent extends BaseEvent {
+  type: 'outbound.pii-redacted';
+  sourceLayer: 'dispatch';
+  payload: OutboundPiiRedactedPayload;
+}
+
 // OutboundNotificationEvent — published by the dispatch layer when a system-level CEO
 // notification needs to be sent (blocked-content alert, group-held alert, etc.).
 // Channel adapters subscribe to route it through the outbound safety pipeline.
@@ -685,6 +708,7 @@ export type BusEvent =
   | MessageHeldEvent      // Unknown sender policy: message held for CEO review
   | MessageRejectedEvent  // Unknown sender policy: message rejected, signals HTTP adapter to return 403
   | OutboundBlockedEvent  // Outbound content filter: message blocked before delivery (#38)
+  | OutboundPiiRedactedEvent // Outbound PII redaction: PII scrubbed before delivery (#249)
   | OutboundNotificationEvent // System notifications routed through safety pipeline (#206)
   | ScheduleCreatedEvent   // Scheduler: job created
   | ScheduleFiredEvent     // Scheduler: job fired
@@ -774,6 +798,22 @@ export function createOutboundBlocked(
     id: randomUUID(),
     timestamp: new Date(),
     type: 'outbound.blocked',
+    sourceLayer: 'dispatch',
+    payload: rest,
+    parentEventId,
+  };
+}
+
+export function createOutboundPiiRedacted(
+  // parentEventId is optional — PII redaction events may trace back to the outbound.message
+  // that triggered the redaction, but this link is advisory rather than required.
+  payload: OutboundPiiRedactedPayload & { parentEventId?: string },
+): OutboundPiiRedactedEvent {
+  const { parentEventId, ...rest } = payload;
+  return {
+    id: randomUUID(),
+    timestamp: new Date(),
+    type: 'outbound.pii-redacted',
     sourceLayer: 'dispatch',
     payload: rest,
     parentEventId,
