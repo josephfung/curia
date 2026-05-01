@@ -7,6 +7,7 @@ import type { OutboundContentFilter } from '../../../src/dispatch/outbound-filte
 import type { EventBus } from '../../../src/bus/bus.js';
 import type { BusEvent } from '../../../src/bus/events.js';
 import type { AutonomyService, AutonomyConfig } from '../../../src/autonomy/autonomy-service.js';
+import type { PiiRedactor } from '../../../src/dispatch/pii-redactor.js';
 
 /**
  * Build fresh vi.fn() mocks for each test. Using beforeEach + createMocks()
@@ -921,5 +922,151 @@ describe('autonomy gate on send()', () => {
 
     expect(result.success).toBe(true);
     expect(result.draftId).toBe('draft-1');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PII redaction pipeline step — wired between blocked-contact check and content filter
+// ---------------------------------------------------------------------------
+
+describe('PII redaction pipeline step', () => {
+  const piiRequest = {
+    channel: 'email' as const,
+    to: 'partner@example.com',
+    subject: 'Payment info',
+    // Credit card number embedded in the message body
+    body: 'Please charge 4111111111111111 for the service.',
+  };
+
+  /** Build a mock PiiRedactor whose redact() function can be controlled per test. */
+  function makePiiRedactor(
+    impl: (content: string) => Promise<{ content: string; redactions: unknown[] }>,
+  ): PiiRedactor {
+    return {
+      redact: vi.fn().mockImplementation((content: string) => impl(content)),
+    } as unknown as PiiRedactor;
+  }
+
+  /** Standard gateway builder used by most cases in this describe block. */
+  function makeGateway(piiRedactor?: PiiRedactor) {
+    const logger = createLogger('error');
+    const nylasClient = {
+      sendMessage: vi.fn().mockResolvedValue({ id: 'msg-pii-1' }),
+    } as unknown as NylasClient;
+    const contactService = {
+      resolveByChannelIdentity: vi.fn().mockResolvedValue(null),
+    } as unknown as ContactService;
+    const contentFilter = {
+      check: vi.fn().mockResolvedValue({ passed: true, findings: [] }),
+    } as unknown as OutboundContentFilter;
+    const bus = {
+      publish: vi.fn().mockResolvedValue(undefined),
+      subscribe: vi.fn(),
+    } as unknown as EventBus;
+
+    const gateway = new OutboundGateway({
+      nylasClients: new Map([['curia', nylasClient]]),
+      contactService,
+      contentFilter,
+      bus,
+      ceoEmail: 'ceo@example.com',
+      logger,
+      piiRedactor,
+    });
+
+    return { gateway, nylasClient, contactService, contentFilter, bus };
+  }
+
+  it('redacts PII for non-CEO recipients before content filter sees it', async () => {
+    // The redactor replaces the credit card with a token.
+    // We verify that the content filter receives the redacted content, not the original.
+    const redactedBody = 'Please charge [REDACTED: CREDIT_CARD] for the service.';
+    const piiRedactor = makePiiRedactor(async (_content) => ({
+      content: redactedBody,
+      redactions: [{ patternLabel: 'credit_card', channelId: 'email', replacedWith: '[REDACTED: CREDIT_CARD]' }],
+    }));
+
+    const { gateway, contentFilter } = makeGateway(piiRedactor);
+    const result = await gateway.send(piiRequest);
+
+    expect(result.success).toBe(true);
+    // The content filter must have seen the redacted content, not the raw PII.
+    expect(contentFilter.check).toHaveBeenCalledOnce();
+    expect(contentFilter.check).toHaveBeenCalledWith(expect.objectContaining({
+      content: redactedBody,
+    }));
+    // The original PII body must NOT have reached the content filter.
+    expect(contentFilter.check).not.toHaveBeenCalledWith(expect.objectContaining({
+      content: piiRequest.body,
+    }));
+  });
+
+  it('does NOT redact PII for CEO recipients (trust_override bypasses redaction)', async () => {
+    // When the recipient has 'ceo' trust level, the redactor returns content unchanged.
+    const piiRedactor = makePiiRedactor(async (content) => ({
+      content,
+      redactions: [],
+    }));
+
+    const { gateway, contentFilter, contactService } = makeGateway(piiRedactor);
+    // Make the contact service return a CEO-level trust contact.
+    (contactService.resolveByChannelIdentity as ReturnType<typeof vi.fn>).mockResolvedValue({
+      contactId: 'contact-ceo',
+      displayName: 'CEO',
+      status: 'confirmed',
+      trustLevel: 'ceo',
+    });
+
+    const result = await gateway.send(piiRequest);
+
+    expect(result.success).toBe(true);
+    // The redactor was still called (the gateway always calls it when configured),
+    // but the content filter receives the original body (redactor returned it unchanged).
+    expect(piiRedactor.redact).toHaveBeenCalledOnce();
+    expect(contentFilter.check).toHaveBeenCalledWith(expect.objectContaining({
+      content: piiRequest.body,
+    }));
+  });
+
+  it('works without piiRedactor configured (backwards compatible)', async () => {
+    // Gateway constructed without piiRedactor → content passes through to filter unchanged.
+    const { gateway, contentFilter } = makeGateway(/* piiRedactor = */ undefined);
+
+    const result = await gateway.send(piiRequest);
+
+    expect(result.success).toBe(true);
+    // The content filter must have received the original body — no redaction.
+    expect(contentFilter.check).toHaveBeenCalledOnce();
+    expect(contentFilter.check).toHaveBeenCalledWith(expect.objectContaining({
+      content: piiRequest.body,
+    }));
+  });
+
+  it('blocks the message when PiiRedactor throws (fail-closed)', async () => {
+    // If the redactor throws, the gateway must block the message rather than
+    // sending unredacted PII. This is the fail-closed contract.
+    const piiRedactor = {
+      redact: vi.fn().mockRejectedValue(new Error('Pattern engine crashed')),
+    } as unknown as PiiRedactor;
+
+    const { gateway, nylasClient, bus } = makeGateway(piiRedactor);
+    const result = await gateway.send(piiRequest);
+
+    // Message must be blocked — never reach Nylas.
+    expect(result.success).toBe(false);
+    expect(nylasClient.sendMessage).not.toHaveBeenCalled();
+
+    // An outbound.blocked event must be published to maintain the audit trail.
+    const publishCalls = (bus.publish as ReturnType<typeof vi.fn>).mock.calls;
+    const blockedCalls = publishCalls.filter(
+      (call: unknown[]) => (call[1] as BusEvent).type === 'outbound.blocked',
+    );
+    expect(blockedCalls).toHaveLength(1);
+    if (blockedCalls[0]) {
+      const blockedEvent = blockedCalls[0][1] as BusEvent;
+      if (blockedEvent.type === 'outbound.blocked') {
+        expect(blockedEvent.payload.reason).toContain('pii_redactor_error');
+      }
+    }
   });
 });

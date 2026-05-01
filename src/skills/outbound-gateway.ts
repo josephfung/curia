@@ -25,6 +25,7 @@ import type { SignalRpcClient } from '../channels/signal/signal-rpc-client.js';
 import type { ContactService } from '../contacts/contact-service.js';
 import type { TrustLevel } from '../contacts/types.js';
 import type { OutboundContentFilter } from '../dispatch/outbound-filter.js';
+import type { PiiRedactor } from '../dispatch/pii-redactor.js';
 import type { EventBus } from '../bus/bus.js';
 import type { Logger } from '../logger.js';
 import { createOutboundBlocked, createOutboundNotification, createAutonomySendBlocked } from '../bus/events.js';
@@ -150,6 +151,20 @@ export interface OutboundGatewayConfig {
    * an advisory. Optional — when absent, the gate is skipped (fail-open).
    */
   autonomyService?: AutonomyService;
+
+  /**
+   * PII redactor — applied between the blocked-contact check (Step 1) and the
+   * content filter (Step 2). Strips PII from the message body based on channel
+   * policy and recipient trust level before content validation runs.
+   *
+   * Fail-closed: if the redactor throws, send() blocks the message and publishes
+   * outbound.blocked. We must never deliver unredacted content through a broken
+   * redactor.
+   *
+   * Optional — when absent, content passes through to the content filter unchanged.
+   * This preserves backwards compatibility with callers that pre-date PII redaction.
+   */
+  piiRedactor?: PiiRedactor;
 }
 
 // ---------------------------------------------------------------------------
@@ -192,6 +207,7 @@ export class OutboundGateway {
   private readonly ceoEmail: string;
   private readonly log: Logger;
   private readonly autonomyService?: AutonomyService;
+  private readonly piiRedactor?: PiiRedactor;
 
   constructor(config: OutboundGatewayConfig) {
     this.nylasClients = config.nylasClients ?? new Map();
@@ -204,6 +220,7 @@ export class OutboundGateway {
     this.ceoEmail = config.ceoEmail ?? '';
     this.log = config.logger.child({ component: 'outbound-gateway' });
     this.autonomyService = config.autonomyService;
+    this.piiRedactor = config.piiRedactor;
   }
 
   /**
@@ -309,6 +326,53 @@ export class OutboundGateway {
     }
 
     // ------------------------------------------------------------------
+    // Step 1.5: PII redaction — strip PII from message body before the content
+    // filter sees it. This ensures the filter operates on clean content and that
+    // any PII-containing message that slips past detection doesn't reach the wire.
+    //
+    // Fail-closed: if the redactor throws, block the message. Sending unredacted
+    // PII through a broken redactor is worse than dropping the message.
+    //
+    // Optional: when piiRedactor is not configured, redactedBody == messageBody
+    // and the pipeline behaves identically to the pre-redaction behaviour.
+    let redactedBody = messageBody;
+    if (this.piiRedactor) {
+      try {
+        const redactionResult = await this.piiRedactor.redact(
+          messageBody,
+          request.channel,
+          recipientTrustLevel,
+          { recipientId },
+        );
+        redactedBody = redactionResult.content;
+      } catch (err) {
+        this.log.error(
+          { err, channel: request.channel, recipientId: redactId(recipientId) },
+          'outbound-gateway: PiiRedactor threw — blocking message (fail-closed)',
+        );
+        const blockId = `block_${randomUUID()}`;
+        try {
+          await this.bus.publish('dispatch', createOutboundBlocked({
+            blockId,
+            conversationId: '',
+            channelId: request.channel,
+            content: messageBody,
+            recipientId,
+            reason: 'pii_redactor_error',
+            findings: [{ rule: 'pii_redactor_error', detail: 'PiiRedactor threw an unexpected error' }],
+            parentEventId: '',
+          }));
+        } catch (publishErr) {
+          this.log.warn(
+            { publishErr, blockId },
+            'outbound-gateway: failed to publish outbound.blocked event for PII redactor error',
+          );
+        }
+        return { success: false, blockedReason: 'pii_redactor_error' };
+      }
+    }
+
+    // ------------------------------------------------------------------
     // Step 2: Content filter
     // ------------------------------------------------------------------
     // Fail-closed: if the filter throws for any reason, treat the message as blocked.
@@ -319,7 +383,7 @@ export class OutboundGateway {
 
     try {
       const filterResult = await this.contentFilter.check({
-        content: messageBody,
+        content: redactedBody,
         // For Signal sends: passing the phone number/groupId as recipientEmail is intentional.
         // The contact-data-leak rule scans for *email addresses* in the content — a phone
         // number passed here will never match an email pattern, so any leaked email address
@@ -358,11 +422,12 @@ export class OutboundGateway {
 
       // Publish the blocked event for audit logging and downstream consumers.
       // Capture the event so we can link the outbound.notification to it via parentEventId.
+      // Use redactedBody so the audit event itself does not contain unredacted PII.
       const blockedEvent = createOutboundBlocked({
         blockId,
         conversationId: '',
         channelId: request.channel,
-        content: messageBody,
+        content: redactedBody,
         recipientId,
         reason: fullReason,
         findings: filterFindings,
