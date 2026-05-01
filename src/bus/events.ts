@@ -114,8 +114,9 @@ interface OutboundBlockedPayload {
 // notificationType discriminates between alert categories:
 //   - 'blocked_content': CEO alert that an outbound message was blocked by the content filter
 //   - 'group_held':      CEO alert that a Signal group message was held due to unverified members
+//   - 'contact_rate_limited': CEO alert that contact auto-creation was throttled due to rate limits
 export interface OutboundNotificationPayload {
-  notificationType: 'blocked_content' | 'group_held';
+  notificationType: 'blocked_content' | 'group_held' | 'contact_rate_limited';
   /** Recipient email for this notification (always the CEO email today). */
   ceoEmail: string;
   subject: string;
