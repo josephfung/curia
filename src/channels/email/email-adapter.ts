@@ -58,6 +58,21 @@ export interface EmailAdapterConfig {
    * Case-insensitive.
    */
   excludedSenderEmails: string[];
+  /**
+   * CEO's email address — used as the recipient for rate-limit notification emails.
+   * When absent, rate-limit notifications are logged but not emailed.
+   */
+  ceoEmail?: string;
+  /**
+   * Maximum new contacts to auto-create from a single email's participant list.
+   * Existing contacts (already in DB) don't count. Default: 10.
+   */
+  contactCreationMaxPerMessage: number;
+  /**
+   * Maximum new contacts to auto-create per hour across all emails for this account.
+   * Sliding window resets after 1 hour. Default: 100.
+   */
+  contactCreationMaxPerHour: number;
 }
 
 export class EmailAdapter {
@@ -66,8 +81,28 @@ export class EmailAdapter {
   private lastSeenTimestamp: number = 0;
   private processing = false;
 
+  // ── Contact auto-creation rate limiting (#36) ──────────────────────────────
+  // In-memory counters — reset on process restart, which is fine for anti-flood.
+  // @TODO Task 4: Wire these into autoCreateContactsFromParticipants().
+
+  /** Sliding-window counter for the per-hour rate limit. Used in Task 4. */
+  private hourlyContactCount!: number;
+  /** Sliding-window start timestamp. Used in Task 4. */
+  private hourlyWindowStart!: number;
+
+  /** Timestamps of the last rate-limit notification per limit type, for dedup. Used in Task 4. */
+  private lastNotifiedPerMessage!: number;
+  private lastNotifiedPerHour!: number;
+
   constructor(config: EmailAdapterConfig) {
     this.config = config;
+    // Initialize rate-limit state (used in Task 4).
+    this.hourlyContactCount = 0;
+    this.hourlyWindowStart = Date.now();
+    this.lastNotifiedPerMessage = 0;
+    this.lastNotifiedPerHour = 0;
+    // Suppress unused field warnings — these are read by the rate-limit logic in Task 4.
+    void (this.hourlyContactCount + this.hourlyWindowStart + this.lastNotifiedPerMessage + this.lastNotifiedPerHour);
   }
 
   async start(): Promise<void> {
