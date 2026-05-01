@@ -947,11 +947,11 @@ async function main(): Promise<void> {
   const missingBuiltInPatterns = getMissingBuiltInPatterns();
   if (missingBuiltInPatterns.length > 0) {
     // Library version drift — one or more built-in PII pattern types were not found
-    // in @openredaction/openredaction. These PII types will NOT be scrubbed from
+    // in openredaction. These PII types will NOT be scrubbed from
     // LLM-facing error messages. Log at error so alerting catches this.
     logger.error(
       { missingPatterns: missingBuiltInPatterns },
-      'PII scrubber: built-in pattern types missing from @openredaction/openredaction — check library version',
+      'PII scrubber: built-in pattern types missing from openredaction — check library version',
     );
   }
   logger.info(
