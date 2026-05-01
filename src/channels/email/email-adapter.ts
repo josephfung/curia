@@ -101,8 +101,7 @@ export class EmailAdapter {
     this.hourlyWindowStart = Date.now();
     this.lastNotifiedPerMessage = 0;
     this.lastNotifiedPerHour = 0;
-    // Suppress unused field warnings — these are read by the rate-limit logic in Task 4.
-    void (this.hourlyContactCount + this.hourlyWindowStart + this.lastNotifiedPerMessage + this.lastNotifiedPerHour);
+    // Fields are all read by the rate-limit logic in extractParticipants / notifyRateLimitHit.
   }
 
   async start(): Promise<void> {
@@ -188,8 +187,10 @@ export class EmailAdapter {
     this.pollTimer = setInterval(() => void this.poll(), pollingIntervalMs);
     logger.info({ pollingIntervalMs }, 'Email adapter started — polling Nylas');
 
-    // Do an initial poll immediately
-    void this.poll();
+    // Do an initial poll immediately and await it so callers that await start()
+    // can be confident the first poll has completed before they assert results.
+    // Subsequent polls run on setInterval (fire-and-forget).
+    await this.poll();
   }
 
   async stop(): Promise<void> {
@@ -269,7 +270,11 @@ export class EmailAdapter {
             // Standard mode: auto-create contacts from participants before publishing
             // the inbound event, so the contact resolver in the dispatch layer can find
             // them immediately.
-            await this.extractParticipants(converted.metadata.participants);
+            await this.extractParticipants(
+              converted.metadata.participants,
+              converted.metadata.subject,
+              converted.senderId,
+            );
           }
 
           // Sanitize email content to mitigate prompt injection from external senders.
@@ -520,11 +525,31 @@ export class EmailAdapter {
    * Uses source 'email_participant' which is auto-verified per spec.
    * Skips participants that already have a contact record, and skips
    * our own email address (selfEmail) to avoid self-contact creation.
+   *
+   * Rate limits (#36):
+   *   - Per-message: at most contactCreationMaxPerMessage new contacts per email
+   *   - Per-hour:    at most contactCreationMaxPerHour new contacts per sliding window
+   * When a limit is hit, remaining participants are skipped and a CEO
+   * notification is sent (deduplicated to one per limit type per hour).
    */
   private async extractParticipants(
     participants: Array<{ email: string; name?: string; role: string }>,
+    emailSubject: string,
+    emailSender: string,
   ): Promise<void> {
-    const { contactService, logger, selfEmail } = this.config;
+    const { contactService, logger, selfEmail, contactCreationMaxPerMessage, contactCreationMaxPerHour } = this.config;
+
+    // Reset the hourly window if it has expired
+    const now = Date.now();
+    if (now - this.hourlyWindowStart > 3_600_000) {
+      this.hourlyContactCount = 0;
+      this.hourlyWindowStart = now;
+    }
+
+    let createdThisMessage = 0;
+    let skippedThisMessage = 0;
+    let hitPerMessageCap = false;
+    let hitPerHourCap = false;
 
     for (const p of participants) {
       // Don't create a contact for ourselves — case-insensitive to guard against
@@ -535,6 +560,32 @@ export class EmailAdapter {
         // Check if this email is already linked to a contact
         const existing = await contactService.resolveByChannelIdentity('email', p.email);
         if (existing) continue;
+
+        // Check per-message cap (existing contacts don't count — only new creations)
+        if (createdThisMessage >= contactCreationMaxPerMessage) {
+          skippedThisMessage++;
+          if (!hitPerMessageCap) {
+            hitPerMessageCap = true;
+            logger.warn(
+              { email: p.email, cap: contactCreationMaxPerMessage, emailSubject },
+              'Contact auto-creation per-message cap reached — skipping remaining participants',
+            );
+          }
+          continue;
+        }
+
+        // Check per-hour cap
+        if (this.hourlyContactCount >= contactCreationMaxPerHour) {
+          skippedThisMessage++;
+          if (!hitPerHourCap) {
+            hitPerHourCap = true;
+            logger.warn(
+              { email: p.email, cap: contactCreationMaxPerHour, hourlyCount: this.hourlyContactCount },
+              'Contact auto-creation per-hour cap reached — skipping remaining participants',
+            );
+          }
+          continue;
+        }
 
         // Create a new contact and link the email identity to it.
         // Display name sanitization happens inside createContact() (see issue #39).
@@ -553,12 +604,84 @@ export class EmailAdapter {
           source: 'email_participant',
         });
 
+        createdThisMessage++;
+        this.hourlyContactCount++;
         logger.info({ email: p.email, name: p.name }, 'Auto-created contact from email participant');
       } catch (err) {
         // Warn rather than error — participant auto-creation is best-effort.
         // The inbound message will still be published even if contact creation fails.
         logger.warn({ err, email: p.email }, 'Failed to auto-create contact from email participant');
       }
+    }
+
+    // Send a deduplicated CEO notification if any participants were skipped due to rate limits
+    if (skippedThisMessage > 0) {
+      await this.notifyRateLimitHit(
+        hitPerMessageCap ? 'per_message' : 'per_hour',
+        skippedThisMessage,
+        emailSubject,
+        emailSender,
+      );
+    }
+  }
+
+  /**
+   * Send a deduplicated CEO notification when contact auto-creation rate limits
+   * are hit. At most one notification per limit type per hour to avoid notification
+   * spam during a sustained flood.
+   */
+  private async notifyRateLimitHit(
+    limitType: 'per_message' | 'per_hour',
+    skippedCount: number,
+    emailSubject: string,
+    emailSender: string,
+  ): Promise<void> {
+    const { outboundGateway, logger, ceoEmail } = this.config;
+    const now = Date.now();
+
+    // Dedup: skip if we already sent a notification for this limit type within the last hour
+    const lastNotified = limitType === 'per_message' ? this.lastNotifiedPerMessage : this.lastNotifiedPerHour;
+    if (now - lastNotified < 3_600_000) {
+      logger.debug({ limitType, skippedCount }, 'Rate-limit notification suppressed (already sent within the hour)');
+      return;
+    }
+
+    if (!ceoEmail) {
+      logger.warn({ limitType, skippedCount }, 'Contact rate-limit hit but ceoEmail not configured — cannot notify');
+      return;
+    }
+
+    // Update dedup timestamp before sending — if the send fails, we still won't spam
+    if (limitType === 'per_message') {
+      this.lastNotifiedPerMessage = now;
+    } else {
+      this.lastNotifiedPerHour = now;
+    }
+
+    const limitLabel = limitType === 'per_message'
+      ? `per-message limit (${this.config.contactCreationMaxPerMessage})`
+      : `per-hour limit (${this.config.contactCreationMaxPerHour})`;
+
+    try {
+      await outboundGateway.sendNotification({
+        notificationType: 'contact_rate_limited',
+        ceoEmail,
+        subject: `Contact auto-creation rate limit reached (${limitLabel})`,
+        body: [
+          `Contact auto-creation was throttled on the ${this.config.accountId} email account.`,
+          '',
+          `Limit hit: ${limitLabel}`,
+          `Participants skipped: ${skippedCount}`,
+          `Triggering email subject: ${emailSubject}`,
+          `Triggering email sender: ${emailSender}`,
+          '',
+          'Skipped participants will be auto-created if they send an email directly.',
+          'If this is unexpected, check for spam activity on this account.',
+        ].join('\n'),
+      });
+    } catch (err) {
+      // Non-fatal — the rate limit is already enforced, this is just a notification
+      logger.warn({ err, limitType, skippedCount }, 'Failed to send contact rate-limit notification');
     }
   }
 }
