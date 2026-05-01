@@ -1078,6 +1078,7 @@ async function main(): Promise<void> {
     identityService: officeIdentityService,
     executiveProfileService,
     contactService,
+    autonomyService,
   });
 
   try {

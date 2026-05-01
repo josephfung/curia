@@ -33,9 +33,11 @@ import { messageRoutes } from './routes/messages.js';
 import { knowledgeGraphRoutes } from './routes/kg.js';
 import { identityRoutes } from './routes/identity.js';
 import { executiveRoutes } from './routes/executive.js';
+import { autonomyRoutes } from './routes/autonomy.js';
 import type { OfficeIdentityService } from '../../identity/service.js';
 import type { ExecutiveProfileService } from '../../executive/service.js';
 import type { ContactService } from '../../contacts/contact-service.js';
+import type { AutonomyService } from '../../autonomy/autonomy-service.js';
 import { type SessionStore } from './session-auth.js';
 
 export interface HttpAdapterConfig {
@@ -53,6 +55,7 @@ export interface HttpAdapterConfig {
   identityService?: OfficeIdentityService;
   executiveProfileService?: ExecutiveProfileService;
   contactService: ContactService;
+  autonomyService?: AutonomyService;
 }
 
 export class HttpAdapter {
@@ -122,7 +125,8 @@ export class HttpAdapter {
         routeUrl.startsWith('/assets') ||
         routeUrl.startsWith('/api/kg') ||
         routeUrl.startsWith('/api/identity') ||
-        routeUrl.startsWith('/api/jobs')
+        routeUrl.startsWith('/api/jobs') ||
+        routeUrl.startsWith('/api/autonomy')
       ) return;
 
       if (!validateBearerToken(request.headers.authorization, apiToken)) {
@@ -177,6 +181,15 @@ export class HttpAdapter {
     if (webAppBootstrapSecret && this.config.executiveProfileService) {
       await this.app.register(executiveRoutes, {
         executiveProfileService: this.config.executiveProfileService,
+        webAppBootstrapSecret,
+        sessions,
+      });
+    }
+
+    // Autonomy routes — same session-auth pattern as identity/executive routes.
+    if (webAppBootstrapSecret && this.config.autonomyService) {
+      await this.app.register(autonomyRoutes, {
+        autonomyService: this.config.autonomyService,
         webAppBootstrapSecret,
         sessions,
       });
