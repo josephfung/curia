@@ -15,7 +15,7 @@
 import type { Logger } from '../logger.js';
 import type { EventBus } from '../bus/bus.js';
 import type { TrustLevel } from '../contacts/types.js';
-import { meetsMinimumTrust } from '../contacts/types.js';
+import { meetsMinimumTrust, TRUST_RANK } from '../contacts/types.js';
 import type { PiiPattern } from '../pii/scrubber.js';
 import { detectPii } from '../pii/scrubber.js';
 import { createOutboundPiiRedacted } from '../bus/events.js';
@@ -119,6 +119,15 @@ export class PiiRedactor {
     // redaction entirely. We use meetsMinimumTrust() so that a recipient with
     // 'ceo' trust also satisfies 'high', 'medium', and 'low' overrides.
     for (const overrideLevel of this.config.trust_override) {
+      // Guard against typos or invalid values from programmatic config construction
+      // (JSON schema validates YAML, but not runtime-constructed configs).
+      if (!(overrideLevel in TRUST_RANK)) {
+        this.logger.warn(
+          { unknownOverrideLevel: overrideLevel },
+          'pii-redactor: unknown trust_override level in config — entry ignored',
+        );
+        continue;
+      }
       if (meetsMinimumTrust(trustLevel, overrideLevel as TrustLevel)) {
         return { content, redactions: [] };
       }
