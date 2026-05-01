@@ -379,12 +379,14 @@ describe('OutboundContentFilter', () => {
     it('allows a routine message to the CEO containing a third-party email (daily briefing)', async () => {
       const filter = createTestFilter();
       // Daily briefing to CEO lists a calendar attendee's email — allowed (CEO is trusted).
+      // Migration 030 ensures the CEO contact always has trustLevel='ceo' in the DB,
+      // so the contact resolver provides recipientTrustLevel: 'ceo' at runtime.
       const result = await filter.check({
         content: `Here is your daily briefing. Your 2pm meeting includes ${THIRD_PARTY_EMAIL}.`,
         recipientEmail: 'ceo@example.com',
         conversationId: 'scheduler:job-1:run-1',
         channelId: 'email',
-        recipientTrustLevel: null,
+        recipientTrustLevel: 'ceo',
       });
       expect(result.passed).toBe(true);
       expect(result.findings.some((f) => f.rule === 'contact-data-leak')).toBe(false);
@@ -393,12 +395,14 @@ describe('OutboundContentFilter', () => {
     it('allows a user-initiated response to the CEO containing a third-party email', async () => {
       const filter = createTestFilter();
       // CEO asked "what is Hamilton's email?" — should be allowed.
+      // Migration 030 ensures the CEO contact always has trustLevel='ceo' in the DB,
+      // so the contact resolver provides recipientTrustLevel: 'ceo' at runtime.
       const result = await filter.check({
         content: `Hamilton's email is ${THIRD_PARTY_EMAIL}.`,
         recipientEmail: 'ceo@example.com',
         conversationId: 'conv-123',
         channelId: 'email',
-        recipientTrustLevel: null,
+        recipientTrustLevel: 'ceo',
       });
       expect(result.passed).toBe(true);
       expect(result.findings.some((f) => f.rule === 'contact-data-leak')).toBe(false);
@@ -458,6 +462,20 @@ describe('OutboundContentFilter', () => {
       });
       expect(result.passed).toBe(false);
       expect(result.findings.some((f) => f.rule === 'contact-data-leak')).toBe(true);
+    });
+
+    it('allows third-party emails when recipient trust level is ceo', async () => {
+      const filter = createTestFilter();
+      // trustLevel='ceo' meets or exceeds 'high' — meetsMinimumTrust('ceo', 'high') is true.
+      // This test ensures the CEO is trusted via trust level rather than email comparison.
+      const result = await filter.check({
+        content: 'Please contact hamilton@other.org for details.',
+        recipientEmail: 'recipient@example.com',
+        conversationId: 'conv-1',
+        channelId: 'email',
+        recipientTrustLevel: 'ceo',
+      });
+      expect(result.passed).toBe(true);
     });
   });
 });
