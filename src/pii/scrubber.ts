@@ -24,6 +24,18 @@ export interface PiiPattern {
   replacement: string;
 }
 
+/** A single PII match found by detectPii(). */
+export interface PiiMatch {
+  /** Pattern name in lowercase (e.g. "email", "credit_card", "extra_0"). */
+  label: string;
+  /** Start index in the original text. */
+  start: number;
+  /** End index (exclusive). */
+  end: number;
+  /** The matched substring from the original text. */
+  matched: string;
+}
+
 // Standard RFC 4122 UUID pattern. UUIDs are extremely common in Curia log
 // output (conversation IDs, task IDs, contact IDs) and must be shielded from
 // PII pattern matching — some patterns (credit card, phone) false-positive on
@@ -132,12 +144,58 @@ export function getBuiltInPatternCount(): number {
 const BUILT_IN_PATTERNS: PiiPattern[] = buildBuiltInPatterns();
 
 /**
+ * Detect PII in text and return an array of matches with position information.
+ *
+ * UUID protection: UUIDs are replaced in the scan buffer with null bytes of
+ * the same length so indices are preserved. Matches overlapping a shielded
+ * UUID region (containing \x00) are skipped. Matched text is always sliced
+ * from the original (unshielded) text so callers get the real characters.
+ *
+ * Results are sorted by start position (ascending).
+ *
+ * This is the shared detection core used by both scrubPii() (for replacement)
+ * and PiiRedactor (for annotation/reporting).
+ *
+ * @param text          The string to scan.
+ * @param extraPatterns Additional patterns from operator config.
+ */
+export function detectPii(text: string, extraPatterns: PiiPattern[] = []): PiiMatch[] {
+  // Shield UUIDs by replacing them with null bytes of the same length. This
+  // preserves byte indices for all text after the UUID, unlike the token
+  // approach used by scrubPii (which changes string length). Matches that
+  // overlap a shielded region will contain \x00 and are skipped below.
+  const shielded = text.replace(UUID_RE, (match) => '\x00'.repeat(match.length));
+
+  const matches: PiiMatch[] = [];
+  const allPatterns = [...BUILT_IN_PATTERNS, ...extraPatterns];
+
+  for (const { name, regex } of allPatterns) {
+    // Reset lastIndex — global regexes retain state across calls if reused.
+    regex.lastIndex = 0;
+    let m: RegExpExecArray | null;
+    while ((m = regex.exec(shielded)) !== null) {
+      // Skip any match that covers shielded UUID territory.
+      if (m[0].includes('\x00')) continue;
+      matches.push({
+        label: name,
+        start: m.index,
+        end: m.index + m[0].length,
+        // Slice from original text — shielded only used for position tracking.
+        matched: text.slice(m.index, m.index + m[0].length),
+      });
+    }
+  }
+
+  matches.sort((a, b) => a.start - b.start);
+  return matches;
+}
+
+/**
  * Scrub PII from a string using the built-in patterns plus any caller-supplied
  * extra patterns (from config/default.yaml).
  *
- * UUID protection: standard RFC 4122 UUIDs are replaced with stable tokens
- * before scrubbing and restored after, preventing false-positive matches on
- * UUID hex segments.
+ * Delegates detection to detectPii() for shared logic, then applies replacements
+ * end-to-start so that earlier match indices remain valid as the string shrinks.
  *
  * This function is intentionally synchronous — it is called on every error
  * message that enters LLM context and must not introduce async overhead.
@@ -147,28 +205,22 @@ const BUILT_IN_PATTERNS: PiiPattern[] = buildBuiltInPatterns();
  *                      at startup and passed through the call chain).
  */
 export function scrubPii(text: string, extraPatterns: PiiPattern[] = []): string {
-  // 1. Shield UUIDs from PII pattern matching.
-  //    Tokens use a format that cannot be confused with real UUIDs or PII.
-  const uuids: string[] = [];
-  let shielded = text.replace(UUID_RE, (match) => {
-    uuids.push(match);
-    return `\x00UUID${uuids.length - 1}\x00`;
-  });
+  const matches = detectPii(text, extraPatterns);
+  if (matches.length === 0) return text;
 
-  // 2. Apply all patterns (built-in first, then extras).
+  // Build a lookup so we can find each pattern's replacement string by name.
   const allPatterns = [...BUILT_IN_PATTERNS, ...extraPatterns];
-  for (const { regex, replacement } of allPatterns) {
-    // Reset lastIndex — global regexes retain state across calls if reused.
-    regex.lastIndex = 0;
-    shielded = shielded.replace(regex, replacement);
-  }
+  const replacementByName = new Map(allPatterns.map((p) => [p.name, p.replacement]));
 
-  // 3. Restore shielded UUIDs.
-  // Return the raw token on index miss rather than '' — erasing content silently
-  // would be harder to notice than an ugly token in the LLM's context.
-  // An index miss is only possible if the input contained a deliberate
-  // \x00UUID<n>\x00 byte sequence before scrubbing, which is pathological.
-  return shielded.replace(/\x00UUID(\d+)\x00/g, (match, i) => uuids[parseInt(i, 10)] ?? match);
+  // Apply replacements end-to-start so earlier indices stay valid as the
+  // string length changes with each substitution.
+  let result = text;
+  for (let i = matches.length - 1; i >= 0; i--) {
+    const match = matches[i];
+    const replacement = replacementByName.get(match.label) ?? `[${match.label.toUpperCase()}]`;
+    result = result.slice(0, match.start) + replacement + result.slice(match.end);
+  }
+  return result;
 }
 
 /**

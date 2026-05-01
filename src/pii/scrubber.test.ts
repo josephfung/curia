@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { scrubPii, parseExtraPiiPatterns } from './scrubber.js';
+import { scrubPii, parseExtraPiiPatterns, detectPii } from './scrubber.js';
 
 describe('scrubPii — built-in patterns', () => {
   // ── Email ──────────────────────────────────────────────────────────────────
@@ -201,5 +201,58 @@ describe('classify.ts integration — PII scrubbing in error messages', () => {
     const result = classifySkillError('payment', 'card 4111 1111 1111 1111 declined');
     expect(result.message).not.toContain('4111 1111 1111 1111');
     expect(result.message).toContain('[CREDIT_CARD]');
+  });
+});
+
+describe('detectPii', () => {
+  it('detects an email address with label and position', () => {
+    const text = 'Contact user@example.com for help';
+    const matches = detectPii(text);
+    expect(matches).toHaveLength(1);
+    expect(matches[0].label).toMatch(/email/i);
+    expect(matches[0].matched).toBe('user@example.com');
+    expect(matches[0].start).toBe(8);
+    expect(matches[0].end).toBe(24);
+  });
+
+  it('detects a credit card number', () => {
+    const matches = detectPii('Card: 4111 1111 1111 1111');
+    expect(matches.some(m => m.label.match(/credit_card/i))).toBe(true);
+  });
+
+  it('does not false-positive on UUIDs', () => {
+    const text = 'Task 550e8400-e29b-41d4-a716-446655440000 failed';
+    const matches = detectPii(text);
+    expect(matches).toHaveLength(0);
+  });
+
+  it('returns empty array for clean text', () => {
+    expect(detectPii('Just a normal message')).toHaveLength(0);
+  });
+
+  it('returns matches sorted by start position', () => {
+    const text = 'from alice@example.com to bob@other.org';
+    const matches = detectPii(text);
+    expect(matches).toHaveLength(2);
+    expect(matches[0].start).toBeLessThan(matches[1].start);
+    expect(matches[0].matched).toBe('alice@example.com');
+    expect(matches[1].matched).toBe('bob@other.org');
+  });
+
+  it('match positions reference the original text', () => {
+    const text = 'error for user@example.com in task';
+    const matches = detectPii(text);
+    expect(matches).toHaveLength(1);
+    const m = matches[0];
+    expect(text.slice(m.start, m.end)).toBe(m.matched);
+  });
+
+  it('accepts extra patterns and detects them', () => {
+    const extras = parseExtraPiiPatterns(
+      [{ regex: 'EMP-\\d{6}', replacement: '[EMPLOYEE_ID]' }],
+      'test',
+    );
+    const matches = detectPii('employee EMP-123456 at step 3', extras);
+    expect(matches.some(m => m.label === 'extra_0')).toBe(true);
   });
 });
