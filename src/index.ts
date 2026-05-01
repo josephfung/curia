@@ -696,6 +696,9 @@ async function main(): Promise<void> {
         selfEmail: account.selfEmail,
         observationMode: account.observationMode,
         excludedSenderEmails: account.excludedSenderEmails,
+        ceoEmail: config.ceoPrimaryEmail,
+        contactCreationMaxPerMessage: yamlConfig.contact_creation_limits?.max_per_message ?? 10,
+        contactCreationMaxPerHour: yamlConfig.contact_creation_limits?.max_per_hour ?? 100,
       }));
     }
   }
