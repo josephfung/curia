@@ -3376,13 +3376,24 @@ function createUiHtml(): string {
         })
         .then(function(data) {
           if (!data.autonomy) {
-            document.getElementById('autonomy-current').textContent =
+            // Render into individual child elements rather than setting textContent on the
+            // parent — setting textContent destroys all children (#autonomy-score-display,
+            // #autonomy-band-badge, #autonomy-band-description), which breaks any subsequent
+            // call to renderAutonomyState() that tries to getElementById on them.
+            document.getElementById('autonomy-score-display').textContent = '—';
+            document.getElementById('autonomy-band-badge').textContent = 'Not configured';
+            document.getElementById('autonomy-band-description').textContent =
               'Autonomy not configured. Run migration 011 first.';
             return;
           }
           autonomySavedScore = data.autonomy.score;
           renderAutonomyState(data.autonomy.score, data.autonomy.band, data.autonomy.bandDescription);
           document.getElementById('autonomy-slider').value = data.autonomy.score;
+          // Reset stale form state from a previous session so we don't show a dirty form
+          // with an enabled save button or leftover reason text on reload.
+          document.getElementById('autonomy-reason').value = '';
+          document.getElementById('autonomy-save-status').textContent = '';
+          document.getElementById('autonomy-save-btn').disabled = true;
         })
         .catch(function(err) {
           document.getElementById('autonomy-current').textContent =
@@ -3446,6 +3457,9 @@ function createUiHtml(): string {
     }
 
     function loadAutonomyHistory() {
+      var btn = document.getElementById('autonomy-show-more-btn');
+      btn.disabled = true;  // prevent double-click during load
+
       fetch('/api/autonomy/history?limit=5&offset=' + autonomyHistoryOffset)
         .then(function(res) {
           if (!res.ok) return res.json().then(function(d) { throw new Error(d.error || ('HTTP ' + res.status)); });
@@ -3458,16 +3472,16 @@ function createUiHtml(): string {
             list.appendChild(buildHistoryEntry(entry));
           });
           autonomyHistoryOffset += data.history.length;
-
-          var btn = document.getElementById('autonomy-show-more-btn');
+          btn.disabled = false;
           btn.style.display = (autonomyHistoryOffset < autonomyHistoryTotal) ? 'inline-block' : 'none';
         })
         .catch(function(err) {
+          btn.disabled = false;
           var errEl = document.createElement('p');
           errEl.style.color = 'var(--destructive)';
           errEl.textContent = 'Failed to load history: ' + (err && err.message ? err.message : 'unknown error');
           document.getElementById('autonomy-history-list').appendChild(errEl);
-          document.getElementById('autonomy-show-more-btn').style.display = 'none';
+          btn.style.display = 'none';
         });
     }
 

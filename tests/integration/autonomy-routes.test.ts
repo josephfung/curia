@@ -19,6 +19,9 @@ describe('Autonomy REST routes', () => {
   const AUTH_HEADER = { 'x-web-bootstrap-secret': TEST_SECRET };
 
   beforeAll(async () => {
+    if (!process.env['DATABASE_URL']) {
+      throw new Error('DATABASE_URL must be set to run autonomy route integration tests');
+    }
     app = Fastify();
     pool = new pg.Pool({ connectionString: process.env['DATABASE_URL'] });
     autonomyService = new AutonomyService(pool, logger);
