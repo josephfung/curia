@@ -1572,6 +1572,40 @@ function createUiHtml(): string {
     var selectedJobId = null;
     var jobsMode = 'create';
 
+    // -- Autonomy state --
+    var autonomySavedScore = null; // last-saved score (to detect slider changes)
+    var autonomyHistoryOffset = 0;
+    var autonomyHistoryTotal = 0;
+
+    var AUTONOMY_BANDS = {
+      'full':              { label: 'Full',              color: '#5E9E6B', description: 'Act independently. No confirmation needed for standard operations. Flag only genuinely novel, irreversible, or high-stakes actions \u2014 where the downside of acting without checking outweighs the cost of the pause.' },
+      'spot-check':        { label: 'Spot-check',        color: '#6BAED6', description: 'Proceed on routine tasks. For consequential actions \u2014 sending external communications, creating commitments, or acting on behalf of the CEO \u2014 note what you are doing in your response so the CEO maintains visibility. No need to stop and ask.' },
+      'approval-required': { label: 'Approval Required', color: '#C9874A', description: 'For any consequential action, present your plan and explicitly ask for confirmation before proceeding. Routine reporting, summarization, and information retrieval can proceed without approval. When in doubt, draft and ask.' },
+      'draft-only':        { label: 'Draft Only',        color: '#7E6BA8', description: 'Prepare drafts, plans, and analysis, but do not send, publish, schedule, or act on behalf of the CEO without an explicit instruction to do so. Surface your work for review; execution requires a direct go-ahead.' },
+      'restricted':        { label: 'Restricted',        color: '#E86040', description: 'Present options and analysis only. Take no independent action. All outputs are advisory. Every step that would have an external effect requires explicit CEO instruction.' },
+    };
+
+    function bandForScore(score) {
+      if (score >= 90) return 'full';
+      if (score >= 80) return 'spot-check';
+      if (score >= 70) return 'approval-required';
+      if (score >= 60) return 'draft-only';
+      return 'restricted';
+    }
+
+    function timeAgo(dateStr) {
+      var now = Date.now();
+      var then = new Date(dateStr).getTime();
+      var seconds = Math.floor((now - then) / 1000);
+      if (seconds < 60) return 'just now';
+      var minutes = Math.floor(seconds / 60);
+      if (minutes < 60) return minutes + 'm ago';
+      var hours = Math.floor(minutes / 60);
+      if (hours < 24) return hours + 'h ago';
+      var days = Math.floor(hours / 24);
+      return days + 'd ago';
+    }
+
     // ── Chat state ─────────────────────────────────────────────────────
     // Active EventSource for SSE — one per conversation, null when idle.
     var chatStream = null;
@@ -1908,6 +1942,7 @@ function createUiHtml(): string {
       var contactsView      = document.getElementById('view-contacts');
       var tasksView         = document.getElementById('view-tasks');
       var scheduledJobsView = document.getElementById('view-scheduled-jobs');
+      var autonomyView      = document.getElementById('view-autonomy');
       var viewWizard        = document.getElementById('view-wizard');
 
       // When navigating to the wizard, fetch the current identity to pre-fill fields,
@@ -1941,6 +1976,7 @@ function createUiHtml(): string {
       contactsView.style.display      = view === 'contacts'       ? 'flex' : 'none';
       tasksView.style.display         = view === 'tasks'          ? 'flex' : 'none';
       scheduledJobsView.style.display = view === 'scheduled-jobs' ? 'flex' : 'none';
+      if (autonomyView) autonomyView.style.display = view === 'autonomy' ? 'flex' : 'none';
       if (viewWizard) viewWizard.style.display = 'none'; // always hide when navigating elsewhere
       // When returning to the KG view, tell Cytoscape to re-measure the container.
       // The canvas dimensions may be stale if the view was hidden (display:none)
@@ -1970,6 +2006,9 @@ function createUiHtml(): string {
       }
       if (view === 'scheduled-jobs') {
         loadJobs();
+      }
+      if (view === 'autonomy') {
+        loadAutonomy();
       }
 
       // On first entry into the Chat view with no conversations yet, ensure
@@ -3327,6 +3366,138 @@ function createUiHtml(): string {
         .finally(function() { jobsDeleteBtn.disabled = false; });
     }
 
+    // -- Autonomy functions --
+
+    function loadAutonomy() {
+      fetch('/api/autonomy')
+        .then(function(res) { return res.json(); })
+        .then(function(data) {
+          if (!data.autonomy) {
+            document.getElementById('autonomy-current').textContent =
+              'Autonomy not configured. Run migration 011 first.';
+            return;
+          }
+          autonomySavedScore = data.autonomy.score;
+          renderAutonomyState(data.autonomy.score, data.autonomy.band, data.autonomy.bandDescription);
+          document.getElementById('autonomy-slider').value = data.autonomy.score;
+        });
+
+      // Reset and load history
+      autonomyHistoryOffset = 0;
+      document.getElementById('autonomy-history-list').replaceChildren();
+      loadAutonomyHistory();
+    }
+
+    function renderAutonomyState(score, band, description) {
+      var bandInfo = AUTONOMY_BANDS[band] || { label: band, color: '#999' };
+      document.getElementById('autonomy-score-display').textContent = score;
+      var badge = document.getElementById('autonomy-band-badge');
+      badge.textContent = bandInfo.label;
+      badge.style.background = bandInfo.color + '22';
+      badge.style.color = bandInfo.color;
+      badge.style.border = '1px solid ' + bandInfo.color + '44';
+      document.getElementById('autonomy-band-description').textContent = description;
+    }
+
+    function buildHistoryEntry(entry) {
+      var bandInfo = AUTONOMY_BANDS[entry.band] || { label: entry.band, color: '#999' };
+      var div = document.createElement('div');
+      div.className = 'autonomy-history-entry';
+
+      // Score change line
+      var scoreDiv = document.createElement('div');
+      scoreDiv.className = 'score-change';
+      var scoreText = (entry.previousScore !== null && entry.previousScore !== undefined)
+        ? entry.previousScore + ' \u2192 ' + entry.score
+        : '\u2014 \u2192 ' + entry.score;
+      scoreDiv.appendChild(document.createTextNode(scoreText + ' '));
+      var badge = document.createElement('span');
+      badge.className = 'badge';
+      badge.style.fontSize = '0.6875rem';
+      badge.style.background = bandInfo.color + '22';
+      badge.style.color = bandInfo.color;
+      badge.style.border = '1px solid ' + bandInfo.color + '44';
+      badge.textContent = bandInfo.label;
+      scoreDiv.appendChild(badge);
+      div.appendChild(scoreDiv);
+
+      // Meta line (who + when)
+      var metaDiv = document.createElement('div');
+      metaDiv.className = 'meta';
+      metaDiv.textContent = entry.changedBy + ' \u00b7 ' + timeAgo(entry.changedAt);
+      div.appendChild(metaDiv);
+
+      // Reason (if present)
+      if (entry.reason) {
+        var reasonDiv = document.createElement('div');
+        reasonDiv.className = 'reason';
+        reasonDiv.textContent = entry.reason;
+        div.appendChild(reasonDiv);
+      }
+
+      return div;
+    }
+
+    function loadAutonomyHistory() {
+      fetch('/api/autonomy/history?limit=5&offset=' + autonomyHistoryOffset)
+        .then(function(res) { return res.json(); })
+        .then(function(data) {
+          autonomyHistoryTotal = data.total;
+          var list = document.getElementById('autonomy-history-list');
+          data.history.forEach(function(entry) {
+            list.appendChild(buildHistoryEntry(entry));
+          });
+          autonomyHistoryOffset += data.history.length;
+
+          var btn = document.getElementById('autonomy-show-more-btn');
+          btn.style.display = (autonomyHistoryOffset < autonomyHistoryTotal) ? 'inline-block' : 'none';
+        });
+    }
+
+    function saveAutonomy() {
+      var score = parseInt(document.getElementById('autonomy-slider').value, 10);
+      var reason = document.getElementById('autonomy-reason').value.trim() || undefined;
+      var saveBtn = document.getElementById('autonomy-save-btn');
+      var status = document.getElementById('autonomy-save-status');
+      saveBtn.disabled = true;
+      status.textContent = 'Saving\u2026';
+
+      fetch('/api/autonomy', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ score: score, reason: reason }),
+      })
+        .then(function(res) {
+          if (!res.ok) return res.json().then(function(d) { throw new Error(d.error); });
+          return res.json();
+        })
+        .then(function(data) {
+          autonomySavedScore = data.autonomy.score;
+          renderAutonomyState(data.autonomy.score, data.autonomy.band, data.autonomy.bandDescription);
+          document.getElementById('autonomy-reason').value = '';
+          status.textContent = 'Saved';
+          setTimeout(function() { status.textContent = ''; }, 2000);
+
+          // Prepend new entry to history
+          var newEntry = {
+            score: data.autonomy.score,
+            previousScore: data.previousScore,
+            band: data.autonomy.band,
+            changedBy: 'web-ui',
+            changedAt: new Date().toISOString(),
+            reason: reason || null,
+          };
+          var list = document.getElementById('autonomy-history-list');
+          list.insertBefore(buildHistoryEntry(newEntry), list.firstChild);
+          autonomyHistoryTotal++;
+          autonomyHistoryOffset++;
+        })
+        .catch(function(err) {
+          status.textContent = 'Error: ' + err.message;
+          saveBtn.disabled = false;
+        });
+    }
+
     jobsForm.addEventListener('submit', saveJob);
     jobsDeleteBtn.addEventListener('click', deleteJob);
     jobsNewBtn.addEventListener('click', resetJobForm);
@@ -3559,6 +3730,24 @@ function createUiHtml(): string {
     });
 
     chatForm.addEventListener('submit', sendChatMessage);
+
+    // -- Autonomy event bindings --
+
+    document.getElementById('autonomy-slider').addEventListener('input', function() {
+      var score = parseInt(this.value, 10);
+      var band = bandForScore(score);
+      var bandInfo = AUTONOMY_BANDS[band];
+      renderAutonomyState(score, band, bandInfo.description);
+      document.getElementById('autonomy-save-btn').disabled = (score === autonomySavedScore);
+    });
+
+    document.getElementById('autonomy-save-btn').addEventListener('click', function() {
+      saveAutonomy();
+    });
+
+    document.getElementById('autonomy-show-more-btn').addEventListener('click', function() {
+      loadAutonomyHistory();
+    });
   </script>
 </body>
 </html>`;
