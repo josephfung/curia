@@ -100,7 +100,7 @@ This format:
 ```
 redact(content, channelId, trustLevel):
   1. If enabled is false → return content unchanged (no-op)
-  2. If trustLevel is in trust_override list → return content unchanged
+  2. If meetsMinimumTrust(trustLevel, <lowest trust_override value>) → return content unchanged
   3. Call detectPii(content, extraPatterns) → matches
   4. For each match:
      - Normalize match.label to lowercase for comparison
@@ -225,18 +225,57 @@ Registered in `src/bus/events.ts` (discriminated union) and authorized for the d
 - `enabled: false` — silent pass-through
 - Log/LLM scrubbing via `scrubPii()` — never emits redaction events (different concern)
 
+## Trust Level Ordinal Comparison
+
+The existing `TrustLevel` type (`'high' | 'medium' | 'low'`) is extended with a `'ceo'` level and ordinal comparison support. This avoids brittle `=== 'high'` checks that break when new levels are added.
+
+### Changes to `src/contacts/types.ts`
+
+```typescript
+export type TrustLevel = 'ceo' | 'high' | 'medium' | 'low';
+
+const TRUST_RANK: Record<TrustLevel, number> = {
+  low: 0,
+  medium: 1,
+  high: 2,
+  ceo: 3,
+};
+
+export function meetsMinimumTrust(
+  actual: TrustLevel | null,
+  required: TrustLevel,
+): boolean {
+  if (actual === null) return false;
+  return TRUST_RANK[actual] >= TRUST_RANK[required];
+}
+```
+
+### Migration
+
+One migration to update the CEO contact from `trustLevel: 'high'` to `trustLevel: 'ceo'`.
+
+### Existing Code Updates
+
+Replace existing `trustLevel === 'high'` checks with `meetsMinimumTrust(trustLevel, 'high')` — semantically identical but now correctly includes `ceo` and any future levels above `high`.
+
+This also removes the special CEO email comparison from the content filter's `checkContactDataLeak` rule — the CEO's `ceo` trust level already implies trust, so the email comparison is redundant.
+
 ## Files Changed
 
 | File | Change |
 |------|--------|
+| `src/contacts/types.ts` | Add `'ceo'` to `TrustLevel`, add `meetsMinimumTrust()` helper |
 | `src/pii/scrubber.ts` | Extract `detectPii()`, make `scrubPii()` a thin wrapper |
 | `src/dispatch/pii-redactor.ts` | New `PiiRedactor` class |
+| `src/dispatch/outbound-filter.ts` | Replace `=== 'high'` + CEO email check with `meetsMinimumTrust()` |
 | `src/skills/outbound-gateway.ts` | Add redaction as step 3 in pipeline |
 | `src/bus/events.ts` | Add `outbound.pii-redacted` event type |
 | `src/bus/permissions.ts` | Authorize dispatch layer for new event |
 | `src/config.ts` | Extend `pii` interface with `outbound_redaction` |
 | `src/startup/validator.ts` | Validate new config block at startup |
+| `schemas/default-config.schema.json` | Add `outbound_redaction` to JSON schema |
 | `config/default.yaml` | Add `outbound_redaction` section |
+| `src/db/migrations/NNN_ceo_trust_level.sql` | Update CEO contact trust level to `'ceo'` |
 
 ## Testing
 
