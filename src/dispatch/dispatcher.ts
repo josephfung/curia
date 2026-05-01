@@ -364,7 +364,9 @@ export class Dispatcher {
           // Unknown sender — determine routing decision first so the audit event is self-contained.
           // Compute a preliminary trust score (injection risk not yet available — the unknown-sender
           // branch returns early before the scanner runs).
-          const prelimChannelTrust = (this.channelPolicies?.[payload.channelId]?.trust ?? 'low') as TrustLevel;
+          // Channel trust levels are loaded from channel-trust.yaml and validated to 'low' | 'medium' | 'high'.
+          // 'ceo' is a contact-level trust level only — channels themselves are never ceo-trust.
+          const prelimChannelTrust = (this.channelPolicies?.[payload.channelId]?.trust ?? 'low') as 'low' | 'medium' | 'high';
           const prelimScore = computeTrustScore({
             channelTrustLevel: prelimChannelTrust,
             contactConfidence: 0.0,  // unknown sender has no confidence

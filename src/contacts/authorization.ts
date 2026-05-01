@@ -11,7 +11,6 @@ import type {
   AuthConfig,
   AuthorizationResult,
   ContactStatus,
-  TrustLevel,
 } from './types.js';
 import { TRUST_RANK } from './types.js';
 
