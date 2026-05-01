@@ -607,14 +607,17 @@ export class EmailAdapter {
       }
     }
 
-    // Send a deduplicated CEO notification if any participants were skipped due to rate limits
+    // Send a deduplicated CEO notification for each rate limit type that was hit.
+    // Both caps can fire simultaneously (e.g. per-hour was already at limit when the email
+    // arrived and per-message is also reached), so notify for each independently so that
+    // the dedup timestamps are updated correctly.
     if (skippedThisMessage > 0) {
-      await this.notifyRateLimitHit(
-        hitPerMessageCap ? 'per_message' : 'per_hour',
-        skippedThisMessage,
-        emailSubject,
-        emailSender,
-      );
+      if (hitPerHourCap) {
+        await this.notifyRateLimitHit('per_hour', skippedThisMessage, emailSubject, emailSender);
+      }
+      if (hitPerMessageCap) {
+        await this.notifyRateLimitHit('per_message', skippedThisMessage, emailSubject, emailSender);
+      }
     }
   }
 
@@ -644,13 +647,6 @@ export class EmailAdapter {
       return;
     }
 
-    // Update dedup timestamp before sending — if the send fails, we still won't spam
-    if (limitType === 'per_message') {
-      this.lastNotifiedPerMessage = now;
-    } else {
-      this.lastNotifiedPerHour = now;
-    }
-
     const limitLabel = limitType === 'per_message'
       ? `per-message limit (${this.config.contactCreationMaxPerMessage})`
       : `per-hour limit (${this.config.contactCreationMaxPerHour})`;
@@ -672,9 +668,17 @@ export class EmailAdapter {
           'If this is unexpected, check for spam activity on this account.',
         ].join('\n'),
       });
+      // Commit the dedup timestamp only after a successful send — if the send fails we
+      // allow a retry on the next limit hit rather than silencing the CEO for an hour.
+      if (limitType === 'per_message') {
+        this.lastNotifiedPerMessage = now;
+      } else {
+        this.lastNotifiedPerHour = now;
+      }
     } catch (err) {
-      // Non-fatal — the rate limit is already enforced, this is just a notification
-      logger.warn({ err, limitType, skippedCount }, 'Failed to send contact rate-limit notification');
+      // Non-fatal — the rate limit is already enforced, this is just a notification.
+      // The timestamp was NOT committed, so the next limit hit will attempt to notify again.
+      logger.warn({ err, limitType, skippedCount }, 'Failed to send contact rate-limit notification — will retry on next limit hit');
     }
   }
 }
