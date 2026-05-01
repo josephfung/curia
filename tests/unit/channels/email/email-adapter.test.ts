@@ -54,12 +54,17 @@ function createMocks() {
   const outboundGateway = {
     send: vi.fn().mockResolvedValue({ success: true, messageId: 'sent-1' }),
     listEmailMessages: vi.fn().mockResolvedValue([]),
+    sendNotification: vi.fn().mockResolvedValue(undefined),
   } as unknown as OutboundGateway;
 
   return { logger, bus, contactService, outboundGateway };
 }
 
-function makeAdapter(mocks: ReturnType<typeof createMocks>) {
+function makeAdapter(mocks: ReturnType<typeof createMocks>, overrides: Partial<{
+  contactCreationMaxPerMessage: number;
+  contactCreationMaxPerHour: number;
+  ceoEmail: string;
+}> = {}) {
   return new EmailAdapter({
     accountId: 'curia',
     outboundPolicy: 'direct',
@@ -71,6 +76,9 @@ function makeAdapter(mocks: ReturnType<typeof createMocks>) {
     selfEmail: SELF_EMAIL,
     observationMode: false,
     excludedSenderEmails: [],
+    contactCreationMaxPerMessage: overrides.contactCreationMaxPerMessage ?? 10,
+    contactCreationMaxPerHour: overrides.contactCreationMaxPerHour ?? 100,
+    ceoEmail: overrides.ceoEmail ?? CEO_EMAIL,
   });
 }
 
@@ -250,6 +258,9 @@ describe('EmailAdapter — inbound poll: excludedSenderEmails', () => {
       selfEmail: 'joseph@example.com',
       observationMode: false,
       excludedSenderEmails: ['curia@example.com'],
+      contactCreationMaxPerMessage: 10,
+      contactCreationMaxPerHour: 100,
+      ceoEmail: CEO_EMAIL,
     });
 
     const msg = makeMockMessage({ from: [{ email: 'curia@example.com' }] });
@@ -279,6 +290,9 @@ describe('EmailAdapter — inbound poll: excludedSenderEmails', () => {
       selfEmail: 'joseph@example.com',
       observationMode: false,
       excludedSenderEmails: ['CURIA@EXAMPLE.COM'],
+      contactCreationMaxPerMessage: 10,
+      contactCreationMaxPerHour: 100,
+      ceoEmail: CEO_EMAIL,
     });
 
     // Sender address uses different casing than the exclusion list entry
@@ -308,6 +322,9 @@ describe('EmailAdapter — inbound poll: excludedSenderEmails', () => {
       selfEmail: 'joseph@example.com',
       observationMode: false,
       excludedSenderEmails: ['curia@example.com'],
+      contactCreationMaxPerMessage: 10,
+      contactCreationMaxPerHour: 100,
+      ceoEmail: CEO_EMAIL,
     });
 
     // Different sender — should not be suppressed
@@ -339,6 +356,9 @@ describe('EmailAdapter — inbound poll: observationMode', () => {
       selfEmail: 'joseph@example.com',
       observationMode: true,
       excludedSenderEmails: [],
+      contactCreationMaxPerMessage: 10,
+      contactCreationMaxPerHour: 100,
+      ceoEmail: CEO_EMAIL,
     });
 
     const msg = makeMockMessage({
@@ -441,6 +461,9 @@ describe('EmailAdapter — outbound.notification subscriber', () => {
       selfEmail: 'joseph@example.com',
       observationMode: false,
       excludedSenderEmails: [],
+      contactCreationMaxPerMessage: 10,
+      contactCreationMaxPerHour: 100,
+      ceoEmail: CEO_EMAIL,
     });
     await adapter.start();
 
@@ -490,6 +513,230 @@ describe('EmailAdapter — outbound.notification subscriber', () => {
       }),
       expect.stringContaining('failed to deliver outbound.notification'),
     );
+    await adapter.stop();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Contact auto-creation rate limiting (#36)
+// ---------------------------------------------------------------------------
+
+describe('EmailAdapter — contact auto-creation rate limiting', () => {
+  /** Build an email with N unique CC participants (+ the from sender). */
+  function makeMockMessageWithParticipants(ccCount: number): NylasMessage {
+    const ccList = Array.from({ length: ccCount }, (_, i) => ({
+      email: `cc${i}@example.com`,
+      name: `CC User ${i}`,
+    }));
+    return makeMockMessage({
+      from: [{ email: 'sender@example.com', name: 'Sender' }],
+      to: [{ email: SELF_EMAIL }],
+      cc: ccList,
+    });
+  }
+
+  it('enforces per-message cap — only creates max_per_message new contacts', async () => {
+    const mocks = createMocks();
+    const adapter = makeAdapter(mocks, { contactCreationMaxPerMessage: 3 });
+
+    (mocks.contactService.resolveByChannelIdentity as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+    (mocks.contactService.createContact as ReturnType<typeof vi.fn>).mockResolvedValue({ id: 'c1' });
+    (mocks.contactService.linkIdentity as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+
+    // 6 non-self participants (1 from + 5 CC)
+    const msg = makeMockMessageWithParticipants(5);
+    (mocks.outboundGateway.listEmailMessages as ReturnType<typeof vi.fn>).mockResolvedValueOnce([msg]);
+
+    await adapter.start();
+    await flushPoll();
+
+    // Only 3 contacts should be created (per-message cap of 3)
+    expect(mocks.contactService.createContact).toHaveBeenCalledTimes(3);
+
+    await adapter.stop();
+  });
+
+  it('enforces per-hour cap across multiple emails', async () => {
+    const mocks = createMocks();
+    const adapter = makeAdapter(mocks, { contactCreationMaxPerHour: 2, contactCreationMaxPerMessage: 100 });
+
+    (mocks.contactService.resolveByChannelIdentity as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+    (mocks.contactService.createContact as ReturnType<typeof vi.fn>).mockResolvedValue({ id: 'c1' });
+    (mocks.contactService.linkIdentity as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+
+    // First email: 2 new participants (from + 1 CC) — creates 2, hits hourly cap
+    const msg1 = makeMockMessage({
+      id: 'msg-a', date: 1700000001,
+      from: [{ email: 'a@example.com' }],
+      to: [{ email: SELF_EMAIL }],
+      cc: [{ email: 'b@example.com' }],
+    });
+    // Second email: 1 new participant — should be skipped (hourly cap already hit)
+    const msg2 = makeMockMessage({
+      id: 'msg-b', date: 1700000002,
+      from: [{ email: 'c@example.com' }],
+      to: [{ email: SELF_EMAIL }],
+      cc: [],
+    });
+    (mocks.outboundGateway.listEmailMessages as ReturnType<typeof vi.fn>).mockResolvedValueOnce([msg1, msg2]);
+
+    await adapter.start();
+    await flushPoll();
+
+    // Only 2 contacts created total (hourly cap of 2), not 3
+    expect(mocks.contactService.createContact).toHaveBeenCalledTimes(2);
+
+    await adapter.stop();
+  });
+
+  it('resets hourly window after 1 hour', async () => {
+    vi.useFakeTimers();
+    try {
+      const mocks = createMocks();
+      const adapter = makeAdapter(mocks, { contactCreationMaxPerHour: 1, contactCreationMaxPerMessage: 100 });
+
+      (mocks.contactService.resolveByChannelIdentity as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+      (mocks.contactService.createContact as ReturnType<typeof vi.fn>).mockResolvedValue({ id: 'c1' });
+      (mocks.contactService.linkIdentity as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+
+      // First poll: 1 new participant — hits hourly cap of 1
+      const msg1 = makeMockMessage({
+        id: 'msg-a', date: 1700000001,
+        from: [{ email: 'first@example.com' }],
+        to: [{ email: SELF_EMAIL }],
+      });
+      (mocks.outboundGateway.listEmailMessages as ReturnType<typeof vi.fn>).mockResolvedValueOnce([msg1]);
+
+      await adapter.start();
+      await flushPoll();
+
+      expect(mocks.contactService.createContact).toHaveBeenCalledTimes(1);
+
+      // Advance time by 1 hour + 1ms so the window resets
+      vi.advanceTimersByTime(3_600_001);
+
+      // Second poll: 1 new participant — window should have reset, creation succeeds
+      const msg2 = makeMockMessage({
+        id: 'msg-b', date: 1700003602,
+        from: [{ email: 'second@example.com' }],
+        to: [{ email: SELF_EMAIL }],
+      });
+      (mocks.outboundGateway.listEmailMessages as ReturnType<typeof vi.fn>).mockResolvedValueOnce([msg2]);
+
+      await (adapter as unknown as { poll(): Promise<void> }).poll();
+
+      expect(mocks.contactService.createContact).toHaveBeenCalledTimes(2);
+
+      await adapter.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('existing contacts do not count toward the per-message cap', async () => {
+    const mocks = createMocks();
+    const adapter = makeAdapter(mocks, { contactCreationMaxPerMessage: 2 });
+
+    // First 3 participants already exist, last 2 are new
+    let resolveCallCount = 0;
+    (mocks.contactService.resolveByChannelIdentity as ReturnType<typeof vi.fn>).mockImplementation(() => {
+      resolveCallCount++;
+      return Promise.resolve(resolveCallCount <= 3 ? { id: 'existing' } : null);
+    });
+    (mocks.contactService.createContact as ReturnType<typeof vi.fn>).mockResolvedValue({ id: 'c1' });
+    (mocks.contactService.linkIdentity as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+
+    // 5 non-self participants (1 from + 4 CC)
+    const msg = makeMockMessageWithParticipants(4);
+    (mocks.outboundGateway.listEmailMessages as ReturnType<typeof vi.fn>).mockResolvedValueOnce([msg]);
+
+    await adapter.start();
+    await flushPoll();
+
+    // 3 existed, 2 are new — both new ones created (under the cap of 2)
+    expect(mocks.contactService.createContact).toHaveBeenCalledTimes(2);
+
+    await adapter.stop();
+  });
+
+  it('sends outbound.notification when per-message cap is hit', async () => {
+    const mocks = createMocks();
+    const adapter = makeAdapter(mocks, { contactCreationMaxPerMessage: 1 });
+
+    (mocks.contactService.resolveByChannelIdentity as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+    (mocks.contactService.createContact as ReturnType<typeof vi.fn>).mockResolvedValue({ id: 'c1' });
+    (mocks.contactService.linkIdentity as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+
+    // 3 non-self participants (from + 2 CC), cap is 1 — 2 will be skipped
+    const msg = makeMockMessage({
+      from: [{ email: 'a@example.com' }],
+      to: [{ email: SELF_EMAIL }],
+      cc: [{ email: 'b@example.com' }, { email: 'c@example.com' }],
+      subject: 'Board meeting notes',
+    });
+    (mocks.outboundGateway.listEmailMessages as ReturnType<typeof vi.fn>).mockResolvedValueOnce([msg]);
+
+    await adapter.start();
+    await flushPoll();
+
+    expect(mocks.outboundGateway.sendNotification).toHaveBeenCalledOnce();
+    const notifPayload = (mocks.outboundGateway.sendNotification as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(notifPayload.notificationType).toBe('contact_rate_limited');
+    expect(notifPayload.ceoEmail).toBe(CEO_EMAIL);
+    expect(notifPayload.subject).toContain('rate limit');
+
+    await adapter.stop();
+  });
+
+  it('deduplicates notifications — only one per limit type per hour', async () => {
+    const mocks = createMocks();
+    const adapter = makeAdapter(mocks, { contactCreationMaxPerMessage: 1 });
+
+    (mocks.contactService.resolveByChannelIdentity as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+    (mocks.contactService.createContact as ReturnType<typeof vi.fn>).mockResolvedValue({ id: 'c1' });
+    (mocks.contactService.linkIdentity as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+
+    // Two emails that both trigger the per-message limit
+    const msg1 = makeMockMessage({
+      id: 'msg-a', date: 1700000001,
+      from: [{ email: 'a@example.com' }],
+      to: [{ email: SELF_EMAIL }],
+      cc: [{ email: 'b@example.com' }],
+    });
+    const msg2 = makeMockMessage({
+      id: 'msg-b', date: 1700000002,
+      from: [{ email: 'c@example.com' }],
+      to: [{ email: SELF_EMAIL }],
+      cc: [{ email: 'd@example.com' }],
+    });
+    (mocks.outboundGateway.listEmailMessages as ReturnType<typeof vi.fn>).mockResolvedValueOnce([msg1, msg2]);
+
+    await adapter.start();
+    await flushPoll();
+
+    // Only one notification despite two rate-limit hits in the same hour
+    expect(mocks.outboundGateway.sendNotification).toHaveBeenCalledOnce();
+
+    await adapter.stop();
+  });
+
+  it('respects custom config overrides for limits', async () => {
+    const mocks = createMocks();
+    const adapter = makeAdapter(mocks, { contactCreationMaxPerMessage: 2, contactCreationMaxPerHour: 5 });
+
+    (mocks.contactService.resolveByChannelIdentity as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+    (mocks.contactService.createContact as ReturnType<typeof vi.fn>).mockResolvedValue({ id: 'c1' });
+    (mocks.contactService.linkIdentity as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+
+    // 4 non-self participants (1 from + 3 CC) — per-message cap of 2 should apply
+    const msg = makeMockMessageWithParticipants(3);
+    (mocks.outboundGateway.listEmailMessages as ReturnType<typeof vi.fn>).mockResolvedValueOnce([msg]);
+
+    await adapter.start();
+    await flushPoll();
+
+    expect(mocks.contactService.createContact).toHaveBeenCalledTimes(2);
+
     await adapter.stop();
   });
 });
