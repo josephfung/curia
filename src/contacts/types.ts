@@ -133,7 +133,8 @@ export type TrustLevel = 'ceo' | 'high' | 'medium' | 'low';
 
 // Ordinal ranking for trust level comparison. Higher rank = more trusted.
 // Used by meetsMinimumTrust() so callers don't need to enumerate every level.
-const TRUST_RANK: Record<TrustLevel, number> = {
+// Exported so authorization.ts and other consumers share the same single source of truth.
+export const TRUST_RANK: Record<TrustLevel, number> = {
   low: 0,
   medium: 1,
   high: 2,
