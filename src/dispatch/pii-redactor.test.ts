@@ -124,4 +124,29 @@ describe('PiiRedactor', () => {
     const result = await redactor.redact('Card: 4111 1111 1111 1111', 'email', 'medium');
     expect(JSON.stringify(result.redactions)).not.toContain('4111');
   });
+
+  it('explicit channel policy fully overrides default: allow (channel policy takes precedence)', async () => {
+    // A channel with an explicit policy entry (even empty allow list) does NOT
+    // inherit default: 'allow'. All PII on that channel follows the channel policy.
+    const redactorWithAllowDefault = new PiiRedactor({
+      config: {
+        ...defaultConfig,
+        default: 'allow',  // would pass everything on channels without a policy
+        channel_policies: {
+          email: { allow: [] },  // explicit empty policy — blocks everything on email
+        },
+      },
+      bus: bus as any,
+      logger: createSilentLogger(),
+      extraPatterns: [],
+    });
+    const result = await redactorWithAllowDefault.redact(
+      'Contact user@example.com',
+      'email',
+      'medium',
+    );
+    // email channel has explicit policy with empty allow list → redacted despite default: 'allow'
+    expect(result.content).toContain('[REDACTED:');
+    expect(result.content).not.toContain('user@example.com');
+  });
 });

@@ -169,7 +169,7 @@ export class PiiRedactor {
       redacted = redacted.slice(0, match.start) + replacedWith + redacted.slice(match.end);
       // Build entry without the original matched value — intentional PII-safety design.
       redactions.unshift({
-        patternLabel: match.label,
+        patternLabel: match.label.toLowerCase(),
         channelId,
         replacedWith,
       });
