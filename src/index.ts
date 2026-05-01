@@ -348,9 +348,14 @@ async function main(): Promise<void> {
   // provisional (the extractParticipants default), causing their messages to be held.
   // Also creates (or backfills) a KG person node so entity context enrichment works
   // for the CEO. See issue #380.
+  let ceoContactId: string | undefined;
   if (config.ceoPrimaryEmail) {
     try {
       const ceoBootstrap = await bootstrapCeoContact(config.ceoPrimaryEmail, 'CEO', pool, logger);
+      // Persist the CEO's contact UUID so PiiRedactor can bypass redaction using a stable
+      // UUID check rather than relying solely on trust_level. UUID is resolved once at startup
+      // from ceoPrimaryEmail and is tamper-proof (unlike trust_level, which has a setter API).
+      ceoContactId = ceoBootstrap.contactId;
       logger.info({ contactId: ceoBootstrap.contactId, kgNodeId: ceoBootstrap.kgNodeId }, 'CEO identity ready');
     } catch (err) {
       // Non-fatal: log and continue. Severity depends on whether the email adapter is active:
@@ -671,6 +676,7 @@ async function main(): Promise<void> {
       bus,
       logger,
       extraPatterns, // same patterns used by the inbound scrubber
+      ceoContactId,  // resolved from ceoPrimaryEmail at bootstrap; undefined if bootstrap failed or email not set
     });
   } catch (err) {
     logger.fatal({ err }, 'Failed to initialize PiiRedactor — check pii.outbound_redaction config');

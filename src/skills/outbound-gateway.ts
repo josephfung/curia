@@ -303,6 +303,7 @@ export class OutboundGateway {
     // Fail-open on DB errors: an infra failure should not silently prevent
     // sending. We warn so the anomaly is visible in logs/alerting.
     let recipientTrustLevel: TrustLevel | null = null;
+    let recipientContactId: string | undefined;
     try {
       const contact = await this.contactService.resolveByChannelIdentity(request.channel, recipientId);
       if (contact !== null) {
@@ -313,9 +314,11 @@ export class OutboundGateway {
           );
           return { success: false, blockedReason: 'Recipient is blocked' };
         }
-        // Capture trust level for the content filter — used to allow contact data
-        // in user-initiated responses to explicitly trusted recipients (e.g. CEO's EA).
+        // Capture trust level for the content filter, and contact UUID for the PII redactor's
+        // CEO bypass check. Both are used downstream: trust level by the content filter, and
+        // contact UUID by PiiRedactor.redact() so it can match against the stored CEO contact ID.
         recipientTrustLevel = contact.trustLevel;
+        recipientContactId = contact.contactId;
       }
     } catch (err) {
       // DB or service error — log at warn and proceed.
@@ -343,7 +346,7 @@ export class OutboundGateway {
           messageBody,
           request.channel,
           recipientTrustLevel,
-          { recipientId },
+          { recipientId, recipientContactId },
         );
         redactedBody = redactionResult.content;
       } catch (err) {

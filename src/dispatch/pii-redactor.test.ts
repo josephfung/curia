@@ -115,6 +115,50 @@ describe('PiiRedactor', () => {
     expect(mockBusPublish).not.toHaveBeenCalled();
   });
 
+  it('bypasses redaction when recipientContactId matches ceoContactId', async () => {
+    // Simulates the case where bootstrap resolved the CEO's UUID and stored it.
+    const ceoUUID = 'b1a2c3d4-e5f6-7890-abcd-ef1234567890';
+    const redactorWithCeoId = new PiiRedactor({
+      config: defaultConfig,
+      bus,
+      logger,
+      extraPatterns: [],
+      ceoContactId: ceoUUID,
+    });
+
+    // Recipient is CEO — should pass through unredacted even with null trust level
+    const result = await redactorWithCeoId.redact(
+      'Your card is 4111 1111 1111 1111.',
+      'email',
+      null, // trust level unknown — UUID check must be sufficient
+      { recipientContactId: ceoUUID },
+    );
+    expect(result.content).toContain('4111 1111 1111 1111');
+    expect(result.redactions).toHaveLength(0);
+    expect(mockBusPublish).not.toHaveBeenCalled();
+  });
+
+  it('does NOT bypass redaction when recipientContactId differs from ceoContactId', async () => {
+    const ceoUUID = 'b1a2c3d4-e5f6-7890-abcd-ef1234567890';
+    const redactorWithCeoId = new PiiRedactor({
+      config: defaultConfig,
+      bus,
+      logger,
+      extraPatterns: [],
+      ceoContactId: ceoUUID,
+    });
+
+    // Recipient is someone else — redaction must apply
+    const result = await redactorWithCeoId.redact(
+      'Your card is 4111 1111 1111 1111.',
+      'email',
+      'medium',
+      { recipientContactId: 'ffffffff-ffff-ffff-ffff-ffffffffffff' },
+    );
+    expect(result.content).toContain('[REDACTED: CREDIT_CARD]');
+    expect(result.redactions).toHaveLength(1);
+  });
+
   it('null trust level is treated as untrusted (PII redacted)', async () => {
     const result = await redactor.redact('Card: 4111 1111 1111 1111', 'email', null);
     expect(result.content).toContain('[REDACTED:');

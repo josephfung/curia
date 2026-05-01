@@ -67,7 +67,7 @@ describeIf('bootstrapCeoContact', () => {
     expect(contact.rows[0].display_name).toBe('Bootstrap Test CEO');
     expect(contact.rows[0].role).toBe('ceo');
     expect(contact.rows[0].status).toBe('confirmed');
-    expect(contact.rows[0].trust_level).toBe('high');
+    expect(contact.rows[0].trust_level).toBe('ceo');
     expect(contact.rows[0].kg_node_id).toBe(result.kgNodeId);
 
     // Verify the KG node was created with correct metadata
@@ -134,13 +134,13 @@ describeIf('bootstrapCeoContact', () => {
     expect(result.contactId).toBe(contactId);
     expect(result.kgNodeId).toBeTruthy();
 
-    // Contact should now be confirmed + high trust
+    // Contact should now be confirmed + ceo trust
     const contact = await pool.query<{ status: string; trust_level: string; kg_node_id: string }>(
       `SELECT status, trust_level, kg_node_id FROM contacts WHERE id = $1`,
       [contactId],
     );
     expect(contact.rows[0].status).toBe('confirmed');
-    expect(contact.rows[0].trust_level).toBe('high');
+    expect(contact.rows[0].trust_level).toBe('ceo');
     expect(contact.rows[0].kg_node_id).toBe(result.kgNodeId);
 
     // Identity should now be verified
