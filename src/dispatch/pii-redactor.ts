@@ -64,6 +64,14 @@ export interface PiiRedactorOptions {
   logger: Logger;
   /** Extra patterns from config (loaded once at startup and threaded through). */
   extraPatterns: PiiPattern[];
+  /**
+   * The CEO's contact UUID, resolved from ceoPrimaryEmail at startup by bootstrapCeoContact().
+   * When set, any message destined for this exact contact ID bypasses PII redaction entirely,
+   * regardless of trust_level. This is the primary CEO identification mechanism — more stable
+   * than trust_level because it is an immutable UUID resolved once at startup, not a DB field
+   * that could be accidentally updated by contact-management code paths.
+   */
+  ceoContactId?: string;
 }
 
 // -- Optional context for audit event --
@@ -72,6 +80,11 @@ export interface RedactContext {
   conversationId?: string;
   recipientId?: string;
   parentEventId?: string;
+  /**
+   * The recipient's contact UUID (from the contacts table).
+   * Used to bypass redaction when it matches PiiRedactorOptions.ceoContactId.
+   */
+  recipientContactId?: string;
 }
 
 // -- PiiRedactor class --
@@ -81,12 +94,14 @@ export class PiiRedactor {
   private readonly bus: EventBus;
   private readonly logger: Logger;
   private readonly extraPatterns: PiiPattern[];
+  private readonly ceoContactId: string | undefined;
 
   constructor(opts: PiiRedactorOptions) {
     this.config = opts.config;
     this.bus = opts.bus;
     this.logger = opts.logger;
     this.extraPatterns = opts.extraPatterns;
+    this.ceoContactId = opts.ceoContactId;
   }
 
   /**
@@ -112,6 +127,14 @@ export class PiiRedactor {
   ): Promise<RedactionResult> {
     // Step 1: Kill switch — if disabled, pass through without any inspection.
     if (!this.config.enabled) {
+      return { content, redactions: [] };
+    }
+
+    // Step 1b: CEO contact ID bypass — more reliable than trust_level.
+    // The CEO contact UUID is resolved once from ceoPrimaryEmail at startup and stored here.
+    // A UUID match is tamper-proof: it cannot be accidentally elevated via contact management
+    // code paths (unlike trust_level, which has a setTrustLevel() API).
+    if (this.ceoContactId && context.recipientContactId === this.ceoContactId) {
       return { content, redactions: [] };
     }
 
