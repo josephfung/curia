@@ -10,6 +10,9 @@ describe('AutonomyService.getHistoryPaginated', () => {
   let service: AutonomyService;
 
   beforeAll(async () => {
+    if (!process.env['DATABASE_URL']) {
+      throw new Error('DATABASE_URL must be set to run autonomy route integration tests');
+    }
     pool = new pg.Pool({ connectionString: process.env['DATABASE_URL'] });
     service = new AutonomyService(pool, logger);
 

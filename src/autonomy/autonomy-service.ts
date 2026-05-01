@@ -265,7 +265,9 @@ export class AutonomyService {
       reason: string | null;
       changed_at: Date;
     }>(
-      'SELECT id, score, previous_score, band, changed_by, reason, changed_at FROM autonomy_history ORDER BY changed_at DESC LIMIT $1 OFFSET $2',
+      // id DESC tiebreaker prevents non-deterministic ordering when two rows share the same
+      // changed_at timestamp, which would cause duplicates or gaps across page boundaries.
+      'SELECT id, score, previous_score, band, changed_by, reason, changed_at FROM autonomy_history ORDER BY changed_at DESC, id DESC LIMIT $1 OFFSET $2',
       [limit, offset],
     );
 
