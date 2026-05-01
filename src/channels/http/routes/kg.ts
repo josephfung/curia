@@ -3370,7 +3370,10 @@ function createUiHtml(): string {
 
     function loadAutonomy() {
       fetch('/api/autonomy')
-        .then(function(res) { return res.json(); })
+        .then(function(res) {
+          if (!res.ok) return res.json().then(function(d) { throw new Error(d.error || ('HTTP ' + res.status)); });
+          return res.json();
+        })
         .then(function(data) {
           if (!data.autonomy) {
             document.getElementById('autonomy-current').textContent =
@@ -3381,9 +3384,9 @@ function createUiHtml(): string {
           renderAutonomyState(data.autonomy.score, data.autonomy.band, data.autonomy.bandDescription);
           document.getElementById('autonomy-slider').value = data.autonomy.score;
         })
-        .catch(function() {
+        .catch(function(err) {
           document.getElementById('autonomy-current').textContent =
-            'Failed to load autonomy settings.';
+            'Failed to load autonomy settings: ' + (err && err.message ? err.message : 'unknown error');
         });
 
       // Reset and load history
@@ -3444,7 +3447,10 @@ function createUiHtml(): string {
 
     function loadAutonomyHistory() {
       fetch('/api/autonomy/history?limit=5&offset=' + autonomyHistoryOffset)
-        .then(function(res) { return res.json(); })
+        .then(function(res) {
+          if (!res.ok) return res.json().then(function(d) { throw new Error(d.error || ('HTTP ' + res.status)); });
+          return res.json();
+        })
         .then(function(data) {
           autonomyHistoryTotal = data.total;
           var list = document.getElementById('autonomy-history-list');
@@ -3456,7 +3462,11 @@ function createUiHtml(): string {
           var btn = document.getElementById('autonomy-show-more-btn');
           btn.style.display = (autonomyHistoryOffset < autonomyHistoryTotal) ? 'inline-block' : 'none';
         })
-        .catch(function() {
+        .catch(function(err) {
+          var errEl = document.createElement('p');
+          errEl.style.color = 'var(--destructive)';
+          errEl.textContent = 'Failed to load history: ' + (err && err.message ? err.message : 'unknown error');
+          document.getElementById('autonomy-history-list').appendChild(errEl);
           document.getElementById('autonomy-show-more-btn').style.display = 'none';
         });
     }
@@ -3500,7 +3510,7 @@ function createUiHtml(): string {
           autonomyHistoryOffset++;
         })
         .catch(function(err) {
-          status.textContent = 'Error: ' + err.message;
+          status.textContent = 'Error: ' + (err && err.message ? err.message : 'unknown error');
           saveBtn.disabled = false;
         });
     }

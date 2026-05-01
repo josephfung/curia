@@ -250,7 +250,11 @@ export class AutonomyService {
     const countResult = await this.pool.query<{ count: string }>(
       'SELECT COUNT(*)::text AS count FROM autonomy_history',
     );
-    const total = parseInt(countResult.rows[0]!.count, 10);
+    const countRow = countResult.rows[0];
+    if (!countRow) {
+      throw new Error('autonomy-service: COUNT query returned no rows — unexpected DB state');
+    }
+    const total = parseInt(countRow.count, 10);
 
     const result = await this.pool.query<{
       id: number;
