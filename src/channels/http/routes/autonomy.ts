@@ -133,7 +133,7 @@ export async function autonomyRoutes(
 
       return reply.send({ history, total });
     } catch (err) {
-      request.log.error({ err }, 'GET /api/autonomy/history: failed to retrieve history');
+      request.log.error({ err, limit, offset }, 'GET /api/autonomy/history: failed to retrieve history');
       return reply.status(500).send({ error: 'Failed to get autonomy history. Check server logs.' });
     }
   });
