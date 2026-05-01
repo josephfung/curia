@@ -6,7 +6,7 @@
 // filter or silently delivered to Curia's inbox. The fix: detect when the latest
 // message is ours and look at to[0].email instead.
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EmailAdapter } from '../../../../src/channels/email/email-adapter.js';
 import { createLogger } from '../../../../src/logger.js';
 import type { OutboundGateway } from '../../../../src/skills/outbound-gateway.js';
@@ -72,7 +72,7 @@ function makeAdapter(mocks: ReturnType<typeof createMocks>, overrides: Partial<{
     logger: mocks.logger,
     outboundGateway: mocks.outboundGateway,
     contactService: mocks.contactService,
-    pollingIntervalMs: 999999, // never fires in tests
+    pollingIntervalMs: 7_200_000, // 2 hours — never fires in tests, even under vi.advanceTimersByTime(3_600_001)
     selfEmail: SELF_EMAIL,
     observationMode: false,
     excludedSenderEmails: [],
@@ -522,6 +522,14 @@ describe('EmailAdapter — outbound.notification subscriber', () => {
 // ---------------------------------------------------------------------------
 
 describe('EmailAdapter — contact auto-creation rate limiting', () => {
+  // Ensure fake timers are always restored after each test in this block, even
+  // when a test times out (a try/finally in the test body is not reliable on
+  // timeout because Vitest abandons the async stack). This prevents fake-timer
+  // state from leaking into subsequent tests.
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   /** Build an email with N unique CC participants (+ the from sender). */
   function makeMockMessageWithParticipants(ccCount: number): NylasMessage {
     const ccList = Array.from({ length: ccCount }, (_, i) => ({
@@ -607,8 +615,10 @@ describe('EmailAdapter — contact auto-creation rate limiting', () => {
       });
       (mocks.outboundGateway.listEmailMessages as ReturnType<typeof vi.fn>).mockResolvedValueOnce([msg1]);
 
+      // start() awaits the initial poll, so by the time start() resolves the
+      // first poll has already completed. flushPoll() would hang here because
+      // setTimeout is fake — skip it and assert directly.
       await adapter.start();
-      await flushPoll();
 
       expect(mocks.contactService.createContact).toHaveBeenCalledTimes(1);
 
