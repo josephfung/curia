@@ -67,15 +67,21 @@ export async function autonomyRoutes(
   app.put('/api/autonomy', async (request, reply) => {
     if (!requireAuth(request, reply)) return;
 
-    const body = request.body as { score?: unknown; reason?: string };
+    const body = request.body as { score?: unknown; reason?: unknown } | null;
 
     // Validate that score is present — reason is optional.
     if (body?.score === undefined || body.score === null) {
-      return reply.status(400).send({ error: 'Request body must include a "score" field.' });
+      return reply.status(400).send({ error: 'Request body must include a "score" field (integer 0-100)' });
     }
 
-    const score = body.score as number;
-    const reason = body.reason;
+    // Validate score range at the route level — spec requires 400 for out-of-range values,
+    // not a 500 from a service-layer throw.
+    const score = body.score;
+    if (typeof score !== 'number' || !Number.isInteger(score) || score < 0 || score > 100) {
+      return reply.status(400).send({ error: 'score must be an integer between 0 and 100' });
+    }
+
+    const reason = typeof body.reason === 'string' ? body.reason : undefined;
 
     try {
       // Source is always 'web-ui' for changes made through this route.
@@ -94,14 +100,6 @@ export async function autonomyRoutes(
       });
     } catch (err) {
       request.log.error({ err }, 'PUT /api/autonomy: failed to set autonomy score');
-
-      // setScore throws with this prefix for out-of-range or non-integer scores.
-      // Return 400 so the UI can surface a user-friendly validation error.
-      const message = err instanceof Error ? err.message : '';
-      if (message.includes('Invalid autonomy score')) {
-        return reply.status(400).send({ error: message });
-      }
-
       return reply.status(500).send({ error: 'Failed to update autonomy score. Check server logs.' });
     }
   });

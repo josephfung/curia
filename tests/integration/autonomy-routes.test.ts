@@ -123,6 +123,16 @@ describe('Autonomy REST routes', () => {
       });
       expect(res.statusCode).toBe(400);
     });
+
+    it('returns 401 without auth', async () => {
+      const res = await app.inject({
+        method: 'PUT',
+        url: '/api/autonomy',
+        headers: { 'content-type': 'application/json' },
+        payload: { score: 85 },
+      });
+      expect(res.statusCode).toBe(401);
+    });
   });
 
   describe('GET /api/autonomy/history', () => {
@@ -151,6 +161,14 @@ describe('Autonomy REST routes', () => {
       const body = JSON.parse(res.body);
       expect(body.history.length).toBe(0);
       expect(body.total).toBeGreaterThanOrEqual(1);
+    });
+
+    it('returns 401 without auth', async () => {
+      const res = await app.inject({
+        method: 'GET',
+        url: '/api/autonomy/history',
+      });
+      expect(res.statusCode).toBe(401);
     });
   });
 });
