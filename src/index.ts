@@ -664,12 +664,18 @@ async function main(): Promise<void> {
       ),
     ),
   };
-  const piiRedactor = new PiiRedactor({
-    config: outboundRedactionConfig,
-    bus,
-    logger,
-    extraPatterns, // same patterns used by the inbound scrubber
-  });
+  let piiRedactor: PiiRedactor;
+  try {
+    piiRedactor = new PiiRedactor({
+      config: outboundRedactionConfig,
+      bus,
+      logger,
+      extraPatterns, // same patterns used by the inbound scrubber
+    });
+  } catch (err) {
+    logger.fatal({ err }, 'Failed to initialize PiiRedactor — check pii.outbound_redaction config');
+    process.exit(1);
+  }
   logger.info(
     { enabled: outboundRedactionConfig.enabled, trustOverride: outboundRedactionConfig.trust_override },
     'Outbound PII redactor initialized',

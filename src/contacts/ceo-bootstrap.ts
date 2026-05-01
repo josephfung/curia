@@ -74,15 +74,23 @@ export async function bootstrapCeoContact(
     // to the same contact would not match the single CEO_PRIMARY_EMAIL config string and
     // would fail the outbound filter's trust check. Setting role keeps metadata consistent
     // even if the contact was initially auto-created without a role.
-    await pool.query(
-      `UPDATE contacts
-       SET role = 'ceo',
-           trust_level = 'ceo',
-           updated_at = now()
-       WHERE id = $1
-         AND (role IS DISTINCT FROM 'ceo' OR trust_level IS DISTINCT FROM 'ceo')`,
-      [contact_id],
-    );
+    try {
+      await pool.query(
+        `UPDATE contacts
+         SET role = 'ceo',
+             trust_level = 'ceo',
+             updated_at = now()
+         WHERE id = $1
+           AND (role IS DISTINCT FROM 'ceo' OR trust_level IS DISTINCT FROM 'ceo')`,
+        [contact_id],
+      );
+    } catch (err) {
+      logger.error(
+        { err, contactId: contact_id },
+        'ceo-bootstrap: failed to set trust_level=ceo on CEO contact — PII redaction bypass will not apply until this is resolved',
+      );
+      throw err;
+    }
 
     // Backfill KG node if missing. This handles existing deployments where the contact
     // was created without a KG node (pre-#380 fix). Uses the contact's existing display_name

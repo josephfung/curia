@@ -32,6 +32,7 @@ import { createOutboundBlocked, createOutboundNotification, createAutonomySendBl
 import type { AutonomyService } from '../autonomy/autonomy-service.js';
 import type { OutboundNotificationPayload } from '../bus/events.js';
 import { markdownToHtml } from '../channels/email/markdown-to-html.js';
+import { scrubPii } from '../pii/scrubber.js';
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -356,7 +357,10 @@ export class OutboundGateway {
             blockId,
             conversationId: '',
             channelId: request.channel,
-            content: messageBody,
+            // scrubPii() as a safety fallback — the redactor itself failed, so we apply
+            // a best-effort scrub before writing anything to the audit log. This ensures
+            // no raw PII leaks into the audit trail even on a redactor failure path.
+            content: scrubPii(messageBody),
             recipientId,
             reason: 'pii_redactor_error',
             findings: [{ rule: 'pii_redactor_error', detail: 'PiiRedactor threw an unexpected error' }],

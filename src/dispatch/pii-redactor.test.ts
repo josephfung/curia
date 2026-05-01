@@ -136,7 +136,7 @@ describe('PiiRedactor', () => {
           email: { allow: [] },  // explicit empty policy — blocks everything on email
         },
       },
-      bus: bus as any,
+      bus,
       logger: createSilentLogger(),
       extraPatterns: [],
     });
