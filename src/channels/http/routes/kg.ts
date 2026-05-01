@@ -826,6 +826,27 @@ function createUiHtml(): string {
       color: var(--accent);
       margin-bottom: 8px;
     }
+    .autonomy-history-entry {
+      padding: 10px 14px;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+    }
+    .autonomy-history-entry .score-change {
+      font-weight: 600;
+      font-size: 0.875rem;
+    }
+    .autonomy-history-entry .meta {
+      font-size: 0.75rem;
+      color: var(--fg-muted);
+      margin-top: 3px;
+    }
+    .autonomy-history-entry .reason {
+      font-size: 0.8125rem;
+      font-style: italic;
+      color: var(--fg-muted);
+      margin-top: 4px;
+    }
     .posture-grid { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 28px; }
     .posture-card {
       flex: 1;
@@ -1068,6 +1089,14 @@ function createUiHtml(): string {
                 <path d="M8 5l3.5-3.5"/>
               </svg>
               Setup Wizard
+            </button>
+            <button id="nav-autonomy" class="nav-sub-item" onclick="navigate('autonomy', 'Autonomy', 'nav-autonomy')">
+              <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M6.5 11.5a5 5 0 1 1 0-10 5 5 0 0 1 0 10z"/>
+                <path d="M6.5 3.5v1"/>
+                <path d="M6.5 6.5l2-2"/>
+              </svg>
+              Autonomy
             </button>
           </div>
         </div>
@@ -1312,6 +1341,44 @@ function createUiHtml(): string {
               </div>
             </form>
           </div>
+        </div>
+      </div>
+
+      <!-- Autonomy settings view — hidden until user clicks the Autonomy nav item -->
+      <div id="view-autonomy" style="display: none; height: 100%; flex-direction: column; overflow-y: auto; padding: 24px 32px; max-width: 720px;">
+
+        <h2 style="font-family: 'Lora', Georgia, serif; font-size: 1.375rem; font-weight: 500; margin: 0 0 24px;">Autonomy</h2>
+
+        <!-- Current state display -->
+        <div id="autonomy-current" style="margin-bottom: 28px;">
+          <div style="display: flex; align-items: baseline; gap: 12px; margin-bottom: 8px;">
+            <span id="autonomy-score-display" style="font-size: 2rem; font-weight: 700; color: var(--fg);"></span>
+            <span id="autonomy-band-badge" class="badge"></span>
+          </div>
+          <p id="autonomy-band-description" style="font-size: 0.875rem; color: var(--fg-muted); margin: 0; line-height: 1.5;"></p>
+        </div>
+
+        <!-- Score adjustment control -->
+        <div style="margin-bottom: 32px; padding: 20px; background: var(--card); border: 1px solid var(--border); border-radius: var(--radius-lg);">
+          <div style="font-size: 0.6875rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; color: var(--fg-muted); margin-bottom: 12px;">Adjust Score</div>
+          <input id="autonomy-slider" type="range" min="0" max="100" step="1" value="75"
+            style="width: 100%; accent-color: var(--primary); margin-bottom: 6px;" />
+          <div class="slider-labels"><span>Restricted</span><span>Full</span></div>
+
+          <div style="margin-top: 16px;">
+            <label for="autonomy-reason" style="display: block; font-size: 0.6875rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; color: var(--fg-muted); margin-bottom: 6px;">Reason (optional)</label>
+            <textarea id="autonomy-reason" rows="2" placeholder="Reason for change (optional)" style="width: 100%; resize: vertical;"></textarea>
+          </div>
+
+          <button id="autonomy-save-btn" class="btn-primary" disabled style="margin-top: 12px;">Save</button>
+          <span id="autonomy-save-status" style="font-size: 0.75rem; color: var(--fg-muted); margin-left: 10px;"></span>
+        </div>
+
+        <!-- History section -->
+        <div>
+          <div style="font-size: 0.6875rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; color: var(--fg-muted); margin-bottom: 12px;">Recent Changes</div>
+          <div id="autonomy-history-list" style="display: flex; flex-direction: column; gap: 8px;"></div>
+          <button id="autonomy-show-more-btn" class="btn-primary" style="margin-top: 12px; display: none; background: var(--muted); color: var(--fg);">Show more</button>
         </div>
       </div>
 
