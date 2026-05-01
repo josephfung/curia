@@ -29,6 +29,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Coordinator: contact-lookup-first** — strengthened rule prohibiting any comment on a contact record (role, existence, details) before running `contact-lookup`.
 - **Coordinator: trust narration suppression** — coordinator no longer proactively informs the CEO that their message arrived via a lower-trust channel; channel trust is only raised when declining a specific request because of it.
 
+### Security
+
+- **Contact auto-creation rate limiting** — email participant contact auto-creation is now capped at 10 per message and 100 per hour (configurable via `contact_creation_limits` in `default.yaml`). CEO is notified via email when limits are hit. Prevents spam-campaign flooding of the contacts table (#36).
+
 ### Fixed
 
 - **held-messages-process** — `identify` action (new-contact path) no longer crashes with `23505` when the sender's channel identity already exists in `contact_channel_identities`; the skill now resolves the owning contact, cleans up the orphaned newly-created contact, and marks the held message processed (fixes #406)
