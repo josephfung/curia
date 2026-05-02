@@ -254,7 +254,14 @@ export class OutboundGateway {
     // allowed the skill, the gateway independently blocks the actual send
     // when the score is too low. Fail-open if the service is not wired
     // or the config table is missing.
-    if (this.autonomyService && !options?.humanApproved) {
+    if (this.autonomyService && options?.humanApproved) {
+      // CEO is explicitly in the loop — autonomy gate does not apply. Log the bypass
+      // so operators can trace every humanApproved send in the log stream. See ADR-017.
+      this.log.info(
+        { channel: request.channel },
+        'outbound-gateway: autonomy gate skipped — humanApproved flag set (CEO-authorized action, see ADR-017)',
+      );
+    } else if (this.autonomyService) {
       try {
         const autonomyConfig = await this.autonomyService.getConfig();
         if (autonomyConfig !== null && autonomyConfig.score < 70) {

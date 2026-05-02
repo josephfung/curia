@@ -747,8 +747,13 @@ export class Dispatcher {
       // the email adapter) and layer injection findings on top. When there are no
       // injection findings and no ceoMeta, pass through the original metadata object
       // unchanged (no copy) to avoid unnecessary allocation on the clean-message hot path.
+      //
+      // SECURITY: strip ceoInitiated from channel-supplied metadata before merging.
+      // The ceoInitiated flag is stamped exclusively by this function based on the
+      // contact resolver result — any pre-existing value from payload.metadata is
+      // untrusted and must not propagate. See ADR-017.
       metadata: (injectionMetadata || ceoMeta)
-        ? { ...(payload.metadata ?? {}), ...(injectionMetadata ?? {}), ...(ceoMeta ?? {}) }
+        ? { ...(payload.metadata ?? {}), ceoInitiated: undefined, ...(injectionMetadata ?? {}), ...(ceoMeta ?? {}) }
         : payload.metadata,
       parentEventId: event.id,
     });

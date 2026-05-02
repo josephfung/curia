@@ -132,7 +132,7 @@ describe('SendDraftHandler', () => {
     });
     const result = await handler.execute(ctx);
     expect(result.success).toBe(false);
-    if (!result.success) expect(result.error).toMatch(/fetch drafts/i);
+    if (!result.success) expect(result.error).toMatch(/fetch drafts folder/i);
   });
 
   it('returns error when draft is not found in DRAFTS folder', async () => {
