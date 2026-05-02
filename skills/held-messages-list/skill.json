@@ -1,6 +1,6 @@
 {
   "name": "held-messages-list",
-  "description": "List messages held from unknown senders awaiting your review. Shows sender, channel, subject, and when it arrived.",
+  "description": "List messages held from unknown senders awaiting your review. Returns sender, channel, subject, a 500-char plaintext preview, totalLength, and timestamp per message.",
   "version": "1.0.0",
   "sensitivity": "normal",
   "action_risk": "none",
