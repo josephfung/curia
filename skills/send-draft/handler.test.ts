@@ -123,6 +123,18 @@ describe('SendDraftHandler', () => {
 
   // ─── Draft lookup ─────────────────────────────────────────────────────────
 
+  it('returns error when DRAFTS folder fetch throws', async () => {
+    const ctx = makeCtx({
+      gateway: {
+        listEmailMessages: vi.fn().mockRejectedValue(new Error('Nylas error')),
+        send: vi.fn(),
+      },
+    });
+    const result = await handler.execute(ctx);
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error).toMatch(/fetch drafts/i);
+  });
+
   it('returns error when draft is not found in DRAFTS folder', async () => {
     const ctx = makeCtx({
       gateway: {
