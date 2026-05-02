@@ -34,7 +34,7 @@ export class HeldMessagesListHandler implements SkillHandler {
     try {
       const messages = await ctx.heldMessages.listPending(filterChannel);
       const summary = messages.map(m => {
-        const plaintext = stripHtml(m.content);
+        const plaintext = stripHtml(m.content ?? '');
         return {
           id: m.id,
           channel: m.channel,
@@ -49,6 +49,7 @@ export class HeldMessagesListHandler implements SkillHandler {
       ctx.log.info({ count: messages.length, channel: filterChannel ?? 'all' }, 'Listed held messages');
       return { success: true, data: { messages: summary, count: messages.length } };
     } catch (err) {
+      ctx.log.error({ err, channel: filterChannel ?? 'all' }, 'held-messages-list: failed to list pending messages');
       const message = err instanceof Error ? err.message : String(err);
       return { success: false, error: `Failed to list held messages: ${message}` };
     }
