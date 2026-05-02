@@ -154,20 +154,32 @@ export class SendDraftHandler implements SkillHandler {
     // ------------------------------------------------------------------
     // Non-fatal: the message is already sent. If bus publish fails, log at error
     // so the missing audit trail is visible in alerting, but don't fail the skill.
+    //
+    // senderId and channelId are stamped by the dispatcher in the same ceoMeta object
+    // as ceoInitiated, so they must be present if we passed the task-origin check.
+    // If they're missing, that indicates a dispatch-layer bug — log loudly but don't
+    // block the send (the CEO explicitly asked for it). See ADR-017.
     const senderId = typeof ctx.taskMetadata?.senderId === 'string'
       ? ctx.taskMetadata.senderId
-      : 'unknown';
+      : undefined;
     const channelId = typeof ctx.taskMetadata?.channelId === 'string'
       ? ctx.taskMetadata.channelId
-      : 'unknown';
+      : undefined;
+
+    if (!senderId || !channelId || !ctx.taskEventId) {
+      ctx.log.error(
+        { senderId, channelId, taskEventId: ctx.taskEventId },
+        'send-draft: audit metadata incomplete — senderId/channelId/taskEventId should always be present when ceoInitiated is true. This indicates a dispatch-layer bug.',
+      );
+    }
 
     try {
       await ctx.bus.publish(
         'dispatch',
         createHumanDecision({
           decision: 'approve',
-          deciderId: senderId,
-          deciderChannel: channelId,
+          deciderId: senderId ?? 'unknown:dispatch-bug',
+          deciderChannel: channelId ?? 'unknown:dispatch-bug',
           // subjectEventId: the task event that drove the CEO's "send it" instruction.
           subjectEventId: ctx.taskEventId ?? '',
           subjectSummary: `CEO authorized send of draft '${draft.subject}' to ${recipient}`,
