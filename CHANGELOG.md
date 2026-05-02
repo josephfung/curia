@@ -13,6 +13,12 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Changed
+- **Held-message notifications** — coordinator now describes the nature of the sender's request (not just subject/sender). Preview is 500-char plaintext with `totalLength` so the LLM can qualify partial reads. Channel name is now dynamic (email, Signal, etc.) instead of hardcoded.
+
+### Removed
+- **CLI held-message notification** — removed vestigial `[Held] Unknown sender...` terminal printout; the coordinator's proactive mention is the real notification path.
+
 ### Fixed
 
 - **Delegate @-prefix normalization** — LLMs sometimes pass agent names with a leading `@` (e.g. `@essay-editor` instead of `essay-editor`), causing registry lookup misses and lost timeout injection. The runtime now strips leading `@` from delegate agent names before registry lookup and handler dispatch.
