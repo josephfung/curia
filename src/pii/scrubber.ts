@@ -168,6 +168,11 @@ export function detectPii(text: string, extraPatterns: PiiPattern[] = []): PiiMa
 
   const matches: PiiMatch[] = [];
   const allPatterns = [...BUILT_IN_PATTERNS, ...extraPatterns];
+  // Overlap guard: returns true if [start, end) intersects any already-accepted match.
+  // Pattern order in allPatterns is precedence — the first pattern to claim a region wins.
+  // This prevents, e.g., a PHONE pattern from consuming part of an already-matched CREDIT_CARD.
+  const overlapsExisting = (start: number, end: number): boolean =>
+    matches.some((m) => start < m.end && end > m.start);
 
   for (const { name, regex } of allPatterns) {
     // Reset lastIndex — global regexes retain state across calls if reused.
@@ -176,12 +181,16 @@ export function detectPii(text: string, extraPatterns: PiiPattern[] = []): PiiMa
     while ((m = regex.exec(shielded)) !== null) {
       // Skip any match that covers shielded UUID territory.
       if (m[0].includes('\x00')) continue;
+      const start = m.index;
+      const end = m.index + m[0].length;
+      // Skip if this span overlaps an already-accepted match.
+      if (overlapsExisting(start, end)) continue;
       matches.push({
         label: name,
-        start: m.index,
-        end: m.index + m[0].length,
+        start,
+        end,
         // Slice from original text — shielded only used for position tracking.
-        matched: text.slice(m.index, m.index + m[0].length),
+        matched: text.slice(start, end),
       });
     }
   }

@@ -340,6 +340,9 @@ export class OutboundGateway {
     // Optional: when piiRedactor is not configured, redactedBody == messageBody
     // and the pipeline behaves identically to the pre-redaction behaviour.
     let redactedBody = messageBody;
+    // Email subjects can contain PII just as the body can — track a separate
+    // variable so we can pass the cleaned subject to dispatchEmail() below.
+    let redactedSubject: string | undefined = request.channel === 'email' ? request.subject : undefined;
     if (this.piiRedactor) {
       try {
         const redactionResult = await this.piiRedactor.redact(
@@ -349,6 +352,16 @@ export class OutboundGateway {
           { recipientId, recipientContactId },
         );
         redactedBody = redactionResult.content;
+        // Redact the subject too — same trust level and channel policy apply.
+        if (request.channel === 'email' && request.subject) {
+          const subjectResult = await this.piiRedactor.redact(
+            request.subject,
+            request.channel,
+            recipientTrustLevel,
+            { recipientId, recipientContactId },
+          );
+          redactedSubject = subjectResult.content;
+        }
       } catch (err) {
         this.log.error(
           { err, channel: request.channel, recipientId: redactId(recipientId) },
@@ -512,7 +525,7 @@ export class OutboundGateway {
     // they receive — if we pass the original `request`, the unredacted content
     // reaches Nylas / signal-cli even though redactedBody was computed above.
     if (request.channel === 'email') {
-      const result = await this.dispatchEmail({ ...request, body: redactedBody });
+      const result = await this.dispatchEmail({ ...request, body: redactedBody, subject: redactedSubject });
       if (result.success) {
         await this.promoteOrCreateRecipientContact('email', recipientId);
       }

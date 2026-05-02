@@ -185,6 +185,13 @@ describeIf('bootstrapCeoContact', () => {
     );
     expect(after.rows[0].kg_node_id).toBe(result.kgNodeId);
 
+    // trust_level should have been promoted from 'high' → 'ceo' by the bootstrap UPDATE
+    const trustAfter = await pool.query<{ trust_level: string }>(
+      `SELECT trust_level FROM contacts WHERE id = $1`,
+      [contactId],
+    );
+    expect(trustAfter.rows[0]!.trust_level).toBe('ceo');
+
     // KG node should be a permanent bootstrap person node
     const node = await pool.query<{ type: string; decay_class: string; source: string }>(
       `SELECT type, decay_class, source FROM kg_nodes WHERE id = $1`,
