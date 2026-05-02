@@ -724,6 +724,16 @@ export class Dispatcher {
       }
     }
 
+    // Stamp ceoInitiated when the sender is the CEO directly (not via observation mode).
+    // This flag is the hard gate in CEO-authorized skills (e.g. send-draft). It is NOT
+    // set for observation-mode tasks so external emails cannot trigger approved actions.
+    // See ADR-017 for the full security reasoning.
+    // Use `resolved` discriminant to narrow InboundSenderContext to SenderContext before
+    // accessing `.role`, which does not exist on UnknownSenderContext.
+    const ceoMeta = senderContext?.resolved && senderContext.role === 'ceo' && !isObservationMode
+      ? { ceoInitiated: true as const, senderId: payload.senderId, channelId: payload.channelId }
+      : undefined;
+
     const taskEvent = createAgentTask({
       agentId: 'coordinator',
       conversationId: payload.conversationId,
@@ -735,10 +745,10 @@ export class Dispatcher {
       messageTrustScore,
       // Merge: preserve any pre-existing inbound metadata (e.g. email subject from
       // the email adapter) and layer injection findings on top. When there are no
-      // injection findings, pass through the original metadata object unchanged
-      // (no copy) to avoid unnecessary allocation on the clean-message hot path.
-      metadata: injectionMetadata
-        ? { ...(payload.metadata ?? {}), ...injectionMetadata }
+      // injection findings and no ceoMeta, pass through the original metadata object
+      // unchanged (no copy) to avoid unnecessary allocation on the clean-message hot path.
+      metadata: (injectionMetadata || ceoMeta)
+        ? { ...(payload.metadata ?? {}), ...(injectionMetadata ?? {}), ...(ceoMeta ?? {}) }
         : payload.metadata,
       parentEventId: event.id,
     });

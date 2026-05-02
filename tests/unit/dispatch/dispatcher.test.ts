@@ -1559,3 +1559,130 @@ describe('Dispatcher thread-originated trust bypass', () => {
     expect(outboundEvents[0]?.payload.conversationId).toBe('email:thread-reply');
   });
 });
+
+describe('ceoInitiated metadata stamping', () => {
+  it('stamps ceoInitiated: true on agent.task when sender role is ceo', async () => {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+
+    // Resolver returns a confirmed CEO contact
+    const ceoResolver = {
+      resolve: vi.fn().mockResolvedValue({
+        resolved: true,
+        contactId: 'ceo-contact-id',
+        displayName: 'The CEO',
+        role: 'ceo',
+        status: 'confirmed' as ContactStatus,
+        verified: true,
+        kgNodeId: null,
+        knowledgeSummary: '',
+        authorization: null,
+        contactConfidence: 1.0,
+        trustLevel: 'high' as TrustLevel,
+      } satisfies InboundSenderContext),
+    } as unknown as ContactResolver;
+
+    const dispatcher = new Dispatcher({
+      bus,
+      logger,
+      contactResolver: ceoResolver,
+      channelPolicies: { signal: { trust: 'high', unknownSender: 'allow' } },
+    });
+    dispatcher.register();
+
+    const tasks: AgentTaskEvent[] = [];
+    bus.subscribe('agent.task', 'agent', (e) => { tasks.push(e as AgentTaskEvent); });
+
+    await bus.publish('channel', createInboundMessage({
+      conversationId: 'conv-ceo-1',
+      channelId: 'signal',
+      senderId: '+14155551234',
+      content: 'Send that draft',
+    }));
+
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0]!.payload.metadata).toMatchObject({
+      ceoInitiated: true,
+      senderId: '+14155551234',
+      channelId: 'signal',
+    });
+  });
+
+  it('does NOT stamp ceoInitiated for a non-CEO confirmed sender', async () => {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+
+    const nonCeoResolver = {
+      resolve: vi.fn().mockResolvedValue({
+        resolved: true,
+        contactId: 'vendor-contact-id',
+        displayName: 'A Vendor',
+        role: 'vendor',
+        status: 'confirmed' as ContactStatus,
+        verified: true,
+        kgNodeId: null,
+        knowledgeSummary: '',
+        authorization: null,
+        contactConfidence: 0.5,
+        trustLevel: null,
+      } satisfies InboundSenderContext),
+    } as unknown as ContactResolver;
+
+    const dispatcher = new Dispatcher({
+      bus,
+      logger,
+      contactResolver: nonCeoResolver,
+      channelPolicies: { signal: { trust: 'high', unknownSender: 'allow' } },
+    });
+    dispatcher.register();
+
+    const tasks: AgentTaskEvent[] = [];
+    bus.subscribe('agent.task', 'agent', (e) => { tasks.push(e as AgentTaskEvent); });
+
+    await bus.publish('channel', createInboundMessage({
+      conversationId: 'conv-nonceo-1',
+      channelId: 'signal',
+      senderId: '+19998887777',
+      content: 'Hello',
+    }));
+
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0]!.payload.metadata?.ceoInitiated).toBeUndefined();
+  });
+
+  it('does NOT stamp ceoInitiated for observation-mode messages', async () => {
+    // Security invariant: external emails in the CEO's monitored inbox must NEVER
+    // receive ceoInitiated: true, even if a bug made the contact resolver return
+    // role='ceo' for an external sender.
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+
+    // Resolver is configured but never called for observation-mode messages
+    const unusedResolver = {
+      resolve: vi.fn(),
+    } as unknown as ContactResolver;
+
+    const dispatcher = new Dispatcher({
+      bus,
+      logger,
+      contactResolver: unusedResolver,
+    });
+    dispatcher.register();
+
+    const tasks: AgentTaskEvent[] = [];
+    bus.subscribe('agent.task', 'agent', (e) => { tasks.push(e as AgentTaskEvent); });
+
+    await bus.publish('channel', createInboundMessage({
+      conversationId: 'conv-obs-1',
+      channelId: 'email',
+      senderId: 'external@example.com',
+      content: 'External email',
+      metadata: { observationMode: true, subject: 'Test' },
+    }));
+
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0]!.payload.metadata?.ceoInitiated).toBeUndefined();
+    // Resolver must never be called for observation-mode messages
+    expect(unusedResolver.resolve).not.toHaveBeenCalled();
+  });
+});
