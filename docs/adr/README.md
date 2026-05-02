@@ -38,6 +38,7 @@ Each ADR follows the [Nygard format](https://adr.github.io/):
 | [014](014-capability-tier-model-routing.md) | Capability-tier model routing over per-agent model declarations | Accepted |
 | [015](015-llm-as-judge-intent-drift.md) | LLM-as-judge for intent drift detection | Accepted |
 | [016](016-mcp-sdk-dependency.md) | Official MCP SDK over hand-rolled transport; registry-transparent skill integration | Accepted |
+| [017](017-ceo-authorized-action-pattern.md) | CEO-authorized action pattern: task-origin check + `humanApproved` flag over per-action gateway methods | Accepted |
 
 ## Adding new ADRs
 
