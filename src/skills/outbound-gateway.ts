@@ -788,6 +788,220 @@ export class OutboundGateway {
   }
 
   /**
+   * Send an existing Nylas draft by ID through the full safety pipeline.
+   *
+   * Unlike send(), which constructs a new message from scratch, this method calls
+   * Nylas's drafts.send() endpoint — preserving the draft's full envelope (all To,
+   * CC, BCC recipients) and removing the draft from DRAFTS after delivery.
+   *
+   * Safety pipeline:
+   *   0. Autonomy gate — skipped when options.humanApproved is true (CEO in the loop)
+   *   1. Blocked-contact check on the primary To recipient
+   *   2. Content filter on the draft body
+   *   3. Nylas drafts.send() dispatch — sends the actual draft, not a reconstructed copy
+   *   4. Recipient contact promotion (provisional → confirmed)
+   *
+   * Note: PII redaction is not applied here. The draft was created by Curia
+   * (content passed through our pipeline at creation time) or authored directly
+   * by the CEO. Sending the stored draft as-is is intentional.
+   *
+   * @param draftId        Nylas draft ID to send
+   * @param accountId      Which named account to use. Defaults to the primary account.
+   * @param draftMeta      Draft content for safety checks — caller must pre-fetch the draft.
+   * @param options        humanApproved: true skips Step 0 only (CEO in the loop).
+   */
+  async sendEmailDraft(
+    draftId: string,
+    accountId: string | undefined,
+    draftMeta: { recipientEmail: string; body: string; subject: string },
+    options?: { humanApproved?: boolean },
+  ): Promise<OutboundSendResult> {
+    // ------------------------------------------------------------------
+    // Step 0: Autonomy gate
+    // ------------------------------------------------------------------
+    if (this.autonomyService && options?.humanApproved) {
+      this.log.info(
+        { draftId },
+        'outbound-gateway: autonomy gate skipped — humanApproved flag set (CEO-authorized draft send, see ADR-017)',
+      );
+    } else if (this.autonomyService) {
+      try {
+        const autonomyConfig = await this.autonomyService.getConfig();
+        if (autonomyConfig !== null && autonomyConfig.score < 70) {
+          this.log.info(
+            { draftId, currentScore: autonomyConfig.score },
+            'outbound-gateway: draft send blocked by autonomy gate — score < 70',
+          );
+          this.bus.publish('dispatch', createAutonomySendBlocked({
+            channel: 'email',
+            currentScore: autonomyConfig.score,
+            requiredScore: 70,
+          })).catch((err) => {
+            this.log.warn(
+              { err, draftId },
+              'outbound-gateway: failed to publish autonomy.send_blocked event',
+            );
+          });
+          return {
+            success: false,
+            blockedReason:
+              `Autonomy score is ${autonomyConfig.score} — direct sends require a score of at least 70. ` +
+              `Use createEmailDraft() for drafts, or ask the CEO to raise the score with set-autonomy.`,
+          };
+        }
+      } catch (err) {
+        this.log.warn(
+          { err, draftId },
+          'outbound-gateway: autonomy gate failed to read config — proceeding without gate (fail-open)',
+        );
+      }
+    }
+
+    const { recipientEmail, body } = draftMeta;
+
+    // ------------------------------------------------------------------
+    // Step 1: Blocked-contact check
+    // ------------------------------------------------------------------
+    let recipientTrustLevel: TrustLevel | null = null;
+    try {
+      const contact = await this.contactService.resolveByChannelIdentity('email', recipientEmail);
+      if (contact !== null) {
+        if (contact.status === 'blocked') {
+          this.log.warn(
+            { draftId, recipientId: redactId(recipientEmail), contactId: contact.contactId },
+            'outbound-gateway: draft send blocked — recipient is blocked',
+          );
+          return { success: false, blockedReason: 'Recipient is blocked' };
+        }
+        recipientTrustLevel = contact.trustLevel;
+      }
+    } catch (err) {
+      // Fail-open on DB errors — log at warn so anomalies are visible, but don't
+      // silently block a CEO-authorized send due to a transient infrastructure error.
+      this.log.warn(
+        { err, draftId, recipientId: redactId(recipientEmail) },
+        'outbound-gateway: contact resolution failed, proceeding without blocked check',
+      );
+    }
+
+    // ------------------------------------------------------------------
+    // Step 2: Content filter
+    // ------------------------------------------------------------------
+    // Run on the draft body. The draft is sent as-is by Nylas (PII redaction is not
+    // applied — see method doc), but we still run the content filter to catch any
+    // flagged patterns before committing to sending. Fail-closed on filter crash.
+    let filterPassed = false;
+    let filterFindings: Array<{ rule: string; detail: string }> = [];
+
+    try {
+      const filterResult = await this.contentFilter.check({
+        content: body,
+        recipientEmail,
+        conversationId: '',
+        channelId: 'email',
+        recipientTrustLevel,
+      });
+      filterPassed = filterResult.passed;
+      filterFindings = filterResult.findings;
+    } catch (err) {
+      this.log.warn(
+        { err, draftId, recipientId: redactId(recipientEmail) },
+        'outbound-gateway: content filter threw — treating as blocked (fail-closed)',
+      );
+      filterPassed = false;
+      filterFindings = [{ rule: 'filter-error', detail: 'Content filter threw an unexpected error' }];
+    }
+
+    if (!filterPassed) {
+      const ruleNames = filterFindings.map((f) => f.rule).join('; ');
+      this.log.warn(
+        { draftId, recipientId: redactId(recipientEmail), rules: ruleNames },
+        'outbound-gateway: draft send blocked by content filter',
+      );
+
+      const blockId = `block_${randomUUID()}`;
+      const fullReason = filterFindings.map((f) => `${f.rule}: ${f.detail}`).join('; ');
+
+      const blockedEvent = createOutboundBlocked({
+        blockId,
+        conversationId: '',
+        channelId: 'email',
+        content: body,
+        recipientId: recipientEmail,
+        reason: fullReason,
+        findings: filterFindings,
+        parentEventId: '',
+      });
+      try {
+        await this.bus.publish('dispatch', blockedEvent);
+      } catch (publishErr) {
+        this.log.warn(
+          { publishErr, blockId },
+          'outbound-gateway: failed to publish outbound.blocked event — draft send is still blocked',
+        );
+      }
+
+      if (this.ceoEmail) {
+        await this.sendNotification(
+          {
+            notificationType: 'blocked_content',
+            ceoEmail: this.ceoEmail,
+            subject: 'Action needed — blocked draft send',
+            body: [
+              'A draft send was blocked by the content filter.',
+              '',
+              `Block ID: ${blockId}`,
+              `Draft ID: ${draftId}`,
+              `Intended recipient: ${recipientEmail}`,
+              '',
+              'Please review the audit log for details.',
+            ].join('\n'),
+            blockId,
+            originalChannel: 'email',
+            originalRecipientId: recipientEmail,
+          },
+          blockedEvent.id,
+        );
+      }
+      return { success: false, blockedReason: 'Content blocked by filter' };
+    }
+
+    // ------------------------------------------------------------------
+    // Step 3: Dispatch via Nylas drafts.send() — sends the actual draft
+    // ------------------------------------------------------------------
+    const nylasClient = this.getNylasClient(accountId);
+    if (!nylasClient) {
+      return {
+        success: false,
+        blockedReason: `Email client not configured for account: ${accountId ?? 'primary'}`,
+      };
+    }
+
+    let sentMessage: NylasMessage;
+    try {
+      sentMessage = await nylasClient.sendDraft(draftId);
+      this.log.info(
+        { messageId: sentMessage.id, draftId, accountId, recipientId: redactId(recipientEmail) },
+        'outbound-gateway: draft sent successfully',
+      );
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.log.error(
+        { err, draftId, accountId },
+        'outbound-gateway: Nylas sendDraft failed',
+      );
+      return { success: false, blockedReason: `Draft send failed: ${message}` };
+    }
+
+    // ------------------------------------------------------------------
+    // Step 4: Contact promotion (same as send())
+    // ------------------------------------------------------------------
+    await this.promoteOrCreateRecipientContact('email', recipientEmail);
+
+    return { success: true, messageId: sentMessage.id };
+  }
+
+  /**
    * Retrieve the E.164 phone numbers of all current (non-pending) members of a
    * Signal group. Curia's own phone number is excluded so callers can pass the
    * result directly to trust-check logic without filtering.

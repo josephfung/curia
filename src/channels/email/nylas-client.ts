@@ -57,6 +57,16 @@ interface NylasLike {
       identifier: string;
       requestBody: CreateDraftRequest;
     }): Promise<NylasResponse<NylasDraft>>;
+
+    /**
+     * Send an existing draft by ID. Nylas delivers the draft as-is (full envelope
+     * preserved) and removes it from the DRAFTS folder after sending.
+     * Returns the sent Message, not a Draft.
+     */
+    send(params: {
+      identifier: string;
+      draftId: string;
+    }): Promise<NylasResponse<NylasSdkMessage>>;
   };
 }
 
@@ -283,6 +293,31 @@ export class NylasClient {
         { err, grantId: this.grantId, to: options.to, subject: options.subject, isReply: !!options.replyToMessageId },
         'Nylas createDraft failed',
       );
+      throw err;
+    }
+  }
+
+  /**
+   * Send an existing Nylas draft by its ID.
+   *
+   * Calls the Nylas `POST /v3/grants/{grant_id}/drafts/{draft_id}/send` endpoint which:
+   *   1. Sends the draft with its full envelope (To/CC/BCC preserved as stored)
+   *   2. Removes the draft from the DRAFTS folder
+   *   3. Honours any `replyToMessageId` embedded in the draft for correct threading
+   *
+   * Used by the send-draft skill when the CEO authorizes sending an existing draft.
+   */
+  async sendDraft(draftId: string): Promise<NylasMessage> {
+    this.log.debug({ draftId }, 'sending draft');
+
+    try {
+      const response = await this.nylas.drafts.send({
+        identifier: this.grantId,
+        draftId,
+      });
+      return this.normalizeMessage(response.data);
+    } catch (err) {
+      this.log.error({ err, grantId: this.grantId, draftId }, 'Nylas sendDraft failed');
       throw err;
     }
   }
