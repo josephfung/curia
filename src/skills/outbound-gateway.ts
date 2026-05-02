@@ -228,6 +228,8 @@ export class OutboundGateway {
    * Send an outbound message through the gateway pipeline.
    *
    * Pipeline steps (channel-agnostic):
+   *   0. Autonomy gate — score < 70 blocks all autonomous sends
+   *      (skipped when options.humanApproved is true — CEO is in the loop)
    *   1. Contact blocked check
    *   2. Content filter (fail-closed)
    *   3. Channel dispatch (email → Nylas, signal → signal-cli RPC)
@@ -237,10 +239,13 @@ export class OutboundGateway {
    *   outbound.notification subscriber to break the recursion cycle: without this
    *   guard, a broken content filter (crash → fail-closed) would trigger
    *   send → block → sendNotification → EmailAdapter → send → block → ... infinitely.
+   * @param options.humanApproved  When true, skip Step 0 (autonomy gate) only.
+   *   The CEO is explicitly in the loop. All other safety checks (blocked-contact,
+   *   content filter) run normally. See ADR-017.
    */
   async send(
     request: OutboundSendRequest,
-    options?: { skipNotificationOnBlock?: boolean },
+    options?: { skipNotificationOnBlock?: boolean; humanApproved?: boolean },
   ): Promise<OutboundSendResult> {
     // ------------------------------------------------------------------
     // Step 0: Autonomy gate — score < 70 blocks all outbound sends
@@ -249,7 +254,7 @@ export class OutboundGateway {
     // allowed the skill, the gateway independently blocks the actual send
     // when the score is too low. Fail-open if the service is not wired
     // or the config table is missing.
-    if (this.autonomyService) {
+    if (this.autonomyService && !options?.humanApproved) {
       try {
         const autonomyConfig = await this.autonomyService.getConfig();
         if (autonomyConfig !== null && autonomyConfig.score < 70) {

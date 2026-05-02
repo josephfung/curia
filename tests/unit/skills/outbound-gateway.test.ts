@@ -1079,3 +1079,82 @@ describe('PII redaction pipeline step', () => {
     }
   });
 });
+
+describe('humanApproved option on send()', () => {
+  it('bypasses the autonomy gate when humanApproved: true and score < 70', async () => {
+    const mocks = createMocks();
+    const gateway = new OutboundGateway({
+      nylasClients: new Map([['curia', mocks.nylasClient]]),
+      contactService: mocks.contactService,
+      contentFilter: mocks.contentFilter,
+      bus: mocks.bus,
+      ceoEmail: 'ceo@example.com',
+      logger: mocks.logger,
+      autonomyService: makeAutonomyService(65), // below 70 — would normally block
+    });
+
+    const result = await gateway.send(
+      { channel: 'email', to: 'recipient@example.com', subject: 'Hello', body: 'Hi!' },
+      { humanApproved: true },
+    );
+
+    expect(result.success).toBe(true);
+    expect(mocks.nylasClient.sendMessage).toHaveBeenCalledOnce();
+  });
+
+  it('still enforces the blocked-contact check when humanApproved: true', async () => {
+    const mocks = createMocks();
+    (mocks.contactService.resolveByChannelIdentity as ReturnType<typeof vi.fn>).mockResolvedValue({
+      contactId: 'contact-1',
+      displayName: 'Blocked Person',
+      role: null,
+      status: 'blocked',
+      kgNodeId: null,
+      verified: true,
+    });
+    const gateway = new OutboundGateway({
+      nylasClients: new Map([['curia', mocks.nylasClient]]),
+      contactService: mocks.contactService,
+      contentFilter: mocks.contentFilter,
+      bus: mocks.bus,
+      ceoEmail: 'ceo@example.com',
+      logger: mocks.logger,
+      autonomyService: makeAutonomyService(65),
+    });
+
+    const result = await gateway.send(
+      { channel: 'email', to: 'recipient@example.com', subject: 'Hello', body: 'Hi!' },
+      { humanApproved: true },
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.blockedReason).toBe('Recipient is blocked');
+    expect(mocks.nylasClient.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('still enforces the content filter when humanApproved: true', async () => {
+    const mocks = createMocks();
+    (mocks.contentFilter.check as ReturnType<typeof vi.fn>).mockResolvedValue({
+      passed: false,
+      findings: [{ rule: 'test-rule', detail: 'blocked in test' }],
+    });
+    const gateway = new OutboundGateway({
+      nylasClients: new Map([['curia', mocks.nylasClient]]),
+      contactService: mocks.contactService,
+      contentFilter: mocks.contentFilter,
+      bus: mocks.bus,
+      ceoEmail: 'ceo@example.com',
+      logger: mocks.logger,
+      autonomyService: makeAutonomyService(65),
+    });
+
+    const result = await gateway.send(
+      { channel: 'email', to: 'recipient@example.com', subject: 'Hello', body: 'Hi!' },
+      { humanApproved: true },
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.blockedReason).toBe('Content blocked by filter');
+    expect(mocks.nylasClient.sendMessage).not.toHaveBeenCalled();
+  });
+});
