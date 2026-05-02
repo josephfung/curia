@@ -435,6 +435,7 @@ pinned_skills:
   - email-list
   - email-get
   - email-draft-save
+  - send-draft
   - signal-send
   - contact-merge
   - contact-find-duplicates
