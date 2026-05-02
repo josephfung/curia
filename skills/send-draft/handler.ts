@@ -76,7 +76,7 @@ export class SendDraftHandler implements SkillHandler {
       drafts = await ctx.outboundGateway.listEmailMessages({ folders: ['DRAFTS'] }, account);
     } catch (err) {
       ctx.log.error({ err, account }, 'send-draft: failed to fetch DRAFTS folder');
-      return { success: false, error: 'Failed to fetch drafts folder' };
+      return { success: false, error: `Failed to fetch drafts folder for account '${account}'` };
     }
 
     const draft = drafts.find((m) => m.id === draftId);
