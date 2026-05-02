@@ -1028,9 +1028,10 @@ describe('PII redaction pipeline step', () => {
     const result = await gateway.send(piiRequest);
 
     expect(result.success).toBe(true);
-    // The redactor was still called (the gateway always calls it when configured),
-    // but the content filter receives the original body (redactor returned it unchanged).
-    expect(piiRedactor.redact).toHaveBeenCalledOnce();
+    // The redactor is called twice for email — once for the body, once for the subject.
+    // Both calls return unchanged content (CEO trust bypass), so the content filter
+    // receives the original body.
+    expect(piiRedactor.redact).toHaveBeenCalledTimes(2);
     expect(contentFilter.check).toHaveBeenCalledWith(expect.objectContaining({
       content: piiRequest.body,
     }));
