@@ -744,17 +744,20 @@ export class Dispatcher {
       senderContext,
       messageTrustScore,
       // Merge: preserve any pre-existing inbound metadata (e.g. email subject from
-      // the email adapter) and layer injection findings on top. When there are no
-      // injection findings and no ceoMeta, pass through the original metadata object
-      // unchanged (no copy) to avoid unnecessary allocation on the clean-message hot path.
+      // the email adapter) and layer injection findings on top.
       //
-      // SECURITY: strip ceoInitiated from channel-supplied metadata before merging.
+      // SECURITY: always strip ceoInitiated from channel-supplied metadata before
+      // merging — on every path, not just when injectionMetadata/ceoMeta are present.
       // The ceoInitiated flag is stamped exclusively by this function based on the
-      // contact resolver result — any pre-existing value from payload.metadata is
-      // untrusted and must not propagate. See ADR-017.
+      // contact resolver result; any pre-existing value from payload.metadata is
+      // untrusted and must not propagate. Without this, a crafted inbound message
+      // with { ceoInitiated: true } in its metadata would slip through to the task
+      // on the clean path (no injection findings, non-CEO sender). See ADR-017.
       metadata: (injectionMetadata || ceoMeta)
         ? { ...(payload.metadata ?? {}), ceoInitiated: undefined, ...(injectionMetadata ?? {}), ...(ceoMeta ?? {}) }
-        : payload.metadata,
+        : payload.metadata
+          ? { ...(payload.metadata as Record<string, unknown>), ceoInitiated: undefined }
+          : undefined,
       parentEventId: event.id,
     });
 
