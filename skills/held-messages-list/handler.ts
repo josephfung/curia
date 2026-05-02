@@ -15,6 +15,7 @@
 // This skill requires heldMessages service access — declare "heldMessages" in capabilities.
 
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import { toLocalIso, formatDisplayTimezone } from '../../src/time/timestamp.js';
 
 // Strip HTML tags for plaintext extraction.
 // Not a full DOM parser — good enough for preview purposes.
@@ -31,10 +32,13 @@ export class HeldMessagesListHandler implements SkillHandler {
     const { channel } = ctx.input as { channel?: string };
     const filterChannel = (channel && typeof channel === 'string') ? channel : undefined;
 
+    const tz = ctx.timezone;
+
     try {
       const messages = await ctx.heldMessages.listPending(filterChannel);
       const summary = messages.map(m => {
         const plaintext = stripHtml(m.content ?? '');
+        const unixSeconds = Math.floor(m.createdAt.getTime() / 1000);
         return {
           id: m.id,
           channel: m.channel,
@@ -42,12 +46,12 @@ export class HeldMessagesListHandler implements SkillHandler {
           subject: m.subject,
           preview: plaintext.slice(0, 500),
           totalLength: plaintext.length,
-          receivedAt: m.createdAt.toISOString(),
+          receivedAt: tz ? toLocalIso(unixSeconds, tz) : m.createdAt.toISOString(),
         };
       });
 
       ctx.log.info({ count: messages.length, channel: filterChannel ?? 'all' }, 'Listed held messages');
-      return { success: true, data: { messages: summary, count: messages.length } };
+      return { success: true, data: { messages: summary, count: messages.length, displayTimezone: tz ? formatDisplayTimezone(tz, new Date()) : null } };
     } catch (err) {
       ctx.log.error({ err, channel: filterChannel ?? 'all' }, 'held-messages-list: failed to list pending messages');
       const message = err instanceof Error ? err.message : String(err);
