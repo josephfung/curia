@@ -9,6 +9,7 @@ function makeCtx(heldMessages: HeldMessageService, input: Record<string, unknown
     input,
     log: pino({ level: 'silent' }),
     heldMessages,
+    timezone: 'America/Toronto',
   } as unknown as SkillContext;
 }
 
@@ -18,7 +19,11 @@ describe('HeldMessagesListHandler', () => {
     const handler = new HeldMessagesListHandler();
     const result = await handler.execute(makeCtx(svc));
 
-    expect(result).toEqual({ success: true, data: { messages: [], count: 0 } });
+    expect(result.success).toBe(true);
+    const data = (result as { success: true; data: Record<string, unknown> }).data;
+    expect(data.messages).toEqual([]);
+    expect(data.count).toBe(0);
+    expect(typeof data.displayTimezone).toBe('string');
   });
 
   it('returns error when heldMessages service is not available', async () => {
