@@ -1080,6 +1080,126 @@ describe('PII redaction pipeline step', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// sendEmailDraft — send an existing Nylas draft through the safety pipeline
+// ---------------------------------------------------------------------------
+
+describe('OutboundGateway.sendEmailDraft', () => {
+  const DRAFT_ID = 'draft-abc123';
+  const DRAFT_META = {
+    recipientEmail: 'partner@example.com',
+    body: '<p>Hello</p>',
+    subject: 'Re: Project',
+  };
+
+  function makeGateway(overrides: {
+    nylasClient?: Partial<NylasClient>;
+    contactService?: Partial<ContactService>;
+    autonomyService?: AutonomyService;
+  } = {}) {
+    const logger = createLogger('error');
+    const nylasClient = {
+      sendDraft: vi.fn().mockResolvedValue({ id: 'sent-msg-1' }),
+      ...overrides.nylasClient,
+    } as unknown as NylasClient;
+    const contactService = {
+      resolveByChannelIdentity: vi.fn().mockResolvedValue(null),
+      ...overrides.contactService,
+    } as unknown as ContactService;
+    const contentFilter = {
+      check: vi.fn().mockResolvedValue({ passed: true, findings: [] }),
+    } as unknown as OutboundContentFilter;
+    const bus = {
+      publish: vi.fn().mockResolvedValue(undefined),
+      subscribe: vi.fn(),
+    } as unknown as EventBus;
+
+    const gateway = new OutboundGateway({
+      nylasClients: new Map([['joseph', nylasClient]]),
+      contactService,
+      contentFilter,
+      bus,
+      ceoEmail: 'ceo@example.com',
+      logger,
+      autonomyService: overrides.autonomyService,
+    });
+
+    return { gateway, nylasClient, contactService, contentFilter, bus };
+  }
+
+  it('calls nylasClient.sendDraft with the correct draftId and returns success', async () => {
+    const { gateway, nylasClient } = makeGateway();
+    const result = await gateway.sendEmailDraft(DRAFT_ID, 'joseph', DRAFT_META);
+
+    expect(result.success).toBe(true);
+    expect(result.messageId).toBe('sent-msg-1');
+    expect(nylasClient.sendDraft).toHaveBeenCalledWith(DRAFT_ID);
+  });
+
+  it('blocks send to a blocked contact before calling nylasClient.sendDraft', async () => {
+    const { gateway, nylasClient } = makeGateway({
+      contactService: {
+        resolveByChannelIdentity: vi.fn().mockResolvedValue({
+          contactId: 'contact-blocked',
+          status: 'blocked',
+          trustLevel: null,
+        }),
+      },
+    });
+    const result = await gateway.sendEmailDraft(DRAFT_ID, 'joseph', DRAFT_META);
+
+    expect(result.success).toBe(false);
+    expect(result.blockedReason).toBe('Recipient is blocked');
+    expect(nylasClient.sendDraft).not.toHaveBeenCalled();
+  });
+
+  it('blocks send when content filter rejects the draft body', async () => {
+    const { gateway, nylasClient, contentFilter } = makeGateway();
+    (contentFilter.check as ReturnType<typeof vi.fn>).mockResolvedValue({
+      passed: false,
+      findings: [{ rule: 'secret-pattern', detail: 'Key detected' }],
+    });
+    const result = await gateway.sendEmailDraft(DRAFT_ID, 'joseph', DRAFT_META);
+
+    expect(result.success).toBe(false);
+    expect(result.blockedReason).toBe('Content blocked by filter');
+    expect(nylasClient.sendDraft).not.toHaveBeenCalled();
+  });
+
+  it('bypasses the autonomy gate when humanApproved: true and score < 70', async () => {
+    const { gateway, nylasClient } = makeGateway({
+      autonomyService: makeAutonomyService(65), // below 70 — would normally block
+    });
+    const result = await gateway.sendEmailDraft(DRAFT_ID, 'joseph', DRAFT_META, { humanApproved: true });
+
+    expect(result.success).toBe(true);
+    expect(nylasClient.sendDraft).toHaveBeenCalledWith(DRAFT_ID);
+  });
+
+  it('blocks send when autonomy score < 70 and humanApproved is not set', async () => {
+    const { gateway, nylasClient } = makeGateway({
+      autonomyService: makeAutonomyService(65),
+    });
+    const result = await gateway.sendEmailDraft(DRAFT_ID, 'joseph', DRAFT_META);
+
+    expect(result.success).toBe(false);
+    expect(result.blockedReason).toMatch(/autonomy/i);
+    expect(nylasClient.sendDraft).not.toHaveBeenCalled();
+  });
+
+  it('returns failure when nylasClient.sendDraft throws', async () => {
+    const { gateway } = makeGateway({
+      nylasClient: {
+        sendDraft: vi.fn().mockRejectedValue(new Error('Nylas API error')),
+      },
+    });
+    const result = await gateway.sendEmailDraft(DRAFT_ID, 'joseph', DRAFT_META);
+
+    expect(result.success).toBe(false);
+    expect(result.blockedReason).toMatch(/draft send failed/i);
+  });
+});
+
 describe('humanApproved option on send()', () => {
   it('bypasses the autonomy gate when humanApproved: true and score < 70', async () => {
     const mocks = createMocks();

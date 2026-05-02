@@ -71,6 +71,11 @@ export class SendDraftHandler implements SkillHandler {
     // The Nylas DRAFTS folder is the source of truth — no shadow PG registry needed.
     // We list all drafts and filter client-side by ID; Nylas doesn't support
     // a direct draft-by-ID lookup via the messages API.
+    //
+    // The draft content is fetched here for two purposes:
+    //   1. Verify the draft exists before attempting to send.
+    //   2. Extract the primary recipient and body for the safety pipeline in
+    //      gateway.sendEmailDraft() — blocked-contact check and content filter.
     let drafts: Awaited<ReturnType<typeof ctx.outboundGateway.listEmailMessages>>;
     try {
       drafts = await ctx.outboundGateway.listEmailMessages({ folders: ['DRAFTS'] }, account);
@@ -92,54 +97,23 @@ export class SendDraftHandler implements SkillHandler {
     }
 
     // ------------------------------------------------------------------
-    // Step 4: Resolve reply threading
+    // Step 4: Send the actual Nylas draft via gateway
     // ------------------------------------------------------------------
-    // If the draft belongs to an existing thread, look up the latest message
-    // in that thread and pass its ID as replyToMessageId so Nylas threads the
-    // outbound message correctly. Same pattern as email-adapter.sendOutboundReply().
+    // gateway.sendEmailDraft() calls Nylas's drafts.send() endpoint, which:
+    //   - Sends the draft with its full envelope (all To/CC/BCC preserved)
+    //   - Removes the draft from DRAFTS after sending
+    //   - Honours any replyToMessageId already embedded in the draft
     //
-    // Thread lookup failure is non-fatal: the email still reaches the recipient;
-    // only the In-Reply-To / References headers are missing.
-    let replyToMessageId: string | undefined;
-    if (draft.threadId) {
-      try {
-        const threadMessages = await ctx.outboundGateway.listEmailMessages(
-          { threadId: draft.threadId, limit: 1 },
-          account,
-        );
-        replyToMessageId = threadMessages[0]?.id;
-      } catch (err) {
-        ctx.log.warn(
-          { err, draftId, threadId: draft.threadId },
-          'send-draft: thread lookup failed — sending without replyToMessageId',
-        );
-      }
-    }
-
-    // ------------------------------------------------------------------
-    // Step 5: Send via gateway with humanApproved: true
-    // ------------------------------------------------------------------
-    // humanApproved: true skips the autonomy gate (Step 0) only — the CEO is
-    // explicitly in the loop. Blocked-contact check and content filter run normally.
+    // humanApproved: true skips the autonomy gate (Step 0 inside the gateway) only.
+    // Blocked-contact check and content filter run normally. See ADR-017.
     ctx.log.info({ draftId, account, recipient }, 'send-draft: sending');
 
-    let sendResult: Awaited<ReturnType<typeof ctx.outboundGateway.send>>;
-    try {
-      sendResult = await ctx.outboundGateway.send(
-        {
-          channel: 'email',
-          accountId: account,
-          to: recipient,
-          subject: draft.subject,
-          body: draft.body,
-          replyToMessageId,
-        },
-        { humanApproved: true },
-      );
-    } catch (err) {
-      ctx.log.error({ err, draftId, account }, 'send-draft: unexpected error during send');
-      return { success: false, error: 'Failed to send draft' };
-    }
+    const sendResult = await ctx.outboundGateway.sendEmailDraft(
+      draftId,
+      account,
+      { recipientEmail: recipient, body: draft.body, subject: draft.subject },
+      { humanApproved: true },
+    );
 
     if (!sendResult.success) {
       ctx.log.warn(
@@ -150,7 +124,7 @@ export class SendDraftHandler implements SkillHandler {
     }
 
     // ------------------------------------------------------------------
-    // Step 6: Publish human.decision audit event
+    // Step 5: Publish human.decision audit event
     // ------------------------------------------------------------------
     // Non-fatal: the message is already sent. If bus publish fails, log at error
     // so the missing audit trail is visible in alerting, but don't fail the skill.

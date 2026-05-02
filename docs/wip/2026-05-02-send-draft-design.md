@@ -47,14 +47,30 @@ it sets a precedent that every CEO-approved action type needs its own method. Th
 right general pattern is a `humanApproved: true` option on the existing
 `gateway.send()` — works for any channel, not just email. See ADR-017.
 
-### Threading via thread lookup, not Nylas draft-send API
+### Nylas draft-send API, not message reconstruction
 
-Rather than adding `drafts.send()` to NylasClient, the handler reconstructs the
-send request from the draft's content and resolves `replyToMessageId` by looking
-up the latest message in the draft's thread — the same pattern
-`email-adapter.sendOutboundReply()` already uses. This avoids expanding the
-NylasClient interface and keeps the send path through the standard
-`gateway.send()` pipeline.
+The handler calls Nylas's `drafts.send()` endpoint (via a new `sendEmailDraft()`
+method on `OutboundGateway` and `sendDraft()` on `NylasClient`) rather than
+reconstructing a new message from the draft's content fields.
+
+An earlier draft of this design used `gateway.send()` with a reconstructed
+`{ to, subject, body, replyToMessageId }` from the fetched draft. This was
+rejected because:
+
+1. **Drops CC/BCC.** Reconstructing from `draft.to[0]?.email` silently discards
+   all CC and BCC recipients set by the CEO when the draft was created.
+2. **Leaves draft behind.** Sending a new message does not remove the original
+   draft from DRAFTS — the CEO would see a stale copy in their Gmail drafts.
+3. **Redundant thread lookup.** The draft already has `replyToMessageId` embedded
+   (set at creation time by `createEmailDraft()`); re-resolving it from the thread
+   at send time is unnecessary work and a second Nylas API call.
+
+`gateway.sendEmailDraft(draftId, accountId, draftMeta, { humanApproved })` runs
+the same safety pipeline as `send()` — autonomy gate, blocked-contact check,
+content filter — but dispatches via `nylasClient.sendDraft(draftId)` instead of
+constructing a new message. The handler pre-fetches the draft (to verify it exists
+and extract the primary recipient for safety checks), then delegates the actual
+send to the gateway.
 
 ### `action_risk: "none"`
 
@@ -106,34 +122,34 @@ See ADR-017 for the full reasoning and the general pattern.
       ├─ no  → return { success: false, error: 'send-draft requires direct CEO authorization...' }
       └─ yes → continue
 
-2. Fetch draft
+2. Parse inputs
+   └─ draft_id (string), account (string)
+
+3. Fetch draft from DRAFTS folder
    └─ outboundGateway.listEmailMessages({ folders: ['DRAFTS'] }, account)
       filter client-side for id === draft_id
-      └─ not found → return { success: false, error: 'Draft not found...' }
+      ├─ not found → return { success: false, error: 'Draft not found...' }
+      └─ no To recipient → return { success: false, error: 'Draft has no recipient address' }
 
-3. Resolve reply threading
-   └─ if draft.threadId:
-        outboundGateway.listEmailMessages({ threadId: draft.threadId, limit: 1 }, account)
-        replyToMessageId = latestThreadMessage?.id
-      else: replyToMessageId = undefined (draft is a new message, not a reply)
-
-4. Build send request
-   └─ { channel: 'email', accountId: account, to: draft.to[0].email,
-         subject: draft.subject, body: draft.body, replyToMessageId }
-
-5. Send via gateway
-   └─ outboundGateway.send(sendRequest, { humanApproved: true })
+4. Send the actual Nylas draft via gateway
+   └─ outboundGateway.sendEmailDraft(draftId, account,
+        { recipientEmail, body: draft.body, subject: draft.subject },
+        { humanApproved: true })
+      │  (internally: autonomy gate skip → blocked-contact check →
+      │   content filter → nylasClient.sendDraft(draftId))
       ├─ blocked (content filter / blocked contact) → return { success: false, error: reason }
       └─ success → continue
 
-6. Publish human.decision event (see §4)
+5. Publish human.decision event (see §4)
 
-7. Return { success: true, data: { message_id, to, subject } }
+6. Return { success: true, data: { message_id, to, subject } }
 ```
 
-### 2. Gateway change
+### 2. Gateway changes
 
-Single addition to `OutboundGateway.send()` options:
+Two additions:
+
+**`OutboundGateway.send()` options** (used for other CEO-approved sends):
 
 ```typescript
 options?: {
@@ -142,16 +158,27 @@ options?: {
 }
 ```
 
-When `humanApproved: true`:
-- **Step 0 (autonomy gate):** skipped — the CEO is in the loop, autonomous-action
-  gating does not apply
-- **Step 1 (blocked-contact check):** runs normally
-- **Step 2 (content filter):** runs normally
-- **Step 3 (channel dispatch + contact promotion):** runs normally
+**New `OutboundGateway.sendEmailDraft()` method:**
 
-This is intentionally narrow. `humanApproved: true` is not "skip all safety
-checks" — it is specifically "the human is in the loop so the autonomy gate does
-not apply." All other safety invariants are preserved.
+```typescript
+sendEmailDraft(
+  draftId: string,
+  accountId: string | undefined,
+  draftMeta: { recipientEmail: string; body: string; subject: string },
+  options?: { humanApproved?: boolean },
+): Promise<OutboundSendResult>
+```
+
+Safety pipeline inside `sendEmailDraft()`:
+- **Step 0 (autonomy gate):** skipped when `humanApproved: true`
+- **Step 1 (blocked-contact check):** runs on `draftMeta.recipientEmail`
+- **Step 2 (content filter):** runs on `draftMeta.body`
+- **Step 3 (Nylas dispatch):** calls `nylasClient.sendDraft(draftId)` — the actual
+  draft is sent with its full stored envelope; PII redaction is not applied
+- **Step 4 (contact promotion):** runs on success, same as `send()`
+
+`humanApproved: true` is intentionally narrow — it only skips the autonomy gate.
+All other safety invariants are preserved.
 
 ### 3. Task-origin enforcement
 

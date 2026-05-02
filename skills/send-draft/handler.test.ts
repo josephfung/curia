@@ -34,7 +34,7 @@ function makeCtx(overrides: {
 }): SkillContext {
   const gateway = {
     listEmailMessages: vi.fn().mockResolvedValue([DRAFT_STUB]),
-    send: vi.fn().mockResolvedValue({ success: true, messageId: 'msg-sent-1' }),
+    sendEmailDraft: vi.fn().mockResolvedValue({ success: true, messageId: 'msg-sent-1' }),
     ...overrides.gateway,
   } as unknown as OutboundGateway;
 
@@ -127,7 +127,7 @@ describe('SendDraftHandler', () => {
     const ctx = makeCtx({
       gateway: {
         listEmailMessages: vi.fn().mockRejectedValue(new Error('Nylas error')),
-        send: vi.fn(),
+        sendEmailDraft: vi.fn(),
       },
     });
     const result = await handler.execute(ctx);
@@ -139,7 +139,7 @@ describe('SendDraftHandler', () => {
     const ctx = makeCtx({
       gateway: {
         listEmailMessages: vi.fn().mockResolvedValue([]),
-        send: vi.fn(),
+        sendEmailDraft: vi.fn(),
       },
     });
     const result = await handler.execute(ctx);
@@ -152,7 +152,7 @@ describe('SendDraftHandler', () => {
     const ctx = makeCtx({
       gateway: {
         listEmailMessages: vi.fn().mockResolvedValue([draftNoRecipient]),
-        send: vi.fn(),
+        sendEmailDraft: vi.fn(),
       },
     });
     const result = await handler.execute(ctx);
@@ -174,47 +174,30 @@ describe('SendDraftHandler', () => {
     }
   });
 
-  it('calls gateway.send with humanApproved: true', async () => {
-    const sendMock = vi.fn().mockResolvedValue({ success: true, messageId: 'msg-sent-1' });
-    const ctx = makeCtx({ gateway: { send: sendMock } });
+  it('calls gateway.sendEmailDraft with humanApproved: true and correct draftId/account', async () => {
+    const sendEmailDraftMock = vi.fn().mockResolvedValue({ success: true, messageId: 'msg-sent-1' });
+    const ctx = makeCtx({ gateway: { sendEmailDraft: sendEmailDraftMock } });
     await handler.execute(ctx);
-    expect(sendMock).toHaveBeenCalledWith(
-      expect.objectContaining({ channel: 'email', to: 'kevin@example.com' }),
+    expect(sendEmailDraftMock).toHaveBeenCalledWith(
+      'draft-abc123',
+      'joseph',
+      expect.objectContaining({ recipientEmail: 'kevin@example.com' }),
       { humanApproved: true },
     );
   });
 
-  it('resolves reply threading when draft has a threadId', async () => {
-    const draftWithThread = { ...DRAFT_STUB, threadId: 'thread-xyz' };
-    const threadMessage = { ...DRAFT_STUB, id: 'latest-thread-msg', threadId: 'thread-xyz' };
-    const listMock = vi.fn()
-      .mockResolvedValueOnce([draftWithThread])  // first call: DRAFTS folder
-      .mockResolvedValueOnce([threadMessage]);   // second call: thread lookup
-    const sendMock = vi.fn().mockResolvedValue({ success: true, messageId: 'msg-sent-1' });
-    const ctx = makeCtx({ gateway: { listEmailMessages: listMock, send: sendMock } });
-
+  it('passes draft body and subject to gateway for safety checks', async () => {
+    const sendEmailDraftMock = vi.fn().mockResolvedValue({ success: true, messageId: 'msg-sent-1' });
+    const ctx = makeCtx({ gateway: { sendEmailDraft: sendEmailDraftMock } });
     await handler.execute(ctx);
-
-    expect(listMock).toHaveBeenCalledTimes(2);
-    expect(sendMock).toHaveBeenCalledWith(
-      expect.objectContaining({ replyToMessageId: 'latest-thread-msg' }),
-      { humanApproved: true },
-    );
-  });
-
-  it('sends without replyToMessageId when thread lookup fails (non-fatal)', async () => {
-    const draftWithThread = { ...DRAFT_STUB, threadId: 'thread-xyz' };
-    const listMock = vi.fn()
-      .mockResolvedValueOnce([draftWithThread])
-      .mockRejectedValueOnce(new Error('Nylas error'));
-    const sendMock = vi.fn().mockResolvedValue({ success: true, messageId: 'msg-sent-1' });
-    const ctx = makeCtx({ gateway: { listEmailMessages: listMock, send: sendMock } });
-
-    const result = await handler.execute(ctx);
-
-    expect(result.success).toBe(true); // thread lookup failure is non-fatal
-    expect(sendMock).toHaveBeenCalledWith(
-      expect.objectContaining({ replyToMessageId: undefined }),
+    expect(sendEmailDraftMock).toHaveBeenCalledWith(
+      'draft-abc123',
+      'joseph',
+      {
+        recipientEmail: 'kevin@example.com',
+        body: '<p>Hello Kevin</p>',
+        subject: 'Re: Project Update',
+      },
       { humanApproved: true },
     );
   });
@@ -222,7 +205,7 @@ describe('SendDraftHandler', () => {
   it('returns error when gateway blocks the send', async () => {
     const ctx = makeCtx({
       gateway: {
-        send: vi.fn().mockResolvedValue({ success: false, blockedReason: 'Recipient is blocked' }),
+        sendEmailDraft: vi.fn().mockResolvedValue({ success: false, blockedReason: 'Recipient is blocked' }),
       },
     });
     const result = await handler.execute(ctx);
