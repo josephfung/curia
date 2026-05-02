@@ -14,6 +14,7 @@ import type { DbPool } from '../db/connection.js';
 import type { Logger } from '../logger.js';
 import type { EntityMemory } from '../memory/entity-memory.js';
 import { sanitizeDisplayName } from '../skills/sanitize.js';
+import { TRUST_RANK } from './types.js';
 import type {
   AuthOverride,
   Contact,
@@ -948,7 +949,7 @@ class PostgresContactBackend implements ContactServiceBackend {
       // Validate trust_level against the allowed enum — the DB CHECK constraint prevents
       // invalid values under normal operation, but a direct DB edit or future migration
       // could introduce an unexpected value that produces NaN via an undefined lookup.
-      trustLevel: (['ceo', 'high', 'medium', 'low'] as TrustLevel[]).includes(row.trust_level as TrustLevel)
+      trustLevel: (Object.keys(TRUST_RANK) as TrustLevel[]).includes(row.trust_level as TrustLevel)
         ? row.trust_level as TrustLevel
         : null,
     };
@@ -1154,7 +1155,7 @@ class PostgresContactBackend implements ContactServiceBackend {
         const v = parseFloat(row.contact_confidence);
         return isFinite(v) ? v : 0.0;
       })(),
-      trustLevel: (['ceo', 'high', 'medium', 'low'] as TrustLevel[]).includes(row.trust_level as TrustLevel)
+      trustLevel: (Object.keys(TRUST_RANK) as TrustLevel[]).includes(row.trust_level as TrustLevel)
         ? row.trust_level as TrustLevel
         : null,
       lastSeenAt: row.last_seen_at,

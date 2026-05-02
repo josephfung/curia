@@ -169,6 +169,24 @@ describe('PiiRedactor', () => {
     expect(JSON.stringify(result.redactions)).not.toContain('4111');
   });
 
+  it('redacts multiple distinct PII spans, preserving order and both tokens', async () => {
+    // Both credit_card and phone_us are blocked on signal (empty allow list).
+    // This exercises the end-to-start replacement loop for n > 1 matches.
+    const result = await redactor.redact(
+      'Card: 4111 1111 1111 1111 and call +1 (555) 867-5309.',
+      'signal',
+      'medium',
+    );
+    expect(result.content).not.toContain('4111');
+    expect(result.content).not.toContain('867-5309');
+    expect(result.content).toContain('[REDACTED: CREDIT_CARD]');
+    expect(result.content).toMatch(/\[REDACTED: PHONE/);
+    expect(result.redactions).toHaveLength(2);
+    // Redactions must be returned in original start-position order (credit card first)
+    expect(result.redactions[0]!.patternLabel).toMatch(/credit_card/i);
+    expect(result.redactions[1]!.patternLabel).toMatch(/phone/i);
+  });
+
   it('explicit channel policy fully overrides default: allow (channel policy takes precedence)', async () => {
     // A channel with an explicit policy entry (even empty allow list) does NOT
     // inherit default: 'allow'. All PII on that channel follows the channel policy.
