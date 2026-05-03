@@ -2,8 +2,15 @@
 //
 // Reports the current global autonomy score and band to the CEO.
 // Includes the last 3 history entries so the CEO can see recent changes.
+//
+// Phase 3 additions:
+//   - lastSetBy: who most recently changed the score (history[0].changedBy or config.updatedBy)
+//   - trend: 'improving' | 'declining' | 'stable' | null — derived from the two most recent
+//     system-generated adjustments (changedBy === 'system'). Null if fewer than 2 system entries.
+//   - scoredActionCount: count of autonomy_action_log rows with scored_by set (0 if table absent)
 
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { AutonomyHistoryEntry } from '../../src/autonomy/autonomy-service.js';
 
 export class GetAutonomyHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {
@@ -19,11 +26,44 @@ export class GetAutonomyHandler implements SkillHandler {
       }
 
       // History is supplementary — a failure here should not block showing the current score.
-      let history: import('../../src/autonomy/autonomy-service.js').AutonomyHistoryEntry[] = [];
+      let history: AutonomyHistoryEntry[] = [];
       try {
         history = await ctx.autonomyService.getHistory(3);
       } catch (err) {
         ctx.log.warn({ err }, 'get-autonomy: could not load history — showing current score only');
+      }
+
+      // --- Phase 3: lastSetBy ---
+      // Use the most recent history entry's actor; fall back to config.updatedBy
+      // if history is empty (e.g. first run after migration without history rows).
+      const lastSetBy: string = history.length > 0 ? history[0]!.changedBy : config.updatedBy;
+
+      // --- Phase 3: trend ---
+      // Filter to system-generated adjustments only, then compare the two most recent.
+      // A CEO manual override is intentional and doesn't reflect the automated trend.
+      const systemEntries = history.filter(e => e.changedBy === 'system');
+      let trend: 'improving' | 'declining' | 'stable' | null = null;
+      if (systemEntries.length >= 2) {
+        const latest = systemEntries[0]!.score;
+        const previous = systemEntries[1]!.score;
+        if (latest > previous) {
+          trend = 'improving';
+        } else if (latest < previous) {
+          trend = 'declining';
+        } else {
+          trend = 'stable';
+        }
+      }
+
+      // --- Phase 3: scoredActionCount ---
+      // Swallow errors defensively in case getScoredActionCount itself throws for
+      // any reason not already handled inside the method (e.g. mock misconfiguration
+      // in tests, unexpected method absence on older service versions).
+      let scoredActionCount = 0;
+      try {
+        scoredActionCount = await ctx.autonomyService.getScoredActionCount();
+      } catch (err) {
+        ctx.log.warn({ err }, 'get-autonomy: could not load scoredActionCount — defaulting to 0');
       }
 
       // Format the band label for human display
@@ -57,6 +97,9 @@ export class GetAutonomyHandler implements SkillHandler {
         data: {
           score: config.score,
           band: config.band,
+          lastSetBy,
+          trend,
+          scoredActionCount,
           summary: lines.join('\n'),
         },
       };

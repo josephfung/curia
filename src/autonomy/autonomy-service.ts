@@ -243,6 +243,23 @@ export class AutonomyService {
   }
 
   /**
+   * Count scored rows in autonomy_action_log (Phase 3).
+   * Returns 0 if the table doesn't exist yet (pre-migration-031).
+   */
+  async getScoredActionCount(): Promise<number> {
+    try {
+      const result = await this.pool.query<{ count: string }>(
+        `SELECT COUNT(*) AS count FROM autonomy_action_log WHERE scored_by IS NOT NULL`,
+      );
+      return parseInt(result.rows[0]!.count, 10);
+    } catch (err) {
+      // Table may not exist yet (pre-migration 031) — return 0, not an error
+      this.logger.debug({ err }, 'getScoredActionCount: autonomy_action_log not queryable');
+      return 0;
+    }
+  }
+
+  /**
    * Return paginated history entries (newest first) with total count.
    * Used by the web UI's "Show more" pagination.
    */
