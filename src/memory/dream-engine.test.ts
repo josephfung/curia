@@ -150,7 +150,7 @@ describe('DreamEngine with AutonomyScoringPass', () => {
     const mockScoringPass = {
       run: vi.fn().mockResolvedValue({ rowsScored: 0, adjustmentApplied: false }),
     };
-    const engine = new DreamEngine(pool, makeBus(), createSilentLogger(), defaultConfig, mockScoringPass as any);
+    const engine = new DreamEngine(pool, makeBus(), createSilentLogger(), defaultConfig, mockScoringPass as { run: () => Promise<unknown> });
     engine.start();
 
     // Advance past the scoring interval (daily = 86400000ms)
@@ -176,7 +176,7 @@ describe('DreamEngine with AutonomyScoringPass', () => {
     const mockScoringPass = {
       run: vi.fn().mockRejectedValue(new Error('judge exploded')),
     };
-    const engine = new DreamEngine(pool, makeBus(), createSilentLogger(), defaultConfig, mockScoringPass as any);
+    const engine = new DreamEngine(pool, makeBus(), createSilentLogger(), defaultConfig, mockScoringPass as { run: () => Promise<unknown> });
     engine.start();
 
     // Should not throw — the error is caught and logged
