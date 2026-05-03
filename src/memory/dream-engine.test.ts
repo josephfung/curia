@@ -3,6 +3,7 @@ import type { Pool, PoolClient, QueryResult } from 'pg';
 import type { EventBus } from '../bus/bus.js';
 import { DreamEngine } from './dream-engine.js';
 import { createSilentLogger } from '../logger.js';
+import type { AutonomyScoringPass } from '../autonomy/scoring-pass.js';
 
 // Mock a pool that returns a client whose query() records calls and returns configured rowCounts.
 // runDecayPass issues: BEGIN, 4 decay queries, 2 archive queries, COMMIT = 8 total client calls.
@@ -150,7 +151,7 @@ describe('DreamEngine with AutonomyScoringPass', () => {
     const mockScoringPass = {
       run: vi.fn().mockResolvedValue({ rowsScored: 0, adjustmentApplied: false }),
     };
-    const engine = new DreamEngine(pool, makeBus(), createSilentLogger(), defaultConfig, mockScoringPass as { run: () => Promise<unknown> });
+    const engine = new DreamEngine(pool, makeBus(), createSilentLogger(), defaultConfig, mockScoringPass as unknown as AutonomyScoringPass);
     engine.start();
 
     // Advance past the scoring interval (daily = 86400000ms)
@@ -176,7 +177,7 @@ describe('DreamEngine with AutonomyScoringPass', () => {
     const mockScoringPass = {
       run: vi.fn().mockRejectedValue(new Error('judge exploded')),
     };
-    const engine = new DreamEngine(pool, makeBus(), createSilentLogger(), defaultConfig, mockScoringPass as { run: () => Promise<unknown> });
+    const engine = new DreamEngine(pool, makeBus(), createSilentLogger(), defaultConfig, mockScoringPass as unknown as AutonomyScoringPass);
     engine.start();
 
     // Should not throw — the error is caught and logged
