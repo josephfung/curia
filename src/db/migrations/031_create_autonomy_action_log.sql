@@ -1,3 +1,5 @@
+-- Up Migration
+
 -- 031_create_autonomy_action_log.sql
 --
 -- Phase 3 autonomy scoring foundation (issue #148) + ADR-018 approval lifecycle.
@@ -65,3 +67,11 @@ CREATE INDEX idx_aal_conversation ON autonomy_action_log (conversation_id)
 
 -- Deduplication (#427): find existing pending rows for same skill+task
 CREATE INDEX idx_aal_task ON autonomy_action_log (task_id);
+
+-- Approval lifecycle (#427/#428/#429): find re-execution rows by parent approval
+CREATE INDEX idx_aal_parent ON autonomy_action_log (parent_action_id)
+  WHERE parent_action_id IS NOT NULL;
+
+-- Down Migration
+
+DROP TABLE IF EXISTS autonomy_action_log;
