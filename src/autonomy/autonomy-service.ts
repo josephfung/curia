@@ -253,9 +253,13 @@ export class AutonomyService {
       );
       return parseInt(result.rows[0]!.count, 10);
     } catch (err) {
-      // Table may not exist yet (pre-migration 031) — return 0, not an error
-      this.logger.debug({ err }, 'getScoredActionCount: autonomy_action_log not queryable');
-      return 0;
+      // Only silently return 0 for "table does not exist" (pre-migration-031).
+      // All other DB errors (connection loss, pool exhaustion) propagate normally.
+      if ((err as { code?: string }).code === '42P01') {
+        this.logger.debug({ err }, 'getScoredActionCount: autonomy_action_log not yet created');
+        return 0;
+      }
+      throw err;
     }
   }
 

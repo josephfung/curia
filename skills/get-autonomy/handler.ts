@@ -28,7 +28,7 @@ export class GetAutonomyHandler implements SkillHandler {
       // History is supplementary — a failure here should not block showing the current score.
       let history: AutonomyHistoryEntry[] = [];
       try {
-        history = await ctx.autonomyService.getHistory(3);
+        history = await ctx.autonomyService.getHistory(10);
       } catch (err) {
         ctx.log.warn({ err }, 'get-autonomy: could not load history — showing current score only');
       }
@@ -56,9 +56,8 @@ export class GetAutonomyHandler implements SkillHandler {
       }
 
       // --- Phase 3: scoredActionCount ---
-      // Swallow errors defensively in case getScoredActionCount itself throws for
-      // any reason not already handled inside the method (e.g. mock misconfiguration
-      // in tests, unexpected method absence on older service versions).
+      // getScoredActionCount() handles table-not-found internally.
+      // This outer catch is a last resort for unexpected errors.
       let scoredActionCount = 0;
       try {
         scoredActionCount = await ctx.autonomyService.getScoredActionCount();

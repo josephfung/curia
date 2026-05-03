@@ -108,15 +108,17 @@ export class ActionLogRepo {
   }
 
   /**
-   * Load all scored rows for the adjustment formula.
-   * Returns rows with at least one non-null scoring flag, ordered by created_at desc.
-   * The scoring pass uses these to compute the time-decay-weighted capability score.
+   * Load the most recent scored rows for the adjustment formula.
+   * Bounded to 500 rows — rows older than ~5 half-lives (150 days at default 30d)
+   * contribute less than 3% weight and are safely excluded.
    */
-  async findAllScored(): Promise<ActionLogRow[]> {
+  async findAllScored(limit = 500): Promise<ActionLogRow[]> {
     const result = await this.pool.query(
       `SELECT * FROM autonomy_action_log
        WHERE scored_by IS NOT NULL
-       ORDER BY created_at DESC`,
+       ORDER BY created_at DESC
+       LIMIT $1`,
+      [limit],
     );
     return result.rows.map(mapRow);
   }
