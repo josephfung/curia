@@ -103,4 +103,5 @@ legitimate CEO-directed sends.
   comment pointing here.
 - This pattern applies only to skills where the CEO is verifiably in the loop at
   invocation time. It must not be used for skills that act autonomously based on
-  inferred or cached intent — those should use the standard `action_risk` tiers.
+  inferred or cached intent — those should use the standard `action_risk` tiers
+  and the Curia-initiated approval request flow (see ADR-018).

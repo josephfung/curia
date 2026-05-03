@@ -13,6 +13,9 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Added
+- **ADR-018: Curia-initiated approval requests** — documents the pattern for autonomy-gated skills to request CEO permission via the unified `action_log` state machine, complementing the CEO-initiated pattern in ADR-017.
+
 ### Fixed
 - **Test fixture naming** — replaced `nathan@curia.com` / `Nathan` references in `message-converter.test.ts` with `curia@example.com` / `Curia` to comply with instance-name hygiene rule.
 

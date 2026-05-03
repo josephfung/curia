@@ -39,6 +39,7 @@ Each ADR follows the [Nygard format](https://adr.github.io/):
 | [015](015-llm-as-judge-intent-drift.md) | LLM-as-judge for intent drift detection | Accepted |
 | [016](016-mcp-sdk-dependency.md) | Official MCP SDK over hand-rolled transport; registry-transparent skill integration | Accepted |
 | [017](017-ceo-authorized-action-pattern.md) | CEO-authorized action pattern: task-origin check + `humanApproved` flag over per-action gateway methods | Accepted |
+| [018](018-curia-initiated-approval-requests.md) | Curia-initiated approval requests via unified `action_log` state machine | Accepted |
 
 ## Adding new ADRs
 
