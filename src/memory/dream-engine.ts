@@ -73,11 +73,16 @@ export class DreamEngine {
         this.scoringPass!.run().catch((err) => {
           this.logger.error({ err }, 'DreamEngine: unhandled error in AutonomyScoringPass');
         });
-      }, this.config.intervalMs);
+      }, this.scoringPass.intervalMs);  // ← use scoring-specific interval, not decay interval
     }
 
     this.logger.info(
-      { intervalMs: this.config.intervalMs, archiveThreshold: this.config.archiveThreshold, hasScoringPass: !!this.scoringPass },
+      {
+        intervalMs: this.config.intervalMs,
+        scoringIntervalMs: this.scoringPass?.intervalMs ?? null,
+        archiveThreshold: this.config.archiveThreshold,
+        hasScoringPass: !!this.scoringPass,
+      },
       'DreamEngine started (decay pass scheduled)',
     );
   }

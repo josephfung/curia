@@ -17,6 +17,7 @@ import type { ActionLogRow, ScoringFlags } from './action-log-types.js';
 import { DETERMINISTIC_SCORES, LLM_SCORED_OUTCOMES } from './action-log-types.js';
 
 export interface ScoringPassConfig {
+  intervalMs: number;
   model: string;
   batchSize: number;
   minScoredActions: number;
@@ -53,6 +54,11 @@ export class AutonomyScoringPass {
     private logger: Logger,
     private config: ScoringPassConfig,
   ) {}
+
+  /** The interval in milliseconds at which this pass should run. */
+  get intervalMs(): number {
+    return this.config.intervalMs;
+  }
 
   async run(): Promise<ScoringPassResult> {
     const result: ScoringPassResult = {

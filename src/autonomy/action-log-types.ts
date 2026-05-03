@@ -8,6 +8,7 @@
 export const TERMINAL_OUTCOMES = [
   'success',
   'failure',
+  'rejected',       // ← add this; DETERMINISTIC_SCORES has a rejected entry but it was never fetched
   'approved',
   'denied',
   'expired',
