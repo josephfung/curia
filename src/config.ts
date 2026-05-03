@@ -277,6 +277,16 @@ export interface YamlConfig {
         fast_decay?: number;
       };
     };
+    autonomy_scoring?: {
+      intervalMs?: number;
+      model?: string;
+      batchSize?: number;
+      minScoredActions?: number;
+      halfLifeDays?: number;
+      weakExpiredWeight?: number;
+      ceoCooldownDays?: number;
+      errorRateThreshold?: number;
+    };
   };
   contact_creation_limits?: {
     /** Maximum new contacts created from a single email's participant list. Default: 10. */
@@ -641,6 +651,33 @@ export function loadYamlConfig(configDir: string): YamlConfig {
         if (halfLifeDays.permanent !== undefined && halfLifeDays.permanent !== null) {
           throw new Error(`dreaming.decay.halfLifeDays.permanent must be null (permanent nodes never decay), got: ${String(halfLifeDays.permanent)}`);
         }
+      }
+    }
+    const autonomyScoring = dreaming.autonomy_scoring;
+    if (autonomyScoring !== undefined) {
+      if (typeof autonomyScoring !== 'object' || autonomyScoring === null || Array.isArray(autonomyScoring)) {
+        throw new Error('dreaming.autonomy_scoring must be a YAML mapping');
+      }
+      if (autonomyScoring.intervalMs !== undefined && (!Number.isInteger(autonomyScoring.intervalMs) || autonomyScoring.intervalMs <= 0)) {
+        throw new Error(`dreaming.autonomy_scoring.intervalMs must be a positive integer, got: ${autonomyScoring.intervalMs}`);
+      }
+      if (autonomyScoring.batchSize !== undefined && (!Number.isInteger(autonomyScoring.batchSize) || autonomyScoring.batchSize <= 0)) {
+        throw new Error(`dreaming.autonomy_scoring.batchSize must be a positive integer, got: ${autonomyScoring.batchSize}`);
+      }
+      if (autonomyScoring.minScoredActions !== undefined && (!Number.isInteger(autonomyScoring.minScoredActions) || autonomyScoring.minScoredActions <= 0)) {
+        throw new Error(`dreaming.autonomy_scoring.minScoredActions must be a positive integer, got: ${autonomyScoring.minScoredActions}`);
+      }
+      if (autonomyScoring.halfLifeDays !== undefined && (typeof autonomyScoring.halfLifeDays !== 'number' || autonomyScoring.halfLifeDays <= 0)) {
+        throw new Error(`dreaming.autonomy_scoring.halfLifeDays must be a positive number, got: ${autonomyScoring.halfLifeDays}`);
+      }
+      if (autonomyScoring.weakExpiredWeight !== undefined && (typeof autonomyScoring.weakExpiredWeight !== 'number' || autonomyScoring.weakExpiredWeight < 0 || autonomyScoring.weakExpiredWeight > 1)) {
+        throw new Error(`dreaming.autonomy_scoring.weakExpiredWeight must be a number between 0 and 1, got: ${autonomyScoring.weakExpiredWeight}`);
+      }
+      if (autonomyScoring.ceoCooldownDays !== undefined && (!Number.isInteger(autonomyScoring.ceoCooldownDays) || autonomyScoring.ceoCooldownDays < 0)) {
+        throw new Error(`dreaming.autonomy_scoring.ceoCooldownDays must be a non-negative integer, got: ${autonomyScoring.ceoCooldownDays}`);
+      }
+      if (autonomyScoring.errorRateThreshold !== undefined && (typeof autonomyScoring.errorRateThreshold !== 'number' || autonomyScoring.errorRateThreshold < 0 || autonomyScoring.errorRateThreshold > 1)) {
+        throw new Error(`dreaming.autonomy_scoring.errorRateThreshold must be a number between 0 and 1, got: ${autonomyScoring.errorRateThreshold}`);
       }
     }
   }
