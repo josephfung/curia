@@ -87,7 +87,9 @@ export function buildDescription(
     }
   }
 
-  if (contextParts.length === 0) return `Run ${skillName}`;
+  // Known skill but no recognizable context fields — return just the verb.
+  // (Fallback to "Run {skillName}" is only for truly unknown skills above.)
+  if (contextParts.length === 0) return verb;
 
   const context = contextParts.join(', ');
   const full = `${verb}: ${context}`;

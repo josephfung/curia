@@ -70,12 +70,16 @@ describe('buildDescription', () => {
     expect(desc).toBe('Run some-unknown-skill');
   });
 
-  it('truncates individual values to 80 chars', () => {
+  it('returns just the verb for a known skill with no recognized context fields', () => {
+    const desc = buildDescription('store-fact', { value: 'something', raw: 'other' });
+    expect(desc).toBe('Store fact');
+  });
+
+  it('truncates individual values to exactly 80 chars including ellipsis', () => {
     const longTitle = 'A'.repeat(100);
     const desc = buildDescription('calendar-create-event', { title: longTitle });
-    // The value portion should be truncated, not the full description
-    expect(desc.length).toBeLessThanOrEqual(200);
-    expect(desc).not.toContain(longTitle);
+    // "Create calendar event: " (23 chars) + 79 A's + "…" (1 char) = 103 chars
+    expect(desc).toBe('Create calendar event: ' + 'A'.repeat(79) + '…');
   });
 
   it('truncates the full description to 200 chars', () => {
