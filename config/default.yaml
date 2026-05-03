@@ -275,6 +275,20 @@ dreaming:
       slow_decay: 180
       fast_decay: 21
 
+  # Autonomy scoring — background Phase 3 auto-adjustment (issue #148).
+  # Runs daily alongside the decay pass. Scores completed actions on three
+  # dimensions (Competence, Commitment, Compatibility), then nudges the
+  # autonomy score ±5 via a delta formula.
+  autonomy_scoring:
+    intervalMs: 86400000          # daily (same cadence as decay)
+    model: "claude-haiku-4-5"     # cheaper model for the LLM judge
+    batchSize: 50                 # max rows scored per pass
+    minScoredActions: 30          # minimum before any adjustment fires
+    halfLifeDays: 30              # time-decay half-life for weighting
+    weakExpiredWeight: 0.3        # reduced weight for 'expired' compatibility signal
+    ceoCooldownDays: 7            # days after CEO set-autonomy before auto-adjust resumes
+    errorRateThreshold: 0.20      # competence error rate that blocks score increases
+
 # Sensitivity classification rules for KG nodes (issue #200).
 # Rules are evaluated in descending sensitivity order — 'restricted' rules are
 # checked before 'confidential', so the most protective rule always wins.
