@@ -36,14 +36,12 @@ post-execution states (`success`, `failure`, `rejected`). Approval decisions
 
 Three approaches were considered:
 
-**A. Automatic approval requests at the gate for medium+ action_risk only.**
-Gate B fires for medium/high/critical skills → creates a pending record →
-notifies CEO. Low-risk blocked actions remain silent.
-
-Problem: at score < 60, low-risk skills are also blocked, and the CEO has
-explicitly set a restrictive posture — silent failures there are exactly the
-kind of thing that slides through the cracks. The threshold for "worth
-notifying" should match the threshold for "worth blocking."
+**A. Automatic approval requests at the gate.**
+Gate B fires → creates a pending record → notifies CEO. Originally scoped to
+medium+ action_risk only, but that leaves low-risk skills silently blocked at
+score < 60, which is exactly the inconsistency this pattern aims to prevent.
+The threshold for "worth notifying" should match the threshold for "worth
+blocking." A separate `action_requests` table stores the pending state.
 
 **B. Coordinator invokes a `request-approval` skill after receiving a gate
 failure.** Gate behavior unchanged; the coordinator decides case-by-case
@@ -53,17 +51,24 @@ Problem: relies on LLM consistency for a system-critical flow. A coordinator
 that forgets to call the skill, or calls it inconsistently, creates the exact
 inconsistency this pattern is meant to prevent.
 
-**C. Extend `action_log` to be the unified state machine for all
-autonomy-relevant events — blocking, pending approval, CEO decisions, and
-re-execution — and trigger approval requests automatically at the gate for
-all non-`none` action_risk levels.**
+**C. Unified `action_log` state machine.**
+Extend `action_log` (issue #148) to record all autonomy-relevant events —
+blocking, pending approval, CEO decisions, and re-execution — instead of
+using a separate table. All approval lifecycle state lives in `action_log`
+rows, giving Phase 3 scoring a single source of truth.
+
+The chosen approach combines **A's gate-level trigger** (automatic, not
+coordinator-dependent) with **C's unified data model** (no separate table,
+everything in `action_log`), and extends A's scope to all non-`none`
+action_risk levels — not just medium+.
 
 ## Decision
 
-**Option C.** The `action_log` table (issue #148) becomes the single source of
-truth for all autonomy-relevant events, including approval requests and their
-outcomes. Approval requests are triggered automatically at the gate level for
-all blocked non-`none` action_risk skills.
+**A + C combined.** The `action_log` table (issue #148) becomes the single
+source of truth for all autonomy-relevant events, including approval requests
+and their outcomes (from C). Approval requests are triggered automatically at
+the gate level for all blocked non-`none` action_risk skills (from A,
+expanded to all tiers).
 
 **Pattern components:**
 
@@ -135,8 +140,8 @@ all blocked non-`none` action_risk skills.
    b. Transitions it to `outcome = 'approved'`, sets `resolved_at` and
       `resolved_by = 'ceo'`.
    c. Re-executes the original skill with the stored `payload`, passing
-      `humanApproved: true` to the outbound gateway (reusing ADR-017's
-      mechanism) where applicable.
+      `humanApproved: true` to bypass the autonomy gates. See "Where
+      `humanApproved` is enforced" below for details.
    d. Writes a new `action_log` row for the re-execution, with
       `parent_action_id` pointing to the approved row.
    e. Publishes a `human.decision` event (same shape as ADR-017) for the
@@ -181,13 +186,39 @@ all blocked non-`none` action_risk skills.
    - `resolved_externally` → neutral (CEO agreed the action was needed but
      handled it differently — no signal about Curia's judgment)
 
+**Where `humanApproved` is enforced:**
+
+When `approve-action` re-executes a blocked skill, the re-execution hits the
+same gates that blocked it originally. `humanApproved` must bypass gates at
+every layer, not just the outbound gateway:
+
+- **Execution layer (Gates A and B).** `InvokeOptions` gains a
+  `humanApproved?: boolean` field. When set, the autonomy score check in
+  `invoke()` is skipped — the skill runs as if the score were sufficient.
+  Only the `approve-action` skill (elevated, CEO-only) sets this flag. This
+  is the primary bypass: it covers all skill types, including calendar
+  writes, contact mutations, memory stores, and anything else that never
+  touches the outbound gateway.
+
+- **Outbound gateway (Gate C).** Already supports `humanApproved` on
+  `send()` and `sendEmailDraft()` (ADR-017). When a re-executed skill calls
+  the gateway, `humanApproved` is threaded through so Gate C is also
+  bypassed. All other safety checks (blocked-contact, content filter) run
+  normally.
+
+Individual skill handlers do not need to implement `humanApproved` support.
+The flag is handled entirely at the infrastructure level — execution layer
+and outbound gateway. A new skill with any `action_risk` value automatically
+inherits the approval request flow when blocked, and the re-execution bypass
+when approved, with zero handler changes.
+
 **Relationship to ADR-017:**
 
 ADR-017 covers the CEO-initiated direction: CEO says "do X" → gate bypassed.
 This ADR covers the Curia-initiated direction: Curia says "may I do X?" →
 gate blocks → CEO approves → gate bypassed. Both flows converge on:
 
-- `humanApproved: true` on the outbound gateway (when applicable)
+- `humanApproved: true` on the execution layer and outbound gateway
 - `human.decision` audit events
 - `action_log` rows that feed Phase 3 scoring
 
@@ -197,12 +228,27 @@ The two ADRs are complementary halves of the same trust model.
 
 For email specifically, the existing draft creation + `send-draft` (PR #423)
 already implements a version of this pattern: the draft is the "pending"
-state, and `send-draft` is the approval path. This ADR generalizes it to all
-gated actions. Email drafts remain the preferred fallback for email-specific
-blocks (they preserve rich formatting, threading, and CC lists better than a
-serialized `payload` field would). The `action_log` row is written alongside
-the draft creation so that the approval decision is captured for scoring
-regardless of whether the CEO uses `send-draft` or sends from Gmail directly.
+state, and `send-draft` is the approval path. This ADR generalizes that
+pattern to all gated actions.
+
+`send-draft` itself does not need handler changes — its core mechanic
+(look up draft, verify CEO origin, send via gateway with `humanApproved`)
+is unchanged. What changes is the plumbing around it:
+
+- When the email adapter falls back to draft creation because the autonomy
+  gate blocked a direct send, it now also writes an `action_log` row with
+  `outcome = 'pending_approval'` alongside the Nylas draft.
+- When the CEO uses `send-draft` to approve that draft, the skill transitions
+  the corresponding `action_log` row to `approved` — capturing the decision
+  for Phase 3 scoring.
+- If the CEO sends the draft from Gmail directly (bypassing Curia), the
+  `action_log` row expires or is dismissed, same as any other pending action.
+
+Email drafts remain the preferred fallback for email-specific blocks (they
+preserve rich formatting, threading, and CC lists better than a serialized
+`payload` field would). The `action_log` row written alongside ensures the
+approval decision is captured for scoring regardless of the CEO's chosen
+send mechanism.
 
 ## Consequences
 
