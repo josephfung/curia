@@ -226,7 +226,7 @@ The `OutboundGateway` (see [15-outbound-safety.md](15-outbound-safety.md)) is al
 | `action_risk` field required on all skill manifests, validated at startup | Done |
 | Phase 2: hard execution gates (block skill when score < `action_risk` floor) | Done |
 | Phase 2: `OutboundGateway` autonomy check (score < 70 → block direct send, drafts unaffected) | Done |
-| Phase 3: automatic score adjustment (Competence/Commitment/Compatibility formula) | Not Done |
+| Phase 3: automatic score adjustment (Competence/Commitment/Compatibility formula) | Done |
 
 ---
 
