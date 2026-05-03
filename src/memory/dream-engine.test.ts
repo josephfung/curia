@@ -142,3 +142,49 @@ describe('DreamEngine.runDecayPass', () => {
     expect(allSqls[allSqls.length - 1]).toBe('COMMIT');
   });
 });
+
+describe('DreamEngine with AutonomyScoringPass', () => {
+  it('calls scoringPass.run() on its own interval', async () => {
+    vi.useFakeTimers();
+    const { pool } = makePool();
+    const mockScoringPass = {
+      run: vi.fn().mockResolvedValue({ rowsScored: 0, adjustmentApplied: false }),
+    };
+    const engine = new DreamEngine(pool, makeBus(), createSilentLogger(), defaultConfig, mockScoringPass as any);
+    engine.start();
+
+    // Advance past the scoring interval (daily = 86400000ms)
+    await vi.advanceTimersByTimeAsync(86_400_000);
+
+    expect(mockScoringPass.run).toHaveBeenCalledTimes(1);
+
+    engine.stop();
+    vi.useRealTimers();
+  });
+
+  it('does not fail if scoringPass is not provided', () => {
+    const { pool } = makePool();
+    // No scoring pass — should not throw
+    const engine = new DreamEngine(pool, makeBus(), createSilentLogger(), defaultConfig);
+    engine.start();
+    engine.stop();
+  });
+
+  it('logs error and continues if scoringPass.run() throws', async () => {
+    vi.useFakeTimers();
+    const { pool } = makePool();
+    const mockScoringPass = {
+      run: vi.fn().mockRejectedValue(new Error('judge exploded')),
+    };
+    const engine = new DreamEngine(pool, makeBus(), createSilentLogger(), defaultConfig, mockScoringPass as any);
+    engine.start();
+
+    // Should not throw — the error is caught and logged
+    await vi.advanceTimersByTimeAsync(86_400_000);
+
+    expect(mockScoringPass.run).toHaveBeenCalledTimes(1);
+
+    engine.stop();
+    vi.useRealTimers();
+  });
+});

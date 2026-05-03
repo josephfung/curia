@@ -1,6 +1,7 @@
 import type { Pool, PoolClient } from 'pg';
 import type { EventBus } from '../bus/bus.js';
 import type { Logger } from '../logger.js';
+import type { AutonomyScoringPass } from '../autonomy/scoring-pass.js';
 
 // Config shape mirrors YamlConfig.dreaming.decay — all fields required at construction
 // time (caller resolves defaults before passing in).
@@ -40,19 +41,25 @@ export class DreamEngine {
   private logger: Logger;
   private config: DecayConfig;
   private intervalHandle: ReturnType<typeof setInterval> | null = null;
+  private scoringIntervalHandle: ReturnType<typeof setInterval> | null = null;
+  private scoringPass?: AutonomyScoringPass;
 
   // _bus is accepted but not stored — it is reserved for the decay warning pass
   // (#280) which will emit `memory.decay_warning` before archiving important nodes.
   // The underscore prefix signals intentional non-use to TypeScript.
-  constructor(pool: Pool, _bus: EventBus, logger: Logger, config: DecayConfig) {
+  constructor(pool: Pool, _bus: EventBus, logger: Logger, config: DecayConfig, scoringPass?: AutonomyScoringPass) {
     this.pool = pool;
     this.logger = logger;
     this.config = config;
+    this.scoringPass = scoringPass;
   }
 
   /**
    * Start the recurring decay interval.
    * Logs the configured cadence so operators can verify the schedule at startup.
+   *
+   * The decay pass and scoring pass run on independent intervals so a slow scoring
+   * pass (e.g. waiting on an LLM judge) never blocks the decay pass from running.
    */
   start(): void {
     this.intervalHandle = setInterval(() => {
@@ -61,17 +68,29 @@ export class DreamEngine {
       });
     }, this.config.intervalMs);
 
+    if (this.scoringPass) {
+      this.scoringIntervalHandle = setInterval(() => {
+        this.scoringPass!.run().catch((err) => {
+          this.logger.error({ err }, 'DreamEngine: unhandled error in AutonomyScoringPass');
+        });
+      }, this.config.intervalMs);
+    }
+
     this.logger.info(
-      { intervalMs: this.config.intervalMs, archiveThreshold: this.config.archiveThreshold },
+      { intervalMs: this.config.intervalMs, archiveThreshold: this.config.archiveThreshold, hasScoringPass: !!this.scoringPass },
       'DreamEngine started (decay pass scheduled)',
     );
   }
 
-  /** Stop the interval timer for clean shutdown. */
+  /** Stop all interval timers for clean shutdown. */
   stop(): void {
     if (this.intervalHandle) {
       clearInterval(this.intervalHandle);
       this.intervalHandle = null;
+    }
+    if (this.scoringIntervalHandle) {
+      clearInterval(this.scoringIntervalHandle);
+      this.scoringIntervalHandle = null;
     }
     this.logger.info('DreamEngine stopped');
   }
