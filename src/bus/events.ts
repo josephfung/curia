@@ -129,8 +129,9 @@ interface OutboundBlockedPayload {
 //   - 'blocked_content': CEO alert that an outbound message was blocked by the content filter
 //   - 'group_held':      CEO alert that a Signal group message was held due to unverified members
 //   - 'contact_rate_limited': CEO alert that contact auto-creation was throttled due to rate limits
+//   - 'approval_requested':   CEO alert that an autonomy gate blocked a skill and approval is needed
 export interface OutboundNotificationPayload {
-  notificationType: 'blocked_content' | 'group_held' | 'contact_rate_limited';
+  notificationType: 'blocked_content' | 'group_held' | 'contact_rate_limited' | 'approval_requested';
   /** Recipient email for this notification (always the CEO email today). */
   ceoEmail: string;
   subject: string;
