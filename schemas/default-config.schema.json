@@ -143,6 +143,20 @@
               }
             }
           }
+        },
+        "autonomy_scoring": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "intervalMs": { "type": "integer", "minimum": 1 },
+            "model": { "type": "string", "minLength": 1 },
+            "batchSize": { "type": "integer", "minimum": 1 },
+            "minScoredActions": { "type": "integer", "minimum": 1 },
+            "halfLifeDays": { "type": "integer", "minimum": 1 },
+            "weakExpiredWeight": { "type": "number", "minimum": 0, "maximum": 1 },
+            "ceoCooldownDays": { "type": "integer", "minimum": 0 },
+            "errorRateThreshold": { "type": "number", "minimum": 0, "maximum": 1 }
+          }
         }
       }
     },
