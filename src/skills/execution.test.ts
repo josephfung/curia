@@ -710,7 +710,7 @@ describe('approval trigger on gate block', () => {
     }
   });
 
-  it('falls back to existing error when taskEventId is missing', async () => {
+  it('falls back to existing error when taskEventId is missing (Gate B path)', async () => {
     const registry = new SkillRegistry();
     registry.register(makeRiskyManifest('send-email', 'medium'), makeHandler('no'));
 
@@ -725,6 +725,30 @@ describe('approval trigger on gate block', () => {
 
     // No taskEventId in options
     const result = await layer.invoke('send-email', {});
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error).toContain('set-autonomy');
+    }
+    expect(trigger.request).not.toHaveBeenCalled();
+  });
+
+  it('falls back to existing error when taskEventId is missing (Gate A path)', async () => {
+    // Gate A triggers when score < 60 and action_risk !== 'none'
+    const registry = new SkillRegistry();
+    registry.register(makeRiskyManifest('store-fact', 'low'), makeHandler('no'));
+
+    const trigger = makeApprovalTrigger({ created: true, shortRef: 'mem-1', notificationSent: true });
+    const mockBus = { publish: vi.fn().mockResolvedValue(undefined) } as unknown as EventBus;
+
+    const layer = new ExecutionLayer(registry, logger, {
+      autonomyService: makeAutonomyService(55), // below 60 — Gate A triggers
+      bus: mockBus,
+      approvalTrigger: trigger,
+    });
+
+    // No taskEventId — trigger should not be called
+    const result = await layer.invoke('store-fact', { label: 'test' });
 
     expect(result.success).toBe(false);
     if (!result.success) {

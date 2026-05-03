@@ -358,6 +358,9 @@ export class ExecutionLayer {
               skillLogger.warn({ err, skillName }, 'autonomy gate: failed to publish autonomy.skill_blocked event');
             });
           }
+          // Note: `input` here is post-timestamp-normalization (mutated in-place above).
+          // The stored payload in autonomy_action_log will contain normalized timestamps,
+          // which is correct — re-normalization on approve-action re-invocation is a no-op.
           const gateAError = await this.buildGateError(
             skillName, input, currentScore, 60, manifest.action_risk, options, skillLogger,
           );
@@ -386,6 +389,7 @@ export class ExecutionLayer {
               skillLogger.warn({ err, skillName }, 'autonomy gate: failed to publish autonomy.skill_blocked event');
             });
           }
+          // Note: same post-normalization `input` as Gate A — see comment above.
           const gateBError = await this.buildGateError(
             skillName, input, currentScore, requiredScore, manifest.action_risk, options, skillLogger,
           );
