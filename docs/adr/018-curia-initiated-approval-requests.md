@@ -108,9 +108,18 @@ all blocked non-`none` action_risk skills.
    c. Notify the CEO via the most appropriate available channel (Signal
       preferred for immediacy; email as fallback). The notification includes
       the skill name, a human-readable description of what Curia wanted to
-      do, and how to approve or dismiss.
+      do, and how to approve or dismiss. If the notification fails (channel
+      unavailable, API error), set `notification_sent_at` to null and log a
+      warning. The `pending_approval` row still exists — it will appear in
+      the pending-actions digest (see step 7) and in `list-pending-actions`
+      results, so the CEO can still discover and act on it. The coordinator's
+      response should reflect whether notification succeeded ("approval
+      requested — CEO notified") or failed ("approval requested — but
+      notification could not be delivered; CEO will see it in the next
+      digest").
    d. Return the existing advisory failure to the coordinator, augmented with
-      a note that an approval request has been sent.
+      a note that an approval request has been sent (or that notification
+      failed — see 3c).
 
    Deduplication: if a `pending_approval` row already exists for the same
    skill name within the same `task_id`, no duplicate request is created. The
@@ -144,10 +153,20 @@ all blocked non-`none` action_risk skills.
    `outcome = 'resolved_externally'`. This prevents orphaned pending requests
    without requiring the CEO to lie about approving or denying.
 
-7. **Expiry.** A background sweep (scheduler job or startup check) transitions
-   `pending_approval` rows past their `expires_at` to `outcome = 'expired'`,
-   sets `resolved_by = 'system'`. No notification on expiry — the absence of
-   CEO response is the signal.
+7. **Expiry and digest.** A background sweep (scheduler job or startup check)
+   transitions `pending_approval` rows past their `expires_at` to
+   `outcome = 'expired'`, sets `resolved_by = 'system'`.
+
+   For `high` and `critical` action_risk tiers, an expiry notification is
+   sent to the CEO ("Curia wanted to create a calendar event but the request
+   expired without a response"). For lower tiers, expiry is silent — the
+   volume at low scores would be noisy.
+
+   Separately, a daily digest (scheduler job) surfaces any `pending_approval`
+   rows that are still open, regardless of tier. This is the safety net for
+   notification failures (step 3c): even if the original notification didn't
+   reach the CEO, the digest will. The digest also reminds the CEO of
+   requests they may have seen but not yet acted on.
 
 8. **Autonomy scoring signals.** Phase 3 (issue #148) consumes approval
    outcomes as first-class signals:
