@@ -73,6 +73,7 @@ import { bootstrapAgentIdentity } from './entity-context/bootstrap.js';
 import { bootstrapCeoContact } from './contacts/ceo-bootstrap.js';
 import { AutonomyService } from './autonomy/autonomy-service.js';
 import { ActionLogRepo } from './autonomy/action-log-repo.js';
+import { ApprovalTriggerService } from './autonomy/approval-trigger.js';
 import { AutonomyScoringPass } from './autonomy/scoring-pass.js';
 import type { ScoringPassConfig } from './autonomy/scoring-pass.js';
 import { BrowserService } from './browser/browser-service.js';
@@ -842,11 +843,17 @@ async function main(): Promise<void> {
 
   const scheduler = new Scheduler({ pool, bus, logger, schedulerService, driftDetector, dreamEngine });
 
+  // Approval trigger — creates pending_approval rows and notifies CEO
+  // when autonomy gates block a skill. See ADR-018 and issue #427.
+  const approvalTrigger = outboundGateway
+    ? new ApprovalTriggerService(actionLogRepo, outboundGateway, logger, config.ceoPrimaryEmail || undefined)
+    : undefined;
+
   // Execution layer — services wired here are injected per-skill based on their
   // capability-gated declarations. outboundGateway gives email skills their send path.
   // entityContextAssembler enables entity_enrichment pre-enrichment and the
   // entity-context skill. agentContactId enables entity_enrichment default='agent'.
-  const executionLayer = new ExecutionLayer(skillRegistry, logger, { bus, agentRegistry, contactService, outboundGateway, heldMessages, schedulerService, entityMemory, agentPersona, nylasCalendarClient, entityContextAssembler, agentContactId: agentIdentityContactId, autonomyService, executiveProfileService, browserService, bullpenService, timezone: config.timezone, skillOutputMaxLength: yamlConfig.skillOutput?.maxLength });
+  const executionLayer = new ExecutionLayer(skillRegistry, logger, { bus, agentRegistry, contactService, outboundGateway, heldMessages, schedulerService, entityMemory, agentPersona, nylasCalendarClient, entityContextAssembler, agentContactId: agentIdentityContactId, autonomyService, executiveProfileService, browserService, bullpenService, approvalTrigger, timezone: config.timezone, skillOutputMaxLength: yamlConfig.skillOutput?.maxLength });
 
   // Two-pass agent registration:
   // Pass 1: Register all agents in the registry so specialistSummary() is complete
