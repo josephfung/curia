@@ -37,6 +37,7 @@ import type { EntityContextAssembler } from '../entity-context/assembler.js';
 import { AutonomyService } from '../autonomy/autonomy-service.js';
 import type { AutonomyConfig } from '../autonomy/autonomy-service.js';
 import type { BrowserService } from '../browser/browser-service.js';
+import type { ApprovalTriggerService } from '../autonomy/approval-trigger.js';
 
 // Default max output length — used when no value is configured in default.yaml.
 // Skills returning more than this will have their output truncated before it
@@ -52,6 +53,11 @@ export interface InvokeOptions {
   /** Task-level metadata forwarded from the agent.task event payload.
    *  Used by skill handlers to inspect task-wide signals (e.g. observationMode). */
   taskMetadata?: Record<string, unknown>;
+  /** When true, autonomy gates (A and B) are skipped — the skill runs as if the
+   *  score were sufficient. Only the approve-action skill (#428) should set this.
+   *  All other checks (elevated-skill gate, content filter, blocked-contact) still run.
+   *  See ADR-018. */
+  humanApproved?: boolean;
 }
 
 export class ExecutionLayer {
@@ -71,6 +77,7 @@ export class ExecutionLayer {
   private executiveProfileService?: import('../executive/service.js').ExecutiveProfileService;
   private browserService?: BrowserService;
   private bullpenService?: import('../memory/bullpen.js').BullpenService;
+  private approvalTrigger?: ApprovalTriggerService;
   /** The agent's own contactId — injected into ctx.agentContactId for entity_enrichment default='agent' */
   private agentContactId?: string;
   /** IANA timezone name used for normalizing offset-less timestamp inputs from the LLM. */
@@ -93,6 +100,7 @@ export class ExecutionLayer {
     executiveProfileService?: import('../executive/service.js').ExecutiveProfileService;
     browserService?: BrowserService;
     bullpenService?: import('../memory/bullpen.js').BullpenService;
+    approvalTrigger?: ApprovalTriggerService;
     agentContactId?: string;
     timezone?: string;
     skillOutputMaxLength?: number;
@@ -113,6 +121,7 @@ export class ExecutionLayer {
     this.executiveProfileService = options?.executiveProfileService;
     this.browserService = options?.browserService;
     this.bullpenService = options?.bullpenService;
+    this.approvalTrigger = options?.approvalTrigger;
     this.agentContactId = options?.agentContactId;
     this.timezone = options?.timezone ?? 'UTC';
     this.skillOutputMaxLength = options?.skillOutputMaxLength ?? DEFAULT_SKILL_OUTPUT_MAX_LENGTH;
@@ -146,6 +155,67 @@ export class ExecutionLayer {
    */
   setAgentContactId(contactId: string): void {
     this.agentContactId = contactId;
+  }
+
+  /**
+   * Build the advisory error message for a gate block, optionally triggering
+   * an approval request via ApprovalTriggerService.
+   *
+   * When the trigger is wired and taskEventId is available, creates a
+   * pending_approval row and enriches the error with the approval status.
+   * Otherwise, returns the existing error message unchanged (fail-open).
+   */
+  private async buildGateError(
+    skillName: string,
+    input: Record<string, unknown>,
+    currentScore: number,
+    requiredScore: number,
+    actionRisk: string | number,
+    options: InvokeOptions | undefined,
+    skillLogger: Logger,
+  ): Promise<string> {
+    const baseMsg =
+      `Skill '${skillName}' blocked — autonomy score is ${currentScore}, ` +
+      `but this skill (action_risk: ${String(actionRisk)}) requires ${requiredScore}. `;
+
+    // Approval trigger — only if wired and task context is available.
+    if (this.approvalTrigger && options?.taskEventId) {
+      try {
+        const result = await this.approvalTrigger.request({
+          taskId: options.taskEventId,
+          conversationId: options.conversationId,
+          skillName,
+          actionRisk: String(actionRisk),
+          input,
+          currentScore,
+          requiredScore,
+        });
+        if (!result.created) {
+          return (
+            `Skill '${skillName}' blocked — an approval request for this action ` +
+            `is already pending (ref: ${result.existingShortRef}).`
+          );
+        }
+        if (result.notificationSent) {
+          return baseMsg + `An approval request has been sent to the CEO (ref: ${result.shortRef}).`;
+        }
+        return (
+          baseMsg +
+          `An approval request was created (ref: ${result.shortRef}) but ` +
+          `notification could not be delivered — the CEO will see it in the next digest.`
+        );
+      } catch (err) {
+        // Approval trigger failure should not change the gate behavior.
+        // The skill is still blocked; we just can't create the approval row.
+        skillLogger.warn(
+          { err, skillName },
+          'approval trigger failed — returning standard gate error',
+        );
+      }
+    }
+
+    // Fallback: no trigger, no taskEventId, or trigger failed
+    return baseMsg + `The CEO can raise the score with the set-autonomy skill.`;
   }
 
   /**
@@ -239,6 +309,15 @@ export class ExecutionLayer {
       }
     }
 
+    // Log every humanApproved invocation for operator traceability.
+    // The gate logic below is skipped when this flag is set.
+    if (options?.humanApproved) {
+      skillLogger.info(
+        { skillName, agentId: options.agentId },
+        'autonomy gates skipped — humanApproved flag set (CEO-authorized re-execution, see ADR-018)',
+      );
+    }
+
     // Autonomy gates — Phase 2 hard enforcement.
     // Elevated skills are exempt — they have their own, stricter access control
     // via CallerContext (sensitivity: 'elevated' gate above). Gating them on
@@ -246,7 +325,8 @@ export class ExecutionLayer {
     // but is the only way to raise the score.
     // Read the live score once per invocation. Fail-open if the service is not
     // wired or the config table doesn't exist yet (getConfig returns null).
-    if (this.autonomyService && manifest.sensitivity !== 'elevated') {
+    // humanApproved bypasses gates A and B — the skill runs as CEO-authorized.
+    if (this.autonomyService && manifest.sensitivity !== 'elevated' && !options?.humanApproved) {
       let autonomyConfig: AutonomyConfig | null = null;
       try {
         autonomyConfig = await this.autonomyService.getConfig();
@@ -278,13 +358,12 @@ export class ExecutionLayer {
               skillLogger.warn({ err, skillName }, 'autonomy gate: failed to publish autonomy.skill_blocked event');
             });
           }
+          const gateAError = await this.buildGateError(
+            skillName, input, currentScore, 60, manifest.action_risk, options, skillLogger,
+          );
           return {
             success: false,
-            error: this.wrapSkillError(
-              `Skill '${skillName}' blocked — autonomy score is ${currentScore} (restricted mode). ` +
-              `All non-read skills require a score of at least 60. ` +
-              `The CEO can raise the score with the set-autonomy skill.`,
-            ),
+            error: this.wrapSkillError(gateAError),
           };
         }
 
@@ -307,13 +386,12 @@ export class ExecutionLayer {
               skillLogger.warn({ err, skillName }, 'autonomy gate: failed to publish autonomy.skill_blocked event');
             });
           }
+          const gateBError = await this.buildGateError(
+            skillName, input, currentScore, requiredScore, manifest.action_risk, options, skillLogger,
+          );
           return {
             success: false,
-            error: this.wrapSkillError(
-              `Skill '${skillName}' blocked — autonomy score is ${currentScore}, ` +
-              `but this skill (action_risk: ${String(manifest.action_risk)}) requires ${requiredScore}. ` +
-              `The CEO can raise the score with the set-autonomy skill.`,
-            ),
+            error: this.wrapSkillError(gateBError),
           };
         }
       } else {
