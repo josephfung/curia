@@ -108,5 +108,93 @@ export class ApprovalTriggerService {
     private readonly ceoEmail?: string,
   ) {}
 
-  // request() is implemented in Task 4
+  /**
+   * Trigger an approval request when an autonomy gate blocks a skill.
+   *
+   * Steps:
+   *   1. Dedup — check for existing pending_approval row with same skill + payload in same task
+   *   2. Generate short_ref and description
+   *   3. Insert autonomy_action_log row
+   *   4. Notify CEO (best-effort — failure does not prevent row creation)
+   *
+   * Returns the result so the execution layer can enrich the advisory error message.
+   */
+  async request(opts: {
+    taskId: string;
+    conversationId?: string;
+    skillName: string;
+    actionRisk: string;
+    input: Record<string, unknown>;
+    currentScore: number;
+    requiredScore: number;
+  }): Promise<ApprovalRequestResult> {
+    const { taskId, conversationId, skillName, actionRisk, input, currentScore, requiredScore } = opts;
+
+    // Step 1: Dedup check
+    const existing = await this.actionLogRepo.findPendingByTaskAndSkill(taskId, skillName, input);
+    if (existing) {
+      this.logger.info(
+        { taskId, skillName, existingShortRef: existing.shortRef },
+        'approval-trigger: duplicate request — pending_approval row already exists',
+      );
+      return { created: false, reason: 'duplicate', existingShortRef: existing.shortRef ?? 'unknown' };
+    }
+
+    // Step 2: Generate short_ref and description
+    const counter = await this.actionLogRepo.countShortRefsForTask(taskId);
+    const shortRef = `${shortRefPrefix(skillName)}-${counter + 1}`;
+    const description = buildDescription(skillName, input);
+
+    // Step 3: Insert row
+    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24h from now
+    const rowId = await this.actionLogRepo.insert({
+      taskId,
+      conversationId,
+      skillName,
+      actionRisk,
+      outcome: 'pending_approval',
+      payload: input,
+      expiresAt,
+      shortRef,
+      description,
+    });
+
+    this.logger.info(
+      { rowId, taskId, skillName, shortRef, currentScore, requiredScore },
+      'approval-trigger: pending_approval row created',
+    );
+
+    // Step 4: Notify CEO (best-effort)
+    let notificationSent = false;
+    if (this.ceoEmail) {
+      try {
+        await this.outboundGateway.sendNotification({
+          notificationType: 'approval_requested',
+          ceoEmail: this.ceoEmail,
+          subject: `Approval needed — ${description}`,
+          body:
+            `Curia wanted to ${description.charAt(0).toLowerCase() + description.slice(1)}, ` +
+            `but the autonomy score (${currentScore}) is below the required threshold (${requiredScore}).\n\n` +
+            `Reference: ${shortRef}\n` +
+            `Expires: ${expiresAt.toISOString()}\n\n` +
+            `Reply to approve, deny, or dismiss this request.`,
+        });
+        await this.actionLogRepo.setNotificationSentAt(rowId);
+        notificationSent = true;
+        this.logger.info({ rowId, shortRef }, 'approval-trigger: CEO notification sent');
+      } catch (err) {
+        this.logger.warn(
+          { err, rowId, shortRef },
+          'approval-trigger: CEO notification failed — row exists, CEO will see it in digest',
+        );
+      }
+    } else {
+      this.logger.warn(
+        { rowId, shortRef },
+        'approval-trigger: ceoEmail not configured — skipping notification',
+      );
+    }
+
+    return { created: true, shortRef, notificationSent };
+  }
 }
