@@ -144,7 +144,7 @@ export class ActionLogRepo {
       [taskId, skillName, JSON.stringify(payload)],
     );
     if (result.rows.length === 0) return null;
-    return mapRow(result.rows[0] as Record<string, unknown>);
+    return mapRow(result.rows[0]);
   }
 
   /**
