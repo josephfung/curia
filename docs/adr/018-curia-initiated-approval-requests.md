@@ -1,4 +1,4 @@
-# ADR-018: Curia-initiated approval requests via unified action log
+# ADR-018: Curia-initiated approval requests via unified autonomy action log
 
 Date: 2026-05-03
 Status: Accepted
@@ -29,7 +29,7 @@ This gap shows up concretely at the default autonomy score (75):
   writes are silently blocked. At restricted mode, every non-read action
   should be surfaced for CEO decision.
 
-The planned `action_log` table (issue #148) records skill invocation outcomes
+The planned `autonomy_action_log` table (issue #148) records skill invocation outcomes
 for Phase 3 automatic score adjustment, but its current schema only covers
 post-execution states (`success`, `failure`, `rejected`). Approval decisions
 — which are high-signal indicators of trust — are not captured.
@@ -51,20 +51,20 @@ Problem: relies on LLM consistency for a system-critical flow. A coordinator
 that forgets to call the skill, or calls it inconsistently, creates the exact
 inconsistency this pattern is meant to prevent.
 
-**C. Unified `action_log` state machine.**
-Extend `action_log` (issue #148) to record all autonomy-relevant events —
+**C. Unified `autonomy_action_log` state machine.**
+Extend `autonomy_action_log` (issue #148) to record all autonomy-relevant events —
 blocking, pending approval, CEO decisions, and re-execution — instead of
-using a separate table. All approval lifecycle state lives in `action_log`
+using a separate table. All approval lifecycle state lives in `autonomy_action_log`
 rows, giving Phase 3 scoring a single source of truth.
 
 The chosen approach combines **A's gate-level trigger** (automatic, not
 coordinator-dependent) with **C's unified data model** (no separate table,
-everything in `action_log`), and extends A's scope to all non-`none`
+everything in `autonomy_action_log`), and extends A's scope to all non-`none`
 action_risk levels — not just medium+.
 
 ## Decision
 
-**A + C combined.** The `action_log` table (issue #148) becomes the single
+**A + C combined.** The `autonomy_action_log` table (issue #148) becomes the single
 source of truth for all autonomy-relevant events, including approval requests
 and their outcomes (from C). Approval requests are triggered automatically at
 the gate level for all blocked non-`none` action_risk skills (from A,
@@ -72,11 +72,11 @@ expanded to all tiers).
 
 **Pattern components:**
 
-1. **Unified `action_log` schema.** The `outcome` column expands from
+1. **Unified `autonomy_action_log` schema.** The `outcome` column expands from
    (`success`, `failure`, `rejected`) to include approval lifecycle states:
 
    - `pending_approval` — gate fired, CEO notified, awaiting decision
-   - `approved` — CEO approved; a separate `action_log` row records the
+   - `approved` — CEO approved; a separate `autonomy_action_log` row records the
      subsequent re-execution with outcome `success` or `failure`
    - `denied` — CEO explicitly declined
    - `expired` — no CEO response within the expiry window
@@ -88,7 +88,7 @@ expanded to all tiers).
    informational (e.g., a re-invocation attempt while an approval request for
    the same action is already pending).
 
-2. **Schema additions to `action_log`.** Beyond the fields in issue #148:
+2. **Schema additions to `autonomy_action_log`.** Beyond the fields in issue #148:
 
    - `payload JSONB` — serialized skill input for re-execution on approval.
      Null for non-approval rows.
@@ -99,7 +99,7 @@ expanded to all tiers).
    - `resolved_by TEXT` — `'ceo'`, `'system'` (expiry), or null.
    - `expires_at TIMESTAMPTZ` — when the pending request auto-expires. Null
      for non-approval rows.
-   - `parent_action_id BIGINT REFERENCES action_log(id)` — links the
+   - `parent_action_id BIGINT REFERENCES autonomy_action_log(id)` — links the
      re-execution row back to the `approved` row that authorized it.
    - `short_ref TEXT` — human-friendly reference for the pending request
      (e.g. `"cal-1"`, `"email-3"`). Generated at insert time from a
@@ -117,7 +117,7 @@ expanded to all tiers).
    action_risk != `none`, and no `pending_approval` row already exists for
    the same skill and input combination within the current task:
 
-   a. Write an `action_log` row with `outcome = 'pending_approval'`, the
+   a. Write an `autonomy_action_log` row with `outcome = 'pending_approval'`, the
       serialized skill input in `payload`, a generated `short_ref`, and a
       human-readable `description`.
    b. Compute `expires_at` (default: 24 hours from now; configurable per
@@ -165,7 +165,7 @@ expanded to all tiers).
    c. Re-executes the original skill with the stored `payload`, passing
       `humanApproved: true` to bypass the autonomy gates. See "Where
       `humanApproved` is enforced" below for details.
-   d. Writes a new `action_log` row for the re-execution, with
+   d. Writes a new `autonomy_action_log` row for the re-execution, with
       `parent_action_id` pointing to the approved row.
    e. Publishes a `human.decision` event (same shape as ADR-017) for the
       audit trail.
@@ -243,7 +243,7 @@ gate blocks → CEO approves → gate bypassed. Both flows converge on:
 
 - `humanApproved: true` on the execution layer and outbound gateway
 - `human.decision` audit events
-- `action_log` rows that feed Phase 3 scoring
+- `autonomy_action_log` rows that feed Phase 3 scoring
 
 The two ADRs are complementary halves of the same trust model.
 
@@ -259,17 +259,17 @@ pattern to all gated actions.
 is unchanged. What changes is the plumbing around it:
 
 - When the email adapter falls back to draft creation because the autonomy
-  gate blocked a direct send, it now also writes an `action_log` row with
+  gate blocked a direct send, it now also writes an `autonomy_action_log` row with
   `outcome = 'pending_approval'` alongside the Nylas draft.
 - When the CEO uses `send-draft` to approve that draft, the skill transitions
-  the corresponding `action_log` row to `approved` — capturing the decision
+  the corresponding `autonomy_action_log` row to `approved` — capturing the decision
   for Phase 3 scoring.
 - If the CEO sends the draft from Gmail directly (bypassing Curia), the
-  `action_log` row expires or is dismissed, same as any other pending action.
+  `autonomy_action_log` row expires or is dismissed, same as any other pending action.
 
 Email drafts remain the preferred fallback for email-specific blocks (they
 preserve rich formatting, threading, and CC lists better than a serialized
-`payload` field would). The `action_log` row written alongside ensures the
+`payload` field would). The `autonomy_action_log` row written alongside ensures the
 approval decision is captured for scoring regardless of the CEO's chosen
 send mechanism.
 
@@ -281,7 +281,7 @@ send mechanism.
   approval request flow when blocked. No per-skill opt-in, no manifest
   changes, no handler modifications.
 - Phase 3 scoring gets high-signal data (CEO approval decisions) without any
-  additional instrumentation — it's already in `action_log`.
+  additional instrumentation — it's already in `autonomy_action_log`.
 - Orphaned pending requests self-resolve via expiry. The `resolved_externally`
   status handles the "CEO did it outside Curia" case explicitly.
 - Single table to query for "what has Curia tried to do, what was blocked,
@@ -291,7 +291,7 @@ send mechanism.
 
 **Harder / accepted trade-offs:**
 
-- `action_log` is no longer a pure append-only log — rows transition through
+- `autonomy_action_log` is no longer a pure append-only log — rows transition through
   states (`pending_approval` → `approved`/`denied`/`expired`). This adds
   update operations to a table originally designed as insert-only. Mitigation:
   only approval-related rows are mutable; `success`/`failure`/`rejected` rows
@@ -300,7 +300,7 @@ send mechanism.
   reconstruct the same execution context. If the world state has changed
   between the original attempt and the approval (e.g., the meeting time
   Curia wanted to book is now taken), the re-execution may fail. This is
-  acceptable — the failure is logged as a normal `action_log` row with
+  acceptable — the failure is logged as a normal `autonomy_action_log` row with
   `outcome = 'failure'` and `parent_action_id` linking it to the approval.
 - CEO notification volume scales with how much Curia attempts at low scores.
   At restricted mode (< 60), every non-read skill triggers a notification.

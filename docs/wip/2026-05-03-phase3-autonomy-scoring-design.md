@@ -15,13 +15,13 @@ Commitment, and Compatibility — then nudges the autonomy score up or down
 based on a weighted composite, subject to guards that prevent runaway swings
 and respect CEO overrides.
 
-This issue also creates the `action_log` table, which serves as the
+This issue also creates the `autonomy_action_log` table, which serves as the
 foundation for the approval lifecycle (#427, #428, #429) and the scoring
 engine described here.
 
 **What this issue delivers:**
 
-1. `action_log` migration and TypeScript types (full ADR-018 schema)
+1. `autonomy_action_log` migration and TypeScript types (full ADR-018 schema)
 2. `AutonomyScoringPass` — LLM judge + deterministic scoring for approval outcomes
 3. Adjustment formula — delta-based, time-decay weighted, with guards
 4. DreamEngine integration as a sibling pass alongside memory decay
@@ -70,7 +70,7 @@ pass; a failed LLM call does not affect memory decay.
 
 ### Summary-based judge context (approach B)
 
-The LLM judge receives the `action_log` row plus a `task_summary` field — a
+The LLM judge receives the `autonomy_action_log` row plus a `task_summary` field — a
 human-readable description of what triggered the skill invocation. This
 provides enough context for the judge to assess whether the skill choice was
 appropriate without requiring full conversation transcript retrieval.
@@ -96,13 +96,13 @@ CEO comfortable visibility into the trend.
 
 ---
 
-## `action_log` Schema
+## `autonomy_action_log` Schema
 
-Migration 031 creates the `action_log` table. This is the foundation for the
+Migration 031 creates the `autonomy_action_log` table. This is the foundation for the
 approval lifecycle (#427/#428/#429) and Phase 3 scoring.
 
 ```sql
-CREATE TABLE action_log (
+CREATE TABLE autonomy_action_log (
   id                   BIGSERIAL PRIMARY KEY,
   task_id              TEXT NOT NULL,
   conversation_id      TEXT,
@@ -126,7 +126,7 @@ CREATE TABLE action_log (
   resolved_at          TIMESTAMPTZ,
   resolved_by          TEXT,
   expires_at           TIMESTAMPTZ,
-  parent_action_id     BIGINT REFERENCES action_log(id),
+  parent_action_id     BIGINT REFERENCES autonomy_action_log(id),
   short_ref            TEXT,
   description          TEXT,
 
@@ -134,27 +134,27 @@ CREATE TABLE action_log (
 );
 
 -- Index for the scoring pass: find unscored terminal rows
-CREATE INDEX idx_action_log_unscored
-  ON action_log (created_at)
+CREATE INDEX idx_autonomy_action_log_unscored
+  ON autonomy_action_log (created_at)
   WHERE scored_by IS NULL
     AND outcome IN ('success', 'failure', 'approved', 'denied', 'expired', 'resolved_externally');
 
 -- Index for the approval lifecycle (#427/#428/#429)
-CREATE INDEX idx_action_log_pending ON action_log (expires_at)
+CREATE INDEX idx_autonomy_action_log_pending ON autonomy_action_log (expires_at)
   WHERE outcome = 'pending_approval';
 
 -- Index for short_ref lookups (#428)
-CREATE INDEX idx_action_log_short_ref ON action_log (short_ref)
+CREATE INDEX idx_autonomy_action_log_short_ref ON autonomy_action_log (short_ref)
   WHERE short_ref IS NOT NULL;
 
 -- Index for conversation_id lookups (future approach C upgrade)
 -- TODO: conversation_id enables the judge to query the audit log for the full
 -- conversation transcript, replacing summary-based scoring with richer context.
-CREATE INDEX idx_action_log_conversation ON action_log (conversation_id)
+CREATE INDEX idx_autonomy_action_log_conversation ON autonomy_action_log (conversation_id)
   WHERE conversation_id IS NOT NULL;
 
 -- Index for task_id lookups (deduplication in #427)
-CREATE INDEX idx_action_log_task ON action_log (task_id);
+CREATE INDEX idx_autonomy_action_log_task ON autonomy_action_log (task_id);
 ```
 
 TypeScript types in `src/autonomy/action-log-types.ts` mirror the schema.
@@ -165,7 +165,7 @@ TypeScript types in `src/autonomy/action-log-types.ts` mirror the schema.
 
 ### What gets scored
 
-Terminal `action_log` rows where `scored_by IS NULL`:
+Terminal `autonomy_action_log` rows where `scored_by IS NULL`:
 
 - `success`, `failure` — require LLM judge call
 - `approved`, `denied`, `expired`, `resolved_externally` — deterministic scoring
@@ -199,7 +199,7 @@ flag is 0 (misaligned); the formula weights it less.
 
 ### LLM judge (for `success` and `failure` outcomes)
 
-The judge receives the `action_log` row fields:
+The judge receives the `autonomy_action_log` row fields:
 
 - `skill_name`, `action_risk`, `outcome`
 - `task_summary` — human-readable context for what triggered the invocation
@@ -228,7 +228,7 @@ capabilityScore =
   0.20 x weightedAvg(compatibility)
 ```
 
-Each dimension's weighted average is computed across all scored `action_log`
+Each dimension's weighted average is computed across all scored `autonomy_action_log`
 rows, with per-row weights determined by time-decay. NULL flags are excluded
 from that dimension's average — the row does not contribute to that dimension
 rather than dragging it toward zero.
@@ -343,7 +343,7 @@ The existing `get-autonomy` skill adds three fields to its response:
 - **`trend`**: `'improving'`, `'declining'`, or `'stable'` — derived from the
   last 2+ `autonomy_history` rows where `changed_by = 'system'`. If fewer
   than 2 system entries exist, trend is `null`
-- **`scoredActionCount`**: total `action_log` rows where
+- **`scoredActionCount`**: total `autonomy_action_log` rows where
   `scored_by IS NOT NULL` — shows how much data feeds the formula and how
   close to the 30-action minimum
 
