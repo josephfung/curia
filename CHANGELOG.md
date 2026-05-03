@@ -14,6 +14,17 @@ bus event types) are noted explicitly even in the `0.x` range.
 ## [Unreleased]
 
 ### Added
+
+- **Autonomy Phase 3 scoring foundation** — `autonomy_action_log` table (migration 031) records skill invocations and outcomes, serving as the foundation for automatic score adjustment and the approval lifecycle (ADR-018). TypeScript types and repo in `src/autonomy/`. (spec 14, issue #148)
+- **Automatic autonomy score adjustment** — daily `AutonomyScoringPass` runs as a DreamEngine sibling pass. Scores completed actions on Competence/Commitment/Compatibility (deterministic for approval outcomes, LLM judge for success/failure), computes a time-decay-weighted capability score, and nudges the autonomy score ±5 via a delta formula. Guards: 30-action minimum, CEO cooldown (7 days), error rate threshold (20%). (spec 14, issue #148)
+- **`get-autonomy` trend surfacing** — skill now reports `lastSetBy` (CEO or system), trend direction (improving/declining/stable), and scored action count. (spec 14, issue #148)
+
+### Changed
+
+- **`autonomy_action_log` table name** — renamed from `action_log` to `autonomy_action_log` for schema clarity. The `autonomy_` prefix groups it with `autonomy_config` and `autonomy_history`. Updated in ADR-018, issues #427/#428/#429. (spec 14, issue #148)
+- **DreamEngine** — now accepts an optional `AutonomyScoringPass` as a sibling pass, running on its own interval alongside memory decay. (spec 14, issue #148)
+
+### Added
 - **ADR-018: Curia-initiated approval requests** — documents the pattern for autonomy-gated skills to request CEO permission via the unified `action_log` state machine, complementing the CEO-initiated pattern in ADR-017.
 
 ### Fixed
