@@ -50,7 +50,7 @@ CREATE TABLE autonomy_action_log (
 CREATE INDEX idx_aal_unscored
   ON autonomy_action_log (created_at)
   WHERE scored_by IS NULL
-    AND outcome IN ('success', 'failure', 'approved', 'denied', 'expired', 'resolved_externally');
+    AND outcome IN ('success', 'failure', 'rejected', 'approved', 'denied', 'expired', 'resolved_externally');
 
 -- Approval lifecycle (#427/#428/#429): find pending rows by expiry
 CREATE INDEX idx_aal_pending ON autonomy_action_log (expires_at)

@@ -825,6 +825,7 @@ async function main(): Promise<void> {
   // Runs as a sibling DreamEngine pass alongside memory decay.
   const actionLogRepo = new ActionLogRepo(pool, logger);
   const scoringPassConfig: ScoringPassConfig = {
+    intervalMs: yamlConfig.dreaming?.autonomy_scoring?.intervalMs ?? 86_400_000,  // default: daily
     model: yamlConfig.dreaming?.autonomy_scoring?.model ?? 'claude-haiku-4-5',
     batchSize: yamlConfig.dreaming?.autonomy_scoring?.batchSize ?? 50,
     minScoredActions: yamlConfig.dreaming?.autonomy_scoring?.minScoredActions ?? 30,

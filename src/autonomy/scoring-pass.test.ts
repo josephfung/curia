@@ -83,6 +83,7 @@ function makeLlmProvider(competence: 0 | 1 = 1, commitment: 0 | 1 = 1, compatibi
 }
 
 const defaultConfig = {
+  intervalMs: 86_400_000,
   model: 'claude-haiku-4-5',
   batchSize: 50,
   minScoredActions: 30,
