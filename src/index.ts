@@ -72,6 +72,9 @@ import { EntityContextAssembler } from './entity-context/assembler.js';
 import { bootstrapAgentIdentity } from './entity-context/bootstrap.js';
 import { bootstrapCeoContact } from './contacts/ceo-bootstrap.js';
 import { AutonomyService } from './autonomy/autonomy-service.js';
+import { ActionLogRepo } from './autonomy/action-log-repo.js';
+import { AutonomyScoringPass } from './autonomy/scoring-pass.js';
+import type { ScoringPassConfig } from './autonomy/scoring-pass.js';
 import { BrowserService } from './browser/browser-service.js';
 import { OfficeIdentityService } from './identity/service.js';
 import { ExecutiveProfileService } from './executive/service.js';
@@ -818,7 +821,22 @@ async function main(): Promise<void> {
       fast_decay: yamlConfig.dreaming?.decay?.halfLifeDays?.fast_decay ?? 21,
     },
   };
-  const dreamEngine = new DreamEngine(pool, bus, logger, decayConfig);
+  // Autonomy scoring pass — Phase 3 automatic score adjustment (issue #148).
+  // Runs as a sibling DreamEngine pass alongside memory decay.
+  const actionLogRepo = new ActionLogRepo(pool, logger);
+  const scoringPassConfig: ScoringPassConfig = {
+    model: yamlConfig.dreaming?.autonomy_scoring?.model ?? 'claude-haiku-4-5',
+    batchSize: yamlConfig.dreaming?.autonomy_scoring?.batchSize ?? 50,
+    minScoredActions: yamlConfig.dreaming?.autonomy_scoring?.minScoredActions ?? 30,
+    halfLifeDays: yamlConfig.dreaming?.autonomy_scoring?.halfLifeDays ?? 30,
+    weakExpiredWeight: yamlConfig.dreaming?.autonomy_scoring?.weakExpiredWeight ?? 0.3,
+    ceoCooldownDays: yamlConfig.dreaming?.autonomy_scoring?.ceoCooldownDays ?? 7,
+    errorRateThreshold: yamlConfig.dreaming?.autonomy_scoring?.errorRateThreshold ?? 0.20,
+  };
+  const scoringPass = new AutonomyScoringPass(actionLogRepo, autonomyService, llmProvider, logger, scoringPassConfig);
+  logger.info({ scoringPassConfig }, 'AutonomyScoringPass configured');
+
+  const dreamEngine = new DreamEngine(pool, bus, logger, decayConfig, scoringPass);
   logger.info({ decayConfig }, 'DreamEngine configured');
 
   const scheduler = new Scheduler({ pool, bus, logger, schedulerService, driftDetector, dreamEngine });
