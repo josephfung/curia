@@ -13,6 +13,9 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Fixed
+- **Test fixture naming** — replaced `nathan@curia.com` / `Nathan` references in `message-converter.test.ts` with `curia@example.com` / `Curia` to comply with instance-name hygiene rule.
+
 ### Changed
 - **Held-message notifications** — coordinator now describes the nature of the sender's request (not just subject/sender). Preview is 500-char plaintext with `totalLength` so the LLM can qualify partial reads. Channel name is now dynamic (email, Signal, etc.) instead of hardcoded.
 

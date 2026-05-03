@@ -13,7 +13,7 @@ function mockMessage(overrides?: Partial<NylasMessage>): NylasMessage {
     threadId: 'thread-1',
     subject: 'Test Subject',
     from: [{ email: 'sender@example.com', name: 'Sender' }],
-    to: [{ email: 'nathan@curia.com', name: 'Test Agent' }],
+    to: [{ email: 'curia@example.com', name: 'Test Agent' }],
     cc: [],
     bcc: [],
     body: '<p>Hello world</p>',
@@ -169,11 +169,11 @@ describe('convertNylasMessage', () => {
 // ---------------------------------------------------------------------------
 
 describe('convertNylasMessage — curiaRole and primaryRecipientEmails', () => {
-  const SELF_EMAIL = 'nathan@curia.com';
+  const SELF_EMAIL = 'curia@example.com';
 
   it('sets curiaRole to "to" when selfEmail is in the To field', () => {
     const result = convertNylasMessage(
-      mockMessage({ to: [{ email: SELF_EMAIL, name: 'Nathan' }] }),
+      mockMessage({ to: [{ email: SELF_EMAIL, name: 'Curia' }] }),
       SELF_EMAIL,
     );
     expect(result.metadata.curiaRole).toBe('to');
@@ -181,7 +181,7 @@ describe('convertNylasMessage — curiaRole and primaryRecipientEmails', () => {
 
   it('sets primaryRecipientEmails to empty when only selfEmail is in To', () => {
     const result = convertNylasMessage(
-      mockMessage({ to: [{ email: SELF_EMAIL, name: 'Nathan' }] }),
+      mockMessage({ to: [{ email: SELF_EMAIL, name: 'Curia' }] }),
       SELF_EMAIL,
     );
     expect(result.metadata.primaryRecipientEmails).toEqual([]);
@@ -191,7 +191,7 @@ describe('convertNylasMessage — curiaRole and primaryRecipientEmails', () => {
     const result = convertNylasMessage(
       mockMessage({
         to: [{ email: 'nik@example.com', name: 'Nik' }],
-        cc: [{ email: SELF_EMAIL, name: 'Nathan' }],
+        cc: [{ email: SELF_EMAIL, name: 'Curia' }],
       }),
       SELF_EMAIL,
     );
@@ -205,7 +205,7 @@ describe('convertNylasMessage — curiaRole and primaryRecipientEmails', () => {
           { email: 'nik@example.com', name: 'Nik' },
           { email: 'alice@example.com', name: 'Alice' },
         ],
-        cc: [{ email: SELF_EMAIL, name: 'Nathan' }],
+        cc: [{ email: SELF_EMAIL, name: 'Curia' }],
       }),
       SELF_EMAIL,
     );
@@ -219,7 +219,7 @@ describe('convertNylasMessage — curiaRole and primaryRecipientEmails', () => {
     const result = convertNylasMessage(
       mockMessage({
         to: [
-          { email: SELF_EMAIL, name: 'Nathan' },
+          { email: SELF_EMAIL, name: 'Curia' },
           { email: 'nik@example.com', name: 'Nik' },
         ],
         cc: [],
@@ -234,9 +234,9 @@ describe('convertNylasMessage — curiaRole and primaryRecipientEmails', () => {
     const result = convertNylasMessage(
       mockMessage({
         to: [{ email: 'nik@example.com' }],
-        cc: [{ email: 'NATHAN@CURIA.COM' }],
+        cc: [{ email: 'CURIA@EXAMPLE.COM' }],
       }),
-      'nathan@curia.com',
+      'curia@example.com',
     );
     expect(result.metadata.curiaRole).toBe('cc');
   });
