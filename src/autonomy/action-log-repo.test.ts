@@ -104,4 +104,69 @@ describe('ActionLogRepo', () => {
       expect(rate).toBe(0);
     });
   });
+
+  describe('findPendingByTaskAndSkill', () => {
+    it('returns the matching pending row when one exists', async () => {
+      const now = new Date();
+      const { pool } = makePool([
+        {
+          id: 10, task_id: 't1', conversation_id: null, skill_name: 'calendar-create-event',
+          action_risk: 'high', outcome: 'pending_approval', task_summary: null,
+          competence_flag: null, commitment_flag: null, compatibility: null,
+          scored_by: null, payload: { title: 'Lunch' }, notification_sent_at: null,
+          resolved_at: null, resolved_by: null, expires_at: null,
+          parent_action_id: null, short_ref: 'cal-1', description: 'Create calendar event: Lunch',
+          created_at: now,
+        },
+      ]);
+      const repo = new ActionLogRepo(pool, createSilentLogger());
+      const row = await repo.findPendingByTaskAndSkill('t1', 'calendar-create-event', { title: 'Lunch' });
+      expect(row).not.toBeNull();
+      expect(row!.id).toBe(10);
+      expect(row!.shortRef).toBe('cal-1');
+    });
+
+    it('returns null when no matching row exists', async () => {
+      const { pool } = makePool([]);
+      const repo = new ActionLogRepo(pool, createSilentLogger());
+      const row = await repo.findPendingByTaskAndSkill('t1', 'calendar-create-event', { title: 'Lunch' });
+      expect(row).toBeNull();
+    });
+
+    it('uses JSONB equality for payload comparison', async () => {
+      const { pool, queries } = makePool([]);
+      const repo = new ActionLogRepo(pool, createSilentLogger());
+      await repo.findPendingByTaskAndSkill('t1', 'send-email', { to: 'a@b.com', subject: 'Hi' });
+      expect(queries[0]!.sql).toContain('payload::jsonb = $3::jsonb');
+      expect(queries[0]!.params[2]).toBe(JSON.stringify({ to: 'a@b.com', subject: 'Hi' }));
+    });
+  });
+
+  describe('countShortRefsForTask', () => {
+    it('returns the count of short_ref rows for a task', async () => {
+      const { pool } = makePool([{ count: '3' }]);
+      const repo = new ActionLogRepo(pool, createSilentLogger());
+      const count = await repo.countShortRefsForTask('t1');
+      expect(count).toBe(3);
+    });
+
+    it('returns 0 when no short_ref rows exist', async () => {
+      const { pool } = makePool([{ count: '0' }]);
+      const repo = new ActionLogRepo(pool, createSilentLogger());
+      const count = await repo.countShortRefsForTask('t1');
+      expect(count).toBe(0);
+    });
+  });
+
+  describe('setNotificationSentAt', () => {
+    it('updates the notification_sent_at column', async () => {
+      const { pool, queries } = makePool([], 1);
+      const repo = new ActionLogRepo(pool, createSilentLogger());
+      await repo.setNotificationSentAt(42);
+      expect(queries).toHaveLength(1);
+      expect(queries[0]!.sql).toContain('UPDATE autonomy_action_log');
+      expect(queries[0]!.sql).toContain('notification_sent_at');
+      expect(queries[0]!.params).toContain(42);
+    });
+  });
 });

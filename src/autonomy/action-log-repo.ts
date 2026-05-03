@@ -122,6 +122,60 @@ export class ActionLogRepo {
     );
     return result.rows.map(mapRow);
   }
+
+  /**
+   * Find a pending_approval row for the given task + skill + payload.
+   * Used by ApprovalTriggerService for deduplication — same skill with
+   * same input in the same task should not generate a duplicate request.
+   * Uses JSONB equality for key-order-independent payload comparison.
+   */
+  async findPendingByTaskAndSkill(
+    taskId: string,
+    skillName: string,
+    payload: Record<string, unknown>,
+  ): Promise<ActionLogRow | null> {
+    const result = await this.pool.query(
+      `SELECT * FROM autonomy_action_log
+       WHERE task_id = $1
+         AND skill_name = $2
+         AND outcome = 'pending_approval'
+         AND payload::jsonb = $3::jsonb
+       LIMIT 1`,
+      [taskId, skillName, JSON.stringify(payload)],
+    );
+    if (result.rows.length === 0) return null;
+    return mapRow(result.rows[0] as Record<string, unknown>);
+  }
+
+  /**
+   * Count rows with a non-null short_ref for this task.
+   * Used by ApprovalTriggerService to generate sequential short_ref
+   * counters (e.g. cal-1, email-2).
+   */
+  async countShortRefsForTask(taskId: string): Promise<number> {
+    const result = await this.pool.query<{ count: string }>(
+      `SELECT COUNT(*) AS count FROM autonomy_action_log
+       WHERE task_id = $1
+         AND short_ref IS NOT NULL`,
+      [taskId],
+    );
+    return parseInt(result.rows[0]!.count, 10);
+  }
+
+  /**
+   * Mark that the CEO notification was successfully delivered.
+   * Called after a successful sendNotification(). If notification fails,
+   * this is never called — notification_sent_at stays null.
+   */
+  async setNotificationSentAt(id: number): Promise<void> {
+    await this.pool.query(
+      `UPDATE autonomy_action_log
+       SET notification_sent_at = now()
+       WHERE id = $1`,
+      [id],
+    );
+    this.logger.debug({ id }, 'action-log-repo: notification_sent_at updated');
+  }
 }
 
 /** Map a snake_case DB row to a camelCase ActionLogRow. */
