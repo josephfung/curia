@@ -142,11 +142,14 @@ describe('ApprovalTriggerService.request()', () => {
     expect(repo.insert).toHaveBeenCalledOnce();
     expect(repo.setNotificationSentAt).toHaveBeenCalledWith(1);
     expect(gateway.sendNotification).toHaveBeenCalledOnce();
-    // Verify notification payload
+    // Verify notification payload — type, recipient, subject, and required body fields
     const notifPayload = (gateway.sendNotification as ReturnType<typeof vi.fn>).mock.calls[0]![0];
     expect(notifPayload.notificationType).toBe('approval_requested');
     expect(notifPayload.ceoEmail).toBe('ceo@example.com');
     expect(notifPayload.subject).toContain('Approval needed');
+    expect(notifPayload.body).toContain('cal-1');           // short_ref
+    expect(notifPayload.body).toMatch(/Expires:/);          // expiry line
+    expect(notifPayload.body).toContain('Reply to approve'); // call to action
   });
 
   it('returns duplicate when matching pending row exists', async () => {
