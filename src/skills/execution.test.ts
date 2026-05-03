@@ -17,6 +17,7 @@ import type { EventBus } from '../bus/bus.js';
 import type { OutboundGateway } from './outbound-gateway.js';
 import type { SchedulerService } from '../scheduler/scheduler-service.js';
 import type { AutonomyService, AutonomyConfig } from '../autonomy/autonomy-service.js';
+import type { ApprovalTriggerService, ApprovalRequestResult } from '../autonomy/approval-trigger.js';
 
 const logger = pino({ level: 'silent' });
 
@@ -426,7 +427,9 @@ describe('autonomy gates', () => {
 
     expect(result.success).toBe(false);
     if (!result.success) {
-      expect(result.error).toContain('restricted');
+      // Gate A now uses buildGateError — message includes score and set-autonomy reference
+      expect(result.error).toContain('55');
+      expect(result.error).toContain('set-autonomy');
     }
     expect(handler.execute).not.toHaveBeenCalled();
   });
@@ -526,5 +529,207 @@ describe('autonomy gates', () => {
     const result = await layer.invoke('send-email', {});
 
     expect(result.success).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// humanApproved bypass tests
+// ---------------------------------------------------------------------------
+
+describe('humanApproved on InvokeOptions', () => {
+  it('skips autonomy gates when humanApproved is true', async () => {
+    const registry = new SkillRegistry();
+    const handler = makeHandler('approved result');
+    registry.register(makeRiskyManifest('calendar-create-event', 'high'), handler);
+
+    const layer = new ExecutionLayer(registry, logger, {
+      autonomyService: makeAutonomyService(65), // well below any threshold
+    });
+
+    const result = await layer.invoke('calendar-create-event', {}, undefined, {
+      humanApproved: true,
+    });
+
+    expect(result.success).toBe(true);
+    expect(handler.execute).toHaveBeenCalledOnce();
+  });
+
+  it('still enforces elevated-skill gate when humanApproved is true', async () => {
+    const registry = new SkillRegistry();
+    const handler = makeHandler('should not run');
+    // Make a manifest with sensitivity: 'elevated' — the elevated gate is NOT bypassed
+    const manifest: SkillManifest = {
+      ...makeRiskyManifest('approve-action', 'high'),
+      sensitivity: 'elevated',
+    };
+    registry.register(manifest, handler);
+
+    const layer = new ExecutionLayer(registry, logger, {
+      autonomyService: makeAutonomyService(65),
+    });
+
+    // humanApproved but no CEO caller context — elevated gate should still block
+    const result = await layer.invoke('approve-action', {}, undefined, {
+      humanApproved: true,
+    });
+
+    expect(result.success).toBe(false);
+    expect(handler.execute).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Approval trigger on gate block tests
+// ---------------------------------------------------------------------------
+
+function makeApprovalTrigger(result: ApprovalRequestResult): ApprovalTriggerService {
+  return {
+    request: vi.fn().mockResolvedValue(result),
+  } as unknown as ApprovalTriggerService;
+}
+
+describe('approval trigger on gate block', () => {
+  it('Gate B calls trigger and enriches error with shortRef when notification sent', async () => {
+    const registry = new SkillRegistry();
+    registry.register(makeRiskyManifest('send-email', 'medium'), makeHandler('no'));
+
+    const trigger = makeApprovalTrigger({ created: true, shortRef: 'email-1', notificationSent: true });
+    const mockBus = { publish: vi.fn().mockResolvedValue(undefined) } as unknown as EventBus;
+
+    const layer = new ExecutionLayer(registry, logger, {
+      autonomyService: makeAutonomyService(65),
+      bus: mockBus,
+      approvalTrigger: trigger,
+    });
+
+    const result = await layer.invoke('send-email', { to: 'a@b.com' }, undefined, {
+      taskEventId: 'task-1',
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error).toContain('email-1');
+      expect(result.error).toContain('approval request has been sent');
+    }
+    expect(trigger.request).toHaveBeenCalledOnce();
+  });
+
+  it('Gate A calls trigger and enriches error with shortRef', async () => {
+    const registry = new SkillRegistry();
+    registry.register(makeRiskyManifest('store-fact', 'low'), makeHandler('no'));
+
+    const trigger = makeApprovalTrigger({ created: true, shortRef: 'mem-1', notificationSent: true });
+    const mockBus = { publish: vi.fn().mockResolvedValue(undefined) } as unknown as EventBus;
+
+    const layer = new ExecutionLayer(registry, logger, {
+      autonomyService: makeAutonomyService(55), // triggers Gate A (< 60)
+      bus: mockBus,
+      approvalTrigger: trigger,
+    });
+
+    const result = await layer.invoke('store-fact', { label: 'test' }, undefined, {
+      taskEventId: 'task-1',
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error).toContain('mem-1');
+      expect(result.error).toContain('approval request has been sent');
+    }
+    expect(trigger.request).toHaveBeenCalledOnce();
+  });
+
+  it('returns duplicate message when trigger finds existing pending row', async () => {
+    const registry = new SkillRegistry();
+    registry.register(makeRiskyManifest('send-email', 'medium'), makeHandler('no'));
+
+    const trigger = makeApprovalTrigger({ created: false, reason: 'duplicate', existingShortRef: 'email-1' });
+    const mockBus = { publish: vi.fn().mockResolvedValue(undefined) } as unknown as EventBus;
+
+    const layer = new ExecutionLayer(registry, logger, {
+      autonomyService: makeAutonomyService(65),
+      bus: mockBus,
+      approvalTrigger: trigger,
+    });
+
+    const result = await layer.invoke('send-email', { to: 'a@b.com' }, undefined, {
+      taskEventId: 'task-1',
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error).toContain('already pending');
+      expect(result.error).toContain('email-1');
+    }
+  });
+
+  it('includes notification failure note when notificationSent is false', async () => {
+    const registry = new SkillRegistry();
+    registry.register(makeRiskyManifest('send-email', 'medium'), makeHandler('no'));
+
+    const trigger = makeApprovalTrigger({ created: true, shortRef: 'email-1', notificationSent: false });
+    const mockBus = { publish: vi.fn().mockResolvedValue(undefined) } as unknown as EventBus;
+
+    const layer = new ExecutionLayer(registry, logger, {
+      autonomyService: makeAutonomyService(65),
+      bus: mockBus,
+      approvalTrigger: trigger,
+    });
+
+    const result = await layer.invoke('send-email', {}, undefined, {
+      taskEventId: 'task-1',
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error).toContain('notification could not be delivered');
+    }
+  });
+
+  it('falls back to existing error when trigger is not wired', async () => {
+    const registry = new SkillRegistry();
+    registry.register(makeRiskyManifest('send-email', 'medium'), makeHandler('no'));
+
+    const mockBus = { publish: vi.fn().mockResolvedValue(undefined) } as unknown as EventBus;
+
+    const layer = new ExecutionLayer(registry, logger, {
+      autonomyService: makeAutonomyService(65),
+      bus: mockBus,
+      // No approvalTrigger
+    });
+
+    const result = await layer.invoke('send-email', {}, undefined, {
+      taskEventId: 'task-1',
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      // Original message — no approval ref
+      expect(result.error).toContain('set-autonomy');
+      expect(result.error).not.toContain('approval request');
+    }
+  });
+
+  it('falls back to existing error when taskEventId is missing', async () => {
+    const registry = new SkillRegistry();
+    registry.register(makeRiskyManifest('send-email', 'medium'), makeHandler('no'));
+
+    const trigger = makeApprovalTrigger({ created: true, shortRef: 'email-1', notificationSent: true });
+    const mockBus = { publish: vi.fn().mockResolvedValue(undefined) } as unknown as EventBus;
+
+    const layer = new ExecutionLayer(registry, logger, {
+      autonomyService: makeAutonomyService(65),
+      bus: mockBus,
+      approvalTrigger: trigger,
+    });
+
+    // No taskEventId in options
+    const result = await layer.invoke('send-email', {});
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error).toContain('set-autonomy');
+    }
+    expect(trigger.request).not.toHaveBeenCalled();
   });
 });
