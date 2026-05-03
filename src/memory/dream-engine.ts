@@ -43,6 +43,11 @@ export class DreamEngine {
   private intervalHandle: ReturnType<typeof setInterval> | null = null;
   private scoringIntervalHandle: ReturnType<typeof setInterval> | null = null;
   private scoringPass?: AutonomyScoringPass;
+  // Guard flag: prevents a new scoring pass from starting while the previous one
+  // is still awaiting LLM responses. Without this, a slow judge call (e.g. rate
+  // limit backoff) could let two passes read the same unscored rows concurrently,
+  // wasting LLM spend and applying the adjustment formula twice.
+  private scoringPassInFlight = false;
 
   // _bus is accepted but not stored — it is reserved for the decay warning pass
   // (#280) which will emit `memory.decay_warning` before archiving important nodes.
@@ -70,9 +75,21 @@ export class DreamEngine {
 
     if (this.scoringPass) {
       this.scoringIntervalHandle = setInterval(() => {
-        this.scoringPass!.run().catch((err) => {
-          this.logger.error({ err }, 'DreamEngine: unhandled error in AutonomyScoringPass');
-        });
+        // Skip this tick if the previous scoring run is still in flight.
+        // setInterval fires again regardless of whether the previous callback has
+        // resolved; skipping prevents concurrent runs from judging the same rows.
+        if (this.scoringPassInFlight) {
+          this.logger.warn('DreamEngine: skipping AutonomyScoringPass tick — previous run still in flight');
+          return;
+        }
+        this.scoringPassInFlight = true;
+        this.scoringPass!.run()
+          .catch((err) => {
+            this.logger.error({ err }, 'DreamEngine: unhandled error in AutonomyScoringPass');
+          })
+          .finally(() => {
+            this.scoringPassInFlight = false;
+          });
       }, this.scoringPass.intervalMs);  // ← use scoring-specific interval, not decay interval
     }
 

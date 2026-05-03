@@ -149,6 +149,7 @@ describe('DreamEngine with AutonomyScoringPass', () => {
     vi.useFakeTimers();
     const { pool } = makePool();
     const mockScoringPass = {
+      intervalMs: 86_400_000,  // daily — matches what DreamEngine reads to schedule the interval
       run: vi.fn().mockResolvedValue({ rowsScored: 0, adjustmentApplied: false }),
     };
     const engine = new DreamEngine(pool, makeBus(), createSilentLogger(), defaultConfig, mockScoringPass as unknown as AutonomyScoringPass);
@@ -175,6 +176,7 @@ describe('DreamEngine with AutonomyScoringPass', () => {
     vi.useFakeTimers();
     const { pool } = makePool();
     const mockScoringPass = {
+      intervalMs: 86_400_000,  // daily — must be present so DreamEngine.start() gets a valid delay
       run: vi.fn().mockRejectedValue(new Error('judge exploded')),
     };
     const engine = new DreamEngine(pool, makeBus(), createSilentLogger(), defaultConfig, mockScoringPass as unknown as AutonomyScoringPass);

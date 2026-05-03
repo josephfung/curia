@@ -18,27 +18,22 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Autonomy Phase 3 scoring foundation** — `autonomy_action_log` table (migration 031) records skill invocations and outcomes, serving as the foundation for automatic score adjustment and the approval lifecycle (ADR-018). TypeScript types and repo in `src/autonomy/`. (spec 14, issue #148)
 - **Automatic autonomy score adjustment** — daily `AutonomyScoringPass` runs as a DreamEngine sibling pass. Scores completed actions on Competence/Commitment/Compatibility (deterministic for approval outcomes, LLM judge for success/failure), computes a time-decay-weighted capability score, and nudges the autonomy score ±5 via a delta formula. Guards: 30-action minimum, CEO cooldown (7 days), error rate threshold (20%). (spec 14, issue #148)
 - **`get-autonomy` trend surfacing** — skill now reports `lastSetBy` (CEO or system), trend direction (improving/declining/stable), and scored action count. (spec 14, issue #148)
+- **ADR-018: Curia-initiated approval requests** — documents the pattern for autonomy-gated skills to request CEO permission via the unified `autonomy_action_log` state machine, complementing the CEO-initiated pattern in ADR-017.
 
 ### Changed
 
 - **`autonomy_action_log` table name** — renamed from `action_log` to `autonomy_action_log` for schema clarity. The `autonomy_` prefix groups it with `autonomy_config` and `autonomy_history`. Updated in ADR-018, issues #427/#428/#429. (spec 14, issue #148)
 - **DreamEngine** — now accepts an optional `AutonomyScoringPass` as a sibling pass, running on its own interval alongside memory decay. (spec 14, issue #148)
-
-### Added
-- **ADR-018: Curia-initiated approval requests** — documents the pattern for autonomy-gated skills to request CEO permission via the unified `action_log` state machine, complementing the CEO-initiated pattern in ADR-017.
-
-### Fixed
-- **Test fixture naming** — replaced `nathan@curia.com` / `Nathan` references in `message-converter.test.ts` with `curia@example.com` / `Curia` to comply with instance-name hygiene rule.
-
-### Changed
 - **Held-message notifications** — coordinator now describes the nature of the sender's request (not just subject/sender). Preview is 500-char plaintext with `totalLength` so the LLM can qualify partial reads. Channel name is now dynamic (email, Signal, etc.) instead of hardcoded.
 
-### Removed
-- **CLI held-message notification** — removed vestigial `[Held] Unknown sender...` terminal printout; the coordinator's proactive mention is the real notification path.
-
 ### Fixed
 
+- **Test fixture naming** — replaced `nathan@curia.com` / `Nathan` references in `message-converter.test.ts` with `curia@example.com` / `Curia` to comply with instance-name hygiene rule.
 - **Delegate @-prefix normalization** — LLMs sometimes pass agent names with a leading `@` (e.g. `@essay-editor` instead of `essay-editor`), causing registry lookup misses and lost timeout injection. The runtime now strips leading `@` from delegate agent names before registry lookup and handler dispatch.
+
+### Removed
+
+- **CLI held-message notification** — removed vestigial `[Held] Unknown sender...` terminal printout; the coordinator's proactive mention is the real notification path.
 
 ### Added
 

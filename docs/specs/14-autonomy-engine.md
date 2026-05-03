@@ -1,6 +1,6 @@
 # 14 — Autonomy Engine
 
-**Status:** Implemented (Phase 1 & 2)
+**Status:** Implemented (Phase 1, 2 & 3)
 
 ---
 
@@ -10,7 +10,7 @@ A single global autonomy score (0–100) governs how independently Curia operate
 
 **Phase 1 (implemented):** Score storage, CEO read/write skills, behavioral prompt injection.
 **Phase 2 (implemented):** Hard execution gates — skill invocations blocked when score is below the skill's declared `action_risk` floor.
-**Phase 3 (future):** Automatic score adjustment driven by a structured action log and a Competence / Commitment / Compatibility scoring formula.
+**Phase 3 (implemented):** Automatic score adjustment driven by a structured action log and a Competence / Commitment / Compatibility scoring formula. See `src/autonomy/` and issue #148.
 
 ---
 
@@ -230,9 +230,9 @@ The `OutboundGateway` (see [15-outbound-safety.md](15-outbound-safety.md)) is al
 
 ---
 
-## Phase 3: Automatic Score Adjustment (Future)
+## Phase 3: Automatic Score Adjustment
 
-Phase 3 will implement automatic score adjustment based on an action log, using a composite formula:
+Phase 3 implements automatic score adjustment based on `autonomy_action_log`, using a composite formula:
 
 ```
 Capability Score =
@@ -242,9 +242,13 @@ Capability Score =
 ```
 
 Key constraints:
-- Minimum 30 actions before any automatic adjustment
-- Time-decay weighting (recent actions weighted more heavily)
-- Score cannot increase if factual error rate is high or overconfidence penalty is active
+- Minimum 30 scored actions before any automatic adjustment fires
+- Time-decay weighting (recent actions weighted more heavily via exponential half-life)
+- Score cannot increase if competence error rate exceeds the configured threshold (default 20%)
+- CEO cooldown: no auto-adjustment for 7 days after a manual CEO `set-autonomy`
 - All automatic adjustments write to `autonomy_history` with `changed_by: "system"`
+- Delta capped at ±5 per daily pass; `get-autonomy` surfaces trend and scored action count
+
+See `src/autonomy/scoring-pass.ts`, `src/autonomy/action-log-repo.ts`, and ADR-018.
 
 The `autonomy_history` table from Phase 1 is the exact foundation Phase 3 writes to. Phase 3 gets its own design doc when the time comes. See `docs/wip/2026-04-03-autonomy-engine.md` for the detailed Phase 3 roadmap.

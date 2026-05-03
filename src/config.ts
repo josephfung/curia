@@ -661,6 +661,9 @@ export function loadYamlConfig(configDir: string): YamlConfig {
       if (autonomyScoring.intervalMs !== undefined && (!Number.isInteger(autonomyScoring.intervalMs) || autonomyScoring.intervalMs <= 0)) {
         throw new Error(`dreaming.autonomy_scoring.intervalMs must be a positive integer, got: ${autonomyScoring.intervalMs}`);
       }
+      if (autonomyScoring.model !== undefined && (typeof autonomyScoring.model !== 'string' || autonomyScoring.model.trim().length === 0)) {
+        throw new Error(`dreaming.autonomy_scoring.model must be a non-empty string, got: ${String(autonomyScoring.model)}`);
+      }
       if (autonomyScoring.batchSize !== undefined && (!Number.isInteger(autonomyScoring.batchSize) || autonomyScoring.batchSize <= 0)) {
         throw new Error(`dreaming.autonomy_scoring.batchSize must be a positive integer, got: ${autonomyScoring.batchSize}`);
       }
