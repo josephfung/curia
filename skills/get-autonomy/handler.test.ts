@@ -2,8 +2,21 @@
 // Verifies that lastSetBy, trend, and scoredActionCount are returned in the response data.
 import { describe, it, expect, vi } from 'vitest';
 import { GetAutonomyHandler } from './handler.js';
-import type { SkillContext } from '../../src/skills/types.js';
+import type { SkillContext, SkillResult } from '../../src/skills/types.js';
 import { createSilentLogger } from '../../src/logger.js';
+
+// Expected shape of the data returned by get-autonomy (Phase 3 fields).
+type GetAutonomyData = {
+  lastSetBy: string;
+  scoredActionCount: number;
+  trend: 'improving' | 'declining' | 'stable' | null;
+};
+
+/** Extract and type the data payload from a successful get-autonomy result. */
+function getData(result: SkillResult): GetAutonomyData {
+  if (!result.success) throw new Error(`Expected successful get-autonomy result, got error: ${result.error}`);
+  return result.data as GetAutonomyData;
+}
 
 // Default service stubs — override per-test via makeCtx(serviceOverrides)
 const defaultService = {
@@ -37,7 +50,7 @@ describe('GetAutonomyHandler', () => {
     const result = await handler.execute(ctx);
     expect(result.success).toBe(true);
     // lastSetBy should reflect the most recent history entry's changedBy
-    expect((result as any).data.lastSetBy).toBe('system');
+    expect(getData(result).lastSetBy).toBe('system');
   });
 
   it('includes scoredActionCount in the response data', async () => {
@@ -45,7 +58,7 @@ describe('GetAutonomyHandler', () => {
     const handler = new GetAutonomyHandler();
     const result = await handler.execute(ctx);
     expect(result.success).toBe(true);
-    expect((result as any).data.scoredActionCount).toBe(47);
+    expect(getData(result).scoredActionCount).toBe(47);
   });
 
   it('reports trend as improving when last system score > previous system score', async () => {
@@ -59,7 +72,7 @@ describe('GetAutonomyHandler', () => {
     });
     const handler = new GetAutonomyHandler();
     const result = await handler.execute(ctx);
-    expect((result as any).data.trend).toBe('improving');
+    expect(getData(result).trend).toBe('improving');
   });
 
   it('reports trend as declining when last system score < previous system score', async () => {
@@ -72,7 +85,7 @@ describe('GetAutonomyHandler', () => {
     });
     const handler = new GetAutonomyHandler();
     const result = await handler.execute(ctx);
-    expect((result as any).data.trend).toBe('declining');
+    expect(getData(result).trend).toBe('declining');
   });
 
   it('reports trend as null when fewer than 2 system entries', async () => {
@@ -84,6 +97,6 @@ describe('GetAutonomyHandler', () => {
     });
     const handler = new GetAutonomyHandler();
     const result = await handler.execute(ctx);
-    expect((result as any).data.trend).toBeNull();
+    expect(getData(result).trend).toBeNull();
   });
 });
