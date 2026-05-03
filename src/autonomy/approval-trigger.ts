@@ -133,11 +133,19 @@ export class ApprovalTriggerService {
     // Step 1: Dedup check
     const existing = await this.actionLogRepo.findPendingByTaskAndSkill(taskId, skillName, input);
     if (existing) {
+      const existingShortRef = existing.shortRef ?? 'unknown';
+      if (!existing.shortRef) {
+        // A pending_approval row without a short_ref should not happen — flag it.
+        this.logger.warn(
+          { taskId, skillName },
+          'approval-trigger: existing pending_approval row has null short_ref — data inconsistency',
+        );
+      }
       this.logger.info(
-        { taskId, skillName, existingShortRef: existing.shortRef },
+        { taskId, skillName, existingShortRef },
         'approval-trigger: duplicate request — pending_approval row already exists',
       );
-      return { created: false, reason: 'duplicate', existingShortRef: existing.shortRef ?? 'unknown' };
+      return { created: false, reason: 'duplicate', existingShortRef };
     }
 
     // Step 2: Generate short_ref and description
