@@ -7,6 +7,7 @@
 import type { ActionLogRepo } from './action-log-repo.js';
 import type { OutboundGateway } from '../skills/outbound-gateway.js';
 import type { Logger } from '../logger.js';
+import { sanitizeOutput } from '../skills/sanitize.js';
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -103,7 +104,9 @@ export function buildDescription(
 export class ApprovalTriggerService {
   constructor(
     private readonly actionLogRepo: ActionLogRepo,
-    private readonly outboundGateway: OutboundGateway,
+    // outboundGateway is optional — row creation does not depend on the outbound stack.
+    // If absent, notification is skipped (same as when ceoEmail is not configured).
+    private readonly outboundGateway: OutboundGateway | undefined,
     private readonly logger: Logger,
     private readonly ceoEmail?: string,
   ) {}
@@ -148,10 +151,12 @@ export class ApprovalTriggerService {
       return { created: false, reason: 'duplicate', existingShortRef };
     }
 
-    // Step 2: Generate short_ref and description
+    // Step 2: Generate short_ref and description.
+    // Sanitize description before storing and sending — the input fields come from
+    // LLM-generated skill arguments and may contain dangerous tags.
     const counter = await this.actionLogRepo.countShortRefsForTask(taskId);
     const shortRef = `${shortRefPrefix(skillName)}-${counter + 1}`;
-    const description = buildDescription(skillName, input);
+    const description = sanitizeOutput(buildDescription(skillName, input));
 
     // Step 3: Insert row
     const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24h from now
@@ -174,7 +179,7 @@ export class ApprovalTriggerService {
 
     // Step 4: Notify CEO (best-effort)
     let notificationSent = false;
-    if (this.ceoEmail) {
+    if (this.ceoEmail && this.outboundGateway) {
       try {
         await this.outboundGateway.sendNotification({
           notificationType: 'approval_requested',

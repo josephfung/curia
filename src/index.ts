@@ -845,9 +845,12 @@ async function main(): Promise<void> {
 
   // Approval trigger — creates pending_approval rows and notifies CEO
   // when autonomy gates block a skill. See ADR-018 and issue #427.
-  const approvalTrigger = outboundGateway
-    ? new ApprovalTriggerService(actionLogRepo, outboundGateway, logger, config.ceoPrimaryEmail || undefined)
-    : undefined;
+  // Constructed unconditionally — row creation does not depend on the outbound stack.
+  // outboundGateway and ceoEmail are optional: if absent, the row is created but
+  // notification is skipped (CEO will see it in the next digest, #429).
+  const approvalTrigger = new ApprovalTriggerService(
+    actionLogRepo, outboundGateway, logger, config.ceoPrimaryEmail || undefined,
+  );
 
   // Execution layer — services wired here are injected per-skill based on their
   // capability-gated declarations. outboundGateway gives email skills their send path.
