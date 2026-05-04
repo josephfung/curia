@@ -10,6 +10,7 @@ import type {
   ActionLogRow,
   ActionLogInsert,
   ScoringFlags,
+  ResolveResult,
 } from './action-log-types.js';
 import { TERMINAL_OUTCOMES } from './action-log-types.js';
 
@@ -176,6 +177,103 @@ export class ActionLogRepo {
       [id],
     );
     this.logger.debug({ id }, 'action-log-repo: notification_sent_at updated');
+  }
+
+  /**
+   * Return all non-expired pending_approval rows, oldest first.
+   * Used by list-pending-actions and by resolvePending() when no short_ref is given.
+   */
+  async findAllPending(): Promise<ActionLogRow[]> {
+    const result = await this.pool.query(
+      `SELECT * FROM autonomy_action_log
+       WHERE outcome = 'pending_approval'
+         AND expires_at > now()
+       ORDER BY created_at ASC`,
+    );
+    return result.rows.map(mapRow);
+  }
+
+  /**
+   * Transition a pending_approval row to a terminal outcome.
+   * Only updates if the current outcome is still pending_approval —
+   * silently no-ops on double-resolve (idempotent).
+   */
+  async resolveRow(
+    id: number,
+    outcome: 'approved' | 'denied' | 'resolved_externally',
+    resolvedBy: string,
+  ): Promise<void> {
+    await this.pool.query(
+      `UPDATE autonomy_action_log
+       SET outcome = $2, resolved_at = now(), resolved_by = $3
+       WHERE id = $1 AND outcome = 'pending_approval'`,
+      [id, outcome, resolvedBy],
+    );
+    this.logger.debug({ id, outcome, resolvedBy }, 'action-log-repo: row resolved');
+  }
+
+  /**
+   * Resolve a short_ref (or the sole pending row) to a single ActionLogRow.
+   *
+   * When short_ref is provided: look up by short_ref among pending + non-expired rows.
+   * If not found there, make a second query (any outcome) to distinguish between
+   * not_found, already_resolved, and expired.
+   *
+   * When omitted: fetch all non-expired pending rows. If exactly one, return it.
+   * If multiple, return ambiguous with the full list so the caller can show options.
+   */
+  async resolvePending(shortRef?: string): Promise<ResolveResult> {
+    if (shortRef !== undefined) {
+      // Query 1: look up by short_ref — pending + non-expired only
+      const pending = await this.pool.query(
+        `SELECT * FROM autonomy_action_log
+         WHERE short_ref = $1
+           AND outcome = 'pending_approval'
+           AND expires_at > now()
+         LIMIT 1`,
+        [shortRef],
+      );
+      if (pending.rows.length > 0) {
+        return { found: true, row: mapRow(pending.rows[0]) };
+      }
+
+      // Query 2: not found as pending — check if it exists at all (any outcome)
+      // to give a more precise error reason
+      const any = await this.pool.query(
+        `SELECT * FROM autonomy_action_log
+         WHERE short_ref = $1
+         LIMIT 1`,
+        [shortRef],
+      );
+      if (any.rows.length === 0) {
+        return { found: false, reason: 'not_found', error: `No approval request found with reference '${shortRef}'` };
+      }
+
+      const row = mapRow(any.rows[0]);
+      if (row.outcome !== 'pending_approval') {
+        // Row exists but has already resolved to a terminal outcome
+        return { found: false, reason: 'already_resolved', error: `Request '${shortRef}' is already resolved (outcome: ${row.outcome})` };
+      }
+      // outcome is still pending_approval but expires_at <= now() (expired)
+      return { found: false, reason: 'expired', error: `Request '${shortRef}' has expired` };
+    }
+
+    // No short_ref — try to auto-resolve to the sole pending row
+    const allPending = await this.findAllPending();
+    if (allPending.length === 0) {
+      return { found: false, reason: 'not_found', error: 'No pending approval requests' };
+    }
+    if (allPending.length === 1) {
+      return { found: true, row: allPending[0]! };
+    }
+    // Multiple pending rows — caller must specify a short_ref
+    const refs = allPending.map(r => `${r.shortRef}: ${r.description}`).join(', ');
+    return {
+      found: false,
+      reason: 'ambiguous',
+      error: `Multiple pending requests — specify a short_ref. Pending: ${refs}`,
+      pending: allPending,
+    };
   }
 }
 
