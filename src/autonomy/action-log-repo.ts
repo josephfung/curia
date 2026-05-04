@@ -225,11 +225,14 @@ export class ActionLogRepo {
   async resolvePending(shortRef?: string): Promise<ResolveResult> {
     if (shortRef !== undefined) {
       // Query 1: look up by short_ref — pending + non-expired only
+      // ORDER BY created_at ASC ensures deterministic resolution of oldest pending row
+      // when multiple rows share the same short_ref across different tasks.
       const pending = await this.pool.query(
         `SELECT * FROM autonomy_action_log
          WHERE short_ref = $1
            AND outcome = 'pending_approval'
            AND expires_at > now()
+         ORDER BY created_at ASC
          LIMIT 1`,
         [shortRef],
       );
@@ -238,10 +241,12 @@ export class ActionLogRepo {
       }
 
       // Query 2: not found as pending — check if it exists at all (any outcome)
-      // to give a more precise error reason
+      // to give a more precise error reason (not_found vs already_resolved vs expired).
+      // ORDER BY created_at DESC ensures the most recent row is returned (most relevant to CEO).
       const any = await this.pool.query(
         `SELECT * FROM autonomy_action_log
          WHERE short_ref = $1
+         ORDER BY created_at DESC
          LIMIT 1`,
         [shortRef],
       );

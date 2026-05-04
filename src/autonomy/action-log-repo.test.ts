@@ -275,11 +275,13 @@ describe('ActionLogRepo', () => {
     };
 
     it('resolves by short_ref when provided', async () => {
-      const { pool } = makePool([pendingRow]);
+      const { pool, queries } = makeSequentialPool([[pendingRow]]);
       const repo = new ActionLogRepo(pool, createSilentLogger());
       const result = await repo.resolvePending('cal-1');
       expect(result.found).toBe(true);
       if (result.found) expect(result.row.id).toBe(10);
+      // Query 1 should include ORDER BY created_at ASC for deterministic resolution
+      expect(queries[0]!.sql).toContain('ORDER BY created_at ASC');
     });
 
     it('returns not_found when short_ref does not match any row', async () => {
@@ -298,7 +300,7 @@ describe('ActionLogRepo', () => {
       const resolvedRow = { ...pendingRow, outcome: 'approved' };
       // Query 1 (pending + non-expired) returns nothing;
       // Query 2 (any outcome) returns the resolved row.
-      const { pool } = makeSequentialPool([[], [resolvedRow]]);
+      const { pool, queries } = makeSequentialPool([[], [resolvedRow]]);
       const repo = new ActionLogRepo(pool, createSilentLogger());
       const result = await repo.resolvePending('cal-1');
       expect(result).toEqual({
@@ -306,6 +308,8 @@ describe('ActionLogRepo', () => {
         reason: 'already_resolved',
         error: expect.stringContaining('already resolved'),
       });
+      // Query 2 should include ORDER BY created_at DESC for most recent row
+      expect(queries[1]!.sql).toContain('ORDER BY created_at DESC');
     });
 
     it('returns expired when row is pending but past expires_at', async () => {
