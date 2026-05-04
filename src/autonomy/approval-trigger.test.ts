@@ -244,6 +244,43 @@ describe('ApprovalTriggerService.request()', () => {
     expect(repo.insert).toHaveBeenCalledOnce();
   });
 
+  it('retries on unique_violation (23505) and succeeds with incremented counter', async () => {
+    // First insert throws unique_violation; second succeeds.
+    const insertMock = vi.fn()
+      .mockRejectedValueOnce(Object.assign(new Error('unique_violation'), { code: '23505' }))
+      .mockResolvedValueOnce(2);
+    // countShortRefsForTask is called once per attempt: 0 on attempt 1, 1 on attempt 2.
+    const countMock = vi.fn()
+      .mockResolvedValueOnce(0)
+      .mockResolvedValueOnce(1);
+    const repo = makeMockRepo({
+      insert: insertMock,
+      countShortRefsForTask: countMock,
+    });
+    const gateway = makeMockGateway();
+    const service = new ApprovalTriggerService(repo, gateway, createSilentLogger(), 'ceo@example.com');
+
+    const result = await service.request(BASE_OPTS);
+
+    expect(result.created).toBe(true);
+    if (result.created) {
+      expect(result.shortRef).toBe('cal-2'); // counter was 1 on retry
+    }
+    expect(insertMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('gives up after 3 retries on persistent unique_violation', async () => {
+    const insertMock = vi.fn().mockRejectedValue(
+      Object.assign(new Error('unique_violation'), { code: '23505' }),
+    );
+    const repo = makeMockRepo({ insert: insertMock });
+    const gateway = makeMockGateway();
+    const service = new ApprovalTriggerService(repo, gateway, createSilentLogger(), 'ceo@example.com');
+
+    await expect(service.request(BASE_OPTS)).rejects.toThrow('unique_violation');
+    expect(insertMock).toHaveBeenCalledTimes(3);
+  });
+
   it('inserts row with correct fields', async () => {
     const FIXED_NOW = 1_746_000_000_000; // 2025-04-30T06:40:00Z — arbitrary fixed point
     vi.useFakeTimers();

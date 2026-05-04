@@ -151,26 +151,49 @@ export class ApprovalTriggerService {
       return { created: false, reason: 'duplicate', existingShortRef };
     }
 
-    // Step 2: Generate short_ref and description.
-    // Sanitize description before storing and sending — the input fields come from
-    // LLM-generated skill arguments and may contain dangerous tags.
-    const counter = await this.actionLogRepo.countShortRefsForTask(taskId);
-    const shortRef = `${shortRefPrefix(skillName)}-${counter + 1}`;
-    const description = sanitizeOutput(buildDescription(skillName, input));
+    // Step 2 + 3: Generate short_ref, description, and insert row.
+    // Retry on unique_violation (23505) — the countShortRefsForTask + 1 pattern
+    // can race under concurrency. The UNIQUE(task_id, short_ref) constraint (#428)
+    // catches the collision; we re-count and retry.
+    const MAX_INSERT_RETRIES = 3;
+    let rowId!: number;
+    let shortRef!: string;
+    let description!: string;
+    let expiresAt!: Date;
 
-    // Step 3: Insert row
-    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24h from now
-    const rowId = await this.actionLogRepo.insert({
-      taskId,
-      conversationId,
-      skillName,
-      actionRisk,
-      outcome: 'pending_approval',
-      payload: input,
-      expiresAt,
-      shortRef,
-      description,
-    });
+    for (let attempt = 1; attempt <= MAX_INSERT_RETRIES; attempt++) {
+      const counter = await this.actionLogRepo.countShortRefsForTask(taskId);
+      shortRef = `${shortRefPrefix(skillName)}-${counter + 1}`;
+      // Sanitize description before storing and sending — the input fields come from
+      // LLM-generated skill arguments and may contain dangerous tags.
+      description = sanitizeOutput(buildDescription(skillName, input));
+      expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24h from now
+
+      try {
+        rowId = await this.actionLogRepo.insert({
+          taskId,
+          conversationId,
+          skillName,
+          actionRisk,
+          outcome: 'pending_approval',
+          payload: input,
+          expiresAt,
+          shortRef,
+          description,
+        });
+        break; // Insert succeeded
+      } catch (err) {
+        const isUniqueViolation = (err as { code?: string }).code === '23505';
+        if (isUniqueViolation && attempt < MAX_INSERT_RETRIES) {
+          this.logger.warn(
+            { taskId, shortRef, attempt },
+            'approval-trigger: short_ref collision — retrying with new counter',
+          );
+          continue;
+        }
+        throw err; // Non-unique error, or exhausted retries
+      }
+    }
 
     this.logger.info(
       { rowId, taskId, skillName, shortRef, currentScore, requiredScore },
