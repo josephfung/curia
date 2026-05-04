@@ -7,7 +7,7 @@
   "inputs": {},
   "outputs": {
     "pending": "number — count of open requests included in digest",
-    "skipped": "boolean — true if no open requests and digest was not sent"
+    "skipped": "boolean — true if digest was not sent (no open requests, or CEO_PRIMARY_EMAIL / outboundGateway not configured)"
   },
   "permissions": [],
   "secrets": ["CEO_PRIMARY_EMAIL"],

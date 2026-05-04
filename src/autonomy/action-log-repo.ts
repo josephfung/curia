@@ -211,26 +211,30 @@ export class ActionLogRepo {
   /**
    * Batch-transition pending_approval rows to expired state.
    * Sets outcome = 'expired', resolved_by = 'system', resolved_at = now().
-   * Returns the count of rows actually updated.
+   * Returns the rows that were actually updated (via RETURNING *).
    *
    * The WHERE outcome = 'pending_approval' guard ensures idempotency — if a row
    * was concurrently resolved (approved/denied/dismissed), it won't be
-   * double-transitioned.
+   * double-transitioned and won't appear in the returned set.
+   *
+   * Empty ids array is a no-op — returns [] without issuing a query.
    */
-  async expireRows(ids: number[]): Promise<number> {
+  async expireRows(ids: number[]): Promise<ActionLogRow[]> {
+    if (ids.length === 0) return [];
     const result = await this.pool.query(
       `UPDATE autonomy_action_log
        SET outcome = 'expired', resolved_by = 'system', resolved_at = now()
-       WHERE id = ANY($1) AND outcome = 'pending_approval'`,
+       WHERE id = ANY($1) AND outcome = 'pending_approval'
+       RETURNING *`,
       [ids],
     );
-    const count = result.rowCount ?? 0;
-    if (count > 0) {
-      this.logger.info({ count, totalRequested: ids.length, ids }, 'action-log-repo: expired rows');
-    } else if (ids.length > 0) {
+    const rows = result.rows.map(mapRow);
+    if (rows.length > 0) {
+      this.logger.info({ count: rows.length, totalRequested: ids.length, ids }, 'action-log-repo: expired rows');
+    } else {
       this.logger.debug({ ids }, 'action-log-repo: expireRows affected 0 rows — all may have been concurrently resolved');
     }
-    return count;
+    return rows;
   }
 
   /**
