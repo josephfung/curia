@@ -209,6 +209,29 @@ export class ActionLogRepo {
   }
 
   /**
+   * Batch-transition pending_approval rows to expired state.
+   * Sets outcome = 'expired', resolved_by = 'system', resolved_at = now().
+   * Returns the count of rows actually updated.
+   *
+   * The WHERE outcome = 'pending_approval' guard ensures idempotency — if a row
+   * was concurrently resolved (approved/denied/dismissed), it won't be
+   * double-transitioned.
+   */
+  async expireRows(ids: number[]): Promise<number> {
+    const result = await this.pool.query(
+      `UPDATE autonomy_action_log
+       SET outcome = 'expired', resolved_by = 'system', resolved_at = now()
+       WHERE id = ANY($1) AND outcome = 'pending_approval'`,
+      [ids],
+    );
+    const count = result.rowCount ?? 0;
+    if (count > 0) {
+      this.logger.info({ count, ids }, 'action-log-repo: expired rows');
+    }
+    return count;
+  }
+
+  /**
    * Transition a pending_approval row to a terminal outcome.
    * Only updates if the current outcome is still pending_approval —
    * returns `false` on double-resolve (concurrent resolution race).
