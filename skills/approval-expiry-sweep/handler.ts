@@ -39,7 +39,16 @@ export class ApprovalExpirySweepHandler implements SkillHandler {
       // --- Step 2: Batch-transition all stale rows to 'expired' ---
       // expireRows() uses WHERE outcome = 'pending_approval' for idempotency —
       // any row concurrently resolved will simply be skipped (rowCount < ids.length).
-      await ctx.actionLogRepo.expireRows(expired.map((r) => r.id));
+      const actualExpired = await ctx.actionLogRepo.expireRows(expired.map((r) => r.id));
+
+      // Warn when fewer rows were updated than found — indicates concurrent resolution
+      // between the findExpired() read and the expireRows() write.
+      if (actualExpired < expired.length) {
+        ctx.log.warn(
+          { found: expired.length, actuallyExpired: actualExpired },
+          'approval-expiry-sweep: fewer rows expired than found — some may have been concurrently resolved',
+        );
+      }
 
       // Log each expired row individually for auditability and debugging.
       for (const r of expired) {
@@ -58,51 +67,59 @@ export class ApprovalExpirySweepHandler implements SkillHandler {
       // returns true.
       let notifiedCount = 0;
 
-      if (notifiable.length > 0 && ctx.outboundGateway !== undefined) {
-        // Read directly from process.env rather than ctx.secret() — ctx.secret()
-        // throws on a missing variable, which would surface as skill failure even
-        // though expiry already committed. A missing email should be a silent skip.
-        const ceoEmail = process.env['CEO_PRIMARY_EMAIL'] ?? '';
-
-        if (!ceoEmail) {
-          // Not configured — expiry is already done, just skip the notification.
+      if (notifiable.length > 0) {
+        if (ctx.outboundGateway === undefined) {
           ctx.log.warn(
             { notifiableCount: notifiable.length },
-            'approval-expiry-sweep: CEO_PRIMARY_EMAIL not configured — skipping expiry notification',
+            'approval-expiry-sweep: outboundGateway not available — skipping expiry notification for high/critical rows',
           );
         } else {
-          const subject = `Approval expired — ${notifiable.length} request(s) expired without response`;
+          // Read directly from process.env rather than ctx.secret() — ctx.secret()
+          // throws on a missing variable, which would surface as skill failure even
+          // though expiry already committed. A missing email should be a silent skip.
+          const ceoEmail = process.env['CEO_PRIMARY_EMAIL'] ?? '';
 
-          // Bullet list: one line per expired request so the CEO can quickly scan.
-          // shortRef and description are nullable — fall back to readable placeholders.
-          const body = notifiable
-            .map((r) => `• ${r.shortRef ?? '(no ref)'}: ${r.description ?? '(no description)'} [${r.skillName}]`)
-            .join('\n');
-
-          const sent = await ctx.outboundGateway.sendNotification({
-            notificationType: 'approval_expired',
-            ceoEmail,
-            subject,
-            body,
-          });
-
-          if (sent) {
-            notifiedCount = notifiable.length;
-          } else {
-            // Non-fatal — the expiry rows are already transitioned. A failure here means
-            // the CEO won't receive the alert for this sweep cycle, but the audit log
-            // (via individual row logs above) still has the full record.
+          if (!ceoEmail) {
+            // Not configured — expiry is already done, just skip the notification.
             ctx.log.warn(
               { notifiableCount: notifiable.length },
-              'approval-expiry-sweep: sendNotification returned false — CEO notification not delivered (expiry committed)',
+              'approval-expiry-sweep: CEO_PRIMARY_EMAIL not configured — skipping expiry notification',
             );
+          } else {
+            const subject = `Approval expired — ${notifiable.length} request(s) expired without response`;
+
+            // Bullet list: one line per expired request so the CEO can quickly scan.
+            // shortRef and description are nullable — fall back to readable placeholders.
+            const body = notifiable
+              .map((r) => `• ${r.shortRef ?? '(no ref)'}: ${r.description ?? '(no description)'} [${r.skillName}]`)
+              .join('\n');
+
+            const sent = await ctx.outboundGateway.sendNotification({
+              notificationType: 'approval_expired',
+              ceoEmail,
+              subject,
+              body,
+            });
+
+            if (sent) {
+              notifiedCount = notifiable.length;
+            } else {
+              // Non-fatal — the expiry rows are already transitioned. A failure here means
+              // the CEO won't receive the alert for this sweep cycle, but the audit log
+              // (via individual row logs above) still has the full record.
+              ctx.log.warn(
+                { notifiableCount: notifiable.length },
+                'approval-expiry-sweep: sendNotification returned false — CEO notification not delivered (expiry committed)',
+              );
+            }
           }
         }
       }
 
-      return { success: true, data: { expired: expired.length, notified: notifiedCount } };
+      return { success: true, data: { expired: actualExpired, notified: notifiedCount } };
     } catch (e) {
-      return { success: false, error: String(e) };
+      ctx.log.error({ err: e }, 'approval-expiry-sweep: unexpected error');
+      return { success: false, error: e instanceof Error ? e.message : String(e) };
     }
   }
 }
