@@ -189,6 +189,14 @@ export interface SkillContext {
    *  Populated from the global config timezone. Skills returning timestamps for display
    *  should use toLocalIso() with this value rather than returning raw UTC strings. */
   timezone?: string;
+  /** Action log repo — available to skills declaring 'actionLogRepo' in capabilities.
+   *  Provides read/write access to the autonomy_action_log table for approval lifecycle
+   *  management. Used by approve-action, deny-action, dismiss-action, list-pending-actions. */
+  actionLogRepo?: import('../autonomy/action-log-repo.js').ActionLogRepo;
+  /** Execution layer — available to skills declaring 'executionLayer' in capabilities.
+   *  Allows re-invocation of skills with humanApproved bypass. Only approve-action (#428)
+   *  should declare this capability; it is sensitivity: "elevated" (CEO-only). */
+  executionLayer?: import('./execution.js').ExecutionLayer;
 }
 
 /**

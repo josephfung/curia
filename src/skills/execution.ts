@@ -78,6 +78,7 @@ export class ExecutionLayer {
   private browserService?: BrowserService;
   private bullpenService?: import('../memory/bullpen.js').BullpenService;
   private approvalTrigger?: ApprovalTriggerService;
+  private actionLogRepo?: import('../autonomy/action-log-repo.js').ActionLogRepo;
   /** The agent's own contactId — injected into ctx.agentContactId for entity_enrichment default='agent' */
   private agentContactId?: string;
   /** IANA timezone name used for normalizing offset-less timestamp inputs from the LLM. */
@@ -101,6 +102,7 @@ export class ExecutionLayer {
     browserService?: BrowserService;
     bullpenService?: import('../memory/bullpen.js').BullpenService;
     approvalTrigger?: ApprovalTriggerService;
+    actionLogRepo?: import('../autonomy/action-log-repo.js').ActionLogRepo;
     agentContactId?: string;
     timezone?: string;
     skillOutputMaxLength?: number;
@@ -122,6 +124,7 @@ export class ExecutionLayer {
     this.browserService = options?.browserService;
     this.bullpenService = options?.bullpenService;
     this.approvalTrigger = options?.approvalTrigger;
+    this.actionLogRepo = options?.actionLogRepo;
     this.agentContactId = options?.agentContactId;
     this.timezone = options?.timezone ?? 'UTC';
     this.skillOutputMaxLength = options?.skillOutputMaxLength ?? DEFAULT_SKILL_OUTPUT_MAX_LENGTH;
@@ -482,6 +485,10 @@ export class ExecutionLayer {
       browserService: this.browserService,
       bullpenService: this.bullpenService,
       executiveProfileService: this.executiveProfileService,
+      actionLogRepo: this.actionLogRepo,
+      // executionLayer injects `this` so approve-action can re-invoke blocked skills
+      // with humanApproved: true (see ADR-018). Only approve-action should declare this.
+      executionLayer: this,
     };
 
     // Fail-closed: if a declared capability is not available on this ExecutionLayer,

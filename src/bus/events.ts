@@ -404,7 +404,7 @@ interface AutonomySendBlockedPayload {
 // and any future human-in-the-loop gate. Timeout decisions use decision: 'timeout'.
 interface HumanDecisionPayload {
   // What was decided
-  decision: 'approve' | 'deny' | 'modify' | 'escalate' | 'timeout';
+  decision: 'approve' | 'deny' | 'dismiss' | 'modify' | 'escalate' | 'timeout';
   // Who decided
   deciderId: string;            // sender ID of the human who made the decision
   deciderChannel: string;       // channel through which the decision was made
