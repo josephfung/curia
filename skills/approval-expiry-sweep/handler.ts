@@ -53,8 +53,16 @@ export class ApprovalExpirySweepHandler implements SkillHandler {
       const notifiable = expired.filter((r) => NOTIFIABLE_TIERS.has(r.actionRisk));
 
       // --- Step 4: Send batched notification if warranted ---
+      // Track whether the notification was actually delivered so we can return
+      // an accurate `notified` count. Defaults to 0 — only set when sendNotification()
+      // returns true.
+      let notifiedCount = 0;
+
       if (notifiable.length > 0 && ctx.outboundGateway !== undefined) {
-        const ceoEmail = ctx.secret('CEO_PRIMARY_EMAIL');
+        // Read directly from process.env rather than ctx.secret() — ctx.secret()
+        // throws on a missing variable, which would surface as skill failure even
+        // though expiry already committed. A missing email should be a silent skip.
+        const ceoEmail = process.env['CEO_PRIMARY_EMAIL'] ?? '';
 
         if (!ceoEmail) {
           // Not configured — expiry is already done, just skip the notification.
@@ -66,8 +74,9 @@ export class ApprovalExpirySweepHandler implements SkillHandler {
           const subject = `Approval expired — ${notifiable.length} request(s) expired without response`;
 
           // Bullet list: one line per expired request so the CEO can quickly scan.
+          // shortRef and description are nullable — fall back to readable placeholders.
           const body = notifiable
-            .map((r) => `• ${r.shortRef}: ${r.description} [${r.skillName}]`)
+            .map((r) => `• ${r.shortRef ?? '(no ref)'}: ${r.description ?? '(no description)'} [${r.skillName}]`)
             .join('\n');
 
           const sent = await ctx.outboundGateway.sendNotification({
@@ -77,7 +86,9 @@ export class ApprovalExpirySweepHandler implements SkillHandler {
             body,
           });
 
-          if (!sent) {
+          if (sent) {
+            notifiedCount = notifiable.length;
+          } else {
             // Non-fatal — the expiry rows are already transitioned. A failure here means
             // the CEO won't receive the alert for this sweep cycle, but the audit log
             // (via individual row logs above) still has the full record.
@@ -89,7 +100,7 @@ export class ApprovalExpirySweepHandler implements SkillHandler {
         }
       }
 
-      return { success: true, data: { expired: expired.length, notified: notifiable.length } };
+      return { success: true, data: { expired: expired.length, notified: notifiedCount } };
     } catch (e) {
       return { success: false, error: String(e) };
     }
