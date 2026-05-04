@@ -569,12 +569,13 @@ export class OutboundGateway {
   async sendNotification(
     payload: OutboundNotificationPayload,
     parentEventId?: string,
-  ): Promise<void> {
+  ): Promise<boolean> {
     try {
       await this.bus.publish(
         'dispatch',
         createOutboundNotification({ ...payload, parentEventId }),
       );
+      return true;
     } catch (err) {
       // Non-fatal — the original block/hold is already recorded. Log so the anomaly
       // is visible in alerting but do not throw; the caller's primary operation (block
@@ -583,6 +584,7 @@ export class OutboundGateway {
         { err, notificationType: payload.notificationType },
         'outbound-gateway: failed to publish outbound.notification event',
       );
+      return false;
     }
   }
 

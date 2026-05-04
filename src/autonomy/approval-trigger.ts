@@ -177,27 +177,29 @@ export class ApprovalTriggerService {
       'approval-trigger: pending_approval row created',
     );
 
-    // Step 4: Notify CEO (best-effort)
+    // Step 4: Notify CEO (best-effort).
+    // sendNotification() catches publish errors internally and returns false rather than
+    // throwing, so we check the return value to know whether to stamp notification_sent_at.
     let notificationSent = false;
     if (this.ceoEmail && this.outboundGateway) {
-      try {
-        await this.outboundGateway.sendNotification({
-          notificationType: 'approval_requested',
-          ceoEmail: this.ceoEmail,
-          subject: `Approval needed — ${description}`,
-          body:
-            `Curia wanted to ${description.charAt(0).toLowerCase() + description.slice(1)}, ` +
-            `but the autonomy score (${currentScore}) is below the required threshold (${requiredScore}).\n\n` +
-            `Reference: ${shortRef}\n` +
-            `Expires: ${expiresAt.toISOString()}\n\n` +
-            `Reply to approve, deny, or dismiss this request.`,
-        });
+      const sent = await this.outboundGateway.sendNotification({
+        notificationType: 'approval_requested',
+        ceoEmail: this.ceoEmail,
+        subject: `Approval needed — ${description}`,
+        body:
+          `Curia wanted to ${description.charAt(0).toLowerCase() + description.slice(1)}, ` +
+          `but the autonomy score (${currentScore}) is below the required threshold (${requiredScore}).\n\n` +
+          `Reference: ${shortRef}\n` +
+          `Expires: ${expiresAt.toISOString()}\n\n` +
+          `Reply to approve, deny, or dismiss this request.`,
+      });
+      if (sent) {
         await this.actionLogRepo.setNotificationSentAt(rowId);
         notificationSent = true;
         this.logger.info({ rowId, shortRef }, 'approval-trigger: CEO notification sent');
-      } catch (err) {
+      } else {
         this.logger.warn(
-          { err, rowId, shortRef },
+          { rowId, shortRef },
           'approval-trigger: CEO notification failed — row exists, CEO will see it in digest',
         );
       }
