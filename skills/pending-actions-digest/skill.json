@@ -1,0 +1,16 @@
+{
+  "name": "pending-actions-digest",
+  "description": "Send a daily digest of open approval requests awaiting CEO decision.",
+  "version": "1.0.0",
+  "sensitivity": "normal",
+  "action_risk": "none",
+  "inputs": {},
+  "outputs": {
+    "pending": "number — count of open requests included in digest",
+    "skipped": "boolean — true if no open requests and digest was not sent"
+  },
+  "permissions": [],
+  "secrets": ["CEO_PRIMARY_EMAIL"],
+  "timeout": 30000,
+  "capabilities": ["actionLogRepo", "outboundGateway"]
+}
