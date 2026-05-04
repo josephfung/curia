@@ -131,7 +131,13 @@ interface OutboundBlockedPayload {
 //   - 'contact_rate_limited': CEO alert that contact auto-creation was throttled due to rate limits
 //   - 'approval_requested':   CEO alert that an autonomy gate blocked a skill and approval is needed
 export interface OutboundNotificationPayload {
-  notificationType: 'blocked_content' | 'group_held' | 'contact_rate_limited' | 'approval_requested';
+  notificationType:
+    | 'blocked_content'
+    | 'group_held'
+    | 'contact_rate_limited'
+    | 'approval_requested'
+    | 'approval_expired'        // batched expiry notification (approval-expiry-sweep)
+    | 'pending_actions_digest'; // daily pending-actions summary (pending-actions-digest)
   /** Recipient email for this notification (always the CEO email today). */
   ceoEmail: string;
   subject: string;
