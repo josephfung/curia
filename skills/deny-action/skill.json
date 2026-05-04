@@ -1,0 +1,17 @@
+{
+  "name": "deny-action",
+  "description": "Deny a pending approval request. The blocked action will not be executed. Specify short_ref to target a specific request, or omit when only one is pending.",
+  "version": "1.0.0",
+  "sensitivity": "elevated",
+  "action_risk": "none",
+  "inputs": {
+    "short_ref": "string? (reference code from the approval notification, e.g. 'cal-1')"
+  },
+  "outputs": {
+    "result": "string (confirmation message)"
+  },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 15000,
+  "capabilities": ["bus", "actionLogRepo"]
+}
