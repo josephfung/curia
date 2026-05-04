@@ -235,10 +235,11 @@ describe('ActionLogRepo', () => {
   });
 
   describe('resolveRow', () => {
-    it('updates outcome, resolved_at, and resolved_by for a pending row', async () => {
+    it('updates outcome and returns true when row was pending', async () => {
       const { pool, queries } = makePool([], 1);
       const repo = new ActionLogRepo(pool, createSilentLogger());
-      await repo.resolveRow(42, 'approved', 'ceo');
+      const updated = await repo.resolveRow(42, 'approved', 'ceo');
+      expect(updated).toBe(true);
       expect(queries).toHaveLength(1);
       expect(queries[0]!.sql).toContain('UPDATE autonomy_action_log');
       expect(queries[0]!.sql).toContain("outcome = 'pending_approval'");
@@ -247,17 +248,26 @@ describe('ActionLogRepo', () => {
       expect(queries[0]!.params).toContain('ceo');
     });
 
+    it('returns false when row was already resolved (rowCount 0)', async () => {
+      const { pool } = makePool([], 0);
+      const repo = new ActionLogRepo(pool, createSilentLogger());
+      const updated = await repo.resolveRow(42, 'approved', 'ceo');
+      expect(updated).toBe(false);
+    });
+
     it('accepts denied outcome', async () => {
       const { pool, queries } = makePool([], 1);
       const repo = new ActionLogRepo(pool, createSilentLogger());
-      await repo.resolveRow(10, 'denied', 'ceo');
+      const updated = await repo.resolveRow(10, 'denied', 'ceo');
+      expect(updated).toBe(true);
       expect(queries[0]!.params).toContain('denied');
     });
 
     it('accepts resolved_externally outcome', async () => {
       const { pool, queries } = makePool([], 1);
       const repo = new ActionLogRepo(pool, createSilentLogger());
-      await repo.resolveRow(10, 'resolved_externally', 'ceo');
+      const updated = await repo.resolveRow(10, 'resolved_externally', 'ceo');
+      expect(updated).toBe(true);
       expect(queries[0]!.params).toContain('resolved_externally');
     });
   });

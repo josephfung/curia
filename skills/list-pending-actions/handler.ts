@@ -7,6 +7,7 @@
 // The ceoInitiated check is a defense-in-depth secondary gate.
 
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import { toLocalIso, formatDisplayTimezone } from '../../src/time/timestamp.js';
 
 export class ListPendingActionsHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {
@@ -20,20 +21,41 @@ export class ListPendingActionsHandler implements SkillHandler {
       return { success: false, error: 'list-pending-actions requires actionLogRepo capability' };
     }
 
-    const rows = await ctx.actionLogRepo.findAllPending();
+    try {
+      const rows = await ctx.actionLogRepo.findAllPending();
 
-    const pending = rows.map((row) => ({
-      short_ref: row.shortRef,
-      description: row.description,
-      skill_name: row.skillName,
-      created_at: row.createdAt.toISOString(),
-      expires_at: row.expiresAt?.toISOString() ?? null,
-    }));
+      const tz = ctx.timezone;
+      const pending = rows.map((row) => ({
+        short_ref: row.shortRef,
+        description: row.description,
+        skill_name: row.skillName,
+        created_at: tz ? toLocalIso(Math.floor(row.createdAt.getTime() / 1000), tz) : row.createdAt.toISOString(),
+        expires_at: row.expiresAt
+          ? (tz ? toLocalIso(Math.floor(row.expiresAt.getTime() / 1000), tz) : row.expiresAt.toISOString())
+          : null,
+      }));
 
-    if (pending.length === 0) {
-      return { success: true, data: { pending: [], message: 'No pending approval requests.' } };
+      if (pending.length === 0) {
+        return {
+          success: true,
+          data: {
+            pending: [],
+            message: 'No pending approval requests.',
+            displayTimezone: tz ? formatDisplayTimezone(tz, new Date()) : undefined,
+          },
+        };
+      }
+
+      return {
+        success: true,
+        data: {
+          pending,
+          displayTimezone: tz ? formatDisplayTimezone(tz, new Date()) : undefined,
+        },
+      };
+    } catch (err) {
+      ctx.log.error({ err }, 'list-pending-actions: failed to query pending approvals');
+      return { success: false, error: 'Unable to list pending approval requests right now.' };
     }
-
-    return { success: true, data: { pending } };
   }
 }

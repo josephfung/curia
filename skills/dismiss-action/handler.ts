@@ -22,43 +22,57 @@ export class DismissActionHandler implements SkillHandler {
       return { success: false, error: 'dismiss-action requires bus capability' };
     }
 
-    const shortRef = typeof ctx.input.short_ref === 'string' && ctx.input.short_ref.trim()
-      ? ctx.input.short_ref.trim()
-      : undefined;
-
-    const resolved = await ctx.actionLogRepo.resolvePending(shortRef);
-    if (!resolved.found) {
-      return { success: false, error: resolved.error };
-    }
-
-    const { row } = resolved;
-
-    await ctx.actionLogRepo.resolveRow(row.id, 'resolved_externally', 'ceo');
-
-    // Publish human.decision audit event (best-effort)
-    const senderId = typeof ctx.taskMetadata?.senderId === 'string' ? ctx.taskMetadata.senderId : 'unknown';
-    const channelId = typeof ctx.taskMetadata?.channelId === 'string' ? ctx.taskMetadata.channelId : 'unknown';
     try {
-      await ctx.bus.publish(
-        'dispatch',
-        createHumanDecision({
-          decision: 'dismiss',
-          deciderId: senderId,
-          deciderChannel: channelId,
-          subjectEventId: row.taskId,
-          subjectSummary: `CEO dismissed (handled externally): ${row.description ?? row.skillName}`,
-          contextShown: ['short_ref', 'description', 'skill_name'],
-          presentedAt: row.createdAt,
-          decidedAt: new Date(),
-          defaultAction: 'block',
-          parentEventId: ctx.taskEventId ?? '',
-        }),
-      );
-    } catch (err) {
-      ctx.log.error({ err, rowId: row.id }, 'dismiss-action: failed to publish human.decision event');
-    }
+      const shortRef = typeof ctx.input.short_ref === 'string' && ctx.input.short_ref.trim()
+        ? ctx.input.short_ref.trim()
+        : undefined;
 
-    ctx.log.info({ rowId: row.id, shortRef: row.shortRef }, 'dismiss-action: request dismissed');
-    return { success: true, data: `Dismissed: ${row.description ?? row.skillName} (${row.shortRef})` };
+      const resolved = await ctx.actionLogRepo.resolvePending(shortRef);
+      if (!resolved.found) {
+        return { success: false, error: resolved.error };
+      }
+
+      const { row } = resolved;
+
+      const transitioned = await ctx.actionLogRepo.resolveRow(row.id, 'resolved_externally', 'ceo');
+      if (!transitioned) {
+        ctx.log.warn({ rowId: row.id, shortRef: row.shortRef }, 'dismiss-action: row was already resolved concurrently');
+        return { success: false, error: `Request '${row.shortRef}' was already resolved by another action` };
+      }
+
+      // Publish human.decision audit event (best-effort).
+      // Skip if taskEventId is absent — an empty parentEventId breaks event lineage.
+      if (ctx.taskEventId) {
+        const senderId = typeof ctx.taskMetadata?.senderId === 'string' ? ctx.taskMetadata.senderId : 'unknown';
+        const channelId = typeof ctx.taskMetadata?.channelId === 'string' ? ctx.taskMetadata.channelId : 'unknown';
+        try {
+          await ctx.bus.publish(
+            'dispatch',
+            createHumanDecision({
+              decision: 'dismiss',
+              deciderId: senderId,
+              deciderChannel: channelId,
+              subjectEventId: row.taskId,
+              subjectSummary: `CEO dismissed (handled externally): ${row.description ?? row.skillName}`,
+              contextShown: ['short_ref', 'description', 'skill_name'],
+              presentedAt: row.createdAt,
+              decidedAt: new Date(),
+              defaultAction: 'block',
+              parentEventId: ctx.taskEventId,
+            }),
+          );
+        } catch (err) {
+          ctx.log.error({ err, rowId: row.id }, 'dismiss-action: failed to publish human.decision event');
+        }
+      } else {
+        ctx.log.warn({ rowId: row.id }, 'dismiss-action: no taskEventId — skipping human.decision audit event');
+      }
+
+      ctx.log.info({ rowId: row.id, shortRef: row.shortRef }, 'dismiss-action: request dismissed');
+      return { success: true, data: `Dismissed: ${row.description ?? row.skillName} (${row.shortRef})` };
+    } catch (err) {
+      ctx.log.error({ err }, 'dismiss-action: unexpected failure');
+      return { success: false, error: 'dismiss-action failed unexpectedly' };
+    }
   }
 }
