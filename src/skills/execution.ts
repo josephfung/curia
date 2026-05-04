@@ -491,6 +491,25 @@ export class ExecutionLayer {
       executionLayer: this,
     };
 
+    // Hard-restrict executionLayer to approve-action only.
+    // executionLayer grants invoke() with humanApproved: true, which bypasses autonomy
+    // gates A and B. This capability MUST NOT be available to any other skill — a
+    // compromised or misconfigured skill with executionLayer could execute arbitrary
+    // actions as if the CEO approved them. The manifest comment is advisory; this
+    // guard is the enforcement boundary.
+    if (caps.includes('executionLayer') && manifest.name !== 'approve-action') {
+      skillLogger.error(
+        { skillName, manifestName: manifest.name },
+        'SECURITY: executionLayer capability is restricted to approve-action — refusing to run skill',
+      );
+      return {
+        success: false,
+        error: this.wrapSkillError(
+          `Skill '${skillName}' declares capability 'executionLayer' but only 'approve-action' is permitted to use it`,
+        ),
+      };
+    }
+
     // Fail-closed: if a declared capability is not available on this ExecutionLayer,
     // refuse to run the skill. This catches configuration errors at invocation time.
     const missingCaps = caps.filter(cap => {

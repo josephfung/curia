@@ -33,7 +33,7 @@ const PENDING_ROW = {
 function makeCtx(overrides?: Partial<SkillContext>): SkillContext {
   return {
     input: { short_ref: 'cal-1' },
-    secret: () => '',
+    secret: (name: string) => { throw new Error(`secret '${name}' not configured in test`); },
     log: createSilentLogger(),
     taskMetadata: { ceoInitiated: true, senderId: 'ceo-1', channelId: 'cli' },
     taskEventId: 'task-1',
@@ -44,7 +44,7 @@ function makeCtx(overrides?: Partial<SkillContext>): SkillContext {
 function makeMockRepo(overrides?: Partial<ActionLogRepo>): ActionLogRepo {
   return {
     resolvePending: vi.fn().mockResolvedValue({ found: true, row: PENDING_ROW }),
-    resolveRow: vi.fn().mockResolvedValue(undefined),
+    resolveRow: vi.fn().mockResolvedValue(true),
     ...overrides,
   } as unknown as ActionLogRepo;
 }
@@ -95,6 +95,19 @@ describe('DismissActionHandler', () => {
     const event = (bus.publish as ReturnType<typeof vi.fn>).mock.calls[0]![1];
     expect(event.type).toBe('human.decision');
     expect(event.payload.decision).toBe('dismiss');
+  });
+
+  it('returns error when resolveRow returns false (concurrent resolve)', async () => {
+    const repo = makeMockRepo({
+      resolveRow: vi.fn().mockResolvedValue(false),
+    });
+    const bus = makeMockBus();
+    const handler = new DismissActionHandler();
+    const result = await handler.execute(makeCtx({ actionLogRepo: repo, bus }));
+
+    expect(result.success).toBe(false);
+    expect(result).toHaveProperty('error', expect.stringContaining('already resolved'));
+    expect(bus.publish).not.toHaveBeenCalled();
   });
 
   it('forwards resolvePending errors', async () => {

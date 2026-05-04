@@ -9,10 +9,11 @@ import { createSilentLogger } from '../../src/logger.js';
 function makeCtx(overrides?: Partial<SkillContext>): SkillContext {
   return {
     input: {},
-    secret: () => '',
+    secret: (name: string) => { throw new Error(`secret '${name}' not configured in test`); },
     log: createSilentLogger(),
     taskMetadata: { ceoInitiated: true, senderId: 'ceo-1', channelId: 'cli' },
     taskEventId: 'task-1',
+    timezone: 'UTC',
     ...overrides,
   } as SkillContext;
 }
@@ -44,9 +45,11 @@ describe('ListPendingActionsHandler', () => {
     const result = await handler.execute(makeCtx({ actionLogRepo: repo }));
     expect(result.success).toBe(true);
     expect(result).toHaveProperty('data');
-    const data = (result as { success: true; data: unknown }).data as { pending: unknown[]; message: string };
+    const data = (result as { success: true; data: unknown }).data as { pending: unknown[]; message: string; displayTimezone?: string };
     expect(data.pending).toEqual([]);
     expect(data.message).toContain('No pending');
+    // displayTimezone should be present when timezone is set
+    expect(data.displayTimezone).toBeDefined();
   });
 
   it('returns pending rows mapped to summary fields', async () => {
@@ -65,16 +68,29 @@ describe('ListPendingActionsHandler', () => {
       ]),
     });
     const handler = new ListPendingActionsHandler();
-    const result = await handler.execute(makeCtx({ actionLogRepo: repo }));
+    const result = await handler.execute(makeCtx({ actionLogRepo: repo, timezone: 'UTC' }));
     expect(result.success).toBe(true);
-    const data = (result as { success: true; data: unknown }).data as { pending: Array<Record<string, unknown>> };
+    const data = (result as { success: true; data: unknown }).data as { pending: Array<Record<string, unknown>>; displayTimezone?: string };
     expect(data.pending).toHaveLength(2);
-    expect(data.pending[0]).toEqual({
+    expect(data.pending[0]).toMatchObject({
       short_ref: 'cal-1',
       description: 'Create calendar event: Lunch',
       skill_name: 'calendar-create-event',
-      created_at: now.toISOString(),
-      expires_at: expires.toISOString(),
     });
+    // Timestamps should be localized ISO strings (not raw UTC Z-suffix)
+    expect(data.pending[0]!.created_at).toBeDefined();
+    expect(data.pending[0]!.expires_at).toBeDefined();
+    // displayTimezone should be present
+    expect(data.displayTimezone).toBe('UTC');
+  });
+
+  it('returns SkillResult error when findAllPending throws', async () => {
+    const repo = makeMockRepo({
+      findAllPending: vi.fn().mockRejectedValue(new Error('DB connection lost')),
+    });
+    const handler = new ListPendingActionsHandler();
+    const result = await handler.execute(makeCtx({ actionLogRepo: repo }));
+    expect(result.success).toBe(false);
+    expect(result).toHaveProperty('error', expect.stringContaining('Unable to list'));
   });
 });

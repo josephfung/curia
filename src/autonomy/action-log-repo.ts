@@ -196,25 +196,31 @@ export class ActionLogRepo {
   /**
    * Transition a pending_approval row to a terminal outcome.
    * Only updates if the current outcome is still pending_approval —
-   * silently no-ops on double-resolve (idempotent).
+   * returns `false` on double-resolve (concurrent resolution race).
+   *
+   * Callers MUST check the return value and skip side effects (re-execution,
+   * audit events) when `false` — otherwise a concurrently denied/dismissed
+   * action could still trigger re-execution.
    */
   async resolveRow(
     id: number,
     outcome: 'approved' | 'denied' | 'resolved_externally',
     resolvedBy: string,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const result = await this.pool.query(
       `UPDATE autonomy_action_log
        SET outcome = $2, resolved_at = now(), resolved_by = $3
        WHERE id = $1 AND outcome = 'pending_approval'`,
       [id, outcome, resolvedBy],
     );
-    if ((result.rowCount ?? 0) === 0) {
+    const updated = (result.rowCount ?? 0) > 0;
+    if (!updated) {
       // Row was already resolved by a concurrent call — idempotent no-op.
       this.logger.warn({ id, outcome, resolvedBy }, 'action-log-repo: resolveRow affected 0 rows — row may have been resolved concurrently');
     } else {
       this.logger.debug({ id, outcome, resolvedBy }, 'action-log-repo: row resolved');
     }
+    return updated;
   }
 
   /**
@@ -229,20 +235,31 @@ export class ActionLogRepo {
    */
   async resolvePending(shortRef?: string): Promise<ResolveResult> {
     if (shortRef !== undefined) {
-      // Query 1: look up by short_ref — pending + non-expired only
-      // ORDER BY created_at ASC ensures deterministic resolution of oldest pending row
-      // when multiple rows share the same short_ref across different tasks.
+      // Query 1: look up by short_ref — pending + non-expired only.
+      // LIMIT 2 (not 1): short_ref is unique per (task_id, short_ref), so the same
+      // short_ref can exist in multiple tasks. If two pending rows match, return
+      // ambiguous rather than silently picking one (could approve/deny the wrong request).
       const pending = await this.pool.query(
         `SELECT * FROM autonomy_action_log
          WHERE short_ref = $1
            AND outcome = 'pending_approval'
            AND expires_at > now()
          ORDER BY created_at ASC
-         LIMIT 1`,
+         LIMIT 2`,
         [shortRef],
       );
-      if (pending.rows.length > 0) {
+      if (pending.rows.length === 1) {
         return { found: true, row: mapRow(pending.rows[0]) };
+      }
+      if (pending.rows.length > 1) {
+        const rows = pending.rows.map(mapRow);
+        const refs = rows.map(r => `${r.shortRef} (task: ${r.taskId}): ${r.description}`).join(', ');
+        return {
+          found: false,
+          reason: 'ambiguous',
+          error: `Reference '${shortRef}' matches multiple pending requests — specify more context. Pending: ${refs}`,
+          pending: rows,
+        };
       }
 
       // Query 2: not found as pending — check if it exists at all (any outcome)

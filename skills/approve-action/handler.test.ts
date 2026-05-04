@@ -34,7 +34,7 @@ const PENDING_ROW = {
 function makeCtx(overrides?: Partial<SkillContext>): SkillContext {
   return {
     input: { short_ref: 'cal-1' },
-    secret: () => '',
+    secret: (name: string) => { throw new Error(`secret '${name}' not configured in test`); },
     log: createSilentLogger(),
     taskMetadata: { ceoInitiated: true, senderId: 'ceo-1', channelId: 'cli' },
     taskEventId: 'task-1',
@@ -46,7 +46,7 @@ function makeCtx(overrides?: Partial<SkillContext>): SkillContext {
 function makeMockRepo(overrides?: Partial<ActionLogRepo>): ActionLogRepo {
   return {
     resolvePending: vi.fn().mockResolvedValue({ found: true, row: PENDING_ROW }),
-    resolveRow: vi.fn().mockResolvedValue(undefined),
+    resolveRow: vi.fn().mockResolvedValue(true),
     insert: vi.fn().mockResolvedValue(99),
     ...overrides,
   } as unknown as ActionLogRepo;
@@ -67,7 +67,10 @@ function makeMockExecutionLayer(result?: SkillResult): ExecutionLayer {
 describe('ApproveActionHandler', () => {
   it('rejects non-CEO callers', async () => {
     const handler = new ApproveActionHandler();
-    const result = await handler.execute(makeCtx({ taskMetadata: {} }));
+    const result = await handler.execute(makeCtx({
+      taskMetadata: {},
+      caller: { contactId: 'user-99', role: 'contact', channel: 'email' },
+    }));
     expect(result.success).toBe(false);
   });
 
@@ -155,6 +158,26 @@ describe('ApproveActionHandler', () => {
     }));
     expect(result.success).toBe(false);
     expect(result).toHaveProperty('error', expect.stringContaining('Multiple pending'));
+  });
+
+  it('aborts re-execution when resolveRow returns false (concurrent resolve)', async () => {
+    const repo = makeMockRepo({
+      resolveRow: vi.fn().mockResolvedValue(false),
+    });
+    const bus = makeMockBus();
+    const execLayer = makeMockExecutionLayer();
+    const handler = new ApproveActionHandler();
+    const result = await handler.execute(makeCtx({
+      actionLogRepo: repo, bus, executionLayer: execLayer,
+    }));
+
+    expect(result.success).toBe(false);
+    expect(result).toHaveProperty('error', expect.stringContaining('already resolved'));
+    // Critical: re-execution must NOT have fired
+    expect(execLayer.invoke).not.toHaveBeenCalled();
+    // No child row or audit event either
+    expect(repo.insert).not.toHaveBeenCalled();
+    expect(bus.publish).not.toHaveBeenCalled();
   });
 
   it('returns error when row has null payload', async () => {
