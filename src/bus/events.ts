@@ -130,6 +130,8 @@ interface OutboundBlockedPayload {
 //   - 'group_held':      CEO alert that a Signal group message was held due to unverified members
 //   - 'contact_rate_limited': CEO alert that contact auto-creation was throttled due to rate limits
 //   - 'approval_requested':   CEO alert that an autonomy gate blocked a skill and approval is needed
+//   - 'approval_expired':     CEO alert that pending approvals expired without response (approval-expiry-sweep)
+//   - 'pending_actions_digest': Daily summary of open approvals awaiting CEO decision (pending-actions-digest)
 export interface OutboundNotificationPayload {
   notificationType:
     | 'blocked_content'

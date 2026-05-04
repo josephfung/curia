@@ -400,33 +400,59 @@ describe('ActionLogRepo', () => {
   });
 
   describe('expireRows', () => {
-    it('batch-transitions rows to expired and returns count', async () => {
-      const { pool, queries } = makePool([], 3);
+    it('batch-transitions rows to expired and returns the updated rows', async () => {
+      const now = new Date();
+      const returnedRows = [
+        {
+          id: 1, task_id: 't1', conversation_id: null, skill_name: 'email-send',
+          action_risk: 'medium', outcome: 'expired', task_summary: null,
+          competence_flag: null, commitment_flag: null, compatibility: null,
+          scored_by: null, payload: null, notification_sent_at: null,
+          resolved_at: now, resolved_by: 'system',
+          expires_at: new Date(now.getTime() - 1000),
+          parent_action_id: null, short_ref: 'email-1', description: 'Send email', created_at: now,
+        },
+        {
+          id: 2, task_id: 't1', conversation_id: null, skill_name: 'create-calendar-event',
+          action_risk: 'high', outcome: 'expired', task_summary: null,
+          competence_flag: null, commitment_flag: null, compatibility: null,
+          scored_by: null, payload: null, notification_sent_at: null,
+          resolved_at: now, resolved_by: 'system',
+          expires_at: new Date(now.getTime() - 1000),
+          parent_action_id: null, short_ref: 'cal-1', description: 'Create event', created_at: now,
+        },
+      ];
+      const { pool, queries } = makePool(returnedRows);
       const repo = new ActionLogRepo(pool, createSilentLogger());
-      const count = await repo.expireRows([1, 2, 3]);
-      expect(count).toBe(3);
+      const rows = await repo.expireRows([1, 2]);
+      expect(rows).toHaveLength(2);
+      expect(rows[0]!.id).toBe(1);
+      expect(rows[0]!.outcome).toBe('expired');
+      expect(rows[0]!.resolvedBy).toBe('system');
+      expect(rows[1]!.id).toBe(2);
       expect(queries[0]!.sql).toContain("outcome = 'expired'");
       expect(queries[0]!.sql).toContain("resolved_by = 'system'");
       expect(queries[0]!.sql).toContain('resolved_at = now()');
       expect(queries[0]!.sql).toContain("outcome = 'pending_approval'");
-      expect(queries[0]!.params[0]).toEqual([1, 2, 3]);
+      expect(queries[0]!.sql).toContain('RETURNING');
+      expect(queries[0]!.params[0]).toEqual([1, 2]);
     });
 
-    it('returns 0 for empty ids array', async () => {
+    it('returns empty array for empty ids (no-op — no query issued)', async () => {
       const { pool, queries } = makePool([], 0);
       const repo = new ActionLogRepo(pool, createSilentLogger());
-      const count = await repo.expireRows([]);
-      expect(count).toBe(0);
-      // Should still issue the query (Postgres handles ANY('{}') gracefully)
-      expect(queries).toHaveLength(1);
+      const rows = await repo.expireRows([]);
+      expect(rows).toEqual([]);
+      // Early return path — no DB query issued for empty input
+      expect(queries).toHaveLength(0);
     });
 
-    it('only updates rows still in pending_approval state (idempotency)', async () => {
-      // rowCount 0 means no rows matched the WHERE clause
+    it('returns empty array when no rows matched (idempotency — all concurrently resolved)', async () => {
+      // RETURNING returns 0 rows when WHERE clause matches nothing
       const { pool } = makePool([], 0);
       const repo = new ActionLogRepo(pool, createSilentLogger());
-      const count = await repo.expireRows([42]);
-      expect(count).toBe(0);
+      const rows = await repo.expireRows([42]);
+      expect(rows).toHaveLength(0);
     });
   });
 });

@@ -36,22 +36,23 @@ export class ApprovalExpirySweepHandler implements SkillHandler {
         return { success: true, data: { expired: 0, notified: 0 } };
       }
 
-      // --- Step 2: Batch-transition all stale rows to 'expired' ---
-      // expireRows() uses WHERE outcome = 'pending_approval' for idempotency —
-      // any row concurrently resolved will simply be skipped (rowCount < ids.length).
-      const actualExpired = await ctx.actionLogRepo.expireRows(expired.map((r) => r.id));
+      // --- Step 2: Batch-transition stale rows, capturing which were actually updated ---
+      // expireRows() uses RETURNING * and WHERE outcome = 'pending_approval' —
+      // rows concurrently resolved between findExpired() and here are absent from the result.
+      // We log and notify only from actuallyExpiredRows, not the candidate set.
+      const actuallyExpiredRows: ActionLogRow[] = await ctx.actionLogRepo.expireRows(expired.map((r) => r.id));
 
-      // Warn when fewer rows were updated than found — indicates concurrent resolution
-      // between the findExpired() read and the expireRows() write.
-      if (actualExpired < expired.length) {
+      // Warn when the result is smaller than the candidate set — indicates concurrent
+      // resolution between the findExpired() read and the expireRows() write.
+      if (actuallyExpiredRows.length < expired.length) {
         ctx.log.warn(
-          { found: expired.length, actuallyExpired: actualExpired },
+          { found: expired.length, actuallyExpired: actuallyExpiredRows.length },
           'approval-expiry-sweep: fewer rows expired than found — some may have been concurrently resolved',
         );
       }
 
-      // Log each expired row individually for auditability and debugging.
-      for (const r of expired) {
+      // Log each actually-expired row for auditability — not the candidate set.
+      for (const r of actuallyExpiredRows) {
         ctx.log.info(
           { id: r.id, shortRef: r.shortRef, skillName: r.skillName, actionRisk: r.actionRisk },
           'approval-expiry-sweep: row expired',
@@ -59,7 +60,8 @@ export class ApprovalExpirySweepHandler implements SkillHandler {
       }
 
       // --- Step 3: Filter to notifiable (high/critical) tiers ---
-      const notifiable = expired.filter((r) => NOTIFIABLE_TIERS.has(r.actionRisk));
+      // Built from actuallyExpiredRows — rows not actually expired are excluded.
+      const notifiable = actuallyExpiredRows.filter((r) => NOTIFIABLE_TIERS.has(r.actionRisk));
 
       // --- Step 4: Send batched notification if warranted ---
       // Track whether the notification was actually delivered so we can return
@@ -116,7 +118,7 @@ export class ApprovalExpirySweepHandler implements SkillHandler {
         }
       }
 
-      return { success: true, data: { expired: actualExpired, notified: notifiedCount } };
+      return { success: true, data: { expired: actuallyExpiredRows.length, notified: notifiedCount } };
     } catch (e) {
       ctx.log.error({ err: e }, 'approval-expiry-sweep: unexpected error');
       return { success: false, error: e instanceof Error ? e.message : String(e) };

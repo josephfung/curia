@@ -503,6 +503,8 @@ pinned_skills:
   - deny-action
   - dismiss-action
   - list-pending-actions
+  - approval-expiry-sweep
+  - pending-actions-digest
 allow_discovery: true
 schedule:
   - cron: "0 * * * *"

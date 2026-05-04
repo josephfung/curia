@@ -7,6 +7,8 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import { PendingActionsDigestHandler } from './handler.js';
 import type { SkillContext } from '../../src/skills/types.js';
+import type { ActionLogRepo } from '../../src/autonomy/action-log-repo.js';
+import type { OutboundGateway } from '../../src/skills/outbound-gateway.js';
 import type { ActionLogRow } from '../../src/autonomy/action-log-types.js';
 
 // --- Fixed time anchor ---
@@ -47,7 +49,7 @@ function makeCtx(overrides: {
   sendResult?: boolean;
   ceoEmail?: string;
   noOutboundGateway?: boolean;
-} = {}): SkillContext {
+} = {}) {
   const {
     pendingRows = [],
     sendResult = true,
@@ -59,21 +61,30 @@ function makeCtx(overrides: {
   // so set it here. Tests that need it absent should pass ceoEmail: ''.
   process.env['CEO_PRIMARY_EMAIL'] = ceoEmail;
 
-  const ctx: Partial<SkillContext> = {
+  // Keep explicit references so tests can assert on mock calls without casts.
+  const findAllPendingMock = vi.fn().mockResolvedValue(pendingRows);
+  const sendNotificationMock = vi.fn().mockResolvedValue(sendResult);
+  const logWarnMock = vi.fn();
+  const logErrorMock = vi.fn();
+
+  const ctx: SkillContext = {
     input: {},
-    secret: vi.fn(),
-    log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as any,
+    // ctx.secret() throws in production when the var is unset — mirror that here.
+    // The handler reads CEO_PRIMARY_EMAIL via process.env directly, so this stub
+    // is present for shape correctness only.
+    secret: vi.fn().mockImplementation((name: string) => {
+      throw new Error(`secret ${name} not configured`);
+    }),
+    log: { info: vi.fn(), warn: logWarnMock, error: logErrorMock, debug: vi.fn() } as unknown as SkillContext['log'],
     actionLogRepo: {
-      findAllPending: vi.fn().mockResolvedValue(pendingRows),
-    } as any,
+      findAllPending: findAllPendingMock,
+    } as unknown as ActionLogRepo,
     outboundGateway: noOutboundGateway
       ? undefined
-      : ({
-          sendNotification: vi.fn().mockResolvedValue(sendResult),
-        } as any),
-  };
+      : ({ sendNotification: sendNotificationMock } as unknown as OutboundGateway),
+  } as SkillContext;
 
-  return ctx as SkillContext;
+  return { ctx, findAllPendingMock, sendNotificationMock, logWarnMock, logErrorMock };
 }
 
 // --- Lifecycle hooks ---
@@ -94,14 +105,14 @@ afterEach(() => {
 describe('PendingActionsDigestHandler', () => {
   it('returns {pending:0, skipped:true} and sends no notification when no pending rows', async () => {
     const handler = new PendingActionsDigestHandler();
-    const ctx = makeCtx({ pendingRows: [] });
+    const { ctx, sendNotificationMock } = makeCtx({ pendingRows: [] });
 
     const result = await handler.execute(ctx);
 
     expect(result.success).toBe(true);
     if (!result.success) throw new Error('unreachable');
     expect(result.data).toEqual({ pending: 0, skipped: true });
-    expect((ctx.outboundGateway as any).sendNotification).not.toHaveBeenCalled();
+    expect(sendNotificationMock).not.toHaveBeenCalled();
   });
 
   it('sends a single digest notification listing all pending rows', async () => {
@@ -110,13 +121,13 @@ describe('PendingActionsDigestHandler', () => {
       makeRow({ id: 2, shortRef: 'email-2', description: 'Send weekly update', skillName: 'send-email' }),
     ];
     const handler = new PendingActionsDigestHandler();
-    const ctx = makeCtx({ pendingRows: rows, ceoEmail: 'ceo@example.com' });
+    const { ctx, sendNotificationMock } = makeCtx({ pendingRows: rows, ceoEmail: 'ceo@example.com' });
 
     const result = await handler.execute(ctx);
 
-    expect((ctx.outboundGateway as any).sendNotification).toHaveBeenCalledTimes(1);
+    expect(sendNotificationMock).toHaveBeenCalledTimes(1);
 
-    const payload = (ctx.outboundGateway as any).sendNotification.mock.calls[0][0];
+    const payload = sendNotificationMock.mock.calls[0][0];
     expect(payload.notificationType).toBe('pending_actions_digest');
     expect(payload.ceoEmail).toBe('ceo@example.com');
     expect(payload.subject).toBe('Pending approvals — 2 request(s) awaiting your decision');
@@ -138,11 +149,11 @@ describe('PendingActionsDigestHandler', () => {
       expiresAt: new Date(FIXED_NOW + 7_200_000), // exactly 2h remaining
     });
     const handler = new PendingActionsDigestHandler();
-    const ctx = makeCtx({ pendingRows: [row] });
+    const { ctx, sendNotificationMock } = makeCtx({ pendingRows: [row] });
 
     await handler.execute(ctx);
 
-    const payload = (ctx.outboundGateway as any).sendNotification.mock.calls[0][0];
+    const payload = sendNotificationMock.mock.calls[0][0];
     expect(payload.body).toContain('ref-abc');
     expect(payload.body).toContain('Book flight to NYC');
     expect(payload.body).toContain('book-travel');
@@ -154,11 +165,11 @@ describe('PendingActionsDigestHandler', () => {
       expiresAt: new Date(FIXED_NOW + 1_800_000), // 30 min in the future
     });
     const handler = new PendingActionsDigestHandler();
-    const ctx = makeCtx({ pendingRows: [row] });
+    const { ctx, sendNotificationMock } = makeCtx({ pendingRows: [row] });
 
     await handler.execute(ctx);
 
-    const payload = (ctx.outboundGateway as any).sendNotification.mock.calls[0][0];
+    const payload = sendNotificationMock.mock.calls[0][0];
     expect(payload.body).toContain('<1h remaining');
   });
 
@@ -166,12 +177,12 @@ describe('PendingActionsDigestHandler', () => {
     const row = makeRow({ id: 1, shortRef: 'cal-1' });
     const handler = new PendingActionsDigestHandler();
     // Setting ceoEmail: '' causes makeCtx to set process.env['CEO_PRIMARY_EMAIL'] = ''
-    const ctx = makeCtx({ pendingRows: [row], ceoEmail: '' });
+    const { ctx, sendNotificationMock, logWarnMock } = makeCtx({ pendingRows: [row], ceoEmail: '' });
 
     const result = await handler.execute(ctx);
 
-    expect((ctx.outboundGateway as any).sendNotification).not.toHaveBeenCalled();
-    expect((ctx.log as any).warn).toHaveBeenCalled();
+    expect(sendNotificationMock).not.toHaveBeenCalled();
+    expect(logWarnMock).toHaveBeenCalled();
 
     expect(result.success).toBe(true);
     if (!result.success) throw new Error('unreachable');
@@ -181,12 +192,12 @@ describe('PendingActionsDigestHandler', () => {
   it('skips notification when outboundGateway is not available', async () => {
     const row = makeRow({ id: 1, shortRef: 'cal-1' });
     const handler = new PendingActionsDigestHandler();
-    const ctx = makeCtx({ pendingRows: [row], noOutboundGateway: true });
+    const { ctx, logWarnMock } = makeCtx({ pendingRows: [row], noOutboundGateway: true });
 
     const result = await handler.execute(ctx);
 
     // ctx.outboundGateway is undefined — verify no crash and warn emitted
-    expect((ctx.log as any).warn).toHaveBeenCalled();
+    expect(logWarnMock).toHaveBeenCalled();
 
     expect(result.success).toBe(true);
     if (!result.success) throw new Error('unreachable');
@@ -197,7 +208,7 @@ describe('PendingActionsDigestHandler', () => {
     const row = makeRow({ id: 1, shortRef: 'cal-1' });
     const handler = new PendingActionsDigestHandler();
     // sendResult: false means the gateway accepted the call but returned false
-    const ctx = makeCtx({ pendingRows: [row], sendResult: false });
+    const { ctx } = makeCtx({ pendingRows: [row], sendResult: false });
 
     const result = await handler.execute(ctx);
 
@@ -209,10 +220,10 @@ describe('PendingActionsDigestHandler', () => {
 
   it('returns success:false on unexpected error', async () => {
     const handler = new PendingActionsDigestHandler();
-    const ctx = makeCtx();
+    const { ctx, findAllPendingMock } = makeCtx();
 
     // Override findAllPending to simulate an unexpected DB error
-    (ctx.actionLogRepo as any).findAllPending = vi.fn().mockRejectedValue(new Error('DB error'));
+    findAllPendingMock.mockRejectedValue(new Error('DB error'));
 
     const result = await handler.execute(ctx);
 
