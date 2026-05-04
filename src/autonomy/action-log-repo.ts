@@ -226,7 +226,9 @@ export class ActionLogRepo {
     );
     const count = result.rowCount ?? 0;
     if (count > 0) {
-      this.logger.info({ count, ids }, 'action-log-repo: expired rows');
+      this.logger.info({ count, totalRequested: ids.length, ids }, 'action-log-repo: expired rows');
+    } else if (ids.length > 0) {
+      this.logger.debug({ ids }, 'action-log-repo: expireRows affected 0 rows — all may have been concurrently resolved');
     }
     return count;
   }

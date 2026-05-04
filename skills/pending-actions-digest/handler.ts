@@ -30,8 +30,12 @@ function formatTimeRemaining(ms: number): string {
 export class PendingActionsDigestHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {
     try {
+      if (!ctx.actionLogRepo) {
+        return { success: false, error: 'pending-actions-digest requires actionLogRepo capability' };
+      }
+
       // --- Step 1: Load all non-expired pending_approval rows ---
-      const pending: ActionLogRow[] = await ctx.actionLogRepo!.findAllPending();
+      const pending: ActionLogRow[] = await ctx.actionLogRepo.findAllPending();
 
       // Early return when nothing to digest — avoid sending an empty email.
       if (pending.length === 0) {
@@ -94,7 +98,8 @@ export class PendingActionsDigestHandler implements SkillHandler {
 
       return { success: true, data: { pending: pending.length, skipped: false } };
     } catch (e) {
-      return { success: false, error: String(e) };
+      ctx.log.error({ err: e }, 'pending-actions-digest: unexpected error');
+      return { success: false, error: e instanceof Error ? e.message : String(e) };
     }
   }
 }
