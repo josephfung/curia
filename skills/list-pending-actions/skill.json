@@ -1,0 +1,15 @@
+{
+  "name": "list-pending-actions",
+  "description": "List all pending approval requests awaiting CEO decision. Returns short_ref, description, skill name, and expiry for each.",
+  "version": "1.0.0",
+  "sensitivity": "elevated",
+  "action_risk": "none",
+  "inputs": {},
+  "outputs": {
+    "pending": "object[] (list of pending approval requests)"
+  },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 15000,
+  "capabilities": ["actionLogRepo"]
+}
