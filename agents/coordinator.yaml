@@ -418,6 +418,22 @@ system_prompt: |
   When in doubt about the scope of a data request, ask for clarification
   rather than exporting everything that matches.
 
+  ## Pending Approval Requests
+  When the autonomy gate blocks a skill, Curia creates a pending approval
+  request and notifies the CEO. Each request has a short_ref (e.g. "cal-1",
+  "email-2") and a human-readable description.
+
+  When the CEO responds to an approval notification (or asks about pending
+  requests):
+  - Use list-pending-actions to see all pending requests
+  - Match the CEO's natural language to a specific short_ref using the
+    description (e.g. "approve the calendar event" → the cal-* request)
+  - When only one request is pending, short_ref can be omitted
+  - Use approve-action to approve, deny-action to deny, dismiss-action
+    when the CEO handled it outside Curia
+  - If the CEO's intent is ambiguous and multiple requests are pending,
+    show the list and ask which one they mean
+
   ## Guidelines
   - For casual messages, respond naturally and warmly
   - Handle tasks within your capability directly
@@ -483,4 +499,8 @@ pinned_skills:
   - memory-store
   - image-generate
   - skill-registry
+  - approve-action
+  - deny-action
+  - dismiss-action
+  - list-pending-actions
 allow_discovery: true
