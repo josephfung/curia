@@ -1,0 +1,17 @@
+{
+  "name": "approve-action",
+  "description": "Approve a pending approval request. Re-executes the originally blocked skill with CEO authorization. Specify short_ref to target a specific request, or omit when only one is pending.",
+  "version": "1.0.0",
+  "sensitivity": "elevated",
+  "action_risk": "none",
+  "inputs": {
+    "short_ref": "string? (reference code from the approval notification, e.g. 'cal-1')"
+  },
+  "outputs": {
+    "result": "object (re-execution result and approval status)"
+  },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 60000,
+  "capabilities": ["bus", "actionLogRepo", "executionLayer"]
+}
