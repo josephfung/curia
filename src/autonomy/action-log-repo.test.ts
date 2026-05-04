@@ -368,4 +368,34 @@ describe('ActionLogRepo', () => {
       }
     });
   });
+
+  describe('findExpired', () => {
+    it('returns expired pending_approval rows ordered by created_at asc', async () => {
+      const now = new Date();
+      const { pool } = makePool([
+        {
+          id: 5, task_id: 't1', conversation_id: null, skill_name: 'email-send',
+          action_risk: 'medium', outcome: 'pending_approval', task_summary: null,
+          competence_flag: null, commitment_flag: null, compatibility: null,
+          scored_by: null, payload: { to: 'a@b.com' }, notification_sent_at: null,
+          resolved_at: null, resolved_by: null, expires_at: new Date(Date.now() - 1000),
+          parent_action_id: null, short_ref: 'email-1', description: 'Send email to a@b.com',
+          created_at: now,
+        },
+      ]);
+      const repo = new ActionLogRepo(pool, createSilentLogger());
+      const rows = await repo.findExpired();
+      expect(rows).toHaveLength(1);
+      expect(rows[0]!.id).toBe(5);
+      expect(rows[0]!.shortRef).toBe('email-1');
+    });
+
+    it('uses correct SQL filter for pending + expired', async () => {
+      const { pool, queries } = makePool([]);
+      const repo = new ActionLogRepo(pool, createSilentLogger());
+      await repo.findExpired();
+      expect(queries[0]!.sql).toContain("outcome = 'pending_approval'");
+      expect(queries[0]!.sql).toContain('expires_at <= now()');
+    });
+  });
 });
