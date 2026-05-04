@@ -398,4 +398,35 @@ describe('ActionLogRepo', () => {
       expect(queries[0]!.sql).toContain('expires_at <= now()');
     });
   });
+
+  describe('expireRows', () => {
+    it('batch-transitions rows to expired and returns count', async () => {
+      const { pool, queries } = makePool([], 3);
+      const repo = new ActionLogRepo(pool, createSilentLogger());
+      const count = await repo.expireRows([1, 2, 3]);
+      expect(count).toBe(3);
+      expect(queries[0]!.sql).toContain("outcome = 'expired'");
+      expect(queries[0]!.sql).toContain("resolved_by = 'system'");
+      expect(queries[0]!.sql).toContain('resolved_at = now()');
+      expect(queries[0]!.sql).toContain("outcome = 'pending_approval'");
+      expect(queries[0]!.params[0]).toEqual([1, 2, 3]);
+    });
+
+    it('returns 0 for empty ids array', async () => {
+      const { pool, queries } = makePool([], 0);
+      const repo = new ActionLogRepo(pool, createSilentLogger());
+      const count = await repo.expireRows([]);
+      expect(count).toBe(0);
+      // Should still issue the query (Postgres handles ANY('{}') gracefully)
+      expect(queries).toHaveLength(1);
+    });
+
+    it('only updates rows still in pending_approval state (idempotency)', async () => {
+      // rowCount 0 means no rows matched the WHERE clause
+      const { pool } = makePool([], 0);
+      const repo = new ActionLogRepo(pool, createSilentLogger());
+      const count = await repo.expireRows([42]);
+      expect(count).toBe(0);
+    });
+  });
 });
