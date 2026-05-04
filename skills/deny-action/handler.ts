@@ -1,0 +1,65 @@
+// handler.ts — deny-action skill implementation.
+//
+// Denies a pending approval request: transitions the autonomy_action_log row
+// to outcome = 'denied' and publishes a human.decision audit event.
+// No re-execution — the originally blocked skill stays blocked.
+//
+// SECURITY: sensitivity: "elevated" + ceoInitiated check.
+
+import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import { createHumanDecision } from '../../src/bus/events.js';
+
+export class DenyActionHandler implements SkillHandler {
+  async execute(ctx: SkillContext): Promise<SkillResult> {
+    if (ctx.taskMetadata?.ceoInitiated !== true) {
+      ctx.log.warn('deny-action: rejected — ceoInitiated flag absent or false');
+      return { success: false, error: 'This skill requires direct CEO authorization.' };
+    }
+
+    if (!ctx.actionLogRepo) {
+      return { success: false, error: 'deny-action requires actionLogRepo capability' };
+    }
+    if (!ctx.bus) {
+      return { success: false, error: 'deny-action requires bus capability' };
+    }
+
+    const shortRef = typeof ctx.input.short_ref === 'string' && ctx.input.short_ref.trim()
+      ? ctx.input.short_ref.trim()
+      : undefined;
+
+    const resolved = await ctx.actionLogRepo.resolvePending(shortRef);
+    if (!resolved.found) {
+      return { success: false, error: resolved.error };
+    }
+
+    const { row } = resolved;
+
+    await ctx.actionLogRepo.resolveRow(row.id, 'denied', 'ceo');
+
+    // Publish human.decision audit event (best-effort)
+    const senderId = typeof ctx.taskMetadata?.senderId === 'string' ? ctx.taskMetadata.senderId : 'unknown';
+    const channelId = typeof ctx.taskMetadata?.channelId === 'string' ? ctx.taskMetadata.channelId : 'unknown';
+    try {
+      await ctx.bus.publish(
+        'dispatch',
+        createHumanDecision({
+          decision: 'deny',
+          deciderId: senderId,
+          deciderChannel: channelId,
+          subjectEventId: row.taskId,
+          subjectSummary: `CEO denied: ${row.description ?? row.skillName}`,
+          contextShown: ['short_ref', 'description', 'skill_name'],
+          presentedAt: row.createdAt,
+          decidedAt: new Date(),
+          defaultAction: 'block',
+          parentEventId: ctx.taskEventId ?? '',
+        }),
+      );
+    } catch (err) {
+      ctx.log.error({ err, rowId: row.id }, 'deny-action: failed to publish human.decision event');
+    }
+
+    ctx.log.info({ rowId: row.id, shortRef: row.shortRef }, 'deny-action: request denied');
+    return { success: true, data: `Denied: ${row.description ?? row.skillName} (${row.shortRef})` };
+  }
+}
