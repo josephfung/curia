@@ -111,7 +111,7 @@ function makeMockRepo(overrides?: Partial<ActionLogRepo>): ActionLogRepo {
 
 function makeMockGateway(overrides?: Partial<OutboundGateway>): OutboundGateway {
   return {
-    sendNotification: vi.fn().mockResolvedValue(undefined),
+    sendNotification: vi.fn().mockResolvedValue(true),
     ...overrides,
   } as unknown as OutboundGateway;
 }
@@ -193,8 +193,9 @@ describe('ApprovalTriggerService.request()', () => {
 
   it('handles notification failure gracefully', async () => {
     const repo = makeMockRepo();
+    // sendNotification() catches publish errors internally and returns false rather than throwing
     const gateway = makeMockGateway({
-      sendNotification: vi.fn().mockRejectedValue(new Error('SMTP down')),
+      sendNotification: vi.fn().mockResolvedValue(false),
     });
     const service = new ApprovalTriggerService(repo, gateway, createSilentLogger(), 'ceo@example.com');
 
@@ -228,26 +229,46 @@ describe('ApprovalTriggerService.request()', () => {
     expect(gateway.sendNotification).not.toHaveBeenCalled();
   });
 
-  it('inserts row with correct fields', async () => {
+  it('creates row successfully when outboundGateway is undefined', async () => {
     const repo = makeMockRepo();
-    const gateway = makeMockGateway();
-    const service = new ApprovalTriggerService(repo, gateway, createSilentLogger(), 'ceo@example.com');
+    // No gateway at all — row creation must not depend on the outbound stack
+    const service = new ApprovalTriggerService(repo, undefined, createSilentLogger(), 'ceo@example.com');
 
-    await service.request(BASE_OPTS);
+    const result = await service.request(BASE_OPTS);
 
-    const insertCall = (repo.insert as ReturnType<typeof vi.fn>).mock.calls[0]![0];
-    expect(insertCall.taskId).toBe('task-1');
-    expect(insertCall.conversationId).toBe('conv-1');
-    expect(insertCall.skillName).toBe('calendar-create-event');
-    expect(insertCall.actionRisk).toBe('high');
-    expect(insertCall.outcome).toBe('pending_approval');
-    expect(insertCall.payload).toEqual({ title: 'Lunch with Dana' });
-    expect(insertCall.shortRef).toBe('cal-1');
-    expect(insertCall.description).toContain('Create calendar event');
-    expect(insertCall.expiresAt).toBeInstanceOf(Date);
-    // Expires roughly 24h from now (within 5s tolerance)
-    const diffMs = insertCall.expiresAt.getTime() - Date.now();
-    expect(diffMs).toBeGreaterThan(86_400_000 - 5000);
-    expect(diffMs).toBeLessThan(86_400_000 + 5000);
+    expect(result).toEqual({
+      created: true,
+      shortRef: 'cal-1',
+      notificationSent: false,
+    });
+    expect(repo.insert).toHaveBeenCalledOnce();
+  });
+
+  it('inserts row with correct fields', async () => {
+    const FIXED_NOW = 1_746_000_000_000; // 2025-04-30T06:40:00Z — arbitrary fixed point
+    vi.useFakeTimers();
+    vi.setSystemTime(FIXED_NOW);
+    try {
+      const repo = makeMockRepo();
+      const gateway = makeMockGateway();
+      const service = new ApprovalTriggerService(repo, gateway, createSilentLogger(), 'ceo@example.com');
+
+      await service.request(BASE_OPTS);
+
+      const insertCall = (repo.insert as ReturnType<typeof vi.fn>).mock.calls[0]![0];
+      expect(insertCall.taskId).toBe('task-1');
+      expect(insertCall.conversationId).toBe('conv-1');
+      expect(insertCall.skillName).toBe('calendar-create-event');
+      expect(insertCall.actionRisk).toBe('high');
+      expect(insertCall.outcome).toBe('pending_approval');
+      expect(insertCall.payload).toEqual({ title: 'Lunch with Dana' });
+      expect(insertCall.shortRef).toBe('cal-1');
+      expect(insertCall.description).toContain('Create calendar event');
+      expect(insertCall.expiresAt).toBeInstanceOf(Date);
+      // Expires exactly 24h from the frozen now — deterministic, no tolerance needed
+      expect(insertCall.expiresAt.getTime()).toBe(FIXED_NOW + 86_400_000);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
