@@ -1,0 +1,16 @@
+{
+  "name": "approval-expiry-sweep",
+  "description": "Expire stale pending approval requests and notify the CEO of high/critical expirations.",
+  "version": "1.0.0",
+  "sensitivity": "normal",
+  "action_risk": "none",
+  "inputs": {},
+  "outputs": {
+    "expired": "number — count of rows transitioned to expired",
+    "notified": "number — count of high/critical expirations included in notification"
+  },
+  "permissions": [],
+  "secrets": ["CEO_PRIMARY_EMAIL"],
+  "timeout": 30000,
+  "capabilities": ["actionLogRepo", "outboundGateway"]
+}
