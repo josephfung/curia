@@ -15,6 +15,9 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **Approval expiry sweep** — new `approval-expiry-sweep` skill that hourly expires stale `pending_approval` rows and sends a batched CEO notification for high/critical tier expirations; added `findExpired()` and `expireRows()` to `ActionLogRepo`
+- **Pending-actions digest** — new `pending-actions-digest` skill that sends a daily 8 AM summary of all open approval requests to the CEO; added two scheduler entries to `agents/coordinator.yaml`
+- **Notification types** — added `approval_expired` and `pending_actions_digest` to `OutboundNotificationPayload.notificationType` union in `src/bus/events.ts`
 - **Autonomy Phase 3 scoring foundation** — `autonomy_action_log` table (migration 031) records skill invocations and outcomes, serving as the foundation for automatic score adjustment and the approval lifecycle (ADR-018). TypeScript types and repo in `src/autonomy/`. (spec 14, issue #148)
 - **Automatic autonomy score adjustment** — daily `AutonomyScoringPass` runs as a DreamEngine sibling pass. Scores completed actions on Competence/Commitment/Compatibility (deterministic for approval outcomes, LLM judge for success/failure), computes a time-decay-weighted capability score, and nudges the autonomy score ±5 via a delta formula. Guards: 30-action minimum, CEO cooldown (7 days), error rate threshold (20%). (spec 14, issue #148)
 - **`get-autonomy` trend surfacing** — skill now reports `lastSetBy` (CEO or system), trend direction (improving/declining/stable), and scored action count. (spec 14, issue #148)
