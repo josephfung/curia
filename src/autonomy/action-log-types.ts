@@ -98,3 +98,11 @@ export const DETERMINISTIC_SCORES: Record<string, ScoringFlags> = {
   resolved_externally: { competenceFlag: 1, commitmentFlag: 1, compatibility: null, scoredBy: 'deterministic' },
   rejected:            { competenceFlag: 0, commitmentFlag: 1, compatibility: null, scoredBy: 'deterministic' },
 };
+
+/** Result of resolving a short_ref to a pending_approval row. */
+export type ResolveResult =
+  | { found: true; row: ActionLogRow }
+  | { found: false; reason: 'not_found'; error: string }
+  | { found: false; reason: 'ambiguous'; error: string; pending: ActionLogRow[] }
+  | { found: false; reason: 'expired'; error: string }
+  | { found: false; reason: 'already_resolved'; error: string };

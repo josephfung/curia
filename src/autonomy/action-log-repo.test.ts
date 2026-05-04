@@ -20,6 +20,26 @@ function makePool(rows: Record<string, unknown>[] = [], rowCount = 0): {
   return { pool, queries };
 }
 
+/**
+ * Like makePool, but returns different rows for each successive query call.
+ * Used to test methods that make multiple DB round-trips (e.g. resolvePending).
+ */
+function makeSequentialPool(
+  callResults: Array<Record<string, unknown>[]>,
+): { pool: Pool; queries: Array<{ sql: string; params: unknown[] }> } {
+  const queries: Array<{ sql: string; params: unknown[] }> = [];
+  let callIndex = 0;
+  const pool = {
+    query: vi.fn(async (sql: string, params?: unknown[]) => {
+      queries.push({ sql, params: params ?? [] });
+      const rows = callResults[callIndex] ?? [];
+      callIndex++;
+      return { rows, rowCount: rows.length } as unknown as QueryResult;
+    }),
+  } as unknown as Pool;
+  return { pool, queries };
+}
+
 describe('ActionLogRepo', () => {
   describe('insert', () => {
     it('inserts a row and returns the id', async () => {
@@ -182,6 +202,156 @@ describe('ActionLogRepo', () => {
       expect(queries[0]!.sql).toContain('UPDATE autonomy_action_log');
       expect(queries[0]!.sql).toContain('notification_sent_at');
       expect(queries[0]!.params).toContain(42);
+    });
+  });
+
+  describe('findAllPending', () => {
+    it('returns pending rows ordered by created_at asc', async () => {
+      const now = new Date();
+      const { pool } = makePool([
+        {
+          id: 1, task_id: 't1', conversation_id: null, skill_name: 'calendar-create-event',
+          action_risk: 'high', outcome: 'pending_approval', task_summary: null,
+          competence_flag: null, commitment_flag: null, compatibility: null,
+          scored_by: null, payload: { title: 'Lunch' }, notification_sent_at: null,
+          resolved_at: null, resolved_by: null, expires_at: new Date(Date.now() + 86_400_000),
+          parent_action_id: null, short_ref: 'cal-1', description: 'Create calendar event: Lunch',
+          created_at: now,
+        },
+      ]);
+      const repo = new ActionLogRepo(pool, createSilentLogger());
+      const rows = await repo.findAllPending();
+      expect(rows).toHaveLength(1);
+      expect(rows[0]!.shortRef).toBe('cal-1');
+    });
+
+    it('uses the correct SQL filter for pending + non-expired', async () => {
+      const { pool, queries } = makePool([]);
+      const repo = new ActionLogRepo(pool, createSilentLogger());
+      await repo.findAllPending();
+      expect(queries[0]!.sql).toContain("outcome = 'pending_approval'");
+      expect(queries[0]!.sql).toContain('expires_at > now()');
+    });
+  });
+
+  describe('resolveRow', () => {
+    it('updates outcome, resolved_at, and resolved_by for a pending row', async () => {
+      const { pool, queries } = makePool([], 1);
+      const repo = new ActionLogRepo(pool, createSilentLogger());
+      await repo.resolveRow(42, 'approved', 'ceo');
+      expect(queries).toHaveLength(1);
+      expect(queries[0]!.sql).toContain('UPDATE autonomy_action_log');
+      expect(queries[0]!.sql).toContain("outcome = 'pending_approval'");
+      expect(queries[0]!.params).toContain(42);
+      expect(queries[0]!.params).toContain('approved');
+      expect(queries[0]!.params).toContain('ceo');
+    });
+
+    it('accepts denied outcome', async () => {
+      const { pool, queries } = makePool([], 1);
+      const repo = new ActionLogRepo(pool, createSilentLogger());
+      await repo.resolveRow(10, 'denied', 'ceo');
+      expect(queries[0]!.params).toContain('denied');
+    });
+
+    it('accepts resolved_externally outcome', async () => {
+      const { pool, queries } = makePool([], 1);
+      const repo = new ActionLogRepo(pool, createSilentLogger());
+      await repo.resolveRow(10, 'resolved_externally', 'ceo');
+      expect(queries[0]!.params).toContain('resolved_externally');
+    });
+  });
+
+  describe('resolvePending', () => {
+    // A representative pending row fixture used across multiple tests.
+    const pendingRow = {
+      id: 10, task_id: 't1', conversation_id: null, skill_name: 'calendar-create-event',
+      action_risk: 'high', outcome: 'pending_approval', task_summary: null,
+      competence_flag: null, commitment_flag: null, compatibility: null,
+      scored_by: null, payload: { title: 'Lunch' }, notification_sent_at: null,
+      resolved_at: null, resolved_by: null, expires_at: new Date(Date.now() + 86_400_000),
+      parent_action_id: null, short_ref: 'cal-1', description: 'Create calendar event: Lunch',
+      created_at: new Date(),
+    };
+
+    it('resolves by short_ref when provided', async () => {
+      const { pool } = makePool([pendingRow]);
+      const repo = new ActionLogRepo(pool, createSilentLogger());
+      const result = await repo.resolvePending('cal-1');
+      expect(result.found).toBe(true);
+      if (result.found) expect(result.row.id).toBe(10);
+    });
+
+    it('returns not_found when short_ref does not match any row', async () => {
+      // Both queries (pending-only and any-outcome) return nothing.
+      const { pool } = makeSequentialPool([[], []]);
+      const repo = new ActionLogRepo(pool, createSilentLogger());
+      const result = await repo.resolvePending('cal-99');
+      expect(result).toEqual({
+        found: false,
+        reason: 'not_found',
+        error: expect.stringContaining('cal-99'),
+      });
+    });
+
+    it('returns already_resolved when row exists but is not pending', async () => {
+      const resolvedRow = { ...pendingRow, outcome: 'approved' };
+      // Query 1 (pending + non-expired) returns nothing;
+      // Query 2 (any outcome) returns the resolved row.
+      const { pool } = makeSequentialPool([[], [resolvedRow]]);
+      const repo = new ActionLogRepo(pool, createSilentLogger());
+      const result = await repo.resolvePending('cal-1');
+      expect(result).toEqual({
+        found: false,
+        reason: 'already_resolved',
+        error: expect.stringContaining('already resolved'),
+      });
+    });
+
+    it('returns expired when row is pending but past expires_at', async () => {
+      const expiredRow = { ...pendingRow, expires_at: new Date(Date.now() - 1000) };
+      // Query 1 (pending + non-expired) returns nothing;
+      // Query 2 (any outcome) returns the expired-but-still-pending row.
+      const { pool } = makeSequentialPool([[], [expiredRow]]);
+      const repo = new ActionLogRepo(pool, createSilentLogger());
+      const result = await repo.resolvePending('cal-1');
+      expect(result).toEqual({
+        found: false,
+        reason: 'expired',
+        error: expect.stringContaining('expired'),
+      });
+    });
+
+    it('resolves to sole pending row when no short_ref provided', async () => {
+      // findAllPending returns one row
+      const { pool } = makePool([pendingRow]);
+      const repo = new ActionLogRepo(pool, createSilentLogger());
+      const result = await repo.resolvePending();
+      expect(result.found).toBe(true);
+      if (result.found) expect(result.row.id).toBe(10);
+    });
+
+    it('returns not_found when no short_ref and no pending rows', async () => {
+      const { pool } = makePool([]);
+      const repo = new ActionLogRepo(pool, createSilentLogger());
+      const result = await repo.resolvePending();
+      expect(result).toEqual({
+        found: false,
+        reason: 'not_found',
+        error: expect.stringContaining('No pending'),
+      });
+    });
+
+    it('returns ambiguous when no short_ref and multiple pending rows', async () => {
+      const row2 = { ...pendingRow, id: 11, short_ref: 'email-1', skill_name: 'email-reply' };
+      const { pool } = makePool([pendingRow, row2]);
+      const repo = new ActionLogRepo(pool, createSilentLogger());
+      const result = await repo.resolvePending();
+      expect(result.found).toBe(false);
+      if (!result.found) {
+        expect(result.reason).toBe('ambiguous');
+        expect((result as { pending: unknown[] }).pending).toHaveLength(2);
+      }
     });
   });
 });
