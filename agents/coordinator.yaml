@@ -504,3 +504,11 @@ pinned_skills:
   - dismiss-action
   - list-pending-actions
 allow_discovery: true
+schedule:
+  - cron: "0 * * * *"
+    task: "Run the approval expiry sweep — find and expire any pending approval requests that have passed their expiry time."
+    expectedDurationSeconds: 120
+
+  - cron: "0 8 * * *"
+    task: "Run the pending-actions digest — if any approval requests are still awaiting a decision, send a summary to the CEO."
+    expectedDurationSeconds: 120
