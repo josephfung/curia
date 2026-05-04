@@ -203,13 +203,18 @@ export class ActionLogRepo {
     outcome: 'approved' | 'denied' | 'resolved_externally',
     resolvedBy: string,
   ): Promise<void> {
-    await this.pool.query(
+    const result = await this.pool.query(
       `UPDATE autonomy_action_log
        SET outcome = $2, resolved_at = now(), resolved_by = $3
        WHERE id = $1 AND outcome = 'pending_approval'`,
       [id, outcome, resolvedBy],
     );
-    this.logger.debug({ id, outcome, resolvedBy }, 'action-log-repo: row resolved');
+    if ((result.rowCount ?? 0) === 0) {
+      // Row was already resolved by a concurrent call — idempotent no-op.
+      this.logger.warn({ id, outcome, resolvedBy }, 'action-log-repo: resolveRow affected 0 rows — row may have been resolved concurrently');
+    } else {
+      this.logger.debug({ id, outcome, resolvedBy }, 'action-log-repo: row resolved');
+    }
   }
 
   /**
