@@ -39,6 +39,21 @@ describe('ActionLogRepo', () => {
       expect(queries[0]!.params).toContain('task-1');
       expect(queries[0]!.params).toContain('conv-1');
     });
+
+    it('includes parent_action_id in INSERT when provided', async () => {
+      const { pool, queries } = makePool([{ id: 99 }]);
+      const repo = new ActionLogRepo(pool, createSilentLogger());
+      const id = await repo.insert({
+        taskId: 'task-1',
+        skillName: 'calendar-create-event',
+        actionRisk: 'high',
+        outcome: 'success',
+        parentActionId: 42,
+      });
+      expect(id).toBe(99);
+      expect(queries[0]!.sql).toContain('parent_action_id');
+      expect(queries[0]!.params).toContain(42);
+    });
   });
 
   describe('findUnscoredTerminal', () => {

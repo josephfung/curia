@@ -66,11 +66,13 @@ export interface ActionLogInsert {
   outcome: ActionLogOutcome;
   taskSummary?: string;
 
-  // Approval lifecycle fields (optional — used by #427)
+  // Approval lifecycle fields (optional — used by #427/#428)
   payload?: Record<string, unknown>;
   expiresAt?: Date;
   shortRef?: string;
   description?: string;
+  /** Links a re-execution row back to the approved row. Used by approve-action (#428). */
+  parentActionId?: number;
 }
 
 /** Scoring flags written by the scoring pass or deterministic scorer. */
