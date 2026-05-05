@@ -143,10 +143,11 @@ export class EmailDraftSaveHandler implements SkillHandler {
       } catch (err) {
         // Non-fatal — the draft was already created successfully. The coordinator
         // and CEO can still find it via their email client; the digest just won't
-        // list it. Log at warn so it surfaces for investigation without alarming ops.
-        ctx.log.warn(
+        // list it. Log at error (not warn) so the missing digest entry is visible in
+        // alerting and can be investigated before the CEO misses an approval opportunity.
+        ctx.log.error(
           { err, draftId: result.draftId, taskId: ctx.taskEventId },
-          'email-draft-save: failed to write action_log row for observation-mode draft — draft was saved but will not appear in pending-actions-digest',
+          'email-draft-save: failed to write action_log row for observation-mode draft — draft saved but will not appear in pending-actions-digest',
         );
       }
     }

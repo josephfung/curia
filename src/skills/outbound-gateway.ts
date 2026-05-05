@@ -288,36 +288,52 @@ export class OutboundGateway {
         'outbound-gateway: autonomy gate skipped — humanApproved flag set (CEO-authorized action, see ADR-017)',
       );
     } else if (this.autonomyService) {
+      // Fail-open on config read only — getConfig() failure must not block sends.
+      // The action_log DB write is kept outside this try/catch so a DB error there
+      // does NOT cause fail-open; the send stays blocked even if we can't write the row.
+      let autonomyConfig: Awaited<ReturnType<typeof this.autonomyService.getConfig>> | null = null;
       try {
-        const autonomyConfig = await this.autonomyService.getConfig();
-        const sendThreshold = AutonomyService.minScoreForActionRisk('medium');
-        if (autonomyConfig !== null && autonomyConfig.score < sendThreshold) {
-          this.log.info(
-            { channel: request.channel, currentScore: autonomyConfig.score, sendThreshold },
-            `outbound-gateway: send blocked by autonomy gate — score < ${sendThreshold}`,
+        autonomyConfig = await this.autonomyService.getConfig();
+      } catch (err) {
+        // DB error — fail-open. Log at warn so anomalies are visible in alerting.
+        this.log.warn(
+          { err, channel: request.channel },
+          'outbound-gateway: autonomy gate failed to read config — proceeding without gate (fail-open)',
+        );
+      }
+
+      const sendThreshold = AutonomyService.minScoreForActionRisk('medium');
+      if (autonomyConfig !== null && autonomyConfig.score < sendThreshold) {
+        this.log.info(
+          { channel: request.channel, currentScore: autonomyConfig.score, sendThreshold },
+          `outbound-gateway: send blocked by autonomy gate — score < ${sendThreshold}`,
+        );
+        this.bus.publish('dispatch', createAutonomySendBlocked({
+          channel: request.channel,
+          currentScore: autonomyConfig.score,
+          requiredScore: sendThreshold,
+        })).catch((err) => {
+          this.log.warn(
+            { err, channel: request.channel },
+            'outbound-gateway: failed to publish autonomy.send_blocked event',
           );
-          this.bus.publish('dispatch', createAutonomySendBlocked({
-            channel: request.channel,
-            currentScore: autonomyConfig.score,
-            requiredScore: sendThreshold,
-          })).catch((err) => {
-            this.log.warn(
-              { err, channel: request.channel },
-              'outbound-gateway: failed to publish autonomy.send_blocked event',
-            );
-          });
+        });
 
-          // Two-step draft-fallback: if actionLogRepo + taskEventId are present,
-          // write a pending_approval row so the approval lifecycle can track the
-          // gated action and link a fallback artifact (e.g. draft ID) later.
-          if (this.actionLogRepo && options?.taskEventId) {
+        // Two-step draft-fallback: if actionLogRepo + taskEventId are present,
+        // write a pending_approval row so the approval lifecycle can track the
+        // gated action and link a fallback artifact (e.g. draft ID) later.
+        // DB failure here must NOT cause fail-open — the send stays blocked even
+        // if the row can't be written (actionRef will just be absent from the result).
+        let actionRef: string | undefined;
+        if (this.actionLogRepo && options?.taskEventId) {
+          // Extract recipient and subject (email channel only for now)
+          const recipientEmail = request.channel === 'email' ? request.to : '';
+          const subject = request.channel === 'email' ? request.subject : undefined;
+          const description = `Draft reply to ${recipientEmail}${subject ? ` — "${subject}"` : ''}. Use send-draft to approve.`;
+
+          try {
             const counter = await this.actionLogRepo.countShortRefsForTask(options.taskEventId);
-            const actionRef = `email-${counter + 1}`;
-
-            // Extract recipient and subject (email channel only for now)
-            const recipientEmail = request.channel === 'email' ? request.to : '';
-            const subject = request.channel === 'email' ? request.subject : undefined;
-            const description = `Draft reply to ${recipientEmail}${subject ? ` — "${subject}"` : ''}. Use send-draft to approve.`;
+            actionRef = `email-${counter + 1}`;
 
             await this.actionLogRepo.insert({
               taskId: options.taskEventId,
@@ -335,29 +351,31 @@ export class OutboundGateway {
               },
               expiresAt: new Date(Date.now() + 48 * 60 * 60 * 1000),
             });
-
-            return {
-              success: false,
-              gated: true,
-              actionRef,
-              blockedReason: `Autonomy score ${autonomyConfig.score} is below send threshold ${sendThreshold}`,
-            };
+          } catch (err) {
+            this.log.error(
+              { err, channel: request.channel, taskEventId: options.taskEventId },
+              'outbound-gateway: failed to write action_log row during gate — send is still blocked, actionRef will be absent',
+            );
+            // actionRef remains undefined — send is still blocked below
           }
+        }
 
+        if (actionRef) {
           return {
             success: false,
             gated: true,
-            blockedReason:
-              `Autonomy score is ${autonomyConfig.score} — direct sends require a score of at least ${sendThreshold}. ` +
-              `Use createEmailDraft() for drafts, or ask the CEO to raise the score with set-autonomy.`,
+            actionRef,
+            blockedReason: `Autonomy score ${autonomyConfig.score} is below send threshold ${sendThreshold}`,
           };
         }
-      } catch (err) {
-        // DB error — fail-open. Log at warn so anomalies are visible in alerting.
-        this.log.warn(
-          { err, channel: request.channel },
-          'outbound-gateway: autonomy gate failed to read config — proceeding without gate (fail-open)',
-        );
+
+        return {
+          success: false,
+          gated: true,
+          blockedReason:
+            `Autonomy score is ${autonomyConfig.score} — direct sends require a score of at least ${sendThreshold}. ` +
+            `Use createEmailDraft() for drafts, or ask the CEO to raise the score with set-autonomy.`,
+        };
       }
     }
 
@@ -1141,11 +1159,18 @@ export class OutboundGateway {
    */
   async linkGatedAction(actionRef: string, payload: Record<string, unknown>): Promise<void> {
     if (!this.actionLogRepo) return;
-    const updated = await this.actionLogRepo.linkPayload(actionRef, payload);
-    if (!updated) {
-      this.log.warn(
-        { actionRef },
-        'outbound-gateway: linkGatedAction found no pending row for actionRef — may have expired',
+    try {
+      const updated = await this.actionLogRepo.linkPayload(actionRef, payload);
+      if (!updated) {
+        this.log.warn(
+          { actionRef },
+          'outbound-gateway: linkGatedAction found no pending row for actionRef — may have expired or been cleaned up',
+        );
+      }
+    } catch (err) {
+      this.log.error(
+        { err, actionRef },
+        'outbound-gateway: linkGatedAction DB call failed — action_log row will not have draftId linked',
       );
     }
   }

@@ -430,7 +430,13 @@ export class EmailAdapter {
 
     if (outboundPolicy === 'draft_gate') {
       // Config-level always-draft — no autonomy decision, no action_log
-      await outboundGateway.createEmailDraft(sendRequest);
+      const draftResult = await outboundGateway.createEmailDraft(sendRequest);
+      if (!draftResult.success) {
+        logger.error(
+          { accountId, reason: draftResult.blockedReason, to: sendRequest.to },
+          'email-adapter: draft_gate policy — createEmailDraft failed',
+        );
+      }
       return;
     }
 
@@ -443,21 +449,48 @@ export class EmailAdapter {
     if (result.success) return;
 
     if (result.gated) {
-      // Gateway blocked the send — create draft as fallback
-      const draftResult = await outboundGateway.createEmailDraft(sendRequest);
+      // Gateway blocked the send — create draft as fallback.
+      // Guard createEmailDraft explicitly: if it throws, we must not propagate to the
+      // outer sendOutboundReply catch, which would log "Failed to send email reply" even
+      // though the gateway gate is working correctly and no send was attempted.
+      let draftResult: Awaited<ReturnType<typeof outboundGateway.createEmailDraft>> | undefined;
+      try {
+        draftResult = await outboundGateway.createEmailDraft(sendRequest);
+      } catch (err) {
+        logger.error(
+          { err, accountId, actionRef: result.actionRef },
+          'email-adapter: unexpected error creating gated fallback draft — draft not created',
+        );
+        return;
+      }
 
-      if (draftResult.success && draftResult.draftId && result.actionRef) {
-        await outboundGateway.linkGatedAction(result.actionRef, {
-          draftId: draftResult.draftId,
-          accountId,
-          recipientEmail: sendRequest.to,
-          subject: sendRequest.subject,
-        });
+      if (draftResult && draftResult.success && draftResult.draftId) {
+        if (result.actionRef) {
+          // linkGatedAction is internally guarded (no-throw), so no outer try/catch needed here.
+          await outboundGateway.linkGatedAction(result.actionRef, {
+            draftId: draftResult.draftId,
+            accountId,
+            recipientEmail: sendRequest.to,
+            subject: sendRequest.subject,
+          });
+        } else {
+          // actionRef is absent when taskEventId was not passed — draft is created but
+          // won't appear in the pending-actions-digest. Log so the gap is visible.
+          logger.warn(
+            { accountId, draftId: draftResult.draftId },
+            'email-adapter: gated fallback draft created but no actionRef available — draft will not appear in pending-actions-digest (taskEventId was absent)',
+          );
+        }
+      } else if (draftResult && !draftResult.success) {
+        logger.error(
+          { accountId, actionRef: result.actionRef, reason: draftResult.blockedReason },
+          'email-adapter: gated fallback draft creation failed — send blocked, no draft created',
+        );
       }
 
       logger.info(
-        { accountId, actionRef: result.actionRef, draftId: draftResult.draftId },
-        'email-adapter: send gated by autonomy — draft created as fallback',
+        { accountId, draftId: draftResult?.draftId, actionRef: result.actionRef },
+        'email-adapter: send gated — fallback draft created',
       );
       return;
     }
