@@ -424,6 +424,65 @@ describe('ActionLogRepo', () => {
     });
   });
 
+  describe('findPendingByPayloadField', () => {
+    it('returns row when payload field matches', async () => {
+      const now = new Date();
+      const { pool } = makePool([
+        {
+          id: 1, task_id: 't-1', conversation_id: null, skill_name: 'send-email',
+          action_risk: 'medium', outcome: 'pending_approval', task_summary: null,
+          competence_flag: null, commitment_flag: null, compatibility: null,
+          scored_by: null, payload: { draftId: 'draft-abc' }, notification_sent_at: null,
+          resolved_at: null, resolved_by: null, expires_at: new Date(Date.now() + 86_400_000),
+          parent_action_id: null, short_ref: 'email-1', description: 'Send email draft',
+          created_at: now,
+        },
+      ]);
+      const repo = new ActionLogRepo(pool, createSilentLogger());
+      const result = await repo.findPendingByPayloadField('draftId', 'draft-abc');
+      expect(result).not.toBeNull();
+      expect(result!.id).toBe(1);
+    });
+
+    it('returns null when no match', async () => {
+      const { pool } = makePool([]);
+      const repo = new ActionLogRepo(pool, createSilentLogger());
+      const result = await repo.findPendingByPayloadField('draftId', 'nonexistent');
+      expect(result).toBeNull();
+    });
+
+    it('queries with correct SQL targeting payload JSONB field and pending_approval outcome', async () => {
+      const { pool, queries } = makePool([]);
+      const repo = new ActionLogRepo(pool, createSilentLogger());
+      await repo.findPendingByPayloadField('draftId', 'draft-xyz');
+      expect(queries[0]!.sql).toContain("outcome = 'pending_approval'");
+      expect(queries[0]!.sql).toContain('payload->>');
+      expect(queries[0]!.params).toContain('draftId');
+      expect(queries[0]!.params).toContain('draft-xyz');
+    });
+  });
+
+  describe('resolveById', () => {
+    it('returns true when row is updated', async () => {
+      const { pool, queries } = makePool([], 1);
+      const repo = new ActionLogRepo(pool, createSilentLogger());
+      const result = await repo.resolveById(42, 'approved', 'ceo');
+      expect(result).toBe(true);
+      expect(queries[0]!.sql).toContain('UPDATE autonomy_action_log');
+      expect(queries[0]!.sql).toContain("outcome = 'pending_approval'");
+      expect(queries[0]!.params).toContain(42);
+      expect(queries[0]!.params).toContain('approved');
+      expect(queries[0]!.params).toContain('ceo');
+    });
+
+    it('returns false when no matching row (already resolved or not found)', async () => {
+      const { pool } = makePool([], 0);
+      const repo = new ActionLogRepo(pool, createSilentLogger());
+      const result = await repo.resolveById(99, 'approved', 'ceo');
+      expect(result).toBe(false);
+    });
+  });
+
   describe('expireRows', () => {
     it('batch-transitions rows to expired and returns the updated rows', async () => {
       const now = new Date();
