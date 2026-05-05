@@ -14,10 +14,10 @@ import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/t
 import type { NylasMessage } from '../../src/channels/email/nylas-client.js';
 import { createHumanDecision } from '../../src/bus/events.js';
 
-/** Result of findDraftById — either the draft + owning account, or an error string. */
+/** Result of findDraftById — either the draft + owning account, or a structured error. */
 type DraftDiscoveryResult =
   | { success: true; draft: NylasMessage; resolvedAccount: string }
-  | { success: false; error: string };
+  | { success: false; error: string; reason: 'not_found' | 'fetch_error' };
 
 export class SendDraftHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {
@@ -259,7 +259,7 @@ export class SendDraftHandler implements SkillHandler {
     // Slow path: search all accounts. Stop at the first match.
     const accountIds = gateway.listAccountIds();
     if (accountIds.length === 0) {
-      return { success: false, error: 'No email accounts configured' };
+      return { success: false, error: 'No email accounts configured', reason: 'fetch_error' };
     }
 
     // Track which accounts failed so the error message is informative.
@@ -267,10 +267,24 @@ export class SendDraftHandler implements SkillHandler {
     for (const acctId of accountIds) {
       const result = await this.searchAccountForDraft(ctx, gateway, draftId, acctId);
       if (result.success) return result;
-      // A "not found" is expected during cross-account search — only track infra failures.
-      if (result.error.startsWith('Failed to fetch')) {
+      if (result.reason === 'fetch_error') {
         failedAccounts.push(acctId);
       }
+    }
+
+    // When every account had a fetch error, the draft was never actually searched —
+    // return a distinct message so the CEO knows it's a transient API issue, not a
+    // missing draft. Without this, a complete Nylas outage reads as "Draft not found."
+    if (failedAccounts.length === accountIds.length) {
+      ctx.log.error(
+        { draftId, failedAccounts },
+        'send-draft: all accounts failed during draft search — cannot confirm draft existence',
+      );
+      return {
+        success: false,
+        reason: 'fetch_error',
+        error: `Could not search for draft ${draftId}: all email accounts had fetch errors (${failedAccounts.join(', ')}). This is likely a transient API issue — try again shortly.`,
+      };
     }
 
     const searched = accountIds.join(', ');
@@ -283,6 +297,7 @@ export class SendDraftHandler implements SkillHandler {
     );
     return {
       success: false,
+      reason: 'not_found',
       error: `Draft not found: ${draftId}. Searched accounts: ${searched}.${failNote}`,
     };
   }
@@ -299,13 +314,13 @@ export class SendDraftHandler implements SkillHandler {
       drafts = await gateway.listEmailMessages({ folders: ['DRAFTS'] }, account);
     } catch (err) {
       ctx.log.error({ err, account }, 'send-draft: failed to fetch DRAFTS folder');
-      return { success: false, error: `Failed to fetch drafts folder for account '${account}'` };
+      return { success: false, reason: 'fetch_error', error: `Failed to fetch drafts folder for account '${account}'` };
     }
 
     const draft = drafts.find((m) => m.id === draftId);
     if (!draft) {
       ctx.log.debug({ draftId, account }, 'send-draft: draft not in this account');
-      return { success: false, error: `Draft not found: ${draftId}` };
+      return { success: false, reason: 'not_found', error: `Draft not found: ${draftId}` };
     }
 
     ctx.log.info(
