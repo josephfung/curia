@@ -277,6 +277,33 @@ export class OutboundGateway {
       taskEventId?: string;
       /** Conversation ID for action_log context. */
       conversationId?: string;
+      /**
+       * Re-execution recipe for the pending_approval lifecycle.
+       *
+       * Channel adapters opt in to the two-step draft-fallback pattern by providing
+       * this object. When present and the send is gated, the gateway writes a
+       * pending_approval row using these values so approve-action can invoke the
+       * correct skill with the correct payload on CEO approval.
+       *
+       * When absent, no pending_approval row is written and the send returns
+       * { gated: true } without an actionRef. Adapters without a re-execution
+       * path (e.g. Signal today) simply omit this field.
+       */
+      reExecRecipe?: {
+        /** Registered skill name to invoke on approval (e.g. 'send-draft'). */
+        skillName: string;
+        /**
+         * Partial payload to store in the action_log row. May be incomplete at gate
+         * time (e.g. draft_id not yet known). Callers fill in missing fields via
+         * linkGatedAction() after creating the fallback artifact.
+         */
+        partialPayload?: Record<string, unknown>;
+        /**
+         * Human-readable description of the blocked action. Used in the action_log
+         * row (visible via list-pending-actions) and the CEO notification body.
+         */
+        description: string;
+      };
     },
   ): Promise<OutboundSendResult> {
     // ------------------------------------------------------------------
@@ -333,19 +360,13 @@ export class OutboundGateway {
           );
         });
 
-        // Two-step draft-fallback: if actionLogRepo + taskEventId are present,
-        // write a pending_approval row so the approval lifecycle can track the
-        // gated action and link a fallback artifact (e.g. draft ID) later.
-        // DB failure here must NOT cause fail-open — the send stays blocked even
-        // if the row can't be written (actionRef will just be absent from the result).
+        // Two-step draft-fallback: channel adapters opt in by passing reExecRecipe.
+        // When present, write a pending_approval row so approve-action can invoke the
+        // correct skill on CEO approval. DB failure must NOT cause fail-open — the send
+        // stays blocked even if the row can't be written (actionRef will be absent).
         let actionRef: string | undefined;
-        if (this.actionLogRepo && options?.taskEventId && request.channel === 'email') {
-          // Extract recipient and subject — this block is email-only (guarded above).
-          // Non-email gated sends (e.g. Signal) return { gated: true } without an actionRef;
-          // the channel adapter handles them directly without the two-step draft pattern.
-          const recipientEmail = request.to;
-          const subject = request.subject;
-          const description = `Draft reply to ${recipientEmail}${subject ? ` — "${subject}"` : ''}. Use send-draft to approve.`;
+        if (this.actionLogRepo && options?.taskEventId && options?.reExecRecipe) {
+          const recipe = options.reExecRecipe;
 
           // Hoist expiresAt so both the insert row and the notification body use the
           // same value — if the 48h window ever changes, only one line needs updating.
@@ -358,22 +379,17 @@ export class OutboundGateway {
             rowId = await this.actionLogRepo.insert({
               taskId: options.taskEventId,
               conversationId: options.conversationId ?? undefined,
-              skillName: 'outbound-send',
+              skillName: recipe.skillName,
               actionRisk: 'medium',
               outcome: 'pending_approval',
               shortRef: actionRef,
-              description,
-              payload: {
-                source: 'autonomy_gate',
-                recipientEmail,
-                subject,
-                channel: request.channel,
-              },
+              description: recipe.description,
+              payload: recipe.partialPayload ?? {},
               expiresAt,
             });
           } catch (err) {
             this.log.error(
-              { err, channel: request.channel, taskEventId: options.taskEventId },
+              { err, taskEventId: options.taskEventId },
               'outbound-gateway: failed to write action_log row during gate — send is still blocked, actionRef will be absent',
             );
             // actionRef remains undefined — send is still blocked below
@@ -388,19 +404,16 @@ export class OutboundGateway {
             const sent = await this.sendNotification({
               notificationType: 'approval_requested',
               ceoEmail: this.ceoEmail,
-              subject: `Approval needed — reply to ${recipientEmail}`,
+              subject: `Approval needed — ${recipe.description}`,
               body: [
-                `An outbound email reply was blocked by the autonomy gate.`,
-                '',
-                `To: ${recipientEmail}`,
-                subject ? `Subject: ${subject}` : null,
+                recipe.description,
                 '',
                 `Autonomy score: ${autonomyConfig.score} (threshold: ${sendThreshold})`,
                 `Reference: ${actionRef}`,
                 `Expires: ${expiresAt.toISOString()}`,
                 '',
                 `Reply with the reference to approve, deny, or dismiss this request.`,
-              ].filter((line): line is string => line !== null).join('\n'),
+              ].join('\n'),
             });
             if (sent) {
               try {

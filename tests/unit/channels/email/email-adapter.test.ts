@@ -828,15 +828,12 @@ describe('EmailAdapter — dispatchByPolicy gated-fallback', () => {
       expect.objectContaining({ to: CEO_EMAIL, channel: 'email' }),
     );
 
-    // linkGatedAction should be called with the actionRef, taskEventId, and draft metadata
+    // linkGatedAction should be called with the actionRef, taskEventId, and just the draft_id.
+    // account is already in the partialPayload stored at gate time — no need to repeat it here.
     expect(mocks.outboundGateway.linkGatedAction).toHaveBeenCalledWith(
       'email-42',
       'task-evt-2',
-      expect.objectContaining({
-        draftId: 'draft-abc',
-        accountId: 'curia',
-        recipientEmail: CEO_EMAIL,
-      }),
+      { draft_id: 'draft-abc' },
     );
 
     await adapter.stop();

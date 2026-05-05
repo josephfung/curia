@@ -1295,7 +1295,15 @@ function makeActionLogRepo() {
 }
 
 describe('gated draft-fallback (two-step pattern)', () => {
-  it('returns { gated: true, actionRef } when score < threshold', async () => {
+  // Standard re-execution recipe the email adapter would pass to gateway.send().
+  // Tests that exercise the pending_approval write path must include this to opt in.
+  const TEST_RECIPE = {
+    skillName: 'send-draft',
+    partialPayload: { account: 'curia' },
+    description: 'Draft reply to recipient@example.com — "Hello". Use send-draft to approve.',
+  } as const;
+
+  it('returns { gated: true, actionRef } when score < threshold and reExecRecipe provided', async () => {
     const mocks = createMocks();
     const actionLogRepo = makeActionLogRepo();
 
@@ -1312,7 +1320,7 @@ describe('gated draft-fallback (two-step pattern)', () => {
 
     const result = await gateway.send(
       { channel: 'email', to: 'recipient@example.com', subject: 'Hello', body: 'Hi!' },
-      { taskEventId: 'task-123', conversationId: 'conv-456' },
+      { taskEventId: 'task-123', conversationId: 'conv-456', reExecRecipe: TEST_RECIPE },
     );
 
     expect(result.success).toBe(false);
@@ -1321,7 +1329,9 @@ describe('gated draft-fallback (two-step pattern)', () => {
     expect(result.blockedReason).toMatch(/autonomy score.*65.*below.*send threshold/i);
   });
 
-  it('writes action_log row with pending_approval on gate', async () => {
+  it('skips action_log write and returns no actionRef when reExecRecipe is not provided', async () => {
+    // Adapters opt in to the pending_approval lifecycle by passing reExecRecipe.
+    // Without it the gateway gates the send but does not write a row or return an actionRef.
     const mocks = createMocks();
     const actionLogRepo = makeActionLogRepo();
 
@@ -1336,23 +1346,18 @@ describe('gated draft-fallback (two-step pattern)', () => {
       actionLogRepo,
     });
 
-    await gateway.send(
+    const result = await gateway.send(
       { channel: 'email', to: 'recipient@example.com', subject: 'Hello', body: 'Hi!' },
-      { taskEventId: 'task-123', conversationId: 'conv-456' },
+      { taskEventId: 'task-123' }, // no reExecRecipe
     );
 
-    expect(actionLogRepo.insert).toHaveBeenCalledOnce();
-    expect(actionLogRepo.insert).toHaveBeenCalledWith(expect.objectContaining({
-      taskId: 'task-123',
-      conversationId: 'conv-456',
-      skillName: 'outbound-send',
-      actionRisk: 'medium',
-      outcome: 'pending_approval',
-      shortRef: 'email-1',
-    }));
+    expect(result.success).toBe(false);
+    expect(result.gated).toBe(true);
+    expect(result.actionRef).toBeUndefined();
+    expect(actionLogRepo.insert).not.toHaveBeenCalled();
   });
 
-  it('action_log row includes recipient and subject in payload', async () => {
+  it('writes action_log row using recipe skillName, payload, and description', async () => {
     const mocks = createMocks();
     const actionLogRepo = makeActionLogRepo();
 
@@ -1366,20 +1371,27 @@ describe('gated draft-fallback (two-step pattern)', () => {
       autonomyService: makeAutonomyService(65),
       actionLogRepo,
     });
+
+    const recipe = {
+      skillName: 'send-draft',
+      partialPayload: { account: 'joseph' },
+      description: 'Draft reply to partner@example.com — "Project update". Use send-draft to approve.',
+    };
 
     await gateway.send(
       { channel: 'email', to: 'partner@example.com', subject: 'Project update', body: 'Content' },
-      { taskEventId: 'task-789' },
+      { taskEventId: 'task-789', reExecRecipe: recipe },
     );
 
     expect(actionLogRepo.insert).toHaveBeenCalledOnce();
     const insertArg = (actionLogRepo.insert as ReturnType<typeof vi.fn>).mock.calls[0][0];
-    expect(insertArg.payload).toEqual(expect.objectContaining({
-      source: 'autonomy_gate',
-      recipientEmail: 'partner@example.com',
-      subject: 'Project update',
-      channel: 'email',
-    }));
+    expect(insertArg.skillName).toBe('send-draft');
+    expect(insertArg.payload).toEqual({ account: 'joseph' });
+    expect(insertArg.description).toBe(recipe.description);
+    expect(insertArg.taskId).toBe('task-789');
+    expect(insertArg.actionRisk).toBe('medium');
+    expect(insertArg.outcome).toBe('pending_approval');
+    expect(insertArg.shortRef).toBe('email-1');
   });
 
   it('skips action_log write when actionLogRepo is not wired', async () => {
@@ -1398,7 +1410,7 @@ describe('gated draft-fallback (two-step pattern)', () => {
 
     const result = await gateway.send(
       { channel: 'email', to: 'recipient@example.com', subject: 'Hello', body: 'Hi!' },
-      { taskEventId: 'task-123' },
+      { taskEventId: 'task-123', reExecRecipe: TEST_RECIPE },
     );
 
     // Still gated, but without actionRef
@@ -1424,7 +1436,7 @@ describe('gated draft-fallback (two-step pattern)', () => {
 
     const result = await gateway.send(
       { channel: 'email', to: 'recipient@example.com', subject: 'Hello', body: 'Hi!' },
-      // taskEventId intentionally omitted
+      { reExecRecipe: TEST_RECIPE }, // taskEventId intentionally omitted
     );
 
     // Still gated, but without actionRef — and no insert called
@@ -1453,7 +1465,7 @@ describe('gated draft-fallback (two-step pattern)', () => {
 
     const result = await gateway.send(
       { channel: 'email', to: 'recipient@example.com', subject: 'Hello', body: 'Hi!' },
-      { taskEventId: 'task-123' },
+      { taskEventId: 'task-123', reExecRecipe: TEST_RECIPE },
     );
 
     expect(result.actionRef).toBe('email-3');
@@ -1478,7 +1490,7 @@ describe('gated draft-fallback (two-step pattern)', () => {
 
     await gateway.send(
       { channel: 'email', to: 'recipient@example.com', subject: 'Hello', body: 'Hi!' },
-      { taskEventId: 'task-123', conversationId: 'conv-456' },
+      { taskEventId: 'task-123', conversationId: 'conv-456', reExecRecipe: TEST_RECIPE },
     );
 
     const publishCalls = (mocks.bus.publish as ReturnType<typeof vi.fn>).mock.calls;
@@ -1512,7 +1524,7 @@ describe('gated draft-fallback (two-step pattern)', () => {
 
     await gateway.send(
       { channel: 'email', to: 'recipient@example.com', subject: 'Hello', body: 'Hi!' },
-      { taskEventId: 'task-123' },
+      { taskEventId: 'task-123', reExecRecipe: TEST_RECIPE },
     );
 
     expect(actionLogRepo.setNotificationSentAt).toHaveBeenCalledOnce();
@@ -1539,7 +1551,7 @@ describe('gated draft-fallback (two-step pattern)', () => {
 
     const result = await gateway.send(
       { channel: 'email', to: 'recipient@example.com', subject: 'Hello', body: 'Hi!' },
-      { taskEventId: 'task-123' },
+      { taskEventId: 'task-123', reExecRecipe: TEST_RECIPE },
     );
 
     // Gate must still fire correctly despite the notification failure
