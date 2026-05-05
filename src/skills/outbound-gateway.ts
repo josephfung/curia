@@ -248,6 +248,12 @@ export class OutboundGateway {
     this.ceoEmail = config.ceoEmail ?? '';
     this.ceoSignalNumber = config.ceoSignalNumber ?? '';
     this.log = config.logger.child({ component: 'outbound-gateway' });
+    if (this.ceoSignalNumber && !/^\+\d{7,15}$/.test(this.ceoSignalNumber)) {
+      this.log.warn(
+        { ceoSignalNumber: this.ceoSignalNumber },
+        'outbound-gateway: ceoSignalNumber does not look like E.164 format (expected +digits) — CEO Signal bypass may not match',
+      );
+    }
     this.autonomyService = config.autonomyService;
     this.piiRedactor = config.piiRedactor;
     this.actionLogRepo = config.actionLogRepo;
@@ -791,6 +797,9 @@ export class OutboundGateway {
     if (request.channel === 'signal' && 'recipient' in request && request.recipient) {
       return this.ceoSignalNumber !== '' && request.recipient === this.ceoSignalNumber;
     }
+    // Signal group sends (groupId without recipient) intentionally excluded — resolving
+    // group membership at gate time would require an async RPC call to signal-cli.
+    // Group messages to the CEO will be subject to normal autonomy gating.
     return false;
   }
 
@@ -1041,11 +1050,11 @@ export class OutboundGateway {
         { draftId },
         'outbound-gateway: autonomy gate skipped — humanApproved flag set (CEO-authorized draft send, see ADR-017)',
       );
-    } else if (this.autonomyService && this.ceoEmail !== '' && draftMeta.recipientEmail.toLowerCase() === this.ceoEmail.toLowerCase()) {
+    } else if (this.autonomyService && this.ceoEmail !== '' && draftMeta.recipientEmail && draftMeta.recipientEmail.toLowerCase() === this.ceoEmail.toLowerCase()) {
       // Agent-to-principal: CEO-bound draft sends bypass the autonomy gate.
       // Same rationale as the send() CEO bypass — see isCeoRecipient() comment.
       this.log.info(
-        { draftId },
+        { draftId, channel: 'email' },
         'outbound-gateway: autonomy gate skipped — draft recipient is CEO (agent-to-principal communication)',
       );
     } else if (this.autonomyService) {
