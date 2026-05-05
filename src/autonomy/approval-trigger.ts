@@ -180,7 +180,20 @@ export class ApprovalTriggerService {
           );
           continue;
         }
-        throw err; // Non-unique error, or exhausted retries
+        if (isUniqueViolation) {
+          // All retries exhausted on unique violations — extremely unlikely with 4B
+          // possibilities; if it happens, something is badly wrong (entropy failure,
+          // constraint mismatch). Log at error so alerting fires.
+          this.logger.error(
+            { shortRef, attempt, maxRetries: MAX_INSERT_RETRIES },
+            'approval-trigger: short_ref collision exhausted all retries — possible entropy issue',
+          );
+          throw new Error(
+            `approval-trigger: failed to insert after ${MAX_INSERT_RETRIES} attempts due to short_ref collisions`,
+            { cause: err },
+          );
+        }
+        throw err; // Non-unique DB error — propagate as-is
       }
     }
 

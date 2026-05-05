@@ -95,7 +95,7 @@ export interface OutboundSendResult {
   blockedReason?: string;
   /** True when the autonomy gate blocked this send */
   gated?: boolean;
-  /** Short reference for the action_log row (e.g. 'email-1'). Present when gated is true. */
+  /** Short reference for the action_log row (e.g. 'a3f7c12b'). Present when gated is true. */
   actionRef?: string;
 }
 
@@ -372,13 +372,14 @@ export class OutboundGateway {
           // Hoist expiresAt so both the insert row and the notification body use the
           // same value — if the 48h window ever changes, only one line needs updating.
           const expiresAt = new Date(Date.now() + 48 * 60 * 60 * 1000);
+          // Hoist candidateRef before the try block so the notification body can
+          // reference it directly — avoiding a fragile dependency on the outer-scope
+          // actionRef variable which is only set after insert() confirms success.
+          const candidateRef = generateShortRef();
           let rowId: number | undefined;
           try {
-            // generateShortRef() produces a random 8-char hex ref — globally unique
-            // across tasks, no per-task counting. Only assign actionRef after insert
-            // confirms the DB row exists to prevent phantom refs on insert failure.
-            const candidateRef = generateShortRef();
-
+            // Only assign actionRef after insert confirms the DB row exists to
+            // prevent phantom refs if insert throws.
             rowId = await this.actionLogRepo.insert({
               taskId: options.taskEventId,
               conversationId: options.conversationId ?? undefined,
@@ -414,7 +415,7 @@ export class OutboundGateway {
                 recipe.description,
                 '',
                 `Autonomy score: ${autonomyConfig.score} (threshold: ${sendThreshold})`,
-                `Reference: ${actionRef}`,
+                `Reference: ${candidateRef}`,
                 `Expires: ${expiresAt.toISOString()}`,
                 '',
                 `Reply with the reference to approve, deny, or dismiss this request.`,
@@ -1239,8 +1240,9 @@ export class OutboundGateway {
    * Called by channel adapters after they create their fallback artifact.
    * No-op when actionLogRepo is not wired or actionRef doesn't match a pending row.
    *
-   * taskEventId scopes the match to a specific task so that colliding short_refs
-   * (e.g. 'email-1' in task A and 'email-1' in task B) don't cross-pollinate.
+   * taskEventId adds a secondary task_id scope as a defensive measure. short_ref is
+   * globally unique (migration 033), so collisions across tasks cannot occur under
+   * normal operation — the scope guards against any data inconsistency.
    * When absent, the match is by short_ref + outcome alone (backwards compatibility).
    */
   async linkGatedAction(
