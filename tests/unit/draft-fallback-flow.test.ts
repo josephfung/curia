@@ -209,18 +209,20 @@ describe('Draft Fallback Flow Integration', () => {
       const insertedRow = actionLogRepo._insertedRows[0]!;
       expect(insertedRow).toMatchObject({
         taskId: 'task-evt-001',
-        skillName: 'outbound-send',
+        // The email adapter passes reExecRecipe with skillName: 'send-draft' so
+        // approve-action can invoke the correct skill generically on CEO approval.
+        skillName: 'send-draft',
         actionRisk: 'medium',
         outcome: 'pending_approval',
       });
-      expect((insertedRow.payload as Record<string, unknown>).source).toBe('autonomy_gate');
+      // account is stored in partialPayload at gate time so approve-action has it
+      expect((insertedRow.payload as Record<string, unknown>).account).toBe('curia');
 
-      // Assert: linkGatedAction was called with the draft ID
+      // Assert: linkGatedAction was called with just the draft_id.
+      // account was already stored in partialPayload — no need to link it again.
       expect(actionLogRepo._linkedPayloads).toHaveLength(1);
-      expect(actionLogRepo._linkedPayloads[0]!.payload).toMatchObject({
-        draftId: 'draft-001',
-        accountId: 'curia',
-        recipientEmail: 'alice@example.com',
+      expect(actionLogRepo._linkedPayloads[0]!.payload).toEqual({
+        draft_id: 'draft-001',
       });
 
       await adapter.stop();

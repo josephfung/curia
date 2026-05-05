@@ -446,10 +446,22 @@ export class EmailAdapter {
       return;
     }
 
-    // Policy: 'direct' — send through gateway, handle gated fallback
+    // Policy: 'direct' — send through gateway, handle gated fallback.
+    // Pass reExecRecipe so the gateway knows how to re-execute this send on CEO approval:
+    //   skillName: 'send-draft' — the registered skill approve-action will invoke
+    //   partialPayload: { account } — the draft's account; draft_id is filled in by
+    //                                 linkGatedAction() after the draft is created below
+    //   description: human-readable label for the pending_approval row + notification
+    const recipientLabel = sendRequest.to;
+    const subjectLabel = sendRequest.subject;
     const result = await outboundGateway.send(sendRequest, {
       taskEventId: context.taskEventId,
       conversationId: context.conversationId,
+      reExecRecipe: {
+        skillName: 'send-draft',
+        partialPayload: { account: accountId },
+        description: `Draft reply to ${recipientLabel}${subjectLabel ? ` — "${subjectLabel}"` : ''}. Use send-draft to approve.`,
+      },
     });
 
     if (result.success) return;
@@ -474,12 +486,11 @@ export class EmailAdapter {
         if (result.actionRef) {
           // linkGatedAction is internally guarded (no-throw), so no outer try/catch needed here.
           // Pass context.taskEventId so linkPayload can scope the update to this specific task,
-          // preventing short_ref collisions across tasks from smearing draftId onto the wrong row.
+          // preventing short_ref collisions across tasks from smearing draft_id onto the wrong row.
+          // Only draft_id needs linking — account was already stored in reExecRecipe.partialPayload
+          // at gate time, so the merged payload matches send-draft's expected inputs exactly.
           await outboundGateway.linkGatedAction(result.actionRef, context.taskEventId, {
-            draftId: draftResult.draftId,
-            accountId,
-            recipientEmail: sendRequest.to,
-            subject: sendRequest.subject,
+            draft_id: draftResult.draftId,
           });
         } else {
           // actionRef is absent when taskEventId was not passed — draft is created but
