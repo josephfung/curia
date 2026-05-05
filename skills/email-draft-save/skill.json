@@ -3,7 +3,7 @@
   "description": "Save an email as a draft without sending it. The CEO can review and send the draft from their email client. Use for observation-mode triage (NEEDS DRAFT category) or when composing a reply that needs CEO approval before sending.",
   "version": "1.0.0",
   "sensitivity": "normal",
-  "action_risk": "medium",
+  "action_risk": "low",
   "inputs": {
     "to": "string (recipient email address)",
     "subject": "string (email subject line)",

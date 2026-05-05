@@ -1536,3 +1536,94 @@ describe('OutboundGateway.linkGatedAction', () => {
     );
   });
 });
+
+// ---------------------------------------------------------------------------
+// isSystemNotification option on send() — system alerts bypass the autonomy gate
+// ---------------------------------------------------------------------------
+// System notifications (e.g. approval_requested, blocked_content alerts sent TO
+// the CEO) must never be silenced by the same autonomy gate they are reporting on.
+// isSystemNotification: true skips Step 0 only; all other safety checks still run.
+
+describe('isSystemNotification option on send()', () => {
+  it('bypasses the autonomy gate when isSystemNotification: true and score < 70', async () => {
+    const mocks = createMocks();
+    const gateway = new OutboundGateway({
+      nylasClients: new Map([['curia', mocks.nylasClient]]),
+      contactService: mocks.contactService,
+      contentFilter: mocks.contentFilter,
+      bus: mocks.bus,
+      ceoEmail: 'ceo@example.com',
+      logger: mocks.logger,
+      autonomyService: makeAutonomyService(65), // below 70 — would normally block
+    });
+
+    const result = await gateway.send(
+      { channel: 'email', to: 'ceo@example.com', subject: 'Action needed', body: 'Approval required.' },
+      { isSystemNotification: true },
+    );
+
+    expect(result.success).toBe(true);
+    expect(mocks.nylasClient.sendMessage).toHaveBeenCalledOnce();
+    // autonomy.send_blocked must NOT fire — we bypassed the gate
+    expect(mocks.bus.publish).not.toHaveBeenCalledWith(
+      'dispatch',
+      expect.objectContaining({ type: 'autonomy.send_blocked' }),
+    );
+  });
+
+  it('still enforces the blocked-contact check when isSystemNotification: true', async () => {
+    const mocks = createMocks();
+    (mocks.contactService.resolveByChannelIdentity as ReturnType<typeof vi.fn>).mockResolvedValue({
+      contactId: 'contact-1',
+      displayName: 'Blocked',
+      role: null,
+      status: 'blocked',
+      kgNodeId: null,
+      verified: true,
+    });
+    const gateway = new OutboundGateway({
+      nylasClients: new Map([['curia', mocks.nylasClient]]),
+      contactService: mocks.contactService,
+      contentFilter: mocks.contentFilter,
+      bus: mocks.bus,
+      ceoEmail: 'ceo@example.com',
+      logger: mocks.logger,
+      autonomyService: makeAutonomyService(65),
+    });
+
+    const result = await gateway.send(
+      { channel: 'email', to: 'blocked@example.com', subject: 'Hi', body: 'Hi.' },
+      { isSystemNotification: true },
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.blockedReason).toBe('Recipient is blocked');
+    expect(mocks.nylasClient.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('still enforces the content filter when isSystemNotification: true', async () => {
+    const mocks = createMocks();
+    (mocks.contentFilter.check as ReturnType<typeof vi.fn>).mockResolvedValue({
+      passed: false,
+      findings: [{ rule: 'test-rule', detail: 'blocked in test' }],
+    });
+    const gateway = new OutboundGateway({
+      nylasClients: new Map([['curia', mocks.nylasClient]]),
+      contactService: mocks.contactService,
+      contentFilter: mocks.contentFilter,
+      bus: mocks.bus,
+      ceoEmail: 'ceo@example.com',
+      logger: mocks.logger,
+      autonomyService: makeAutonomyService(65),
+    });
+
+    const result = await gateway.send(
+      { channel: 'email', to: 'ceo@example.com', subject: 'Hi', body: 'Hi.' },
+      { isSystemNotification: true },
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.blockedReason).toBe('Content blocked by filter');
+    expect(mocks.nylasClient.sendMessage).not.toHaveBeenCalled();
+  });
+});

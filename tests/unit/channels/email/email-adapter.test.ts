@@ -448,7 +448,7 @@ describe('EmailAdapter — outbound.notification subscriber', () => {
       to: CEO_EMAIL,
       subject: 'Action needed — blocked outbound reply',
     }));
-    expect(sendCall[1]).toEqual({ skipNotificationOnBlock: true });
+    expect(sendCall[1]).toEqual({ skipNotificationOnBlock: true, isSystemNotification: true });
 
     await adapter.stop();
   });
