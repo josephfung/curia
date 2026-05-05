@@ -399,6 +399,31 @@ describe('ActionLogRepo', () => {
     });
   });
 
+  describe('linkPayload', () => {
+    it('merges additional payload into existing row by short_ref', async () => {
+      // rowCount = 1 signals that one row was updated; rows array is the RETURNING result (unused here)
+      const { pool, queries } = makePool([{ id: 1, payload: { source: 'autonomy_gate' } }], 1);
+      const repo = new ActionLogRepo(pool, createSilentLogger());
+
+      const result = await repo.linkPayload('email-1', { draftId: 'draft-abc', accountId: 'curia' });
+
+      expect(result).toBe(true);
+      expect(queries[0]!.sql).toContain('UPDATE');
+      expect(queries[0]!.sql).toContain('short_ref');
+      expect(queries[0]!.sql).toContain('jsonb');
+      expect(queries[0]!.params).toContain('email-1');
+    });
+
+    it('returns false when no row matches the short_ref', async () => {
+      const { pool } = makePool([]);  // empty result — rowCount = 0
+      const repo = new ActionLogRepo(pool, createSilentLogger());
+
+      const result = await repo.linkPayload('unknown-ref', { draftId: 'draft-xyz' });
+
+      expect(result).toBe(false);
+    });
+  });
+
   describe('expireRows', () => {
     it('batch-transitions rows to expired and returns the updated rows', async () => {
       const now = new Date();
