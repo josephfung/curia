@@ -141,6 +141,7 @@ describe('EmailAdapter — sendOutboundReply', () => {
 
     expect(mocks.outboundGateway.send).toHaveBeenCalledWith(
       expect.objectContaining({ to: CEO_EMAIL }),
+      expect.any(Object),
     );
   });
 
@@ -158,6 +159,7 @@ describe('EmailAdapter — sendOutboundReply', () => {
     // Must NOT send to ourselves — must send to the human
     expect(mocks.outboundGateway.send).toHaveBeenCalledWith(
       expect.objectContaining({ to: CEO_EMAIL }),
+      expect.any(Object),
     );
     const callArg = (mocks.outboundGateway.send as ReturnType<typeof vi.fn>).mock.calls[0][0];
     expect(callArg.to).not.toBe(SELF_EMAIL);
@@ -175,6 +177,7 @@ describe('EmailAdapter — sendOutboundReply', () => {
 
     expect(mocks.outboundGateway.send).toHaveBeenCalledWith(
       expect.objectContaining({ to: CEO_EMAIL }),
+      expect.any(Object),
     );
   });
 
@@ -238,6 +241,7 @@ describe('EmailAdapter — sendOutboundReply', () => {
 
     expect(mocks.outboundGateway.send).toHaveBeenCalledWith(
       expect.objectContaining({ replyToMessageId: 'msg-latest' }),
+      expect.any(Object),
     );
   });
 });

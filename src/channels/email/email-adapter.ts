@@ -402,7 +402,10 @@ export class EmailAdapter {
         replyToMessageId: threadMessage.id,
       };
 
-      await this.dispatchByPolicy(sendRequest, { threadId, latestIsOurs, to: recipientEmail });
+      await this.dispatchByPolicy(sendRequest, {
+        taskEventId: outbound.payload.taskEventId,
+        conversationId: outbound.payload.conversationId,
+      });
     } catch (err) {
       logger.error({ err, threadId }, 'Failed to send email reply');
     }
@@ -412,51 +415,54 @@ export class EmailAdapter {
    * Apply this account's outbound policy before dispatching a reply.
    *
    * - direct:      send immediately through the gateway (autonomy gate + blocked-contact +
-   *                content filter all run inside gateway.send)
+   *                content filter all run inside gateway.send). If the gateway returns
+   *                gated (autonomy blocked), fall back to creating a draft and linking
+   *                the action_log row so the CEO can approve-and-send from the digest.
    * - draft_gate:  save as a Nylas draft for human review; no notification is
    *                sent — the CEO discovers drafts via the end-of-day Signal
-   *                digest (#403). Approval + send remain deferred (TODO(#278)).
+   *                digest (#403). No autonomy decision, no action_log.
    */
   private async dispatchByPolicy(
     sendRequest: EmailSendRequest,
-    logCtx: Record<string, unknown>,
+    context: { taskEventId?: string; conversationId?: string },
   ): Promise<void> {
-    const { outboundGateway, logger, outboundPolicy } = this.config;
+    const { outboundPolicy, outboundGateway, logger, accountId } = this.config;
 
-    if (outboundPolicy === 'direct') {
-      // Standard path — gateway enforces autonomy gate, blocked-contact check, and content filter
-      const result = await outboundGateway.send(sendRequest);
-      if (result.success) {
-        logger.info({ ...logCtx, accountId: this.config.accountId }, 'Email reply sent via gateway');
-      } else {
-        logger.warn({ ...logCtx, accountId: this.config.accountId, reason: result.blockedReason }, 'Email reply blocked by gateway');
-      }
+    if (outboundPolicy === 'draft_gate') {
+      // Config-level always-draft — no autonomy decision, no action_log
+      await outboundGateway.createEmailDraft(sendRequest);
       return;
     }
 
-    // draft_gate: save as draft for human review.
-    // The gateway creates the draft silently — no per-draft email notification is sent.
-    // The CEO discovers pending drafts via the end-of-day Signal digest (#403).
-    const draftResult = await outboundGateway.createEmailDraft(sendRequest);
-    if (draftResult.success) {
+    // Policy: 'direct' — send through gateway, handle gated fallback
+    const result = await outboundGateway.send(sendRequest, {
+      taskEventId: context.taskEventId,
+      conversationId: context.conversationId,
+    });
+
+    if (result.success) return;
+
+    if (result.gated) {
+      // Gateway blocked the send — create draft as fallback
+      const draftResult = await outboundGateway.createEmailDraft(sendRequest);
+
+      if (draftResult.success && draftResult.draftId && result.actionRef) {
+        await outboundGateway.linkGatedAction(result.actionRef, {
+          draftId: draftResult.draftId,
+          accountId,
+          recipientEmail: sendRequest.to,
+          subject: sendRequest.subject,
+        });
+      }
+
       logger.info(
-        { ...logCtx, accountId: this.config.accountId, draftId: draftResult.draftId },
-        'Email reply saved as draft for CEO review',
+        { accountId, actionRef: result.actionRef, draftId: draftResult.draftId },
+        'email-adapter: send gated by autonomy — draft created as fallback',
       );
-    } else if (draftResult.blockedReason === 'Recipient is blocked') {
-      // Intentional block — not an infrastructure failure
-      logger.warn(
-        { ...logCtx, accountId: this.config.accountId, reason: draftResult.blockedReason },
-        'Email draft blocked — recipient is on the blocked list',
-      );
-    } else {
-      // Infrastructure failure (Nylas error, contact resolution failure, client not configured).
-      // The reply is permanently lost — log at error so operators can investigate.
-      logger.error(
-        { ...logCtx, accountId: this.config.accountId, reason: draftResult.blockedReason },
-        'Email draft creation failed — reply permanently lost',
-      );
+      return;
     }
+
+    // Non-gated failure (blocked contact, content filter, etc.) — already logged by gateway
   }
 
   /**

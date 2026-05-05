@@ -894,6 +894,9 @@ export class Dispatcher {
         // dispatcher can later verify thread-originated trust when their reply arrives.
         recipientId: routing.senderId,
         parentEventId: event.id,
+        // The agent.response's parentEventId is the agent.task that triggered it — thread
+        // this through so the email adapter can pass it to gateway.send() for action_log context.
+        taskEventId: event.parentEventId ?? undefined,
       });
       await this.bus.publish('dispatch', outbound);
     }
