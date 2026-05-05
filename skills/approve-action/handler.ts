@@ -58,17 +58,33 @@ export class ApproveActionHandler implements SkillHandler {
       }
       ctx.log.info({ rowId: row.id, shortRef: row.shortRef }, 'approve-action: row transitioned to approved');
 
-      // Step 2: Re-execute the original skill with humanApproved bypass
-      const reResult = await ctx.executionLayer.invoke(
-        row.skillName,
-        row.payload,
-        ctx.caller,
-        {
-          humanApproved: true,
-          taskEventId: ctx.taskEventId,
-          conversationId: row.conversationId ?? undefined,
-        },
-      );
+      // Step 2: Re-execute the original skill with humanApproved bypass.
+      //
+      // Special case: 'outbound-send' is a synthetic name used by OutboundGateway for
+      // gate blocks — it is not a registered skill. The correct re-execution path is
+      // send-draft using the draftId + accountId that linkGatedAction stored in payload.
+      let reResult: SkillResult;
+      if (row.skillName === 'outbound-send') {
+        const draftId = typeof row.payload.draftId === 'string' ? row.payload.draftId : null;
+        const accountId = typeof row.payload.accountId === 'string' ? row.payload.accountId : null;
+        if (!draftId || !accountId) {
+          ctx.log.error({ rowId: row.id, shortRef: row.shortRef }, 'approve-action: outbound-send row has no linked draft — cannot re-execute');
+          return { success: false, error: `Cannot approve '${row.shortRef}': no draft was linked to this approval request. The draft may not have been created.` };
+        }
+        reResult = await ctx.executionLayer.invoke(
+          'send-draft',
+          { draft_id: draftId, account: accountId },
+          ctx.caller,
+          { humanApproved: true, taskEventId: ctx.taskEventId, conversationId: row.conversationId ?? undefined },
+        );
+      } else {
+        reResult = await ctx.executionLayer.invoke(
+          row.skillName,
+          row.payload,
+          ctx.caller,
+          { humanApproved: true, taskEventId: ctx.taskEventId, conversationId: row.conversationId ?? undefined },
+        );
+      }
 
       // Step 3: Write child row for the re-execution result
       const childOutcome = reResult.success ? 'success' : 'failure';
@@ -115,6 +131,12 @@ export class ApproveActionHandler implements SkillHandler {
         ctx.log.warn({ rowId: row.id }, 'approve-action: no taskEventId — skipping human.decision audit event');
       }
 
+      if (!reResult.success) {
+        ctx.log.warn(
+          { rowId: row.id, shortRef: row.shortRef, reExecutionError: (reResult as { error: string }).error },
+          'approve-action: re-execution failed',
+        );
+      }
       ctx.log.info(
         { rowId: row.id, shortRef: row.shortRef, reExecutionSuccess: reResult.success },
         'approve-action: completed',

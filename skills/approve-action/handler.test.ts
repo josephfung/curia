@@ -197,3 +197,73 @@ describe('ApproveActionHandler', () => {
     expect(result).toHaveProperty('error', expect.stringContaining('payload'));
   });
 });
+
+// ---------------------------------------------------------------------------
+// outbound-send re-execution — gateway-gated sends route to send-draft
+// ---------------------------------------------------------------------------
+// When skillName === 'outbound-send', the original action was blocked by the
+// OutboundGateway (not a skill registry entry). The correct re-execution path
+// is send-draft using the draftId + accountId stored in payload by linkGatedAction.
+// Invoking 'outbound-send' directly would produce a skill registry error.
+
+describe('ApproveActionHandler — outbound-send re-execution', () => {
+  const OUTBOUND_ROW = {
+    ...PENDING_ROW,
+    skillName: 'outbound-send',
+    actionRisk: 'medium',
+    shortRef: 'email-1',
+    description: 'Draft reply to josephbrnnn@gmail.com — "Re: Reconnecting". Use send-draft to approve.',
+    payload: {
+      source: 'autonomy_gate',
+      channel: 'email',
+      recipientEmail: 'josephbrnnn@gmail.com',
+      subject: 'Re: Reconnecting',
+      draftId: 'draft-abc123',
+      accountId: 'curia',
+    },
+  };
+
+  it('invokes send-draft (not outbound-send) with draftId and accountId from payload', async () => {
+    const repo = makeMockRepo({
+      resolvePending: vi.fn().mockResolvedValue({ found: true, row: OUTBOUND_ROW }),
+    });
+    const bus = makeMockBus();
+    const execLayer = makeMockExecutionLayer({ success: true, data: { message_id: 'msg-1', to: 'josephbrnnn@gmail.com', subject: 'Re: Reconnecting' } });
+    const handler = new ApproveActionHandler();
+
+    const result = await handler.execute(makeCtx({
+      actionLogRepo: repo, bus, executionLayer: execLayer,
+    }));
+
+    expect(result.success).toBe(true);
+    const invokeArgs = (execLayer.invoke as ReturnType<typeof vi.fn>).mock.calls[0]!;
+    // Must route to send-draft, not the synthetic 'outbound-send' name
+    expect(invokeArgs[0]).toBe('send-draft');
+    expect(invokeArgs[1]).toEqual({ draft_id: 'draft-abc123', account: 'curia' });
+    expect(invokeArgs[3]).toMatchObject({ humanApproved: true });
+  });
+
+  it('returns error without invoking execution layer when draftId is missing from payload', async () => {
+    // linkGatedAction may not have run (e.g. email adapter failed to create draft)
+    const repo = makeMockRepo({
+      resolvePending: vi.fn().mockResolvedValue({
+        found: true,
+        row: {
+          ...OUTBOUND_ROW,
+          payload: { source: 'autonomy_gate', channel: 'email', recipientEmail: 'josephbrnnn@gmail.com' },
+        },
+      }),
+    });
+    const bus = makeMockBus();
+    const execLayer = makeMockExecutionLayer();
+    const handler = new ApproveActionHandler();
+
+    const result = await handler.execute(makeCtx({
+      actionLogRepo: repo, bus, executionLayer: execLayer,
+    }));
+
+    expect(result.success).toBe(false);
+    expect(result).toHaveProperty('error', expect.stringContaining('draft'));
+    expect(execLayer.invoke).not.toHaveBeenCalled();
+  });
+});
