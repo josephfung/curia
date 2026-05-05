@@ -8,6 +8,7 @@ import type { EventBus } from '../../../src/bus/bus.js';
 import type { BusEvent } from '../../../src/bus/events.js';
 import type { AutonomyService, AutonomyConfig } from '../../../src/autonomy/autonomy-service.js';
 import type { PiiRedactor } from '../../../src/dispatch/pii-redactor.js';
+import type { ActionLogRepo } from '../../../src/autonomy/action-log-repo.js';
 
 /**
  * Build fresh vi.fn() mocks for each test. Using beforeEach + createMocks()
@@ -1278,3 +1279,183 @@ describe('humanApproved option on send()', () => {
     expect(mocks.nylasClient.sendMessage).not.toHaveBeenCalled();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Gated draft-fallback (two-step pattern) — Task 4
+// ---------------------------------------------------------------------------
+
+/** Build a stub ActionLogRepo for testing the two-step draft-fallback pattern. */
+function makeActionLogRepo() {
+  return {
+    insert: vi.fn().mockResolvedValue(1),
+    linkPayload: vi.fn().mockResolvedValue(true),
+    countShortRefsForTask: vi.fn().mockResolvedValue(0),
+  } as unknown as ActionLogRepo;
+}
+
+describe('gated draft-fallback (two-step pattern)', () => {
+  it('returns { gated: true, actionRef } when score < threshold', async () => {
+    const mocks = createMocks();
+    const actionLogRepo = makeActionLogRepo();
+
+    const gateway = new OutboundGateway({
+      nylasClients: new Map([['curia', mocks.nylasClient]]),
+      contactService: mocks.contactService,
+      contentFilter: mocks.contentFilter,
+      bus: mocks.bus,
+      ceoEmail: 'ceo@example.com',
+      logger: mocks.logger,
+      autonomyService: makeAutonomyService(65),
+      actionLogRepo,
+    });
+
+    const result = await gateway.send(
+      { channel: 'email', to: 'recipient@example.com', subject: 'Hello', body: 'Hi!' },
+      { taskEventId: 'task-123', conversationId: 'conv-456' },
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.gated).toBe(true);
+    expect(result.actionRef).toBe('email-1');
+    expect(result.blockedReason).toMatch(/autonomy score.*65.*below.*send threshold/i);
+  });
+
+  it('writes action_log row with pending_approval on gate', async () => {
+    const mocks = createMocks();
+    const actionLogRepo = makeActionLogRepo();
+
+    const gateway = new OutboundGateway({
+      nylasClients: new Map([['curia', mocks.nylasClient]]),
+      contactService: mocks.contactService,
+      contentFilter: mocks.contentFilter,
+      bus: mocks.bus,
+      ceoEmail: 'ceo@example.com',
+      logger: mocks.logger,
+      autonomyService: makeAutonomyService(65),
+      actionLogRepo,
+    });
+
+    await gateway.send(
+      { channel: 'email', to: 'recipient@example.com', subject: 'Hello', body: 'Hi!' },
+      { taskEventId: 'task-123', conversationId: 'conv-456' },
+    );
+
+    expect(actionLogRepo.insert).toHaveBeenCalledOnce();
+    expect(actionLogRepo.insert).toHaveBeenCalledWith(expect.objectContaining({
+      taskId: 'task-123',
+      conversationId: 'conv-456',
+      skillName: 'outbound-send',
+      actionRisk: 'medium',
+      outcome: 'pending_approval',
+      shortRef: 'email-1',
+    }));
+  });
+
+  it('action_log row includes recipient and subject in payload', async () => {
+    const mocks = createMocks();
+    const actionLogRepo = makeActionLogRepo();
+
+    const gateway = new OutboundGateway({
+      nylasClients: new Map([['curia', mocks.nylasClient]]),
+      contactService: mocks.contactService,
+      contentFilter: mocks.contentFilter,
+      bus: mocks.bus,
+      ceoEmail: 'ceo@example.com',
+      logger: mocks.logger,
+      autonomyService: makeAutonomyService(65),
+      actionLogRepo,
+    });
+
+    await gateway.send(
+      { channel: 'email', to: 'partner@example.com', subject: 'Project update', body: 'Content' },
+      { taskEventId: 'task-789' },
+    );
+
+    expect(actionLogRepo.insert).toHaveBeenCalledOnce();
+    const insertArg = (actionLogRepo.insert as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(insertArg.payload).toEqual(expect.objectContaining({
+      source: 'autonomy_gate',
+      recipientEmail: 'partner@example.com',
+      subject: 'Project update',
+      channel: 'email',
+    }));
+  });
+
+  it('skips action_log write when actionLogRepo is not wired', async () => {
+    const mocks = createMocks();
+
+    const gateway = new OutboundGateway({
+      nylasClients: new Map([['curia', mocks.nylasClient]]),
+      contactService: mocks.contactService,
+      contentFilter: mocks.contentFilter,
+      bus: mocks.bus,
+      ceoEmail: 'ceo@example.com',
+      logger: mocks.logger,
+      autonomyService: makeAutonomyService(65),
+      // actionLogRepo intentionally omitted
+    });
+
+    const result = await gateway.send(
+      { channel: 'email', to: 'recipient@example.com', subject: 'Hello', body: 'Hi!' },
+      { taskEventId: 'task-123' },
+    );
+
+    // Still gated, but without actionRef
+    expect(result.success).toBe(false);
+    expect(result.gated).toBeUndefined();
+    expect(result.actionRef).toBeUndefined();
+  });
+
+  it('skips action_log write when taskEventId is missing', async () => {
+    const mocks = createMocks();
+    const actionLogRepo = makeActionLogRepo();
+
+    const gateway = new OutboundGateway({
+      nylasClients: new Map([['curia', mocks.nylasClient]]),
+      contactService: mocks.contactService,
+      contentFilter: mocks.contentFilter,
+      bus: mocks.bus,
+      ceoEmail: 'ceo@example.com',
+      logger: mocks.logger,
+      autonomyService: makeAutonomyService(65),
+      actionLogRepo,
+    });
+
+    const result = await gateway.send(
+      { channel: 'email', to: 'recipient@example.com', subject: 'Hello', body: 'Hi!' },
+      // taskEventId intentionally omitted
+    );
+
+    // Still gated, but without actionRef — and no insert called
+    expect(result.success).toBe(false);
+    expect(result.gated).toBeUndefined();
+    expect(result.actionRef).toBeUndefined();
+    expect(actionLogRepo.insert).not.toHaveBeenCalled();
+  });
+
+  it('increments actionRef counter based on existing short refs for the task', async () => {
+    const mocks = createMocks();
+    const actionLogRepo = makeActionLogRepo();
+    // Simulate 2 existing short refs for this task
+    (actionLogRepo.countShortRefsForTask as ReturnType<typeof vi.fn>).mockResolvedValue(2);
+
+    const gateway = new OutboundGateway({
+      nylasClients: new Map([['curia', mocks.nylasClient]]),
+      contactService: mocks.contactService,
+      contentFilter: mocks.contentFilter,
+      bus: mocks.bus,
+      ceoEmail: 'ceo@example.com',
+      logger: mocks.logger,
+      autonomyService: makeAutonomyService(65),
+      actionLogRepo,
+    });
+
+    const result = await gateway.send(
+      { channel: 'email', to: 'recipient@example.com', subject: 'Hello', body: 'Hi!' },
+      { taskEventId: 'task-123' },
+    );
+
+    expect(result.actionRef).toBe('email-3');
+  });
+});
+

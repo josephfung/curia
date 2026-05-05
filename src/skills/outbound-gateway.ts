@@ -306,6 +306,44 @@ export class OutboundGateway {
               'outbound-gateway: failed to publish autonomy.send_blocked event',
             );
           });
+
+          // Two-step draft-fallback: if actionLogRepo + taskEventId are present,
+          // write a pending_approval row so the approval lifecycle can track the
+          // gated action and link a fallback artifact (e.g. draft ID) later.
+          if (this.actionLogRepo && options?.taskEventId) {
+            const counter = await this.actionLogRepo.countShortRefsForTask(options.taskEventId);
+            const actionRef = `email-${counter + 1}`;
+
+            // Extract recipient and subject (email channel only for now)
+            const recipientEmail = request.channel === 'email' ? request.to : '';
+            const subject = request.channel === 'email' ? request.subject : undefined;
+            const description = `Draft reply to ${recipientEmail}${subject ? ` — "${subject}"` : ''}. Use send-draft to approve.`;
+
+            await this.actionLogRepo.insert({
+              taskId: options.taskEventId,
+              conversationId: options.conversationId ?? undefined,
+              skillName: 'outbound-send',
+              actionRisk: 'medium',
+              outcome: 'pending_approval',
+              shortRef: actionRef,
+              description,
+              payload: {
+                source: 'autonomy_gate',
+                recipientEmail,
+                subject,
+                channel: request.channel,
+              },
+              expiresAt: new Date(Date.now() + 48 * 60 * 60 * 1000),
+            });
+
+            return {
+              success: false,
+              gated: true,
+              actionRef,
+              blockedReason: `Autonomy score ${autonomyConfig.score} is below send threshold ${sendThreshold}`,
+            };
+          }
+
           return {
             success: false,
             blockedReason:
