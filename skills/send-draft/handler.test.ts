@@ -415,6 +415,31 @@ describe('SendDraftHandler', () => {
       }
     });
 
+    it('returns transient-error message when ALL accounts have fetch errors', async () => {
+      // Every account throws — the draft was never searched, so the error should
+      // say "could not search" not "not found".
+      const listEmailMessages = vi.fn().mockRejectedValue(new Error('Nylas down'));
+
+      const ctx = makeCtx({
+        input: { draft_id: 'draft-abc123' },
+        gateway: {
+          listEmailMessages,
+          sendEmailDraft: vi.fn(),
+          listAccountIds: vi.fn().mockReturnValue(['curia', 'joseph']),
+        },
+      });
+
+      const result = await handler.execute(ctx);
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        // Must NOT say "Draft not found" — it was never actually searched.
+        expect(result.error).toMatch(/could not search/i);
+        expect(result.error).toMatch(/transient/i);
+        expect(result.error).toContain('curia');
+        expect(result.error).toContain('joseph');
+      }
+    });
+
     it('returns error when no email accounts are configured', async () => {
       const ctx = makeCtx({
         input: { draft_id: 'draft-abc123' }, // no account
