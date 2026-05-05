@@ -4,6 +4,7 @@
 // dedup check, row insertion, short_ref generation, description building,
 // and CEO notification. See ADR-018 and issue #427.
 
+import { randomBytes } from 'node:crypto';
 import type { ActionLogRepo } from './action-log-repo.js';
 import type { OutboundGateway } from '../skills/outbound-gateway.js';
 import type { Logger } from '../logger.js';
@@ -21,27 +22,14 @@ export type ApprovalRequestResult =
 // Pure helpers — exported for testing
 // ---------------------------------------------------------------------------
 
-/** Skill name prefix mapping for short_ref generation. */
-const PREFIX_RULES: Array<{ test: (name: string) => boolean; prefix: string }> = [
-  { test: (n) => n.startsWith('calendar-'), prefix: 'cal' },
-  { test: (n) => n.startsWith('email-'), prefix: 'email' },
-  // send-draft is the re-execution skill for gateway-blocked email drafts; it
-  // maps to 'email' so short_refs from gateway blocks match those from skill blocks.
-  { test: (n) => n === 'send-draft', prefix: 'email' },
-  { test: (n) => n.startsWith('signal-'), prefix: 'signal' },
-  { test: (n) => n === 'store-fact' || n.includes('-memory-'), prefix: 'mem' },
-  { test: (n) => n.includes('contact'), prefix: 'contact' },
-  { test: (n) => n.startsWith('schedule-'), prefix: 'sched' },
-];
-
-/** Return a short prefix for a skill name (e.g. "cal", "email"). */
-export function shortRefPrefix(skillName: string): string {
-  for (const rule of PREFIX_RULES) {
-    if (rule.test(skillName)) return rule.prefix;
-  }
-  // Fallback: first word (before first hyphen), truncated to 6 chars
-  const firstWord = skillName.split('-')[0] ?? skillName;
-  return firstWord.slice(0, 6);
+/**
+ * Generate a globally unique short_ref for an approval action.
+ * Returns 8 lowercase hex chars (4 random bytes), giving ~4 billion possibilities.
+ * Replaces the previous per-task sequential prefix scheme (e.g. "email-1") which
+ * caused collisions across tasks — two unrelated emails both received "email-1".
+ */
+export function generateShortRef(): string {
+  return randomBytes(4).toString('hex');
 }
 
 const MAX_VALUE_LENGTH = 80;
@@ -155,22 +143,20 @@ export class ApprovalTriggerService {
     }
 
     // Step 2 + 3: Generate short_ref, description, and insert row.
-    // Retry on unique_violation (23505) — the countShortRefsForTask + 1 pattern
-    // can race under concurrency. The UNIQUE(task_id, short_ref) constraint (#428)
-    // catches the collision; we re-count and retry.
+    // generateShortRef() produces a random 8-char hex ref (~4B possibilities) —
+    // globally unique across tasks, no per-task counting needed. Retry on
+    // unique_violation (23505) with a freshly generated ref; collisions are
+    // astronomically rare but the retry keeps the code correct under any scenario.
     const MAX_INSERT_RETRIES = 3;
     let rowId!: number;
     let shortRef!: string;
-    let description!: string;
-    let expiresAt!: Date;
+    // Sanitize description before storing and sending — the input fields come from
+    // LLM-generated skill arguments and may contain dangerous tags.
+    const description = sanitizeOutput(buildDescription(skillName, input));
+    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24h from now
 
     for (let attempt = 1; attempt <= MAX_INSERT_RETRIES; attempt++) {
-      const counter = await this.actionLogRepo.countShortRefsForTask(taskId);
-      shortRef = `${shortRefPrefix(skillName)}-${counter + 1}`;
-      // Sanitize description before storing and sending — the input fields come from
-      // LLM-generated skill arguments and may contain dangerous tags.
-      description = sanitizeOutput(buildDescription(skillName, input));
-      expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24h from now
+      shortRef = generateShortRef();
 
       try {
         rowId = await this.actionLogRepo.insert({
@@ -189,8 +175,8 @@ export class ApprovalTriggerService {
         const isUniqueViolation = (err as { code?: string }).code === '23505';
         if (isUniqueViolation && attempt < MAX_INSERT_RETRIES) {
           this.logger.warn(
-            { taskId, shortRef, attempt },
-            'approval-trigger: short_ref collision — retrying with new counter',
+            { shortRef, attempt },
+            'approval-trigger: short_ref collision — retrying with new random ref',
           );
           continue;
         }

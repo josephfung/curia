@@ -104,7 +104,6 @@ function createMockActionLogRepo(): ActionLogRepo & {
       _insertedRows.push(row);
       return ++insertCounter;
     }),
-    countShortRefsForTask: vi.fn().mockResolvedValue(0),
     linkPayload: vi.fn().mockImplementation(async (_shortRef: string, _taskEventId: string | undefined, payload: Record<string, unknown>) => {
       _linkedPayloads.push({ shortRef: _shortRef, payload });
       return true;

@@ -7,6 +7,7 @@
 // the CEO reviews and sends it from their email client.
 
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import { generateShortRef } from '../../src/autonomy/approval-trigger.js';
 
 export class EmailDraftSaveHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {
@@ -114,8 +115,7 @@ export class EmailDraftSaveHandler implements SkillHandler {
     if (ctx.taskMetadata?.observationMode === true && ctx.actionLogRepo && ctx.taskEventId) {
       const recipientEmail = to;
       try {
-        const counter = await ctx.actionLogRepo.countShortRefsForTask(ctx.taskEventId);
-        const shortRef = `email-${counter + 1}`;
+        const shortRef = generateShortRef();
         const description = `Draft reply to ${recipientEmail}${subject ? ` — "${subject}"` : ''} (${accountId ?? 'default'}). Use send-draft to approve.`;
 
         await ctx.actionLogRepo.insert({

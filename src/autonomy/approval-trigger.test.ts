@@ -1,54 +1,25 @@
 // approval-trigger.test.ts — unit tests for ApprovalTriggerService.
 //
 // Tests are structured in two groups:
-//   1. Pure functions (shortRefPrefix, buildDescription) — no mocks needed
-//   2. request() method (Task 4) — mocks ActionLogRepo and OutboundGateway
+//   1. Pure functions (generateShortRef, buildDescription) — no mocks needed
+//   2. request() method — mocks ActionLogRepo and OutboundGateway
 
 import { describe, it, expect, vi } from 'vitest';
-import { shortRefPrefix, buildDescription, ApprovalTriggerService } from './approval-trigger.js';
+import { generateShortRef, buildDescription, ApprovalTriggerService } from './approval-trigger.js';
 import type { ActionLogRepo } from './action-log-repo.js';
 import type { OutboundGateway } from '../skills/outbound-gateway.js';
 import { createSilentLogger } from '../logger.js';
 
-describe('shortRefPrefix', () => {
-  it('maps calendar-* skills to "cal"', () => {
-    expect(shortRefPrefix('calendar-create-event')).toBe('cal');
-    expect(shortRefPrefix('calendar-update-event')).toBe('cal');
+describe('generateShortRef', () => {
+  it('returns an 8-char lowercase hex string', () => {
+    const ref = generateShortRef();
+    expect(ref).toMatch(/^[0-9a-f]{8}$/);
   });
 
-  it('maps email-* skills to "email"', () => {
-    expect(shortRefPrefix('email-reply')).toBe('email');
-    expect(shortRefPrefix('email-draft-save')).toBe('email');
-  });
-
-  it('maps signal-* skills to "signal"', () => {
-    expect(shortRefPrefix('signal-send')).toBe('signal');
-  });
-
-  it('maps store-fact to "mem"', () => {
-    expect(shortRefPrefix('store-fact')).toBe('mem');
-  });
-
-  it('maps *-memory-* skills to "mem"', () => {
-    expect(shortRefPrefix('entity-memory-store')).toBe('mem');
-  });
-
-  it('maps *-contact* skills to "contact"', () => {
-    expect(shortRefPrefix('update-contact')).toBe('contact');
-    expect(shortRefPrefix('contact-merge')).toBe('contact');
-  });
-
-  it('maps schedule-* skills to "sched"', () => {
-    expect(shortRefPrefix('schedule-job')).toBe('sched');
-  });
-
-  it('maps send-draft to "email" (re-execution skill for gateway-blocked email drafts)', () => {
-    expect(shortRefPrefix('send-draft')).toBe('email');
-  });
-
-  it('falls back to first word of skill name, truncated to 6 chars', () => {
-    expect(shortRefPrefix('something-unusual')).toBe('someth');
-    expect(shortRefPrefix('web-search')).toBe('web');
+  it('returns a different value on each call', () => {
+    const refs = new Set(Array.from({ length: 20 }, () => generateShortRef()));
+    // With 4B possibilities, 20 calls should all be unique
+    expect(refs.size).toBe(20);
   });
 });
 
@@ -106,7 +77,6 @@ describe('buildDescription', () => {
 function makeMockRepo(overrides?: Partial<ActionLogRepo>): ActionLogRepo {
   return {
     findPendingByTaskAndSkill: vi.fn().mockResolvedValue(null),
-    countShortRefsForTask: vi.fn().mockResolvedValue(0),
     insert: vi.fn().mockResolvedValue(1),
     setNotificationSentAt: vi.fn().mockResolvedValue(undefined),
     ...overrides,
@@ -138,9 +108,9 @@ describe('ApprovalTriggerService.request()', () => {
 
     const result = await service.request(BASE_OPTS);
 
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       created: true,
-      shortRef: 'cal-1',
+      shortRef: expect.stringMatching(/^[0-9a-f]{8}$/),
       notificationSent: true,
     });
     expect(repo.insert).toHaveBeenCalledOnce();
@@ -151,7 +121,10 @@ describe('ApprovalTriggerService.request()', () => {
     expect(notifPayload.notificationType).toBe('approval_requested');
     expect(notifPayload.ceoEmail).toBe('ceo@example.com');
     expect(notifPayload.subject).toContain('Approval needed');
-    expect(notifPayload.body).toContain('cal-1');           // short_ref
+    // Body must contain the actual short_ref that was generated
+    if (result.created) {
+      expect(notifPayload.body).toContain(result.shortRef);
+    }
     expect(notifPayload.body).toMatch(/Expires:/);          // expiry line
     expect(notifPayload.body).toContain('Reply to approve'); // call to action
   });
@@ -176,9 +149,7 @@ describe('ApprovalTriggerService.request()', () => {
 
   it('allows different payloads for same skill in same task', async () => {
     const repo = makeMockRepo({
-      // First call: no match (different payload). countShortRefs returns 1 (one already exists).
       findPendingByTaskAndSkill: vi.fn().mockResolvedValue(null),
-      countShortRefsForTask: vi.fn().mockResolvedValue(1),
     });
     const gateway = makeMockGateway();
     const service = new ApprovalTriggerService(repo, gateway, createSilentLogger(), 'ceo@example.com');
@@ -188,9 +159,9 @@ describe('ApprovalTriggerService.request()', () => {
       input: { title: 'Dinner with Bob' },
     });
 
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       created: true,
-      shortRef: 'cal-2',  // counter is 1, so next is 2
+      shortRef: expect.stringMatching(/^[0-9a-f]{8}$/),
       notificationSent: true,
     });
   });
@@ -205,9 +176,9 @@ describe('ApprovalTriggerService.request()', () => {
 
     const result = await service.request(BASE_OPTS);
 
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       created: true,
-      shortRef: 'cal-1',
+      shortRef: expect.stringMatching(/^[0-9a-f]{8}$/),
       notificationSent: false,
     });
     // Row was still inserted
@@ -224,9 +195,9 @@ describe('ApprovalTriggerService.request()', () => {
 
     const result = await service.request(BASE_OPTS);
 
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       created: true,
-      shortRef: 'cal-1',
+      shortRef: expect.stringMatching(/^[0-9a-f]{8}$/),
       notificationSent: false,
     });
     expect(repo.insert).toHaveBeenCalledOnce();
@@ -240,27 +211,20 @@ describe('ApprovalTriggerService.request()', () => {
 
     const result = await service.request(BASE_OPTS);
 
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       created: true,
-      shortRef: 'cal-1',
+      shortRef: expect.stringMatching(/^[0-9a-f]{8}$/),
       notificationSent: false,
     });
     expect(repo.insert).toHaveBeenCalledOnce();
   });
 
-  it('retries on unique_violation (23505) and succeeds with incremented counter', async () => {
-    // First insert throws unique_violation; second succeeds.
+  it('retries on unique_violation (23505) and succeeds with a new random ref', async () => {
+    // First insert throws unique_violation; second succeeds with a freshly generated ref.
     const insertMock = vi.fn()
       .mockRejectedValueOnce(Object.assign(new Error('unique_violation'), { code: '23505' }))
       .mockResolvedValueOnce(2);
-    // countShortRefsForTask is called once per attempt: 0 on attempt 1, 1 on attempt 2.
-    const countMock = vi.fn()
-      .mockResolvedValueOnce(0)
-      .mockResolvedValueOnce(1);
-    const repo = makeMockRepo({
-      insert: insertMock,
-      countShortRefsForTask: countMock,
-    });
+    const repo = makeMockRepo({ insert: insertMock });
     const gateway = makeMockGateway();
     const service = new ApprovalTriggerService(repo, gateway, createSilentLogger(), 'ceo@example.com');
 
@@ -268,9 +232,13 @@ describe('ApprovalTriggerService.request()', () => {
 
     expect(result.created).toBe(true);
     if (result.created) {
-      expect(result.shortRef).toBe('cal-2'); // counter was 1 on retry
+      expect(result.shortRef).toMatch(/^[0-9a-f]{8}$/);
     }
     expect(insertMock).toHaveBeenCalledTimes(2);
+    // Each attempt uses a freshly generated ref — the two insert calls get different short_refs
+    const ref1 = insertMock.mock.calls[0]![0].shortRef as string;
+    const ref2 = insertMock.mock.calls[1]![0].shortRef as string;
+    expect(ref1).not.toBe(ref2);
   });
 
   it('gives up after 3 retries on persistent unique_violation', async () => {
@@ -303,7 +271,7 @@ describe('ApprovalTriggerService.request()', () => {
       expect(insertCall.actionRisk).toBe('high');
       expect(insertCall.outcome).toBe('pending_approval');
       expect(insertCall.payload).toEqual({ title: 'Lunch with Dana' });
-      expect(insertCall.shortRef).toBe('cal-1');
+      expect(insertCall.shortRef).toMatch(/^[0-9a-f]{8}$/); // random globally-unique ref
       expect(insertCall.description).toContain('Create calendar event');
       expect(insertCall.expiresAt).toBeInstanceOf(Date);
       // Expires exactly 24h from the frozen now — deterministic, no tolerance needed

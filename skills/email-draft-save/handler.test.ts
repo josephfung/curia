@@ -28,7 +28,6 @@ function makeMockGateway(overrides?: { createEmailDraft?: ReturnType<typeof vi.f
 function makeMockActionLogRepo(overrides?: Partial<ActionLogRepo>): ActionLogRepo {
   return {
     insert: vi.fn().mockResolvedValue(42),
-    countShortRefsForTask: vi.fn().mockResolvedValue(0),
     // Other methods not used by this skill — typed as unknown
     ...overrides,
   } as unknown as ActionLogRepo;
@@ -161,10 +160,6 @@ describe('EmailDraftSaveHandler — observation-mode action_log tracking', () =>
 
     expect(result.success).toBe(true);
 
-    // countShortRefsForTask must be called to generate the sequential short_ref
-    expect(repo.countShortRefsForTask).toHaveBeenCalledOnce();
-    expect(repo.countShortRefsForTask).toHaveBeenCalledWith('task-123');
-
     // insert must be called exactly once
     expect(repo.insert).toHaveBeenCalledOnce();
 
@@ -178,8 +173,8 @@ describe('EmailDraftSaveHandler — observation-mode action_log tracking', () =>
     expect(insertedRow.actionRisk).toBe('medium');
     expect(insertedRow.outcome).toBe('pending_approval');
 
-    // Short ref is "email-1" when no prior refs exist (count returns 0)
-    expect(insertedRow.shortRef).toBe('email-1');
+    // Short ref is a globally-unique 8-char hex string
+    expect(insertedRow.shortRef).toMatch(/^[0-9a-f]{8}$/);
 
     // Description includes recipient and subject
     expect(insertedRow.description).toContain('alice@example.com');
@@ -200,11 +195,9 @@ describe('EmailDraftSaveHandler — observation-mode action_log tracking', () =>
     expect(Math.abs((insertedRow.expiresAt as Date).getTime() - expectedExpiry)).toBeLessThan(5000);
   });
 
-  it('increments short_ref counter based on existing short refs for the task', async () => {
-    // Two prior short_refs already exist for this task → next counter is 3 → "email-3"
-    const repo = makeMockActionLogRepo({
-      countShortRefsForTask: vi.fn().mockResolvedValue(2),
-    });
+  it('generates a unique short_ref regardless of existing refs for the task', async () => {
+    // Each call generates a fresh random ref — no counting, no collisions across tasks
+    const repo = makeMockActionLogRepo();
 
     await handler.execute(makeCtx({
       outboundGateway: gateway,
@@ -215,7 +208,7 @@ describe('EmailDraftSaveHandler — observation-mode action_log tracking', () =>
     }));
 
     const insertedRow = (repo.insert as ReturnType<typeof vi.fn>).mock.calls[0]![0];
-    expect(insertedRow.shortRef).toBe('email-3');
+    expect(insertedRow.shortRef).toMatch(/^[0-9a-f]{8}$/);
   });
 
   it('omits subject clause from description when subject is absent', async () => {
@@ -258,7 +251,6 @@ describe('EmailDraftSaveHandler — observation-mode action_log tracking', () =>
 
     expect(result.success).toBe(true);
     expect(repo.insert).not.toHaveBeenCalled();
-    expect(repo.countShortRefsForTask).not.toHaveBeenCalled();
   });
 
   it('does NOT write action_log when taskMetadata is absent', async () => {
@@ -323,9 +315,10 @@ describe('EmailDraftSaveHandler — observation-mode action_log tracking', () =>
     expect((result as { data: Record<string, unknown> }).data).toEqual({ draft_id: 'draft-abc' });
   });
 
-  it('does not fail the skill if countShortRefsForTask throws', async () => {
+  it('does not fail the skill if action_log insert throws', async () => {
+    // The action_log write is best-effort — a DB error must not block the draft.
     const repo = makeMockActionLogRepo({
-      countShortRefsForTask: vi.fn().mockRejectedValue(new Error('DB timeout')),
+      insert: vi.fn().mockRejectedValue(new Error('DB timeout')),
     });
 
     const result = await handler.execute(makeCtx({
@@ -337,8 +330,6 @@ describe('EmailDraftSaveHandler — observation-mode action_log tracking', () =>
     }));
 
     expect(result.success).toBe(true);
-    // insert should not have been called since countShortRefs threw
-    expect(repo.insert).not.toHaveBeenCalled();
   });
 
   it('succeeds and writes action_log when no subject is available (not possible per validation but exercises description without subject branch)', async () => {
