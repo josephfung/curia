@@ -17,14 +17,16 @@
 -- short_refs; any that happen to collide globally would be flagged by the
 -- pre-check below.
 
--- Step 1: NULL out short_refs for rows that are already resolved or expired.
--- These rows no longer need a short_ref for approval lookup, and clearing
--- them removes the per-task duplicates (e.g. two "email-1" rows in different
--- tasks) that would otherwise block the new global UNIQUE constraint.
+-- Step 1: NULL out short_refs for all non-pending rows.
+-- Any row with a terminal outcome (approved, denied, dismissed, expired) no longer
+-- needs a short_ref for approval lookup. Clearing them removes the per-task
+-- duplicates (e.g. two "email-1" rows in different tasks) that would otherwise
+-- block the new global UNIQUE constraint. We intentionally do NOT filter by
+-- expires_at here — a terminal-outcome row with a future expires_at (e.g. set
+-- by a bug or manual intervention) would survive and potentially conflict.
 UPDATE autonomy_action_log
 SET short_ref = NULL
-WHERE outcome != 'pending_approval'
-   OR expires_at <= now();
+WHERE outcome != 'pending_approval';
 
 -- Step 2: Pre-check for any remaining short_ref duplicates among active pending
 -- rows. Should never occur in practice (each task just started), but guards

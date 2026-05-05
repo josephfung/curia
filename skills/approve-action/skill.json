@@ -5,7 +5,7 @@
   "sensitivity": "elevated",
   "action_risk": "none",
   "inputs": {
-    "short_ref": "string? (reference code from the approval notification, e.g. 'cal-1')"
+    "short_ref": "string? (reference code from the approval notification, e.g. 'a3f7c12b')"
   },
   "outputs": {
     "result": "object (re-execution result and approval status)"

@@ -249,7 +249,7 @@ describe('ApprovalTriggerService.request()', () => {
     const gateway = makeMockGateway();
     const service = new ApprovalTriggerService(repo, gateway, createSilentLogger(), 'ceo@example.com');
 
-    await expect(service.request(BASE_OPTS)).rejects.toThrow('unique_violation');
+    await expect(service.request(BASE_OPTS)).rejects.toThrow('failed to insert after 3 attempts');
     expect(insertMock).toHaveBeenCalledTimes(3);
   });
 

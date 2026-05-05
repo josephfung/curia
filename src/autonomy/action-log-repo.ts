@@ -268,10 +268,11 @@ export class ActionLogRepo {
    * initial row is created on gate (with source/context), then the adapter
    * links the draft ID after creating the draft.
    *
-   * When taskEventId is provided, the WHERE clause scopes the match to that
-   * specific task — short_ref is only unique per task (e.g. 'email-1' in task A
-   * and 'email-1' in task B are different rows). Passing taskEventId prevents
-   * draftId from being smeared across unrelated tasks when short_refs collide.
+   * When taskEventId is provided, the WHERE clause adds a secondary task_id
+   * scope as a defensive belt-and-suspenders measure. short_ref is globally
+   * unique (migration 033 added UNIQUE(short_ref)), so a taskEventId scope is
+   * not strictly necessary, but it guards against any data inconsistency and
+   * makes the intent explicit at the call site.
    *
    * When taskEventId is omitted (undefined/null), the filter is bypassed and the
    * match is by short_ref + outcome alone — kept for backwards compatibility with
@@ -338,9 +339,11 @@ export class ActionLogRepo {
   async resolvePending(shortRef?: string): Promise<ResolveResult> {
     if (shortRef !== undefined) {
       // Query 1: look up by short_ref — pending + non-expired only.
-      // LIMIT 2 (not 1): short_ref is unique per (task_id, short_ref), so the same
-      // short_ref can exist in multiple tasks. If two pending rows match, return
-      // ambiguous rather than silently picking one (could approve/deny the wrong request).
+      // LIMIT 2 (not 1): short_ref is globally unique (migration 033), so two
+      // pending rows with the same ref should never occur under normal operation.
+      // The LIMIT 2 + ambiguous path is a defensive safety net — if duplicates
+      // somehow exist (e.g. manual DB insert, constraint not yet applied), return
+      // ambiguous rather than silently approving/denying the wrong request.
       const pending = await this.pool.query(
         `SELECT * FROM autonomy_action_log
          WHERE short_ref = $1
