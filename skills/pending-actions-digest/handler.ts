@@ -66,15 +66,15 @@ export class PendingActionsDigestHandler implements SkillHandler {
       }
 
       // --- Step 4: Build bullet-list body ---
-      // Each line shows the short reference, description, originating skill, and
-      // time remaining so the CEO can quickly assess urgency without opening each request.
+      // Each line shows the description, originating skill, time remaining, and short
+      // reference (at end) so the CEO can quickly assess urgency without opening each request.
       const body = pending
         .map((r) => {
           // expiresAt is guaranteed non-null by findAllPending() (WHERE expires_at > now()),
           // but the type is Date | null — null-coalesce to avoid calling .getTime() on null.
           const msRemaining = r.expiresAt != null ? r.expiresAt.getTime() - Date.now() : 0;
           const timeRemaining = formatTimeRemaining(msRemaining);
-          return `• ${r.shortRef ?? '(no ref)'}: ${r.description ?? '(no description)'} [${r.skillName}] — ${timeRemaining}`;
+          return `• ${r.description ?? '(no description)'} [${r.skillName}] — ${timeRemaining} [${r.shortRef ?? '—'}]`;
         })
         .join('\n');
 
