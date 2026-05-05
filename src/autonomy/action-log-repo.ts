@@ -238,6 +238,25 @@ export class ActionLogRepo {
   }
 
   /**
+   * Merge additional payload fields into an existing action_log row identified
+   * by short_ref. Used by the gateway's two-step draft-fallback pattern: the
+   * initial row is created on gate (with source/context), then the adapter
+   * links the draft ID after creating the draft.
+   *
+   * Returns true if a row was updated, false if no matching pending row exists.
+   */
+  async linkPayload(shortRef: string, additionalPayload: Record<string, unknown>): Promise<boolean> {
+    const result = await this.pool.query(
+      `UPDATE autonomy_action_log
+       SET payload = COALESCE(payload, '{}'::jsonb) || $2::jsonb
+       WHERE short_ref = $1
+         AND outcome = 'pending_approval'`,
+      [shortRef, JSON.stringify(additionalPayload)],
+    );
+    return (result.rowCount ?? 0) > 0;
+  }
+
+  /**
    * Transition a pending_approval row to a terminal outcome.
    * Only updates if the current outcome is still pending_approval —
    * returns `false` on double-resolve (concurrent resolution race).
