@@ -283,15 +283,29 @@ export class ActionLogRepo {
    * initial row is created on gate (with source/context), then the adapter
    * links the draft ID after creating the draft.
    *
+   * When taskEventId is provided, the WHERE clause scopes the match to that
+   * specific task — short_ref is only unique per task (e.g. 'email-1' in task A
+   * and 'email-1' in task B are different rows). Passing taskEventId prevents
+   * draftId from being smeared across unrelated tasks when short_refs collide.
+   *
+   * When taskEventId is omitted (undefined/null), the filter is bypassed and the
+   * match is by short_ref + outcome alone — kept for backwards compatibility with
+   * callers that lack a taskEventId.
+   *
    * Returns true if a row was updated, false if no matching pending row exists.
    */
-  async linkPayload(shortRef: string, additionalPayload: Record<string, unknown>): Promise<boolean> {
+  async linkPayload(
+    shortRef: string,
+    taskEventId: string | undefined,
+    additionalPayload: Record<string, unknown>,
+  ): Promise<boolean> {
     const result = await this.pool.query(
       `UPDATE autonomy_action_log
-       SET payload = COALESCE(payload, '{}'::jsonb) || $2::jsonb
+       SET payload = COALESCE(payload, '{}'::jsonb) || $3::jsonb
        WHERE short_ref = $1
+         AND ($2::text IS NULL OR task_event_id = $2)
          AND outcome = 'pending_approval'`,
-      [shortRef, JSON.stringify(additionalPayload)],
+      [shortRef, taskEventId ?? null, JSON.stringify(additionalPayload)],
     );
     return (result.rowCount ?? 0) > 0;
   }

@@ -325,10 +325,12 @@ export class OutboundGateway {
         // DB failure here must NOT cause fail-open — the send stays blocked even
         // if the row can't be written (actionRef will just be absent from the result).
         let actionRef: string | undefined;
-        if (this.actionLogRepo && options?.taskEventId) {
-          // Extract recipient and subject (email channel only for now)
-          const recipientEmail = request.channel === 'email' ? request.to : '';
-          const subject = request.channel === 'email' ? request.subject : undefined;
+        if (this.actionLogRepo && options?.taskEventId && request.channel === 'email') {
+          // Extract recipient and subject — this block is email-only (guarded above).
+          // Non-email gated sends (e.g. Signal) return { gated: true } without an actionRef;
+          // the channel adapter handles them directly without the two-step draft pattern.
+          const recipientEmail = request.to;
+          const subject = request.subject;
           const description = `Draft reply to ${recipientEmail}${subject ? ` — "${subject}"` : ''}. Use send-draft to approve.`;
 
           try {
@@ -1156,20 +1158,28 @@ export class OutboundGateway {
    * Link a draft (or other fallback result) to a gated action_log row.
    * Called by channel adapters after they create their fallback artifact.
    * No-op when actionLogRepo is not wired or actionRef doesn't match a pending row.
+   *
+   * taskEventId scopes the match to a specific task so that colliding short_refs
+   * (e.g. 'email-1' in task A and 'email-1' in task B) don't cross-pollinate.
+   * When absent, the match is by short_ref + outcome alone (backwards compatibility).
    */
-  async linkGatedAction(actionRef: string, payload: Record<string, unknown>): Promise<void> {
+  async linkGatedAction(
+    actionRef: string,
+    taskEventId: string | undefined,
+    payload: Record<string, unknown>,
+  ): Promise<void> {
     if (!this.actionLogRepo) return;
     try {
-      const updated = await this.actionLogRepo.linkPayload(actionRef, payload);
+      const updated = await this.actionLogRepo.linkPayload(actionRef, taskEventId, payload);
       if (!updated) {
         this.log.warn(
-          { actionRef },
+          { actionRef, taskEventId },
           'outbound-gateway: linkGatedAction found no pending row for actionRef — may have expired or been cleaned up',
         );
       }
     } catch (err) {
       this.log.error(
-        { err, actionRef },
+        { err, actionRef, taskEventId },
         'outbound-gateway: linkGatedAction DB call failed — action_log row will not have draftId linked',
       );
     }

@@ -34,11 +34,6 @@ bus event types) are noted explicitly even in the `0.x` range.
   action_log for unified pending-actions surface. (#435)
 - **Pending-actions-digest** — short reference codes moved to end of each line for readability
 
-### Removed
-
-- **`autonomy_gated` outbound policy** — replaced by gateway-level autonomy gate on `direct`
-  policy. Deployments using `autonomy_gated` must switch to `direct`.
-
 ### Fixed
 
 - **Test fixture naming** — replaced `nathan@curia.com` / `Nathan` references in `message-converter.test.ts` with `curia@example.com` / `Curia` to comply with instance-name hygiene rule.
@@ -46,6 +41,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Removed
 
+- **`autonomy_gated` outbound policy** — replaced by gateway-level autonomy gate on `direct`
+  policy. Deployments using `autonomy_gated` must switch to `direct`.
 - **CLI held-message notification** — removed vestigial `[Held] Unknown sender...` terminal printout; the coordinator's proactive mention is the real notification path.
 
 ### Added

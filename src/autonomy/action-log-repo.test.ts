@@ -405,7 +405,7 @@ describe('ActionLogRepo', () => {
       const { pool, queries } = makePool([{ id: 1, payload: { source: 'autonomy_gate' } }], 1);
       const repo = new ActionLogRepo(pool, createSilentLogger());
 
-      const result = await repo.linkPayload('email-1', { draftId: 'draft-abc', accountId: 'curia' });
+      const result = await repo.linkPayload('email-1', 'task-evt-001', { draftId: 'draft-abc', accountId: 'curia' });
 
       expect(result).toBe(true);
       expect(queries[0]!.sql).toContain('UPDATE');
@@ -418,7 +418,7 @@ describe('ActionLogRepo', () => {
       const { pool } = makePool([]);  // empty result — rowCount = 0
       const repo = new ActionLogRepo(pool, createSilentLogger());
 
-      const result = await repo.linkPayload('unknown-ref', { draftId: 'draft-xyz' });
+      const result = await repo.linkPayload('unknown-ref', undefined, { draftId: 'draft-xyz' });
 
       expect(result).toBe(false);
     });

@@ -1478,10 +1478,10 @@ describe('OutboundGateway.linkGatedAction', () => {
       actionLogRepo,
     });
 
-    await gateway.linkGatedAction('email-1', { draftId: 'draft-abc' });
+    await gateway.linkGatedAction('email-1', 'task-evt-001', { draftId: 'draft-abc' });
 
     expect(actionLogRepo.linkPayload).toHaveBeenCalledOnce();
-    expect(actionLogRepo.linkPayload).toHaveBeenCalledWith('email-1', { draftId: 'draft-abc' });
+    expect(actionLogRepo.linkPayload).toHaveBeenCalledWith('email-1', 'task-evt-001', { draftId: 'draft-abc' });
   });
 
   it('is a no-op when actionLogRepo is not wired', async () => {
@@ -1498,7 +1498,7 @@ describe('OutboundGateway.linkGatedAction', () => {
     });
 
     // Should not throw
-    await gateway.linkGatedAction('email-1', { draftId: 'draft-abc' });
+    await gateway.linkGatedAction('email-1', undefined, { draftId: 'draft-abc' });
   });
 
   it('logs warn when linkPayload returns false (unknown ref)', async () => {
@@ -1527,7 +1527,7 @@ describe('OutboundGateway.linkGatedAction', () => {
       actionLogRepo,
     });
 
-    await gateway.linkGatedAction('email-99', { draftId: 'draft-xyz' });
+    await gateway.linkGatedAction('email-99', undefined, { draftId: 'draft-xyz' });
 
     expect(warnSpy).toHaveBeenCalledOnce();
     expect(warnSpy).toHaveBeenCalledWith(
