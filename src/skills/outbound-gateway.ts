@@ -882,6 +882,15 @@ export class OutboundGateway {
   }
 
   /**
+   * Return the IDs of all configured email accounts.
+   * Skills use this to iterate across accounts when the caller doesn't know
+   * which account owns a resource (e.g. draft discovery in send-draft).
+   */
+  listAccountIds(): string[] {
+    return [...this.nylasClients.keys()];
+  }
+
+  /**
    * Fetch a single email message by its Nylas message ID.
    * Read-only — no security filtering applied.
    *
