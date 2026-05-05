@@ -1892,4 +1892,28 @@ describe('CEO recipient bypass on send()', () => {
     expect(result.success).toBe(false);
     expect(result.gated).toBe(true);
   });
+
+  it('does not bypass Signal when ceoSignalNumber is not configured', async () => {
+    const mocks = createMocks();
+    const signalClient = {
+      send: vi.fn().mockResolvedValue(undefined),
+    };
+    const gateway = new OutboundGateway({
+      signalClient: signalClient as unknown as import('../../../src/channels/signal/signal-rpc-client.js').SignalRpcClient,
+      signalPhoneNumber: '+10000000000',
+      contactService: mocks.contactService,
+      contentFilter: mocks.contentFilter,
+      bus: mocks.bus,
+      // ceoSignalNumber intentionally omitted
+      logger: mocks.logger,
+      autonomyService: makeAutonomyService(65),
+    });
+
+    const result = await gateway.send(
+      { channel: 'signal', recipient: '+14155551234', message: 'Hello' },
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.gated).toBe(true);
+  });
 });
