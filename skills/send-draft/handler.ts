@@ -134,11 +134,25 @@ export class SendDraftHandler implements SkillHandler {
       try {
         const row = await ctx.actionLogRepo.findPendingByPayloadField('draftId', draftId);
         if (row) {
-          await ctx.actionLogRepo.resolveById(row.id, 'approved', 'ceo');
+          const updated = await ctx.actionLogRepo.resolveById(row.id, 'approved', 'ceo');
+          if (!updated) {
+            // Row was present during find but couldn't be resolved — likely a concurrent
+            // approval (e.g. two CEO messages sent in quick succession). Log at warn so
+            // the gap is visible, but don't fail the send (draft was already sent above).
+            ctx.log.warn(
+              { draftId, rowId: row.id },
+              'send-draft: action_log row was already resolved — possible concurrent approval; no action taken',
+            );
+          }
         }
       } catch (err) {
-        // Best-effort — don't fail the send if action_log transition fails
-        ctx.log.warn({ err, draftId }, 'send-draft: failed to transition action_log row');
+        // Best-effort — the email was already sent. Failure here leaves the row in
+        // pending_approval, so it will appear in the next digest. Log at error so the
+        // stuck row is visible in alerting and can be cleaned up manually.
+        ctx.log.error(
+          { err, draftId },
+          'send-draft: failed to transition action_log row — row will remain pending_approval and appear in next digest',
+        );
       }
     }
 
