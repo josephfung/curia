@@ -338,6 +338,16 @@ export class OutboundGateway {
         { channel: request.channel },
         'outbound-gateway: autonomy gate skipped — isSystemNotification flag set (infrastructure alert to CEO)',
       );
+    } else if (this.autonomyService && this.isCeoRecipient(request)) {
+      // Agent-to-principal communication — the autonomy gate must not silence
+      // the agent's ability to communicate with its oversight authority. Gating
+      // CEO-bound messages reduces oversight rather than improving it.
+      // All other safety checks (blocked-contact, content filter, PII redaction)
+      // still run below.
+      this.log.info(
+        { channel: request.channel },
+        'outbound-gateway: autonomy gate skipped — recipient is CEO (agent-to-principal communication)',
+      );
     } else if (this.autonomyService) {
       // Fail-open on config read only — getConfig() failure must not block sends.
       // The action_log DB write is kept outside this try/catch so a DB error there
@@ -762,6 +772,26 @@ export class OutboundGateway {
       );
       return false;
     }
+  }
+
+  /**
+   * Check whether the outbound request is addressed to the CEO.
+   * Used by the autonomy gate to exempt agent-to-principal communications.
+   *
+   * Email: case-insensitive comparison against configured ceoEmail.
+   * Signal: exact comparison against configured ceoSignalNumber (E.164 format).
+   *
+   * Returns false when the relevant CEO identifier is not configured — the bypass
+   * is inert rather than broken, matching the pattern of other optional config fields.
+   */
+  private isCeoRecipient(request: OutboundSendRequest): boolean {
+    if (request.channel === 'email') {
+      return this.ceoEmail !== '' && request.to.toLowerCase() === this.ceoEmail.toLowerCase();
+    }
+    if (request.channel === 'signal' && 'recipient' in request && request.recipient) {
+      return this.ceoSignalNumber !== '' && request.recipient === this.ceoSignalNumber;
+    }
+    return false;
   }
 
   /**
