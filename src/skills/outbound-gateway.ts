@@ -29,7 +29,8 @@ import type { PiiRedactor } from '../dispatch/pii-redactor.js';
 import type { EventBus } from '../bus/bus.js';
 import type { Logger } from '../logger.js';
 import { createOutboundBlocked, createOutboundNotification, createAutonomySendBlocked } from '../bus/events.js';
-import type { AutonomyService } from '../autonomy/autonomy-service.js';
+import { AutonomyService } from '../autonomy/autonomy-service.js';
+import type { ActionLogRepo } from '../autonomy/action-log-repo.js';
 import type { OutboundNotificationPayload } from '../bus/events.js';
 import { markdownToHtml } from '../channels/email/markdown-to-html.js';
 import { scrubPii } from '../pii/scrubber.js';
@@ -151,9 +152,10 @@ export interface OutboundGatewayConfig {
   logger: Logger;
 
   /**
-   * Autonomy service — used to enforce the score < 70 outbound gate.
-   * When the live score is below 70, send() blocks the dispatch and returns
-   * an advisory. Optional — when absent, the gate is skipped (fail-open).
+   * Autonomy service — used to enforce the outbound gate at the 'medium' risk
+   * threshold (currently 70, derived from AutonomyService.minScoreForActionRisk).
+   * When the live score is below the threshold, send() blocks the dispatch and
+   * returns an advisory. Optional — when absent, the gate is skipped (fail-open).
    */
   autonomyService?: AutonomyService;
 
@@ -170,6 +172,17 @@ export interface OutboundGatewayConfig {
    * This preserves backwards compatibility with callers that pre-date PII redaction.
    */
   piiRedactor?: PiiRedactor;
+
+  /**
+   * Action log repository — used to write pending_approval rows when the autonomy
+   * gate blocks a send. Enables the two-step draft-fallback pattern: the gateway
+   * creates an action_log entry on gate, then the channel adapter links the draft
+   * ID after creating the fallback artifact.
+   *
+   * Optional — when absent, gated sends still return { gated: true } but no
+   * action_log row is written and no actionRef is assigned.
+   */
+  actionLogRepo?: ActionLogRepo;
 }
 
 // ---------------------------------------------------------------------------
@@ -213,6 +226,7 @@ export class OutboundGateway {
   private readonly log: Logger;
   private readonly autonomyService?: AutonomyService;
   private readonly piiRedactor?: PiiRedactor;
+  private readonly actionLogRepo?: ActionLogRepo;
 
   constructor(config: OutboundGatewayConfig) {
     this.nylasClients = config.nylasClients ?? new Map();
@@ -226,13 +240,14 @@ export class OutboundGateway {
     this.log = config.logger.child({ component: 'outbound-gateway' });
     this.autonomyService = config.autonomyService;
     this.piiRedactor = config.piiRedactor;
+    this.actionLogRepo = config.actionLogRepo;
   }
 
   /**
    * Send an outbound message through the gateway pipeline.
    *
    * Pipeline steps (channel-agnostic):
-   *   0. Autonomy gate — score < 70 blocks all autonomous sends
+   *   0. Autonomy gate — score below 'medium' risk threshold blocks all autonomous sends
    *      (skipped when options.humanApproved is true — CEO is in the loop)
    *   1. Contact blocked check
    *   2. Content filter (fail-closed)
@@ -259,7 +274,7 @@ export class OutboundGateway {
     },
   ): Promise<OutboundSendResult> {
     // ------------------------------------------------------------------
-    // Step 0: Autonomy gate — score < 70 blocks all outbound sends
+    // Step 0: Autonomy gate — score below 'medium' threshold blocks all outbound sends
     // ------------------------------------------------------------------
     // Belt-and-suspenders for medium+ skills: even if the execution layer
     // allowed the skill, the gateway independently blocks the actual send
@@ -275,15 +290,16 @@ export class OutboundGateway {
     } else if (this.autonomyService) {
       try {
         const autonomyConfig = await this.autonomyService.getConfig();
-        if (autonomyConfig !== null && autonomyConfig.score < 70) {
+        const sendThreshold = AutonomyService.minScoreForActionRisk('medium');
+        if (autonomyConfig !== null && autonomyConfig.score < sendThreshold) {
           this.log.info(
-            { channel: request.channel, currentScore: autonomyConfig.score },
-            'outbound-gateway: send blocked by autonomy gate — score < 70',
+            { channel: request.channel, currentScore: autonomyConfig.score, sendThreshold },
+            `outbound-gateway: send blocked by autonomy gate — score < ${sendThreshold}`,
           );
           this.bus.publish('dispatch', createAutonomySendBlocked({
             channel: request.channel,
             currentScore: autonomyConfig.score,
-            requiredScore: 70,
+            requiredScore: sendThreshold,
           })).catch((err) => {
             this.log.warn(
               { err, channel: request.channel },
@@ -293,7 +309,7 @@ export class OutboundGateway {
           return {
             success: false,
             blockedReason:
-              `Autonomy score is ${autonomyConfig.score} — direct sends require a score of at least 70. ` +
+              `Autonomy score is ${autonomyConfig.score} — direct sends require a score of at least ${sendThreshold}. ` +
               `Use createEmailDraft() for drafts, or ask the CEO to raise the score with set-autonomy.`,
           };
         }
@@ -840,15 +856,16 @@ export class OutboundGateway {
     } else if (this.autonomyService) {
       try {
         const autonomyConfig = await this.autonomyService.getConfig();
-        if (autonomyConfig !== null && autonomyConfig.score < 70) {
+        const sendThreshold = AutonomyService.minScoreForActionRisk('medium');
+        if (autonomyConfig !== null && autonomyConfig.score < sendThreshold) {
           this.log.info(
-            { draftId, currentScore: autonomyConfig.score },
-            'outbound-gateway: draft send blocked by autonomy gate — score < 70',
+            { draftId, currentScore: autonomyConfig.score, sendThreshold },
+            `outbound-gateway: draft send blocked by autonomy gate — score < ${sendThreshold}`,
           );
           this.bus.publish('dispatch', createAutonomySendBlocked({
             channel: 'email',
             currentScore: autonomyConfig.score,
-            requiredScore: 70,
+            requiredScore: sendThreshold,
           })).catch((err) => {
             this.log.warn(
               { err, draftId },
@@ -858,7 +875,7 @@ export class OutboundGateway {
           return {
             success: false,
             blockedReason:
-              `Autonomy score is ${autonomyConfig.score} — direct sends require a score of at least 70. ` +
+              `Autonomy score is ${autonomyConfig.score} — direct sends require a score of at least ${sendThreshold}. ` +
               `Use createEmailDraft() for drafts, or ask the CEO to raise the score with set-autonomy.`,
           };
         }
