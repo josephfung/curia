@@ -25,6 +25,9 @@ export type ApprovalRequestResult =
 const PREFIX_RULES: Array<{ test: (name: string) => boolean; prefix: string }> = [
   { test: (n) => n.startsWith('calendar-'), prefix: 'cal' },
   { test: (n) => n.startsWith('email-'), prefix: 'email' },
+  // send-draft is the re-execution skill for gateway-blocked email drafts; it
+  // maps to 'email' so short_refs from gateway blocks match those from skill blocks.
+  { test: (n) => n === 'send-draft', prefix: 'email' },
   { test: (n) => n.startsWith('signal-'), prefix: 'signal' },
   { test: (n) => n === 'store-fact' || n.includes('-memory-'), prefix: 'mem' },
   { test: (n) => n.includes('contact'), prefix: 'contact' },

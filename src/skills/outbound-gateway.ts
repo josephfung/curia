@@ -31,6 +31,7 @@ import type { Logger } from '../logger.js';
 import { createOutboundBlocked, createOutboundNotification, createAutonomySendBlocked } from '../bus/events.js';
 import { AutonomyService } from '../autonomy/autonomy-service.js';
 import type { ActionLogRepo } from '../autonomy/action-log-repo.js';
+import { shortRefPrefix } from '../autonomy/approval-trigger.js';
 import type { OutboundNotificationPayload } from '../bus/events.js';
 import { markdownToHtml } from '../channels/email/markdown-to-html.js';
 import { scrubPii } from '../pii/scrubber.js';
@@ -374,7 +375,13 @@ export class OutboundGateway {
           let rowId: number | undefined;
           try {
             const counter = await this.actionLogRepo.countShortRefsForTask(options.taskEventId);
-            actionRef = `email-${counter + 1}`;
+            // Build the candidate ref before the insert, but only publish it as
+            // actionRef after insert confirms the DB row exists. This prevents the
+            // gateway from returning a phantom ref if insert throws.
+            // shortRefPrefix maps the recipe skill name to its short_ref prefix
+            // (e.g. send-draft → 'email') so gateway-level blocks use the same
+            // prefix as execution-layer blocks for the same logical action.
+            const candidateRef = `${shortRefPrefix(recipe.skillName)}-${counter + 1}`;
 
             rowId = await this.actionLogRepo.insert({
               taskId: options.taskEventId,
@@ -382,14 +389,16 @@ export class OutboundGateway {
               skillName: recipe.skillName,
               actionRisk: 'medium',
               outcome: 'pending_approval',
-              shortRef: actionRef,
+              shortRef: candidateRef,
               description: recipe.description,
               payload: recipe.partialPayload ?? {},
               expiresAt,
             });
+            // Only commit actionRef now that the row actually exists in the DB
+            actionRef = candidateRef;
           } catch (err) {
             this.log.error(
-              { err, taskEventId: options.taskEventId },
+              { err, channel: request.channel, taskEventId: options.taskEventId },
               'outbound-gateway: failed to write action_log row during gate — send is still blocked, actionRef will be absent',
             );
             // actionRef remains undefined — send is still blocked below

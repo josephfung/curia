@@ -127,12 +127,12 @@ export class SendDraftHandler implements SkillHandler {
     // Step 5: Transition action_log row from pending_approval → approved
     // ------------------------------------------------------------------
     // Best-effort — the email is already sent. Any failure here must not
-    // surface to the CEO as a skill error. The draftId was stored in the
-    // payload by the gateway's two-step draft-fallback pattern (linkPayload).
+    // surface to the CEO as a skill error. The draft_id key (snake_case) is used
+    // because linkGatedAction stores it as { draft_id } via the reExecRecipe pattern.
     // Rows created outside the autonomy gate will not match and are silently skipped.
     if (ctx.actionLogRepo) {
       try {
-        const row = await ctx.actionLogRepo.findPendingByPayloadField('draftId', draftId);
+        const row = await ctx.actionLogRepo.findPendingByPayloadField('draft_id', draftId);
         if (row) {
           const updated = await ctx.actionLogRepo.resolveById(row.id, 'approved', 'ceo');
           if (!updated) {
