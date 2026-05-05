@@ -467,7 +467,9 @@ export class EmailAdapter {
       if (draftResult && draftResult.success && draftResult.draftId) {
         if (result.actionRef) {
           // linkGatedAction is internally guarded (no-throw), so no outer try/catch needed here.
-          await outboundGateway.linkGatedAction(result.actionRef, {
+          // Pass context.taskEventId so linkPayload can scope the update to this specific task,
+          // preventing short_ref collisions across tasks from smearing draftId onto the wrong row.
+          await outboundGateway.linkGatedAction(result.actionRef, context.taskEventId, {
             draftId: draftResult.draftId,
             accountId,
             recipientEmail: sendRequest.to,
@@ -481,17 +483,18 @@ export class EmailAdapter {
             'email-adapter: gated fallback draft created but no actionRef available — draft will not appear in pending-actions-digest (taskEventId was absent)',
           );
         }
+        // Log inside the success branch only — if the draft failed, we already logged
+        // the error below and logging "draft created" would be misleading.
+        logger.info(
+          { accountId, draftId: draftResult.draftId, actionRef: result.actionRef },
+          'email-adapter: send gated — fallback draft created',
+        );
       } else if (draftResult && !draftResult.success) {
         logger.error(
           { accountId, actionRef: result.actionRef, reason: draftResult.blockedReason },
           'email-adapter: gated fallback draft creation failed — send blocked, no draft created',
         );
       }
-
-      logger.info(
-        { accountId, draftId: draftResult?.draftId, actionRef: result.actionRef },
-        'email-adapter: send gated — fallback draft created',
-      );
       return;
     }
 

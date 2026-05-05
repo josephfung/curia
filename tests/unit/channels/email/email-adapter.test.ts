@@ -828,9 +828,10 @@ describe('EmailAdapter — dispatchByPolicy gated-fallback', () => {
       expect.objectContaining({ to: CEO_EMAIL, channel: 'email' }),
     );
 
-    // linkGatedAction should be called with the actionRef and draft metadata
+    // linkGatedAction should be called with the actionRef, taskEventId, and draft metadata
     expect(mocks.outboundGateway.linkGatedAction).toHaveBeenCalledWith(
       'email-42',
+      'task-evt-2',
       expect.objectContaining({
         draftId: 'draft-abc',
         accountId: 'curia',

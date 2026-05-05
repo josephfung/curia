@@ -1,4 +1,4 @@
-// tests/integration/draft-fallback-flow.test.ts
+// tests/unit/draft-fallback-flow.test.ts
 //
 // Integration test: exercises the full gate → draft → approve path.
 // Verifies contracts BETWEEN layers: the gateway's gated result shape,
@@ -6,13 +6,16 @@
 //
 // "Medium-weight" integration: real EventBus + real OutboundGateway + real
 // EmailAdapter, with mocked external services (Nylas, autonomy DB, contacts).
+//
+// Lives in tests/unit/ because all external dependencies are mocked (no real
+// Postgres / Docker required). Convention: integration/ = real Postgres, unit/ = mocks.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EventBus } from '../../src/bus/bus.js';
 import { OutboundGateway } from '../../src/skills/outbound-gateway.js';
 import { EmailAdapter } from '../../src/channels/email/email-adapter.js';
 import { AutonomyService } from '../../src/autonomy/autonomy-service.js';
-import { createOutboundMessage, type OutboundMessageEvent } from '../../src/bus/events.js';
+import { createOutboundMessage } from '../../src/bus/events.js';
 import { createLogger } from '../../src/logger.js';
 import type { NylasClient, NylasMessage } from '../../src/channels/email/nylas-client.js';
 import type { ContactService } from '../../src/contacts/contact-service.js';
@@ -102,8 +105,8 @@ function createMockActionLogRepo(): ActionLogRepo & {
       return ++insertCounter;
     }),
     countShortRefsForTask: vi.fn().mockResolvedValue(0),
-    linkPayload: vi.fn().mockImplementation(async (shortRef: string, payload: Record<string, unknown>) => {
-      _linkedPayloads.push({ shortRef, payload });
+    linkPayload: vi.fn().mockImplementation(async (_shortRef: string, _taskEventId: string | undefined, payload: Record<string, unknown>) => {
+      _linkedPayloads.push({ shortRef: _shortRef, payload });
       return true;
     }),
     findPendingByTaskAndSkill: vi.fn().mockResolvedValue(null),
