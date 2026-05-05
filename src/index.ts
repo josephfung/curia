@@ -724,6 +724,7 @@ async function main(): Promise<void> {
       // Must be the CEO's primary email, NOT Curia's own Nylas address —
       // notifications addressed to Curia's inbox were never visible to the CEO.
       ceoEmail: config.ceoPrimaryEmail || undefined,
+      ceoSignalNumber: config.ceoSignalNumber,
       logger,
       autonomyService,
       piiRedactor,
