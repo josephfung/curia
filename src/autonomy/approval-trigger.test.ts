@@ -42,6 +42,10 @@ describe('shortRefPrefix', () => {
     expect(shortRefPrefix('schedule-job')).toBe('sched');
   });
 
+  it('maps send-draft to "email" (re-execution skill for gateway-blocked email drafts)', () => {
+    expect(shortRefPrefix('send-draft')).toBe('email');
+  });
+
   it('falls back to first word of skill name, truncated to 6 chars', () => {
     expect(shortRefPrefix('something-unusual')).toBe('someth');
     expect(shortRefPrefix('web-search')).toBe('web');

@@ -1560,6 +1560,40 @@ describe('gated draft-fallback (two-step pattern)', () => {
     // Notification failed → setNotificationSentAt must NOT be called
     expect(actionLogRepo.setNotificationSentAt).not.toHaveBeenCalled();
   });
+
+  it('returns undefined actionRef when insert throws after countShortRefsForTask succeeds', async () => {
+    // HIGH: actionRef must only be set after insert() confirms the DB row exists.
+    // If countShortRefsForTask succeeds but insert throws, the gateway must not
+    // return an actionRef pointing to a non-existent DB row (phantom reference).
+    const mocks = createMocks();
+    const actionLogRepo = {
+      countShortRefsForTask: vi.fn().mockResolvedValue(0),
+      insert: vi.fn().mockRejectedValue(new Error('DB connection error')),
+      linkPayload: vi.fn(),
+      setNotificationSentAt: vi.fn(),
+    } as unknown as ActionLogRepo;
+
+    const gateway = new OutboundGateway({
+      nylasClients: new Map([['curia', mocks.nylasClient]]),
+      contactService: mocks.contactService,
+      contentFilter: mocks.contentFilter,
+      bus: mocks.bus,
+      ceoEmail: 'ceo@example.com',
+      logger: mocks.logger,
+      autonomyService: makeAutonomyService(65),
+      actionLogRepo,
+    });
+
+    const result = await gateway.send(
+      { channel: 'email', to: 'recipient@example.com', subject: 'Hello', body: 'Hi!' },
+      { taskEventId: 'task-123', reExecRecipe: TEST_RECIPE },
+    );
+
+    // Send is still blocked (gated) but actionRef must be undefined — no DB row was written
+    expect(result.success).toBe(false);
+    expect(result.gated).toBe(true);
+    expect(result.actionRef).toBeUndefined();
+  });
 });
 
 // ---------------------------------------------------------------------------
