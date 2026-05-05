@@ -150,6 +150,13 @@ export interface OutboundGatewayConfig {
    */
   ceoEmail?: string;
 
+  /**
+   * CEO's Signal phone number in E.164 format — used by the autonomy gate to
+   * exempt CEO-bound Signal messages. Same pattern as ceoEmail for email.
+   * Optional — when absent, the Signal CEO bypass does not fire.
+   */
+  ceoSignalNumber?: string;
+
   logger: Logger;
 
   /**
@@ -224,6 +231,7 @@ export class OutboundGateway {
   private readonly contentFilter: OutboundContentFilter;
   private readonly bus: EventBus;
   private readonly ceoEmail: string;
+  private readonly ceoSignalNumber: string;
   private readonly log: Logger;
   private readonly autonomyService?: AutonomyService;
   private readonly piiRedactor?: PiiRedactor;
@@ -238,6 +246,7 @@ export class OutboundGateway {
     this.contentFilter = config.contentFilter;
     this.bus = config.bus;
     this.ceoEmail = config.ceoEmail ?? '';
+    this.ceoSignalNumber = config.ceoSignalNumber ?? '';
     this.log = config.logger.child({ component: 'outbound-gateway' });
     this.autonomyService = config.autonomyService;
     this.piiRedactor = config.piiRedactor;
