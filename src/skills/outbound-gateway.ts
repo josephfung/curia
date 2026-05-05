@@ -347,11 +347,15 @@ export class OutboundGateway {
           const subject = request.subject;
           const description = `Draft reply to ${recipientEmail}${subject ? ` — "${subject}"` : ''}. Use send-draft to approve.`;
 
+          // Hoist expiresAt so both the insert row and the notification body use the
+          // same value — if the 48h window ever changes, only one line needs updating.
+          const expiresAt = new Date(Date.now() + 48 * 60 * 60 * 1000);
+          let rowId: number | undefined;
           try {
             const counter = await this.actionLogRepo.countShortRefsForTask(options.taskEventId);
             actionRef = `email-${counter + 1}`;
 
-            await this.actionLogRepo.insert({
+            rowId = await this.actionLogRepo.insert({
               taskId: options.taskEventId,
               conversationId: options.conversationId ?? undefined,
               skillName: 'outbound-send',
@@ -365,7 +369,7 @@ export class OutboundGateway {
                 subject,
                 channel: request.channel,
               },
-              expiresAt: new Date(Date.now() + 48 * 60 * 60 * 1000),
+              expiresAt,
             });
           } catch (err) {
             this.log.error(
@@ -373,6 +377,43 @@ export class OutboundGateway {
               'outbound-gateway: failed to write action_log row during gate — send is still blocked, actionRef will be absent',
             );
             // actionRef remains undefined — send is still blocked below
+          }
+
+          // Notify CEO (best-effort) — mirrors ApprovalTriggerService.request() pattern.
+          // sendNotification() has its own try-catch and returns false on failure, so it
+          // never throws. Only stamp notification_sent_at if the publish succeeded.
+          // setNotificationSentAt is wrapped separately so a DB failure there does not
+          // discard the fact that the insert (and the notification delivery) succeeded.
+          if (rowId !== undefined && this.ceoEmail) {
+            const sent = await this.sendNotification({
+              notificationType: 'approval_requested',
+              ceoEmail: this.ceoEmail,
+              subject: `Approval needed — reply to ${recipientEmail}`,
+              body: [
+                `An outbound email reply was blocked by the autonomy gate.`,
+                '',
+                `To: ${recipientEmail}`,
+                subject ? `Subject: ${subject}` : null,
+                '',
+                `Autonomy score: ${autonomyConfig.score} (threshold: ${sendThreshold})`,
+                `Reference: ${actionRef}`,
+                `Expires: ${expiresAt.toISOString()}`,
+                '',
+                `Reply with the reference to approve, deny, or dismiss this request.`,
+              ].filter((line): line is string => line !== null).join('\n'),
+            });
+            if (sent) {
+              try {
+                await this.actionLogRepo.setNotificationSentAt(rowId);
+              } catch (err) {
+                // Non-fatal: the pending_approval row exists and gating is correct.
+                // Only notification_sent_at is missing — the CEO still received the alert.
+                this.log.warn(
+                  { err, rowId, taskEventId: options.taskEventId },
+                  'outbound-gateway: setNotificationSentAt failed after successful notification — notification_sent_at will be null',
+                );
+              }
+            }
           }
         }
 

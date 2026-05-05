@@ -422,6 +422,18 @@ describe('ActionLogRepo', () => {
 
       expect(result).toBe(false);
     });
+
+    it('scopes update to task_id column (not task_event_id) when taskEventId is provided', async () => {
+      // Bug fix: the WHERE clause previously used task_event_id which doesn't exist —
+      // the actual column is task_id. Verify the SQL uses the correct column name.
+      const { pool, queries } = makePool([], 1);
+      const repo = new ActionLogRepo(pool, createSilentLogger());
+
+      await repo.linkPayload('email-1', 'task-evt-001', { draftId: 'draft-abc' });
+
+      expect(queries[0]!.sql).toContain('task_id');
+      expect(queries[0]!.sql).not.toContain('task_event_id');
+    });
   });
 
   describe('findPendingByPayloadField', () => {
