@@ -131,9 +131,11 @@ export class EmailAdapter {
 
       const notification = event as OutboundNotificationEvent;
       try {
-        // skipNotificationOnBlock prevents infinite recursion: if the content filter
-        // is broken and blocks this notification, the gateway will NOT re-publish
-        // outbound.notification, breaking the cycle.
+        // isSystemNotification bypasses the autonomy gate so the CEO still receives
+        // alerts (e.g. approval_requested) even when the score is below the send
+        // threshold — the notification must not be silenced by the gate it's reporting.
+        // skipNotificationOnBlock prevents infinite recursion if the content filter
+        // crashes and blocks this notification delivery itself.
         const result = await this.config.outboundGateway.send(
           {
             channel: 'email',
@@ -141,7 +143,7 @@ export class EmailAdapter {
             subject: notification.payload.subject,
             body: notification.payload.body,
           },
-          { skipNotificationOnBlock: true },
+          { skipNotificationOnBlock: true, isSystemNotification: true },
         );
         if (!result.success) {
           logger.error(

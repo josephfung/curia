@@ -248,7 +248,7 @@ export class OutboundGateway {
    *
    * Pipeline steps (channel-agnostic):
    *   0. Autonomy gate — score below 'medium' risk threshold blocks all autonomous sends
-   *      (skipped when options.humanApproved is true — CEO is in the loop)
+   *      (skipped when options.humanApproved or options.isSystemNotification is true)
    *   1. Contact blocked check
    *   2. Content filter (fail-closed)
    *   3. Channel dispatch (email → Nylas, signal → signal-cli RPC)
@@ -261,12 +261,18 @@ export class OutboundGateway {
    * @param options.humanApproved  When true, skip Step 0 (autonomy gate) only.
    *   The CEO is explicitly in the loop. All other safety checks (blocked-contact,
    *   content filter) run normally. See ADR-017.
+   * @param options.isSystemNotification  When true, skip Step 0 (autonomy gate) only.
+   *   Used for infrastructure alerts sent TO the CEO (e.g. approval_requested,
+   *   blocked_content). These must never be silenced by the same gate they report on —
+   *   if the score is too low to send autonomously, the CEO still needs to know about it.
+   *   All other safety checks (blocked-contact, content filter) run normally.
    */
   async send(
     request: OutboundSendRequest,
     options?: {
       skipNotificationOnBlock?: boolean;
       humanApproved?: boolean;
+      isSystemNotification?: boolean;
       /** Task event ID for action_log traceability. */
       taskEventId?: string;
       /** Conversation ID for action_log context. */
@@ -286,6 +292,14 @@ export class OutboundGateway {
       this.log.info(
         { channel: request.channel },
         'outbound-gateway: autonomy gate skipped — humanApproved flag set (CEO-authorized action, see ADR-017)',
+      );
+    } else if (this.autonomyService && options?.isSystemNotification) {
+      // Infrastructure alert to the CEO — gate must not silence its own alarm bell.
+      // A notification about a blocked action still needs to reach the CEO regardless
+      // of the score that caused the block. All other safety checks still run below.
+      this.log.info(
+        { channel: request.channel },
+        'outbound-gateway: autonomy gate skipped — isSystemNotification flag set (infrastructure alert to CEO)',
       );
     } else if (this.autonomyService) {
       // Fail-open on config read only — getConfig() failure must not block sends.
