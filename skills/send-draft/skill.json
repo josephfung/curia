@@ -6,7 +6,7 @@
   "action_risk": "none",
   "inputs": {
     "draft_id": "string (Nylas draft ID to send)",
-    "account": "string (named email account the draft lives in, as configured in channel_accounts.email — e.g. the CEO's account name)"
+    "account": "string? (named email account the draft lives in, as configured in channel_accounts.email. When omitted, the skill searches all configured accounts and auto-discovers which one owns the draft.)"
   },
   "outputs": {
     "message_id": "string",

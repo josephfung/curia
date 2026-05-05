@@ -11,7 +11,13 @@
 // See ADR-017 for the full reasoning behind this pattern.
 
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { NylasMessage } from '../../src/channels/email/nylas-client.js';
 import { createHumanDecision } from '../../src/bus/events.js';
+
+/** Result of findDraftById — either the draft + owning account, or an error string. */
+type DraftDiscoveryResult =
+  | { success: true; draft: NylasMessage; resolvedAccount: string }
+  | { success: false; error: string };
 
 export class SendDraftHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {
@@ -58,12 +64,15 @@ export class SendDraftHandler implements SkillHandler {
       : undefined;
     if (!draftId) return { success: false, error: 'Missing required input: draft_id (string)' };
 
+    // account is optional — when omitted, the skill searches all configured accounts
+    // for the draft and auto-discovers which account owns it. This fixes the bug where
+    // the coordinator LLM had to guess the account name (often incorrectly, defaulting
+    // to the primary account even when the draft lives in a secondary one). See #455.
     const account = typeof rawAccount === 'string' && rawAccount.trim()
       ? rawAccount.trim()
       : undefined;
-    if (!account) return { success: false, error: 'Missing required input: account (string)' };
 
-    ctx.log.info({ draftId, account }, 'send-draft: fetching draft');
+    ctx.log.info({ draftId, account: account ?? '(auto-discover)' }, 'send-draft: fetching draft');
 
     // ------------------------------------------------------------------
     // Step 3: Fetch draft from Nylas DRAFTS folder
@@ -76,19 +85,16 @@ export class SendDraftHandler implements SkillHandler {
     //   1. Verify the draft exists before attempting to send.
     //   2. Extract the primary recipient and body for the safety pipeline in
     //      gateway.sendEmailDraft() — blocked-contact check and content filter.
-    let drafts: Awaited<ReturnType<typeof ctx.outboundGateway.listEmailMessages>>;
-    try {
-      drafts = await ctx.outboundGateway.listEmailMessages({ folders: ['DRAFTS'] }, account);
-    } catch (err) {
-      ctx.log.error({ err, account }, 'send-draft: failed to fetch DRAFTS folder');
-      return { success: false, error: `Failed to fetch drafts folder for account '${account}'` };
+    //
+    // When account is provided, search only that account's DRAFTS folder.
+    // When omitted, iterate all configured accounts (via gateway.listAccountIds())
+    // and stop at the first match. This avoids requiring the LLM to know which
+    // account owns the draft — the skill derives it from the draft's location.
+    const discoveryResult = await this.findDraftById(ctx, draftId, account);
+    if (!discoveryResult.success) {
+      return { success: false, error: discoveryResult.error };
     }
-
-    const draft = drafts.find((m) => m.id === draftId);
-    if (!draft) {
-      ctx.log.warn({ draftId, account }, 'send-draft: draft not found in DRAFTS folder');
-      return { success: false, error: `Draft not found: ${draftId}` };
-    }
+    const { draft, resolvedAccount } = discoveryResult;
 
     const recipient = draft.to[0]?.email;
     if (!recipient) {
@@ -106,18 +112,22 @@ export class SendDraftHandler implements SkillHandler {
     //
     // humanApproved: true skips the autonomy gate (Step 0 inside the gateway) only.
     // Blocked-contact check and content filter run normally. See ADR-017.
-    ctx.log.info({ draftId, account, recipient }, 'send-draft: sending');
+    //
+    // resolvedAccount is used for the send — either the explicit input or the
+    // account discovered during draft lookup. This ensures the send always uses
+    // the credentials of the account that owns the draft.
+    ctx.log.info({ draftId, account: resolvedAccount, recipient }, 'send-draft: sending');
 
     const sendResult = await ctx.outboundGateway.sendEmailDraft(
       draftId,
-      account,
+      resolvedAccount,
       { recipientEmail: recipient, body: draft.body, subject: draft.subject },
       { humanApproved: true },
     );
 
     if (!sendResult.success) {
       ctx.log.warn(
-        { draftId, account, reason: sendResult.blockedReason },
+        { draftId, account: resolvedAccount, reason: sendResult.blockedReason },
         'send-draft: gateway blocked the send',
       );
       return { success: false, error: sendResult.blockedReason ?? 'Send blocked by gateway' };
@@ -218,5 +228,90 @@ export class SendDraftHandler implements SkillHandler {
         subject: draft.subject,
       },
     };
+  }
+
+  // ------------------------------------------------------------------
+  // Private: draft discovery
+  // ------------------------------------------------------------------
+
+  /**
+   * Find a draft by ID, either in a specific account or across all accounts.
+   *
+   * When `account` is provided, searches only that account's DRAFTS folder.
+   * When omitted, iterates all configured accounts (via gateway.listAccountIds())
+   * and returns the first match along with the account that owns it.
+   *
+   * This is the core fix for #455: the coordinator no longer needs to guess which
+   * account a draft lives in — the skill discovers it automatically.
+   */
+  private async findDraftById(
+    ctx: SkillContext,
+    draftId: string,
+    account: string | undefined,
+  ): Promise<DraftDiscoveryResult> {
+    const gateway = ctx.outboundGateway!;
+
+    // Fast path: caller specified the account — search only that one.
+    if (account) {
+      return this.searchAccountForDraft(ctx, gateway, draftId, account);
+    }
+
+    // Slow path: search all accounts. Stop at the first match.
+    const accountIds = gateway.listAccountIds();
+    if (accountIds.length === 0) {
+      return { success: false, error: 'No email accounts configured' };
+    }
+
+    // Track which accounts failed so the error message is informative.
+    const failedAccounts: string[] = [];
+    for (const acctId of accountIds) {
+      const result = await this.searchAccountForDraft(ctx, gateway, draftId, acctId);
+      if (result.success) return result;
+      // A "not found" is expected during cross-account search — only track infra failures.
+      if (result.error.startsWith('Failed to fetch')) {
+        failedAccounts.push(acctId);
+      }
+    }
+
+    const searched = accountIds.join(', ');
+    const failNote = failedAccounts.length > 0
+      ? ` (accounts with fetch errors: ${failedAccounts.join(', ')})`
+      : '';
+    ctx.log.warn(
+      { draftId, searchedAccounts: accountIds, failedAccounts },
+      'send-draft: draft not found in any account',
+    );
+    return {
+      success: false,
+      error: `Draft not found: ${draftId}. Searched accounts: ${searched}.${failNote}`,
+    };
+  }
+
+  /** Search a single account's DRAFTS folder for a draft by ID. */
+  private async searchAccountForDraft(
+    ctx: SkillContext,
+    gateway: NonNullable<SkillContext['outboundGateway']>,
+    draftId: string,
+    account: string,
+  ): Promise<DraftDiscoveryResult> {
+    let drafts: Awaited<ReturnType<typeof gateway.listEmailMessages>>;
+    try {
+      drafts = await gateway.listEmailMessages({ folders: ['DRAFTS'] }, account);
+    } catch (err) {
+      ctx.log.error({ err, account }, 'send-draft: failed to fetch DRAFTS folder');
+      return { success: false, error: `Failed to fetch drafts folder for account '${account}'` };
+    }
+
+    const draft = drafts.find((m) => m.id === draftId);
+    if (!draft) {
+      ctx.log.debug({ draftId, account }, 'send-draft: draft not in this account');
+      return { success: false, error: `Draft not found: ${draftId}` };
+    }
+
+    ctx.log.info(
+      { draftId, account },
+      'send-draft: draft found',
+    );
+    return { success: true, draft, resolvedAccount: account };
   }
 }
