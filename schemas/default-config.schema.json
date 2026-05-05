@@ -236,9 +236,8 @@
               "self_email": { "type": "string", "minLength": 1 },
               "outbound_policy": {
                 "type": "string",
-                "enum": ["direct", "draft_gate", "autonomy_gated"]
-              },
-              "autonomy_threshold": { "type": "integer", "minimum": 0, "maximum": 100 }
+                "enum": ["direct", "draft_gate"]
+              }
             }
           }
         }

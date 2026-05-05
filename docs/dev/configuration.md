@@ -163,11 +163,10 @@ channel_accounts:
       self_email:     "env:NYLAS_SELF_EMAIL"
       outbound_policy: direct
 
-    joseph:
-      nylas_grant_id: "env:NYLAS_GRANT_ID_JOSEPH"
-      self_email:     "env:NYLAS_SELF_EMAIL_JOSEPH"
-      outbound_policy: autonomy_gated
-      autonomy_threshold: 80
+    personal:
+      nylas_grant_id: "env:NYLAS_GRANT_ID_PERSONAL"
+      self_email:     "env:NYLAS_SELF_EMAIL_PERSONAL"
+      outbound_policy: draft_gate
 ```
 
 The `env:VAR_NAME` references are resolved from environment variables at
