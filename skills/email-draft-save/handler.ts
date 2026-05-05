@@ -100,6 +100,57 @@ export class EmailDraftSaveHandler implements SkillHandler {
     }
 
     ctx.log.info({ draftId: result.draftId, to, accountId }, 'email-draft-save: draft saved');
+
+    // Track observation-mode drafts in action_log for pending-actions-digest.
+    //
+    // When the coordinator creates a draft in observation mode, the CEO needs to
+    // know it exists so they can approve (send) or discard it. Writing a
+    // pending_approval row here surfaces the draft in the next digest and
+    // makes it reachable via the send-draft skill using the shortRef.
+    //
+    // We guard on all three prerequisites — missing any one means we either
+    // aren't in obs mode (no tracking needed) or can't form a valid row.
+    // Failures are non-fatal: a failed audit write must not block the draft.
+    if (ctx.taskMetadata?.observationMode === true && ctx.actionLogRepo && ctx.taskEventId) {
+      const recipientEmail = to;
+      try {
+        const counter = await ctx.actionLogRepo.countShortRefsForTask(ctx.taskEventId);
+        const shortRef = `email-${counter + 1}`;
+        const description = `Draft reply to ${recipientEmail}${subject ? ` — "${subject}"` : ''} (${accountId ?? 'default'}). Use send-draft to approve.`;
+
+        await ctx.actionLogRepo.insert({
+          taskId: ctx.taskEventId,
+          // conversationId is not surfaced on SkillContext — omit rather than pass null
+          skillName: 'email-draft-save',
+          actionRisk: 'medium',
+          outcome: 'pending_approval',
+          shortRef,
+          description,
+          payload: {
+            source: 'observation_mode',
+            draftId: result.draftId,
+            accountId,
+            recipientEmail,
+            subject,
+          },
+          expiresAt: new Date(Date.now() + 48 * 60 * 60 * 1000),
+        });
+
+        ctx.log.info(
+          { draftId: result.draftId, shortRef, taskId: ctx.taskEventId },
+          'email-draft-save: observation-mode draft tracked in action_log',
+        );
+      } catch (err) {
+        // Non-fatal — the draft was already created successfully. The coordinator
+        // and CEO can still find it via their email client; the digest just won't
+        // list it. Log at warn so it surfaces for investigation without alarming ops.
+        ctx.log.warn(
+          { err, draftId: result.draftId, taskId: ctx.taskEventId },
+          'email-draft-save: failed to write action_log row for observation-mode draft — draft was saved but will not appear in pending-actions-digest',
+        );
+      }
+    }
+
     return { success: true, data: { draft_id: result.draftId } };
   }
 }

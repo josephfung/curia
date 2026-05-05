@@ -19,6 +19,7 @@
   "secrets": [],
   "timeout": 20000,
   "capabilities": [
-    "outboundGateway"
+    "outboundGateway",
+    "actionLogRepo"
   ]
 }
