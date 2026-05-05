@@ -792,7 +792,7 @@ export class OutboundGateway {
    */
   private isCeoRecipient(request: OutboundSendRequest): boolean {
     if (request.channel === 'email') {
-      return this.ceoEmail !== '' && request.to.toLowerCase() === this.ceoEmail.toLowerCase();
+      return this.isCeoEmail(request.to);
     }
     if (request.channel === 'signal' && 'recipient' in request && request.recipient) {
       return this.ceoSignalNumber !== '' && request.recipient === this.ceoSignalNumber;
@@ -801,6 +801,16 @@ export class OutboundGateway {
     // group membership at gate time would require an async RPC call to signal-cli.
     // Group messages to the CEO will be subject to normal autonomy gating.
     return false;
+  }
+
+  /**
+   * Check whether an email address belongs to the CEO.
+   * Canonical comparison: case-insensitive, with null/undefined guard.
+   * Used by both isCeoRecipient() and the sendEmailDraft() autonomy bypass.
+   */
+  private isCeoEmail(email: string | undefined | null): boolean {
+    if (!email || this.ceoEmail === '') return false;
+    return email.toLowerCase() === this.ceoEmail.toLowerCase();
   }
 
   /**
@@ -1050,7 +1060,7 @@ export class OutboundGateway {
         { draftId },
         'outbound-gateway: autonomy gate skipped — humanApproved flag set (CEO-authorized draft send, see ADR-017)',
       );
-    } else if (this.autonomyService && this.ceoEmail !== '' && draftMeta.recipientEmail && draftMeta.recipientEmail.toLowerCase() === this.ceoEmail.toLowerCase()) {
+    } else if (this.autonomyService && this.isCeoEmail(draftMeta.recipientEmail)) {
       // Agent-to-principal: CEO-bound draft sends bypass the autonomy gate.
       // Same rationale as the send() CEO bypass — see isCeoRecipient() comment.
       this.log.info(
