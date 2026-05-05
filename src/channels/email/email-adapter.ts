@@ -136,6 +136,10 @@ export class EmailAdapter {
         // threshold — the notification must not be silenced by the gate it's reporting.
         // skipNotificationOnBlock prevents infinite recursion if the content filter
         // crashes and blocks this notification delivery itself.
+        logger.info(
+          { notificationType: notification.payload.notificationType, channel: 'email' },
+          'EmailAdapter: delivering system notification with autonomy gate bypass',
+        );
         const result = await this.config.outboundGateway.send(
           {
             channel: 'email',
