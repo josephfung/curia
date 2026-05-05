@@ -13,94 +13,60 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
-### Fixed
+---
 
-- **Silent memory store failure** — `memory-store` no longer returns `action: 'rejected'` conflating two unrelated outcomes; distinct codes `entity_not_found` and `rate_limited` are now returned so the coordinator can respond appropriately to each.
-- **Observation-mode draft sent to wrong address** — the dispatcher now includes `From: <sender email>` in the `[OBSERVATION MODE — monitored inbox]` preamble. Without it, the email-triage agent had no authoritative sender address and inferred the reply `to` from `email-list` history, picking a stale address for the same contact. The coordinator delegation template and email-triage system prompt are updated to forward and mandate use of the `From:` value. The `From:` value is sanitized against prompt injection (newlines, angle brackets stripped; capped at 254 chars) and omitted with a warning when the email adapter reports no sender (`unknown` sentinel), matching the defensive pattern already applied to CC-path recipient addresses.
-- **CC reply routed to wrong account** — the dispatcher now includes `Message ID` and `Account` in the `[OWNER CC —]` preamble, mirroring the observation-mode pattern. Without these identifiers the coordinator couldn't call `email-reply` and fell back to `email-draft-save`, where it misread the context and drafted in the CEO's account instead of Curia's. The coordinator system prompt is updated with an explicit rule for CC'd emails: use `email-reply` with the preamble's Message ID, never `email-draft-save` with the CEO's account name. Fixes test 7.1 failure.
-- **`send-draft` not account-aware** — the skill now auto-discovers which email account owns a draft when the `account` input is omitted, searching all configured accounts instead of defaulting to the primary. Sends use the discovered account's credentials, and missing drafts produce a clear error instead of silently falling back to draft creation. Fixes #455.
-- **`short_ref` collision across tasks** — replaced the per-task sequential counter (`email-1`, `cal-1`) with a random 8-char hex identifier (`generateShortRef()`). The old scheme reset to 1 for every new task context, causing multiple pending rows to share the same `short_ref` and making `approve-action` return an ambiguous error. New refs are globally unique (~4B possibilities); the DB constraint is upgraded from `UNIQUE(task_id, short_ref)` to `UNIQUE(short_ref)` via migration 033.
-- **Gateway gate notifies CEO** — `OutboundGateway.send()` now sends an `approval_requested` notification to the CEO when the autonomy gate blocks a send and writes a `pending_approval` row. Previously, CEO alerts only came from the execution-layer `ApprovalTriggerService`; gateway-level blocks were silent, leaving the CEO unaware and `notification_sent_at` always NULL.
-- **`linkPayload` wrong column name** — fixed SQL bug in `ActionLogRepo.linkPayload()` where the WHERE clause used `task_event_id` (non-existent) instead of `task_id`, causing every `linkGatedAction()` call to throw a `DatabaseError` and draft IDs to never be linked to pending approval rows.
-- **`approve-action` re-execution for gated email sends** — the `pending_approval` row for a gateway-gated email send now stores `skillName: 'send-draft'` with `payload: { account, draft_id }` so `approve-action` can re-execute it generically, without any channel-specific special-casing. The email adapter opts in via a new `reExecRecipe` field on `gateway.send()` options, which keeps the gateway channel-agnostic. Closes the registry error that occurred when `approve-action` tried to invoke the synthetic `outbound-send` skill name.
-- **`send-draft` handler key mismatch** — fixed silent failure where `send-draft/handler.ts` looked up the pending approval row with JSONB key `draftId` (camelCase) but `linkGatedAction` stores it as `draft_id` (snake_case). The lookup always returned null, leaving the pending row stuck in `pending_approval` after the CEO approved and the draft was sent.
-- **Phantom `actionRef` on insert failure** — fixed gateway bug where `actionRef` was assigned *before* `actionLogRepo.insert()` confirmed the DB row exists. If `countShortRefsForTask` succeeded but `insert` threw, the gateway returned `{ gated: true, actionRef: 'email-1' }` pointing to a non-existent row.
-- **`shortRefPrefix` maps `send-draft` to `'email'`** — added explicit rule so gateway-blocked email drafts use `email-N` short refs, matching the prefix produced by execution-layer email skill blocks. Gateway now calls `shortRefPrefix(recipe.skillName)` instead of hard-coding `'email-'`, keeping it channel-agnostic.
-
-- **CEO-bound messages bypass autonomy gate** — outbound messages addressed to the CEO (email or Signal) now skip the autonomy gate in `OutboundGateway.send()` and `sendEmailDraft()`. The autonomy gate exists to prevent autonomous communication with external parties; gating agent-to-principal messages caused the agent to go mute at low scores and created phantom `pending_approval` rows when the coordinator tried to confirm approval/denial actions. All other safety checks (content filter, PII redaction, blocked-contact) still apply. Fixes #454.
-- **System notifications bypass autonomy gate** — `OutboundGateway.send()` now accepts `isSystemNotification: true`, which skips Step 0 (autonomy gate) for infrastructure alerts to the CEO (e.g. `approval_requested`). Previously, CEO approval notifications were silenced by the same gate that triggered them — the CEO could not act on a blocked action because the notification never arrived. All other safety checks (blocked-contact, content filter) still apply.
-- **`email-draft-save` action risk downgraded** — changed from `"medium"` to `"low"` (min score 60 instead of 70). Drafts are internal mailbox writes — the CEO still controls sending — and do not constitute autonomous outbound communication.
+## [0.25.0] — 2026-05-05 — "By Your Leave"
 
 ### Added
 
+- **Approval workflow** — when a skill is blocked by the autonomy gate, the execution layer now creates an approval request and notifies the CEO rather than hard-failing. Four new CEO-facing skills: `approve-action`, `deny-action`, `dismiss-action`, `list-pending-actions`. Stale requests expire hourly via `approval-expiry-sweep`; a daily 8 AM digest summarises outstanding requests each morning via `pending-actions-digest`. Implements ADR-018. (#427, #428, #429)
+- **Autonomy Phase 2 hard gates** — the execution layer now enforces `action_risk` thresholds against the live score at invocation time. A blocked skill emits `autonomy.skill_blocked`, returns an advisory failure describing the required score, and routes to the approval workflow above. `OutboundGateway.send()` independently blocks direct sends when score < 70, leaving drafts as the fallback. (#147)
+- **Autonomy Phase 3 automatic score adjustment** — a daily `AutonomyScoringPass` runs as a DreamEngine sibling pass, scoring recent actions on Competence / Commitment / Compatibility and nudging the autonomy score ±5. Deterministic scoring for approval outcomes; LLM-as-judge for task success/failure. Guards: 30-action minimum, 7-day CEO cooldown, 20% error-rate cap. `get-autonomy` now surfaces `lastSetBy`, trend direction, and scored action count. (#148)
+- **Autonomy web UI** — dedicated Settings page to view the current score, trend direction, and paginated change history. New REST endpoints: `GET /api/autonomy`, `PUT /api/autonomy`, `GET /api/autonomy/history`. (#409)
+- **`send-draft` skill** — allows the CEO to instruct Curia to send a previously saved Nylas draft. Requires a CEO-originated task context; bypasses the autonomy gate via `humanApproved: true` while preserving blocked-contact and content-filter checks. Implements ADR-017. (#414)
+- **PII outbound redaction** — `PiiRedactor` sits between agent responses and channel delivery, scanning for credit cards, phone numbers, SSNs, and email addresses. Redaction is channel-aware: per-channel allow lists in config control which patterns pass through. CEO trust level bypasses redaction. Publishes `outbound.pii-redacted` to the audit log. (#249)
+- **Contact auto-creation rate limiting** — email participant contact creation capped at 10 per message and 100 per hour (configurable). CEO notified when limits are hit; prevents spam-campaign flooding. (#36)
+- **CC role detection** — `convertNylasMessage` now computes `curiaRole` (to / cc / bcc) and `primaryRecipientEmails`, giving the coordinator unambiguous context when Curia is CC'd vs. directly addressed.
 - **Coordinator memory workflow** — new `## Memory` section in the coordinator prompt with step-by-step guidance on storing facts (`memory-store`) and proactive recall (`memory-query`); covers known contacts, non-contact entities, decay class selection, and disambiguation.
-- **`EntityMemory.resolveOrCreate()`** — shared find-or-create primitive extracted from `extract-facts` and now used by both `memory-store` and `extract-facts`, eliminating code duplication and ensuring consistent entity resolution across the system.
-- **Approval expiry sweep** — new `approval-expiry-sweep` skill that hourly expires stale `pending_approval` rows and sends a batched CEO notification for high/critical tier expirations; added `findExpired()` and `expireRows()` to `ActionLogRepo`
-- **Pending-actions digest** — new `pending-actions-digest` skill that sends a daily 8 AM summary of all open approval requests to the CEO; added two scheduler entries to `agents/coordinator.yaml`
-- **Notification types** — added `approval_expired` and `pending_actions_digest` to `OutboundNotificationPayload.notificationType` union in `src/bus/events.ts`
-- **Autonomy Phase 3 scoring foundation** — `autonomy_action_log` table (migration 031) records skill invocations and outcomes, serving as the foundation for automatic score adjustment and the approval lifecycle (ADR-018). TypeScript types and repo in `src/autonomy/`. (spec 14, issue #148)
-- **Automatic autonomy score adjustment** — daily `AutonomyScoringPass` runs as a DreamEngine sibling pass. Scores completed actions on Competence/Commitment/Compatibility (deterministic for approval outcomes, LLM judge for success/failure), computes a time-decay-weighted capability score, and nudges the autonomy score ±5 via a delta formula. Guards: 30-action minimum, CEO cooldown (7 days), error rate threshold (20%). (spec 14, issue #148)
-- **`get-autonomy` trend surfacing** — skill now reports `lastSetBy` (CEO or system), trend direction (improving/declining/stable), and scored action count. (spec 14, issue #148)
-- **ADR-018: Curia-initiated approval requests** — documents the pattern for autonomy-gated skills to request CEO permission via the unified `autonomy_action_log` state machine, complementing the CEO-initiated pattern in ADR-017.
+- **`EntityMemory.resolveOrCreate()`** — shared find-or-create primitive now used by both `memory-store` and `extract-facts`, ensuring consistent entity resolution and eliminating code duplication.
+- **ADR-017** — CEO-authorized action pattern: `action_risk: "none"` + task-origin check + `humanApproved` flag, reusable for any future CEO-directed skill.
+- **ADR-018** — Curia-initiated approval request pattern: gate-blocked skills create `autonomy_action_log` rows and notify the CEO rather than returning a hard error.
 
 ### Changed
 
+- **Outbound autonomy gate** — draft-fallback logic moved from the email adapter to `OutboundGateway`; the email adapter is now pure transport. The gateway writes `autonomy_action_log` rows for gated sends, supports two-step draft linkage for the approval-to-send flow, and tracks observation-mode drafts for a unified pending-actions surface. (#435)
+- **CEO and system messages bypass autonomy gate** — outbound messages addressed to the CEO (email or Signal) and infrastructure system notifications (e.g. `approval_requested`) now skip the autonomy gate. Gating agent-to-principal messages caused the agent to go mute at low scores and produced phantom `pending_approval` rows when the coordinator tried to confirm approval/denial outcomes. All other safety checks (content filter, PII redaction, blocked-contact) still apply. (#454)
+- **`email-draft-save` action risk** — downgraded from `medium` to `low` (min score 60). Drafts are internal mailbox writes the CEO still controls; they do not constitute autonomous outbound communication.
 - **`memory-store`** — entity names that don't exist in the KG are now auto-created (via `resolveOrCreate`) rather than returning a rejection; `entity_type` optional input added to hint the node type on creation.
-- **`extract-facts`** — entity resolution refactored to use `EntityMemory.resolveOrCreate()` (no behaviour change).
-- **`autonomy_action_log` table name** — renamed from `action_log` to `autonomy_action_log` for schema clarity. The `autonomy_` prefix groups it with `autonomy_config` and `autonomy_history`. Updated in ADR-018, issues #427/#428/#429. (spec 14, issue #148)
-- **DreamEngine** — now accepts an optional `AutonomyScoringPass` as a sibling pass, running on its own interval alongside memory decay. (spec 14, issue #148)
-- **Held-message notifications** — coordinator now describes the nature of the sender's request (not just subject/sender). Preview is 500-char plaintext with `totalLength` so the LLM can qualify partial reads. Channel name is now dynamic (email, Signal, etc.) instead of hardcoded.
-- **Outbound autonomy gate** — draft-fallback logic lifted from email adapter to OutboundGateway;
-  email adapter simplified to pure transport. Gateway now writes `autonomy_action_log` rows on
-  gated sends and supports two-step draft linkage. Observation-mode drafts also tracked in
-  action_log for unified pending-actions surface. (#435)
-- **Pending-actions-digest** — short reference codes moved to end of each line for readability
+- **Held-message notifications** — enriched with a 500-character plaintext preview of the sender's request, total message length, and a dynamic channel label. (#400)
+- **Trust levels** — added `'ceo'` trust level above `'high'`; `meetsMinimumTrust()` helper for ordinal comparison. CEO bootstrap sets `trust_level = 'ceo'` on the CEO contact. (#249)
+- **PII scrubber** — replaced deprecated `@openredaction/openredaction` with `openredaction` v1.1.2; reordered CREDIT_CARD before PHONE patterns to prevent partial matches; added PHONE_US parenthesized-format fix. (#252)
+- **`action_risk` enforcement** — `SkillRegistry.register()` now throws at startup if a skill manifest omits `action_risk` (previously silently accepted).
+- **Coordinator** — strengthened contact-lookup-first rule; added CC'd email handling guidance; trust-channel narration now only raised when declining a specific request.
+- **DreamEngine** — accepts an optional `AutonomyScoringPass` as a sibling pass, running on its own interval alongside memory decay.
 
 ### Fixed
 
-- **Test fixture naming** — replaced `nathan@curia.com` / `Nathan` references in `message-converter.test.ts` with `curia@example.com` / `Curia` to comply with instance-name hygiene rule.
-- **Delegate @-prefix normalization** — LLMs sometimes pass agent names with a leading `@` (e.g. `@essay-editor` instead of `essay-editor`), causing registry lookup misses and lost timeout injection. The runtime now strips leading `@` from delegate agent names before registry lookup and handler dispatch.
+- **Approval lifecycle** — multiple correctness bugs addressed after testing: gateway-blocked sends now notify the CEO immediately (`notification_sent_at` was always NULL before); `pending_approval` rows are correctly cleared on approval and denial; `short_ref` is now a globally unique 8-char hex identifier (old per-task sequential scheme caused collisions and made `approve-action` return ambiguous errors); JSONB key casing mismatch in the `send-draft` handler fixed; phantom `actionRef` on insert failure fixed; `approve-action` re-execution for gated email sends now uses a generic `reExecRecipe` pattern.
+- **`send-draft` account selection** — the skill now auto-discovers the draft's owning email account when `account` is omitted, searching all configured accounts. Sends use the discovered account's credentials. Missing drafts surface a clear error instead of silently creating a new draft. (#455)
+- **CC reply routing** — the dispatcher now includes Message ID and Account in the `[OWNER CC]` preamble; the coordinator uses `email-reply` with these identifiers rather than falling back to `email-draft-save` in the wrong account.
+- **Observation-mode draft reply address** — dispatcher includes `From: <sender>` in the observation-mode preamble, preventing the email-triage agent from inferring a stale reply-to address for the same contact.
+- **Silent memory store failure** — `memory-store` now returns distinct codes `entity_not_found` and `rate_limited` instead of the generic `rejected`, so the coordinator can respond appropriately to each.
+- **`held-messages-process` identify** — no longer crashes with `23505` when the sender's channel identity already exists; resolves the owning contact, cleans up the orphaned new contact, and marks the message processed. (#406)
+- **`held-messages-process` trust level** — confirmed contacts now receive `trust_level = 'high'` so subsequent messages from identified senders are not re-held. (#407)
+- **Silent email drafts** — observation-mode triage drafts are now created silently; the per-draft CEO email notification has been removed. Discovery shifts to the daily Signal digest. (#403)
+- **Delegate @-prefix normalization** — agent names passed with a leading `@` are stripped before registry lookup, preventing silent delegation failures.
 
 ### Removed
 
-- **`autonomy_gated` outbound policy** — replaced by gateway-level autonomy gate on `direct`
-  policy. Deployments using `autonomy_gated` must switch to `direct`.
-- **CLI held-message notification** — removed vestigial `[Held] Unknown sender...` terminal printout; the coordinator's proactive mention is the real notification path.
+- **`autonomy_gated` outbound policy** — superseded by the gateway-level autonomy gate on the `direct` policy. Deployments using `autonomy_gated` must switch to `direct`.
+- **CLI held-message notification** — removed vestigial terminal printout; the coordinator's proactive mention is the real notification path.
 
-### Added
+---
 
-- **`send-draft` skill** — new skill that sends a CEO-approved Nylas draft email. Requires `ceoInitiated: true` in task metadata (stamped by the dispatch layer for CEO-sender messages); bypasses the autonomy gate via `humanApproved: true` while preserving all other safety checks. Implements the CEO-authorized action pattern from ADR-017. (#414)
-- **ADR-017** — documents the CEO-authorized action pattern: `action_risk: "none"` + task-origin check + `humanApproved` flag as a reusable recipe for future CEO-directed skills.
-- **`humanApproved` option on `OutboundGateway.send()`** — narrow flag that skips Step 0 (autonomy gate) only; blocked-contact check and content filter are unaffected. Part of the ADR-017 pattern.
-- **`ceoInitiated` task metadata stamping** — dispatcher now stamps `ceoInitiated: true`, `senderId`, and `channelId` into task metadata when the sender's role is `ceo` and the task is not observation-mode.
-- **Autonomy web UI** — dedicated settings page for viewing and adjusting the autonomy score, with paginated change history. New REST endpoints: `GET/PUT /api/autonomy`, `GET /api/autonomy/history`. Closes #409.
-- **PII outbound redaction** — configurable per-channel PII redaction for outbound messages. Detected PII (credit cards, phone numbers, SSNs, etc.) is redacted in email and Signal replies based on channel policy (`channel_policies` in config). CEO trust level bypasses redaction. Publishes `outbound.pii-redacted` audit event. New `PiiRedactor` class at `src/dispatch/pii-redactor.ts`. (#249)
-- **`detectPii()` function** — shared PII detection foundation extracted from `scrubPii()`. Returns `PiiMatch[]` with labels and positions. Used by both the log/LLM scrubber and the outbound PII redactor. (#249)
-- **Autonomy hard gates (spec 14, Phase 2):** execution layer blocks skill invocations when the live autonomy score is below the skill's declared `action_risk` threshold. Full restriction (score < 60) blocks all non-read skills. `OutboundGateway.send()` independently blocks direct sends when score < 70 — drafts remain available as the intended fallback. Both gates emit audit events (`autonomy.skill_blocked`, `autonomy.send_blocked`) and return advisory failures that surface the required score to the agent.
-- **Logo assets** — added SVG wordmark (`logo-curia-wordmark.svg`) and mark (`logo-curia-mark.svg`) to `docs/assets/`; replaced text-based "CURIA" placeholders in the Knowledge Graph UI (sidebar, auth wall, onboarding wizard) with the inline SVG wordmark; updated README header to use the SVG wordmark and removed the old `curia-header.png`
-- **CC role detection** — `convertNylasMessage` now accepts a `selfEmail` parameter and computes `curiaRole` (`'to'` | `'cc'` | `'bcc'`) and `primaryRecipientEmails` in the converted email metadata, so the dispatcher can distinguish emails addressed directly to Curia from emails where Curia was CC'd.
-
-### Changed
-
-- **Trust levels** — added `'ceo'` trust level above `'high'` with ordinal comparison via `meetsMinimumTrust()` helper in `src/contacts/types.ts`. CEO bootstrap sets `trust_level = 'ceo'` for the CEO contact. (#249)
-- **`checkContactDataLeak`** — recipient trust now determined via `meetsMinimumTrust(trustLevel, 'high')` instead of direct equality check; CEO identified by trust level rather than email address comparison. (#249)
-- **PII scrubber dependency** — replaced deprecated `@openredaction/openredaction` with the actively maintained unscoped `openredaction` package (v1.1.2); dropped PHONE_UK pattern (v1.1 regex too broad for log scrubbing — PHONE_UK_MOBILE provides UK coverage); reordered CREDIT_CARD before PHONE patterns to prevent partial matches; added PHONE_US regex fixup for parenthesized `(NXX) NXX-XXXX` format (fixes #252)
-- **`action_risk` enforcement:** `SkillRegistry.register()` now throws at startup if a skill manifest is missing the `action_risk` field (previously accepted silently).
-- **README** — updated messaging to align with "Digital Office of the CEO" positioning: reframed problem statement around CEO pain points, led with capabilities over technical comparisons, added governance-first framing and autonomy row to comparison table
-- **CC role preamble in dispatcher** — when Curia is CC'd on an email (non-observation mode), the coordinator task content is prepended with `[OWNER CC — addressed to <recipients>; you were CC'd]`, giving the coordinator unambiguous context about its role without polluting the email body.
-- **Coordinator: CC'd email behavior** — new principle-based guidance for `[OWNER CC]` tasks: read holistically, look up third parties before responding, infer intent without asking the CEO to repeat themselves, and raise clarifications out-of-band only when genuinely irresolvable.
-- **Coordinator: contact-lookup-first** — strengthened rule prohibiting any comment on a contact record (role, existence, details) before running `contact-lookup`.
-- **Coordinator: trust narration suppression** — coordinator no longer proactively informs the CEO that their message arrived via a lower-trust channel; channel trust is only raised when declining a specific request because of it.
-
-### Security
-
-- **Contact auto-creation rate limiting** — email participant contact auto-creation is now capped at 10 per message and 100 per hour (configurable via `contact_creation_limits` in `default.yaml`). CEO is notified via email when limits are hit. Prevents spam-campaign flooding of the contacts table (#36).
-
-### Fixed
-
-- **held-messages-process** — `identify` action (new-contact path) no longer crashes with `23505` when the sender's channel identity already exists in `contact_channel_identities`; the skill now resolves the owning contact, cleans up the orphaned newly-created contact, and marks the held message processed (fixes #406)
-- **held-messages-process** — `identify` action now sets `trust_level = 'high'` on the confirmed contact so subsequent inbound messages from that sender score above the dispatcher trust floor and are not re-held (fixes #407)
-- **Silent email drafts** — `OutboundGateway.createEmailDraft()` no longer sends an immediate per-draft email notification to the CEO after every observation-mode triage draft. The notification was counterproductive: if the CEO wasn't going to see the original email, they weren't going to see the notification either. Drafts are now created silently; discovery moves to the end-of-day Signal digest (see issue #403). Removes `notifyCeoDraftCreated` and its private `primaryAccountId` field from `OutboundGateway`.
+*stopped at the threshold —*
+*the system asks before it acts.*
+*trust earned, one by one.*
 
 ---
 
