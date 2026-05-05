@@ -11,7 +11,6 @@ import type { EventBus } from '../../bus/bus.js';
 import type { Logger } from '../../logger.js';
 import type { OutboundGateway, EmailSendRequest } from '../../skills/outbound-gateway.js';
 import type { ContactService } from '../../contacts/contact-service.js';
-import type { AutonomyService } from '../../autonomy/autonomy-service.js';
 import type { OutboundPolicy } from '../../config.js';
 import { convertNylasMessage } from './message-converter.js';
 import { createInboundMessage, type OutboundMessageEvent, type OutboundNotificationEvent } from '../../bus/events.js';
@@ -27,16 +26,11 @@ export interface EmailAdapterConfig {
   /**
    * How outbound replies from this account are handled.
    *
-   * - direct:          send immediately via OutboundGateway (current behavior)
-   * - draft_gate:      save as a Nylas draft silently; CEO discovers via end-of-day
-   *                    Signal digest and reviews in Gmail (#403, #278)
-   * - autonomy_gated:  send only when autonomy score >= autonomyThreshold
+   * - direct:      send immediately via OutboundGateway (autonomy gate applied at gateway level)
+   * - draft_gate:  save as a Nylas draft silently; CEO discovers via end-of-day
+   *                Signal digest and reviews in Gmail (#403, #278)
    */
   outboundPolicy: OutboundPolicy;
-  /** Required when outboundPolicy is 'autonomy_gated'. Minimum score (0–100) to send. */
-  autonomyThreshold?: number;
-  /** Required when outboundPolicy is 'autonomy_gated'. Queried before each send. */
-  autonomyService?: AutonomyService;
   bus: EventBus;
   logger: Logger;
   outboundGateway: OutboundGateway;
@@ -330,9 +324,8 @@ export class EmailAdapter {
    * most recent inbound message in that thread and reply to it.
    *
    * The actual send behaviour is controlled by this account's outboundPolicy:
-   *   - direct:         send immediately via OutboundGateway
-   *   - draft_gate:     save as Nylas draft silently; CEO discovers via Signal digest (#403, #278)
-   *   - autonomy_gated: check autonomy score before sending; hold as draft if below threshold
+   *   - direct:      send immediately via OutboundGateway (autonomy gate applied at gateway level)
+   *   - draft_gate:  save as Nylas draft silently; CEO discovers via Signal digest (#403, #278)
    */
   private async sendOutboundReply(outbound: OutboundMessageEvent): Promise<void> {
     const { outboundGateway, logger } = this.config;
@@ -418,22 +411,20 @@ export class EmailAdapter {
   /**
    * Apply this account's outbound policy before dispatching a reply.
    *
-   * - direct:         send immediately through the gateway (blocked-contact +
-   *                   content filter run inside gateway.send)
-   * - draft_gate:     save as a Nylas draft for human review; no notification is
-   *                   sent — the CEO discovers drafts via the end-of-day Signal
-   *                   digest (#403). Approval + send remain deferred (TODO(#278)).
-   * - autonomy_gated: check the current global autonomy score; if it meets the
-   *                   configured threshold, send directly; otherwise draft-gate
+   * - direct:      send immediately through the gateway (autonomy gate + blocked-contact +
+   *                content filter all run inside gateway.send)
+   * - draft_gate:  save as a Nylas draft for human review; no notification is
+   *                sent — the CEO discovers drafts via the end-of-day Signal
+   *                digest (#403). Approval + send remain deferred (TODO(#278)).
    */
   private async dispatchByPolicy(
     sendRequest: EmailSendRequest,
     logCtx: Record<string, unknown>,
   ): Promise<void> {
-    const { outboundGateway, logger, outboundPolicy, autonomyThreshold, autonomyService } = this.config;
+    const { outboundGateway, logger, outboundPolicy } = this.config;
 
     if (outboundPolicy === 'direct') {
-      // Standard path — gateway enforces blocked-contact check + content filter
+      // Standard path — gateway enforces autonomy gate, blocked-contact check, and content filter
       const result = await outboundGateway.send(sendRequest);
       if (result.success) {
         logger.info({ ...logCtx, accountId: this.config.accountId }, 'Email reply sent via gateway');
@@ -443,52 +434,7 @@ export class EmailAdapter {
       return;
     }
 
-    if (outboundPolicy === 'autonomy_gated') {
-      // Check the global autonomy score before committing to a send.
-      // autonomyThreshold and autonomyService are guaranteed to be set when
-      // outboundPolicy is 'autonomy_gated' — validated at startup via config.ts.
-      if (!autonomyService || autonomyThreshold === undefined) {
-        logger.error(
-          { ...logCtx, accountId: this.config.accountId },
-          'autonomy_gated policy requires autonomyService and autonomyThreshold — degrading to draft_gate for this reply',
-        );
-        // Explicit fall-through to draft_gate below (operator sees error log above).
-        // Degrading to draft rather than silently sending or dropping is the safest
-        // choice: the reply is preserved for human review despite the misconfiguration.
-      } else {
-        const autonomyCfg = await autonomyService.getConfig();
-        if (autonomyCfg === null) {
-          // Autonomy not yet configured (pre-migration environment) — preserve for
-          // human review rather than sending autonomously or dropping the reply.
-          logger.warn(
-            { ...logCtx, accountId: this.config.accountId },
-            'Autonomy config not found (pre-migration?) — degrading to draft_gate for this reply',
-          );
-          // Fall through to draft_gate below
-        } else {
-          const score = autonomyCfg.score;
-          if (score >= autonomyThreshold) {
-            const result = await outboundGateway.send(sendRequest);
-            if (result.success) {
-              logger.info(
-                { ...logCtx, accountId: this.config.accountId, autonomyScore: score, threshold: autonomyThreshold },
-                'Email reply sent autonomously (autonomy threshold met)',
-              );
-            } else {
-              logger.warn({ ...logCtx, accountId: this.config.accountId, reason: result.blockedReason }, 'Email reply blocked by gateway');
-            }
-            return;
-          }
-          logger.info(
-            { ...logCtx, accountId: this.config.accountId, autonomyScore: score, threshold: autonomyThreshold },
-            'Autonomy score below threshold — saving reply as draft',
-          );
-          // Score too low: fall through to draft_gate behaviour
-        }
-      }
-    }
-
-    // draft_gate (and autonomy_gated fallback): save as draft for human review.
+    // draft_gate: save as draft for human review.
     // The gateway creates the draft silently — no per-draft email notification is sent.
     // The CEO discovers pending drafts via the end-of-day Signal digest (#403).
     const draftResult = await outboundGateway.createEmailDraft(sendRequest);

@@ -91,6 +91,9 @@ interface OutboundMessagePayload {
    * Absent for non-reply outbound paths where no inbound routing entry exists.
    */
   recipientId?: string;
+  /** The agent.task event ID that originated this outbound message.
+   *  Stamped by the dispatcher for traceability and action_log context. */
+  taskEventId?: string;
 }
 
 // OutboundPiiRedactedPayload — emitted by the dispatch layer (via PiiRedactor)
