@@ -1133,6 +1133,22 @@ export class OutboundGateway {
     }
   }
 
+  /**
+   * Link a draft (or other fallback result) to a gated action_log row.
+   * Called by channel adapters after they create their fallback artifact.
+   * No-op when actionLogRepo is not wired or actionRef doesn't match a pending row.
+   */
+  async linkGatedAction(actionRef: string, payload: Record<string, unknown>): Promise<void> {
+    if (!this.actionLogRepo) return;
+    const updated = await this.actionLogRepo.linkPayload(actionRef, payload);
+    if (!updated) {
+      this.log.warn(
+        { actionRef },
+        'outbound-gateway: linkGatedAction found no pending row for actionRef — may have expired',
+      );
+    }
+  }
+
   // ---------------------------------------------------------------------------
   // Private helpers
   // ---------------------------------------------------------------------------

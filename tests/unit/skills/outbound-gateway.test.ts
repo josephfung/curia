@@ -1459,3 +1459,80 @@ describe('gated draft-fallback (two-step pattern)', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// linkGatedAction — Task 5
+// ---------------------------------------------------------------------------
+
+describe('OutboundGateway.linkGatedAction', () => {
+  it('delegates to actionLogRepo.linkPayload', async () => {
+    const mocks = createMocks();
+    const actionLogRepo = makeActionLogRepo();
+
+    const gateway = new OutboundGateway({
+      nylasClients: new Map([['curia', mocks.nylasClient]]),
+      contactService: mocks.contactService,
+      contentFilter: mocks.contentFilter,
+      bus: mocks.bus,
+      ceoEmail: 'ceo@example.com',
+      logger: mocks.logger,
+      actionLogRepo,
+    });
+
+    await gateway.linkGatedAction('email-1', { draftId: 'draft-abc' });
+
+    expect(actionLogRepo.linkPayload).toHaveBeenCalledOnce();
+    expect(actionLogRepo.linkPayload).toHaveBeenCalledWith('email-1', { draftId: 'draft-abc' });
+  });
+
+  it('is a no-op when actionLogRepo is not wired', async () => {
+    const mocks = createMocks();
+
+    const gateway = new OutboundGateway({
+      nylasClients: new Map([['curia', mocks.nylasClient]]),
+      contactService: mocks.contactService,
+      contentFilter: mocks.contentFilter,
+      bus: mocks.bus,
+      ceoEmail: 'ceo@example.com',
+      logger: mocks.logger,
+      // actionLogRepo intentionally omitted
+    });
+
+    // Should not throw
+    await gateway.linkGatedAction('email-1', { draftId: 'draft-abc' });
+  });
+
+  it('logs warn when linkPayload returns false (unknown ref)', async () => {
+    const mocks = createMocks();
+    const actionLogRepo = makeActionLogRepo();
+    (actionLogRepo.linkPayload as ReturnType<typeof vi.fn>).mockResolvedValue(false);
+
+    // Use a logger that captures log calls
+    const warnSpy = vi.fn();
+    const logger = {
+      child: () => ({
+        info: vi.fn(),
+        warn: warnSpy,
+        error: vi.fn(),
+        debug: vi.fn(),
+      }),
+    } as unknown as import('../../../src/logger.js').Logger;
+
+    const gateway = new OutboundGateway({
+      nylasClients: new Map([['curia', mocks.nylasClient]]),
+      contactService: mocks.contactService,
+      contentFilter: mocks.contentFilter,
+      bus: mocks.bus,
+      ceoEmail: 'ceo@example.com',
+      logger,
+      actionLogRepo,
+    });
+
+    await gateway.linkGatedAction('email-99', { draftId: 'draft-xyz' });
+
+    expect(warnSpy).toHaveBeenCalledOnce();
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ actionRef: 'email-99' }),
+      expect.stringContaining('no pending row'),
+    );
+  });
+});
