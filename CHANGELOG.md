@@ -15,6 +15,9 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **Gateway gate notifies CEO** — `OutboundGateway.send()` now sends an `approval_requested` notification to the CEO when the autonomy gate blocks a send and writes a `pending_approval` row. Previously, CEO alerts only came from the execution-layer `ApprovalTriggerService`; gateway-level blocks were silent, leaving the CEO unaware and `notification_sent_at` always NULL.
+- **`linkPayload` wrong column name** — fixed SQL bug in `ActionLogRepo.linkPayload()` where the WHERE clause used `task_event_id` (non-existent) instead of `task_id`, causing every `linkGatedAction()` call to throw a `DatabaseError` and draft IDs to never be linked to pending approval rows.
+
 - **System notifications bypass autonomy gate** — `OutboundGateway.send()` now accepts `isSystemNotification: true`, which skips Step 0 (autonomy gate) for infrastructure alerts to the CEO (e.g. `approval_requested`). Previously, CEO approval notifications were silenced by the same gate that triggered them — the CEO could not act on a blocked action because the notification never arrived. All other safety checks (blocked-contact, content filter) still apply.
 - **`email-draft-save` action risk downgraded** — changed from `"medium"` to `"low"` (min score 60 instead of 70). Drafts are internal mailbox writes — the CEO still controls sending — and do not constitute autonomous outbound communication.
 

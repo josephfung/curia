@@ -1290,6 +1290,7 @@ function makeActionLogRepo() {
     insert: vi.fn().mockResolvedValue(1),
     linkPayload: vi.fn().mockResolvedValue(true),
     countShortRefsForTask: vi.fn().mockResolvedValue(0),
+    setNotificationSentAt: vi.fn().mockResolvedValue(undefined),
   } as unknown as ActionLogRepo;
 }
 
@@ -1456,6 +1457,96 @@ describe('gated draft-fallback (two-step pattern)', () => {
     );
 
     expect(result.actionRef).toBe('email-3');
+  });
+
+  it('notifies CEO when autonomy gate blocks a send and actionLogRepo + taskEventId are present', async () => {
+    // Bug fix: gateway-level gate blocks must notify the CEO — previously only the
+    // execution-layer ApprovalTriggerService sent notifications, leaving gateway blocks silent.
+    const mocks = createMocks();
+    const actionLogRepo = makeActionLogRepo();
+
+    const gateway = new OutboundGateway({
+      nylasClients: new Map([['curia', mocks.nylasClient]]),
+      contactService: mocks.contactService,
+      contentFilter: mocks.contentFilter,
+      bus: mocks.bus,
+      ceoEmail: 'ceo@example.com',
+      logger: mocks.logger,
+      autonomyService: makeAutonomyService(65),
+      actionLogRepo,
+    });
+
+    await gateway.send(
+      { channel: 'email', to: 'recipient@example.com', subject: 'Hello', body: 'Hi!' },
+      { taskEventId: 'task-123', conversationId: 'conv-456' },
+    );
+
+    const publishCalls = (mocks.bus.publish as ReturnType<typeof vi.fn>).mock.calls;
+    const notificationCalls = publishCalls.filter(
+      (call: unknown[]) => (call[1] as BusEvent).type === 'outbound.notification',
+    );
+    expect(notificationCalls).toHaveLength(1);
+    const notificationEvent = notificationCalls[0]![1] as BusEvent;
+    if (notificationEvent.type === 'outbound.notification') {
+      expect(notificationEvent.payload.notificationType).toBe('approval_requested');
+      expect(notificationEvent.payload.ceoEmail).toBe('ceo@example.com');
+    }
+  });
+
+  it('calls setNotificationSentAt with the row id after successful notification', async () => {
+    const mocks = createMocks();
+    const actionLogRepo = makeActionLogRepo();
+    // insert returns row id 42 so we can assert setNotificationSentAt is called with 42
+    (actionLogRepo.insert as ReturnType<typeof vi.fn>).mockResolvedValue(42);
+
+    const gateway = new OutboundGateway({
+      nylasClients: new Map([['curia', mocks.nylasClient]]),
+      contactService: mocks.contactService,
+      contentFilter: mocks.contentFilter,
+      bus: mocks.bus,
+      ceoEmail: 'ceo@example.com',
+      logger: mocks.logger,
+      autonomyService: makeAutonomyService(65),
+      actionLogRepo,
+    });
+
+    await gateway.send(
+      { channel: 'email', to: 'recipient@example.com', subject: 'Hello', body: 'Hi!' },
+      { taskEventId: 'task-123' },
+    );
+
+    expect(actionLogRepo.setNotificationSentAt).toHaveBeenCalledOnce();
+    expect(actionLogRepo.setNotificationSentAt).toHaveBeenCalledWith(42);
+  });
+
+  it('does not throw and still returns gated result when sendNotification fails', async () => {
+    // sendNotification() has an internal try-catch, so a bus.publish failure must not
+    // surface as a gateway error — the send is still blocked and gated: true is returned.
+    const mocks = createMocks();
+    const actionLogRepo = makeActionLogRepo();
+    (mocks.bus.publish as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('Bus error'));
+
+    const gateway = new OutboundGateway({
+      nylasClients: new Map([['curia', mocks.nylasClient]]),
+      contactService: mocks.contactService,
+      contentFilter: mocks.contentFilter,
+      bus: mocks.bus,
+      ceoEmail: 'ceo@example.com',
+      logger: mocks.logger,
+      autonomyService: makeAutonomyService(65),
+      actionLogRepo,
+    });
+
+    const result = await gateway.send(
+      { channel: 'email', to: 'recipient@example.com', subject: 'Hello', body: 'Hi!' },
+      { taskEventId: 'task-123' },
+    );
+
+    // Gate must still fire correctly despite the notification failure
+    expect(result.success).toBe(false);
+    expect(result.gated).toBe(true);
+    // Notification failed → setNotificationSentAt must NOT be called
+    expect(actionLogRepo.setNotificationSentAt).not.toHaveBeenCalled();
   });
 });
 

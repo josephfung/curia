@@ -303,7 +303,7 @@ export class ActionLogRepo {
       `UPDATE autonomy_action_log
        SET payload = COALESCE(payload, '{}'::jsonb) || $3::jsonb
        WHERE short_ref = $1
-         AND ($2::text IS NULL OR task_event_id = $2)
+         AND ($2::text IS NULL OR task_id = $2)
          AND outcome = 'pending_approval'`,
       [shortRef, taskEventId ?? null, JSON.stringify(additionalPayload)],
     );
