@@ -1402,7 +1402,7 @@ describe('gated draft-fallback (two-step pattern)', () => {
 
     // Still gated, but without actionRef
     expect(result.success).toBe(false);
-    expect(result.gated).toBeUndefined();
+    expect(result.gated).toBe(true);
     expect(result.actionRef).toBeUndefined();
   });
 
@@ -1428,7 +1428,7 @@ describe('gated draft-fallback (two-step pattern)', () => {
 
     // Still gated, but without actionRef — and no insert called
     expect(result.success).toBe(false);
-    expect(result.gated).toBeUndefined();
+    expect(result.gated).toBe(true);
     expect(result.actionRef).toBeUndefined();
     expect(actionLogRepo.insert).not.toHaveBeenCalled();
   });
