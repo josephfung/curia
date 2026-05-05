@@ -110,6 +110,9 @@ export interface Config {
   // Without this, the first inbound email from the CEO creates them as provisional,
   // causing their messages to be held.
   ceoPrimaryEmail: string | undefined;
+  // CEO's Signal phone number in E.164 format (e.g. "+14155551234").
+  // Used by OutboundGateway to exempt CEO-bound Signal messages from the autonomy gate.
+  ceoSignalNumber: string | undefined;
   // Signal channel config. Both must be set to enable the Signal adapter.
   // signalSocketPath: path to the signal-cli daemon Unix socket (e.g. /run/signal-cli/socket).
   //   In Docker Compose, this is mounted from the signal-cli container's socket volume.
@@ -832,6 +835,7 @@ export function loadConfig(): Config {
     nylasPollingIntervalMs,
     nylasSelfEmail: process.env.NYLAS_SELF_EMAIL ?? '',
     ceoPrimaryEmail: process.env.CEO_PRIMARY_EMAIL?.trim().toLowerCase() || undefined,
+    ceoSignalNumber: process.env.CEO_SIGNAL_NUMBER?.trim() || undefined,
     // .trim() prevents a whitespace-only value (e.g. "  ") from activating the
     // Signal adapter with a bogus socket path or phone number.
     signalSocketPath: process.env.SIGNAL_SOCKET_PATH?.trim() || undefined,
