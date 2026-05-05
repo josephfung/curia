@@ -3,6 +3,7 @@ import { SendDraftHandler } from './handler.js';
 import type { SkillContext } from '../../src/skills/types.js';
 import type { OutboundGateway } from '../../src/skills/outbound-gateway.js';
 import type { EventBus } from '../../src/bus/bus.js';
+import type { ActionLogRepo } from '../../src/autonomy/action-log-repo.js';
 import pino from 'pino';
 
 function makeLogger() {
@@ -31,6 +32,7 @@ function makeCtx(overrides: {
   gateway?: Partial<OutboundGateway>;
   bus?: Partial<EventBus>;
   taskEventId?: string;
+  actionLogRepo?: Partial<ActionLogRepo> | null;
 }): SkillContext {
   const gateway = {
     listEmailMessages: vi.fn().mockResolvedValue([DRAFT_STUB]),
@@ -43,6 +45,14 @@ function makeCtx(overrides: {
     ...overrides.bus,
   } as unknown as EventBus;
 
+  // Build action log repo — undefined by default (matches pre-existing tests),
+  // null means explicitly absent (ctx.actionLogRepo = undefined), or a partial mock.
+  const actionLogRepo = overrides.actionLogRepo === null
+    ? undefined
+    : overrides.actionLogRepo !== undefined
+      ? overrides.actionLogRepo as unknown as ActionLogRepo
+      : undefined;
+
   const ctx = {
     input: overrides.input ?? { draft_id: 'draft-abc123', account: 'joseph' },
     secret: () => '',
@@ -53,6 +63,7 @@ function makeCtx(overrides: {
       ? overrides.taskMetadata
       : { ceoInitiated: true, senderId: '+14155551234', channelId: 'signal' },
     taskEventId: overrides.taskEventId ?? 'task-event-1',
+    actionLogRepo,
   } as unknown as SkillContext;
 
   return ctx;
@@ -238,5 +249,64 @@ describe('SendDraftHandler', () => {
 
     const result = await handler.execute(ctx);
     expect(result.success).toBe(true);
+  });
+
+  // ─── action_log transition on approval ───────────────────────────────────
+
+  describe('action_log transition on approval', () => {
+    it('transitions matching action_log row to approved on successful send', async () => {
+      // Arrange: actionLogRepo finds a matching pending row for the draft
+      const mockRow = { id: 55 };
+      const findPendingByPayloadField = vi.fn().mockResolvedValue(mockRow);
+      const resolveById = vi.fn().mockResolvedValue(true);
+      const ctx = makeCtx({
+        actionLogRepo: { findPendingByPayloadField, resolveById },
+      });
+
+      // Act
+      const result = await handler.execute(ctx);
+
+      // Assert: send succeeded and action_log was transitioned
+      expect(result.success).toBe(true);
+      expect(findPendingByPayloadField).toHaveBeenCalledWith('draftId', 'draft-abc123');
+      expect(resolveById).toHaveBeenCalledWith(55, 'approved', 'ceo');
+    });
+
+    it('still succeeds when no action_log row exists (pre-existing draft)', async () => {
+      // findPendingByPayloadField returns null — draft was not created via the autonomy gate
+      const findPendingByPayloadField = vi.fn().mockResolvedValue(null);
+      const resolveById = vi.fn();
+      const ctx = makeCtx({
+        actionLogRepo: { findPendingByPayloadField, resolveById },
+      });
+
+      const result = await handler.execute(ctx);
+
+      expect(result.success).toBe(true);
+      // resolveById must NOT be called when no row was found
+      expect(resolveById).not.toHaveBeenCalled();
+    });
+
+    it('still succeeds when actionLogRepo is not available', async () => {
+      // No actionLogRepo in ctx — older code paths, or skills without the capability
+      const ctx = makeCtx({ actionLogRepo: null });
+
+      const result = await handler.execute(ctx);
+
+      expect(result.success).toBe(true);
+    });
+
+    it('still succeeds when action_log transition throws', async () => {
+      // Best-effort: failure in the action_log path must not fail the skill —
+      // the email has already been sent at this point.
+      const findPendingByPayloadField = vi.fn().mockRejectedValue(new Error('DB error'));
+      const ctx = makeCtx({
+        actionLogRepo: { findPendingByPayloadField, resolveById: vi.fn() },
+      });
+
+      const result = await handler.execute(ctx);
+
+      expect(result.success).toBe(true);
+    });
   });
 });

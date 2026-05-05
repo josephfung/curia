@@ -124,7 +124,26 @@ export class SendDraftHandler implements SkillHandler {
     }
 
     // ------------------------------------------------------------------
-    // Step 5: Publish human.decision audit event
+    // Step 5: Transition action_log row from pending_approval → approved
+    // ------------------------------------------------------------------
+    // Best-effort — the email is already sent. Any failure here must not
+    // surface to the CEO as a skill error. The draftId was stored in the
+    // payload by the gateway's two-step draft-fallback pattern (linkPayload).
+    // Rows created outside the autonomy gate will not match and are silently skipped.
+    if (ctx.actionLogRepo) {
+      try {
+        const row = await ctx.actionLogRepo.findPendingByPayloadField('draftId', draftId);
+        if (row) {
+          await ctx.actionLogRepo.resolveById(row.id, 'approved', 'ceo');
+        }
+      } catch (err) {
+        // Best-effort — don't fail the send if action_log transition fails
+        ctx.log.warn({ err, draftId }, 'send-draft: failed to transition action_log row');
+      }
+    }
+
+    // ------------------------------------------------------------------
+    // Step 6: Publish human.decision audit event
     // ------------------------------------------------------------------
     // Non-fatal: the message is already sent. If bus publish fails, log at error
     // so the missing audit trail is visible in alerting, but don't fail the skill.
