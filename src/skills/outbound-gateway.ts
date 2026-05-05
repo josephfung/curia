@@ -436,6 +436,13 @@ export class OutboundGateway {
                 );
               }
             }
+          } else if (rowId !== undefined && !this.ceoEmail) {
+            // Row was written but ceoEmail is not configured — notification silently skipped.
+            // Surface this as an error so misconfigured deployments are detectable in alerting.
+            this.log.error(
+              { rowId, taskEventId: options.taskEventId },
+              'outbound-gateway: pending_approval row written but CEO notification skipped — ceoEmail not configured',
+            );
           }
         }
 
@@ -1257,7 +1264,7 @@ export class OutboundGateway {
     } catch (err) {
       this.log.error(
         { err, actionRef, taskEventId },
-        'outbound-gateway: linkGatedAction DB call failed — action_log row will not have draftId linked',
+        'outbound-gateway: linkGatedAction DB call failed — action_log row will not have draft_id linked',
       );
     }
   }
