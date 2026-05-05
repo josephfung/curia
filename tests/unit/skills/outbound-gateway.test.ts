@@ -1737,3 +1737,145 @@ describe('isSystemNotification option on send()', () => {
     expect(mocks.nylasClient.sendMessage).not.toHaveBeenCalled();
   });
 });
+
+// ---------------------------------------------------------------------------
+// CEO recipient bypass on send() — agent-to-principal communication bypasses
+// the autonomy gate. All other safety checks (blocked-contact, content filter)
+// still run. See design: docs/wip/2026-05-05-ceo-gate-bypass-design.md
+// ---------------------------------------------------------------------------
+
+describe('CEO recipient bypass on send()', () => {
+  it('bypasses the autonomy gate when recipient is the CEO email and score < 70', async () => {
+    const mocks = createMocks();
+    const gateway = new OutboundGateway({
+      nylasClients: new Map([['curia', mocks.nylasClient]]),
+      contactService: mocks.contactService,
+      contentFilter: mocks.contentFilter,
+      bus: mocks.bus,
+      ceoEmail: 'ceo@example.com',
+      logger: mocks.logger,
+      autonomyService: makeAutonomyService(65), // below 70 — would normally block
+    });
+
+    const result = await gateway.send(
+      { channel: 'email', to: 'ceo@example.com', subject: 'Status update', body: 'All done.' },
+    );
+
+    expect(result.success).toBe(true);
+    expect(mocks.nylasClient.sendMessage).toHaveBeenCalledOnce();
+    // autonomy.send_blocked must NOT fire — we bypassed the gate
+    const publishedEvents = (mocks.bus.publish as ReturnType<typeof vi.fn>).mock.calls
+      .map(([, evt]: [string, BusEvent]) => evt.type);
+    expect(publishedEvents).not.toContain('autonomy.send_blocked');
+  });
+
+  it('bypasses the autonomy gate for case-insensitive CEO email match', async () => {
+    const mocks = createMocks();
+    const gateway = new OutboundGateway({
+      nylasClients: new Map([['curia', mocks.nylasClient]]),
+      contactService: mocks.contactService,
+      contentFilter: mocks.contentFilter,
+      bus: mocks.bus,
+      ceoEmail: 'CEO@Example.COM',
+      logger: mocks.logger,
+      autonomyService: makeAutonomyService(65),
+    });
+
+    const result = await gateway.send(
+      { channel: 'email', to: 'ceo@example.com', subject: 'Hello', body: 'Hi!' },
+    );
+
+    expect(result.success).toBe(true);
+    expect(mocks.nylasClient.sendMessage).toHaveBeenCalledOnce();
+  });
+
+  it('bypasses the autonomy gate when Signal recipient is the CEO number', async () => {
+    const mocks = createMocks();
+    const signalClient = {
+      send: vi.fn().mockResolvedValue(undefined),
+    };
+    const gateway = new OutboundGateway({
+      signalClient: signalClient as unknown as import('../../../src/channels/signal/signal-rpc-client.js').SignalRpcClient,
+      signalPhoneNumber: '+10000000000',
+      contactService: mocks.contactService,
+      contentFilter: mocks.contentFilter,
+      bus: mocks.bus,
+      ceoSignalNumber: '+14155551234',
+      logger: mocks.logger,
+      autonomyService: makeAutonomyService(65),
+    });
+
+    const result = await gateway.send(
+      { channel: 'signal', recipient: '+14155551234', message: 'Status update' },
+    );
+
+    expect(result.success).toBe(true);
+    expect(signalClient.send).toHaveBeenCalledOnce();
+  });
+
+  it('does NOT bypass for non-CEO recipients — gate still blocks', async () => {
+    const mocks = createMocks();
+    const gateway = new OutboundGateway({
+      nylasClients: new Map([['curia', mocks.nylasClient]]),
+      contactService: mocks.contactService,
+      contentFilter: mocks.contentFilter,
+      bus: mocks.bus,
+      ceoEmail: 'ceo@example.com',
+      logger: mocks.logger,
+      autonomyService: makeAutonomyService(65),
+    });
+
+    const result = await gateway.send(
+      { channel: 'email', to: 'stranger@example.com', subject: 'Hello', body: 'Hi!' },
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.gated).toBe(true);
+    expect(mocks.nylasClient.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('still enforces the content filter when recipient is CEO', async () => {
+    const mocks = createMocks();
+    (mocks.contentFilter.check as ReturnType<typeof vi.fn>).mockResolvedValue({
+      passed: false,
+      findings: [{ rule: 'test-rule', detail: 'blocked in test' }],
+    });
+    const gateway = new OutboundGateway({
+      nylasClients: new Map([['curia', mocks.nylasClient]]),
+      contactService: mocks.contactService,
+      contentFilter: mocks.contentFilter,
+      bus: mocks.bus,
+      ceoEmail: 'ceo@example.com',
+      logger: mocks.logger,
+      autonomyService: makeAutonomyService(65),
+    });
+
+    const result = await gateway.send(
+      { channel: 'email', to: 'ceo@example.com', subject: 'Hello', body: 'Hi!' },
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.blockedReason).toBe('Content blocked by filter');
+    expect(mocks.nylasClient.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('does not bypass when ceoEmail is not configured', async () => {
+    const mocks = createMocks();
+    const gateway = new OutboundGateway({
+      nylasClients: new Map([['curia', mocks.nylasClient]]),
+      contactService: mocks.contactService,
+      contentFilter: mocks.contentFilter,
+      bus: mocks.bus,
+      // ceoEmail intentionally omitted
+      logger: mocks.logger,
+      autonomyService: makeAutonomyService(65),
+    });
+
+    const result = await gateway.send(
+      { channel: 'email', to: 'anyone@example.com', subject: 'Hello', body: 'Hi!' },
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.gated).toBe(true);
+  });
+});
