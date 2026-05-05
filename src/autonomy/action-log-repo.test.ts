@@ -177,22 +177,6 @@ describe('ActionLogRepo', () => {
     });
   });
 
-  describe('countShortRefsForTask', () => {
-    it('returns the count of short_ref rows for a task', async () => {
-      const { pool } = makePool([{ count: '3' }]);
-      const repo = new ActionLogRepo(pool, createSilentLogger());
-      const count = await repo.countShortRefsForTask('t1');
-      expect(count).toBe(3);
-    });
-
-    it('returns 0 when no short_ref rows exist', async () => {
-      const { pool } = makePool([{ count: '0' }]);
-      const repo = new ActionLogRepo(pool, createSilentLogger());
-      const count = await repo.countShortRefsForTask('t1');
-      expect(count).toBe(0);
-    });
-  });
-
   describe('setNotificationSentAt', () => {
     it('updates the notification_sent_at column', async () => {
       const { pool, queries } = makePool([], 1);

@@ -150,21 +150,6 @@ export class ActionLogRepo {
   }
 
   /**
-   * Count rows with a non-null short_ref for this task.
-   * Used by ApprovalTriggerService to generate sequential short_ref
-   * counters (e.g. cal-1, email-2).
-   */
-  async countShortRefsForTask(taskId: string): Promise<number> {
-    const result = await this.pool.query<{ count: string }>(
-      `SELECT COUNT(*) AS count FROM autonomy_action_log
-       WHERE task_id = $1
-         AND short_ref IS NOT NULL`,
-      [taskId],
-    );
-    return parseInt(result.rows[0]!.count, 10);
-  }
-
-  /**
    * Mark that the CEO notification was successfully delivered.
    * Called after a successful sendNotification(). If notification fails,
    * this is never called — notification_sent_at stays null.

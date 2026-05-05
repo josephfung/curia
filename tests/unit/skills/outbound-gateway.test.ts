@@ -1289,7 +1289,6 @@ function makeActionLogRepo() {
   return {
     insert: vi.fn().mockResolvedValue(1),
     linkPayload: vi.fn().mockResolvedValue(true),
-    countShortRefsForTask: vi.fn().mockResolvedValue(0),
     setNotificationSentAt: vi.fn().mockResolvedValue(undefined),
   } as unknown as ActionLogRepo;
 }
@@ -1325,7 +1324,7 @@ describe('gated draft-fallback (two-step pattern)', () => {
 
     expect(result.success).toBe(false);
     expect(result.gated).toBe(true);
-    expect(result.actionRef).toBe('email-1');
+    expect(result.actionRef).toMatch(/^[0-9a-f]{8}$/);
     expect(result.blockedReason).toMatch(/autonomy score.*65.*below.*send threshold/i);
   });
 
@@ -1391,7 +1390,7 @@ describe('gated draft-fallback (two-step pattern)', () => {
     expect(insertArg.taskId).toBe('task-789');
     expect(insertArg.actionRisk).toBe('medium');
     expect(insertArg.outcome).toBe('pending_approval');
-    expect(insertArg.shortRef).toBe('email-1');
+    expect(insertArg.shortRef).toMatch(/^[0-9a-f]{8}$/);
   });
 
   it('skips action_log write when actionLogRepo is not wired', async () => {
@@ -1444,31 +1443,6 @@ describe('gated draft-fallback (two-step pattern)', () => {
     expect(result.gated).toBe(true);
     expect(result.actionRef).toBeUndefined();
     expect(actionLogRepo.insert).not.toHaveBeenCalled();
-  });
-
-  it('increments actionRef counter based on existing short refs for the task', async () => {
-    const mocks = createMocks();
-    const actionLogRepo = makeActionLogRepo();
-    // Simulate 2 existing short refs for this task
-    (actionLogRepo.countShortRefsForTask as ReturnType<typeof vi.fn>).mockResolvedValue(2);
-
-    const gateway = new OutboundGateway({
-      nylasClients: new Map([['curia', mocks.nylasClient]]),
-      contactService: mocks.contactService,
-      contentFilter: mocks.contentFilter,
-      bus: mocks.bus,
-      ceoEmail: 'ceo@example.com',
-      logger: mocks.logger,
-      autonomyService: makeAutonomyService(65),
-      actionLogRepo,
-    });
-
-    const result = await gateway.send(
-      { channel: 'email', to: 'recipient@example.com', subject: 'Hello', body: 'Hi!' },
-      { taskEventId: 'task-123', reExecRecipe: TEST_RECIPE },
-    );
-
-    expect(result.actionRef).toBe('email-3');
   });
 
   it('notifies CEO when autonomy gate blocks a send and actionLogRepo + taskEventId are present', async () => {
@@ -1561,13 +1535,12 @@ describe('gated draft-fallback (two-step pattern)', () => {
     expect(actionLogRepo.setNotificationSentAt).not.toHaveBeenCalled();
   });
 
-  it('returns undefined actionRef when insert throws after countShortRefsForTask succeeds', async () => {
+  it('returns undefined actionRef when insert throws (no phantom reference)', async () => {
     // HIGH: actionRef must only be set after insert() confirms the DB row exists.
-    // If countShortRefsForTask succeeds but insert throws, the gateway must not
-    // return an actionRef pointing to a non-existent DB row (phantom reference).
+    // If insert throws, the gateway must not return an actionRef pointing to a
+    // non-existent DB row (phantom reference).
     const mocks = createMocks();
     const actionLogRepo = {
-      countShortRefsForTask: vi.fn().mockResolvedValue(0),
       insert: vi.fn().mockRejectedValue(new Error('DB connection error')),
       linkPayload: vi.fn(),
       setNotificationSentAt: vi.fn(),

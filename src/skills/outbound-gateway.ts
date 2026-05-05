@@ -31,7 +31,7 @@ import type { Logger } from '../logger.js';
 import { createOutboundBlocked, createOutboundNotification, createAutonomySendBlocked } from '../bus/events.js';
 import { AutonomyService } from '../autonomy/autonomy-service.js';
 import type { ActionLogRepo } from '../autonomy/action-log-repo.js';
-import { shortRefPrefix } from '../autonomy/approval-trigger.js';
+import { generateShortRef } from '../autonomy/approval-trigger.js';
 import type { OutboundNotificationPayload } from '../bus/events.js';
 import { markdownToHtml } from '../channels/email/markdown-to-html.js';
 import { scrubPii } from '../pii/scrubber.js';
@@ -374,14 +374,10 @@ export class OutboundGateway {
           const expiresAt = new Date(Date.now() + 48 * 60 * 60 * 1000);
           let rowId: number | undefined;
           try {
-            const counter = await this.actionLogRepo.countShortRefsForTask(options.taskEventId);
-            // Build the candidate ref before the insert, but only publish it as
-            // actionRef after insert confirms the DB row exists. This prevents the
-            // gateway from returning a phantom ref if insert throws.
-            // shortRefPrefix maps the recipe skill name to its short_ref prefix
-            // (e.g. send-draft → 'email') so gateway-level blocks use the same
-            // prefix as execution-layer blocks for the same logical action.
-            const candidateRef = `${shortRefPrefix(recipe.skillName)}-${counter + 1}`;
+            // generateShortRef() produces a random 8-char hex ref — globally unique
+            // across tasks, no per-task counting. Only assign actionRef after insert
+            // confirms the DB row exists to prevent phantom refs on insert failure.
+            const candidateRef = generateShortRef();
 
             rowId = await this.actionLogRepo.insert({
               taskId: options.taskEventId,
