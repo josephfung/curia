@@ -741,22 +741,9 @@ async function main(): Promise<void> {
     for (const account of resolvedEmailAccounts) {
       if (!nylasClientMap.has(account.name)) continue; // skip accounts with no client (NYLAS_API_KEY missing)
 
-      if (account.outboundPolicy === 'autonomy_gated' && account.autonomyThreshold === undefined) {
-        // This should be caught by config validation, but guard defensively at runtime too.
-        logger.warn(
-          { accountId: account.name },
-          'Email account has outbound_policy=autonomy_gated but no autonomy_threshold — skipping adapter',
-        );
-        continue;
-      }
-
       emailAdapters.push(new EmailAdapter({
         accountId: account.name,
         outboundPolicy: account.outboundPolicy,
-        autonomyThreshold: account.autonomyThreshold,
-        // autonomyService is only injected when the policy actually needs it, to avoid
-        // passing a live service reference to adapters that will never call it.
-        autonomyService: account.outboundPolicy === 'autonomy_gated' ? autonomyService : undefined,
         bus,
         logger,
         outboundGateway,

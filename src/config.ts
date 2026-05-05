@@ -9,13 +9,11 @@ import * as path from 'node:path';
 /**
  * Outbound send policy for a named email account.
  *
- * - direct:          send immediately (default for Curia's own account)
- * - draft_gate:      create a Nylas draft silently; CEO discovers pending drafts via the
- *                    end-of-day Signal digest and reviews in Gmail (#403, #278)
- * - autonomy_gated:  send autonomously only when the global autonomy score meets or
- *                    exceeds the account's autonomy_threshold value
+ * - direct:      send via OutboundGateway (autonomy gate applied at gateway level)
+ * - draft_gate:  create a Nylas draft silently; CEO discovers pending drafts via the
+ *                end-of-day Signal digest and reviews in Gmail (#403, #278)
  */
-export type OutboundPolicy = 'direct' | 'draft_gate' | 'autonomy_gated';
+export type OutboundPolicy = 'direct' | 'draft_gate';
 
 /**
  * Raw per-account email entry as read from config/default.yaml.
@@ -25,8 +23,6 @@ export interface RawEmailAccountConfig {
   nylas_grant_id: string;
   self_email: string;
   outbound_policy: OutboundPolicy;
-  /** Required when outbound_policy is 'autonomy_gated'. Integer 0–100. */
-  autonomy_threshold?: number;
   /**
    * When true, Curia monitors this inbox as an observer rather than acting as
    * the recipient. Inbound emails bypass the contact trust flow (no provisional
@@ -59,9 +55,6 @@ export interface ResolvedEmailAccount {
   nylasGrantId: string;
   selfEmail: string;
   outboundPolicy: OutboundPolicy;
-  /** Minimum autonomy score (0–100) required for autonomous sends. Only set when
-   *  outboundPolicy is 'autonomy_gated'. */
-  autonomyThreshold?: number;
   /** See RawEmailAccountConfig.observation_mode. */
   observationMode: boolean;
   /** Resolved sender addresses to suppress in addition to selfEmail. */
@@ -494,7 +487,7 @@ export function loadYamlConfig(configDir: string): YamlConfig {
     if (channelAccounts === null || typeof channelAccounts !== 'object' || Array.isArray(channelAccounts)) {
       throw new Error('channel_accounts.email must be a YAML mapping');
     }
-    const validPolicies: OutboundPolicy[] = ['direct', 'draft_gate', 'autonomy_gated'];
+    const validPolicies: OutboundPolicy[] = ['direct', 'draft_gate'];
     for (const [accountName, rawAccount] of Object.entries(channelAccounts)) {
       if (typeof rawAccount !== 'object' || rawAccount === null || Array.isArray(rawAccount)) {
         throw new Error(`channel_accounts.email.${accountName} must be a YAML mapping`);
@@ -508,23 +501,6 @@ export function loadYamlConfig(configDir: string): YamlConfig {
       if (!validPolicies.includes(rawAccount.outbound_policy)) {
         throw new Error(
           `channel_accounts.email.${accountName}.outbound_policy must be one of: ${validPolicies.join(', ')}, got: "${rawAccount.outbound_policy}"`,
-        );
-      }
-      if (rawAccount.outbound_policy === 'autonomy_gated') {
-        if (rawAccount.autonomy_threshold === undefined) {
-          throw new Error(
-            `channel_accounts.email.${accountName}: outbound_policy 'autonomy_gated' requires autonomy_threshold`,
-          );
-        }
-        if (!Number.isInteger(rawAccount.autonomy_threshold) || rawAccount.autonomy_threshold < 0 || rawAccount.autonomy_threshold > 100) {
-          throw new Error(
-            `channel_accounts.email.${accountName}.autonomy_threshold must be an integer 0–100, got: ${rawAccount.autonomy_threshold}`,
-          );
-        }
-      }
-      if (rawAccount.autonomy_threshold !== undefined && rawAccount.outbound_policy !== 'autonomy_gated') {
-        throw new Error(
-          `channel_accounts.email.${accountName}: autonomy_threshold is only valid when outbound_policy is 'autonomy_gated'`,
         );
       }
       if (rawAccount.observation_mode !== undefined && typeof rawAccount.observation_mode !== 'boolean') {
@@ -767,7 +743,6 @@ export function resolveChannelAccounts(yamlConfig: YamlConfig, config: Config): 
         nylasGrantId,
         selfEmail,
         outboundPolicy: raw.outbound_policy,
-        autonomyThreshold: raw.autonomy_threshold,
         observationMode: raw.observation_mode ?? false,
         excludedSenderEmails,
       };

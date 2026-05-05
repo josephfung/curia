@@ -91,6 +91,10 @@ export interface OutboundSendResult {
   messageId?: string;
   /** Human-readable reason when success is false */
   blockedReason?: string;
+  /** True when the autonomy gate blocked this send */
+  gated?: boolean;
+  /** Short reference for the action_log row (e.g. 'email-1'). Present when gated is true. */
+  actionRef?: string;
 }
 
 /** Result from createEmailDraft() — extends send result with the Nylas draft ID. */
@@ -245,7 +249,14 @@ export class OutboundGateway {
    */
   async send(
     request: OutboundSendRequest,
-    options?: { skipNotificationOnBlock?: boolean; humanApproved?: boolean },
+    options?: {
+      skipNotificationOnBlock?: boolean;
+      humanApproved?: boolean;
+      /** Task event ID for action_log traceability. */
+      taskEventId?: string;
+      /** Conversation ID for action_log context. */
+      conversationId?: string;
+    },
   ): Promise<OutboundSendResult> {
     // ------------------------------------------------------------------
     // Step 0: Autonomy gate — score < 70 blocks all outbound sends
