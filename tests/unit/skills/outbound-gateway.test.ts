@@ -1188,6 +1188,20 @@ describe('OutboundGateway.sendEmailDraft', () => {
     expect(nylasClient.sendDraft).not.toHaveBeenCalled();
   });
 
+  it('bypasses the autonomy gate when draft recipient is the CEO email and score < 70', async () => {
+    const { gateway, nylasClient } = makeGateway({
+      autonomyService: makeAutonomyService(65), // below 70 — would normally block
+    });
+    const result = await gateway.sendEmailDraft(DRAFT_ID, 'joseph', {
+      recipientEmail: 'ceo@example.com',
+      body: 'Hi CEO!',
+      subject: 'Update',
+    });
+
+    expect(result.success).toBe(true);
+    expect(nylasClient.sendDraft).toHaveBeenCalledWith(DRAFT_ID);
+  });
+
   it('returns failure when nylasClient.sendDraft throws', async () => {
     const { gateway } = makeGateway({
       nylasClient: {
