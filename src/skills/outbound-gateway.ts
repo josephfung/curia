@@ -346,6 +346,7 @@ export class OutboundGateway {
 
           return {
             success: false,
+            gated: true,
             blockedReason:
               `Autonomy score is ${autonomyConfig.score} — direct sends require a score of at least ${sendThreshold}. ` +
               `Use createEmailDraft() for drafts, or ask the CEO to raise the score with set-autonomy.`,
