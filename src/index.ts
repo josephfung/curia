@@ -691,6 +691,11 @@ async function main(): Promise<void> {
     'Outbound PII redactor initialized',
   );
 
+  // ActionLogRepo — used by OutboundGateway (autonomy gate logging, draft-linkage) and
+  // later by ApprovalTriggerService and AutonomyScoringPass. Instantiated here so it
+  // can be passed to the gateway at construction time.
+  const actionLogRepo = new ActionLogRepo(pool, logger);
+
   // Outbound gateway — single choke-point for all outbound external communication.
   // Runs blocked-contact checks and content filtering before any message leaves Curia.
   //
@@ -722,6 +727,9 @@ async function main(): Promise<void> {
       logger,
       autonomyService,
       piiRedactor,
+      // Wire action log repo so the gateway can write autonomy_action_log rows on
+      // gated sends and support two-step draft linkage (#435).
+      actionLogRepo,
     });
     logger.info({
       emailAccounts: [...nylasClientMap.keys()],
@@ -811,7 +819,7 @@ async function main(): Promise<void> {
   };
   // Autonomy scoring pass — Phase 3 automatic score adjustment (issue #148).
   // Runs as a sibling DreamEngine pass alongside memory decay.
-  const actionLogRepo = new ActionLogRepo(pool, logger);
+  // actionLogRepo is already instantiated above (before OutboundGateway) — reused here.
   const scoringPassConfig: ScoringPassConfig = {
     intervalMs: yamlConfig.dreaming?.autonomy_scoring?.intervalMs ?? 86_400_000,  // default: daily
     model: yamlConfig.dreaming?.autonomy_scoring?.model ?? 'claude-haiku-4-5',
