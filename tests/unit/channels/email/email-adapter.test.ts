@@ -53,6 +53,8 @@ function createMocks() {
 
   const outboundGateway = {
     send: vi.fn().mockResolvedValue({ success: true, messageId: 'sent-1' }),
+    createEmailDraft: vi.fn().mockResolvedValue({ success: true, draftId: 'draft-1' }),
+    linkGatedAction: vi.fn().mockResolvedValue(undefined),
     listEmailMessages: vi.fn().mockResolvedValue([]),
     sendNotification: vi.fn().mockResolvedValue(undefined),
   } as unknown as OutboundGateway;
@@ -750,6 +752,188 @@ describe('EmailAdapter — contact auto-creation rate limiting', () => {
     await flushPoll();
 
     expect(mocks.contactService.createContact).toHaveBeenCalledTimes(2);
+
+    await adapter.stop();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// dispatchByPolicy — gated fallback (#435)
+// ---------------------------------------------------------------------------
+
+describe('EmailAdapter — dispatchByPolicy gated-fallback', () => {
+  let mocks: ReturnType<typeof createMocks>;
+  let triggerOutbound: (event: BusEvent) => Promise<void>;
+
+  beforeEach(() => {
+    mocks = createMocks();
+    triggerOutbound = captureHandler('outbound.message', mocks);
+  });
+
+  function makeOutboundEventWithTask(conversationId: string, taskEventId?: string) {
+    return createOutboundMessage({
+      conversationId,
+      channelId: 'email',
+      content: 'Here is my reply.',
+      parentEventId: 'response-1',
+      taskEventId,
+    });
+  }
+
+  it('calls gateway.send() with context for direct policy', async () => {
+    const adapter = makeAdapter(mocks);
+    await adapter.start();
+
+    const humanMessage = makeMockMessage({
+      from: [{ email: CEO_EMAIL }],
+      to: [{ email: SELF_EMAIL }],
+    });
+    (mocks.outboundGateway.listEmailMessages as ReturnType<typeof vi.fn>).mockResolvedValue([humanMessage]);
+
+    await triggerOutbound(makeOutboundEventWithTask('email:thread-abc', 'task-evt-1'));
+
+    expect(mocks.outboundGateway.send).toHaveBeenCalledWith(
+      expect.objectContaining({ to: CEO_EMAIL }),
+      expect.objectContaining({ taskEventId: 'task-evt-1', conversationId: 'email:thread-abc' }),
+    );
+
+    await adapter.stop();
+  });
+
+  it('creates draft and links action when gateway returns gated', async () => {
+    // Gateway returns gated result
+    (mocks.outboundGateway.send as ReturnType<typeof vi.fn>).mockResolvedValue({
+      success: false,
+      gated: true,
+      actionRef: 'email-42',
+    });
+    (mocks.outboundGateway.createEmailDraft as ReturnType<typeof vi.fn>).mockResolvedValue({
+      success: true,
+      draftId: 'draft-abc',
+    });
+
+    const adapter = makeAdapter(mocks);
+    await adapter.start();
+
+    const humanMessage = makeMockMessage({
+      from: [{ email: CEO_EMAIL }],
+      to: [{ email: SELF_EMAIL }],
+    });
+    (mocks.outboundGateway.listEmailMessages as ReturnType<typeof vi.fn>).mockResolvedValue([humanMessage]);
+
+    await triggerOutbound(makeOutboundEventWithTask('email:thread-abc', 'task-evt-2'));
+
+    // Draft should be created as fallback
+    expect(mocks.outboundGateway.createEmailDraft).toHaveBeenCalledWith(
+      expect.objectContaining({ to: CEO_EMAIL, channel: 'email' }),
+    );
+
+    // linkGatedAction should be called with the actionRef and draft metadata
+    expect(mocks.outboundGateway.linkGatedAction).toHaveBeenCalledWith(
+      'email-42',
+      expect.objectContaining({
+        draftId: 'draft-abc',
+        accountId: 'curia',
+        recipientEmail: CEO_EMAIL,
+      }),
+    );
+
+    await adapter.stop();
+  });
+
+  it('does not link action when draft creation fails', async () => {
+    (mocks.outboundGateway.send as ReturnType<typeof vi.fn>).mockResolvedValue({
+      success: false,
+      gated: true,
+      actionRef: 'email-99',
+    });
+    (mocks.outboundGateway.createEmailDraft as ReturnType<typeof vi.fn>).mockResolvedValue({
+      success: false,
+      blockedReason: 'Recipient is blocked',
+    });
+
+    const adapter = makeAdapter(mocks);
+    await adapter.start();
+
+    const humanMessage = makeMockMessage({
+      from: [{ email: CEO_EMAIL }],
+      to: [{ email: SELF_EMAIL }],
+    });
+    (mocks.outboundGateway.listEmailMessages as ReturnType<typeof vi.fn>).mockResolvedValue([humanMessage]);
+
+    await triggerOutbound(makeOutboundEventWithTask('email:thread-abc'));
+
+    // Draft creation attempted
+    expect(mocks.outboundGateway.createEmailDraft).toHaveBeenCalled();
+    // But linkGatedAction should NOT be called because draft failed
+    expect(mocks.outboundGateway.linkGatedAction).not.toHaveBeenCalled();
+
+    await adapter.stop();
+  });
+
+  it('draft_gate policy calls createEmailDraft directly without send()', async () => {
+    const adapter = new EmailAdapter({
+      accountId: 'curia',
+      outboundPolicy: 'draft_gate',
+      bus: mocks.bus,
+      logger: mocks.logger,
+      outboundGateway: mocks.outboundGateway,
+      contactService: mocks.contactService,
+      pollingIntervalMs: 999999,
+      selfEmail: SELF_EMAIL,
+      observationMode: false,
+      excludedSenderEmails: [],
+      contactCreationMaxPerMessage: 10,
+      contactCreationMaxPerHour: 100,
+      ceoEmail: CEO_EMAIL,
+    });
+    await adapter.start();
+
+    const humanMessage = makeMockMessage({
+      from: [{ email: CEO_EMAIL }],
+      to: [{ email: SELF_EMAIL }],
+    });
+    (mocks.outboundGateway.listEmailMessages as ReturnType<typeof vi.fn>).mockResolvedValue([humanMessage]);
+
+    await triggerOutbound(makeOutboundEventWithTask('email:thread-abc', 'task-evt-3'));
+
+    // draft_gate goes straight to createEmailDraft — no send() call
+    expect(mocks.outboundGateway.send).not.toHaveBeenCalled();
+    expect(mocks.outboundGateway.createEmailDraft).toHaveBeenCalledWith(
+      expect.objectContaining({ to: CEO_EMAIL, channel: 'email' }),
+    );
+
+    await adapter.stop();
+  });
+
+  it('draft_gate does NOT call linkGatedAction', async () => {
+    const adapter = new EmailAdapter({
+      accountId: 'curia',
+      outboundPolicy: 'draft_gate',
+      bus: mocks.bus,
+      logger: mocks.logger,
+      outboundGateway: mocks.outboundGateway,
+      contactService: mocks.contactService,
+      pollingIntervalMs: 999999,
+      selfEmail: SELF_EMAIL,
+      observationMode: false,
+      excludedSenderEmails: [],
+      contactCreationMaxPerMessage: 10,
+      contactCreationMaxPerHour: 100,
+      ceoEmail: CEO_EMAIL,
+    });
+    await adapter.start();
+
+    const humanMessage = makeMockMessage({
+      from: [{ email: CEO_EMAIL }],
+      to: [{ email: SELF_EMAIL }],
+    });
+    (mocks.outboundGateway.listEmailMessages as ReturnType<typeof vi.fn>).mockResolvedValue([humanMessage]);
+
+    await triggerOutbound(makeOutboundEventWithTask('email:thread-abc', 'task-evt-4'));
+
+    // draft_gate has no autonomy decision — linkGatedAction should never be called
+    expect(mocks.outboundGateway.linkGatedAction).not.toHaveBeenCalled();
 
     await adapter.stop();
   });
