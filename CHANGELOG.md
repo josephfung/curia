@@ -28,6 +28,16 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **`autonomy_action_log` table name** — renamed from `action_log` to `autonomy_action_log` for schema clarity. The `autonomy_` prefix groups it with `autonomy_config` and `autonomy_history`. Updated in ADR-018, issues #427/#428/#429. (spec 14, issue #148)
 - **DreamEngine** — now accepts an optional `AutonomyScoringPass` as a sibling pass, running on its own interval alongside memory decay. (spec 14, issue #148)
 - **Held-message notifications** — coordinator now describes the nature of the sender's request (not just subject/sender). Preview is 500-char plaintext with `totalLength` so the LLM can qualify partial reads. Channel name is now dynamic (email, Signal, etc.) instead of hardcoded.
+- **Outbound autonomy gate** — draft-fallback logic lifted from email adapter to OutboundGateway;
+  email adapter simplified to pure transport. Gateway now writes `autonomy_action_log` rows on
+  gated sends and supports two-step draft linkage. Observation-mode drafts also tracked in
+  action_log for unified pending-actions surface. (#435)
+- **Pending-actions-digest** — short reference codes moved to end of each line for readability
+
+### Removed
+
+- **`autonomy_gated` outbound policy** — replaced by gateway-level autonomy gate on `direct`
+  policy. Deployments using `autonomy_gated` must switch to `direct`.
 
 ### Fixed
 
