@@ -37,7 +37,7 @@ function makeCtx(overrides: {
   const gateway = {
     listEmailMessages: vi.fn().mockResolvedValue([DRAFT_STUB]),
     sendEmailDraft: vi.fn().mockResolvedValue({ success: true, messageId: 'msg-sent-1' }),
-    listAccountIds: vi.fn().mockReturnValue(['curia', 'joseph']),
+    listAccountIds: vi.fn().mockReturnValue(['curia', 'personal']),
     ...overrides.gateway,
   } as unknown as OutboundGateway;
 
@@ -55,7 +55,7 @@ function makeCtx(overrides: {
       : undefined;
 
   const ctx = {
-    input: overrides.input ?? { draft_id: 'draft-abc123', account: 'joseph' },
+    input: overrides.input ?? { draft_id: 'draft-abc123', account: 'personal' },
     secret: () => '',
     log: makeLogger(),
     outboundGateway: gateway,
@@ -120,7 +120,7 @@ describe('SendDraftHandler', () => {
   // ─── Input validation ─────────────────────────────────────────────────────
 
   it('returns error when draft_id is missing', async () => {
-    const ctx = makeCtx({ input: { account: 'joseph' } });
+    const ctx = makeCtx({ input: { account: 'personal' } });
     const result = await handler.execute(ctx);
     expect(result.success).toBe(false);
     if (!result.success) expect(result.error).toMatch(/draft_id/i);
@@ -140,7 +140,7 @@ describe('SendDraftHandler', () => {
       gateway: {
         listEmailMessages: vi.fn().mockRejectedValue(new Error('Nylas error')),
         sendEmailDraft: vi.fn(),
-        listAccountIds: vi.fn().mockReturnValue(['joseph']),
+        listAccountIds: vi.fn().mockReturnValue(['personal']),
       },
     });
     const result = await handler.execute(ctx);
@@ -153,7 +153,7 @@ describe('SendDraftHandler', () => {
       gateway: {
         listEmailMessages: vi.fn().mockResolvedValue([]),
         sendEmailDraft: vi.fn(),
-        listAccountIds: vi.fn().mockReturnValue(['joseph']),
+        listAccountIds: vi.fn().mockReturnValue(['personal']),
       },
     });
     const result = await handler.execute(ctx);
@@ -167,7 +167,7 @@ describe('SendDraftHandler', () => {
       gateway: {
         listEmailMessages: vi.fn().mockResolvedValue([draftNoRecipient]),
         sendEmailDraft: vi.fn(),
-        listAccountIds: vi.fn().mockReturnValue(['joseph']),
+        listAccountIds: vi.fn().mockReturnValue(['personal']),
       },
     });
     const result = await handler.execute(ctx);
@@ -195,7 +195,7 @@ describe('SendDraftHandler', () => {
     await handler.execute(ctx);
     expect(sendEmailDraftMock).toHaveBeenCalledWith(
       'draft-abc123',
-      'joseph',
+      'personal',
       expect.objectContaining({ recipientEmail: 'kevin@example.com' }),
       { humanApproved: true },
     );
@@ -207,7 +207,7 @@ describe('SendDraftHandler', () => {
     await handler.execute(ctx);
     expect(sendEmailDraftMock).toHaveBeenCalledWith(
       'draft-abc123',
-      'joseph',
+      'personal',
       {
         recipientEmail: 'kevin@example.com',
         body: '<p>Hello Kevin</p>',
@@ -259,11 +259,11 @@ describe('SendDraftHandler', () => {
 
   describe('cross-account draft discovery', () => {
     it('finds draft in secondary account when account is omitted', async () => {
-      // Draft lives in 'joseph' (second account). listEmailMessages returns empty
-      // for 'curia' but finds the draft in 'joseph'.
+      // Draft lives in 'personal' (second account). listEmailMessages returns empty
+      // for 'curia' but finds the draft in 'personal'.
       const listEmailMessages = vi.fn()
         .mockImplementation((_opts: unknown, accountId: string) =>
-          accountId === 'joseph'
+          accountId === 'personal'
             ? Promise.resolve([DRAFT_STUB])
             : Promise.resolve([]),
         );
@@ -274,27 +274,27 @@ describe('SendDraftHandler', () => {
         gateway: {
           listEmailMessages,
           sendEmailDraft,
-          listAccountIds: vi.fn().mockReturnValue(['curia', 'joseph']),
+          listAccountIds: vi.fn().mockReturnValue(['curia', 'personal']),
         },
       });
 
       const result = await handler.execute(ctx);
       expect(result.success).toBe(true);
-      // Verify the send used the discovered account ('joseph'), not the primary ('curia')
+      // Verify the send used the discovered account ('personal'), not the primary ('curia')
       expect(sendEmailDraft).toHaveBeenCalledWith(
         'draft-abc123',
-        'joseph',
+        'personal',
         expect.objectContaining({ recipientEmail: 'kevin@example.com' }),
         { humanApproved: true },
       );
     });
 
     it('sends from discovered account, not primary', async () => {
-      // The primary account is 'curia', but the draft is in 'joseph'.
-      // The send must use 'joseph' credentials.
+      // The primary account is 'curia', but the draft is in 'personal'.
+      // The send must use 'personal' credentials.
       const listEmailMessages = vi.fn()
         .mockImplementation((_opts: unknown, accountId: string) =>
-          accountId === 'joseph'
+          accountId === 'personal'
             ? Promise.resolve([DRAFT_STUB])
             : Promise.resolve([]),
         );
@@ -305,14 +305,14 @@ describe('SendDraftHandler', () => {
         gateway: {
           listEmailMessages,
           sendEmailDraft,
-          listAccountIds: vi.fn().mockReturnValue(['curia', 'joseph']),
+          listAccountIds: vi.fn().mockReturnValue(['curia', 'personal']),
         },
       });
 
       await handler.execute(ctx);
       // sendEmailDraft's second argument is the accountId
       const usedAccount = sendEmailDraft.mock.calls[0][1];
-      expect(usedAccount).toBe('joseph');
+      expect(usedAccount).toBe('personal');
     });
 
     it('returns clear error when draft not found in any account (no fallback to creating new draft)', async () => {
@@ -323,7 +323,7 @@ describe('SendDraftHandler', () => {
         gateway: {
           listEmailMessages,
           sendEmailDraft: vi.fn(),
-          listAccountIds: vi.fn().mockReturnValue(['curia', 'joseph']),
+          listAccountIds: vi.fn().mockReturnValue(['curia', 'personal']),
         },
       });
 
@@ -332,14 +332,14 @@ describe('SendDraftHandler', () => {
       if (!result.success) {
         expect(result.error).toMatch(/not found/i);
         expect(result.error).toContain('curia');
-        expect(result.error).toContain('joseph');
+        expect(result.error).toContain('personal');
       }
       // sendEmailDraft must NOT be called — no silent fallback to creating a new draft
       expect(ctx.outboundGateway!.sendEmailDraft).not.toHaveBeenCalled();
     });
 
     it('stops searching after first account match (short-circuits)', async () => {
-      // Draft found in the first account ('curia') — should not query 'joseph'.
+      // Draft found in the first account ('curia') — should not query 'personal'.
       const listEmailMessages = vi.fn()
         .mockImplementation((_opts: unknown, accountId: string) =>
           accountId === 'curia'
@@ -352,7 +352,7 @@ describe('SendDraftHandler', () => {
         gateway: {
           listEmailMessages,
           sendEmailDraft: vi.fn().mockResolvedValue({ success: true, messageId: 'msg-sent-1' }),
-          listAccountIds: vi.fn().mockReturnValue(['curia', 'joseph']),
+          listAccountIds: vi.fn().mockReturnValue(['curia', 'personal']),
         },
       });
 
@@ -363,7 +363,7 @@ describe('SendDraftHandler', () => {
     });
 
     it('continues searching when one account fetch fails', async () => {
-      // 'curia' throws an error, but 'joseph' has the draft — should still succeed.
+      // 'curia' throws an error, but 'personal' has the draft — should still succeed.
       const listEmailMessages = vi.fn()
         .mockImplementation((_opts: unknown, accountId: string) => {
           if (accountId === 'curia') return Promise.reject(new Error('Nylas timeout'));
@@ -376,7 +376,7 @@ describe('SendDraftHandler', () => {
         gateway: {
           listEmailMessages,
           sendEmailDraft,
-          listAccountIds: vi.fn().mockReturnValue(['curia', 'joseph']),
+          listAccountIds: vi.fn().mockReturnValue(['curia', 'personal']),
         },
       });
 
@@ -384,7 +384,7 @@ describe('SendDraftHandler', () => {
       expect(result.success).toBe(true);
       expect(sendEmailDraft).toHaveBeenCalledWith(
         'draft-abc123',
-        'joseph',
+        'personal',
         expect.anything(),
         expect.anything(),
       );
@@ -395,7 +395,7 @@ describe('SendDraftHandler', () => {
       const listEmailMessages = vi.fn()
         .mockImplementation((_opts: unknown, accountId: string) => {
           if (accountId === 'curia') return Promise.reject(new Error('Nylas timeout'));
-          return Promise.resolve([]); // joseph: no match
+          return Promise.resolve([]); // personal: no match
         });
 
       const ctx = makeCtx({
@@ -403,7 +403,7 @@ describe('SendDraftHandler', () => {
         gateway: {
           listEmailMessages,
           sendEmailDraft: vi.fn(),
-          listAccountIds: vi.fn().mockReturnValue(['curia', 'joseph']),
+          listAccountIds: vi.fn().mockReturnValue(['curia', 'personal']),
         },
       });
 
@@ -425,7 +425,7 @@ describe('SendDraftHandler', () => {
         gateway: {
           listEmailMessages,
           sendEmailDraft: vi.fn(),
-          listAccountIds: vi.fn().mockReturnValue(['curia', 'joseph']),
+          listAccountIds: vi.fn().mockReturnValue(['curia', 'personal']),
         },
       });
 
@@ -436,7 +436,7 @@ describe('SendDraftHandler', () => {
         expect(result.error).toMatch(/could not search/i);
         expect(result.error).toMatch(/transient/i);
         expect(result.error).toContain('curia');
-        expect(result.error).toContain('joseph');
+        expect(result.error).toContain('personal');
       }
     });
 
@@ -459,10 +459,10 @@ describe('SendDraftHandler', () => {
       // When account is provided, only that account is searched — not all accounts.
       const listEmailMessages = vi.fn().mockResolvedValue([DRAFT_STUB]);
       const sendEmailDraft = vi.fn().mockResolvedValue({ success: true, messageId: 'msg-sent-1' });
-      const listAccountIds = vi.fn().mockReturnValue(['curia', 'joseph']);
+      const listAccountIds = vi.fn().mockReturnValue(['curia', 'personal']);
 
       const ctx = makeCtx({
-        input: { draft_id: 'draft-abc123', account: 'joseph' },
+        input: { draft_id: 'draft-abc123', account: 'personal' },
         gateway: { listEmailMessages, sendEmailDraft, listAccountIds },
       });
 
@@ -470,8 +470,8 @@ describe('SendDraftHandler', () => {
 
       // listAccountIds should NOT be called — fast path skips the iteration
       expect(listAccountIds).not.toHaveBeenCalled();
-      // listEmailMessages called once with 'joseph' specifically
-      expect(listEmailMessages).toHaveBeenCalledWith({ folders: ['DRAFTS'] }, 'joseph');
+      // listEmailMessages called once with 'personal' specifically
+      expect(listEmailMessages).toHaveBeenCalledWith({ folders: ['DRAFTS'] }, 'personal');
     });
   });
 
