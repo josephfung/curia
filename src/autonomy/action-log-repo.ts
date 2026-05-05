@@ -238,6 +238,46 @@ export class ActionLogRepo {
   }
 
   /**
+   * Find a pending_approval row where a specific field in the JSONB payload
+   * matches the given value. Used by send-draft to find the action_log row
+   * associated with a draft being approved.
+   */
+  async findPendingByPayloadField(
+    field: string,
+    value: string,
+  ): Promise<ActionLogRow | null> {
+    const result = await this.pool.query(
+      `SELECT * FROM autonomy_action_log
+       WHERE outcome = 'pending_approval'
+         AND payload->>$1 = $2
+       ORDER BY created_at DESC
+       LIMIT 1`,
+      [field, value],
+    );
+    return result.rows[0] ? mapRow(result.rows[0]) : null;
+  }
+
+  /**
+   * Transition a specific action_log row to a terminal outcome by ID.
+   * Only updates if the current outcome is still pending_approval — returns
+   * false on double-resolve (concurrent resolution race).
+   *
+   * Unlike resolveRow(), this method accepts a free-form outcome string so
+   * that callers (e.g. send-draft) can pass 'approved' without needing to
+   * import the union type. The WHERE guard on pending_approval ensures
+   * idempotency — a row that was already resolved will not be double-transitioned.
+   */
+  async resolveById(id: number, outcome: string, resolvedBy: string): Promise<boolean> {
+    const result = await this.pool.query(
+      `UPDATE autonomy_action_log
+       SET outcome = $2, resolved_at = NOW(), resolved_by = $3
+       WHERE id = $1 AND outcome = 'pending_approval'`,
+      [id, outcome, resolvedBy],
+    );
+    return (result.rowCount ?? 0) > 0;
+  }
+
+  /**
    * Merge additional payload fields into an existing action_log row identified
    * by short_ref. Used by the gateway's two-step draft-fallback pattern: the
    * initial row is created on gate (with source/context), then the adapter
