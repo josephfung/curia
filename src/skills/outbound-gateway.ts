@@ -1041,6 +1041,13 @@ export class OutboundGateway {
         { draftId },
         'outbound-gateway: autonomy gate skipped — humanApproved flag set (CEO-authorized draft send, see ADR-017)',
       );
+    } else if (this.autonomyService && this.ceoEmail !== '' && draftMeta.recipientEmail.toLowerCase() === this.ceoEmail.toLowerCase()) {
+      // Agent-to-principal: CEO-bound draft sends bypass the autonomy gate.
+      // Same rationale as the send() CEO bypass — see isCeoRecipient() comment.
+      this.log.info(
+        { draftId },
+        'outbound-gateway: autonomy gate skipped — draft recipient is CEO (agent-to-principal communication)',
+      );
     } else if (this.autonomyService) {
       try {
         const autonomyConfig = await this.autonomyService.getConfig();
