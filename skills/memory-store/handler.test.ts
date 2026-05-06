@@ -341,6 +341,7 @@ describe('MemoryStoreHandler', () => {
       const data = (result as { success: true; data: Record<string, unknown> }).data;
       expect(data.stored).toBe(false);
       expect(data.action).toBe('entity_not_found');
+      expect(String(data.reason)).toMatch(/entity node not found/i);
     });
   });
 

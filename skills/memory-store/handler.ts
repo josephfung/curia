@@ -23,7 +23,8 @@ const SENSITIVITY_LEVELS_SET: ReadonlySet<string> = new Set(SENSITIVITY_LEVELS);
 const ENTITY_NODE_TYPES = NODE_TYPES.filter(t => t !== 'fact');
 const ENTITY_NODE_TYPES_SET: ReadonlySet<string> = new Set(ENTITY_NODE_TYPES);
 
-// UUID v4 pattern — used to detect when the caller is passing a node ID directly.
+// UUID pattern — used to detect when the caller is passing a node ID directly.
+// Matches any UUID-shaped string (all versions/variants), not just v4.
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export class MemoryStoreHandler implements SkillHandler {
@@ -111,6 +112,14 @@ export class MemoryStoreHandler implements SkillHandler {
       let entityNode: KgNode;
 
       if (UUID_PATTERN.test(entity)) {
+        // entity_type has no effect when a UUID is supplied — the node type is already
+        // determined by the existing KG node. Log a warning so LLM callers notice the mismatch.
+        if (entity_type !== undefined) {
+          ctx.log.debug(
+            { entity, entity_type },
+            'memory-store: entity_type hint is ignored when entity is a UUID — type is fixed by the existing KG node',
+          );
+        }
         const byId = await ctx.entityMemory.getEntity(entity);
         if (!byId) {
           ctx.log.debug({ entity }, 'memory-store: entity UUID not found in KG');
