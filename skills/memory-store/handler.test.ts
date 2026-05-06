@@ -31,6 +31,18 @@ function makeCtx(entityMemory: EntityMemory | undefined, input: Record<string, u
   } as unknown as SkillContext;
 }
 
+// Factory for mock entity memory objects used in the updated/rate_limited/entity_not_found tests.
+// The resolveOrCreate mock always resolves to a known entity; storeFact behaviour is injected.
+function makeMockEntityMemory(storeFactResult: Record<string, unknown>) {
+  return {
+    resolveOrCreate: vi.fn().mockResolvedValue({
+      kind: 'found',
+      node: { id: 'entity-1', label: 'Jane Doe', type: 'person' },
+    }),
+    storeFact: vi.fn().mockResolvedValue(storeFactResult),
+  };
+}
+
 const VALID_INPUT = {
   entity: 'Jane Doe',
   field: 'preferred_airline',
@@ -255,23 +267,11 @@ describe('MemoryStoreHandler', () => {
 
   describe('action: updated', () => {
     it('returns updated with node_id and sensitivity when storeFact detects a near-duplicate', async () => {
-      const mockEntityMemory = {
-        resolveOrCreate: vi.fn().mockResolvedValue({
-          kind: 'found',
-          node: { id: 'entity-1', label: 'Jane Doe', type: 'person' },
-        }),
-        storeFact: vi.fn().mockResolvedValue({
-          stored: true,
-          action: 'updated',
-          nodeId: 'fact-existing-42',
-          sensitivity: 'internal',
-        }),
-      };
       const ctx = {
         input: VALID_INPUT,
         secret: () => 'test-key',
         log: pino({ level: 'silent' }),
-        entityMemory: mockEntityMemory,
+        entityMemory: makeMockEntityMemory({ stored: true, action: 'updated', nodeId: 'fact-existing-42', sensitivity: 'internal' }),
       } as unknown as SkillContext;
 
       const result = await handler.execute(ctx);
@@ -287,22 +287,11 @@ describe('MemoryStoreHandler', () => {
 
   describe('action: rate_limited', () => {
     it('returns rate_limited with reason when storeFact hits the write limit', async () => {
-      const mockEntityMemory = {
-        resolveOrCreate: vi.fn().mockResolvedValue({
-          kind: 'found',
-          node: { id: 'entity-1', label: 'Jane Doe', type: 'person' },
-        }),
-        storeFact: vi.fn().mockResolvedValue({
-          stored: false,
-          action: 'rate_limited',
-          conflict: 'Memory write rate limit exceeded (50 per agent per task)',
-        }),
-      };
       const ctx = {
         input: VALID_INPUT,
         secret: () => 'test-key',
         log: pino({ level: 'silent' }),
-        entityMemory: mockEntityMemory,
+        entityMemory: makeMockEntityMemory({ stored: false, action: 'rate_limited', conflict: 'Memory write rate limit exceeded (50 per agent per task)' }),
       } as unknown as SkillContext;
 
       const result = await handler.execute(ctx);
@@ -317,22 +306,11 @@ describe('MemoryStoreHandler', () => {
 
   describe('action: entity_not_found (validator race)', () => {
     it('returns entity_not_found when storeFact reports entity gone at write time', async () => {
-      const mockEntityMemory = {
-        resolveOrCreate: vi.fn().mockResolvedValue({
-          kind: 'found',
-          node: { id: 'entity-1', label: 'Jane Doe', type: 'person' },
-        }),
-        storeFact: vi.fn().mockResolvedValue({
-          stored: false,
-          action: 'entity_not_found',
-          conflict: 'Entity node not found: entity-1',
-        }),
-      };
       const ctx = {
         input: VALID_INPUT,
         secret: () => 'test-key',
         log: pino({ level: 'silent' }),
-        entityMemory: mockEntityMemory,
+        entityMemory: makeMockEntityMemory({ stored: false, action: 'entity_not_found', conflict: 'Entity node not found: entity-1' }),
       } as unknown as SkillContext;
 
       const result = await handler.execute(ctx);
@@ -349,18 +327,14 @@ describe('MemoryStoreHandler', () => {
 
   describe('error handling', () => {
     it('returns success:false when storeFact throws unexpectedly', async () => {
-      const mockEntityMemory = {
-        resolveOrCreate: vi.fn().mockResolvedValue({
-          kind: 'found',
-          node: { id: 'entity-1', label: 'Jane Doe', type: 'person' },
-        }),
-        storeFact: vi.fn().mockRejectedValue(new Error('DB connection lost')),
-      };
       const ctx = {
         input: VALID_INPUT,
         secret: () => 'test-key',
         log: pino({ level: 'silent' }),
-        entityMemory: mockEntityMemory,
+        entityMemory: {
+          ...makeMockEntityMemory({}),
+          storeFact: vi.fn().mockRejectedValue(new Error('DB connection lost')),
+        },
       } as unknown as SkillContext;
 
       const result = await handler.execute(ctx);

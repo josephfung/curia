@@ -209,7 +209,16 @@ ${text}`,
             source,
             confidence: 0.6,
           });
-          const entityNode = resolved.kind === 'ambiguous' ? resolved.candidates[0]! : resolved.node;
+          let entityNode;
+          if (resolved.kind === 'ambiguous') {
+            entityNode = resolved.candidates[0]!;
+            ctx.log.warn(
+              { subject, candidateCount: resolved.candidates.length, chosenId: entityNode.id },
+              'extract-facts: ambiguous subject entity — taking first candidate',
+            );
+          } else {
+            entityNode = resolved.node;
+          }
 
           // Label format: "<attribute>: <value>" — human-readable and dedup-stable.
           // The validator uses semantic similarity on this label for near-duplicate detection.

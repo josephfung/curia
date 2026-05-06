@@ -15,7 +15,7 @@
 
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
 import { DECAY_CLASSES, SENSITIVITY_LEVELS, NODE_TYPES } from '../../src/memory/types.js';
-import type { DecayClass, Sensitivity, NodeType } from '../../src/memory/types.js';
+import type { DecayClass, Sensitivity, NodeType, KgNode } from '../../src/memory/types.js';
 
 const DECAY_CLASSES_SET: ReadonlySet<string> = new Set(DECAY_CLASSES);
 const SENSITIVITY_LEVELS_SET: ReadonlySet<string> = new Set(SENSITIVITY_LEVELS);
@@ -115,7 +115,7 @@ export class MemoryStoreHandler implements SkillHandler {
         // entity_type has no effect when a UUID is supplied — the node type is already
         // determined by the existing KG node. Log a warning so LLM callers notice the mismatch.
         if (entity_type !== undefined) {
-          ctx.log.debug(
+          ctx.log.warn(
             { entity, entity_type },
             'memory-store: entity_type hint is ignored when entity is a UUID — type is fixed by the existing KG node',
           );
@@ -212,29 +212,27 @@ export class MemoryStoreHandler implements SkillHandler {
         };
       }
 
-      if (result.action === 'entity_not_found') {
-        // Validator race guard — entity existed at resolution time but was deleted before write.
-        ctx.log.warn({ entity, field }, 'memory-store: entity node gone at write time — validator race');
-        return {
-          success: true,
-          data: {
-            stored: false,
-            action: 'entity_not_found',
-            reason: result.conflict,
-          },
-        };
+      switch (result.action) {
+        case 'entity_not_found':
+          // Validator race guard — entity existed at resolution time but was deleted before write.
+          ctx.log.warn({ entity, field }, 'memory-store: entity node gone at write time — validator race');
+          return {
+            success: true,
+            data: { stored: false, action: 'entity_not_found', reason: result.conflict },
+          };
+        case 'rate_limited':
+          ctx.log.warn({ entity, field, reason: result.conflict }, 'memory-store: write rate limit reached');
+          return {
+            success: true,
+            data: { stored: false, action: 'rate_limited', reason: result.conflict },
+          };
+        default: {
+          // Exhaustive check — TypeScript will error here if a new action variant is added
+          // to StoreFactResult without a corresponding case above.
+          const _exhaustive: never = result.action;
+          throw new Error(`memory-store: unhandled storeFact action: ${String(_exhaustive)}`);
+        }
       }
-
-      // action === 'rate_limited'
-      ctx.log.warn({ entity, field, reason: result.conflict }, 'memory-store: write rate limit reached');
-      return {
-        success: true,
-        data: {
-          stored: false,
-          action: 'rate_limited',
-          reason: result.conflict,
-        },
-      };
     } catch (err) {
       ctx.log.error({ err, entity, field }, 'memory-store: unexpected error');
       return { success: false, error: err instanceof Error ? err.message : String(err) };
@@ -242,6 +240,3 @@ export class MemoryStoreHandler implements SkillHandler {
   }
 }
 
-// -- Helpers --
-
-type KgNode = import('../../src/memory/types.js').KgNode;

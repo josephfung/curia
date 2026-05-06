@@ -85,7 +85,8 @@ export interface ResolveOrCreateOptions {
 }
 
 export type ResolveOrCreateResult =
-  | { kind: 'found' | 'created'; node: KgNode }
+  | { kind: 'found'; node: KgNode }
+  | { kind: 'created'; node: KgNode }
   | { kind: 'ambiguous'; candidates: KgNode[] };
 
 // Fact node types — used to distinguish fact nodes from entity nodes when walking edges.
