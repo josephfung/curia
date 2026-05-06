@@ -882,7 +882,7 @@ describe('Dispatcher — observation mode preamble', () => {
 });
 
 describe('Dispatcher — CC role preamble', () => {
-  it('prepends [OWNER CC] preamble when curiaRole is "cc"', async () => {
+  it('prepends [OWNER CC] preamble with Account when curiaRole is "cc"', async () => {
     const logger = createLogger('error');
     const bus = new EventBus(logger);
 
@@ -895,6 +895,7 @@ describe('Dispatcher — CC role preamble', () => {
     const event = createInboundMessage({
       conversationId: 'email:thread-cc-intro',
       channelId: 'email',
+      accountId: 'curia',
       senderId: 'joseph@example.com',
       content: 'Hey Nik, feel free to hit up my EA.',
       metadata: { curiaRole: 'cc', primaryRecipientEmails: ['nik@example.com'] },
@@ -906,7 +907,75 @@ describe('Dispatcher — CC role preamble', () => {
     const content = tasks[0]!.payload.content;
     expect(content).toContain('[OWNER CC');
     expect(content).toContain('nik@example.com');
+    // Account line always present so the coordinator knows which mailbox this came from
+    expect(content).toContain('Account: curia');
     expect(content).toContain('Hey Nik, feel free to hit up my EA.');
+  });
+
+  it('includes Message ID in CC preamble when nylasMessageId is present', async () => {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+
+    const tasks: AgentTaskEvent[] = [];
+    bus.subscribe('agent.task', 'agent', (e) => tasks.push(e as AgentTaskEvent));
+
+    const dispatcher = new Dispatcher({ bus, logger });
+    dispatcher.register();
+
+    const event = createInboundMessage({
+      conversationId: 'email:thread-cc-with-id',
+      channelId: 'email',
+      accountId: 'curia',
+      senderId: 'joseph@example.com',
+      content: 'Loop Curia in.',
+      metadata: {
+        curiaRole: 'cc',
+        primaryRecipientEmails: ['nik@example.com'],
+        nylasMessageId: 'nylas-msg-xyz-789',
+      },
+    });
+
+    await bus.publish('channel', event);
+
+    expect(tasks).toHaveLength(1);
+    const content = tasks[0]!.payload.content;
+    expect(content).toContain('Message ID: nylas-msg-xyz-789');
+    expect(content).toContain('Account: curia');
+    // Verify preamble order: [OWNER CC] header → identifiers → email body
+    const preambleIndex = content.indexOf('[OWNER CC');
+    const messageIdIndex = content.indexOf('Message ID:');
+    const bodyIndex = content.indexOf('Loop Curia in.');
+    expect(preambleIndex).toBeLessThan(messageIdIndex);
+    expect(messageIdIndex).toBeLessThan(bodyIndex);
+  });
+
+  it('omits Message ID from CC preamble when nylasMessageId is absent', async () => {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+
+    const tasks: AgentTaskEvent[] = [];
+    bus.subscribe('agent.task', 'agent', (e) => tasks.push(e as AgentTaskEvent));
+
+    const dispatcher = new Dispatcher({ bus, logger });
+    dispatcher.register();
+
+    const event = createInboundMessage({
+      conversationId: 'email:thread-cc-no-msgid',
+      channelId: 'email',
+      accountId: 'curia',
+      senderId: 'joseph@example.com',
+      content: 'No message ID here.',
+      metadata: { curiaRole: 'cc', primaryRecipientEmails: ['nik@example.com'] },
+    });
+
+    await bus.publish('channel', event);
+
+    expect(tasks).toHaveLength(1);
+    const content = tasks[0]!.payload.content;
+    expect(content).toContain('[OWNER CC');
+    expect(content).not.toContain('Message ID:');
+    // Account line still present
+    expect(content).toContain('Account: curia');
   });
 
   it('does not prepend [OWNER CC] preamble when curiaRole is "to"', async () => {
