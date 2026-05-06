@@ -45,7 +45,7 @@ export interface CreateEntityOptions {
 
 export interface StoreFactResult {
   stored: boolean;
-  /** The pipeline outcome — lets callers distinguish create/update from conflict/rejected
+  /** The pipeline outcome — lets callers distinguish create/update from conflict / entity_not_found / rate_limited
    *  and take action accordingly (e.g. surfacing a conflict to the CEO). */
   action: 'created' | 'updated' | 'conflict' | 'entity_not_found' | 'rate_limited';
   /** The ID of the persisted (or existing) fact node, if stored is true. */

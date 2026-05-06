@@ -122,8 +122,8 @@ describe('MemoryValidator', () => {
         label: 'One more fact',
         source: agentTaskKey,
       });
-      expect(result.action).toBe('rejected');
-      expect((result as { action: 'rejected'; reason: string }).reason).toContain('rate limit');
+      expect(result.action).toBe('rate_limited');
+      expect((result as { action: 'rate_limited'; reason: string }).reason).toContain('rate limit');
     });
 
     it('allows writes before the limit is reached', async () => {
@@ -167,7 +167,7 @@ describe('MemoryValidator', () => {
         label: 'Blocked',
         source: agentTaskKey,
       });
-      expect(blocked.action).toBe('rejected');
+      expect(blocked.action).toBe('rate_limited');
 
       // Reset and try again
       validator.resetRateLimit(agentTaskKey);
