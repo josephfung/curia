@@ -47,7 +47,7 @@ export interface StoreFactResult {
   stored: boolean;
   /** The pipeline outcome — lets callers distinguish create/update from conflict/rejected
    *  and take action accordingly (e.g. surfacing a conflict to the CEO). */
-  action: 'created' | 'updated' | 'conflict' | 'rejected';
+  action: 'created' | 'updated' | 'conflict' | 'entity_not_found' | 'rate_limited';
   /** The ID of the persisted (or existing) fact node, if stored is true. */
   nodeId?: string;
   /** The sensitivity level that was assigned to the node (for audit event emission). */
@@ -71,6 +71,22 @@ export interface QueryResult {
   /** Non-fact nodes directly connected to the entity, with the edge that links them. */
   relationships: Array<{ edge: KgEdge; node: KgNode }>;
 }
+
+// -- resolveOrCreate types --
+
+export interface ResolveOrCreateOptions {
+  label: string;
+  type: NodeType;
+  source: string;
+  /** Confidence to use when auto-creating the entity. Defaults to 0.6 — lower than
+   *  the createEntity default (0.7) to reflect that an auto-created node has no
+   *  prior context confirming its identity. */
+  confidence?: number;
+}
+
+export type ResolveOrCreateResult =
+  | { kind: 'found' | 'created'; node: KgNode }
+  | { kind: 'ambiguous'; candidates: KgNode[] };
 
 // Fact node types — used to distinguish fact nodes from entity nodes when walking edges.
 // Per types.ts, 'fact' is the only node type that carries atomic facts about entities.
@@ -240,6 +256,48 @@ export class EntityMemory {
   }
 
   /**
+   * Find or create an entity node by label.
+   *
+   * Resolution logic (in order):
+   *   0 matches → create via createEntity(), return { kind: 'created', node }
+   *   1 match   → return { kind: 'found', node }
+   *   2+ matches, one has the expected type → return { kind: 'found', node: typeMatch }
+   *   2+ matches, no type match → return { kind: 'ambiguous', candidates }
+   *
+   * This is the shared primitive used by both memory-store (agent-directed writes)
+   * and extract-facts (background batch extraction). Callers handle 'ambiguous'
+   * differently: memory-store surfaces candidates to the agent for disambiguation;
+   * extract-facts takes candidates[0] to avoid stalling a batch job.
+   */
+  async resolveOrCreate(options: ResolveOrCreateOptions): Promise<ResolveOrCreateResult> {
+    const matches = await this.store.findNodesByLabel(options.label);
+
+    if (matches.length === 0) {
+      const { entity } = await this.createEntity({
+        type: options.type,
+        label: options.label,
+        properties: {},
+        source: options.source,
+        confidence: options.confidence ?? 0.6,
+      });
+      return { kind: 'created', node: entity };
+    }
+
+    if (matches.length === 1) {
+      return { kind: 'found', node: matches[0]! };
+    }
+
+    // 2+ matches — prefer a node whose type matches the caller's expected type.
+    const typeMatch = matches.find(n => n.type === options.type);
+    if (typeMatch) {
+      return { kind: 'found', node: typeMatch };
+    }
+
+    // No type match — caller must ask the user to pick one.
+    return { kind: 'ambiguous', candidates: matches };
+  }
+
+  /**
    * Store a fact about an entity, running it through the full validation pipeline:
    * rate limiting → deduplication → (optionally) contradiction detection.
    *
@@ -373,8 +431,11 @@ export class EntityMemory {
           existingNodeId: result.existingNodeId,
         };
 
-      case 'rejected':
-        return { stored: false, action: 'rejected', conflict: result.reason };
+      case 'entity_not_found':
+        return { stored: false, action: 'entity_not_found', conflict: result.reason };
+
+      case 'rate_limited':
+        return { stored: false, action: 'rate_limited', conflict: result.reason };
     }
   }
 
