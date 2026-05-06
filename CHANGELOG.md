@@ -13,8 +13,17 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Added
+- **Coordinator memory workflow** — new `## Memory` section in the coordinator prompt with step-by-step guidance on storing facts (`memory-store`) and proactive recall (`memory-query`); covers known contacts, non-contact entities, decay class selection, and disambiguation.
+- **`EntityMemory.resolveOrCreate()`** — shared find-or-create primitive extracted from `extract-facts` and now used by both `memory-store` and `extract-facts`, eliminating code duplication and ensuring consistent entity resolution across the system.
+
+### Changed
+- **`memory-store`** — entity names that don't exist in the KG are now auto-created (via `resolveOrCreate`) rather than returning a rejection; `entity_type` optional input added to hint the node type on creation.
+- **`extract-facts`** — entity resolution refactored to use `EntityMemory.resolveOrCreate()` (no behaviour change).
+
 ### Fixed
 
+- **Silent memory store failure** — `memory-store` no longer returns `action: 'rejected'` conflating two unrelated outcomes; distinct codes `entity_not_found` and `rate_limited` are now returned so the coordinator can respond appropriately to each.
 - **Observation-mode draft sent to wrong address** — the dispatcher now includes `From: <sender email>` in the `[OBSERVATION MODE — monitored inbox]` preamble. Without it, the email-triage agent had no authoritative sender address and inferred the reply `to` from `email-list` history, picking a stale address for the same contact. The coordinator delegation template and email-triage system prompt are updated to forward and mandate use of the `From:` value. The `From:` value is sanitized against prompt injection (newlines, angle brackets stripped; capped at 254 chars) and omitted with a warning when the email adapter reports no sender (`unknown` sentinel), matching the defensive pattern already applied to CC-path recipient addresses.
 - **CC reply routed to wrong account** — the dispatcher now includes `Message ID` and `Account` in the `[OWNER CC —]` preamble, mirroring the observation-mode pattern. Without these identifiers the coordinator couldn't call `email-reply` and fell back to `email-draft-save`, where it misread the context and drafted in the CEO's account instead of Curia's. The coordinator system prompt is updated with an explicit rule for CC'd emails: use `email-reply` with the preamble's Message ID, never `email-draft-save` with the CEO's account name. Fixes test 7.1 failure.
 - **`send-draft` not account-aware** — the skill now auto-discovers which email account owns a draft when the `account` input is omitted, searching all configured accounts instead of defaulting to the primary. Sends use the discovered account's credentials, and missing drafts produce a clear error instead of silently falling back to draft creation. Fixes #455.
