@@ -124,7 +124,8 @@ export type ValidationResult =
   | { action: 'create'; validated: ValidatedFactData }
   | { action: 'update'; existingNodeId: string; mergedProperties: Record<string, unknown> }
   | { action: 'conflict'; existingNodeId: string; reason: string }
-  | { action: 'rejected'; reason: string };
+  | { action: 'entity_not_found'; reason: string }
+  | { action: 'rate_limited'; reason: string };
 
 // -- Search result (semantic or label-based) --
 export interface SearchResult {
