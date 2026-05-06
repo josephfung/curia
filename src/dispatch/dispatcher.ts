@@ -674,9 +674,28 @@ export class Dispatcher {
       // no sender email in its context and will infer it from email-list results — which
       // can return stale or wrong addresses (root cause of skyphysio50 incident, 2026-05-06).
       // Message ID is only present when the email adapter has surfaced it via metadata.
+      //
+      // Sanitize senderId before injection — the From header is attacker-controlled and this
+      // preamble is injected after the injection scanner has run on payload.content. Mirror
+      // the sanitization applied to CC-path recipient addresses and nylasMessageId above.
+      const sanitizedSenderId = typeof payload.senderId === 'string'
+        ? payload.senderId.replace(/[\n\r\[\]<>]/g, '').trim().slice(0, 254)
+        : '';
+      // 'unknown' is the message-converter sentinel for a missing From header — it is not a
+      // real address. Omit the From: line rather than forward a value the LLM cannot
+      // distinguish from a real address and will blindly use as the reply-to destination.
+      const fromLine = sanitizedSenderId && sanitizedSenderId !== 'unknown'
+        ? `From: ${sanitizedSenderId}\n`
+        : '';
+      if (!fromLine) {
+        this.logger.warn(
+          { channelId: payload.channelId, accountId: observingAccountId },
+          'Observation-mode preamble: senderId is empty or unknown — omitting From: line; email-triage will lack authoritative sender address',
+        );
+      }
       const identifierBlock = nylasMessageId
-        ? `Message ID: ${nylasMessageId}\nAccount: ${observingAccountId ?? 'primary'}\nFrom: ${payload.senderId}\n\n`
-        : `Account: ${observingAccountId ?? 'primary'}\nFrom: ${payload.senderId}\n\n`;
+        ? `Message ID: ${nylasMessageId}\nAccount: ${observingAccountId ?? 'primary'}\n${fromLine}\n`
+        : `Account: ${observingAccountId ?? 'primary'}\n${fromLine}\n`;
 
       taskContent =
         `[OBSERVATION MODE — monitored inbox]\n` +
