@@ -103,22 +103,42 @@ describe('MemoryStoreHandler', () => {
   // ── Entity resolution ─────────────────────────────────────────────────────
 
   describe('entity resolution', () => {
-    it('returns rejected when entity label is not found', async () => {
+    it('auto-creates entity when label is not found and stores the fact', async () => {
+      // resolveOrCreate creates the entity automatically — no pre-existing node needed
       const { mem } = makeEntityMemory();
       const result = await handler.execute(makeCtx(mem, VALID_INPUT));
 
       expect(result.success).toBe(true);
       const data = (result as { success: true; data: Record<string, unknown> }).data;
-      expect(data.stored).toBe(false);
-      expect(data.action).toBe('rejected');
-      expect(String(data.reason)).toMatch(/not found/i);
+      expect(data.stored).toBe(true);
+      expect(data.action).toBe('created');
     });
 
-    it('resolves entity by direct node ID when label lookup finds nothing', async () => {
+    it('uses entity_type when auto-creating a new entity', async () => {
       const { mem } = makeEntityMemory();
-      const { entity } = await mem.createEntity({ type: 'person', label: 'Jane Doe', properties: {}, source: 'test' });
+      const result = await handler.execute(makeCtx(mem, {
+        ...VALID_INPUT,
+        entity: 'Q3 Budget',
+        entity_type: 'project',
+      }));
 
-      // Pass the UUID directly instead of the label
+      expect(result.success).toBe(true);
+      const data = (result as { success: true; data: Record<string, unknown> }).data;
+      expect(data.stored).toBe(true);
+      expect(data.action).toBe('created');
+
+      // Verify the auto-created node has the specified type
+      const nodes = await mem.findEntities('Q3 Budget');
+      expect(nodes[0]?.type).toBe('project');
+    });
+
+    it('resolves entity by direct UUID when passed a node ID', async () => {
+      const { mem } = makeEntityMemory();
+      const { entity } = await mem.createEntity({
+        type: 'person', label: 'Jane Doe', properties: {}, source: 'test',
+      });
+
+      // Pass the UUID directly — bypasses label lookup, goes through getEntity()
       const result = await handler.execute(makeCtx(mem, { ...VALID_INPUT, entity: entity.id }));
 
       expect(result.success).toBe(true);
@@ -127,19 +147,39 @@ describe('MemoryStoreHandler', () => {
       expect(data.action).toBe('created');
     });
 
-    it('returns ambiguous when multiple nodes share the same label', async () => {
-      // KG upsert prevents duplicates via createEntity — insert a second node
-      // directly through the store to simulate pre-migration duplicates.
-      const { mem, store } = makeEntityMemory();
-      await mem.createEntity({ type: 'person', label: 'Jane Doe', properties: {}, source: 'test' });
-      await store.createNode({ type: 'person', label: 'Jane Doe', properties: {}, source: 'test' });
+    it('returns entity_not_found when a UUID entity no longer exists', async () => {
+      const { mem } = makeEntityMemory();
+      const result = await handler.execute(makeCtx(mem, {
+        ...VALID_INPUT,
+        entity: '00000000-0000-0000-0000-000000000000',
+      }));
 
+      expect(result.success).toBe(true);
+      const data = (result as { success: true; data: Record<string, unknown> }).data;
+      expect(data.stored).toBe(false);
+      expect(data.action).toBe('entity_not_found');
+    });
+
+    it('returns ambiguous when multiple nodes share the same label with no type match', async () => {
+      const { mem, store } = makeEntityMemory();
+      // Insert two nodes with the same label via the store to bypass upsert
+      await store.createNode({ type: 'person', label: 'Jane Doe', properties: {}, source: 'test' });
+      await store.createNode({ type: 'organization', label: 'Jane Doe', properties: {}, source: 'test' });
+
+      // No type hint provided — falls back to 'concept', which doesn't match either
       const result = await handler.execute(makeCtx(mem, VALID_INPUT));
 
       expect(result.success).toBe(true);
       const data = (result as { success: true; data: { ambiguous: boolean; candidates: unknown[] } }).data;
       expect(data.ambiguous).toBe(true);
       expect(data.candidates).toHaveLength(2);
+    });
+
+    it('rejects unknown entity_type', async () => {
+      const { mem } = makeEntityMemory();
+      const result = await handler.execute(makeCtx(mem, { ...VALID_INPUT, entity_type: 'spaceship' }));
+      expect(result.success).toBe(false);
+      expect((result as { success: false; error: string }).error).toMatch(/entity_type/i);
     });
   });
 
@@ -211,13 +251,15 @@ describe('MemoryStoreHandler', () => {
     });
   });
 
-  // ── Mocked entityMemory for updated / rejected outcomes ───────────────────
+  // ── Mocked entityMemory for updated / rate_limited / entity_not_found outcomes ───
 
   describe('action: updated', () => {
     it('returns updated with node_id and sensitivity when storeFact detects a near-duplicate', async () => {
       const mockEntityMemory = {
-        findEntities: vi.fn().mockResolvedValue([{ id: 'entity-1', label: 'Jane Doe', type: 'person' }]),
-        getEntity: vi.fn(),
+        resolveOrCreate: vi.fn().mockResolvedValue({
+          kind: 'found',
+          node: { id: 'entity-1', label: 'Jane Doe', type: 'person' },
+        }),
         storeFact: vi.fn().mockResolvedValue({
           stored: true,
           action: 'updated',
@@ -243,14 +285,16 @@ describe('MemoryStoreHandler', () => {
     });
   });
 
-  describe('action: rejected', () => {
-    it('returns rejected with reason when storeFact reports rate-limit or entity-gone', async () => {
+  describe('action: rate_limited', () => {
+    it('returns rate_limited with reason when storeFact hits the write limit', async () => {
       const mockEntityMemory = {
-        findEntities: vi.fn().mockResolvedValue([{ id: 'entity-1', label: 'Jane Doe', type: 'person' }]),
-        getEntity: vi.fn(),
+        resolveOrCreate: vi.fn().mockResolvedValue({
+          kind: 'found',
+          node: { id: 'entity-1', label: 'Jane Doe', type: 'person' },
+        }),
         storeFact: vi.fn().mockResolvedValue({
           stored: false,
-          action: 'rejected',
+          action: 'rate_limited',
           conflict: 'Memory write rate limit exceeded (50 per agent per task)',
         }),
       };
@@ -266,8 +310,37 @@ describe('MemoryStoreHandler', () => {
       expect(result.success).toBe(true);
       const data = (result as { success: true; data: Record<string, unknown> }).data;
       expect(data.stored).toBe(false);
-      expect(data.action).toBe('rejected');
+      expect(data.action).toBe('rate_limited');
       expect(String(data.reason)).toMatch(/rate limit/i);
+    });
+  });
+
+  describe('action: entity_not_found (validator race)', () => {
+    it('returns entity_not_found when storeFact reports entity gone at write time', async () => {
+      const mockEntityMemory = {
+        resolveOrCreate: vi.fn().mockResolvedValue({
+          kind: 'found',
+          node: { id: 'entity-1', label: 'Jane Doe', type: 'person' },
+        }),
+        storeFact: vi.fn().mockResolvedValue({
+          stored: false,
+          action: 'entity_not_found',
+          conflict: 'Entity node not found: entity-1',
+        }),
+      };
+      const ctx = {
+        input: VALID_INPUT,
+        secret: () => 'test-key',
+        log: pino({ level: 'silent' }),
+        entityMemory: mockEntityMemory,
+      } as unknown as SkillContext;
+
+      const result = await handler.execute(ctx);
+
+      expect(result.success).toBe(true);
+      const data = (result as { success: true; data: Record<string, unknown> }).data;
+      expect(data.stored).toBe(false);
+      expect(data.action).toBe('entity_not_found');
     });
   });
 
@@ -276,8 +349,10 @@ describe('MemoryStoreHandler', () => {
   describe('error handling', () => {
     it('returns success:false when storeFact throws unexpectedly', async () => {
       const mockEntityMemory = {
-        findEntities: vi.fn().mockResolvedValue([{ id: 'entity-1', label: 'Jane Doe', type: 'person' }]),
-        getEntity: vi.fn(),
+        resolveOrCreate: vi.fn().mockResolvedValue({
+          kind: 'found',
+          node: { id: 'entity-1', label: 'Jane Doe', type: 'person' },
+        }),
         storeFact: vi.fn().mockRejectedValue(new Error('DB connection lost')),
       };
       const ctx = {

@@ -1,22 +1,30 @@
 // handler.ts — memory-store skill.
 //
 // Writes a named fact about a known entity to the knowledge graph.
-// Resolves the entity by label or direct node ID, then delegates to
-// EntityMemory.storeFact() which runs the full validation pipeline
-// (rate limit → contradiction detection → dedup → persist).
+//
+// Entity resolution:
+//   - If `entity` is a UUID → direct getEntity() lookup; returns entity_not_found if gone.
+//   - Otherwise → entityMemory.resolveOrCreate() which finds or auto-creates the entity.
 //
 // Possible outcomes:
-//   created   — new fact node created and linked to the entity
-//   updated   — near-duplicate found; existing node merged in place
-//   conflict  — contradicts an existing attribute fact; agent should surface to CEO
-//   rejected  — rate limit exceeded or entity node no longer exists
+//   created       — new fact node created and linked to the entity
+//   updated       — near-duplicate found; existing node merged in place
+//   conflict      — contradicts an existing attribute fact; agent should surface to CEO
+//   entity_not_found — UUID entity no longer exists, or entity gone between resolution and write
+//   rate_limited  — write limit (50 per task) exceeded
 
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
-import { DECAY_CLASSES, SENSITIVITY_LEVELS } from '../../src/memory/types.js';
-import type { DecayClass, Sensitivity } from '../../src/memory/types.js';
+import { DECAY_CLASSES, SENSITIVITY_LEVELS, NODE_TYPES } from '../../src/memory/types.js';
+import type { DecayClass, Sensitivity, NodeType } from '../../src/memory/types.js';
 
 const DECAY_CLASSES_SET: ReadonlySet<string> = new Set(DECAY_CLASSES);
 const SENSITIVITY_LEVELS_SET: ReadonlySet<string> = new Set(SENSITIVITY_LEVELS);
+// 'fact' is not a valid entity type — entities hold facts as linked nodes, not as themselves.
+const ENTITY_NODE_TYPES = NODE_TYPES.filter(t => t !== 'fact');
+const ENTITY_NODE_TYPES_SET: ReadonlySet<string> = new Set(ENTITY_NODE_TYPES);
+
+// UUID v4 pattern — used to detect when the caller is passing a node ID directly.
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export class MemoryStoreHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {
@@ -29,6 +37,7 @@ export class MemoryStoreHandler implements SkillHandler {
       decay_class,
       sensitivity,
       sensitivity_category,
+      entity_type,
     } = ctx.input as {
       entity?: string;
       field?: string;
@@ -38,6 +47,7 @@ export class MemoryStoreHandler implements SkillHandler {
       decay_class?: string;
       sensitivity?: string;
       sensitivity_category?: string;
+      entity_type?: string;
     };
 
     // --- Input validation ---
@@ -75,6 +85,13 @@ export class MemoryStoreHandler implements SkillHandler {
       };
     }
 
+    if (entity_type !== undefined && !ENTITY_NODE_TYPES_SET.has(entity_type)) {
+      return {
+        success: false,
+        error: `Unknown entity_type: "${entity_type}". Valid values: ${ENTITY_NODE_TYPES.join(', ')}`,
+      };
+    }
+
     if (!ctx.entityMemory) {
       ctx.log.error('memory-store: entity memory not available');
       return { success: false, error: 'Entity memory not available — database not configured' };
@@ -83,39 +100,51 @@ export class MemoryStoreHandler implements SkillHandler {
     try {
       // --- Entity resolution ---
       //
-      // Try label-based lookup first (case-insensitive). If nothing is found,
-      // fall back to a direct ID lookup — this allows callers to pass either
-      // a human-readable name or a UUID obtained from a previous KG query.
+      // UUID → direct getEntity() lookup (caller has a specific node ID).
+      // Plain name → resolveOrCreate() which finds or auto-creates the entity.
+      //
+      // This means callers can pass either a human-readable name or a UUID obtained
+      // from contact-lookup / a previous KG query. Names always succeed (auto-create
+      // if not found); UUIDs return entity_not_found if the node was deleted.
 
-      const resolved = await resolveEntity(ctx, entity);
+      const resolvedEntityType = (entity_type as NodeType | undefined) ?? 'concept';
+      let entityNode: KgNode;
 
-      if (resolved.kind === 'ambiguous') {
-        // Multiple nodes share the same label — caller must disambiguate.
-        // We reuse the candidates already fetched by resolveEntity rather than
-        // calling findEntities a second time (avoids a race window and extra DB round-trip).
-        ctx.log.debug({ entity, count: resolved.candidates.length }, 'memory-store: ambiguous entity label');
-        return {
-          success: true,
-          data: {
-            ambiguous: true,
-            candidates: resolved.candidates.map(n => ({ id: n.id, label: n.label, type: n.type })),
-          },
-        };
+      if (UUID_PATTERN.test(entity)) {
+        const byId = await ctx.entityMemory.getEntity(entity);
+        if (!byId) {
+          ctx.log.debug({ entity }, 'memory-store: entity UUID not found in KG');
+          return {
+            success: true,
+            data: {
+              stored: false,
+              action: 'entity_not_found',
+              reason: `Entity node not found: "${entity}". The entity may have been deleted — retry with the entity name to auto-create it.`,
+            },
+          };
+        }
+        entityNode = byId;
+      } else {
+        const resolved = await ctx.entityMemory.resolveOrCreate({
+          label: entity,
+          type: resolvedEntityType,
+          source,
+          confidence: 0.6,
+        });
+
+        if (resolved.kind === 'ambiguous') {
+          ctx.log.debug({ entity, count: resolved.candidates.length }, 'memory-store: ambiguous entity label');
+          return {
+            success: true,
+            data: {
+              ambiguous: true,
+              candidates: resolved.candidates.map(n => ({ id: n.id, label: n.label, type: n.type })),
+            },
+          };
+        }
+
+        entityNode = resolved.node;
       }
-
-      if (resolved.kind === 'not_found') {
-        ctx.log.debug({ entity }, 'memory-store: entity not found in KG');
-        return {
-          success: true,
-          data: {
-            stored: false,
-            action: 'rejected',
-            reason: `Entity not found in knowledge graph: "${entity}". Create the entity first or check the spelling.`,
-          },
-        };
-      }
-
-      const entityNode = resolved.node;
 
       // --- Fact storage ---
       //
@@ -137,9 +166,6 @@ export class MemoryStoreHandler implements SkillHandler {
       });
 
       if (result.stored) {
-        // The execution-layer observer logs sensitivityFallback via the audit event,
-        // but if this handler is called outside that observer (e.g. in a direct test or
-        // future CLI integration), the fallback would otherwise be silent. Log defensively.
         if (result.sensitivityFallback) {
           ctx.log.warn(
             { entity, field, nodeId: result.nodeId, sensitivity: result.sensitivity },
@@ -161,7 +187,6 @@ export class MemoryStoreHandler implements SkillHandler {
         };
       }
 
-      // stored === false: conflict or rejected
       if (result.action === 'conflict') {
         ctx.log.warn(
           { entity, field, existingNodeId: result.existingNodeId },
@@ -178,13 +203,26 @@ export class MemoryStoreHandler implements SkillHandler {
         };
       }
 
-      // action === 'rejected' (rate limit or entity node no longer exists)
-      ctx.log.warn({ entity, field, reason: result.conflict }, 'memory-store: fact rejected');
+      if (result.action === 'entity_not_found') {
+        // Validator race guard — entity existed at resolution time but was deleted before write.
+        ctx.log.warn({ entity, field }, 'memory-store: entity node gone at write time — validator race');
+        return {
+          success: true,
+          data: {
+            stored: false,
+            action: 'entity_not_found',
+            reason: result.conflict,
+          },
+        };
+      }
+
+      // action === 'rate_limited'
+      ctx.log.warn({ entity, field, reason: result.conflict }, 'memory-store: write rate limit reached');
       return {
         success: true,
         data: {
           stored: false,
-          action: 'rejected',
+          action: 'rate_limited',
           reason: result.conflict,
         },
       };
@@ -198,32 +236,3 @@ export class MemoryStoreHandler implements SkillHandler {
 // -- Helpers --
 
 type KgNode = import('../../src/memory/types.js').KgNode;
-
-/** Discriminated result from entity resolution. */
-type ResolveResult =
-  | { kind: 'found'; node: KgNode }
-  | { kind: 'ambiguous'; candidates: KgNode[] }
-  | { kind: 'not_found' };
-
-/** Resolve an entity by label or direct ID.
- *
- * Returns candidates directly in the ambiguous case so the handler can build
- * the response without a second findEntities call, which would introduce a
- * race window and duplicate DB work.
- */
-async function resolveEntity(ctx: SkillContext, entity: string): Promise<ResolveResult> {
-  const mem = ctx.entityMemory!;
-
-  const matches = await mem.findEntities(entity);
-
-  if (matches.length === 1) return { kind: 'found', node: matches[0]! };
-  if (matches.length > 1) return { kind: 'ambiguous', candidates: matches };
-
-  // Zero label matches — try interpreting `entity` as a direct node ID.
-  // This handles callers that have a UUID from a previous KG query and
-  // want to attach a fact without doing another findEntities round-trip.
-  const byId = await mem.getEntity(entity);
-  if (byId) return { kind: 'found', node: byId };
-
-  return { kind: 'not_found' };
-}
