@@ -59,7 +59,8 @@ export class MemoryValidator {
    * it requires attribute metadata that not all callers have.
    *
    * Returns a ValidationResult discriminated union:
-   * - 'rejected' if the rate limit is exceeded or the entity node does not exist
+   * - 'rate_limited' if the rate limit is exceeded
+   * - 'entity_not_found' if the entity node does not exist
    * - 'update' if a near-duplicate fact already exists (caller should merge)
    * - 'create' with validated fact data (label, properties, temporal, embedding) ready to persist
    */
