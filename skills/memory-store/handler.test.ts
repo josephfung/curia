@@ -2,7 +2,7 @@
 //
 // Uses real EntityMemory (backed by in-memory KG store) for entity resolution
 // and the full created/conflict pipeline. Uses a mock entityMemory stub for
-// the updated and rejected outcomes, which require state that is hard to
+// the updated, rate_limited, and entity_not_found outcomes, which require state that is hard to
 // construct reliably with the in-memory backend.
 
 import { describe, it, expect, vi } from 'vitest';
