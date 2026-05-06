@@ -42,6 +42,10 @@ divergence makes `memory-store` fragile and harder to maintain.
 - Semantic search / fuzzy matching within `resolveOrCreate` for near-name variants
 - Disambiguation or creation for non-contact entities (organizations, venues, concepts)
 
+**Out of scope (tracked in #468):**
+- Memory access for specialist agents (email-triage and others) — they will need
+  `memory-query` pinned and their own `## Memory` prompt section
+
 ---
 
 ## Design
@@ -165,19 +169,21 @@ Trigger: CEO explicitly asks to remember something ("remember that…", "note th
 
 Workflow:
 1. Identify the subject entity (who or what the fact is about).
-2. If the entity is a **known contact**, call `contact-lookup` first to get their
-   `kg_node_id` and pass it as `entity` — this ensures the stored fact is anchored to
-   the same node the contact system uses, keeping entity context enrichment coherent.
-   - **0 matches** — call `contact-create` (name only), use the returned `kg_node_id`.
-   - **1 match** — use `kg_node_id` directly.
-   - **2+ matches** — ask the CEO to disambiguate. Do not guess.
-3. If the entity is **not a contact** (a business, venue, concept, etc.), pass the name
-   directly as `entity` — `memory-store` will find or create the KG node automatically.
-   Note: non-contact entity support is limited (see issue #467).
-4. Choose `decay_class`:
+2. Resolve the entity to determine what to pass as the `entity` parameter:
+   - If the entity is a **known contact**, call `contact-lookup` first to get their
+     `kg_node_id` — this ensures the stored fact is anchored to the same node the
+     contact system uses, keeping entity context enrichment coherent.
+     - **0 matches** — call `contact-create` (name only), use the returned `kg_node_id`.
+     - **1 match** — use `kg_node_id` directly.
+     - **2+ matches** — ask the CEO to disambiguate. Do not proceed until resolved.
+   - If the entity is **not a contact** (a business, venue, concept, etc.), use the
+     plain name — `memory-store` will find or create the KG node automatically.
+     Note: non-contact entity support is limited (see issue #467).
+3. Choose `decay_class`:
    - `permanent` — deeply stable facts (birthday, legal name)
    - `slow_decay` — preferences and standing facts that change occasionally (default)
    - `fast_decay` — current-situation facts (active project, this week's priority)
+4. Call `memory-store` with the resolved `entity` and chosen `decay_class`.
 5. Handle outcomes:
    - `stored: true` — confirm naturally ("Got it, I have that on file.")
    - `ambiguous` — candidates returned; ask CEO to clarify which entity they meant.
