@@ -200,18 +200,16 @@ ${text}`,
             ? Math.min(1, Math.max(0, fact.confidence))
             : 0.7;
 
-          // Resolve entity node — require a type match to avoid attaching facts to a
-          // same-label entity of the wrong type (e.g. a person named the same as an org).
-          // If no same-type match exists, create a new entity node.
-          const matches = await ctx.entityMemory.findEntities(subject);
-          const match = matches.find(n => n.type === subjectType);
-          const entityNode = match ?? (await ctx.entityMemory.createEntity({
-            type: subjectType,
+          // Resolve entity node — finds or auto-creates via resolveOrCreate().
+          // Ambiguous case (2+ nodes, no type match) takes candidates[0] rather than
+          // stalling the background batch job with a disambiguation loop.
+          const resolved = await ctx.entityMemory.resolveOrCreate({
             label: subject,
-            properties: {},
+            type: subjectType,
             source,
             confidence: 0.6,
-          })).entity;
+          });
+          const entityNode = resolved.kind === 'ambiguous' ? resolved.candidates[0]! : resolved.node;
 
           // Label format: "<attribute>: <value>" — human-readable and dedup-stable.
           // The validator uses semantic similarity on this label for near-duplicate detection.
