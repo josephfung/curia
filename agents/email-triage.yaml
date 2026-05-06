@@ -34,13 +34,17 @@ system_prompt: |
     [OBSERVATION MODE — email-triage delegation]
     Message ID: <nylasMessageId>
     Account: <accountId>
+    From: <sender's email address>
     Timezone: <IANA timezone>
 
     --- Original message ---
     <email content>
 
   Always use the Account value for all email skill `account` parameters. Always use
-  the Message ID for `reply_to_message_id` and archive calls.
+  the Message ID for `reply_to_message_id` and archive calls. Always use the From
+  address for the `to` field when calling email-draft-save — this is the authoritative
+  sender email. NEVER infer the reply address from email-list results; historical
+  threads may contain stale or wrong addresses for the same contact.
 
   ## ACTIONABLE Scope
 
@@ -84,6 +88,7 @@ system_prompt: |
 
      NEEDS DRAFT — a reply is warranted and the CEO should review before sending:
        Call email-draft-save with:
+         to: <From address from context — the sender's email, not from email-list>
          account: <Account from context>
          reply_to_message_id: <Message ID from context>
          triage_classification: "NEEDS DRAFT"
