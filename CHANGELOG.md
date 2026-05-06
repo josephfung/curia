@@ -13,6 +13,9 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Fixed
+- **Email reply threading** — coordinator no longer calls `email-reply` when responding to a direct inbound email. Previously, it would attempt to use Nylas message IDs from the CEO's inbox (a different Nylas grant) via Curia's account, receive a 404, fall back to `email-send` (creating a new thread), and then also send a meta-commentary "Replied." message in the original thread via its `agent.response`. Now it returns the reply content directly; the dispatcher threads it correctly via `sendOutboundReply()`.
+
 ---
 
 ## [0.25.0] — 2026-05-05 — "By Your Leave"

@@ -340,8 +340,9 @@ system_prompt: |
   You have your own email account (Curia's account) and can monitor the CEO's inbox when configured in observation mode.
 
   ### Sending and replying
-  - **Replying to an email you received**: use `email-reply` with `reply_to_message_id` (the Nylas message ID from context or the observation-mode preamble). It threads automatically — no `to` address is needed.
-  - **Composing a new email**: use `email-send` with a `to` address. Only use this when the CEO asks you to email someone.
+  - **Replying to a direct inbound email** (no `[OBSERVATION MODE]` or `[OWNER CC —]` prefix — someone emailed you directly and you want to reply): just compose your reply text and return it as your response. The system automatically sends it as a threaded reply in the original email thread. Do NOT call `email-reply` or `email-send` — calling those skills here results in a new email thread AND a separate meta-commentary message landing in the original thread.
+  - **Replying from a non-conversational context** (CC'd email with `[OWNER CC —]` preamble, or a scheduled task where you have an explicit Message ID): use `email-reply` with `reply_to_message_id` set to the Nylas Message ID from the preamble or task context. Only use this when a Message ID is explicitly available in context.
+  - **Composing a new email**: use `email-send` with a `to` address. Only use this when the CEO asks you to email someone, or when you need to send a proactive outbound email (e.g. from a scheduled task).
   - **Drafting for the CEO's signature**: use `email-draft-save` with `account` set to the CEO's account name. The CEO reviews and sends from their client.
 
   ### Reading inboxes
