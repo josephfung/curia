@@ -720,10 +720,34 @@ export class Dispatcher {
         // comes from Nylas and is interpolated into the task preamble after the
         // injection scanner has run on payload.content.
         const rawNylasMessageId = meta?.nylasMessageId;
-        const nylasMessageId =
-          typeof rawNylasMessageId === 'string' && rawNylasMessageId.trim()
-            ? rawNylasMessageId.replace(/[\n\r\[\]<>]/g, '').trim().slice(0, 200)
-            : undefined;
+        let nylasMessageId: string | undefined;
+        if (typeof rawNylasMessageId === 'string' && rawNylasMessageId.trim()) {
+          const sanitized = rawNylasMessageId.replace(/[\n\r\[\]<>]/g, '').trim().slice(0, 200);
+          if (sanitized.length === 0) {
+            // Non-empty raw value collapsed to empty after sanitization — structurally
+            // suspicious (e.g. a message ID composed entirely of stripped characters).
+            // Omit from preamble and warn so operators have an audit trail.
+            // rawNylasMessageId is deliberately excluded from the log — it may be attacker-controlled.
+            this.logger.warn(
+              { channelId: payload.channelId, conversationId: payload.conversationId },
+              'CC preamble: nylasMessageId was non-empty but sanitized to empty — omitting Message ID from preamble',
+            );
+          } else {
+            nylasMessageId = sanitized;
+          }
+        } else {
+          // nylasMessageId absent or non-string — warn so operators can diagnose
+          // a coordinator that falls back to email-draft-save due to missing Message ID.
+          this.logger.warn(
+            {
+              channelId: payload.channelId,
+              conversationId: payload.conversationId,
+              senderId: redactSenderId(payload.senderId),
+              rawType: typeof rawNylasMessageId,
+            },
+            'CC preamble: nylasMessageId absent or invalid — Message ID omitted; coordinator may fall back to email-draft-save',
+          );
+        }
 
         this.logger.info(
           { channelId: payload.channelId, senderId: payload.senderId, primaryRecipients: recipientList },

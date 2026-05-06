@@ -978,6 +978,42 @@ describe('Dispatcher — CC role preamble', () => {
     expect(content).toContain('Account: curia');
   });
 
+  it('omits Message ID from CC preamble when nylasMessageId sanitizes to empty string', async () => {
+    // A message ID composed entirely of characters stripped by sanitization ([\n\r\[\]<>])
+    // should result in no Message ID line in the preamble — not an empty "Message ID: ".
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+
+    const tasks: AgentTaskEvent[] = [];
+    bus.subscribe('agent.task', 'agent', (e) => tasks.push(e as AgentTaskEvent));
+
+    const dispatcher = new Dispatcher({ bus, logger });
+    dispatcher.register();
+
+    const event = createInboundMessage({
+      conversationId: 'email:thread-cc-bad-msgid',
+      channelId: 'email',
+      accountId: 'curia',
+      senderId: 'joseph@example.com',
+      content: 'Suspicious message ID.',
+      metadata: {
+        curiaRole: 'cc',
+        primaryRecipientEmails: ['nik@example.com'],
+        nylasMessageId: '<<<>>>',  // entirely stripped by sanitization
+      },
+    });
+
+    await bus.publish('channel', event);
+
+    expect(tasks).toHaveLength(1);
+    const content = tasks[0]!.payload.content;
+    expect(content).toContain('[OWNER CC');
+    // Stripped-to-empty ID must not appear as "Message ID: " with no value
+    expect(content).not.toContain('Message ID:');
+    // Account line still present
+    expect(content).toContain('Account: curia');
+  });
+
   it('does not prepend [OWNER CC] preamble when curiaRole is "to"', async () => {
     const logger = createLogger('error');
     const bus = new EventBus(logger);
