@@ -714,12 +714,31 @@ export class Dispatcher {
         const recipientList = omittedCount > 0
           ? `${recipientListBase}, +${omittedCount} more`
           : recipientListBase;
+        // Extract the Nylas message ID from metadata so the coordinator can pass it
+        // to email-reply to thread a response from Curia's own account.
+        // Sanitize for the same reason as recipient addresses above — this value
+        // comes from Nylas and is interpolated into the task preamble after the
+        // injection scanner has run on payload.content.
+        const rawNylasMessageId = meta?.nylasMessageId;
+        const nylasMessageId =
+          typeof rawNylasMessageId === 'string' && rawNylasMessageId.trim()
+            ? rawNylasMessageId.replace(/[\n\r\[\]<>]/g, '').trim().slice(0, 200)
+            : undefined;
+
         this.logger.info(
           { channelId: payload.channelId, senderId: payload.senderId, primaryRecipients: recipientList },
           'CC role preamble injected — Curia was not the primary recipient',
         );
+        // Include Message ID and Account so the coordinator can call email-reply
+        // with the correct message ID, mirroring the observation-mode preamble pattern.
+        // Without these identifiers the coordinator cannot use email-reply and falls back
+        // to email-draft-save, where it has historically chosen the wrong account (CEO's).
+        const ccIdentifierBlock = nylasMessageId
+          ? `Message ID: ${nylasMessageId}\nAccount: ${payload.accountId ?? 'curia'}\n\n`
+          : `Account: ${payload.accountId ?? 'curia'}\n\n`;
         taskContent =
-          `[OWNER CC — this email was addressed to ${recipientList}; you were CC'd, not the primary recipient]\n\n` +
+          `[OWNER CC — this email was addressed to ${recipientList}; you were CC'd, not the primary recipient]\n` +
+          ccIdentifierBlock +
           taskContent;
       }
     }
