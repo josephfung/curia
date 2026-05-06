@@ -7,7 +7,7 @@ import { describe, it, expect } from 'vitest';
 import { KnowledgeGraphStore } from './knowledge-graph.js';
 import { EmbeddingService } from './embedding.js';
 import { EntityMemory } from './entity-memory.js';
-import { MemoryValidator } from './validation.js';
+import { MemoryValidator, MAX_WRITES_PER_AGENT_TASK } from './validation.js';
 import { createSilentLogger } from '../logger.js';
 
 function makeEntityMemory() {
@@ -99,7 +99,7 @@ describe('EntityMemory.resolveOrCreate', () => {
     expect(result.candidates).toHaveLength(2);
   });
 
-  it('uses the caller-supplied confidence when auto-creating (defaults to 0.6)', async () => {
+  it('uses the caller-supplied confidence when auto-creating', async () => {
     const { mem } = makeEntityMemory();
     const result = await mem.resolveOrCreate({
       label: 'New Concept',
@@ -111,6 +111,20 @@ describe('EntityMemory.resolveOrCreate', () => {
     expect(result.kind).toBe('created');
     if (result.kind !== 'created') throw new Error('narrowing');
     expect(result.node.temporal.confidence).toBe(0.4);
+  });
+
+  it('defaults confidence to 0.6 when omitted', async () => {
+    const { mem } = makeEntityMemory();
+    const result = await mem.resolveOrCreate({
+      label: 'Default Confidence Entity',
+      type: 'concept',
+      source: 'test',
+      // confidence omitted — should default to 0.6
+    });
+
+    expect(result.kind).toBe('created');
+    if (result.kind !== 'created') throw new Error('narrowing');
+    expect(result.node.temporal.confidence).toBe(0.6);
   });
 });
 
@@ -135,8 +149,8 @@ describe('EntityMemory.storeFact — updated action codes', () => {
     });
     const source = 'agent:coordinator/task:limit-test';
 
-    // Exhaust the 50-write limit without touching storeFact's DB path
-    for (let i = 0; i < 50; i++) {
+    // Exhaust the write limit without touching storeFact's DB path
+    for (let i = 0; i < MAX_WRITES_PER_AGENT_TASK; i++) {
       validator.recordWrite(source);
     }
 

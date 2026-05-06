@@ -8,7 +8,8 @@ import type { StoreFactOptions, ValidationResult } from './types.js';
 const DEDUP_SIMILARITY_THRESHOLD = 0.92;
 
 // Spec line 126: max writes per agent per task
-const MAX_WRITES_PER_AGENT_TASK = 50;
+// Exported so tests can exhaust the limit without hard-coding the magic number.
+export const MAX_WRITES_PER_AGENT_TASK = 50;
 
 /**
  * Memory validation gates per spec 01 (lines 107-131).

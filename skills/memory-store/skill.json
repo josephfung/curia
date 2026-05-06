@@ -1,7 +1,7 @@
 {
   "name": "memory-store",
   "description": "Write a named fact about a known entity to the knowledge graph. Resolves the entity by name (finding or auto-creating the KG node) or by node ID. Returns one of five outcomes: created (new fact node), updated (near-duplicate merged), conflict (contradicts an existing attribute fact — surface to CEO before proceeding), entity_not_found (UUID entity gone — retry with name), or rate_limited (write limit reached for this task). When multiple entities share the same name and none matches the expected type, returns an ambiguous response with candidates for disambiguation.",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "sensitivity": "normal",
   "action_risk": "low",
   "inputs": {

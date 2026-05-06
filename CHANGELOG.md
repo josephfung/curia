@@ -13,14 +13,6 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
-### Added
-- **Coordinator memory workflow** — new `## Memory` section in the coordinator prompt with step-by-step guidance on storing facts (`memory-store`) and proactive recall (`memory-query`); covers known contacts, non-contact entities, decay class selection, and disambiguation.
-- **`EntityMemory.resolveOrCreate()`** — shared find-or-create primitive extracted from `extract-facts` and now used by both `memory-store` and `extract-facts`, eliminating code duplication and ensuring consistent entity resolution across the system.
-
-### Changed
-- **`memory-store`** — entity names that don't exist in the KG are now auto-created (via `resolveOrCreate`) rather than returning a rejection; `entity_type` optional input added to hint the node type on creation.
-- **`extract-facts`** — entity resolution refactored to use `EntityMemory.resolveOrCreate()` (no behaviour change).
-
 ### Fixed
 
 - **Silent memory store failure** — `memory-store` no longer returns `action: 'rejected'` conflating two unrelated outcomes; distinct codes `entity_not_found` and `rate_limited` are now returned so the coordinator can respond appropriately to each.
@@ -41,6 +33,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **Coordinator memory workflow** — new `## Memory` section in the coordinator prompt with step-by-step guidance on storing facts (`memory-store`) and proactive recall (`memory-query`); covers known contacts, non-contact entities, decay class selection, and disambiguation.
+- **`EntityMemory.resolveOrCreate()`** — shared find-or-create primitive extracted from `extract-facts` and now used by both `memory-store` and `extract-facts`, eliminating code duplication and ensuring consistent entity resolution across the system.
 - **Approval expiry sweep** — new `approval-expiry-sweep` skill that hourly expires stale `pending_approval` rows and sends a batched CEO notification for high/critical tier expirations; added `findExpired()` and `expireRows()` to `ActionLogRepo`
 - **Pending-actions digest** — new `pending-actions-digest` skill that sends a daily 8 AM summary of all open approval requests to the CEO; added two scheduler entries to `agents/coordinator.yaml`
 - **Notification types** — added `approval_expired` and `pending_actions_digest` to `OutboundNotificationPayload.notificationType` union in `src/bus/events.ts`
@@ -51,6 +45,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
+- **`memory-store`** — entity names that don't exist in the KG are now auto-created (via `resolveOrCreate`) rather than returning a rejection; `entity_type` optional input added to hint the node type on creation.
+- **`extract-facts`** — entity resolution refactored to use `EntityMemory.resolveOrCreate()` (no behaviour change).
 - **`autonomy_action_log` table name** — renamed from `action_log` to `autonomy_action_log` for schema clarity. The `autonomy_` prefix groups it with `autonomy_config` and `autonomy_history`. Updated in ADR-018, issues #427/#428/#429. (spec 14, issue #148)
 - **DreamEngine** — now accepts an optional `AutonomyScoringPass` as a sibling pass, running on its own interval alongside memory decay. (spec 14, issue #148)
 - **Held-message notifications** — coordinator now describes the nature of the sender's request (not just subject/sender). Preview is 500-char plaintext with `totalLength` so the LLM can qualify partial reads. Channel name is now dynamic (email, Signal, etc.) instead of hardcoded.
