@@ -68,7 +68,7 @@ export class MemoryValidator {
     const writeCount = this.writeCounts.get(options.source) ?? 0;
     if (writeCount >= MAX_WRITES_PER_AGENT_TASK) {
       return {
-        action: 'rejected',
+        action: 'rate_limited',
         reason: `Memory write rate limit exceeded (${MAX_WRITES_PER_AGENT_TASK} per agent per task)`,
       };
     }
@@ -79,7 +79,7 @@ export class MemoryValidator {
     const entityNode = await this.store.getNode(options.entityNodeId);
     if (!entityNode) {
       return {
-        action: 'rejected',
+        action: 'entity_not_found',
         reason: `Entity node not found: ${options.entityNodeId}`,
       };
     }
