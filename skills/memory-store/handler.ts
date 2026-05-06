@@ -122,7 +122,7 @@ export class MemoryStoreHandler implements SkillHandler {
         }
         const byId = await ctx.entityMemory.getEntity(entity);
         if (!byId) {
-          ctx.log.debug({ entity }, 'memory-store: entity UUID not found in KG');
+          ctx.log.warn({ entity }, 'memory-store: entity UUID not found in KG — entity may have been deleted');
           return {
             success: true,
             data: {
