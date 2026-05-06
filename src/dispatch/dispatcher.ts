@@ -662,18 +662,21 @@ export class Dispatcher {
     // per-message identifiers so the coordinator knows which mailbox and message to act on.
     // The triage protocol (roles, classifications, rules) lives in the coordinator's system
     // prompt (agents/coordinator.yaml) where it is static and therefore cacheable.
-    // Only message-specific identifiers — nylasMessageId and accountId — remain here.
+    // Only message-specific identifiers — nylasMessageId, accountId, and senderId — remain here.
     // Injected after the injection scanner so it is never treated as potentially hostile content.
     if (isObservationMode) {
       // Extract identifiers needed for skill calls (e.g. email-archive) from payload metadata.
       const nylasMessageId = (payload.metadata as Record<string, unknown> | undefined)?.nylasMessageId as string | undefined;
       const observingAccountId = payload.accountId;
 
-      // Always include Account so the coordinator knows which mailbox to act on.
+      // Always include Account and From so the coordinator and email-triage both have the
+      // authoritative sender address for reply drafts. Without From here, email-triage has
+      // no sender email in its context and will infer it from email-list results — which
+      // can return stale or wrong addresses (root cause of skyphysio50 incident, 2026-05-06).
       // Message ID is only present when the email adapter has surfaced it via metadata.
       const identifierBlock = nylasMessageId
-        ? `Message ID: ${nylasMessageId}\nAccount: ${observingAccountId ?? 'primary'}\n\n`
-        : `Account: ${observingAccountId ?? 'primary'}\n\n`;
+        ? `Message ID: ${nylasMessageId}\nAccount: ${observingAccountId ?? 'primary'}\nFrom: ${payload.senderId}\n\n`
+        : `Account: ${observingAccountId ?? 'primary'}\nFrom: ${payload.senderId}\n\n`;
 
       taskContent =
         `[OBSERVATION MODE — monitored inbox]\n` +
