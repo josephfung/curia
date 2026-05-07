@@ -1,8 +1,7 @@
 // handler.ts — email-archive skill implementation.
 //
 // Archives an email by removing it from INBOX via the OutboundGateway.
-// Used by the coordinator's observation-mode triage flow for emails that need
-// no action (receipts, newsletters, automated notifications).
+// Used for emails that need no action (receipts, newsletters, automated notifications).
 //
 // Does NOT run through the outbound content filter — this is a folder-move
 // operation, not an outbound communication.

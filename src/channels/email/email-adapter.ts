@@ -11,7 +11,6 @@ import type { EventBus } from '../../bus/bus.js';
 import type { Logger } from '../../logger.js';
 import type { OutboundGateway, EmailSendRequest } from '../../skills/outbound-gateway.js';
 import type { ContactService } from '../../contacts/contact-service.js';
-// OutboundPolicy removed — all channel accounts now send directly (autonomy-gated)
 import { convertNylasMessage } from './message-converter.js';
 import { createInboundMessage, type OutboundMessageEvent, type OutboundNotificationEvent } from '../../bus/events.js';
 import { sanitizeOutput } from '../../skills/sanitize.js';

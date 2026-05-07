@@ -918,7 +918,7 @@ async function main(): Promise<void> {
         agentContactId: agentIdentityContactId,
       });
     } else if (agentConfig.inject_specialists) {
-      // Specialists that need to know about available agents (e.g. email-triage)
+      // Specialists that need to know about available agents
       // opt in via inject_specialists: true in their YAML.
       try {
         systemPrompt = interpolateRuntimeContext(systemPrompt, {
