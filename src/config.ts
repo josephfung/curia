@@ -115,9 +115,9 @@ export interface YamlConfig {
   /**
    * Multi-account channel config (spec 03 - #3).
    *
-   * Defines N named accounts per channel type, each with its own credentials
-   * and outbound_policy. When this block is absent, the system falls back to the
-   * legacy single-account env-var config (NYLAS_GRANT_ID + NYLAS_SELF_EMAIL).
+   * Defines N named accounts per channel type, each with its own credentials.
+   * When this block is absent, the system falls back to the legacy single-account
+   * env-var config (NYLAS_GRANT_ID + NYLAS_SELF_EMAIL).
    *
    * Values may be literal strings or "env:VAR_NAME" references resolved at startup.
    * The Nylas API key (NYLAS_API_KEY) is shared across all email accounts —
@@ -129,11 +129,6 @@ export interface YamlConfig {
    *       curia:
    *         nylas_grant_id: env:NYLAS_GRANT_ID
    *         self_email: env:NYLAS_SELF_EMAIL
-   *         outbound_policy: direct
-   *       personal:
-   *         nylas_grant_id: env:PERSONAL_NYLAS_GRANT_ID
-   *         self_email: env:PERSONAL_EMAIL
-   *         outbound_policy: draft_gate
    */
   channel_accounts?: {
     email?: Record<string, RawEmailAccountConfig>;
