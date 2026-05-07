@@ -321,10 +321,10 @@ describe('taskMetadata pass-through', () => {
     );
 
     await layer.invoke('test-meta', {}, undefined, {
-      taskMetadata: { observationMode: true, extra: 'value' },
+      taskMetadata: { someFlag: true, extra: 'value' },
     });
 
-    expect(capturedCtx?.taskMetadata).toEqual({ observationMode: true, extra: 'value' });
+    expect(capturedCtx?.taskMetadata).toEqual({ someFlag: true, extra: 'value' });
   });
 
   it('leaves taskMetadata undefined when options omit it', async () => {
