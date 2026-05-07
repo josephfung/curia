@@ -25,60 +25,7 @@ function makeCtx(
 describe('EmailReplyHandler', () => {
   const handler = new EmailReplyHandler();
 
-  // --- Observation mode block ---
-
-  it('blocks in observation mode and does not call gateway', async () => {
-    const gateway = { getEmailMessage: vi.fn(), send: vi.fn() };
-    const result = await handler.execute(
-      makeCtx(
-        { reply_to_message_id: 'msg-1', body: 'Hello' },
-        gateway,
-        { observationMode: true },
-      ),
-    );
-    expect(result.success).toBe(false);
-    if (!result.success) {
-      expect(result.error).toMatch(/observation mode/i);
-      // Verify the error redirects callers to the correct alternative
-      expect(result.error).toMatch(/email-draft-save/i);
-    }
-    expect(gateway.getEmailMessage).not.toHaveBeenCalled();
-    expect(gateway.send).not.toHaveBeenCalled();
-  });
-
-  it('does not block when observationMode is false', async () => {
-    const gateway = {
-      getEmailMessage: vi.fn().mockResolvedValue({
-        from: [{ email: 'sender@example.com' }],
-        subject: 'Test',
-      }),
-      send: vi.fn().mockResolvedValue({ success: true, messageId: 'msg-out-1' }),
-    };
-    const result = await handler.execute(
-      makeCtx(
-        { reply_to_message_id: 'msg-1', body: 'Hello' },
-        gateway,
-        { observationMode: false },
-      ),
-    );
-    expect(result.success).toBe(true);
-  });
-
-  it('does not block when taskMetadata is absent', async () => {
-    const gateway = {
-      getEmailMessage: vi.fn().mockResolvedValue({
-        from: [{ email: 'sender@example.com' }],
-        subject: 'Test',
-      }),
-      send: vi.fn().mockResolvedValue({ success: true, messageId: 'msg-out-2' }),
-    };
-    const result = await handler.execute(
-      makeCtx({ reply_to_message_id: 'msg-1', body: 'Hello' }, gateway),
-    );
-    expect(result.success).toBe(true);
-  });
-
-  // --- Input validation (non-obs-mode) ---
+  // --- Input validation ---
 
   it('returns failure when outboundGateway is not configured', async () => {
     const result = await handler.execute(

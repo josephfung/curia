@@ -97,77 +97,8 @@ describe('EmailDraftSaveHandler', () => {
     if (!result.success) expect(result.error).toContain('Failed to save draft');
   });
 
-  describe('observation mode guard', () => {
-    it('blocks when observationMode is true and triage_classification is absent', async () => {
-      const gateway = { createEmailDraft: vi.fn() };
-      const result = await handler.execute(makeCtx(
-        { to: 'ceo@example.com', subject: 'Re: Hi', body: 'Hello', account: 'joseph', reply_to_message_id: 'msg-1' },
-        gateway,
-        { observationMode: true },
-      ));
-      expect(result.success).toBe(false);
-      if (!result.success) expect(result.error).toMatch(/observation mode/i);
-      expect(gateway.createEmailDraft).not.toHaveBeenCalled();
-    });
-
-    it('blocks when observationMode is true and triage_classification is NOISE', async () => {
-      const gateway = { createEmailDraft: vi.fn() };
-      const result = await handler.execute(makeCtx(
-        { to: 'ceo@example.com', subject: 'Re: Hi', body: 'Hello', account: 'joseph', triage_classification: 'NOISE' },
-        gateway,
-        { observationMode: true },
-      ));
-      expect(result.success).toBe(false);
-      if (!result.success) expect(result.error).toMatch(/observation mode/i);
-      expect(gateway.createEmailDraft).not.toHaveBeenCalled();
-    });
-
-    it('blocks when observationMode is true and triage_classification is LEAVE FOR CEO', async () => {
-      const gateway = { createEmailDraft: vi.fn() };
-      const result = await handler.execute(makeCtx(
-        { to: 'ceo@example.com', subject: 'Re: Hi', body: 'Hello', account: 'joseph', triage_classification: 'LEAVE FOR CEO' },
-        gateway,
-        { observationMode: true },
-      ));
-      expect(result.success).toBe(false);
-      if (!result.success) expect(result.error).toMatch(/observation mode/i);
-      expect(gateway.createEmailDraft).not.toHaveBeenCalled();
-    });
-
-    it('allows the call when observationMode is true and triage_classification is NEEDS DRAFT', async () => {
-      const gateway = { createEmailDraft: vi.fn().mockResolvedValue({ success: true, draftId: 'd-obs-1' }) };
-      const result = await handler.execute(makeCtx(
-        { to: 'ceo@example.com', subject: 'Re: Hi', body: 'Hello', account: 'joseph', reply_to_message_id: 'msg-1', triage_classification: 'NEEDS DRAFT' },
-        gateway,
-        { observationMode: true },
-      ));
-      expect(result.success).toBe(true);
-      if (result.success) expect((result.data as { draft_id: string }).draft_id).toBe('d-obs-1');
-    });
-
-    it('does not apply obs mode guard when taskMetadata is absent', async () => {
-      const gateway = { createEmailDraft: vi.fn().mockResolvedValue({ success: true, draftId: 'd-normal' }) };
-      const result = await handler.execute(makeCtx(
-        { to: 'r@example.com', subject: 'Hi', body: 'Hello' },
-        gateway,
-      ));
-      expect(result.success).toBe(true);
-    });
-
-    it('does not apply obs mode guard when observationMode is false', async () => {
-      const gateway = { createEmailDraft: vi.fn().mockResolvedValue({ success: true, draftId: 'd-not-obs' }) };
-      const result = await handler.execute(makeCtx(
-        { to: 'r@example.com', subject: 'Hi', body: 'Hello' },
-        gateway,
-        { observationMode: false },
-      ));
-      expect(result.success).toBe(true);
-      expect(gateway.createEmailDraft).toHaveBeenCalled();
-    });
-  });
-
-  describe('missing-account warning for non-observation-mode drafts', () => {
-    it('logs a warning when account is omitted and not in observation mode', async () => {
+  describe('missing-account warning for drafts', () => {
+    it('logs a warning when account is omitted', async () => {
       const gateway = { createEmailDraft: vi.fn().mockResolvedValue({ success: true, draftId: 'd-1' }) };
       const warnSpy = vi.fn();
       const ctx = makeCtx(
@@ -195,21 +126,5 @@ describe('EmailDraftSaveHandler', () => {
       expect(warnSpy).not.toHaveBeenCalled();
     });
 
-    it('does not warn in observation mode (even without account)', async () => {
-      const gateway = { createEmailDraft: vi.fn().mockResolvedValue({ success: true, draftId: 'd-1' }) };
-      const warnSpy = vi.fn();
-      const ctx = makeCtx(
-        { to: 'r@example.com', subject: 'Hi', body: 'Hello', triage_classification: 'NEEDS DRAFT' },
-        gateway,
-        { observationMode: true },
-      );
-      ctx.log = { ...logger, warn: warnSpy } as never;
-      await handler.execute(ctx);
-      // The obs-mode guard warn may fire, but the missing-account warn should not
-      const missingAccountWarns = warnSpy.mock.calls.filter(
-        (args: unknown[]) => typeof args[1] === 'string' && (args[1] as string).includes('no account specified'),
-      );
-      expect(missingAccountWarns).toHaveLength(0);
-    });
   });
 });
