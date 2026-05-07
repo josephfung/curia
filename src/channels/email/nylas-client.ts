@@ -259,8 +259,8 @@ export class NylasClient {
   }
 
   /**
-   * Save an email as a draft (without sending). Used by the 'draft_gate' outbound
-   * policy to hold replies for human review before they leave Curia's mailbox.
+   * Save an email as a draft (without sending). Used as a fallback when the autonomy
+   * gate blocks a direct send, creating a draft for human review.
    *
    * Draft and Message share the same BaseMessage shape in the Nylas SDK, so the
    * response can be normalised with the same helper as a sent message.

@@ -50,8 +50,7 @@ export interface InvokeOptions {
   agentId?: string;
   conversationId?: string;
   parentEventId?: string;
-  /** Task-level metadata forwarded from the agent.task event payload.
-   *  Used by skill handlers to inspect task-wide signals (e.g. observationMode). */
+  /** Task-level metadata forwarded from the agent.task event payload. */
   taskMetadata?: Record<string, unknown>;
   /** When true, autonomy gates (A and B) are skipped — the skill runs as if the
    *  score were sufficient. Only the approve-action skill (#428) should set this.
@@ -455,8 +454,7 @@ export class ExecutionLayer {
       // skills (bullpen) need these for event publishing; harmless for others.
       agentId: options?.agentId,
       taskEventId: options?.taskEventId,
-      // Forward task-level metadata (e.g. observationMode) so skills can adjust
-      // their behaviour without needing a separate out-of-band signalling channel.
+      // Forward task-level metadata so skills can inspect task-wide signals.
       taskMetadata: options?.taskMetadata,
       // Expose the configured timezone so skills can format output timestamps
       // in the user's local time. See toLocalIso() in src/time/timestamp.ts.

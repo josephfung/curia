@@ -979,8 +979,8 @@ export class OutboundGateway {
   }
 
   /**
-   * Create a Nylas draft without sending it — used by the draft_gate outbound policy
-   * and by observation-mode email triage (NEEDS DRAFT classification).
+   * Create a Nylas draft without sending it — used as a fallback when the autonomy
+   * gate blocks a direct send (score too low).
    *
    * Runs the same blocked-contact check as send() but skips the content filter
    * (the filter is designed for messages leaving Curia's control; drafts stay in the

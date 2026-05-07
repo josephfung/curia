@@ -633,11 +633,8 @@ export class AgentRuntime {
           agentId,
           conversationId,
           parentEventId: invokeEvent.id,
-          // Pass task-level metadata (e.g. observationMode) so skill handlers can
-          // inspect task-wide signals without bus or dispatcher access.
-          // metadata is undefined for non-email tasks (Signal, CLI, scheduler) — when
-          // undefined, skill-layer obs-mode guards treat the task as non-obs-mode (safe,
-          // since those paths never set observationMode on the task event).
+          // Pass task-level metadata so skill handlers can inspect task-wide signals
+          // without bus or dispatcher access.
           taskMetadata: taskEvent.payload.metadata,
         });
         const durationMs = Date.now() - startTime;
