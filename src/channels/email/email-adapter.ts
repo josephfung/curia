@@ -5,13 +5,13 @@
 // and sends outbound replies when the coordinator responds to an email thread.
 //
 // Multi-account: one EmailAdapter instance is constructed per configured email account.
-// Each instance owns a single Nylas grant and applies its own outbound policy.
+// Each instance owns a single Nylas grant.
 
 import type { EventBus } from '../../bus/bus.js';
 import type { Logger } from '../../logger.js';
 import type { OutboundGateway, EmailSendRequest } from '../../skills/outbound-gateway.js';
 import type { ContactService } from '../../contacts/contact-service.js';
-import type { OutboundPolicy } from '../../config.js';
+// OutboundPolicy removed — all channel accounts now send directly (autonomy-gated)
 import { convertNylasMessage } from './message-converter.js';
 import { createInboundMessage, type OutboundMessageEvent, type OutboundNotificationEvent } from '../../bus/events.js';
 import { sanitizeOutput } from '../../skills/sanitize.js';
@@ -23,14 +23,6 @@ export interface EmailAdapterConfig {
    * can route replies back through the same account.
    */
   accountId: string;
-  /**
-   * How outbound replies from this account are handled.
-   *
-   * - direct:      send immediately via OutboundGateway (autonomy gate applied at gateway level)
-   * - draft_gate:  save as a Nylas draft silently; CEO discovers via end-of-day
-   *                Signal digest and reviews in Gmail (#403, #278)
-   */
-  outboundPolicy: OutboundPolicy;
   bus: EventBus;
   logger: Logger;
   outboundGateway: OutboundGateway;
@@ -39,16 +31,7 @@ export interface EmailAdapterConfig {
   /** This account's own email address — used to filter out self-sent messages */
   selfEmail: string;
   /**
-   * When true, Curia monitors this inbox as an observer rather than acting as
-   * the recipient. Inbound emails bypass contact auto-creation and the contact
-   * trust flow; the dispatcher receives them with observationMode: true in their
-   * metadata and routes them directly to the coordinator for surfacing to the CEO.
-   */
-  observationMode: boolean;
-  /**
    * Additional sender addresses to suppress, beyond selfEmail.
-   * Used to exclude Curia's own outbound address from a monitored inbox so that
-   * Curia's sent emails don't get re-processed as observations (self-reply loops).
    * Case-insensitive.
    */
   excludedSenderEmails: string[];
@@ -253,22 +236,13 @@ export class EmailAdapter {
         try {
           const converted = convertNylasMessage(msg, this.config.selfEmail);
 
-          if (this.config.observationMode) {
-            // Observation mode: Curia monitors this inbox on behalf of the CEO but is
-            // not the recipient. Skip contact auto-creation (senders are third parties
-            // emailing the CEO, not people initiating contact with Curia). The dispatcher
-            // will receive observationMode: true in the metadata and bypass the contact
-            // trust flow, routing directly to the coordinator for surfacing to the CEO.
-          } else {
-            // Standard mode: auto-create contacts from participants before publishing
-            // the inbound event, so the contact resolver in the dispatch layer can find
-            // them immediately.
-            await this.extractParticipants(
-              converted.metadata.participants,
-              converted.metadata.subject,
-              converted.senderId,
-            );
-          }
+          // Auto-create contacts from participants before publishing the inbound
+          // event, so the contact resolver in the dispatch layer can find them.
+          await this.extractParticipants(
+            converted.metadata.participants,
+            converted.metadata.subject,
+            converted.senderId,
+          );
 
           // Sanitize email content to mitigate prompt injection from external senders.
           // This strips known injection patterns (system/instruction/prompt tags) before
@@ -281,8 +255,6 @@ export class EmailAdapter {
           });
 
           // Publish inbound message to the bus.
-          // observationMode is stamped into metadata so the dispatcher can bypass the
-          // contact trust flow without needing to know about account configuration.
           const event = createInboundMessage({
             conversationId: converted.conversationId,
             channelId: converted.channelId,
@@ -291,7 +263,6 @@ export class EmailAdapter {
             content: sanitizedContent,
             metadata: {
               ...(converted.metadata as unknown as Record<string, unknown>),
-              ...(this.config.observationMode ? { observationMode: true } : {}),
             },
           });
           await this.config.bus.publish('channel', event);
@@ -325,13 +296,10 @@ export class EmailAdapter {
   }
 
   /**
-   * Send (or draft) the coordinator's response as an email reply in the original thread.
+   * Send the coordinator's response as an email reply in the original thread.
    * The conversationId encodes the thread (email:{threadId}), so we look up the
    * most recent inbound message in that thread and reply to it.
-   *
-   * The actual send behaviour is controlled by this account's outboundPolicy:
-   *   - direct:      send immediately via OutboundGateway (autonomy gate applied at gateway level)
-   *   - draft_gate:  save as Nylas draft silently; CEO discovers via Signal digest (#403, #278)
+   * Sends via OutboundGateway (autonomy gate applied at gateway level).
    */
   private async sendOutboundReply(outbound: OutboundMessageEvent): Promise<void> {
     const { outboundGateway, logger } = this.config;
@@ -418,35 +386,18 @@ export class EmailAdapter {
   }
 
   /**
-   * Apply this account's outbound policy before dispatching a reply.
-   *
-   * - direct:      send immediately through the gateway (autonomy gate + blocked-contact +
-   *                content filter all run inside gateway.send). If the gateway returns
-   *                gated (autonomy blocked), fall back to creating a draft and linking
-   *                the action_log row so the CEO can approve-and-send from the digest.
-   * - draft_gate:  save as a Nylas draft for human review; no notification is
-   *                sent — the CEO discovers drafts via the end-of-day Signal
-   *                digest (#403). No autonomy decision, no action_log.
+   * Send the reply through the gateway (autonomy gate + blocked-contact +
+   * content filter all run inside gateway.send). If the gateway returns
+   * gated (autonomy blocked), fall back to creating a draft and linking
+   * the action_log row so the CEO can approve-and-send from the digest.
    */
   private async dispatchByPolicy(
     sendRequest: EmailSendRequest,
     context: { taskEventId?: string; conversationId?: string },
   ): Promise<void> {
-    const { outboundPolicy, outboundGateway, logger, accountId } = this.config;
+    const { outboundGateway, logger, accountId } = this.config;
 
-    if (outboundPolicy === 'draft_gate') {
-      // Config-level always-draft — no autonomy decision, no action_log
-      const draftResult = await outboundGateway.createEmailDraft(sendRequest);
-      if (!draftResult.success) {
-        logger.error(
-          { accountId, reason: draftResult.blockedReason, to: sendRequest.to },
-          'email-adapter: draft_gate policy — createEmailDraft failed',
-        );
-      }
-      return;
-    }
-
-    // Policy: 'direct' — send through gateway, handle gated fallback.
+    // Send through gateway, handle gated fallback.
     // Pass reExecRecipe so the gateway knows how to re-execute this send on CEO approval:
     //   skillName: 'send-draft' — the registered skill approve-action will invoke
     //   partialPayload: { account } — the draft's account; draft_id is filled in by
