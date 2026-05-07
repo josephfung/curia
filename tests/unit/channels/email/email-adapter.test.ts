@@ -684,10 +684,10 @@ describe('EmailAdapter — contact auto-creation rate limiting', () => {
 });
 
 // ---------------------------------------------------------------------------
-// dispatchByPolicy — gated fallback (#435)
+// sendWithGatedDraftFallback — gated fallback (#435)
 // ---------------------------------------------------------------------------
 
-describe('EmailAdapter — dispatchByPolicy gated-fallback', () => {
+describe('EmailAdapter — sendWithGatedDraftFallback gated-fallback', () => {
   let mocks: ReturnType<typeof createMocks>;
   let triggerOutbound: (event: BusEvent) => Promise<void>;
 

@@ -375,7 +375,7 @@ export class EmailAdapter {
         replyToMessageId: threadMessage.id,
       };
 
-      await this.dispatchByPolicy(sendRequest, {
+      await this.sendWithGatedDraftFallback(sendRequest, {
         taskEventId: outbound.payload.taskEventId,
         conversationId: outbound.payload.conversationId,
       });
@@ -390,7 +390,7 @@ export class EmailAdapter {
    * gated (autonomy blocked), fall back to creating a draft and linking
    * the action_log row so the CEO can approve-and-send from the digest.
    */
-  private async dispatchByPolicy(
+  private async sendWithGatedDraftFallback(
     sendRequest: EmailSendRequest,
     context: { taskEventId?: string; conversationId?: string },
   ): Promise<void> {

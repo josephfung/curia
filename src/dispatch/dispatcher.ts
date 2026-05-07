@@ -18,6 +18,26 @@ function redactSenderId(value: string): string {
   return `${value.slice(0, 3)}***${value.slice(-3)}`;
 }
 
+/**
+ * Merge channel-supplied metadata with injection findings and CEO identity.
+ * SECURITY: always strips `ceoInitiated` from channel-supplied metadata — that
+ * flag is stamped exclusively by the dispatcher from the contact resolver result.
+ * Any pre-existing value from the channel is untrusted. See ADR-017.
+ */
+function mergeTaskMetadata(
+  channelMetadata: Record<string, unknown> | undefined,
+  injectionMetadata: Record<string, unknown> | undefined,
+  ceoMeta: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
+  if (!channelMetadata && !injectionMetadata && !ceoMeta) return undefined;
+  return {
+    ...(channelMetadata ?? {}),
+    ceoInitiated: undefined,          // strip untrusted channel value
+    ...(injectionMetadata ?? {}),
+    ...(ceoMeta ?? {}),               // ceoMeta.ceoInitiated wins if present
+  };
+}
+
 export interface DispatcherConfig {
   bus: EventBus;
   logger: Logger;
@@ -730,21 +750,15 @@ export class Dispatcher {
       content: taskContent,
       senderContext,
       messageTrustScore,
-      // Merge: preserve any pre-existing inbound metadata (e.g. email subject from
-      // the email adapter) and layer injection findings on top.
-      //
-      // SECURITY: always strip ceoInitiated from channel-supplied metadata before
-      // merging — on every path, not just when injectionMetadata/ceoMeta are present.
-      // The ceoInitiated flag is stamped exclusively by this function based on the
-      // contact resolver result; any pre-existing value from payload.metadata is
-      // untrusted and must not propagate. Without this, a crafted inbound message
-      // with { ceoInitiated: true } in its metadata would slip through to the task
-      // on the clean path (no injection findings, non-CEO sender). See ADR-017.
-      metadata: (injectionMetadata || ceoMeta)
-        ? { ...(payload.metadata ?? {}), ceoInitiated: undefined, ...(injectionMetadata ?? {}), ...(ceoMeta ?? {}) }
-        : payload.metadata
-          ? { ...(payload.metadata as Record<string, unknown>), ceoInitiated: undefined }
-          : undefined,
+      // SECURITY: always strip ceoInitiated from channel-supplied metadata —
+      // it is stamped exclusively by this function from the contact resolver.
+      // A crafted inbound with { ceoInitiated: true } must never propagate.
+      // See ADR-017.
+      metadata: mergeTaskMetadata(
+        payload.metadata as Record<string, unknown> | undefined,
+        injectionMetadata,
+        ceoMeta,
+      ),
       parentEventId: event.id,
     });
 
