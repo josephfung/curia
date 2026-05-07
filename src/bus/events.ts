@@ -435,30 +435,6 @@ interface HumanDecisionPayload {
 }
 
 
-/**
- * Observation-mode triage classification categories. Shared type so downstream consumers
- * (#299 triage routing, monitoring) use the same vocabulary as the event payload.
- *
- * Token forms use spaces (e.g. `'NEEDS DRAFT'`, `'LEAVE FOR CEO'`) — these match the
- * exact labels the coordinator emits and the dispatcher regex extracts. Log messages
- * and prose may use underscored shorthand (`LEAVE_FOR_CEO`) for readability, but
- * string-literal comparisons must use the spaced form defined here.
- */
-export type TriageClassification = 'URGENT' | 'ACTIONABLE' | 'NEEDS DRAFT' | 'LEAVE FOR CEO' | 'NOISE' | 'unknown';
-
-// ObservationTriageCompletedPayload — emitted by the dispatch layer at the end of every
-// observation-mode task. Captures the coordinator's classification decision and which
-// skills it invoked, providing an operational signal for monitoring, alerting, and
-// trend analysis without requiring log scraping.
-interface ObservationTriageCompletedPayload {
-  conversationId: string;
-  accountId?: string;
-  senderId: string;
-  classification: TriageClassification;
-  skillsCalled: string[];       // skills invoked during the task (from agent.response)
-  outboundActions: number;      // === skillsCalled.length
-}
-
 // -- Discriminated union --
 // The `type` field is the discriminant; `sourceLayer` records which layer emitted the event.
 
@@ -673,15 +649,6 @@ export interface AutonomySendBlockedEvent extends BaseEvent {
   payload: AutonomySendBlockedPayload;
 }
 
-// ObservationTriageCompletedEvent — published by the dispatch layer after every observation-mode
-// triage task completes. Subscribers (audit logger, future monitoring) use this to detect
-// misclassifications, zero-action failures, and classification drift over time.
-export interface ObservationTriageCompletedEvent extends BaseEvent {
-  type: 'observation.triage.completed';
-  sourceLayer: 'dispatch';
-  payload: ObservationTriageCompletedPayload;
-}
-
 interface ConversationCheckpointPayload {
   conversationId: string;
   agentId: string;
@@ -733,8 +700,7 @@ export type BusEvent =
   | HumanDecisionEvent       // Spec 10: human-in-the-loop decision record (approve/deny/etc.)
   | SecretAccessedEvent      // Spec 06: secrets isolation audit trail (name only, never value)
   | AutonomySkillBlockedEvent  // Autonomy Phase 2: skill blocked by action_risk gate
-  | AutonomySendBlockedEvent   // Autonomy Phase 2: outbound send blocked by score < 70 gate
-  | ObservationTriageCompletedEvent; // Observation mode: triage classification + action summary (#311)
+  | AutonomySendBlockedEvent;  // Autonomy Phase 2: outbound send blocked by score < 70 gate
 
 // Convenience alias for use in handler maps / switch statements.
 export type EventType = BusEvent['type'];
@@ -1194,17 +1160,3 @@ export function createAutonomySendBlocked(
   };
 }
 
-export function createObservationTriageCompleted(
-  // parentEventId is required — triage completion must trace back to the agent.task that triggered it.
-  payload: ObservationTriageCompletedPayload & { parentEventId: string },
-): ObservationTriageCompletedEvent {
-  const { parentEventId, ...rest } = payload;
-  return {
-    id: randomUUID(),
-    timestamp: new Date(),
-    type: 'observation.triage.completed',
-    sourceLayer: 'dispatch',
-    payload: rest,
-    parentEventId,
-  };
-}
