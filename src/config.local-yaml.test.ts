@@ -61,7 +61,6 @@ channel_accounts:
     curia:
       nylas_grant_id: literal-grant-id
       self_email: curia@example.com
-      outbound_policy: direct
 `,
     });
     const config = loadYamlConfig(dir);
