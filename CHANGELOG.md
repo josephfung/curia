@@ -13,6 +13,18 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Removed
+
+- **Observation mode** — removed the `observationMode` flag, observation-mode preamble injection, outbound suppression, and all 12+ branch points across the channel, dispatch, agent, and execution layers. CEO inbox monitoring is now a dedicated skill domain in curia-deploy, not a channel concept. This eliminates the cross-grant Nylas ID bugs and identity confusion that occurred when a single coordinator handled both Curia's email and the CEO's email.
+- **`email-triage` agent** — deleted. Triage functionality moves to a dedicated `ceo-inbox` agent in curia-deploy.
+- **`outbound_policy` / `draft_gate`** — removed from config types, validation, schema, and email adapter. All channel accounts now send directly (autonomy-gated). The autonomy gate's fallback-to-draft mechanism handles low-score cases.
+- **`ObservationTriageCompletedEvent`** — removed from bus events and permissions. No longer emitted.
+- **`triage_classification`** — removed from `email-draft-save` skill inputs. Observation-mode guard removed from both `email-draft-save` and `email-reply`.
+
+### Changed
+
+- **Coordinator email instructions** — simplified. Direct inbound replies use the response content (dispatcher threads via `sendOutboundReply`). CC'd emails use `email-reply` with the preamble's Message ID. No observation-mode delegation or identity branching.
+
 ---
 
 ## [0.25.0] — 2026-05-05 — "By Your Leave"
