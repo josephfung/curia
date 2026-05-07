@@ -1,6 +1,6 @@
 {
   "name": "email-archive",
-  "description": "Archive an email by removing it from the inbox. Use for observation-mode emails that need no action — receipts, newsletters, automated notifications. Silently moves the message out of INBOX without notifying the CEO.",
+  "description": "Archive an email by removing it from the inbox. Use for emails that need no action — receipts, newsletters, automated notifications. Silently moves the message out of INBOX.",
   "version": "1.0.0",
   "sensitivity": "normal",
   "action_risk": "low",

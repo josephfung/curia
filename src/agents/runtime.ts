@@ -494,8 +494,7 @@ export class AgentRuntime {
       : undefined;
 
     // Accumulate skill names across all tool-use turns so we can report them
-    // on the agent.response event. Consumers (e.g. the dispatcher's observation-mode
-    // triage event) use this to know what the agent actually did during the task.
+    // on the agent.response event for audit and monitoring.
     const skillsCalled: string[] = [];
 
     while (response.type === 'tool_use' && executionLayer) {

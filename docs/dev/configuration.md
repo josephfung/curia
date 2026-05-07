@@ -149,11 +149,11 @@ repo. Your deployment tooling writes it to the server at deploy time.
 ### Primary use case: multi-account email
 
 The most common reason to use `local.yaml` is to configure
-`channel_accounts.email`, which defines the named email accounts Curia manages
-and their outbound policies. Because this structure varies per deployment, it
-belongs in `local.yaml` rather than `default.yaml`.
+`channel_accounts.email`, which defines the named email accounts Curia manages.
+Because this structure varies per deployment, it belongs in `local.yaml` rather
+than `default.yaml`.
 
-Example `local.yaml` for a two-account deployment:
+Example `local.yaml`:
 
 ```yaml
 channel_accounts:
@@ -161,21 +161,14 @@ channel_accounts:
     curia:
       nylas_grant_id: "env:NYLAS_GRANT_ID"
       self_email:     "env:NYLAS_SELF_EMAIL"
-      outbound_policy: direct
-
-    personal:
-      nylas_grant_id: "env:NYLAS_GRANT_ID_PERSONAL"
-      self_email:     "env:NYLAS_SELF_EMAIL_PERSONAL"
-      outbound_policy: draft_gate
 ```
 
 The `env:VAR_NAME` references are resolved from environment variables at
 startup — no credentials are stored in `local.yaml`. The actual grant IDs and
 email addresses live in `.env`.
 
-For a full description of the `channel_accounts.email` schema and outbound
-policy options, see the `channel_accounts` comment block in
-`config/default.yaml`.
+For a full description of the `channel_accounts.email` schema, see the
+`channel_accounts` comment block in `config/default.yaml`.
 
 ### Error handling
 
