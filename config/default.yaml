@@ -9,13 +9,8 @@ channels:
 # Multi-account email configuration (spec §03-email-channel.md).
 #
 # channel_accounts.email defines one or more named Nylas-backed email accounts.
-# Each account has its own grant ID, self-email address, and outbound policy.
-#
-# Outbound policies:
-#   direct          — send immediately via the OutboundGateway (blocked-contact + content
-#                     filter enforced by the gateway). This is the default for most accounts.
-#   draft_gate      — save the coordinator's reply as a Nylas draft for human review;
-#                     the notification → approval → send flow is deferred (see issue #278).
+# Each account has its own grant ID and self-email address. All accounts send
+# directly via the OutboundGateway (autonomy-gated).
 #
 # Credential values may be supplied inline or as env-var references using the
 # `env:VAR_NAME` syntax (recommended for secrets):
@@ -26,7 +21,7 @@ channels:
 # Backward compatibility: if this block is absent, the email channel falls back to the
 # single-account env-var mode (NYLAS_API_KEY / NYLAS_GRANT_ID / NYLAS_SELF_EMAIL).
 #
-# Example — two accounts, one direct and one draft-gated:
+# Example:
 # (Keys are the logical account names; they become the accountId on bus events.)
 #
 # channel_accounts:
@@ -34,12 +29,6 @@ channels:
 #     curia:
 #       nylas_grant_id: "env:NYLAS_GRANT_ID_CURIA"
 #       self_email:     "env:NYLAS_SELF_EMAIL_CURIA"
-#       outbound_policy: direct
-#
-#     personal:
-#       nylas_grant_id: "env:NYLAS_GRANT_ID_PERSONAL"
-#       self_email:     "env:NYLAS_SELF_EMAIL_PERSONAL"
-#       outbound_policy: draft_gate
 #
 # channel_accounts: {}
 

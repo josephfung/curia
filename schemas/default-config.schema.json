@@ -229,15 +229,11 @@
           "type": "object",
           "additionalProperties": {
             "type": "object",
-            "required": ["nylas_grant_id", "self_email", "outbound_policy"],
+            "required": ["nylas_grant_id", "self_email"],
             "additionalProperties": false,
             "properties": {
               "nylas_grant_id": { "type": "string", "minLength": 1 },
-              "self_email": { "type": "string", "minLength": 1 },
-              "outbound_policy": {
-                "type": "string",
-                "enum": ["direct", "draft_gate"]
-              }
+              "self_email": { "type": "string", "minLength": 1 }
             }
           }
         }
