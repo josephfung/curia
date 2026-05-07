@@ -7,40 +7,15 @@ import * as path from 'node:path';
 // ---------------------------------------------------------------------------
 
 /**
- * Outbound send policy for a named email account.
- *
- * - direct:      send via OutboundGateway (autonomy gate applied at gateway level)
- * - draft_gate:  create a Nylas draft silently; CEO discovers pending drafts via the
- *                end-of-day Signal digest and reviews in Gmail (#403, #278)
- */
-export type OutboundPolicy = 'direct' | 'draft_gate';
-
-/**
  * Raw per-account email entry as read from config/default.yaml.
  * Values may be literal strings or "env:VAR_NAME" env-var references.
  */
 export interface RawEmailAccountConfig {
   nylas_grant_id: string;
   self_email: string;
-  outbound_policy: OutboundPolicy;
-  /**
-   * When true, Curia monitors this inbox as an observer rather than acting as
-   * the recipient. Inbound emails bypass the contact trust flow (no provisional
-   * contact creation, no hold queue) and are delivered directly to the coordinator
-   * with an observationMode flag in their metadata. The coordinator treats them as
-   * third-party communications to surface to the CEO, not as instructions.
-   *
-   * Intended for accounts like the CEO's personal email where Curia should draft
-   * replies on request but never act autonomously on incoming emails.
-   */
-  observation_mode?: boolean;
   /**
    * Additional sender email addresses to suppress from this account's inbox,
    * beyond the account's own selfEmail. Supports env:VAR_NAME references.
-   *
-   * Primary use case: exclude Curia's own outbound address from a monitored
-   * inbox so that Curia's sent emails don't get re-processed as observations
-   * (which would cause self-reply loops).
    */
   excluded_sender_emails?: string[];
 }
@@ -50,13 +25,10 @@ export interface RawEmailAccountConfig {
  * to their actual values. This is the shape passed to NylasClient and EmailAdapter.
  */
 export interface ResolvedEmailAccount {
-  /** Logical name for this account as declared in the YAML (e.g. "curia", "joseph"). */
+  /** Logical name for this account as declared in the YAML (e.g. "curia"). */
   name: string;
   nylasGrantId: string;
   selfEmail: string;
-  outboundPolicy: OutboundPolicy;
-  /** See RawEmailAccountConfig.observation_mode. */
-  observationMode: boolean;
   /** Resolved sender addresses to suppress in addition to selfEmail. */
   excludedSenderEmails: string[];
 }
@@ -490,7 +462,6 @@ export function loadYamlConfig(configDir: string): YamlConfig {
     if (channelAccounts === null || typeof channelAccounts !== 'object' || Array.isArray(channelAccounts)) {
       throw new Error('channel_accounts.email must be a YAML mapping');
     }
-    const validPolicies: OutboundPolicy[] = ['direct', 'draft_gate'];
     for (const [accountName, rawAccount] of Object.entries(channelAccounts)) {
       if (typeof rawAccount !== 'object' || rawAccount === null || Array.isArray(rawAccount)) {
         throw new Error(`channel_accounts.email.${accountName} must be a YAML mapping`);
@@ -500,23 +471,6 @@ export function loadYamlConfig(configDir: string): YamlConfig {
       }
       if (typeof rawAccount.self_email !== 'string' || !rawAccount.self_email) {
         throw new Error(`channel_accounts.email.${accountName}.self_email must be a non-empty string`);
-      }
-      if (!validPolicies.includes(rawAccount.outbound_policy)) {
-        throw new Error(
-          `channel_accounts.email.${accountName}.outbound_policy must be one of: ${validPolicies.join(', ')}, got: "${rawAccount.outbound_policy}"`,
-        );
-      }
-      if (rawAccount.observation_mode !== undefined && typeof rawAccount.observation_mode !== 'boolean') {
-        throw new Error(
-          `channel_accounts.email.${accountName}.observation_mode must be a boolean, got: ${typeof rawAccount.observation_mode}`,
-        );
-      }
-      // Observation mode monitors someone else's inbox — replies must never be sent
-      // directly. Enforce draft_gate so a human always reviews before sending.
-      if (rawAccount.observation_mode === true && rawAccount.outbound_policy !== 'draft_gate') {
-        throw new Error(
-          `channel_accounts.email.${accountName}: observation_mode requires outbound_policy 'draft_gate'`,
-        );
       }
       if (rawAccount.excluded_sender_emails !== undefined) {
         if (!Array.isArray(rawAccount.excluded_sender_emails)) {
@@ -745,8 +699,6 @@ export function resolveChannelAccounts(yamlConfig: YamlConfig, config: Config): 
         name,
         nylasGrantId,
         selfEmail,
-        outboundPolicy: raw.outbound_policy,
-        observationMode: raw.observation_mode ?? false,
         excludedSenderEmails,
       };
     });
@@ -760,8 +712,6 @@ export function resolveChannelAccounts(yamlConfig: YamlConfig, config: Config): 
       name: 'curia',
       nylasGrantId: config.nylasGrantId,
       selfEmail: config.nylasSelfEmail,
-      outboundPolicy: 'direct',
-      observationMode: false,
       excludedSenderEmails: [],
     }];
   }
