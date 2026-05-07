@@ -13,17 +13,31 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+---
+
+## [0.25.1] — 2026-05-07 — "Clean Lines"
+
 ### Removed
 
-- **Observation mode** — removed the `observationMode` flag, observation-mode preamble injection, outbound suppression, and all 12+ branch points across the channel, dispatch, agent, and execution layers. CEO inbox monitoring is now a dedicated skill domain in curia-deploy, not a channel concept. This eliminates the cross-grant Nylas ID bugs and identity confusion that occurred when a single coordinator handled both Curia's email and the CEO's email.
-- **`email-triage` agent** — deleted. Triage functionality moves to a dedicated `ceo-inbox` agent in curia-deploy.
-- **`outbound_policy` / `draft_gate`** — removed from config types, validation, schema, and email adapter. All channel accounts now send directly (autonomy-gated). The autonomy gate's fallback-to-draft mechanism handles low-score cases.
-- **`ObservationTriageCompletedEvent`** — removed from bus events and permissions. No longer emitted.
-- **`triage_classification`** — removed from `email-draft-save` skill inputs. Observation-mode guard removed from both `email-draft-save` and `email-reply`.
+- **Observation mode** — removed the `observationMode` flag, preamble injection, outbound suppression, and all 12+ branch points across channel, dispatch, agent, and execution layers. CEO inbox monitoring is now a dedicated skill domain in curia-deploy, not a channel concept. Eliminates the cross-grant Nylas ID bugs and identity confusion that plagued v0.24.
+- **`email-triage` agent** — deleted. Triage moves to the dedicated `ceo-inbox` agent in curia-deploy.
+- **`outbound_policy` / `draft_gate`** — removed from config types, validation, schema, and email adapter. All channel accounts now send directly (autonomy-gated).
+- **`ObservationTriageCompletedEvent`** — removed from bus events and permissions.
+- **`triage_classification`** — removed from `email-draft-save` and `email-reply` skill inputs.
 
 ### Changed
 
-- **Coordinator email instructions** — simplified. Direct inbound replies use the response content (dispatcher threads via `sendOutboundReply`). CC'd emails use `email-reply` with the preamble's Message ID. No observation-mode delegation or identity branching.
+- **Coordinator email instructions** — simplified. Direct inbound replies use the response content; CC'd emails use `email-reply` with the preamble's Message ID. No observation-mode delegation or identity branching.
+
+### Fixed
+
+- **CI pnpm 11 compatibility** — pinned pnpm 11, removed stale `onlyBuiltDependencies` config, and applied esbuild workaround for the CI workflow.
+
+---
+
+*old branches pruned away —*
+*one voice, one mailbox, clear.*
+*the lines hold their own.*
 
 ---
 
