@@ -747,8 +747,6 @@ describe('Dispatcher — rate limiting', () => {
 });
 
 describe('Dispatcher — CC role preamble', () => {
-
-describe('Dispatcher — CC role preamble', () => {
   it('prepends [OWNER CC] preamble with Account when curiaRole is "cc"', async () => {
     const logger = createLogger('error');
     const bus = new EventBus(logger);
