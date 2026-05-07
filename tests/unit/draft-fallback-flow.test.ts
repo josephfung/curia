@@ -164,18 +164,16 @@ describe('Draft Fallback Flow Integration', () => {
         actionLogRepo,
       });
 
-      // Create the email adapter with 'direct' policy — it will call gateway.send()
+      // Create the email adapter — it will call gateway.send()
       // which will gate, then the adapter falls back to createEmailDraft + linkGatedAction.
       const adapter = new EmailAdapter({
         accountId: 'curia',
-        outboundPolicy: 'direct',
         bus,
         logger,
         outboundGateway: gateway,
         contactService: mockContactService,
         pollingIntervalMs: 999_999, // no polling in test
         selfEmail: 'curia@company.com',
-        observationMode: false,
         excludedSenderEmails: [],
         ceoEmail: 'ceo@company.com',
         contactCreationMaxPerMessage: 10,
@@ -249,14 +247,12 @@ describe('Draft Fallback Flow Integration', () => {
 
       const adapter = new EmailAdapter({
         accountId: 'curia',
-        outboundPolicy: 'direct',
         bus,
         logger,
         outboundGateway: gateway,
         contactService: mockContactService,
         pollingIntervalMs: 999_999,
         selfEmail: 'curia@company.com',
-        observationMode: false,
         excludedSenderEmails: [],
         ceoEmail: 'ceo@company.com',
         contactCreationMaxPerMessage: 10,
@@ -290,70 +286,7 @@ describe('Draft Fallback Flow Integration', () => {
     });
   });
 
-  describe('Test 3: draft_gate policy creates draft without action_log', () => {
-    it('creates a draft without gateway.send() or action_log', async () => {
-      // Score doesn't matter for draft_gate — the adapter bypasses gateway.send() entirely
-      const autonomyService = createMockAutonomyService(50);
-      const actionLogRepo = createMockActionLogRepo();
-
-      const nylasClients = new Map<string, NylasClient>([['curia', mockNylasClient]]);
-
-      const gateway = new OutboundGateway({
-        nylasClients,
-        contactService: mockContactService,
-        contentFilter,
-        bus,
-        ceoEmail: 'ceo@company.com',
-        logger,
-        autonomyService,
-        actionLogRepo,
-      });
-
-      // draft_gate policy — adapter calls createEmailDraft directly, no gateway.send()
-      const adapter = new EmailAdapter({
-        accountId: 'curia',
-        outboundPolicy: 'draft_gate',
-        bus,
-        logger,
-        outboundGateway: gateway,
-        contactService: mockContactService,
-        pollingIntervalMs: 999_999,
-        selfEmail: 'curia@company.com',
-        observationMode: false,
-        excludedSenderEmails: [],
-        ceoEmail: 'ceo@company.com',
-        contactCreationMaxPerMessage: 10,
-        contactCreationMaxPerHour: 100,
-      });
-
-      await adapter.start();
-
-      const outboundEvent = createOutboundMessage({
-        conversationId: 'email:thread-001',
-        channelId: 'email',
-        accountId: 'curia',
-        content: 'This should become a draft, not a send.',
-        parentEventId: 'parent-evt-003',
-      });
-
-      await bus.publish('dispatch', outboundEvent);
-
-      // Assert: createDraft was called (draft_gate always drafts)
-      const createDraftFn = mockNylasClient.createDraft as ReturnType<typeof vi.fn>;
-      expect(createDraftFn).toHaveBeenCalledTimes(1);
-
-      // Assert: sendMessage was NOT called (no direct send for draft_gate)
-      const sendMessageFn = mockNylasClient.sendMessage as ReturnType<typeof vi.fn>;
-      expect(sendMessageFn).not.toHaveBeenCalled();
-
-      // Assert: no action_log insert (draft_gate bypasses autonomy decision entirely)
-      expect(actionLogRepo._insertedRows).toHaveLength(0);
-
-      await adapter.stop();
-    });
-  });
-
-  describe('Test 4: Multi-account — each account creates draft on its own Nylas client', () => {
+  describe('Test 3: Multi-account — each account creates draft on its own Nylas client', () => {
     it('routes drafts to the correct account when both are gated', async () => {
       const autonomyService = createMockAutonomyService(50); // low score → gated
       const actionLogRepo = createMockActionLogRepo();
@@ -381,14 +314,12 @@ describe('Draft Fallback Flow Integration', () => {
       // Adapter for the 'curia' account
       const adapterCuria = new EmailAdapter({
         accountId: 'curia',
-        outboundPolicy: 'direct',
         bus,
         logger,
         outboundGateway: gateway,
         contactService: mockContactService,
         pollingIntervalMs: 999_999,
         selfEmail: 'curia@company.com',
-        observationMode: false,
         excludedSenderEmails: [],
         ceoEmail: 'ceo@company.com',
         contactCreationMaxPerMessage: 10,
@@ -398,14 +329,12 @@ describe('Draft Fallback Flow Integration', () => {
       // Adapter for the 'joseph' account
       const adapterJoseph = new EmailAdapter({
         accountId: 'joseph',
-        outboundPolicy: 'direct',
         bus,
         logger,
         outboundGateway: gateway,
         contactService: mockContactService,
         pollingIntervalMs: 999_999,
         selfEmail: 'joseph@company.com',
-        observationMode: false,
         excludedSenderEmails: [],
         ceoEmail: 'ceo@company.com',
         contactCreationMaxPerMessage: 10,

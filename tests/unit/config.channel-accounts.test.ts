@@ -1,5 +1,5 @@
-// Tests for resolveChannelAccounts() — focused on the observation_mode and
-// excluded_sender_emails fields added for CEO inbox monitoring (#273).
+// Tests for resolveChannelAccounts() — focused on the excluded_sender_emails
+// field and backward-compat single-account path.
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { resolveChannelAccounts, resolveGoogleWorkspaceAccounts, loadYamlConfig } from '../../src/config.js';
@@ -48,65 +48,6 @@ function writeLocalYaml(content: string) {
   fs.writeFileSync(path.join(tempDir, 'local.yaml'), content);
 }
 
-describe('resolveChannelAccounts — observation_mode', () => {
-  it('defaults observationMode to false when observation_mode is absent', () => {
-    writeLocalYaml(`
-channel_accounts:
-  email:
-    curia:
-      nylas_grant_id: grant-1
-      self_email: curia@example.com
-      outbound_policy: direct
-`);
-    const yamlConfig = loadYamlConfig(tempDir);
-    const accounts = resolveChannelAccounts(yamlConfig, baseConfig);
-    expect(accounts[0]?.observationMode).toBe(false);
-  });
-
-  it('sets observationMode to true when observation_mode: true', () => {
-    writeLocalYaml(`
-channel_accounts:
-  email:
-    joseph:
-      nylas_grant_id: grant-2
-      self_email: joseph@example.com
-      outbound_policy: draft_gate
-      observation_mode: true
-`);
-    const yamlConfig = loadYamlConfig(tempDir);
-    const accounts = resolveChannelAccounts(yamlConfig, baseConfig);
-    expect(accounts[0]?.observationMode).toBe(true);
-  });
-
-  it('throws when observation_mode is not a boolean', () => {
-    writeLocalYaml(`
-channel_accounts:
-  email:
-    joseph:
-      nylas_grant_id: grant-2
-      self_email: joseph@example.com
-      outbound_policy: draft_gate
-      observation_mode: "yes"
-`);
-    expect(() => loadYamlConfig(tempDir)).toThrow('observation_mode must be a boolean');
-  });
-
-  it('throws when observation_mode is true but outbound_policy is not draft_gate', () => {
-    writeLocalYaml(`
-channel_accounts:
-  email:
-    joseph:
-      nylas_grant_id: grant-2
-      self_email: joseph@example.com
-      outbound_policy: direct
-      observation_mode: true
-`);
-    expect(() => loadYamlConfig(tempDir)).toThrow(
-      "observation_mode requires outbound_policy 'draft_gate'",
-    );
-  });
-});
-
 describe('resolveChannelAccounts — excluded_sender_emails', () => {
   it('defaults excludedSenderEmails to [] when absent', () => {
     writeLocalYaml(`
@@ -115,7 +56,6 @@ channel_accounts:
     curia:
       nylas_grant_id: grant-1
       self_email: curia@example.com
-      outbound_policy: direct
 `);
     const yamlConfig = loadYamlConfig(tempDir);
     const accounts = resolveChannelAccounts(yamlConfig, baseConfig);
@@ -129,7 +69,6 @@ channel_accounts:
     joseph:
       nylas_grant_id: grant-2
       self_email: joseph@example.com
-      outbound_policy: draft_gate
       excluded_sender_emails:
         - curia@example.com
         - noreply@example.com
@@ -149,7 +88,6 @@ channel_accounts:
     joseph:
       nylas_grant_id: grant-2
       self_email: joseph@example.com
-      outbound_policy: draft_gate
       excluded_sender_emails:
         - "env:TEST_EXCLUDED_EMAIL"
 `);
@@ -172,7 +110,6 @@ channel_accounts:
     joseph:
       nylas_grant_id: grant-2
       self_email: joseph@example.com
-      outbound_policy: draft_gate
       excluded_sender_emails: "curia@example.com"
 `);
     expect(() => loadYamlConfig(tempDir)).toThrow('excluded_sender_emails must be a list');
@@ -185,7 +122,6 @@ channel_accounts:
     joseph:
       nylas_grant_id: grant-2
       self_email: joseph@example.com
-      outbound_policy: draft_gate
       excluded_sender_emails:
         - 123
 `);
@@ -194,7 +130,7 @@ channel_accounts:
 });
 
 describe('resolveChannelAccounts — backward-compat single-account path', () => {
-  it('sets observationMode: false and excludedSenderEmails: [] on the legacy synthetic account', () => {
+  it('sets excludedSenderEmails: [] on the legacy synthetic account', () => {
     // No local.yaml — falls back to env-var mode (nylasGrantId + nylasSelfEmail)
     const yamlConfig = loadYamlConfig(tempDir); // default.yaml is empty, no local.yaml
     const config: Config = {
@@ -205,7 +141,6 @@ describe('resolveChannelAccounts — backward-compat single-account path', () =>
     const accounts = resolveChannelAccounts(yamlConfig, config);
     expect(accounts).toHaveLength(1);
     expect(accounts[0]?.name).toBe('curia');
-    expect(accounts[0]?.observationMode).toBe(false);
     expect(accounts[0]?.excludedSenderEmails).toEqual([]);
   });
 });

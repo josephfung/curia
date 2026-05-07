@@ -69,14 +69,12 @@ function makeAdapter(mocks: ReturnType<typeof createMocks>, overrides: Partial<{
 }> = {}) {
   return new EmailAdapter({
     accountId: 'curia',
-    outboundPolicy: 'direct',
     bus: mocks.bus,
     logger: mocks.logger,
     outboundGateway: mocks.outboundGateway,
     contactService: mocks.contactService,
     pollingIntervalMs: 7_200_000, // 2 hours — never fires in tests, even under vi.advanceTimersByTime(3_600_001)
     selfEmail: SELF_EMAIL,
-    observationMode: false,
     excludedSenderEmails: [],
     contactCreationMaxPerMessage: overrides.contactCreationMaxPerMessage ?? 10,
     contactCreationMaxPerHour: overrides.contactCreationMaxPerHour ?? 100,
@@ -248,21 +246,19 @@ describe('EmailAdapter — sendOutboundReply', () => {
   });
 });
 
-// ── Inbound poll — excludedSenderEmails and observationMode ──────────────────
+// ── Inbound poll — excludedSenderEmails ──────────────────
 
 describe('EmailAdapter — inbound poll: excludedSenderEmails', () => {
   it('suppresses emails from an excluded sender address', async () => {
     const mocks = createMocks();
     const adapter = new EmailAdapter({
       accountId: 'joseph',
-      outboundPolicy: 'draft_gate',
       bus: mocks.bus,
       logger: mocks.logger,
       outboundGateway: mocks.outboundGateway,
       contactService: mocks.contactService,
       pollingIntervalMs: 999999,
       selfEmail: 'joseph@example.com',
-      observationMode: false,
       excludedSenderEmails: ['curia@example.com'],
       contactCreationMaxPerMessage: 10,
       contactCreationMaxPerHour: 100,
@@ -287,14 +283,12 @@ describe('EmailAdapter — inbound poll: excludedSenderEmails', () => {
     const mocks = createMocks();
     const adapter = new EmailAdapter({
       accountId: 'joseph',
-      outboundPolicy: 'draft_gate',
       bus: mocks.bus,
       logger: mocks.logger,
       outboundGateway: mocks.outboundGateway,
       contactService: mocks.contactService,
       pollingIntervalMs: 999999,
       selfEmail: 'joseph@example.com',
-      observationMode: false,
       excludedSenderEmails: ['CURIA@EXAMPLE.COM'],
       contactCreationMaxPerMessage: 10,
       contactCreationMaxPerHour: 100,
@@ -319,14 +313,12 @@ describe('EmailAdapter — inbound poll: excludedSenderEmails', () => {
     const mocks = createMocks();
     const adapter = new EmailAdapter({
       accountId: 'joseph',
-      outboundPolicy: 'draft_gate',
       bus: mocks.bus,
       logger: mocks.logger,
       outboundGateway: mocks.outboundGateway,
       contactService: mocks.contactService,
       pollingIntervalMs: 999999,
       selfEmail: 'joseph@example.com',
-      observationMode: false,
       excludedSenderEmails: ['curia@example.com'],
       contactCreationMaxPerMessage: 10,
       contactCreationMaxPerHour: 100,
@@ -343,70 +335,6 @@ describe('EmailAdapter — inbound poll: excludedSenderEmails', () => {
     const inboundPublish = (mocks.bus.publish as ReturnType<typeof vi.fn>).mock.calls
       .find(([, ev]) => ev?.type === 'inbound.message');
     expect(inboundPublish).toBeDefined();
-
-    await adapter.stop();
-  });
-});
-
-describe('EmailAdapter — inbound poll: observationMode', () => {
-  it('stamps observationMode: true in event metadata and skips contact auto-creation', async () => {
-    const mocks = createMocks();
-    const adapter = new EmailAdapter({
-      accountId: 'joseph',
-      outboundPolicy: 'draft_gate',
-      bus: mocks.bus,
-      logger: mocks.logger,
-      outboundGateway: mocks.outboundGateway,
-      contactService: mocks.contactService,
-      pollingIntervalMs: 999999,
-      selfEmail: 'joseph@example.com',
-      observationMode: true,
-      excludedSenderEmails: [],
-      contactCreationMaxPerMessage: 10,
-      contactCreationMaxPerHour: 100,
-      ceoEmail: CEO_EMAIL,
-    });
-
-    const msg = makeMockMessage({
-      from: [{ email: 'sender@example.com', name: 'Sender' }],
-      to: [{ email: 'joseph@example.com' }],
-    });
-    (mocks.outboundGateway.listEmailMessages as ReturnType<typeof vi.fn>).mockResolvedValueOnce([msg]);
-
-    await adapter.start();
-    await flushPoll();
-
-    // Contact auto-creation must be skipped entirely in observation mode
-    expect(mocks.contactService.resolveByChannelIdentity).not.toHaveBeenCalled();
-    expect(mocks.contactService.createContact).not.toHaveBeenCalled();
-
-    // Published event must carry observationMode: true in metadata
-    const inboundCall = (mocks.bus.publish as ReturnType<typeof vi.fn>).mock.calls
-      .find(([, ev]) => ev?.type === 'inbound.message');
-    expect(inboundCall).toBeDefined();
-    expect(inboundCall![1].payload.metadata.observationMode).toBe(true);
-
-    await adapter.stop();
-  });
-
-  it('standard mode runs contact auto-creation and does not stamp observationMode', async () => {
-    const mocks = createMocks();
-    const adapter = makeAdapter(mocks); // observationMode: false
-
-    const msg = makeMockMessage({ from: [{ email: CEO_EMAIL, name: 'CEO' }] });
-    (mocks.outboundGateway.listEmailMessages as ReturnType<typeof vi.fn>).mockResolvedValueOnce([msg]);
-
-    await adapter.start();
-    await flushPoll();
-
-    // Contact resolution IS called in standard mode
-    expect(mocks.contactService.resolveByChannelIdentity).toHaveBeenCalled();
-
-    // Published event must NOT have observationMode set
-    const inboundCall = (mocks.bus.publish as ReturnType<typeof vi.fn>).mock.calls
-      .find(([, ev]) => ev?.type === 'inbound.message');
-    expect(inboundCall).toBeDefined();
-    expect(inboundCall![1].payload.metadata.observationMode).toBeUndefined();
 
     await adapter.stop();
   });
@@ -458,14 +386,12 @@ describe('EmailAdapter — outbound.notification subscriber', () => {
     // Create adapter with non-primary accountId
     const adapter = new EmailAdapter({
       accountId: 'joseph',
-      outboundPolicy: 'direct',
       bus: mocks.bus,
       logger: mocks.logger,
       outboundGateway: mocks.outboundGateway,
       contactService: mocks.contactService,
       pollingIntervalMs: 999999,
       selfEmail: 'joseph@example.com',
-      observationMode: false,
       excludedSenderEmails: [],
       contactCreationMaxPerMessage: 10,
       contactCreationMaxPerHour: 100,
@@ -869,70 +795,4 @@ describe('EmailAdapter — dispatchByPolicy gated-fallback', () => {
     await adapter.stop();
   });
 
-  it('draft_gate policy calls createEmailDraft directly without send()', async () => {
-    const adapter = new EmailAdapter({
-      accountId: 'curia',
-      outboundPolicy: 'draft_gate',
-      bus: mocks.bus,
-      logger: mocks.logger,
-      outboundGateway: mocks.outboundGateway,
-      contactService: mocks.contactService,
-      pollingIntervalMs: 999999,
-      selfEmail: SELF_EMAIL,
-      observationMode: false,
-      excludedSenderEmails: [],
-      contactCreationMaxPerMessage: 10,
-      contactCreationMaxPerHour: 100,
-      ceoEmail: CEO_EMAIL,
-    });
-    await adapter.start();
-
-    const humanMessage = makeMockMessage({
-      from: [{ email: CEO_EMAIL }],
-      to: [{ email: SELF_EMAIL }],
-    });
-    (mocks.outboundGateway.listEmailMessages as ReturnType<typeof vi.fn>).mockResolvedValue([humanMessage]);
-
-    await triggerOutbound(makeOutboundEventWithTask('email:thread-abc', 'task-evt-3'));
-
-    // draft_gate goes straight to createEmailDraft — no send() call
-    expect(mocks.outboundGateway.send).not.toHaveBeenCalled();
-    expect(mocks.outboundGateway.createEmailDraft).toHaveBeenCalledWith(
-      expect.objectContaining({ to: CEO_EMAIL, channel: 'email' }),
-    );
-
-    await adapter.stop();
-  });
-
-  it('draft_gate does NOT call linkGatedAction', async () => {
-    const adapter = new EmailAdapter({
-      accountId: 'curia',
-      outboundPolicy: 'draft_gate',
-      bus: mocks.bus,
-      logger: mocks.logger,
-      outboundGateway: mocks.outboundGateway,
-      contactService: mocks.contactService,
-      pollingIntervalMs: 999999,
-      selfEmail: SELF_EMAIL,
-      observationMode: false,
-      excludedSenderEmails: [],
-      contactCreationMaxPerMessage: 10,
-      contactCreationMaxPerHour: 100,
-      ceoEmail: CEO_EMAIL,
-    });
-    await adapter.start();
-
-    const humanMessage = makeMockMessage({
-      from: [{ email: CEO_EMAIL }],
-      to: [{ email: SELF_EMAIL }],
-    });
-    (mocks.outboundGateway.listEmailMessages as ReturnType<typeof vi.fn>).mockResolvedValue([humanMessage]);
-
-    await triggerOutbound(makeOutboundEventWithTask('email:thread-abc', 'task-evt-4'));
-
-    // draft_gate has no autonomy decision — linkGatedAction should never be called
-    expect(mocks.outboundGateway.linkGatedAction).not.toHaveBeenCalled();
-
-    await adapter.stop();
-  });
 });
