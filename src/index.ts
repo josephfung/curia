@@ -752,14 +752,12 @@ async function main(): Promise<void> {
 
       emailAdapters.push(new EmailAdapter({
         accountId: account.name,
-        outboundPolicy: account.outboundPolicy,
         bus,
         logger,
         outboundGateway,
         contactService,
         pollingIntervalMs: config.nylasPollingIntervalMs,
         selfEmail: account.selfEmail,
-        observationMode: account.observationMode,
         excludedSenderEmails: account.excludedSenderEmails,
         ceoEmail: config.ceoPrimaryEmail,
         contactCreationMaxPerMessage: yamlConfig.contact_creation_limits?.max_per_message ?? 10,
@@ -966,10 +964,9 @@ async function main(): Promise<void> {
       // use when MCP tools ask for an email address or phone number. Injected into ALL
       // agents (#387) — specialists like essay-editor need this to avoid hallucinating
       // account identifiers.
-      // Email: use the first non-observation-mode account (Curia's direct send account),
-      // not the legacy config.nylasSelfEmail, so multi-account setups stay consistent.
+      // Email: use the first account's address for agent context injection.
       channelAccounts: {
-        email: resolvedEmailAccounts.find(a => !a.observationMode)?.selfEmail || undefined,
+        email: resolvedEmailAccounts[0]?.selfEmail || undefined,
         phone: config.signalPhoneNumber || undefined,
       },
       // Google Workspace accounts — injected into ALL agents so they know which account
