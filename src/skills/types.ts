@@ -180,9 +180,6 @@ export interface SkillContext {
    *  Searches all registered skills by keyword, excluding skill-registry itself. */
   skillSearch?: (query: string) => Array<{ name: string; description: string }>;
   /** Arbitrary task-level metadata forwarded from the agent.task event payload.
-   *  Currently used to carry observationMode (whether the task was dispatched in
-   *  observation-only mode) so skills can adjust their behaviour accordingly —
-   *  e.g. suppressing outbound sends when observationMode === true.
    *  Skills that do not need it can ignore this field entirely. */
   taskMetadata?: Record<string, unknown>;
   /** IANA timezone name (e.g. "America/Toronto") for formatting user-facing timestamps.

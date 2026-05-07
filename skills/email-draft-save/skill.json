@@ -1,6 +1,6 @@
 {
   "name": "email-draft-save",
-  "description": "Save an email as a draft without sending it. The CEO can review and send the draft from their email client. Use for observation-mode triage (NEEDS DRAFT category) or when composing a reply that needs CEO approval before sending.",
+  "description": "Save an email as a draft without sending it. The CEO can review and send the draft from their email client. Use when composing a reply that needs CEO approval before sending.",
   "version": "1.0.0",
   "sensitivity": "normal",
   "action_risk": "low",
@@ -9,8 +9,7 @@
     "subject": "string (email subject line)",
     "body": "string (email body; markdown supported, converted to HTML automatically)",
     "account": "string? (named account to draft from, as configured in channel_accounts.email. Defaults to the primary account.)",
-    "reply_to_message_id": "string? (Nylas message ID to reply to; threads the draft as a reply when set)",
-    "triage_classification": "string? (Required in observation mode. Must be 'NEEDS DRAFT' to allow the draft. Any other value — or omitting this field in observation mode — blocks the call with an auditable error. Not required outside observation mode.)"
+    "reply_to_message_id": "string? (Nylas message ID to reply to; threads the draft as a reply when set)"
   },
   "outputs": {
     "draft_id": "string"
@@ -19,7 +18,6 @@
   "secrets": [],
   "timeout": 20000,
   "capabilities": [
-    "outboundGateway",
-    "actionLogRepo"
+    "outboundGateway"
   ]
 }
