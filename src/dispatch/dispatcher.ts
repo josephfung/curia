@@ -1,7 +1,6 @@
 import type { EventBus } from '../bus/bus.js';
 import type { InboundMessageEvent, AgentResponseEvent, AgentErrorEvent } from '../bus/events.js';
-import { createAgentTask, createOutboundMessage, createContactResolved, createContactUnknown, createMessageHeld, createMessageRejected, createConversationCheckpoint, createObservationTriageCompleted } from '../bus/events.js';
-import type { TriageClassification } from '../bus/events.js';
+import { createAgentTask, createOutboundMessage, createContactResolved, createContactUnknown, createMessageHeld, createMessageRejected, createConversationCheckpoint } from '../bus/events.js';
 import type { Logger } from '../logger.js';
 import type { ContactResolver } from '../contacts/contact-resolver.js';
 import type { ContactService } from '../contacts/contact-service.js';
@@ -89,11 +88,6 @@ export class Dispatcher {
       conversationId: string;
       senderId: string;
       accountId?: string;
-      // When true, the originating inbound message was observation-mode (monitored
-      // inbox). The coordinator's final response is for audit/logging only — we
-      // must NOT auto-publish it as an outbound reply, because that would land
-      // as a draft in the CEO's inbox under the `draft_gate` outbound policy.
-      observationMode?: boolean;
     }
   >();
   /** Key: `${conversationId}:${agentId}` — reset on every agent.response */
@@ -208,22 +202,6 @@ export class Dispatcher {
       return;
     }
 
-    // Observation-mode messages originate from a monitored inbox (e.g. the CEO's
-    // personal email) where Curia is an observer, not the recipient. Senders are
-    // third parties emailing the CEO — they should not enter the contact trust flow,
-    // be held, or have provisional contact records created on their behalf. Route
-    // directly to the coordinator (with no senderContext) so it can surface the
-    // email to the CEO as an observation.
-    // Rate limiting and injection scanning still run below — those protections apply
-    // regardless of how the message is routed.
-    const isObservationMode = (payload.metadata as Record<string, unknown> | undefined)?.observationMode === true;
-    if (isObservationMode) {
-      this.logger.info(
-        { channelId: payload.channelId, senderId: payload.senderId, accountId: payload.accountId },
-        'Observation-mode email — bypassing contact trust flow, routing to coordinator',
-      );
-    }
-
     // Resolve sender if contact resolver is available.
     // Wrapped in try/catch so DB errors degrade gracefully (no sender context)
     // rather than silently dropping the message — the task still dispatches,
@@ -234,7 +212,7 @@ export class Dispatcher {
     // stale senderContext values must not trigger a re-hold on the same message.
     let senderContext: InboundSenderContext | undefined;
     let threadTrusted = false;
-    if (this.contactResolver && !isObservationMode) {
+    if (this.contactResolver) {
       try {
         senderContext = await this.contactResolver.resolve(payload.channelId, payload.senderId);
 
@@ -599,14 +577,8 @@ export class Dispatcher {
       // This overrides per-channel 'allow' policies for very low-trust messages — including unknown
       // senders on 'allow' channels. Unknown senders on 'hold_and_notify' and 'ignore' channels
       // already returned early above, so there is no risk of double-holding here.
-      //
-      // Observation-mode messages bypass the floor: we already skipped the contact-resolver path
-      // (isObservationMode check above), so senderContext is undefined and contactConfidence is 0.
-      // Without the bypass, observation-mode emails would always fall below the 0.2 floor and get
-      // silently held — making the entire observation-mode feature non-functional in production.
       const policy = this.channelPolicies[payload.channelId];
       if (
-        !isObservationMode &&
         !threadTrusted &&
         messageTrustScore < this.trustScoreFloor &&
         policy?.unknownSender !== 'ignore' &&
@@ -658,59 +630,10 @@ export class Dispatcher {
       }
     }
 
-    // Observation-mode marker: prepend an explicit [OBSERVATION MODE] label plus the
-    // per-message identifiers so the coordinator knows which mailbox and message to act on.
-    // The triage protocol (roles, classifications, rules) lives in the coordinator's system
-    // prompt (agents/coordinator.yaml) where it is static and therefore cacheable.
-    // Only message-specific identifiers — nylasMessageId, accountId, and senderId — remain here.
-    // Injected after the injection scanner so it is never treated as potentially hostile content.
-    if (isObservationMode) {
-      // Extract identifiers needed for skill calls (e.g. email-archive) from payload metadata.
-      const nylasMessageId = (payload.metadata as Record<string, unknown> | undefined)?.nylasMessageId as string | undefined;
-      const observingAccountId = payload.accountId;
-
-      // Always include Account and From so the coordinator and email-triage both have the
-      // authoritative sender address for reply drafts. Without From here, email-triage has
-      // no sender email in its context and will infer it from email-list results — which
-      // can return stale or wrong addresses (root cause of skyphysio50 incident, 2026-05-06).
-      // Message ID is only present when the email adapter has surfaced it via metadata.
-      //
-      // Sanitize senderId before injection — the From header is attacker-controlled and this
-      // preamble is injected after the injection scanner has run on payload.content. Mirror
-      // the sanitization applied to CC-path recipient addresses and nylasMessageId above.
-      const sanitizedSenderId = typeof payload.senderId === 'string'
-        ? payload.senderId.replace(/[\n\r\[\]<>]/g, '').trim().slice(0, 254)
-        : '';
-      // 'unknown' is the message-converter sentinel for a missing From header — it is not a
-      // real address. Omit the From: line rather than forward a value the LLM cannot
-      // distinguish from a real address and will blindly use as the reply-to destination.
-      const fromLine = sanitizedSenderId && sanitizedSenderId !== 'unknown'
-        ? `From: ${sanitizedSenderId}\n`
-        : '';
-      if (!fromLine) {
-        this.logger.warn(
-          { channelId: payload.channelId, accountId: observingAccountId },
-          'Observation-mode preamble: senderId is empty or unknown — omitting From: line; email-triage will lack authoritative sender address',
-        );
-      }
-      const identifierBlock = nylasMessageId
-        ? `Message ID: ${nylasMessageId}\nAccount: ${observingAccountId ?? 'primary'}\n${fromLine}\n`
-        : `Account: ${observingAccountId ?? 'primary'}\n${fromLine}\n`;
-
-      taskContent =
-        `[OBSERVATION MODE — monitored inbox]\n` +
-        identifierBlock +
-        `--- Original message ---\n` +
-        taskContent;
-    }
-
     // CC role marker: when the email adapter determined that Curia was CC'd rather than
     // directly addressed, prepend a context block so the coordinator knows it was an
     // observer on this email (e.g. the CEO looping Curia in on a message to a third party).
-    // Injected after the observation-mode block so it always appears first in the task
-    // content. Not injected for observation-mode emails — those already have their own
-    // preamble and are processed by the email-triage specialist, not the main CC logic.
-    if (!isObservationMode && payload.channelId === 'email') {
+    if (payload.channelId === 'email') {
       const meta = payload.metadata as Record<string, unknown> | undefined;
       const curiaRole = meta?.curiaRole as string | undefined;
       if (curiaRole === 'cc') {
@@ -776,7 +699,7 @@ export class Dispatcher {
           'CC role preamble injected — Curia was not the primary recipient',
         );
         // Include Message ID and Account so the coordinator can call email-reply
-        // with the correct message ID, mirroring the observation-mode preamble pattern.
+        // with the correct message ID.
         // Without these identifiers the coordinator cannot use email-reply and falls back
         // to email-draft-save, where it has historically chosen the wrong account (CEO's).
         const ccIdentifierBlock = nylasMessageId
@@ -789,13 +712,12 @@ export class Dispatcher {
       }
     }
 
-    // Stamp ceoInitiated when the sender is the CEO directly (not via observation mode).
-    // This flag is the hard gate in CEO-authorized skills (e.g. send-draft). It is NOT
-    // set for observation-mode tasks so external emails cannot trigger approved actions.
+    // Stamp ceoInitiated when the sender is the CEO directly.
+    // This flag is the hard gate in CEO-authorized skills (e.g. send-draft).
     // See ADR-017 for the full security reasoning.
     // Use `resolved` discriminant to narrow InboundSenderContext to SenderContext before
     // accessing `.role`, which does not exist on UnknownSenderContext.
-    const ceoMeta = senderContext?.resolved && senderContext.role === 'ceo' && !isObservationMode
+    const ceoMeta = senderContext?.resolved && senderContext.role === 'ceo'
       ? { ceoInitiated: true as const, senderId: payload.senderId, channelId: payload.channelId }
       : undefined;
 
@@ -829,14 +751,12 @@ export class Dispatcher {
     // Store routing info keyed by the task event ID so we can look it up
     // when the agent publishes its response (agent sets parentEventId = task.id).
     // accountId is stored so the outbound.message is routed to the same email account
-    // that received the original inbound message. observationMode is stored so
-    // handleAgentResponse can suppress auto-reply for monitored-inbox tasks.
+    // that received the original inbound message.
     this.taskRouting.set(taskEvent.id, {
       channelId: payload.channelId,
       conversationId: payload.conversationId,
       senderId: payload.senderId,
       accountId: payload.accountId,
-      observationMode: isObservationMode,
     });
 
     await this.bus.publish('dispatch', taskEvent);
@@ -871,100 +791,23 @@ export class Dispatcher {
 
     this.taskRouting.delete(event.parentEventId!);
 
-    // Observation-mode: the coordinator is watching a monitored inbox on the
-    // CEO's behalf. Its final response is an audit/log artefact — NOT a reply
-    // to the sender. Suppress the outbound.message so the email adapter does
-    // not turn the coordinator's classification summary into a dangling draft
-    // in the CEO's inbox (which it would under `draft_gate` outbound policy).
-    //
-    // Any outbound action the coordinator wanted to take (notify CEO on Signal,
-    // archive, save a reply draft) is taken explicitly via skill calls during
-    // the task — not via this auto-reply path. We still schedule a checkpoint
-    // below so working memory is persisted.
-    if (routing.observationMode) {
-      // Skip triage processing for error-path responses — isError means the runtime
-      // bailed before the coordinator produced a real classification. Emitting a
-      // triage event here would pollute monitoring with runtime failures.
-      if (event.payload.isError) {
-        this.logger.warn(
-          { conversationId: routing.conversationId, agentId: event.payload.agentId },
-          'observation-mode: skipping triage event for error-path response (isError)',
-        );
-        // Fall through to scheduleCheckpoint below.
-      } else {
-      // Log at info (not debug) so the suppression is visible in default prod
-      // log streams. If observationMode is ever flipped incorrectly (misrouted
-      // metadata, config mistake, future refactor), real replies would vanish —
-      // this log is the operator's only hook to notice.
-      //
-      // SECURITY: do NOT log the coordinator's free-form response text here.
-      // Observation mode handles personal/sensitive mail, and the model-generated
-      // summary can and does restate original content verbatim. Default prod logs
-      // must not become a sensitive-data sink. We log only a bounded classification
-      // token extracted from the response; full rationale stays in the
-      // llm_call_archive (which has stricter retention + access controls).
-      const classification: TriageClassification =
-        (event.payload.content?.match(
-          /\b(URGENT|ACTIONABLE|NEEDS DRAFT|LEAVE FOR CEO|NOISE)\b/,
-        )?.[0] as TriageClassification | undefined) ?? 'unknown';
-      const skillsCalled = event.payload.skillsCalled ?? [];
-
-      this.logger.info(
-        {
-          conversationId: routing.conversationId,
-          agentId: event.payload.agentId,
-          senderId: routing.senderId,
-          accountId: routing.accountId,
-          parentEventId: event.id,
-          contentLength: event.payload.content?.length ?? 0,
-          classification,
-        },
-        'observation-mode: suppressed auto-reply outbound.message (audit-only response)',
-      );
-
-      // Defensive check: zero skill calls for a non-LEAVE_FOR_CEO classification means
-      // the coordinator decided to do nothing when it should have taken action (archive,
-      // notify, draft). Warn so operators can detect prompt regressions or silent failures.
-      if (skillsCalled.length === 0 && classification !== 'LEAVE FOR CEO') {
-        this.logger.warn(
-          { conversationId: routing.conversationId, classification, senderId: routing.senderId },
-          'observation-mode: zero skill calls for non-LEAVE_FOR_CEO classification — possible coordinator stall',
-        );
-      }
-
-      // Emit structured triage completion event for downstream consumers (audit log,
-      // future monitoring/alerting). parentEventId traces back to the agent.task —
-      // safe to assert non-null because routing was found via event.parentEventId.
-      const triageEvent = createObservationTriageCompleted({
-        conversationId: routing.conversationId,
-        accountId: routing.accountId,
-        senderId: routing.senderId,
-        classification,
-        skillsCalled,
-        outboundActions: skillsCalled.length,
-        parentEventId: event.parentEventId!,
-      });
-      await this.bus.publish('dispatch', triageEvent);
-      }
-    } else {
-      // Publish outbound.message to the bus — the email adapter will pick it up
-      // and route it through OutboundGateway (blocked-contact check + content filter).
-      // No filter logic lives here anymore; it all runs inside the gateway.
-      const outbound = createOutboundMessage({
-        conversationId: routing.conversationId,
-        channelId: routing.channelId,
-        accountId: routing.accountId,
-        content: event.payload.content,
-        // senderId is the person we're replying to — record it as recipientId so the
-        // dispatcher can later verify thread-originated trust when their reply arrives.
-        recipientId: routing.senderId,
-        parentEventId: event.id,
-        // The agent.response's parentEventId is the agent.task that triggered it — thread
-        // this through so the email adapter can pass it to gateway.send() for action_log context.
-        taskEventId: event.parentEventId ?? undefined,
-      });
-      await this.bus.publish('dispatch', outbound);
-    }
+    // Publish outbound.message to the bus — the email adapter will pick it up
+    // and route it through OutboundGateway (blocked-contact check + content filter).
+    // No filter logic lives here anymore; it all runs inside the gateway.
+    const outbound = createOutboundMessage({
+      conversationId: routing.conversationId,
+      channelId: routing.channelId,
+      accountId: routing.accountId,
+      content: event.payload.content,
+      // senderId is the person we're replying to — record it as recipientId so the
+      // dispatcher can later verify thread-originated trust when their reply arrives.
+      recipientId: routing.senderId,
+      parentEventId: event.id,
+      // The agent.response's parentEventId is the agent.task that triggered it — thread
+      // this through so the email adapter can pass it to gateway.send() for action_log context.
+      taskEventId: event.parentEventId ?? undefined,
+    });
+    await this.bus.publish('dispatch', outbound);
 
     // Schedule a checkpoint for this conversation — resets the debounce timer if
     // already running, so only fires after a full window of inactivity.
