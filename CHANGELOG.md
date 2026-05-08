@@ -20,8 +20,6 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Changed
 - **`contact.resolved` bus event** — `sourceLayer` widened from `'dispatch'` to `'dispatch' | 'execution'`; `createContactResolved()` factory accepts an optional `sourceLayer` parameter (defaults to `'dispatch'` for backward compatibility). This is a public API surface change.
 - **`IdentitySource`** — new value `'agent_called'` for contacts registered by agents outside the normal dispatcher pipeline
-
-### Changed
 - **Outbound gateway** — removed `setTrustLevel('high')` band-aid; outbound sends now trigger the confidence scoring pipeline instead, giving contacts a real `contact_confidence` value
 - **Smoke tests** — renamed three `email-triage-*` test cases to `email-prioritization-*` following the CEO inbox redesign; updated the `email-triage` tag to `email-prioritization` in each
 - **ADR-017** — added a note that observation mode has been removed since this ADR was written (v0.25.x, CEO inbox redesign)

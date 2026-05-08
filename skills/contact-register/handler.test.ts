@@ -279,6 +279,71 @@ describe('ContactRegisterHandler — last_seen_at idempotency (pipeline absent)'
   });
 });
 
+describe('ContactRegisterHandler — confidence pipeline (pipeline present)', () => {
+  let handler: ContactRegisterHandler;
+  let contactService: ContactService;
+  let contactId: string;
+
+  beforeEach(async () => {
+    handler = new ContactRegisterHandler();
+    contactService = ContactService.createInMemory();
+
+    const contact = await contactService.createContact({
+      displayName: 'Dave Evans',
+      status: 'confirmed',
+      source: 'ceo_stated',
+    });
+    contactId = contact.id;
+    await contactService.linkIdentity({
+      contactId: contact.id,
+      channel: 'email',
+      channelIdentifier: 'dave@example.com',
+      source: 'email_participant',
+    });
+  });
+
+  it('delegates scoring to the pipeline when present', async () => {
+    const calls: Array<{ contactId: string; signal: unknown }> = [];
+    const mockPipeline = {
+      incrementalUpdate: async (id: string, signal: unknown) => {
+        calls.push({ contactId: id, signal });
+      },
+    };
+
+    const ctx = makeCtx({
+      contactService,
+      confidencePipeline: mockPipeline as SkillContext['confidencePipeline'],
+      input: { channel: 'email', identifier: 'dave@example.com', displayName: 'Dave', messageTimestamp: TIMESTAMP_A },
+    });
+
+    const result = await handler.execute(ctx);
+
+    expect(result.success).toBe(true);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.contactId).toBe(contactId);
+    expect(calls[0]!.signal).toEqual({ type: 'message_seen' });
+  });
+
+  it('does not update lastSeenAt directly when pipeline is present', async () => {
+    const mockPipeline = {
+      incrementalUpdate: async () => { /* no-op — does not write lastSeenAt */ },
+    };
+
+    const ctx = makeCtx({
+      contactService,
+      confidencePipeline: mockPipeline as SkillContext['confidencePipeline'],
+      input: { channel: 'email', identifier: 'dave@example.com', displayName: 'Dave', messageTimestamp: TIMESTAMP_A },
+    });
+
+    await handler.execute(ctx);
+
+    // The mock pipeline is a no-op — lastSeenAt should remain null because the
+    // direct update path is skipped when the pipeline is present.
+    const contact = await contactService.getContact(contactId);
+    expect(contact!.lastSeenAt).toBeNull();
+  });
+});
+
 describe('ContactRegisterHandler — bus event emission', () => {
   let handler: ContactRegisterHandler;
   let contactService: ContactService;
