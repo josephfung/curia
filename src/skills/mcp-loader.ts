@@ -274,9 +274,15 @@ export async function loadMcpServers(
       const handler: SkillHandler = {
         async execute(ctx: SkillContext): Promise<SkillResult> {
           try {
+            // Merge fixed_inputs into the tool call arguments. Fixed values take
+            // precedence — even if an agent somehow passed a value for a stripped
+            // parameter (e.g. via prompt injection), the config value wins.
+            const mergedInput = Object.keys(resolvedFixedInputs).length > 0
+              ? { ...ctx.input, ...resolvedFixedInputs }
+              : ctx.input;
             const rawResult = await capturedSession.client.callTool({
               name: toolName,
-              arguments: ctx.input,
+              arguments: mergedInput,
             });
             const result = mapMcpResult(rawResult, logger, capturedSession.serverId, toolName);
             if (!result.success) {
@@ -298,7 +304,23 @@ export async function loadMcpServers(
       // Build the raw MCP input schema for the fast-path in toToolDefinitions.
       // The MCP SDK returns `inputSchema` as a full JSON Schema object; we cast
       // it to the ToolDefinition input_schema shape which shares the same structure.
-      const mcpInputSchema = tool.inputSchema as import('./types.js').ToolDefinition['input_schema'];
+      //
+      // When fixed_inputs are configured, strip those keys from the schema so
+      // agents never see them as tool parameters. The values are injected
+      // server-side in the execute handler below.
+      let mcpInputSchema = tool.inputSchema as import('./types.js').ToolDefinition['input_schema'];
+      const fixedKeys = Object.keys(resolvedFixedInputs);
+      if (fixedKeys.length > 0) {
+        mcpInputSchema = structuredClone(mcpInputSchema);
+        for (const key of fixedKeys) {
+          delete mcpInputSchema.properties[key];
+        }
+        if (mcpInputSchema.required) {
+          mcpInputSchema.required = mcpInputSchema.required.filter(
+            r => !fixedKeys.includes(r),
+          );
+        }
+      }
 
       try {
         registry.register(manifest, handler, mcpInputSchema);
