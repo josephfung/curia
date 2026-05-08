@@ -734,7 +734,15 @@ export class ContactService {
       lastSeenAt?: Date;
     },
   ): Promise<void> {
-    await this.backend.updateScoringFields(contactId, updates);
+    // Reject NaN/Infinity — these would silently corrupt the DB or cause a Postgres error
+    // depending on the column type. Better to fail loudly here than silently at write-time.
+    if (!Number.isFinite(updates.contactConfidence)) {
+      throw new Error(`contact-service: contactConfidence must be a finite number, got ${updates.contactConfidence}`);
+    }
+    // Clamp to [0, 1] as a last-resort safety net. computeConfidence() already clamps,
+    // but this guards against callers that bypass the pipeline.
+    const contactConfidence = Math.max(0, Math.min(1, updates.contactConfidence));
+    await this.backend.updateScoringFields(contactId, { ...updates, contactConfidence });
   }
 
   private computeGoldenRecord(

@@ -938,7 +938,16 @@ export class OutboundGateway {
       return;
     }
 
-    // Already confirmed — no action needed.
+    // Already confirmed — record the outbound interaction for scoring.
+    // Confirmed contacts are the busiest outbound path; omitting them would leave
+    // contact_confidence stale for established correspondents.
+    if (this.confidencePipeline) {
+      this.confidencePipeline.incrementalUpdate(contact.contactId, { type: 'message_sent' })
+        .catch(err => this.log.warn(
+          { err, channel, recipientId: redactId(recipientId), contactId: contact.contactId },
+          'outbound-gateway: confidence pipeline update failed for confirmed contact (non-fatal)',
+        ));
+    }
   }
 
   /**

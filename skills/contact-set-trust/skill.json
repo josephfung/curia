@@ -15,5 +15,6 @@
   },
   "permissions": [],
   "secrets": [],
-  "timeout": 15000
+  "timeout": 15000,
+  "capabilities": ["confidencePipeline"]
 }

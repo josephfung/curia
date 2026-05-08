@@ -589,7 +589,13 @@ describe('OutboundGateway.getSignalGroupMembers', () => {
 // ---------------------------------------------------------------------------
 
 describe('OutboundGateway contact promotion on successful send', () => {
-  function makeGateway(contactService: ContactService, nylasClient: NylasClient) {
+  type MockPipeline = { incrementalUpdate: ReturnType<typeof vi.fn> };
+
+  function makeGateway(
+    contactService: ContactService,
+    nylasClient: NylasClient,
+    confidencePipeline?: MockPipeline,
+  ) {
     const logger = createLogger('error');
     const contentFilter = {
       check: vi.fn().mockResolvedValue({ passed: true, findings: [] }),
@@ -605,6 +611,7 @@ describe('OutboundGateway contact promotion on successful send', () => {
       bus,
       ceoEmail: 'ceo@example.com',
       logger,
+      confidencePipeline: confidencePipeline as unknown as import('../../../src/contacts/confidence-pipeline.js').ConfidencePipeline,
     });
   }
 
@@ -692,6 +699,34 @@ describe('OutboundGateway contact promotion on successful send', () => {
     expect(result.success).toBe(true);
     expect(contactService.setStatus).not.toHaveBeenCalled();
     expect(contactService.createContact).not.toHaveBeenCalled();
+  });
+
+  it('fires confidencePipeline message_sent for an already-confirmed contact', async () => {
+    const nylasClient = {
+      sendMessage: vi.fn().mockResolvedValue({ id: 'sent-4' }),
+    } as unknown as NylasClient;
+
+    const contactService = {
+      resolveByChannelIdentity: vi.fn().mockResolvedValue({
+        contactId: 'contact-donna',
+        status: 'confirmed',
+        trustLevel: null,
+      }),
+    } as unknown as ContactService;
+
+    const confidencePipeline: MockPipeline = {
+      incrementalUpdate: vi.fn().mockResolvedValue(undefined),
+    };
+
+    const gateway = makeGateway(contactService, nylasClient, confidencePipeline);
+    const result = await gateway.send(baseRequest);
+
+    expect(result.success).toBe(true);
+    expect(confidencePipeline.incrementalUpdate).toHaveBeenCalledOnce();
+    expect(confidencePipeline.incrementalUpdate).toHaveBeenCalledWith(
+      'contact-donna',
+      { type: 'message_sent' },
+    );
   });
 
   it('does not promote on a failed send', async () => {

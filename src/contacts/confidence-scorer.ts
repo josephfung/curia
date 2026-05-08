@@ -77,7 +77,9 @@ export function computeConfidence(input: ConfidenceInput): number {
   }
 
   // Verification score: discrete boosts from CEO actions and identity pairings
-  const grantBoost = trustLevel !== null ? GRANT_BOOST : 0;
+  // Only CEO-granted trust levels (high, ceo) earn the boost — low/medium overrides are
+  // neutral or restrictive, not a positive verification signal.
+  const grantBoost = trustLevel === 'high' || trustLevel === 'ceo' ? GRANT_BOOST : 0;
   const manualBoost = hasCeoStatedIdentity ? MANUAL_BOOST : 0;
   const pairingBoost =
     (Math.min(verifiedIdentityCount, MAX_PAIRING_IDENTITIES) / MAX_PAIRING_IDENTITIES) * PAIRING_BOOST;
