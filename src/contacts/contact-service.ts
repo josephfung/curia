@@ -101,6 +101,9 @@ const AUTO_VERIFIED_SOURCES: ReadonlySet<IdentitySource> = new Set([
   'signal_participant',
   'crm_import',
   'calendar_attendee',
+  // agent_called: the agent is responsible for sourcing the identifier (same
+  // trust level as email_participant — provenance is from the channel itself).
+  'agent_called',
 ]);
 
 /**

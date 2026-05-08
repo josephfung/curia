@@ -15,6 +15,11 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 - **Contact confidence scoring pipeline** — `contact_confidence` is now updated on each qualifying event (inbound/outbound message, CEO trust grant, verified identity pairing). Supports incremental and full-recompute modes with convergence guarantee (spec 06, #460)
+- **`contact-register` skill** — integration point for agents that read channels directly (e.g. the ceo-inbox agent) rather than through the dispatcher. Resolves or creates contacts, updates `last_seen_at`, triggers a confidence scoring delta, and emits a `contact.resolved` bus event (#485)
+
+### Changed
+- **`contact.resolved` bus event** — `sourceLayer` widened from `'dispatch'` to `'dispatch' | 'execution'`; `createContactResolved()` factory accepts an optional `sourceLayer` parameter (defaults to `'dispatch'` for backward compatibility). This is a public API surface change.
+- **`IdentitySource`** — new value `'agent_called'` for contacts registered by agents outside the normal dispatcher pipeline
 
 ### Changed
 - **Outbound gateway** — removed `setTrustLevel('high')` band-aid; outbound sends now trigger the confidence scoring pipeline instead, giving contacts a real `contact_confidence` value

@@ -37,7 +37,11 @@ export type IdentitySource =
   | 'signal_participant'
   | 'crm_import'
   | 'calendar_attendee'
-  | 'self_claimed';
+  | 'self_claimed'
+  // Contact registered by an agent calling the contact-register skill directly,
+  // outside the normal dispatcher pipeline. Treated with the same trust as
+  // email_participant — the agent is responsible for sourcing the identifier.
+  | 'agent_called';
 
 // -- Contact status --
 // confirmed: CEO has verified this contact

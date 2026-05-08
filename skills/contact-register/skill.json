@@ -1,0 +1,25 @@
+{
+  "name": "contact-register",
+  "description": "Register a contact interaction from an agent that reads a channel directly, outside the normal dispatcher pipeline. Given a channel type and identifier (e.g. an email address), resolves the sender to a known contact — or creates a provisional one — then updates last_seen_at and triggers a confidence scoring delta. Emits a contact.resolved bus event for the audit trail. Use this once per sender during triage when processing messages that bypass handleInbound(). Returns the contact record.",
+  "version": "1.0.0",
+  "sensitivity": "normal",
+  "action_risk": "low",
+  "inputs": {
+    "channel": "string (channel type, e.g. 'email')",
+    "identifier": "string (channel identifier, e.g. sender email address)",
+    "displayName": "string (sender's display name — used as the contact name if a new contact is created)",
+    "direction": "string? (message direction: 'inbound' | 'outbound'; defaults to 'inbound')",
+    "messageTimestamp": "string (ISO 8601 timestamp of the message)"
+  },
+  "outputs": {
+    "contact_id": "string",
+    "display_name": "string",
+    "status": "string (confirmed | provisional | blocked)",
+    "contact_confidence": "number (0.0–1.0)",
+    "created": "boolean (true if a new provisional contact was created)"
+  },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 30000,
+  "capabilities": ["bus", "confidencePipeline"]
+}
