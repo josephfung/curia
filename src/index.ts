@@ -313,7 +313,7 @@ async function main(): Promise<void> {
   });
 
   // Now that contactService exists, wire up the confidence pipeline.
-  confidencePipeline = contactService ? new ConfidencePipeline(contactService) : undefined;
+  confidencePipeline = contactService ? new ConfidencePipeline(contactService, logger) : undefined;
 
   // Authorization config — load role defaults, permissions, and channel trust.
   // These YAML files define the deterministic permission model.

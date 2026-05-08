@@ -464,10 +464,19 @@ export class ContactService {
 
     await this.backend.createIdentity(identity);
 
-    // Notify the scoring pipeline when a verified identity is linked
+    // Fire-and-forget: notify scoring pipeline when a verified identity is linked.
+    // The callback may return a promise (async pipeline update), so we handle both
+    // sync throws and async rejections. Scoring is non-blocking — must not fail
+    // the linkIdentity operation.
     if (verified && this.onIdentityVerified) {
       try {
-        this.onIdentityVerified(options.contactId);
+        const result = this.onIdentityVerified(options.contactId);
+        // Handle async callbacks — catch unhandled rejections
+        if (result && typeof (result as Promise<void>).catch === 'function') {
+          (result as Promise<void>).catch(err => {
+            this.logger?.warn({ err, contactId: options.contactId }, 'onIdentityVerified callback rejected (non-fatal)');
+          });
+        }
       } catch (err) {
         this.logger?.warn({ err, contactId: options.contactId }, 'onIdentityVerified callback threw (non-fatal)');
       }
