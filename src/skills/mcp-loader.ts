@@ -19,20 +19,6 @@ import type { ActionRisk } from './types.js';
 import { resolveEnvValue } from '../config.js';
 
 // ---------------------------------------------------------------------------
-// Errors
-// ---------------------------------------------------------------------------
-
-/**
- * Thrown when MCP server configuration is invalid (e.g. a fixed_inputs env-var
- * reference cannot be resolved). This is a deployment problem that must be fixed
- * before the system can start — it must NOT be swallowed by the graceful-degradation
- * catch block in index.ts that handles connection failures.
- */
-export class McpConfigError extends Error {
-  override readonly name = 'McpConfigError';
-}
-
-// ---------------------------------------------------------------------------
 // Config types — mirrors schemas/skills-config.json
 // ---------------------------------------------------------------------------
 
@@ -167,10 +153,12 @@ export function stripFixedInputsFromSchema(
 ): import('./types.js').ToolDefinition['input_schema'] {
   if (fixedKeys.length === 0) return schema;
   const stripped = structuredClone(schema);
-  for (const key of fixedKeys) {
-    delete stripped.properties[key];
+  if (stripped.properties && typeof stripped.properties === 'object') {
+    for (const key of fixedKeys) {
+      delete stripped.properties[key];
+    }
   }
-  if (stripped.required) {
+  if (Array.isArray(stripped.required)) {
     stripped.required = stripped.required.filter(r => !fixedKeys.includes(r));
   }
   return stripped;
@@ -237,13 +225,13 @@ export async function loadMcpServers(
     // Resolve fixed_inputs once at startup. These values are captured in closures
     // and merged into every callTool invocation for this server's tools.
     // Env-var references (e.g. "env:CURIA_GOOGLE_EMAIL") are resolved here —
-    // a missing env var throws McpConfigError, which propagates through the
-    // graceful-degradation catch in index.ts and crashes the process. This is
-    // intentional: a missing deployment constant is a config error, not a
-    // transient connection failure.
+    // a missing env var skips this server entirely (same as a connection failure).
+    // This keeps google-workspace optional: deployments without CURIA_GOOGLE_EMAIL
+    // simply don't get Workspace tools, rather than crashing the process.
     const rawFixedInputs = 'fixed_inputs' in serverEntry ? serverEntry.fixed_inputs : undefined;
     const resolvedFixedInputs: Record<string, string> = {};
     if (rawFixedInputs) {
+      let resolutionFailed = false;
       for (const [key, value] of Object.entries(rawFixedInputs)) {
         try {
           resolvedFixedInputs[key] = resolveEnvValue(
@@ -251,12 +239,15 @@ export async function loadMcpServers(
             `MCP server '${serverEntry.name}' fixed_inputs.${key}`,
           );
         } catch (err) {
-          throw new McpConfigError(
-            err instanceof Error ? err.message : String(err),
-            { cause: err },
+          logger.error(
+            { err, server: serverEntry.name, key },
+            'fixed_inputs resolution failed — skipping this MCP server',
           );
+          resolutionFailed = true;
+          break;
         }
       }
+      if (resolutionFailed) continue;
       logger.info(
         { server: serverEntry.name, keys: Object.keys(resolvedFixedInputs) },
         'MCP server fixed_inputs resolved',
