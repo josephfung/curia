@@ -555,33 +555,6 @@ export class Dispatcher {
     let taskContent = payload.content;
     let injectionMetadata: Record<string, unknown> | undefined;
 
-    // Inbound context injection for non-threaded channels.
-    // Read recent outbound context memos from working memory and prepend them
-    // to the task content so the coordinator knows what it last sent.
-    // Best-effort: failure is logged but does not block message routing.
-    const inboundPolicy = this.channelPolicies?.[payload.channelId];
-    if (this.workingMemory && inboundPolicy && !inboundPolicy.threaded) {
-      try {
-        const history = await this.workingMemory.getHistory(
-          payload.conversationId, 'coordinator',
-        );
-        const recentMemos = extractRecentMemos(history, this.contextMemoTtlMs);
-        const preamble = buildContextPreamble(recentMemos, taskContent);
-        if (preamble !== null) {
-          taskContent = preamble;
-          this.logger.debug(
-            { channelId: payload.channelId, conversationId: payload.conversationId, memoCount: recentMemos.length },
-            'Injected outbound context preamble into task content',
-          );
-        }
-      } catch (err) {
-        this.logger.warn(
-          { err, channelId: payload.channelId, conversationId: payload.conversationId },
-          'Failed to read outbound context memos — proceeding without context injection',
-        );
-      }
-    }
-
     if (this.injectionScanner) {
       try {
         const scan = this.injectionScanner.scan(payload.content);
@@ -612,6 +585,33 @@ export class Dispatcher {
         this.logger.error(
           { err: scanErr, channelId: payload.channelId, senderId: payload.senderId },
           'Inbound scanner threw unexpectedly — forwarding raw content to coordinator (Layer 2 defense still active)',
+        );
+      }
+    }
+
+    // Inbound context injection for non-threaded channels.
+    // Placed AFTER the injection scanner so the preamble (system-generated content)
+    // wraps the already-sanitized user content and is not itself scanned or overwritten.
+    // Best-effort: failure is logged but does not block message routing.
+    const inboundPolicy = this.channelPolicies?.[payload.channelId];
+    if (this.workingMemory && inboundPolicy && !inboundPolicy.threaded) {
+      try {
+        const history = await this.workingMemory.getHistory(
+          payload.conversationId, 'coordinator',
+        );
+        const recentMemos = extractRecentMemos(history, this.contextMemoTtlMs);
+        const preamble = buildContextPreamble(recentMemos, taskContent);
+        if (preamble !== null) {
+          taskContent = preamble;
+          this.logger.debug(
+            { channelId: payload.channelId, conversationId: payload.conversationId, memoCount: recentMemos.length },
+            'Injected outbound context preamble into task content',
+          );
+        }
+      } catch (err) {
+        this.logger.warn(
+          { err, channelId: payload.channelId, conversationId: payload.conversationId },
+          'Failed to read outbound context memos — proceeding without context injection',
         );
       }
     }
