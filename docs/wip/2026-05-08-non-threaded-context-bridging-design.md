@@ -131,20 +131,20 @@ preamble, most recent last. In practice this will rarely exceed 2-3.
 **Error handling:** If the working memory query fails, log the error and proceed
 without the preamble. Context injection is best-effort.
 
-### Layer 4 — Coordinator prompt: cold-start clarification gate
+### Layer 4 — Coordinator prompt: outbound context and clarification gate
 
 The coordinator YAML (`agents/coordinator.yaml`) gains a new directive section,
 placed after the existing audience-awareness block:
 
 ```
-## Non-threaded channel context
+## Outbound context
 
 When your input includes a [PRIOR OUTBOUND CONTEXT] section, the user is likely
 replying to that prior message. Use the context memo (message_preview, key_ids,
 expected_reply) to understand what they are referring to and act accordingly.
 
-When your input does NOT include a [PRIOR OUTBOUND CONTEXT] section and you are
-on a non-threaded channel (Signal, SMS), apply this two-part test:
+When your input does NOT include a [PRIOR OUTBOUND CONTEXT] section, apply this
+two-part test:
 
 1. Is the message **self-contained** — fully actionable on its own?
    Examples: "Move the weekly team meeting to 4:30", "What's on my calendar tomorrow?"
@@ -159,12 +159,11 @@ on a non-threaded channel (Signal, SMS), apply this two-part test:
 This is a soft LLM directive — the coordinator uses judgment. "Yes, cancel it" is
 reply-shaped (cancel what?). "Yes, cancel the 3pm meeting" is self-contained.
 
-No changes to threaded channels. Email threading already carries context.
-
-**Channel identification:** The coordinator already receives `channelId` in the task
-payload. The prompt lists non-threaded channels explicitly (Signal, SMS, CLI). Adding
-a new non-threaded channel requires updating this list — but adding a channel already
-requires prompt updates for audience-awareness, so this is not incremental work.
+The gate is **channel-agnostic** — it applies universally. On threaded channels like
+email, it rarely fires because the email body carries thread context (quoted text,
+subject line). On non-threaded channels, it fires more often because there is no
+structural threading. This avoids hardcoding channel lists in the prompt and handles
+cross-channel scenarios (e.g., user receives a Signal notification, replies via email).
 
 ## What is NOT in scope
 
@@ -197,8 +196,8 @@ requires prompt updates for audience-awareness, so this is not incremental work.
 - [ ] Dispatch layer reads the most recent outbound context memo(s) (within 24h TTL)
       and injects them when routing an inbound message from a non-threaded channel.
 - [ ] If no recent memo exists, the inbound message passes through without a preamble.
-- [ ] Coordinator prompt reflects the two-condition clarification gate (no preamble AND
-      reply-shaped → ask; no preamble AND self-contained → proceed).
+- [ ] Coordinator prompt reflects the channel-agnostic clarification gate (no preamble
+      AND reply-shaped → ask; no preamble AND self-contained → proceed).
 - [ ] Integration test: simulate scheduler-sends-Signal → user-replies flow; verify
       coordinator context contains the outbound memo.
 - [ ] Integration test: cold-start self-contained message proceeds without clarification.
