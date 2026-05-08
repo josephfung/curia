@@ -72,6 +72,16 @@ export class ContactSetTrustHandler implements SkillHandler {
         'Contact trust level updated',
       );
 
+      // Fire scoring pipeline update — the trust level change affects contact_confidence
+      if (ctx.confidencePipeline) {
+        try {
+          await ctx.confidencePipeline.incrementalUpdate(contact_id, { type: 'trust_grant' });
+        } catch (pipelineErr) {
+          // Non-fatal — the trust level was already set successfully
+          ctx.log.warn({ err: pipelineErr, contact_id }, 'Confidence pipeline update failed after trust grant (non-fatal)');
+        }
+      }
+
       return {
         success: true,
         data: {
