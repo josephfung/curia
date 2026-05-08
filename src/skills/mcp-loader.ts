@@ -16,6 +16,7 @@ import { connectStdio, connectSse } from './mcp-client.js';
 import type { McpSession } from './mcp-client.js';
 import type { Logger } from '../logger.js';
 import type { ActionRisk } from './types.js';
+import { resolveEnvValue } from '../config.js';
 
 // ---------------------------------------------------------------------------
 // Config types — mirrors schemas/skills-config.json
@@ -30,6 +31,10 @@ interface McpStdioServerEntry {
   command: string;
   args?: string[];
   env?: Record<string, string>;
+  /** Constant parameter values injected into every tool call from this server.
+   *  Keys are parameter names; values are literal strings or "env:VAR_NAME" references.
+   *  Listed parameters are stripped from the tool schema — agents never see them. */
+  fixed_inputs?: Record<string, string>;
 }
 
 interface McpSseServerEntry {
@@ -40,6 +45,10 @@ interface McpSseServerEntry {
   timeout_ms?: number;
   url: string;
   headers?: Record<string, string>;
+  /** Constant parameter values injected into every tool call from this server.
+   *  Keys are parameter names; values are literal strings or "env:VAR_NAME" references.
+   *  Listed parameters are stripped from the tool schema — agents never see them. */
+  fixed_inputs?: Record<string, string>;
 }
 
 type McpServerEntry = McpStdioServerEntry | McpSseServerEntry;
@@ -174,6 +183,25 @@ export async function loadMcpServers(
         'MCP server config missing required "url" for sse transport — skipping',
       );
       continue;
+    }
+
+    // Resolve fixed_inputs once at startup. These values are captured in closures
+    // and merged into every callTool invocation for this server's tools.
+    // Env-var references (e.g. "env:CURIA_GOOGLE_EMAIL") are resolved here —
+    // a missing env var causes a startup failure with a clear error message.
+    const rawFixedInputs = 'fixed_inputs' in serverEntry ? serverEntry.fixed_inputs : undefined;
+    const resolvedFixedInputs: Record<string, string> = {};
+    if (rawFixedInputs) {
+      for (const [key, value] of Object.entries(rawFixedInputs)) {
+        resolvedFixedInputs[key] = resolveEnvValue(
+          value,
+          `MCP server '${serverEntry.name}' fixed_inputs.${key}`,
+        );
+      }
+      logger.info(
+        { server: serverEntry.name, keys: Object.keys(resolvedFixedInputs) },
+        'MCP server fixed_inputs resolved',
+      );
     }
 
     let session: McpSession;
