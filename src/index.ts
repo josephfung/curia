@@ -39,7 +39,7 @@ import { EntityMemory } from './memory/entity-memory.js';
 import { SkillRegistry } from './skills/registry.js';
 import { ExecutionLayer } from './skills/execution.js';
 import { loadSkillsFromDirectory } from './skills/loader.js';
-import { loadMcpServers, McpConfigError } from './skills/mcp-loader.js';
+import { loadMcpServers } from './skills/mcp-loader.js';
 import type { McpSession } from './skills/mcp-client.js';
 import { ContactService } from './contacts/contact-service.js';
 import { ConfidencePipeline } from './contacts/confidence-pipeline.js';
@@ -551,14 +551,11 @@ async function main(): Promise<void> {
   try {
     mcpSessions = await loadMcpServers(configDir, skillRegistry, logger);
   } catch (err) {
-    if (err instanceof McpConfigError) {
-      // Config errors (missing env vars, invalid fixed_inputs) are deployment
-      // problems that must be fixed before the system can start. Do not degrade.
-      throw err;
-    }
     // Malformed skills.yaml or unexpected loader error — degrade gracefully rather
     // than crashing. The startup validator catches schema violations, but a YAML
     // parse error after the validator runs would otherwise crash here.
+    // Per-server errors (connection failures, missing fixed_inputs env vars) are
+    // handled inside loadMcpServers and skip the affected server only.
     logger.error({ err }, 'MCP bootstrap failed; continuing without MCP tools');
   }
   if (mcpSessions.length > 0) {
