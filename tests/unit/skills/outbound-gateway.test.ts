@@ -627,7 +627,6 @@ describe('OutboundGateway contact promotion on successful send', () => {
         // Second call: promotion lookup (returns provisional again)
         .mockResolvedValueOnce({ contactId: 'contact-donna', status: 'provisional', trustLevel: null }),
       setStatus: vi.fn().mockResolvedValue(undefined),
-      setTrustLevel: vi.fn().mockResolvedValue(undefined),
     } as unknown as ContactService;
 
     const gateway = makeGateway(contactService, nylasClient);
@@ -636,9 +635,8 @@ describe('OutboundGateway contact promotion on successful send', () => {
     expect(result.success).toBe(true);
     expect(contactService.setStatus).toHaveBeenCalledOnce();
     expect(contactService.setStatus).toHaveBeenCalledWith('contact-donna', 'confirmed');
-    // Must also set trustLevel so replies score above the trust floor
-    expect(contactService.setTrustLevel).toHaveBeenCalledOnce();
-    expect(contactService.setTrustLevel).toHaveBeenCalledWith('contact-donna', 'high');
+    // trustLevel band-aid removed — confidence pipeline handles scoring now
+    // (pipeline is optional and not provided in this test, so no scoring call fires)
   });
 
   it('creates a confirmed contact when no record exists for the recipient', async () => {
@@ -651,7 +649,6 @@ describe('OutboundGateway contact promotion on successful send', () => {
       resolveByChannelIdentity: vi.fn().mockResolvedValue(null),
       createContact: vi.fn().mockResolvedValue({ id: 'new-contact-id' }),
       linkIdentity: vi.fn().mockResolvedValue(undefined),
-      setTrustLevel: vi.fn().mockResolvedValue(undefined),
     } as unknown as ContactService;
 
     const gateway = makeGateway(contactService, nylasClient);
@@ -670,9 +667,8 @@ describe('OutboundGateway contact promotion on successful send', () => {
       channelIdentifier: 'donna@example.com',
       source: 'ceo_stated',
     }));
-    // Must also set trustLevel so replies score above the trust floor
-    expect(contactService.setTrustLevel).toHaveBeenCalledOnce();
-    expect(contactService.setTrustLevel).toHaveBeenCalledWith('new-contact-id', 'high');
+    // trustLevel band-aid removed — confidence pipeline handles scoring now
+    // (pipeline is optional and not provided in this test, so no scoring call fires)
   });
 
   it('does not promote a contact that is already confirmed', async () => {
