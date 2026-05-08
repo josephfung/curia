@@ -517,12 +517,14 @@ export interface AgentDiscussEvent extends BaseEvent {
   payload: AgentDiscussPayload;
 }
 
-// Contact events — emitted by the dispatch layer during the contact resolution step.
+// Contact events — emitted during contact resolution. Normally fired by the dispatch
+// layer, but can also be emitted by the execution layer (e.g. contact-register skill
+// for agents that read channels directly without going through the dispatcher).
 // contact.resolved fires when a sender maps to a known contact; contact.unknown fires when no match is found.
 
 export interface ContactResolvedEvent extends BaseEvent {
   type: 'contact.resolved';
-  sourceLayer: 'dispatch';
+  sourceLayer: 'dispatch' | 'execution';
   payload: ContactResolvedPayload;
 }
 
@@ -905,15 +907,17 @@ export function createMemoryQuery(
 }
 
 export function createContactResolved(
-  // parentEventId is required — every resolution must trace back to the inbound event that triggered it.
-  payload: ContactResolvedPayload & { parentEventId: string },
+  // parentEventId is required — every resolution must trace back to the triggering event.
+  // sourceLayer defaults to 'dispatch' for the normal pipeline; pass 'execution' when
+  // emitting from a skill (e.g. contact-register for agents that bypass the dispatcher).
+  payload: ContactResolvedPayload & { parentEventId: string; sourceLayer?: 'dispatch' | 'execution' },
 ): ContactResolvedEvent {
-  const { parentEventId, ...rest } = payload;
+  const { parentEventId, sourceLayer = 'dispatch', ...rest } = payload;
   return {
     id: randomUUID(),
     timestamp: new Date(),
     type: 'contact.resolved',
-    sourceLayer: 'dispatch',
+    sourceLayer,
     payload: rest,
     parentEventId,
   };

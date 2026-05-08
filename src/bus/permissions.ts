@@ -19,11 +19,14 @@ import type { Layer, EventType } from './events.js';
 //          system layer gets full access for audit logging and monitoring.
 // PII redaction (#249): dispatch layer publishes outbound.pii-redacted when PII is scrubbed
 //          from an outbound message; system layer gets full access for future audit subscribers.
+// contact-register skill (#485): execution layer publishes contact.resolved when an agent registers
+//          a contact interaction outside the dispatcher pipeline (e.g. ceo-inbox reading Nylas directly).
+//          The sourceLayer on the event is 'execution'; the publish permission here is what puts it on the wire.
 const publishAllowlist: Record<Layer, Set<EventType>> = {
   channel: new Set(['inbound.message']),
   dispatch: new Set(['agent.task', 'outbound.message', 'outbound.blocked', 'outbound.pii-redacted', 'outbound.notification', 'contact.resolved', 'contact.unknown', 'message.held', 'message.rejected', 'contact.duplicate_detected', 'contact.merged', 'conversation.checkpoint', 'human.decision', 'autonomy.send_blocked']),
   agent: new Set(['agent.response', 'agent.error', 'skill.invoke', 'skill.result', 'memory.store', 'memory.query', 'agent.discuss', 'llm.call']),
-  execution: new Set(['skill.result', 'secret.accessed', 'autonomy.skill_blocked']),
+  execution: new Set(['skill.result', 'secret.accessed', 'autonomy.skill_blocked', 'contact.resolved']),
   system: new Set(['inbound.message', 'agent.task', 'agent.response', 'agent.error', 'outbound.message', 'outbound.blocked', 'outbound.pii-redacted', 'outbound.notification', 'skill.invoke', 'skill.result', 'memory.store', 'memory.query', 'contact.resolved', 'contact.unknown', 'message.held', 'message.rejected', 'schedule.created', 'schedule.fired', 'schedule.suspended', 'schedule.recovered', 'schedule.drift_paused', 'config.change', 'contact.duplicate_detected', 'contact.merged', 'agent.discuss', 'conversation.checkpoint', 'llm.call', 'human.decision', 'secret.accessed', 'autonomy.skill_blocked', 'autonomy.send_blocked']),
 };
 
