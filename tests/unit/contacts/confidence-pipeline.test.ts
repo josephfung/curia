@@ -1,0 +1,154 @@
+import { describe, it, expect, beforeEach } from 'vitest';
+import { ContactService } from '../../../src/contacts/contact-service.js';
+import { ConfidencePipeline } from '../../../src/contacts/confidence-pipeline.js';
+import type { Contact } from '../../../src/contacts/types.js';
+
+describe('ConfidencePipeline', () => {
+  let service: ContactService;
+  let pipeline: ConfidencePipeline;
+
+  beforeEach(() => {
+    service = ContactService.createInMemory();
+    pipeline = new ConfidencePipeline(service);
+  });
+
+  async function createTestContact(overrides: { source?: string } = {}): Promise<Contact> {
+    return service.createContact({
+      displayName: 'Test Contact',
+      source: overrides.source ?? 'email_participant',
+    });
+  }
+
+  describe('incrementalUpdate — message_seen', () => {
+    it('increments inbound count and updates lastSeenAt', async () => {
+      const contact = await createTestContact();
+      await pipeline.incrementalUpdate(contact.id, { type: 'message_seen' });
+
+      const updated = await service.getContact(contact.id);
+      expect(updated!.inboundMessageCount).toBe(1);
+      expect(updated!.lastSeenAt).not.toBeNull();
+      expect(updated!.contactConfidence).toBeGreaterThan(0);
+    });
+
+    it('respects count parameter for bulk import', async () => {
+      const contact = await createTestContact();
+      await pipeline.incrementalUpdate(contact.id, { type: 'message_seen', count: 15 });
+
+      const updated = await service.getContact(contact.id);
+      expect(updated!.inboundMessageCount).toBe(15);
+    });
+  });
+
+  describe('incrementalUpdate — message_sent', () => {
+    it('increments outbound count but does not update lastSeenAt', async () => {
+      const contact = await createTestContact();
+      await pipeline.incrementalUpdate(contact.id, { type: 'message_sent' });
+
+      const updated = await service.getContact(contact.id);
+      expect(updated!.outboundMessageCount).toBe(1);
+      expect(updated!.lastSeenAt).toBeNull();
+      expect(updated!.contactConfidence).toBeGreaterThan(0);
+    });
+
+    it('respects count parameter', async () => {
+      const contact = await createTestContact();
+      await pipeline.incrementalUpdate(contact.id, { type: 'message_sent', count: 5 });
+
+      const updated = await service.getContact(contact.id);
+      expect(updated!.outboundMessageCount).toBe(5);
+    });
+  });
+
+  describe('incrementalUpdate — trust_grant', () => {
+    it('recomputes confidence with trust level signal', async () => {
+      const contact = await createTestContact();
+      await service.setTrustLevel(contact.id, 'high');
+      await pipeline.incrementalUpdate(contact.id, { type: 'trust_grant' });
+
+      const updated = await service.getContact(contact.id);
+      expect(updated!.contactConfidence).toBeGreaterThan(0);
+    });
+  });
+
+  describe('incrementalUpdate — pairing_confirmed', () => {
+    it('recomputes confidence with verified identity signal', async () => {
+      const contact = await createTestContact();
+      await service.linkIdentity({
+        contactId: contact.id,
+        channel: 'email',
+        channelIdentifier: 'test@example.com',
+        source: 'email_participant',
+      });
+      await pipeline.incrementalUpdate(contact.id, { type: 'pairing_confirmed' });
+
+      const updated = await service.getContact(contact.id);
+      expect(updated!.contactConfidence).toBeGreaterThan(0);
+    });
+  });
+
+  describe('fullRecompute', () => {
+    it('produces same score as incremental path for identical history', async () => {
+      const contact = await createTestContact();
+      await pipeline.incrementalUpdate(contact.id, { type: 'message_seen', count: 5 });
+      await pipeline.incrementalUpdate(contact.id, { type: 'message_sent', count: 3 });
+      const afterIncremental = await service.getContact(contact.id);
+
+      await pipeline.fullRecompute(contact.id);
+      const afterRecompute = await service.getContact(contact.id);
+
+      expect(afterRecompute!.contactConfidence).toBeCloseTo(afterIncremental!.contactConfidence);
+    });
+
+    it('is idempotent — running twice gives the same result', async () => {
+      const contact = await createTestContact();
+      await pipeline.incrementalUpdate(contact.id, { type: 'message_seen', count: 10 });
+
+      await pipeline.fullRecompute(contact.id);
+      const first = await service.getContact(contact.id);
+
+      await pipeline.fullRecompute(contact.id);
+      const second = await service.getContact(contact.id);
+
+      expect(second!.contactConfidence).toBe(first!.contactConfidence);
+    });
+
+    it('does not modify message counts or lastSeenAt', async () => {
+      const contact = await createTestContact();
+      await pipeline.incrementalUpdate(contact.id, { type: 'message_seen', count: 7 });
+      const before = await service.getContact(contact.id);
+
+      await pipeline.fullRecompute(contact.id);
+      const after = await service.getContact(contact.id);
+
+      expect(after!.inboundMessageCount).toBe(before!.inboundMessageCount);
+      expect(after!.outboundMessageCount).toBe(before!.outboundMessageCount);
+      expect(after!.lastSeenAt?.getTime()).toBe(before!.lastSeenAt?.getTime());
+    });
+  });
+
+  describe('fullRecomputeAll', () => {
+    it('recomputes all contacts and returns count', async () => {
+      await createTestContact();
+      await createTestContact();
+      const count = await pipeline.fullRecomputeAll();
+      expect(count).toBe(2);
+    });
+  });
+
+  describe('edge cases', () => {
+    it('skips CEO contacts (role = ceo)', async () => {
+      const ceo = await service.createContact({
+        displayName: 'CEO',
+        role: 'ceo',
+        source: 'ceo_stated',
+      });
+      await pipeline.incrementalUpdate(ceo.id, { type: 'message_seen' });
+      const after = await service.getContact(ceo.id);
+      expect(after!.inboundMessageCount).toBe(0);
+    });
+
+    it('ignores unknown contactId', async () => {
+      await pipeline.incrementalUpdate('nonexistent-id', { type: 'message_seen' });
+    });
+  });
+});
