@@ -125,6 +125,9 @@ export interface SkillContext {
    *  (e.g., resolving a caller's registered calendars, looking up contacts).
    *  Populated whenever the ExecutionLayer has a contactService instance. */
   contactService?: import('../contacts/contact-service.js').ContactService;
+  /** Contact confidence scoring pipeline. Populated when available.
+   *  Skills that modify trust-related fields can fire scoring signals through this. */
+  confidencePipeline?: import('../contacts/confidence-pipeline.js').ConfidencePipeline;
   /** Outbound gateway — available to skills declaring 'outboundGateway' in capabilities.
    *  All external communication (email, future Signal/Telegram) goes through the gateway,
    *  which enforces contact blocked checks and content filtering. */

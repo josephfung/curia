@@ -114,6 +114,7 @@ const AUTO_VERIFIED_SOURCES: ReadonlySet<IdentitySource> = new Set([
  */
 export class ContactService {
   private onContactMerged?: (primaryId: string, secondaryId: string, mergedAt: Date) => void;
+  private onIdentityVerified?: (contactId: string) => void;
   private dedupService?: DedupService;
   private onDuplicateDetected?: (
     newContactId: string,
@@ -129,6 +130,7 @@ export class ContactService {
     options?: ContactServiceOptions,
   ) {
     this.onContactMerged = options?.onContactMerged;
+    this.onIdentityVerified = options?.onIdentityVerified;
     this.dedupService = options?.dedupService;
     this.onDuplicateDetected = options?.onDuplicateDetected;
   }
@@ -461,6 +463,16 @@ export class ContactService {
     };
 
     await this.backend.createIdentity(identity);
+
+    // Notify the scoring pipeline when a verified identity is linked
+    if (verified && this.onIdentityVerified) {
+      try {
+        this.onIdentityVerified(options.contactId);
+      } catch (err) {
+        this.logger?.warn({ err, contactId: options.contactId }, 'onIdentityVerified callback threw (non-fatal)');
+      }
+    }
+
     return identity;
   }
 
