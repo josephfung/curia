@@ -56,7 +56,8 @@ export interface SkillManifest {
    *
    *  Valid capabilities: bus, agentRegistry, outboundGateway, heldMessages,
    *  schedulerService, entityMemory, nylasCalendarClient, autonomyService,
-   *  executiveProfileService, browserService, bullpenService, skillSearch.
+   *  executiveProfileService, browserService, bullpenService, skillSearch,
+   *  actionLogRepo, executionLayer, confidencePipeline.
    *
    *  Services NOT listed here (contactService, entityContextAssembler, agentPersona)
    *  are universal — available to every skill without declaration. */
@@ -125,8 +126,9 @@ export interface SkillContext {
    *  (e.g., resolving a caller's registered calendars, looking up contacts).
    *  Populated whenever the ExecutionLayer has a contactService instance. */
   contactService?: import('../contacts/contact-service.js').ContactService;
-  /** Contact confidence scoring pipeline. Populated when available.
-   *  Skills that modify trust-related fields can fire scoring signals through this. */
+  /** Contact confidence scoring pipeline — available to skills declaring 'confidencePipeline'
+   *  in capabilities. Skills that modify trust-related data (trust level, identity pairings)
+   *  should declare this capability and fire scoring signals through it. */
   confidencePipeline?: import('../contacts/confidence-pipeline.js').ConfidencePipeline;
   /** Outbound gateway — available to skills declaring 'outboundGateway' in capabilities.
    *  All external communication (email, future Signal/Telegram) goes through the gateway,

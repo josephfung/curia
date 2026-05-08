@@ -453,7 +453,6 @@ export class ExecutionLayer {
       // contactService is available to all skills — read-only contact lookups
       // (calendars, display names, etc.) are not a privilege escalation.
       contactService: this.contactService,
-      confidencePipeline: this.confidencePipeline,
       // Thread agentId and taskEventId into context unconditionally — capability-gated
       // skills (bullpen) need these for event publishing; harmless for others.
       agentId: options?.agentId,
@@ -488,6 +487,7 @@ export class ExecutionLayer {
       bullpenService: this.bullpenService,
       executiveProfileService: this.executiveProfileService,
       actionLogRepo: this.actionLogRepo,
+      confidencePipeline: this.confidencePipeline,
       // executionLayer injects `this` so approve-action can re-invoke blocked skills
       // with humanApproved: true (see ADR-018). Only approve-action should declare this.
       executionLayer: this,

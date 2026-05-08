@@ -48,8 +48,8 @@ export class ConfidencePipeline {
     if (contact.role === 'ceo') return; // CEO confidence is hardcoded in ContactResolver
 
     const count = ('count' in signal ? signal.count : undefined) ?? 1;
-    if (count < 1) {
-      this.logger?.warn({ contactId, count }, 'confidence-pipeline: non-positive count — skipping (likely a caller bug)');
+    if (!Number.isInteger(count) || count < 1) {
+      this.logger?.warn({ contactId, count }, 'confidence-pipeline: non-positive or non-integer count — skipping (likely a caller bug)');
       return;
     }
 

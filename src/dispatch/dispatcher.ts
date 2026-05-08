@@ -260,7 +260,8 @@ export class Dispatcher {
             // Fire-and-forget: update contact confidence for this interaction.
             // Non-blocking — the trust score for THIS message already used the
             // stored contactConfidence. This update benefits the NEXT inbound.
-            if (this.confidencePipeline) {
+            // Skip blocked contacts — they are being dropped and should not accrue history.
+            if (this.confidencePipeline && senderContext.status !== 'blocked') {
               const resolvedContactId = senderContext.contactId;
               this.confidencePipeline.incrementalUpdate(resolvedContactId, { type: 'message_seen' })
                 .catch(err => this.logger.warn({ err, contactId: resolvedContactId }, 'Confidence pipeline update failed (non-fatal)'));
