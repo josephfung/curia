@@ -251,4 +251,25 @@ describe('ExtractFactsHandler', () => {
     expect(result).toEqual({ success: true, data: { stored: 1, skipped: false, failed: 1 } });
     expect(storeFact).toHaveBeenCalledTimes(2);
   });
+
+  it('catch block is safe when storeFact throws — failed incremented, no ReferenceError', async () => {
+    const entityMemory = makeEntityMemory();
+    const facts = JSON.stringify([
+      { subject: 'Jane Doe', subjectType: 'person', attribute: 'home_city', value: 'Toronto', confidence: 0.9, decayClass: 'slow_decay' },
+    ]);
+    const anthropic = makeMockAnthropicClient(['yes', facts]);
+    const handler = new ExtractFactsHandler(anthropic as never);
+
+    // Simulate a DB outage — storeFact throws instead of returning a failure result.
+    vi.spyOn(entityMemory, 'storeFact').mockRejectedValueOnce(new Error('DB connection lost'));
+
+    const ctx = makeCtx(entityMemory, { text: 'Jane Doe lives in Toronto.', source: 'test' });
+    const result = await handler.execute(ctx);
+
+    // The per-fact catch block must handle the error and increment failed.
+    // If subject/attribute are not in scope, a ReferenceError escapes to the
+    // outer catch and the result is { success: false } — so this assertion
+    // distinguishes the two code paths.
+    expect(result).toEqual({ success: true, data: { stored: 0, skipped: false, failed: 1 } });
+  });
 });
