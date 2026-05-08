@@ -204,7 +204,7 @@ describe('ExtractFactsHandler', () => {
     expect(result).toEqual({ success: false, error: 'Extraction returned non-array response' });
   });
 
-  it('handles storeFact returning stored:false (rate-limit or contradiction) — not counted as failed', async () => {
+  it('handles storeFact conflict — fact not stored, not counted as failed', async () => {
     const entityMemory = makeEntityMemory();
     const facts = JSON.stringify([
       { subject: 'Jane Doe', subjectType: 'person', attribute: 'home_city', value: 'Toronto', confidence: 0.9, decayClass: 'slow_decay' },
@@ -212,14 +212,43 @@ describe('ExtractFactsHandler', () => {
     const anthropic = makeMockAnthropicClient(['yes', facts]);
     const handler = new ExtractFactsHandler(anthropic as never);
 
-    // Mock storeFact to return stored:false (simulates rate-limit rejection or contradiction)
-    const storeFact = vi.spyOn(entityMemory, 'storeFact').mockResolvedValueOnce({ stored: false, conflict: 'Rate limit exceeded' });
+    // Mock storeFact to return a conflict (contradicts an existing fact)
+    const storeFact = vi.spyOn(entityMemory, 'storeFact').mockResolvedValueOnce({
+      stored: false,
+      action: 'conflict',
+      conflict: 'contradicts existing value: London',
+    });
 
     const ctx = makeCtx(entityMemory, { text: 'Bob lives in Toronto.', source: 'test' });
     const result = await handler.execute(ctx);
 
-    // stored:false is not counted as failed — it is an expected semantic outcome
+    // conflict is a semantic outcome — not counted as failed
     expect(result).toEqual({ success: true, data: { stored: 0, skipped: false, failed: 0 } });
     expect(storeFact).toHaveBeenCalledOnce();
+  });
+
+  it('breaks immediately on rate_limited mid-batch — increments failed, skips remaining facts', async () => {
+    const entityMemory = makeEntityMemory();
+    // Three facts — first stored successfully, second hits rate limit, third should never be attempted.
+    const facts = JSON.stringify([
+      { subject: 'Jane Doe', subjectType: 'person', attribute: 'home_city', value: 'Toronto', confidence: 0.9, decayClass: 'slow_decay' },
+      { subject: 'Jane Doe', subjectType: 'person', attribute: 'job_title', value: 'CEO', confidence: 0.9, decayClass: 'slow_decay' },
+      { subject: 'Jane Doe', subjectType: 'person', attribute: 'nationality', value: 'Canadian', confidence: 0.9, decayClass: 'permanent' },
+    ]);
+    const anthropic = makeMockAnthropicClient(['yes', facts]);
+    const handler = new ExtractFactsHandler(anthropic as never);
+
+    const storeFact = vi.spyOn(entityMemory, 'storeFact')
+      .mockResolvedValueOnce({ stored: true, action: 'created' })
+      .mockResolvedValueOnce({ stored: false, action: 'rate_limited', conflict: '50-write limit reached' });
+    // No third mock — if the loop doesn't break, storeFact will be called a third time and
+    // the test will fail because the spy has no more configured responses.
+
+    const ctx = makeCtx(entityMemory, { text: 'Jane Doe is the Canadian CEO based in Toronto.', source: 'test' });
+    const result = await handler.execute(ctx);
+
+    // first fact stored, rate-limit counted as failed, loop stopped before fact 3
+    expect(result).toEqual({ success: true, data: { stored: 1, skipped: false, failed: 1 } });
+    expect(storeFact).toHaveBeenCalledTimes(2);
   });
 });

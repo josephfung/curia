@@ -152,10 +152,10 @@ ${text}`,
 
       // -- Steps 3 & 4: Entity resolution + fact storage --
       let stored = 0;
-      // failed counts two things: malformed LLM output (skipped in the guard below) and
-      // infrastructure errors thrown during entity resolution or storeFact persistence.
-      // storeFact returning stored:false (rate-limit / contradiction) is NOT counted as
-      // failed — those are expected semantic outcomes logged at warn, not error.
+      // failed counts: malformed LLM output (guard below), rate-limited facts (loop
+      // breaks immediately on first hit), and infrastructure errors from storeFact.
+      // Contradictions (action:'conflict') are NOT counted as failed — they are expected
+      // semantic outcomes logged at warn.
       let failed = 0;
 
       // Entity node types (fact nodes themselves are excluded as subjects —
@@ -235,10 +235,19 @@ ${text}`,
 
           if (result.stored) {
             stored++;
+          } else if (result.action === 'rate_limited') {
+            // The 50-writes-per-task limit is exhausted — all remaining storeFact calls
+            // in this batch will also fail, so break immediately rather than burning
+            // through the rest of the loop and mis-reporting them as conflicts.
+            ctx.log.error(
+              { subject, attribute, source, reason: result.conflict },
+              'extract-facts: write rate limit exceeded — aborting remaining facts in batch',
+            );
+            failed++;
+            break;
           } else {
-            // storeFact returns stored:false on rate-limit rejection or contradiction.
-            // Log at warn (not error) — these are expected semantic outcomes, not infra failures.
-            ctx.log.warn({ subject, attribute, conflict: result.conflict, source }, 'extract-facts: fact rejected or conflicted');
+            // conflict or entity_not_found — expected semantic outcomes, not infra failures.
+            ctx.log.warn({ subject, attribute, conflict: result.conflict, action: result.action, source }, 'extract-facts: fact not stored');
           }
         } catch (err) {
           // Log at error — persistence failures are infrastructure errors (DB outage,
