@@ -27,6 +27,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Fixed
 - **Trust floor confirmed-contact exemption** — confirmed contacts with `contact_confidence=0` and no `trust_level` override are no longer incorrectly held by the trust floor; the floor now exempts contacts with `status='confirmed'` since they have passed explicit CEO approval.
 - **extract-facts rate-limit handling** — the per-fact loop now breaks immediately when `storeFact` returns `action:'rate_limited'`, logs at `error` level, and counts the fact as `failed`; previously all rate-limited facts were silently collapsed into the warn log alongside contradictions with no aggregate signal.
+- **extract-facts catch scope** — `subject` and `attribute` are now declared before the per-fact `try` block so the `catch` block can always reference them; previously a `ReferenceError` could mask the original error if an exception fired before those `const` declarations ran.
 
 ---
 
