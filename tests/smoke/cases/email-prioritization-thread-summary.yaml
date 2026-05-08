@@ -1,7 +1,7 @@
 name: Summarize Long Email Thread
 description: Agent should ask for thread details, then produce a structured summary that identifies the core decision point and suggests next steps
 tags:
-  - email-triage
+  - email-prioritization
   - summarization
   - multi-turn
 
