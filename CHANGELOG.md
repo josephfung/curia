@@ -18,6 +18,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **ADR-017** — added a note that observation mode has been removed since this ADR was written (v0.25.x, CEO inbox redesign)
 
 ### Fixed
+- **Trust floor confirmed-contact exemption** — confirmed contacts with `contact_confidence=0` and no `trust_level` override are no longer incorrectly held by the trust floor; the floor now exempts contacts with `status='confirmed'` since they have passed explicit CEO approval.
 - **extract-facts rate-limit handling** — the per-fact loop now breaks immediately when `storeFact` returns `action:'rate_limited'`, logs at `error` level, and counts the fact as `failed`; previously all rate-limited facts were silently collapsed into the warn log alongside contradictions with no aggregate signal.
 
 ---

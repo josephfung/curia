@@ -333,10 +333,70 @@ describe('Dispatcher — messageTrustScore', () => {
     expect(tasks[0]!.payload.messageTrustScore).toBeCloseTo(0.12);
   });
 
-  it('trust floor triggers hold_and_notify for low-scoring known sender', async () => {
+  it('trust floor triggers hold_and_notify for provisional sender with low score', async () => {
+    // Provisional contacts still go through the floor — they have not yet been explicitly approved.
     const logger = createLogger('error');
     const bus = new EventBus(logger);
     const heldMessages = makeInMemoryHeldMessages();
+    const resolver = makeResolverWithContact({
+      contactConfidence: 0.0,
+      trustLevel: null,
+      status: 'provisional',
+    });
+    const dispatcher = new Dispatcher({
+      bus,
+      logger,
+      contactResolver: resolver,
+      heldMessages,
+      channelPolicies: { email: { trust: 'low', unknownSender: 'allow' } },
+      trustScoreFloor: 0.2,
+    });
+    dispatcher.register();
+
+    const held: MessageHeldEvent[] = [];
+    const tasks: AgentTaskEvent[] = [];
+    bus.subscribe('message.held', 'channel', (e) => { held.push(e as MessageHeldEvent); });
+    bus.subscribe('agent.task', 'agent', (e) => { tasks.push(e as AgentTaskEvent); });
+
+    await bus.publish('channel', createInboundMessage({
+      conversationId: 'conv-floor-1',
+      channelId: 'email',
+      senderId: 'provisional@example.com',
+      content: 'Hello',
+    }));
+
+    // email low=0.3, contactConfidence=0.0 → 0.3*0.4=0.12, below floor of 0.2 → held
+    expect(held).toHaveLength(1);
+    expect(tasks).toHaveLength(0);
+  });
+
+  it('trust floor does not hold confirmed contact with contact_confidence=0 (issue #459)', async () => {
+    // Regression test: a confirmed contact with contact_confidence=0 and trust_level=null was
+    // incorrectly held by the trust floor. Confirmed contacts have explicit CEO approval and
+    // must route unconditionally regardless of contact_confidence.
+    //
+    // Production incident: xiaopu@xiaopu.ca (status=confirmed, verified, source=ceo_stated)
+    // was held because contact_confidence=0.00 caused trust score=0.12 < floor(0.2).
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+    const heldMessages = makeInMemoryHeldMessages();
+    const mockProvider: LLMProvider = {
+      id: 'mock',
+      chat: vi.fn().mockResolvedValue({
+        type: 'text' as const,
+        content: 'OK',
+        usage: { inputTokens: 1, outputTokens: 1 },
+      }),
+    };
+    const coordinator = new AgentRuntime({
+      agentId: 'coordinator',
+      systemPrompt: 'You are a helpful assistant.',
+      provider: mockProvider,
+      bus,
+      logger,
+    });
+    coordinator.register();
+
     const resolver = makeResolverWithContact({
       contactConfidence: 0.0,
       trustLevel: null,
@@ -358,15 +418,16 @@ describe('Dispatcher — messageTrustScore', () => {
     bus.subscribe('agent.task', 'agent', (e) => { tasks.push(e as AgentTaskEvent); });
 
     await bus.publish('channel', createInboundMessage({
-      conversationId: 'conv-floor-1',
+      conversationId: 'conv-floor-confirmed-exempt',
       channelId: 'email',
-      senderId: 'lowscore@example.com',
+      senderId: 'confirmed@example.com',
       content: 'Hello',
     }));
 
-    // email low=0.3, contactConfidence=0.0 → 0.3*0.4=0.12, below floor of 0.2 → held
-    expect(held).toHaveLength(1);
-    expect(tasks).toHaveLength(0);
+    // email low=0.3, contactConfidence=0.0 → score=0.12, below floor of 0.2
+    // BUT contact is confirmed → trust floor is skipped → routes to coordinator
+    expect(held).toHaveLength(0);
+    expect(tasks).toHaveLength(1);
   });
 
   it('trust floor does not hold messages on ignore channels', async () => {
