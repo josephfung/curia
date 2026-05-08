@@ -16,6 +16,11 @@
 #   command      Executable to spawn (e.g. "npx", "node").
 #   args         Command-line arguments array.
 #   env          Extra env vars merged on top of process.env for the child.
+#   fixed_inputs Optional. Constant parameter values injected into every tool call.
+#                Keys are parameter names; values are literal strings or "env:VAR"
+#                references. Listed parameters are stripped from the tool schema —
+#                agents never see them. Use for deployment constants like account
+#                identity that should not be in the agent reasoning layer.
 #
 # sse-only fields:
 #   url          HTTP MCP endpoint URL (uses StreamableHTTPClientTransport).
@@ -64,6 +69,12 @@ servers:
     env:
       GOOGLE_OAUTH_CLIENT_ID: ""
       GOOGLE_OAUTH_CLIENT_SECRET: ""
+    # Bind the Google Workspace user email at the tool layer so agents never see
+    # or reason about it. Resolved from CURIA_GOOGLE_EMAIL env var at startup.
+    # This replaces the system prompt injection approach (#387) which was fragile
+    # because LLMs could hallucinate different email addresses.
+    fixed_inputs:
+      user_google_email: "env:CURIA_GOOGLE_EMAIL"
     action_risk: low
     sensitivity: normal
     timeout_ms: 60000
