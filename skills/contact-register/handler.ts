@@ -103,22 +103,51 @@ export class ContactRegisterHandler implements SkillHandler {
           source: 'agent_called',
         });
 
-        await ctx.contactService.linkIdentity({
-          contactId: contact.id,
-          channel,
-          channelIdentifier: identifier,
-          source: 'agent_called',
-        });
+        // Link the identity, guarding against a concurrent call that may have created
+        // and linked the same identity between our resolveByChannelIdentity check above
+        // and now. If linkIdentity hits a unique-constraint violation (23505), the
+        // concurrent caller won — clean up our orphaned provisional contact, then
+        // re-resolve to get theirs.
+        let linked = false;
+        try {
+          await ctx.contactService.linkIdentity({
+            contactId: contact.id,
+            channel,
+            channelIdentifier: identifier,
+            source: 'agent_called',
+          });
+          linked = true;
+        } catch (linkErr) {
+          const pgCode = (linkErr as { code?: string }).code;
+          if (pgCode !== '23505') throw linkErr;
+
+          ctx.log.info(
+            { channel, orphanId: contact.id },
+            'contact-register: concurrent link conflict — cleaning up orphan and re-resolving',
+          );
+          // Best-effort orphan cleanup. Failure here is non-fatal — the orphaned
+          // provisional contact has no linked identity and will be unreachable via
+          // normal resolution, but it will leave a dangling row. Log as warn so it
+          // can be caught by a periodic cleanup sweep if needed.
+          try {
+            await ctx.contactService.deleteContact(contact.id);
+          } catch (deleteErr) {
+            ctx.log.warn(
+              { deleteErr, orphanId: contact.id },
+              'contact-register: could not clean up orphaned provisional contact',
+            );
+          }
+        }
 
         // Re-resolve to get the full ResolvedSender shape (verified flag, contactConfidence, etc.).
-        // Should always succeed immediately after creation+link.
         resolvedSender = await ctx.contactService.resolveByChannelIdentity(channel, identifier);
         if (!resolvedSender) {
-          // Should never happen — we just created the identity.
           return { success: false, error: 'contact-register: failed to resolve contact after creation — possible DB inconsistency' };
         }
 
-        created = true;
+        // created = true only when we won the race and linked the identity ourselves.
+        // If a concurrent call won, created = false (the contact already existed from our POV).
+        created = linked;
       }
 
       const contactId = resolvedSender.contactId;
