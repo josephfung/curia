@@ -10,6 +10,7 @@
 //
 // Both call the same formula — convergence is guaranteed by construction.
 
+import type { Logger } from '../logger.js';
 import type { ContactService } from './contact-service.js';
 import { computeConfidence } from './confidence-scorer.js';
 
@@ -20,7 +21,10 @@ export type ConfidenceSignal =
   | { type: 'pairing_confirmed' };
 
 export class ConfidencePipeline {
-  constructor(private contactService: ContactService) {}
+  constructor(
+    private contactService: ContactService,
+    private logger?: Logger,
+  ) {}
 
   /**
    * Apply a scoring signal and recompute contact_confidence.
@@ -35,13 +39,19 @@ export class ConfidencePipeline {
    */
   async incrementalUpdate(contactId: string, signal: ConfidenceSignal): Promise<void> {
     const contact = await this.contactService.getContact(contactId);
-    if (!contact) return;
+    if (!contact) {
+      this.logger?.debug({ contactId }, 'confidence-pipeline: contact not found — skipping');
+      return;
+    }
 
     // Skip CEO contacts — confidence is hardcoded in ContactResolver
-    if (contact.role === 'ceo') return;
+    if (contact.role === 'ceo') return; // CEO confidence is hardcoded in ContactResolver
 
     const count = ('count' in signal ? signal.count : undefined) ?? 1;
-    if (count < 1) return; // Guard against non-positive counts
+    if (count < 1) {
+      this.logger?.warn({ contactId, count }, 'confidence-pipeline: non-positive count — skipping (likely a caller bug)');
+      return;
+    }
 
     // Determine stat deltas based on signal type
     let inboundDelta = 0;
@@ -66,7 +76,10 @@ export class ConfidencePipeline {
 
     // Fetch identities for verification signals
     const result = await this.contactService.getContactWithIdentities(contactId);
-    if (!result) return;
+    if (!result) {
+      this.logger?.warn({ contactId }, 'confidence-pipeline: getContactWithIdentities returned null after getContact succeeded — possible data inconsistency');
+      return;
+    }
     const { identities } = result;
 
     // Compute the new confidence from the *post-update* state.
@@ -96,7 +109,10 @@ export class ConfidencePipeline {
    */
   async fullRecompute(contactId: string): Promise<number> {
     const result = await this.contactService.getContactWithIdentities(contactId);
-    if (!result) return 0;
+    if (!result) {
+      this.logger?.debug({ contactId }, 'confidence-pipeline: contact not found for recompute — skipping');
+      return 0;
+    }
     const { contact, identities } = result;
 
     // Skip CEO
@@ -127,9 +143,24 @@ export class ConfidencePipeline {
   async fullRecomputeAll(): Promise<number> {
     const contacts = await this.contactService.listContacts();
     let count = 0;
+    let errors = 0;
     for (const contact of contacts) {
-      await this.fullRecompute(contact.id);
-      count++;
+      try {
+        await this.fullRecompute(contact.id);
+        count++;
+      } catch (err) {
+        errors++;
+        this.logger?.error(
+          { err, contactId: contact.id },
+          'fullRecomputeAll: failed to recompute confidence for contact — skipping',
+        );
+      }
+    }
+    if (errors > 0) {
+      this.logger?.warn(
+        { total: contacts.length, succeeded: count, failed: errors },
+        'fullRecomputeAll: completed with errors',
+      );
     }
     return count;
   }

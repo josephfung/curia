@@ -261,6 +261,7 @@ export interface ContactServiceOptions {
   ) => void;
   /** Called after a successful non-dry-run merge to notify subscribers (e.g., for audit logging). */
   onContactMerged?: (primaryId: string, secondaryId: string, mergedAt: Date) => void;
-  /** Called when a verified identity is linked — triggers confidence recompute. */
-  onIdentityVerified?: (contactId: string) => void;
+  /** Called when a verified identity is linked — triggers confidence recompute.
+   *  May return a Promise; rejections are caught by ContactService (non-fatal). */
+  onIdentityVerified?: (contactId: string) => void | Promise<void>;
 }
