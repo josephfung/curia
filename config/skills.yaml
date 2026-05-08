@@ -11,16 +11,16 @@
 #                none | low | medium | high | critical (or integer 0–100).
 #   sensitivity  Optional. "normal" (default) or "elevated" (CEO-only).
 #   timeout_ms   Optional. Per-invocation timeout in ms. Default: 30000.
-#
-# stdio-only fields:
-#   command      Executable to spawn (e.g. "npx", "node").
-#   args         Command-line arguments array.
-#   env          Extra env vars merged on top of process.env for the child.
 #   fixed_inputs Optional. Constant parameter values injected into every tool call.
 #                Keys are parameter names; values are literal strings or "env:VAR"
 #                references. Listed parameters are stripped from the tool schema —
 #                agents never see them. Use for deployment constants like account
 #                identity that should not be in the agent reasoning layer.
+#
+# stdio-only fields:
+#   command      Executable to spawn (e.g. "npx", "node").
+#   args         Command-line arguments array.
+#   env          Extra env vars merged on top of process.env for the child.
 #
 # sse-only fields:
 #   url          HTTP MCP endpoint URL (uses StreamableHTTPClientTransport).
