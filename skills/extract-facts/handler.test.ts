@@ -261,7 +261,7 @@ describe('ExtractFactsHandler', () => {
     const handler = new ExtractFactsHandler(anthropic as never);
 
     // Simulate a DB outage — storeFact throws instead of returning a failure result.
-    vi.spyOn(entityMemory, 'storeFact').mockRejectedValueOnce(new Error('DB connection lost'));
+    const storeFact = vi.spyOn(entityMemory, 'storeFact').mockRejectedValueOnce(new Error('DB connection lost'));
 
     const ctx = makeCtx(entityMemory, { text: 'Jane Doe lives in Toronto.', source: 'test' });
     const result = await handler.execute(ctx);
@@ -271,5 +271,6 @@ describe('ExtractFactsHandler', () => {
     // outer catch and the result is { success: false } — so this assertion
     // distinguishes the two code paths.
     expect(result).toEqual({ success: true, data: { stored: 0, skipped: false, failed: 1 } });
+    expect(storeFact).toHaveBeenCalledTimes(1);
   });
 });
