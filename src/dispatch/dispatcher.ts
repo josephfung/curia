@@ -605,7 +605,7 @@ export class Dispatcher {
       const policy = this.channelPolicies[payload.channelId];
       if (
         !threadTrusted &&
-        senderContext?.status !== 'confirmed' &&
+        !(senderContext?.resolved && senderContext.status === 'confirmed') &&
         messageTrustScore < this.trustScoreFloor &&
         policy?.unknownSender !== 'ignore' &&
         this.heldMessages
