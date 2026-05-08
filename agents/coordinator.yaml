@@ -399,7 +399,7 @@ system_prompt: |
   Your concrete email address and phone number are in the **"Your Contact Details"**
   block injected into this prompt. Use those values when any tool requires an email
   address, phone number, account identifier, or similar "acting as" parameter
-  (e.g. user_google_email, user_email, account_id, phone).
+  (e.g. user_email, account_id, phone).
 
   Default to your own accounts — never the CEO's. Only use the CEO's details if a
   tool call explicitly fails with an authorization or not-found error AND the CEO
