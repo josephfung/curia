@@ -16,7 +16,6 @@ import type { OfficeIdentityService } from '../identity/service.js';
 import type { ExecutiveProfileService } from '../executive/service.js';
 import { formatBullpenContext, type BullpenService } from '../memory/bullpen.js';
 import type { AgentRegistry } from './agent-registry.js';
-import type { ResolvedGoogleWorkspaceAccount } from '../config.js';
 
 export interface AgentConfig {
   agentId: string;
@@ -61,11 +60,6 @@ export interface AgentConfig {
     email?: string;
     phone?: string;
   };
-  /** Resolved Google Workspace accounts from config. When provided, a "Your Google Workspace
-   *  Accounts" block is appended to the system prompt so agents know which account to use when
-   *  Google Workspace MCP tools require a `user_google_email` parameter. Injected into all
-   *  agents to prevent LLM hallucination of email addresses (#387). */
-  googleWorkspaceAccounts?: ResolvedGoogleWorkspaceAccount[];
   /** Agent registry — used to look up target agent's expectedDurationSeconds when a delegate
    *  call is made, so the runtime can inject an appropriate timeout_ms. See #387. */
   agentRegistry?: AgentRegistry;
@@ -262,25 +256,6 @@ export class AgentRuntime {
       lines.push('');
       if (channelAccounts.email) lines.push(`- Email: ${channelAccounts.email}`);
       if (channelAccounts.phone) lines.push(`- Phone: ${channelAccounts.phone}`);
-      effectiveSystemPrompt += '\n\n' + lines.join('\n');
-    }
-
-    // Append Google Workspace account details so agents know which account to use when
-    // Google Drive, Docs, or other Workspace MCP tools require a `user_google_email` param.
-    // Without this, the LLM hallucinates email addresses (#387 root cause 1).
-    // Injected into ALL agents — specialists like essay-editor need this too.
-    const { googleWorkspaceAccounts } = this.config;
-    if (googleWorkspaceAccounts && googleWorkspaceAccounts.length > 0) {
-      const lines: string[] = ['## Your Google Workspace Accounts'];
-      lines.push('When calling Google Drive, Google Docs, or other Google Workspace tools that');
-      lines.push('require a `user_google_email` parameter, use your primary account. If the tool');
-      lines.push('returns an authentication error, retry with the next available account before');
-      lines.push('reporting failure.');
-      lines.push('');
-      for (const acct of googleWorkspaceAccounts) {
-        const marker = acct.primary ? ' (primary)' : '';
-        lines.push(`- ${acct.name}: ${acct.googleEmail}${marker}`);
-      }
       effectiveSystemPrompt += '\n\n' + lines.join('\n');
     }
 
