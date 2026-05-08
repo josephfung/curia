@@ -7,6 +7,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { stripFixedInputsFromSchema, mergeFixedInputs } from './mcp-loader.js';
+import { resolveEnvValue } from '../config.js';
 
 // ---------------------------------------------------------------------------
 // stripFixedInputsFromSchema
@@ -123,5 +124,38 @@ describe('mergeFixedInputs', () => {
     const result = mergeFixedInputs(agentInput, {});
 
     expect(result).toBe(agentInput);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// resolveEnvValue integration (imported from config.ts)
+// ---------------------------------------------------------------------------
+
+describe('resolveEnvValue (fixed_inputs context)', () => {
+  it('resolves env:VAR_NAME from process.env', () => {
+    const original = process.env.TEST_FIXED_INPUT_EMAIL;
+    try {
+      process.env.TEST_FIXED_INPUT_EMAIL = 'curia@example.com';
+      const result = resolveEnvValue('env:TEST_FIXED_INPUT_EMAIL', 'test context');
+      expect(result).toBe('curia@example.com');
+    } finally {
+      if (original === undefined) {
+        delete process.env.TEST_FIXED_INPUT_EMAIL;
+      } else {
+        process.env.TEST_FIXED_INPUT_EMAIL = original;
+      }
+    }
+  });
+
+  it('throws with a clear message when env var is not set', () => {
+    delete process.env.DEFINITELY_NOT_SET_VAR;
+    expect(() =>
+      resolveEnvValue('env:DEFINITELY_NOT_SET_VAR', "MCP server 'google-workspace' fixed_inputs.user_google_email"),
+    ).toThrow(/env var "DEFINITELY_NOT_SET_VAR" is not set/);
+  });
+
+  it('passes through literal strings unchanged', () => {
+    const result = resolveEnvValue('literal@example.com', 'test context');
+    expect(result).toBe('literal@example.com');
   });
 });
