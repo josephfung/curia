@@ -17,6 +17,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Non-threaded channel context bridging** — dispatch layer writes outbound context memos to working memory on non-threaded channels (Signal, CLI, HTTP) and injects them as a preamble when the user replies, so the coordinator knows what it last said. Coordinator prompt gains a channel-agnostic clarification gate for reply-shaped messages without context (#431)
 - **Contact confidence scoring pipeline** — `contact_confidence` is now updated on each qualifying event (inbound/outbound message, CEO trust grant, verified identity pairing). Supports incremental and full-recompute modes with convergence guarantee (spec 06, #460)
 - **`contact-register` skill** — integration point for agents that read channels directly (e.g. the ceo-inbox agent) rather than through the dispatcher. Resolves or creates contacts, updates `last_seen_at`, triggers a confidence scoring delta, and emits a `contact.resolved` bus event (#485)
+- **MCP `fixed_inputs`** — MCP server entries in `skills.yaml` now support a `fixed_inputs` field that binds constant parameter values at the tool layer. Values are resolved from env vars or literals at startup, stripped from tool schemas (invisible to agents), and merged into every `callTool` invocation (#432)
 
 ### Changed
 - **`contact.resolved` bus event** — `sourceLayer` widened from `'dispatch'` to `'dispatch' | 'execution'`; `createContactResolved()` factory accepts an optional `sourceLayer` parameter (defaults to `'dispatch'` for backward compatibility). This is a public API surface change.
@@ -29,6 +30,9 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Trust floor confirmed-contact exemption** — confirmed contacts with `contact_confidence=0` and no `trust_level` override are no longer incorrectly held by the trust floor; the floor now exempts contacts with `status='confirmed'` since they have passed explicit CEO approval.
 - **extract-facts rate-limit handling** — the per-fact loop now breaks immediately when `storeFact` returns `action:'rate_limited'`, logs at `error` level, and counts the fact as `failed`; previously all rate-limited facts were silently collapsed into the warn log alongside contradictions with no aggregate signal.
 - **extract-facts catch scope** — `subject` and `attribute` are now declared before the per-fact `try` block so the `catch` block can always reference them; previously a `ReferenceError` could mask the original error if an exception fired before those `const` declarations ran.
+
+### Removed
+- **Google Workspace prompt injection** — removed the `googleWorkspaceAccounts` system prompt injection block, the `channel_accounts.google_workspace` config schema, and all related types/wiring. Google Workspace account identity is now handled via `fixed_inputs` on the MCP server config (#432)
 
 ---
 
