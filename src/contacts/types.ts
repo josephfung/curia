@@ -10,6 +10,9 @@ export interface Contact {
   contactConfidence: number;         // 0.0–1.0; accumulated over time
   trustLevel: TrustLevel | null;     // nullable per-contact override
   lastSeenAt: Date | null;
+  // Message count fields (migration 034) — scoring-owned
+  inboundMessageCount: number;
+  outboundMessageCount: number;
   notes: string | null;
   createdAt: Date;
   updatedAt: Date;
