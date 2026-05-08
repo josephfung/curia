@@ -431,6 +431,14 @@ describe('Dispatcher — messageTrustScore', () => {
   });
 
   it('trust floor does not hold messages on ignore channels', async () => {
+    // Uses a confirmed contact because that is the only resolved-sender type that can reach
+    // the trust floor in a controlled test scenario (provisional contacts on ignore channels are
+    // caught by the provisional gate before they reach the trust floor). Before issue #459 was
+    // fixed, the confirmed-contact path was also the only way to trigger the floor's 'ignore'
+    // exemption for a resolved sender. After the fix, confirmed contacts are exempt via the new
+    // guard and the 'ignore' check fires second — this test retains coverage of the guard as a
+    // belt-and-suspenders defense against future regressions where a non-confirmed resolved sender
+    // might reach the trust floor on an 'ignore' channel.
     const logger = createLogger('error');
     const bus = new EventBus(logger);
     const heldMessages = makeInMemoryHeldMessages();
