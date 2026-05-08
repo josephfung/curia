@@ -149,7 +149,7 @@ describe('HTTP API — unknown_sender: ignore policy', () => {
       bus,
       logger,
       contactResolver: mockResolver,
-      channelPolicies: { http: { trust: 'low', unknownSender: 'ignore' } },
+      channelPolicies: { http: { trust: 'low', unknownSender: 'ignore', threaded: false } },
     });
     dispatcher.register();
 
@@ -394,7 +394,7 @@ describe('Trust scoring — unknown sender via HTTP', () => {
       bus,
       logger,
       contactResolver: mockResolver,
-      channelPolicies: { http: { trust: 'medium', unknownSender: 'allow' } },
+      channelPolicies: { http: { trust: 'medium', unknownSender: 'allow', threaded: false } },
     });
     dispatcher.register();
 

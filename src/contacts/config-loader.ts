@@ -74,7 +74,7 @@ export function loadAuthConfig(configDir: string): AuthConfig {
     throw new Error("Missing or invalid 'channels' section in channel-trust.yaml");
   }
   // Accept either flat strings (legacy) or objects with trust + unknown_sender fields
-  const trustTyped = trustRaw as { channels: Record<string, string | { trust: string; unknown_sender: string }> };
+  const trustTyped = trustRaw as { channels: Record<string, string | { trust: string; unknown_sender: string; threaded?: boolean }> };
 
   const channelTrust: Record<string, TrustLevel> = {};
   const channelPolicies: Record<string, ChannelPolicyConfig> = {};
@@ -89,7 +89,7 @@ export function loadAuthConfig(configDir: string): AuthConfig {
       channelTrust[channel] = trust;
       // Default to 'allow' for legacy configs — silently holding messages would be
       // a surprising behavior change for deployments using the old flat-string format.
-      channelPolicies[channel] = { trust, unknownSender: 'allow' };
+      channelPolicies[channel] = { trust, unknownSender: 'allow', threaded: false };
     } else {
       const trust = (config as { trust: string }).trust as TrustLevel;
       if (!['high', 'medium', 'low'].includes(trust)) {
@@ -99,8 +99,9 @@ export function loadAuthConfig(configDir: string): AuthConfig {
       if (!['allow', 'hold_and_notify', 'ignore'].includes(unknownSender)) {
         throw new Error(`Invalid unknown_sender policy '${unknownSender}' for channel '${channel}'`);
       }
+      const threaded = (config as { threaded?: boolean }).threaded ?? false;
       channelTrust[channel] = trust;
-      channelPolicies[channel] = { trust, unknownSender };
+      channelPolicies[channel] = { trust, unknownSender, threaded };
     }
   }
 
