@@ -11,6 +11,8 @@ import type { RateLimiter } from './rate-limiter.js';
 import type { DbPool } from '../db/connection.js';
 import { computeTrustScore, DEFAULT_TRUST_WEIGHTS } from './trust-scorer.js';
 import type { TrustScorerWeights } from './trust-scorer.js';
+import type { WorkingMemory } from '../memory/working-memory.js';
+import { formatOutboundMemo, extractRecentMemos, buildContextPreamble } from './context-memo.js';
 
 /** Redact a channel identifier (email address or phone number) for safe log output. */
 function redactSenderId(value: string): string {
@@ -73,6 +75,13 @@ export interface DispatcherConfig {
   /** Contact confidence scoring pipeline. When provided, fires message_seen on
    *  every resolved inbound sender. When absent, scoring is disabled. */
   confidencePipeline?: import('../contacts/confidence-pipeline.js').ConfidencePipeline;
+  /** Working memory — used to write outbound context memos on non-threaded channels
+   *  and read them back for inbound context injection. When omitted, context
+   *  bridging is disabled (e.g. in unit tests that don't exercise it). */
+  workingMemory?: WorkingMemory;
+  /** TTL for outbound context memos in milliseconds. Memos older than this are
+   *  excluded from inbound injection. Default: 86400000 (24 hours). */
+  contextMemoTtlMs?: number;
 }
 
 /**
@@ -119,6 +128,8 @@ export class Dispatcher {
   private conversationCheckpointDebounceMs: number;
   private maxMessageBytes: number;
   private confidencePipeline?: import('../contacts/confidence-pipeline.js').ConfidencePipeline;
+  private workingMemory?: WorkingMemory;
+  private contextMemoTtlMs: number;
 
   constructor(config: DispatcherConfig) {
     this.bus = config.bus;
@@ -135,6 +146,8 @@ export class Dispatcher {
     this.trustScoreFloor = config.trustScoreFloor ?? 0.2;
     this.maxMessageBytes = config.maxMessageBytes ?? 102_400;
     this.confidencePipeline = config.confidencePipeline;
+    this.workingMemory = config.workingMemory;
+    this.contextMemoTtlMs = config.contextMemoTtlMs ?? 86_400_000;
 
     // Warn if the trust floor is active but no held-message service was provided — the floor
     // silently becomes a no-op in that case, which is a security-relevant degradation.
@@ -542,6 +555,33 @@ export class Dispatcher {
     let taskContent = payload.content;
     let injectionMetadata: Record<string, unknown> | undefined;
 
+    // Inbound context injection for non-threaded channels.
+    // Read recent outbound context memos from working memory and prepend them
+    // to the task content so the coordinator knows what it last sent.
+    // Best-effort: failure is logged but does not block message routing.
+    const inboundPolicy = this.channelPolicies?.[payload.channelId];
+    if (this.workingMemory && inboundPolicy && !inboundPolicy.threaded) {
+      try {
+        const history = await this.workingMemory.getHistory(
+          payload.conversationId, 'coordinator',
+        );
+        const recentMemos = extractRecentMemos(history, this.contextMemoTtlMs);
+        const preamble = buildContextPreamble(recentMemos, taskContent);
+        if (preamble !== null) {
+          taskContent = preamble;
+          this.logger.debug(
+            { channelId: payload.channelId, conversationId: payload.conversationId, memoCount: recentMemos.length },
+            'Injected outbound context preamble into task content',
+          );
+        }
+      } catch (err) {
+        this.logger.warn(
+          { err, channelId: payload.channelId, conversationId: payload.conversationId },
+          'Failed to read outbound context memos — proceeding without context injection',
+        );
+      }
+    }
+
     if (this.injectionScanner) {
       try {
         const scan = this.injectionScanner.scan(payload.content);
@@ -843,6 +883,34 @@ export class Dispatcher {
       taskEventId: event.parentEventId ?? undefined,
     });
     await this.bus.publish('dispatch', outbound);
+
+    // Write an outbound context memo to working memory for non-threaded channels.
+    // When the user replies, the inbound handler reads these memos and prepends
+    // them to the coordinator's task content so it knows what it last said.
+    // Best-effort: failure is logged but does not block outbound delivery.
+    const channelPolicy = this.channelPolicies?.[routing.channelId];
+    if (this.workingMemory && channelPolicy && !channelPolicy.threaded) {
+      try {
+        const memo = formatOutboundMemo({
+          conversationId: routing.conversationId,
+          content: event.payload.content,
+          taskEventId: event.parentEventId ?? undefined,
+        });
+        await this.workingMemory.addTurn(routing.conversationId, 'coordinator', {
+          role: 'system',
+          content: memo,
+        });
+        this.logger.debug(
+          { channelId: routing.channelId, conversationId: routing.conversationId },
+          'Outbound context memo written to working memory',
+        );
+      } catch (err) {
+        this.logger.warn(
+          { err, channelId: routing.channelId, conversationId: routing.conversationId },
+          'Failed to write outbound context memo — context bridging degraded for this message',
+        );
+      }
+    }
 
     // Schedule a checkpoint for this conversation — resets the debounce timer if
     // already running, so only fires after a full window of inactivity.
