@@ -3,11 +3,8 @@ import {
   computeConfidence,
   SATURATION,
   W_INTERACTION,
-  W_RECENCY,
   GRANT_BOOST,
   MANUAL_BOOST,
-  PAIRING_BOOST,
-  RECENCY_HALF_LIFE_DAYS,
   type ConfidenceInput,
 } from '../../../src/contacts/confidence-scorer.js';
 
