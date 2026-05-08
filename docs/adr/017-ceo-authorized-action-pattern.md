@@ -94,9 +94,11 @@ legitimate CEO-directed sends.
 
 **Harder / accepted trade-offs:**
 - The `ceoInitiated` stamping logic must be correct. If it fires too broadly
-  (e.g., stamps all tasks, or stamps observation-mode tasks), CEO-authorized skills
-  become reachable without genuine CEO approval. This logic should have its own
-  unit tests.
+  (e.g., stamps all tasks), CEO-authorized skills become reachable without genuine
+  CEO approval. This logic should have its own unit tests.
+  *(Note: "observation-mode tasks" was a concern at the time this ADR was written;
+  observation mode was removed in v0.25.x as part of the CEO inbox redesign — the
+  CEO's email is now a skill domain, not a channel.)*
 - `action_risk: "none"` on a skill that sends email looks surprising in isolation.
   Implementers who encounter it without context may be tempted to raise it. This
   ADR is the explanation; the skill manifest description should also include a

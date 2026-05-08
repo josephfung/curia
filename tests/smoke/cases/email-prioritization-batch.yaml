@@ -1,7 +1,7 @@
 name: Triage Batch of Mixed Emails
 description: Agent should prioritize and categorize a batch of emails by urgency and action type, surfacing what needs CEO attention first
 tags:
-  - email-triage
+  - email-prioritization
   - urgency
   - multi-task
   - single-turn

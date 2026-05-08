@@ -13,6 +13,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Changed
+- **Smoke tests** — renamed three `email-triage-*` test cases to `email-prioritization-*` following the CEO inbox redesign; updated the `email-triage` tag to `email-prioritization` in each
+- **ADR-017** — added a note that observation mode has been removed since this ADR was written (v0.25.x, CEO inbox redesign)
+
 ---
 
 ## [0.25.1] — 2026-05-07 — "Clean Lines"

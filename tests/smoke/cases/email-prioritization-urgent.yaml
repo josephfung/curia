@@ -1,7 +1,7 @@
 name: Classify Urgent Investor Email
 description: Agent should correctly classify an email from a lead investor about an unexpected board matter as urgent and recommend immediate action
 tags:
-  - email-triage
+  - email-prioritization
   - urgency
   - single-turn
 
