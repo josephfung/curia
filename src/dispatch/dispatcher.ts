@@ -597,9 +597,15 @@ export class Dispatcher {
       // This overrides per-channel 'allow' policies for very low-trust messages — including unknown
       // senders on 'allow' channels. Unknown senders on 'hold_and_notify' and 'ignore' channels
       // already returned early above, so there is no risk of double-holding here.
+      //
+      // Confirmed contacts are exempt: a contact with status='confirmed' has passed explicit CEO
+      // approval and should route unconditionally regardless of contact_confidence. The floor is
+      // designed for unknown or provisional senders, not explicitly approved contacts. Provisional
+      // contacts still go through the floor check.
       const policy = this.channelPolicies[payload.channelId];
       if (
         !threadTrusted &&
+        senderContext?.status !== 'confirmed' &&
         messageTrustScore < this.trustScoreFloor &&
         policy?.unknownSender !== 'ignore' &&
         this.heldMessages
