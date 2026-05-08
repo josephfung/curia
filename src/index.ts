@@ -1112,6 +1112,7 @@ async function main(): Promise<void> {
     trustScoreFloor,
     maxMessageBytes: yamlConfig.channels?.max_message_bytes ?? 102_400,
     confidencePipeline,
+    workingMemory: memory,
   });
   dispatcher.register();
 
