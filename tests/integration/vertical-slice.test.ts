@@ -139,7 +139,7 @@ describe('Vertical Slice: Unknown sender email → hold_and_notify', () => {
       logger,
       contactResolver: mockResolver,
       heldMessages,
-      channelPolicies: { email: { trust: 'low', unknownSender: 'hold_and_notify' } },
+      channelPolicies: { email: { trust: 'low', unknownSender: 'hold_and_notify', threaded: true } },
     });
     dispatcher.register();
 

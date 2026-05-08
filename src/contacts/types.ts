@@ -203,6 +203,10 @@ export interface HeldMessage {
 export interface ChannelPolicyConfig {
   trust: TrustLevel;
   unknownSender: UnknownSenderPolicy;
+  /** Whether this channel structurally links replies to their parent messages.
+   *  Email is threaded (subject + in-reply-to headers); Signal/SMS/CLI are not.
+   *  The dispatch layer uses this to decide whether to write/read outbound context memos. */
+  threaded: boolean;
 }
 
 // -- Calendar registry types --

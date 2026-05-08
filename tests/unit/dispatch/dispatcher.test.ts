@@ -125,7 +125,7 @@ describe('Dispatcher unknown_sender: ignore policy', () => {
       bus,
       logger,
       contactResolver: mockResolver,
-      channelPolicies: { http: { trust: 'low', unknownSender: 'ignore' } },
+      channelPolicies: { http: { trust: 'low', unknownSender: 'ignore', threaded: false } },
     });
     dispatcher.register();
 
@@ -226,7 +226,7 @@ describe('Dispatcher unknown_sender: ignore policy', () => {
       bus,
       logger,
       contactResolver: mockResolver,
-      channelPolicies: { http: { trust: 'low', unknownSender: 'allow' } },
+      channelPolicies: { http: { trust: 'low', unknownSender: 'allow', threaded: false } },
     });
     dispatcher.register();
 
@@ -287,7 +287,7 @@ describe('Dispatcher — messageTrustScore', () => {
       bus,
       logger,
       contactResolver: resolver,
-      channelPolicies: { email: { trust: 'low', unknownSender: 'hold_and_notify' } },
+      channelPolicies: { email: { trust: 'low', unknownSender: 'hold_and_notify', threaded: true } },
     });
     dispatcher.register();
 
@@ -314,7 +314,7 @@ describe('Dispatcher — messageTrustScore', () => {
       bus,
       logger,
       contactResolver: resolver,
-      channelPolicies: { email: { trust: 'low', unknownSender: 'allow' } },
+      channelPolicies: { email: { trust: 'low', unknownSender: 'allow', threaded: true } },
     });
     dispatcher.register();
 
@@ -348,7 +348,7 @@ describe('Dispatcher — messageTrustScore', () => {
       logger,
       contactResolver: resolver,
       heldMessages,
-      channelPolicies: { email: { trust: 'low', unknownSender: 'allow' } },
+      channelPolicies: { email: { trust: 'low', unknownSender: 'allow', threaded: true } },
       trustScoreFloor: 0.2,
     });
     dispatcher.register();
@@ -407,7 +407,7 @@ describe('Dispatcher — messageTrustScore', () => {
       logger,
       contactResolver: resolver,
       heldMessages,
-      channelPolicies: { email: { trust: 'low', unknownSender: 'allow' } },
+      channelPolicies: { email: { trust: 'low', unknownSender: 'allow', threaded: true } },
       trustScoreFloor: 0.2,
     });
     dispatcher.register();
@@ -452,7 +452,7 @@ describe('Dispatcher — messageTrustScore', () => {
       logger,
       contactResolver: resolver,
       heldMessages,
-      channelPolicies: { http: { trust: 'medium', unknownSender: 'ignore' } },
+      channelPolicies: { http: { trust: 'medium', unknownSender: 'ignore', threaded: false } },
       trustScoreFloor: 0.5,
     });
     dispatcher.register();
@@ -486,7 +486,7 @@ describe('Dispatcher — messageTrustScore', () => {
       logger,
       contactResolver: resolver,
       heldMessages,
-      channelPolicies: { email: { trust: 'low', unknownSender: 'allow' } },
+      channelPolicies: { email: { trust: 'low', unknownSender: 'allow', threaded: true } },
       trustScoreFloor: 0.2,
     });
     dispatcher.register();
@@ -520,7 +520,7 @@ describe('Dispatcher — contact.unknown event payload', () => {
       logger,
       contactResolver: resolver,
       heldMessages,
-      channelPolicies: { email: { trust: 'low', unknownSender: 'hold_and_notify' } },
+      channelPolicies: { email: { trust: 'low', unknownSender: 'hold_and_notify', threaded: true } },
     });
     dispatcher.register();
 
@@ -551,7 +551,7 @@ describe('Dispatcher — contact.unknown event payload', () => {
       bus,
       logger,
       contactResolver: resolver,
-      channelPolicies: { http: { trust: 'medium', unknownSender: 'ignore' } },
+      channelPolicies: { http: { trust: 'medium', unknownSender: 'ignore', threaded: false } },
     });
     dispatcher.register();
 
@@ -1232,7 +1232,7 @@ describe('Dispatcher thread-originated trust bypass', () => {
       contactResolver: resolver,
       contactService,
       heldMessages,
-      channelPolicies: { email: { trust: 'low', unknownSender: 'hold_and_notify' } },
+      channelPolicies: { email: { trust: 'low', unknownSender: 'hold_and_notify', threaded: true } },
       pool: pool as unknown as DbPool,
       // No trustScoreFloor override — the threadTrusted flag now bypasses the floor for
       // thread-trusted messages, so this test exercises production behaviour.
@@ -1273,7 +1273,7 @@ describe('Dispatcher thread-originated trust bypass', () => {
       contactResolver: resolver,
       contactService,
       heldMessages,
-      channelPolicies: { email: { trust: 'low', unknownSender: 'hold_and_notify' } },
+      channelPolicies: { email: { trust: 'low', unknownSender: 'hold_and_notify', threaded: true } },
       pool: pool as unknown as DbPool,
     });
     dispatcher.register();
@@ -1307,7 +1307,7 @@ describe('Dispatcher thread-originated trust bypass', () => {
       contactResolver: resolver,
       contactService,
       heldMessages,
-      channelPolicies: { email: { trust: 'low', unknownSender: 'hold_and_notify' } },
+      channelPolicies: { email: { trust: 'low', unknownSender: 'hold_and_notify', threaded: true } },
       pool: pool as unknown as DbPool,
       // No trustScoreFloor override — threadTrusted flag bypasses it for this message.
     });
@@ -1354,7 +1354,7 @@ describe('Dispatcher thread-originated trust bypass', () => {
       contactResolver: resolver,
       contactService,
       heldMessages,
-      channelPolicies: { email: { trust: 'low', unknownSender: 'hold_and_notify' } },
+      channelPolicies: { email: { trust: 'low', unknownSender: 'hold_and_notify', threaded: true } },
       // pool intentionally omitted
     });
     dispatcher.register();
@@ -1390,7 +1390,7 @@ describe('Dispatcher thread-originated trust bypass', () => {
       contactResolver: resolver,
       contactService,
       heldMessages,
-      channelPolicies: { email: { trust: 'low', unknownSender: 'hold_and_notify' } },
+      channelPolicies: { email: { trust: 'low', unknownSender: 'hold_and_notify', threaded: true } },
       pool: pool as unknown as DbPool,
     });
     dispatcher.register();
