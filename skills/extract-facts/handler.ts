@@ -165,13 +165,21 @@ ${text}`,
       );
 
       for (const fact of facts) {
+        // Declared before try so the catch block can always reference them,
+        // even if an exception fires before the assignments inside try would run.
+        // Empty string is the safe sentinel — falsy, so the malformed-fact guard
+        // below fires correctly when subject or attribute could not be determined.
+        let subject = typeof fact?.subject === 'string' ? fact.subject.trim() : '';
+        let attribute = typeof fact?.attribute === 'string' ? fact.attribute.trim() : '';
+
         try {
           // Guard: skip malformed entries where required string fields are absent or blank.
           // Blank strings would create empty-label entities or facts labelled ": ".
+          // subject and attribute are pre-computed above; only value needs its typeof check here.
           if (
             !fact ||
-            typeof fact.subject !== 'string' || !fact.subject.trim() ||
-            typeof fact.attribute !== 'string' || !fact.attribute.trim() ||
+            !subject ||
+            !attribute ||
             typeof fact.value !== 'string' || !fact.value.trim()
           ) {
             ctx.log.warn({ fact }, 'extract-facts: skipping malformed fact');
@@ -179,10 +187,7 @@ ${text}`,
             continue;
           }
 
-          // Trim validated fields so lookups, labels, and stored properties are
-          // idempotent for inputs with leading/trailing whitespace.
-          const subject = fact.subject.trim();
-          const attribute = fact.attribute.trim();
+          // value is not referenced in the catch block so it stays here.
           const value = fact.value.trim();
 
           // Normalise subject type — fall back to 'person' for unknown or non-entity types.
@@ -252,6 +257,7 @@ ${text}`,
         } catch (err) {
           // Log at error — persistence failures are infrastructure errors (DB outage,
           // connection loss) that must surface in Sentry, not soft warnings.
+          // subject and attribute are always in scope here (declared before this try).
           ctx.log.error({ err, subject, attribute }, 'extract-facts: failed to persist fact, skipping');
           failed++;
         }
