@@ -70,6 +70,9 @@ export interface DispatcherConfig {
   /** Maximum inbound message content size in bytes. Messages exceeding this are
    *  rejected before routing. Default: 102400 (100KB). */
   maxMessageBytes?: number;
+  /** Contact confidence scoring pipeline. When provided, fires message_seen on
+   *  every resolved inbound sender. When absent, scoring is disabled. */
+  confidencePipeline?: import('../contacts/confidence-pipeline.js').ConfidencePipeline;
 }
 
 /**
@@ -115,6 +118,7 @@ export class Dispatcher {
   private pool: DbPool | undefined;
   private conversationCheckpointDebounceMs: number;
   private maxMessageBytes: number;
+  private confidencePipeline?: import('../contacts/confidence-pipeline.js').ConfidencePipeline;
 
   constructor(config: DispatcherConfig) {
     this.bus = config.bus;
@@ -130,6 +134,7 @@ export class Dispatcher {
     this.trustScorerWeights = config.trustScorerWeights ?? DEFAULT_TRUST_WEIGHTS;
     this.trustScoreFloor = config.trustScoreFloor ?? 0.2;
     this.maxMessageBytes = config.maxMessageBytes ?? 102_400;
+    this.confidencePipeline = config.confidencePipeline;
 
     // Warn if the trust floor is active but no held-message service was provided — the floor
     // silently becomes a no-op in that case, which is a security-relevant degradation.
@@ -251,6 +256,14 @@ export class Dispatcher {
               channelIdentifier: payload.senderId,
               parentEventId: event.id,
             }));
+
+            // Fire-and-forget: update contact confidence for this interaction.
+            // Non-blocking — the trust score for THIS message already used the
+            // stored contactConfidence. This update benefits the NEXT inbound.
+            if (this.confidencePipeline) {
+              this.confidencePipeline.incrementalUpdate(senderContext.contactId, { type: 'message_seen' })
+                .catch(err => this.logger.warn({ err, contactId: senderContext.contactId }, 'Confidence pipeline update failed (non-fatal)'));
+            }
 
             // Provisional contacts are treated like unknown senders for policy purposes.
             // They have a contact record (so the resolver finds them), but the CEO hasn't
