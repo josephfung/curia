@@ -6,7 +6,7 @@
 // Both the incremental and full-recompute paths call this function. Convergence
 // is guaranteed because both paths use the same stored columns as inputs.
 
-import type { TrustLevel } from './types.js';
+import { meetsMinimumTrust, type TrustLevel } from './types.js';
 
 // -- Tunable constants (exported for tests and documentation) --
 
@@ -79,7 +79,7 @@ export function computeConfidence(input: ConfidenceInput): number {
   // Verification score: discrete boosts from CEO actions and identity pairings
   // Only CEO-granted trust levels (high, ceo) earn the boost — low/medium overrides are
   // neutral or restrictive, not a positive verification signal.
-  const grantBoost = trustLevel === 'high' || trustLevel === 'ceo' ? GRANT_BOOST : 0;
+  const grantBoost = meetsMinimumTrust(trustLevel, 'high') ? GRANT_BOOST : 0;
   const manualBoost = hasCeoStatedIdentity ? MANUAL_BOOST : 0;
   const pairingBoost =
     (Math.min(verifiedIdentityCount, MAX_PAIRING_IDENTITIES) / MAX_PAIRING_IDENTITIES) * PAIRING_BOOST;
