@@ -191,6 +191,12 @@ export interface OutboundGatewayConfig {
    * action_log row is written and no actionRef is assigned.
    */
   actionLogRepo?: ActionLogRepo;
+
+  /**
+   * Contact confidence scoring pipeline. When provided, fires message_sent after
+   * every successful outbound send. Replaces the setTrustLevel('high') band-aid.
+   */
+  confidencePipeline?: import('../contacts/confidence-pipeline.js').ConfidencePipeline;
 }
 
 // ---------------------------------------------------------------------------
@@ -236,6 +242,7 @@ export class OutboundGateway {
   private readonly autonomyService?: AutonomyService;
   private readonly piiRedactor?: PiiRedactor;
   private readonly actionLogRepo?: ActionLogRepo;
+  private readonly confidencePipeline?: import('../contacts/confidence-pipeline.js').ConfidencePipeline;
 
   constructor(config: OutboundGatewayConfig) {
     this.nylasClients = config.nylasClients ?? new Map();
@@ -257,6 +264,7 @@ export class OutboundGateway {
     this.autonomyService = config.autonomyService;
     this.piiRedactor = config.piiRedactor;
     this.actionLogRepo = config.actionLogRepo;
+    this.confidencePipeline = config.confidencePipeline;
   }
 
   /**
@@ -881,18 +889,14 @@ export class OutboundGateway {
         return;
       }
 
-      // Set trustLevel: 'high' so replies from this contact score above the trust floor.
-      // contactConfidence starts at 0 for new contacts (enriched later via KG), so without
-      // a trustLevel override the dispatcher's trust score formula produces ~0.12 — below the
-      // default floor of 0.2 — and the reply gets re-held even though the contact is confirmed.
-      // Failure is non-fatal: the contact was created and linked; warn so it's visible.
-      try {
-        await this.contactService.setTrustLevel(created.id, 'high');
-      } catch (err) {
-        this.log.warn(
-          { err, channel, recipientId: redactId(recipientId), contactId: created.id },
-          'outbound-gateway: setTrustLevel failed after contact creation — replies may still fall below trust floor',
-        );
+      // Update confidence score — the message_sent signal gives the contact a
+      // non-zero contactConfidence so replies clear the trust floor.
+      if (this.confidencePipeline) {
+        this.confidencePipeline.incrementalUpdate(created.id, { type: 'message_sent' })
+          .catch(err => this.log.warn(
+            { err, channel, recipientId: redactId(recipientId), contactId: created.id },
+            'outbound-gateway: confidence pipeline update failed after contact creation (non-fatal)',
+          ));
       }
       return;
     }
@@ -923,15 +927,13 @@ export class OutboundGateway {
         );
         return;
       }
-      // Set trustLevel: 'high' so replies score above the trust floor (same reason as
-      // the new-contact path above — contactConfidence defaults to 0 after promotion).
-      try {
-        await this.contactService.setTrustLevel(contact.contactId, 'high');
-      } catch (err) {
-        this.log.warn(
-          { err, channel, recipientId: redactId(recipientId), contactId: contact.contactId },
-          'outbound-gateway: setTrustLevel failed after promotion — replies may still fall below trust floor',
-        );
+      // Update confidence score after promotion
+      if (this.confidencePipeline) {
+        this.confidencePipeline.incrementalUpdate(contact.contactId, { type: 'message_sent' })
+          .catch(err => this.log.warn(
+            { err, channel, recipientId: redactId(recipientId), contactId: contact.contactId },
+            'outbound-gateway: confidence pipeline update failed after promotion (non-fatal)',
+          ));
       }
       return;
     }
