@@ -19,6 +19,20 @@ import type { ActionRisk } from './types.js';
 import { resolveEnvValue } from '../config.js';
 
 // ---------------------------------------------------------------------------
+// Errors
+// ---------------------------------------------------------------------------
+
+/**
+ * Thrown when MCP server configuration is invalid (e.g. a fixed_inputs env-var
+ * reference cannot be resolved). This is a deployment problem that must be fixed
+ * before the system can start — it must NOT be swallowed by the graceful-degradation
+ * catch block in index.ts that handles connection failures.
+ */
+export class McpConfigError extends Error {
+  override readonly name = 'McpConfigError';
+}
+
+// ---------------------------------------------------------------------------
 // Config types — mirrors schemas/skills-config.json
 // ---------------------------------------------------------------------------
 
@@ -223,15 +237,25 @@ export async function loadMcpServers(
     // Resolve fixed_inputs once at startup. These values are captured in closures
     // and merged into every callTool invocation for this server's tools.
     // Env-var references (e.g. "env:CURIA_GOOGLE_EMAIL") are resolved here —
-    // a missing env var causes a startup failure with a clear error message.
+    // a missing env var throws McpConfigError, which propagates through the
+    // graceful-degradation catch in index.ts and crashes the process. This is
+    // intentional: a missing deployment constant is a config error, not a
+    // transient connection failure.
     const rawFixedInputs = 'fixed_inputs' in serverEntry ? serverEntry.fixed_inputs : undefined;
     const resolvedFixedInputs: Record<string, string> = {};
     if (rawFixedInputs) {
       for (const [key, value] of Object.entries(rawFixedInputs)) {
-        resolvedFixedInputs[key] = resolveEnvValue(
-          value,
-          `MCP server '${serverEntry.name}' fixed_inputs.${key}`,
-        );
+        try {
+          resolvedFixedInputs[key] = resolveEnvValue(
+            value,
+            `MCP server '${serverEntry.name}' fixed_inputs.${key}`,
+          );
+        } catch (err) {
+          throw new McpConfigError(
+            err instanceof Error ? err.message : String(err),
+            { cause: err },
+          );
+        }
       }
       logger.info(
         { server: serverEntry.name, keys: Object.keys(resolvedFixedInputs) },
@@ -344,6 +368,18 @@ export async function loadMcpServers(
       let mcpInputSchema = tool.inputSchema as import('./types.js').ToolDefinition['input_schema'];
       const fixedKeys = Object.keys(resolvedFixedInputs);
       if (fixedKeys.length > 0) {
+        // Warn if a fixed_inputs key doesn't match any parameter in this tool's
+        // schema — likely means the upstream MCP server renamed the parameter and
+        // the config is stale. The tool call will still work (extra keys are
+        // ignored by most MCP servers) but the intended parameter won't be set.
+        for (const key of fixedKeys) {
+          if (mcpInputSchema.properties && !(key in mcpInputSchema.properties)) {
+            logger.warn(
+              { server: serverEntry.name, tool: tool.name, fixedInputKey: key },
+              'fixed_inputs key not found in tool schema — the MCP server may not recognize this parameter',
+            );
+          }
+        }
         mcpInputSchema = stripFixedInputsFromSchema(mcpInputSchema, fixedKeys);
       }
 
