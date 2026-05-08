@@ -19,7 +19,7 @@
 
 import * as path from 'node:path';
 import { runner } from 'node-pg-migrate';
-import { loadConfig, loadYamlConfig, resolveChannelAccounts, resolveGoogleWorkspaceAccounts } from './config.js';
+import { loadConfig, loadYamlConfig, resolveChannelAccounts } from './config.js';
 import { createLogger } from './logger.js';
 import { HttpAdapter } from './channels/http/http-adapter.js';
 import { createPool } from './db/connection.js';
@@ -436,13 +436,6 @@ async function main(): Promise<void> {
   // EmailAdapters are constructed further below, after OutboundGateway is ready,
   // and started after the dispatcher is registered to avoid dropping inbound messages.
   const resolvedEmailAccounts = resolveChannelAccounts(yamlConfig, config);
-  const resolvedGoogleWorkspaceAccounts = resolveGoogleWorkspaceAccounts(yamlConfig);
-  if (resolvedGoogleWorkspaceAccounts.length > 0) {
-    logger.info(
-      { accounts: resolvedGoogleWorkspaceAccounts.map(a => ({ name: a.name, primary: a.primary })) },
-      `Google Workspace: ${resolvedGoogleWorkspaceAccounts.length} account(s) configured`,
-    );
-  }
   const nylasClientMap = new Map<string, NylasClient>();
 
   if (!config.nylasApiKey) {
@@ -982,10 +975,6 @@ async function main(): Promise<void> {
         email: resolvedEmailAccounts[0]?.selfEmail || undefined,
         phone: config.signalPhoneNumber || undefined,
       },
-      // Google Workspace accounts — injected into ALL agents so they know which account
-      // to use for Google Drive/Docs MCP tools, preventing email hallucination (#387).
-      googleWorkspaceAccounts: resolvedGoogleWorkspaceAccounts.length > 0
-        ? resolvedGoogleWorkspaceAccounts : undefined,
       // Agent registry — allows the runtime to look up the target agent's
       // expected_duration_seconds when injecting delegate timeouts (#387).
       agentRegistry,
