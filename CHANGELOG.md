@@ -14,6 +14,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 ## [Unreleased]
 
 ### Added
+- **Non-threaded channel context bridging** — dispatch layer writes outbound context memos to working memory on non-threaded channels (Signal, CLI, HTTP) and injects them as a preamble when the user replies, so the coordinator knows what it last said. Coordinator prompt gains a channel-agnostic clarification gate for reply-shaped messages without context (#431)
 - **Contact confidence scoring pipeline** — `contact_confidence` is now updated on each qualifying event (inbound/outbound message, CEO trust grant, verified identity pairing). Supports incremental and full-recompute modes with convergence guarantee (spec 06, #460)
 - **`contact-register` skill** — integration point for agents that read channels directly (e.g. the ceo-inbox agent) rather than through the dispatcher. Resolves or creates contacts, updates `last_seen_at`, triggers a confidence scoring delta, and emits a `contact.resolved` bus event (#485)
 
