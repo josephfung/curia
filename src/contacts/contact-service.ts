@@ -470,10 +470,10 @@ export class ContactService {
     // the linkIdentity operation.
     if (verified && this.onIdentityVerified) {
       try {
-        const result = this.onIdentityVerified(options.contactId);
+        const maybePromise = this.onIdentityVerified(options.contactId) as void | Promise<void>;
         // Handle async callbacks — catch unhandled rejections
-        if (result && typeof (result as Promise<void>).catch === 'function') {
-          (result as Promise<void>).catch(err => {
+        if (maybePromise instanceof Promise) {
+          maybePromise.catch(err => {
             this.logger?.warn({ err, contactId: options.contactId }, 'onIdentityVerified callback rejected (non-fatal)');
           });
         }

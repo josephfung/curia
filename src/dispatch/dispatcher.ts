@@ -261,8 +261,9 @@ export class Dispatcher {
             // Non-blocking — the trust score for THIS message already used the
             // stored contactConfidence. This update benefits the NEXT inbound.
             if (this.confidencePipeline) {
-              this.confidencePipeline.incrementalUpdate(senderContext.contactId, { type: 'message_seen' })
-                .catch(err => this.logger.warn({ err, contactId: senderContext.contactId }, 'Confidence pipeline update failed (non-fatal)'));
+              const resolvedContactId = senderContext.contactId;
+              this.confidencePipeline.incrementalUpdate(resolvedContactId, { type: 'message_seen' })
+                .catch(err => this.logger.warn({ err, contactId: resolvedContactId }, 'Confidence pipeline update failed (non-fatal)'));
             }
 
             // Provisional contacts are treated like unknown senders for policy purposes.
