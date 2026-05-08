@@ -42,6 +42,7 @@ import { loadSkillsFromDirectory } from './skills/loader.js';
 import { loadMcpServers } from './skills/mcp-loader.js';
 import type { McpSession } from './skills/mcp-client.js';
 import { ContactService } from './contacts/contact-service.js';
+import { ConfidencePipeline } from './contacts/confidence-pipeline.js';
 import { DedupService } from './contacts/dedup-service.js';
 import { ContactResolver } from './contacts/contact-resolver.js';
 import { createContactDuplicateDetected, createContactMerged } from './bus/events.js';
@@ -267,6 +268,10 @@ async function main(): Promise<void> {
   const bullpenService = BullpenService.createWithPostgres(pool, logger);
   logger.info('Bullpen service initialized');
 
+  // Contact confidence scoring pipeline — needs late-binding because the
+  // callback references the pipeline, which depends on contactService.
+  let confidencePipeline: ConfidencePipeline | undefined;
+
   // Contact system — provides identity resolution and contact management.
   // Always initialized (contacts work even without entity memory / KG).
   // DedupService is wired here so that createContact() automatically checks for
@@ -290,6 +295,10 @@ async function main(): Promise<void> {
         logger.error({ err }, 'Failed to publish contact.duplicate_detected — audit trail may be incomplete'),
       );
     },
+    onIdentityVerified: (contactId: string) => {
+      confidencePipeline?.incrementalUpdate(contactId, { type: 'pairing_confirmed' })
+        .catch(err => logger.warn({ err, contactId }, 'pairing_confirmed pipeline update failed (non-fatal)'));
+    },
     onContactMerged: (primaryContactId, secondaryContactId, mergedAt) => {
       const event = createContactMerged({
         primaryContactId,
@@ -302,6 +311,9 @@ async function main(): Promise<void> {
       );
     },
   });
+
+  // Now that contactService exists, wire up the confidence pipeline.
+  confidencePipeline = contactService ? new ConfidencePipeline(contactService) : undefined;
 
   // Authorization config — load role defaults, permissions, and channel trust.
   // These YAML files define the deterministic permission model.
@@ -731,6 +743,7 @@ async function main(): Promise<void> {
       // Wire action log repo so the gateway can write autonomy_action_log rows on
       // gated sends and support two-step draft linkage (#435).
       actionLogRepo,
+      confidencePipeline,
     });
     logger.info({
       emailAccounts: [...nylasClientMap.keys()],
@@ -850,7 +863,7 @@ async function main(): Promise<void> {
   // capability-gated declarations. outboundGateway gives email skills their send path.
   // entityContextAssembler enables entity_enrichment pre-enrichment and the
   // entity-context skill. agentContactId enables entity_enrichment default='agent'.
-  const executionLayer = new ExecutionLayer(skillRegistry, logger, { bus, agentRegistry, contactService, outboundGateway, heldMessages, schedulerService, entityMemory, agentPersona, nylasCalendarClient, entityContextAssembler, agentContactId: agentIdentityContactId, autonomyService, executiveProfileService, browserService, bullpenService, approvalTrigger, actionLogRepo, timezone: config.timezone, skillOutputMaxLength: yamlConfig.skillOutput?.maxLength });
+  const executionLayer = new ExecutionLayer(skillRegistry, logger, { bus, agentRegistry, contactService, outboundGateway, heldMessages, schedulerService, entityMemory, agentPersona, nylasCalendarClient, entityContextAssembler, agentContactId: agentIdentityContactId, autonomyService, executiveProfileService, browserService, bullpenService, approvalTrigger, actionLogRepo, confidencePipeline, timezone: config.timezone, skillOutputMaxLength: yamlConfig.skillOutput?.maxLength });
 
   // Two-pass agent registration:
   // Pass 1: Register all agents in the registry so specialistSummary() is complete
@@ -1098,6 +1111,7 @@ async function main(): Promise<void> {
     trustScorerWeights,
     trustScoreFloor,
     maxMessageBytes: yamlConfig.channels?.max_message_bytes ?? 102_400,
+    confidencePipeline,
   });
   dispatcher.register();
 

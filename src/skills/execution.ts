@@ -78,6 +78,7 @@ export class ExecutionLayer {
   private bullpenService?: import('../memory/bullpen.js').BullpenService;
   private approvalTrigger?: ApprovalTriggerService;
   private actionLogRepo?: import('../autonomy/action-log-repo.js').ActionLogRepo;
+  private confidencePipeline?: import('../contacts/confidence-pipeline.js').ConfidencePipeline;
   /** The agent's own contactId — injected into ctx.agentContactId for entity_enrichment default='agent' */
   private agentContactId?: string;
   /** IANA timezone name used for normalizing offset-less timestamp inputs from the LLM. */
@@ -102,6 +103,7 @@ export class ExecutionLayer {
     bullpenService?: import('../memory/bullpen.js').BullpenService;
     approvalTrigger?: ApprovalTriggerService;
     actionLogRepo?: import('../autonomy/action-log-repo.js').ActionLogRepo;
+    confidencePipeline?: import('../contacts/confidence-pipeline.js').ConfidencePipeline;
     agentContactId?: string;
     timezone?: string;
     skillOutputMaxLength?: number;
@@ -124,6 +126,7 @@ export class ExecutionLayer {
     this.bullpenService = options?.bullpenService;
     this.approvalTrigger = options?.approvalTrigger;
     this.actionLogRepo = options?.actionLogRepo;
+    this.confidencePipeline = options?.confidencePipeline;
     this.agentContactId = options?.agentContactId;
     this.timezone = options?.timezone ?? 'UTC';
     this.skillOutputMaxLength = options?.skillOutputMaxLength ?? DEFAULT_SKILL_OUTPUT_MAX_LENGTH;
@@ -450,6 +453,7 @@ export class ExecutionLayer {
       // contactService is available to all skills — read-only contact lookups
       // (calendars, display names, etc.) are not a privilege escalation.
       contactService: this.contactService,
+      confidencePipeline: this.confidencePipeline,
       // Thread agentId and taskEventId into context unconditionally — capability-gated
       // skills (bullpen) need these for event publishing; harmless for others.
       agentId: options?.agentId,
