@@ -73,6 +73,21 @@ interface ContactServiceBackend {
    * Delete a contact by ID. Call only after FK-referenced rows have been re-pointed.
    */
   deleteContact(id: string): Promise<void>;
+
+  /**
+   * Update scoring-owned fields on a contact. Uses atomic increments for message
+   * counts to avoid read-modify-write races. Only touches scoring-owned columns —
+   * does not modify display_name, role, status, notes, or trust_level.
+   */
+  updateScoringFields(
+    contactId: string,
+    updates: {
+      inboundMessageCountDelta?: number;
+      outboundMessageCountDelta?: number;
+      contactConfidence: number;
+      lastSeenAt?: Date;
+    },
+  ): Promise<void>;
 }
 
 // -- Auto-verification sources --
@@ -194,6 +209,8 @@ export class ContactService {
       contactConfidence: 0,
       trustLevel: null,
       lastSeenAt: null,
+      inboundMessageCount: 0,
+      outboundMessageCount: 0,
       notes: options.notes ?? null,
       createdAt: now,
       updatedAt: now,
@@ -683,6 +700,22 @@ export class ContactService {
     await this.backend.deleteContact(id);
   }
 
+  /**
+   * Update scoring-owned fields. Delegates to the backend's atomic increment path.
+   * Called by ConfidencePipeline — not intended for direct use by skills or other callers.
+   */
+  async updateScoringFields(
+    contactId: string,
+    updates: {
+      inboundMessageCountDelta?: number;
+      outboundMessageCountDelta?: number;
+      contactConfidence: number;
+      lastSeenAt?: Date;
+    },
+  ): Promise<void> {
+    await this.backend.updateScoringFields(contactId, updates);
+  }
+
   private computeGoldenRecord(
     primary: Contact,
     primaryIdentities: ChannelIdentity[],
@@ -767,11 +800,13 @@ class PostgresContactBackend implements ContactServiceBackend {
       contact_confidence: string;
       trust_level: string | null;
       last_seen_at: Date | null;
+      inbound_message_count: string;  // INT returned as string by node-pg
+      outbound_message_count: string;
       notes: string | null;
       created_at: Date;
       updated_at: Date;
     }>(
-      `SELECT id, kg_node_id, display_name, role, status, contact_confidence, trust_level, last_seen_at, notes, created_at, updated_at
+      `SELECT id, kg_node_id, display_name, role, status, contact_confidence, trust_level, last_seen_at, inbound_message_count, outbound_message_count, notes, created_at, updated_at
        FROM contacts WHERE id = $1`,
       [id],
     );
@@ -796,11 +831,13 @@ class PostgresContactBackend implements ContactServiceBackend {
       contact_confidence: string;
       trust_level: string | null;
       last_seen_at: Date | null;
+      inbound_message_count: string;  // INT returned as string by node-pg
+      outbound_message_count: string;
       notes: string | null;
       created_at: Date;
       updated_at: Date;
     }>(
-      `SELECT id, kg_node_id, display_name, role, status, contact_confidence, trust_level, last_seen_at, notes, created_at, updated_at
+      `SELECT id, kg_node_id, display_name, role, status, contact_confidence, trust_level, last_seen_at, inbound_message_count, outbound_message_count, notes, created_at, updated_at
        FROM contacts WHERE display_name ILIKE $1`,
       [`%${name}%`],
     );
@@ -818,11 +855,13 @@ class PostgresContactBackend implements ContactServiceBackend {
       contact_confidence: string;
       trust_level: string | null;
       last_seen_at: Date | null;
+      inbound_message_count: string;  // INT returned as string by node-pg
+      outbound_message_count: string;
       notes: string | null;
       created_at: Date;
       updated_at: Date;
     }>(
-      `SELECT id, kg_node_id, display_name, role, status, contact_confidence, trust_level, last_seen_at, notes, created_at, updated_at
+      `SELECT id, kg_node_id, display_name, role, status, contact_confidence, trust_level, last_seen_at, inbound_message_count, outbound_message_count, notes, created_at, updated_at
        FROM contacts WHERE role = $1 ORDER BY created_at ASC`,
       [role],
     );
@@ -840,11 +879,13 @@ class PostgresContactBackend implements ContactServiceBackend {
       contact_confidence: string;
       trust_level: string | null;
       last_seen_at: Date | null;
+      inbound_message_count: string;  // INT returned as string by node-pg
+      outbound_message_count: string;
       notes: string | null;
       created_at: Date;
       updated_at: Date;
     }>(
-      `SELECT id, kg_node_id, display_name, role, status, contact_confidence, trust_level, last_seen_at, notes, created_at, updated_at
+      `SELECT id, kg_node_id, display_name, role, status, contact_confidence, trust_level, last_seen_at, inbound_message_count, outbound_message_count, notes, created_at, updated_at
        FROM contacts ORDER BY created_at ASC`,
     );
 
@@ -859,6 +900,34 @@ class PostgresContactBackend implements ContactServiceBackend {
       `UPDATE contacts SET kg_node_id = $2, display_name = $3, role = $4, status = $5, notes = $6, trust_level = $7, updated_at = $8
        WHERE id = $1`,
       [contact.id, contact.kgNodeId, contact.displayName, contact.role, contact.status, contact.notes, contact.trustLevel, contact.updatedAt],
+    );
+  }
+
+  async updateScoringFields(
+    contactId: string,
+    updates: {
+      inboundMessageCountDelta?: number;
+      outboundMessageCountDelta?: number;
+      contactConfidence: number;
+      lastSeenAt?: Date;
+    },
+  ): Promise<void> {
+    this.logger.debug({ contactId }, 'contacts: updating scoring fields');
+    await this.pool.query(
+      `UPDATE contacts
+       SET contact_confidence = $2,
+           inbound_message_count = inbound_message_count + $3,
+           outbound_message_count = outbound_message_count + $4,
+           last_seen_at = COALESCE($5, last_seen_at),
+           updated_at = now()
+       WHERE id = $1`,
+      [
+        contactId,
+        updates.contactConfidence,
+        updates.inboundMessageCountDelta ?? 0,
+        updates.outboundMessageCountDelta ?? 0,
+        updates.lastSeenAt ?? null,
+      ],
     );
   }
 
@@ -1138,6 +1207,8 @@ class PostgresContactBackend implements ContactServiceBackend {
     contact_confidence: string;  // NUMERIC returned as string by node-pg
     trust_level: string | null;
     last_seen_at: Date | null;
+    inbound_message_count: string;
+    outbound_message_count: string;
     notes: string | null;
     created_at: Date;
     updated_at: Date;
@@ -1159,6 +1230,8 @@ class PostgresContactBackend implements ContactServiceBackend {
         ? row.trust_level as TrustLevel
         : null,
       lastSeenAt: row.last_seen_at,
+      inboundMessageCount: parseInt(row.inbound_message_count, 10) || 0,
+      outboundMessageCount: parseInt(row.outbound_message_count, 10) || 0,
       notes: row.notes,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
@@ -1276,6 +1349,27 @@ class InMemoryContactBackend implements ContactServiceBackend {
 
   async updateContact(contact: Contact): Promise<void> {
     this.contacts.set(contact.id, contact);
+  }
+
+  async updateScoringFields(
+    contactId: string,
+    updates: {
+      inboundMessageCountDelta?: number;
+      outboundMessageCountDelta?: number;
+      contactConfidence: number;
+      lastSeenAt?: Date;
+    },
+  ): Promise<void> {
+    const contact = this.contacts.get(contactId);
+    if (!contact) return;
+    this.contacts.set(contactId, {
+      ...contact,
+      contactConfidence: updates.contactConfidence,
+      inboundMessageCount: contact.inboundMessageCount + (updates.inboundMessageCountDelta ?? 0),
+      outboundMessageCount: contact.outboundMessageCount + (updates.outboundMessageCountDelta ?? 0),
+      lastSeenAt: updates.lastSeenAt ?? contact.lastSeenAt,
+      updatedAt: new Date(),
+    });
   }
 
   async createIdentity(identity: ChannelIdentity): Promise<void> {
