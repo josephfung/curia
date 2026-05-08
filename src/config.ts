@@ -643,7 +643,7 @@ export function loadYamlConfig(configDir: string): YamlConfig {
  * Throws at startup if a referenced env var is not set — a missing credential
  * should fail loudly rather than produce a silent no-op.
  */
-function resolveEnvValue(value: string, context: string): string {
+export function resolveEnvValue(value: string, context: string): string {
   if (value.startsWith('env:')) {
     const varName = value.slice(4);
     const resolved = process.env[varName];
