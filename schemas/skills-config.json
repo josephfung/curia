@@ -80,6 +80,11 @@
         "url": {
           "type": "string",
           "description": "Required for sse transport. The HTTP MCP endpoint URL (e.g. https://bigquery.googleapis.com/mcp)."
+        },
+        "fixed_inputs": {
+          "type": "object",
+          "additionalProperties": { "type": "string" },
+          "description": "Constant parameter values injected into every tool call from this server. Keys are parameter names; values are literal strings or 'env:VAR_NAME' references resolved at startup. Listed parameters are stripped from the tool schema — agents never see them."
         }
       }
     }
