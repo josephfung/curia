@@ -140,6 +140,41 @@ function mapMcpResult(
 }
 
 // ---------------------------------------------------------------------------
+// fixed_inputs helpers — exported for testing
+// ---------------------------------------------------------------------------
+
+/**
+ * Remove fixed_inputs keys from an MCP tool's JSON Schema so agents never see
+ * them as tool parameters. Returns a deep clone; the original is not mutated.
+ */
+export function stripFixedInputsFromSchema(
+  schema: import('./types.js').ToolDefinition['input_schema'],
+  fixedKeys: string[],
+): import('./types.js').ToolDefinition['input_schema'] {
+  if (fixedKeys.length === 0) return schema;
+  const stripped = structuredClone(schema);
+  for (const key of fixedKeys) {
+    delete stripped.properties[key];
+  }
+  if (stripped.required) {
+    stripped.required = stripped.required.filter(r => !fixedKeys.includes(r));
+  }
+  return stripped;
+}
+
+/**
+ * Merge resolved fixed_inputs into tool call arguments. Fixed values take
+ * precedence over agent-supplied values to prevent prompt injection overrides.
+ */
+export function mergeFixedInputs(
+  agentInput: Record<string, unknown>,
+  fixedInputs: Record<string, string>,
+): Record<string, unknown> {
+  if (Object.keys(fixedInputs).length === 0) return agentInput;
+  return { ...agentInput, ...fixedInputs };
+}
+
+// ---------------------------------------------------------------------------
 // Main entry point
 // ---------------------------------------------------------------------------
 
@@ -277,9 +312,7 @@ export async function loadMcpServers(
             // Merge fixed_inputs into the tool call arguments. Fixed values take
             // precedence — even if an agent somehow passed a value for a stripped
             // parameter (e.g. via prompt injection), the config value wins.
-            const mergedInput = Object.keys(resolvedFixedInputs).length > 0
-              ? { ...ctx.input, ...resolvedFixedInputs }
-              : ctx.input;
+            const mergedInput = mergeFixedInputs(ctx.input, resolvedFixedInputs);
             const rawResult = await capturedSession.client.callTool({
               name: toolName,
               arguments: mergedInput,
@@ -311,15 +344,7 @@ export async function loadMcpServers(
       let mcpInputSchema = tool.inputSchema as import('./types.js').ToolDefinition['input_schema'];
       const fixedKeys = Object.keys(resolvedFixedInputs);
       if (fixedKeys.length > 0) {
-        mcpInputSchema = structuredClone(mcpInputSchema);
-        for (const key of fixedKeys) {
-          delete mcpInputSchema.properties[key];
-        }
-        if (mcpInputSchema.required) {
-          mcpInputSchema.required = mcpInputSchema.required.filter(
-            r => !fixedKeys.includes(r),
-          );
-        }
+        mcpInputSchema = stripFixedInputsFromSchema(mcpInputSchema, fixedKeys);
       }
 
       try {
