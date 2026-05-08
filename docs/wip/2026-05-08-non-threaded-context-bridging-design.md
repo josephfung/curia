@@ -14,7 +14,7 @@ Real failure: the scheduler sent a Signal notification about held Google Docs co
 emails but wrote no context into Signal working memory. When the CEO replied, the
 coordinator searched the wrong inbox because it had no record of what it had just told him.
 
-## Solution: Three Layers
+## Solution
 
 ### Layer 1 — Channel threading declaration
 
@@ -160,6 +160,11 @@ This is a soft LLM directive — the coordinator uses judgment. "Yes, cancel it"
 reply-shaped (cancel what?). "Yes, cancel the 3pm meeting" is self-contained.
 
 No changes to threaded channels. Email threading already carries context.
+
+**Channel identification:** The coordinator already receives `channelId` in the task
+payload. The prompt lists non-threaded channels explicitly (Signal, SMS, CLI). Adding
+a new non-threaded channel requires updating this list — but adding a channel already
+requires prompt updates for audience-awareness, so this is not incremental work.
 
 ## What is NOT in scope
 
