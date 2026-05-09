@@ -20,6 +20,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **MCP `fixed_inputs`** — MCP server entries in `skills.yaml` now support a `fixed_inputs` field that binds constant parameter values at the tool layer. Values are resolved from env vars or literals at startup, stripped from tool schemas (invisible to agents), and merged into every `callTool` invocation (#432)
 
 ### Changed
+- **Bullpen context refresh in tool-use loop** — `AgentRuntime` now re-fetches pending Bullpen threads before every `chatWithRetry` call, not just once at task start. Replies and closures that occur mid-task are visible to the model on the next loop iteration (#213)
 - **`contact.resolved` bus event** — `sourceLayer` widened from `'dispatch'` to `'dispatch' | 'execution'`; `createContactResolved()` factory accepts an optional `sourceLayer` parameter (defaults to `'dispatch'` for backward compatibility). This is a public API surface change.
 - **`IdentitySource`** — new value `'agent_called'` for contacts registered by agents outside the normal dispatcher pipeline
 - **Outbound gateway** — removed `setTrustLevel('high')` band-aid; outbound sends now trigger the confidence scoring pipeline instead, giving contacts a real `contact_confidence` value
