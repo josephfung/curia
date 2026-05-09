@@ -817,25 +817,31 @@ export class AgentRuntime {
         this.config.bullpenWindowMinutes ?? 60,
       );
 
-      // Remove stale message first (if any)
+      // Build the replacement message BEFORE mutating the array, so that a
+      // formatBullpenContext failure preserves the stale message rather than
+      // leaving the array with the old message removed and no replacement.
+      const newBlock = pendingThreads.length > 0
+        ? formatBullpenContext(pendingThreads)
+        : null;
+
+      // Now atomically swap: remove stale, insert fresh.
       if (existingIdx !== -1) {
         messages.splice(existingIdx, 1);
       }
 
-      if (pendingThreads.length > 0) {
-        const bullpenBlock = formatBullpenContext(pendingThreads);
+      if (newBlock) {
         // If we removed a previous Bullpen message, re-insert at the same position
         // so it stays adjacent to the surrounding context rather than jumping back to
         // the top of a now-much-longer messages array. Only fall back to
         // bullpenInsertAt on the initial injection (no prior message existed).
         const insertAt = existingIdx !== -1 ? existingIdx : bullpenInsertAt;
-        messages.splice(insertAt, 0, { role: 'system', content: bullpenBlock });
+        messages.splice(insertAt, 0, { role: 'system', content: newBlock });
       }
     } catch (err) {
-      // A Bullpen lookup failure must not abort the task. Log and continue —
+      // A Bullpen refresh failure must not abort the task. Log and continue —
       // the agent will proceed with stale thread context (or none) rather than
       // failing entirely. The existing message (if any) is preserved.
-      logger.error({ err, agentId }, 'Failed to load Bullpen pending threads — proceeding without thread context');
+      logger.error({ err, agentId }, 'Bullpen context refresh failed — proceeding with stale thread context');
     }
   }
 
