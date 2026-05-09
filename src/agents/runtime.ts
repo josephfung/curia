@@ -422,24 +422,9 @@ export class AgentRuntime {
     // Inject pending Bullpen threads as a system message so the agent is aware
     // of active inter-agent discussions. Inserted after sender context (if any),
     // before conversation history — matching spec context budget priority order.
-    if (this.config.bullpenService) {
-      try {
-        const pendingThreads = await this.config.bullpenService.getPendingThreadsForAgent(
-          agentId,
-          this.config.bullpenWindowMinutes ?? 60,
-        );
-        if (pendingThreads.length > 0) {
-          const bullpenBlock = formatBullpenContext(pendingThreads);
-          // Insert after sender context (if present) but before conversation history.
-          // bullpenInsertAt is 2 when sender context was injected, 1 otherwise.
-          messages.splice(bullpenInsertAt, 0, { role: 'system', content: bullpenBlock });
-        }
-      } catch (err) {
-        // A Bullpen lookup failure must not abort the task. Log and continue —
-        // the agent will proceed without thread context rather than failing entirely.
-        logger.error({ err, agentId }, 'Failed to load Bullpen pending threads — proceeding without thread context');
-      }
-    }
+    // Refreshed before every chatWithRetry call so the model sees current thread
+    // state, not a stale snapshot from the start of the task (#213).
+    await this.refreshBullpenContext(messages, bullpenInsertAt, agentId);
 
     logger.info({ agentId, conversationId, historyLength: history.length }, 'Agent processing task');
 
@@ -701,6 +686,10 @@ export class AgentRuntime {
       // a tool_use_id from the preceding assistant turn.
       messages.push({ role: 'user', content: toolResultBlocks });
 
+      // Refresh Bullpen context before the next LLM round so the model sees
+      // any new replies or closures that occurred during skill execution (#213).
+      await this.refreshBullpenContext(messages, bullpenInsertAt, agentId);
+
       // Continue the loop — the full conversation history is now in messages
       response = await this.chatWithRetry(provider, { messages, tools: workingToolDefs }, budget, taskEvent);
       if (!response) return; // chatWithRetry already published error events
@@ -805,6 +794,58 @@ export class AgentRuntime {
    * - On success: reset consecutive error counter, return the response
    * - If all retries exhausted: publish agent.error, send error response, return null
    */
+
+  /**
+   * Refresh the Bullpen pending-thread system message in the messages array.
+   *
+   * Called before every chatWithRetry invocation so the model sees current
+   * thread state, not a stale snapshot from the start of the task (#213).
+   *
+   * - Finds and removes any existing Bullpen system message (identified by
+   *   the `[Bullpen —` prefix produced by formatBullpenContext).
+   * - Fetches fresh pending threads and inserts a new system message.
+   * - On fetch failure: logs the error and leaves the existing message in
+   *   place (stale context is better than no context).
+   */
+  private async refreshBullpenContext(
+    messages: Message[],
+    bullpenInsertAt: number,
+    agentId: string,
+  ): Promise<void> {
+    if (!this.config.bullpenService) return;
+
+    const logger = this.config.logger;
+
+    // Find any existing Bullpen system message by its sentinel prefix.
+    const existingIdx = messages.findIndex(
+      m => m.role === 'system' && typeof m.content === 'string' && m.content.startsWith('[Bullpen'),
+    );
+
+    try {
+      const pendingThreads = await this.config.bullpenService.getPendingThreadsForAgent(
+        agentId,
+        this.config.bullpenWindowMinutes ?? 60,
+      );
+
+      // Remove stale message first (if any)
+      if (existingIdx !== -1) {
+        messages.splice(existingIdx, 1);
+      }
+
+      if (pendingThreads.length > 0) {
+        const bullpenBlock = formatBullpenContext(pendingThreads);
+        // Insert after sender context (if present) but before conversation history.
+        // bullpenInsertAt is 2 when sender context was injected, 1 otherwise.
+        messages.splice(bullpenInsertAt, 0, { role: 'system', content: bullpenBlock });
+      }
+    } catch (err) {
+      // A Bullpen lookup failure must not abort the task. Log and continue —
+      // the agent will proceed with stale thread context (or none) rather than
+      // failing entirely. The existing message (if any) is preserved.
+      logger.error({ err, agentId }, 'Failed to load Bullpen pending threads — proceeding without thread context');
+    }
+  }
+
   private async chatWithRetry(
     provider: LLMProvider,
     params: { messages: Message[]; tools?: ToolDefinition[] },
