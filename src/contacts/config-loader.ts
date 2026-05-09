@@ -99,7 +99,11 @@ export function loadAuthConfig(configDir: string): AuthConfig {
       if (!['allow', 'hold_and_notify', 'ignore'].includes(unknownSender)) {
         throw new Error(`Invalid unknown_sender policy '${unknownSender}' for channel '${channel}'`);
       }
-      const threaded = (config as { threaded?: boolean }).threaded ?? false;
+      const rawThreaded = (config as { threaded?: unknown }).threaded;
+      if (rawThreaded !== undefined && typeof rawThreaded !== 'boolean') {
+        throw new Error(`Invalid threaded flag '${String(rawThreaded)}' for channel '${channel}'`);
+      }
+      const threaded = rawThreaded ?? false;
       channelTrust[channel] = trust;
       channelPolicies[channel] = { trust, unknownSender, threaded };
     }
