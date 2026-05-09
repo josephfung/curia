@@ -786,16 +786,6 @@ export class AgentRuntime {
   }
 
   /**
-   * Call the LLM provider with retry logic for transient failures.
-   *
-   * - Non-retryable errors: publish agent.error, send error response, return null
-   * - Retryable errors: backoff and retry up to 3 times, incrementing budget counters
-   * - AUTH_FAILURE counts double against the budget (it's a serious signal)
-   * - On success: reset consecutive error counter, return the response
-   * - If all retries exhausted: publish agent.error, send error response, return null
-   */
-
-  /**
    * Refresh the Bullpen pending-thread system message in the messages array.
    *
    * Called before every chatWithRetry invocation so the model sees current
@@ -834,9 +824,12 @@ export class AgentRuntime {
 
       if (pendingThreads.length > 0) {
         const bullpenBlock = formatBullpenContext(pendingThreads);
-        // Insert after sender context (if present) but before conversation history.
-        // bullpenInsertAt is 2 when sender context was injected, 1 otherwise.
-        messages.splice(bullpenInsertAt, 0, { role: 'system', content: bullpenBlock });
+        // If we removed a previous Bullpen message, re-insert at the same position
+        // so it stays adjacent to the surrounding context rather than jumping back to
+        // the top of a now-much-longer messages array. Only fall back to
+        // bullpenInsertAt on the initial injection (no prior message existed).
+        const insertAt = existingIdx !== -1 ? existingIdx : bullpenInsertAt;
+        messages.splice(insertAt, 0, { role: 'system', content: bullpenBlock });
       }
     } catch (err) {
       // A Bullpen lookup failure must not abort the task. Log and continue —
@@ -846,6 +839,15 @@ export class AgentRuntime {
     }
   }
 
+  /**
+   * Call the LLM provider with retry logic for transient failures.
+   *
+   * - Non-retryable errors: publish agent.error, send error response, return null
+   * - Retryable errors: backoff and retry up to 3 times, incrementing budget counters
+   * - AUTH_FAILURE counts double against the budget (it's a serious signal)
+   * - On success: reset consecutive error counter, return the response
+   * - If all retries exhausted: publish agent.error, send error response, return null
+   */
   private async chatWithRetry(
     provider: LLMProvider,
     params: { messages: Message[]; tools?: ToolDefinition[] },
