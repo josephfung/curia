@@ -1664,3 +1664,317 @@ describe('AgentRuntime chatWithRetry', () => {
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// Bullpen context refresh in tool-use loop (#213)
+// ---------------------------------------------------------------------------
+
+describe('AgentRuntime Bullpen context refresh', () => {
+  it('re-fetches pending threads before each chatWithRetry in the tool-use loop', async () => {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+
+    // Track the messages array passed to each provider.chat() call so we can
+    // verify the Bullpen system message content changed between rounds.
+    const capturedMessageSnapshots: Array<Array<{ role: string; content: unknown }>> = [];
+
+    let chatCallCount = 0;
+    const provider: LLMProvider = {
+      id: 'mock',
+      chat: vi.fn(async ({ messages }) => {
+        // Deep-copy the messages to capture the state at each call
+        capturedMessageSnapshots.push(
+          messages.map((m: { role: string; content: unknown }) => ({ role: m.role, content: m.content })),
+        );
+        chatCallCount++;
+        if (chatCallCount === 1) {
+          // First call: LLM requests a tool call
+          return {
+            type: 'tool_use' as const,
+            toolCalls: [{ id: 'call-bp-1', name: 'web-fetch', input: { url: 'https://example.com' } }],
+            usage: { inputTokens: 100, outputTokens: 50 },
+          };
+        }
+        // Second call: LLM returns text (exit tool-use loop)
+        return {
+          type: 'text' as const,
+          content: 'All done.',
+          usage: { inputTokens: 200, outputTokens: 60 },
+        };
+      }),
+    };
+
+    const mockExecution = {
+      invoke: vi.fn().mockResolvedValue({ success: true, data: 'fetched' }),
+    } as unknown as ExecutionLayer;
+
+    // Mock bullpenService: returns different threads on successive calls so we
+    // can verify the system message content actually changes.
+    let bullpenCallCount = 0;
+    const mockBullpenService = {
+      getPendingThreadsForAgent: vi.fn(async () => {
+        bullpenCallCount++;
+        if (bullpenCallCount === 1) {
+          return [{
+            threadId: 'thread-1',
+            topic: 'Sprint planning',
+            totalMessages: 1,
+            recentMessages: [{
+              senderAgentId: 'research-analyst',
+              content: 'Initial message',
+              mentionedAgentIds: ['coordinator'],
+              createdAt: new Date('2026-05-09T10:00:00Z'),
+            }],
+          }];
+        }
+        // Second call: thread has a new reply
+        return [{
+          threadId: 'thread-1',
+          topic: 'Sprint planning',
+          totalMessages: 2,
+          recentMessages: [
+            {
+              senderAgentId: 'research-analyst',
+              content: 'Initial message',
+              mentionedAgentIds: ['coordinator'],
+              createdAt: new Date('2026-05-09T10:00:00Z'),
+            },
+            {
+              senderAgentId: 'essay-editor',
+              content: 'Follow-up reply',
+              mentionedAgentIds: ['coordinator'],
+              createdAt: new Date('2026-05-09T10:01:00Z'),
+            },
+          ],
+        }];
+      }),
+    };
+
+    bus.subscribe('agent.response', 'dispatch', () => {});
+
+    const agent = new AgentRuntime({
+      agentId: 'coordinator',
+      systemPrompt: 'You are an assistant.',
+      provider,
+      bus,
+      logger,
+      executionLayer: mockExecution,
+      skillToolDefs: [{ name: 'web-fetch', description: 'Fetch', input_schema: { type: 'object' as const, properties: {}, required: [] as string[] } }],
+      bullpenService: mockBullpenService as unknown as import('../../../src/memory/bullpen.js').BullpenService,
+    });
+    agent.register();
+
+    const task = createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'conv-bp-refresh',
+      channelId: 'cli',
+      senderId: 'user',
+      content: 'Do something',
+      parentEventId: 'parent-bp-refresh',
+    });
+    await bus.publish('dispatch', task);
+
+    // bullpenService.getPendingThreadsForAgent must be called twice:
+    // once before the initial chatWithRetry, once before the loop chatWithRetry
+    expect(mockBullpenService.getPendingThreadsForAgent).toHaveBeenCalledTimes(2);
+
+    // Both chat calls should have included a Bullpen system message
+    expect(capturedMessageSnapshots).toHaveLength(2);
+
+    // First call: system messages should contain the initial thread state (1 message)
+    const firstSystemMsgs = capturedMessageSnapshots[0]!
+      .filter(m => m.role === 'system' && typeof m.content === 'string' && (m.content as string).includes('[Bullpen'));
+    expect(firstSystemMsgs).toHaveLength(1);
+    expect(firstSystemMsgs[0]!.content).toContain('1 total messages');
+    expect(firstSystemMsgs[0]!.content).not.toContain('Follow-up reply');
+
+    // Second call: system messages should contain the refreshed thread state (2 messages)
+    const secondSystemMsgs = capturedMessageSnapshots[1]!
+      .filter(m => m.role === 'system' && typeof m.content === 'string' && (m.content as string).includes('[Bullpen'));
+    expect(secondSystemMsgs).toHaveLength(1);
+    expect(secondSystemMsgs[1 - 1]!.content).toContain('2 total messages');
+    expect(secondSystemMsgs[0]!.content).toContain('Follow-up reply');
+  });
+
+  it('removes stale Bullpen message when no pending threads remain', async () => {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+
+    const capturedMessageSnapshots: Array<Array<{ role: string; content: unknown }>> = [];
+
+    let chatCallCount = 0;
+    const provider: LLMProvider = {
+      id: 'mock',
+      chat: vi.fn(async ({ messages }) => {
+        capturedMessageSnapshots.push(
+          messages.map((m: { role: string; content: unknown }) => ({ role: m.role, content: m.content })),
+        );
+        chatCallCount++;
+        if (chatCallCount === 1) {
+          return {
+            type: 'tool_use' as const,
+            toolCalls: [{ id: 'call-bp-2', name: 'web-fetch', input: {} }],
+            usage: { inputTokens: 100, outputTokens: 50 },
+          };
+        }
+        return {
+          type: 'text' as const,
+          content: 'Done.',
+          usage: { inputTokens: 200, outputTokens: 60 },
+        };
+      }),
+    };
+
+    const mockExecution = {
+      invoke: vi.fn().mockResolvedValue({ success: true, data: 'ok' }),
+    } as unknown as ExecutionLayer;
+
+    let bullpenCallCount = 0;
+    const mockBullpenService = {
+      getPendingThreadsForAgent: vi.fn(async () => {
+        bullpenCallCount++;
+        if (bullpenCallCount === 1) {
+          // First call: one pending thread
+          return [{
+            threadId: 'thread-2',
+            topic: 'Design review',
+            totalMessages: 1,
+            recentMessages: [{
+              senderAgentId: 'research-analyst',
+              content: 'Review this',
+              mentionedAgentIds: ['coordinator'],
+              createdAt: new Date('2026-05-09T10:00:00Z'),
+            }],
+          }];
+        }
+        // Second call: thread was closed — no more pending threads
+        return [];
+      }),
+    };
+
+    bus.subscribe('agent.response', 'dispatch', () => {});
+
+    const agent = new AgentRuntime({
+      agentId: 'coordinator',
+      systemPrompt: 'You are an assistant.',
+      provider,
+      bus,
+      logger,
+      executionLayer: mockExecution,
+      skillToolDefs: [{ name: 'web-fetch', description: 'Fetch', input_schema: { type: 'object' as const, properties: {}, required: [] as string[] } }],
+      bullpenService: mockBullpenService as unknown as import('../../../src/memory/bullpen.js').BullpenService,
+    });
+    agent.register();
+
+    const task = createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'conv-bp-remove',
+      channelId: 'cli',
+      senderId: 'user',
+      content: 'Do something',
+      parentEventId: 'parent-bp-remove',
+    });
+    await bus.publish('dispatch', task);
+
+    // First call should have a Bullpen system message
+    const firstBullpenMsgs = capturedMessageSnapshots[0]!
+      .filter(m => m.role === 'system' && typeof m.content === 'string' && (m.content as string).includes('[Bullpen'));
+    expect(firstBullpenMsgs).toHaveLength(1);
+
+    // Second call: Bullpen message should be removed (no pending threads)
+    const secondBullpenMsgs = capturedMessageSnapshots[1]!
+      .filter(m => m.role === 'system' && typeof m.content === 'string' && (m.content as string).includes('[Bullpen'));
+    expect(secondBullpenMsgs).toHaveLength(0);
+  });
+
+  it('preserves existing Bullpen message when refresh fails', async () => {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+
+    const capturedMessageSnapshots: Array<Array<{ role: string; content: unknown }>> = [];
+
+    let chatCallCount = 0;
+    const provider: LLMProvider = {
+      id: 'mock',
+      chat: vi.fn(async ({ messages }) => {
+        capturedMessageSnapshots.push(
+          messages.map((m: { role: string; content: unknown }) => ({ role: m.role, content: m.content })),
+        );
+        chatCallCount++;
+        if (chatCallCount === 1) {
+          return {
+            type: 'tool_use' as const,
+            toolCalls: [{ id: 'call-bp-3', name: 'web-fetch', input: {} }],
+            usage: { inputTokens: 100, outputTokens: 50 },
+          };
+        }
+        return {
+          type: 'text' as const,
+          content: 'Done.',
+          usage: { inputTokens: 200, outputTokens: 60 },
+        };
+      }),
+    };
+
+    const mockExecution = {
+      invoke: vi.fn().mockResolvedValue({ success: true, data: 'ok' }),
+    } as unknown as ExecutionLayer;
+
+    let bullpenCallCount = 0;
+    const mockBullpenService = {
+      getPendingThreadsForAgent: vi.fn(async () => {
+        bullpenCallCount++;
+        if (bullpenCallCount === 1) {
+          return [{
+            threadId: 'thread-3',
+            topic: 'Architecture review',
+            totalMessages: 1,
+            recentMessages: [{
+              senderAgentId: 'research-analyst',
+              content: 'Let us discuss',
+              mentionedAgentIds: ['coordinator'],
+              createdAt: new Date('2026-05-09T10:00:00Z'),
+            }],
+          }];
+        }
+        // Second call fails — refresh should preserve the stale message
+        throw new Error('DB connection lost');
+      }),
+    };
+
+    bus.subscribe('agent.response', 'dispatch', () => {});
+
+    const agent = new AgentRuntime({
+      agentId: 'coordinator',
+      systemPrompt: 'You are an assistant.',
+      provider,
+      bus,
+      logger,
+      executionLayer: mockExecution,
+      skillToolDefs: [{ name: 'web-fetch', description: 'Fetch', input_schema: { type: 'object' as const, properties: {}, required: [] as string[] } }],
+      bullpenService: mockBullpenService as unknown as import('../../../src/memory/bullpen.js').BullpenService,
+    });
+    agent.register();
+
+    const task = createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'conv-bp-fail',
+      channelId: 'cli',
+      senderId: 'user',
+      content: 'Do something',
+      parentEventId: 'parent-bp-fail',
+    });
+    await bus.publish('dispatch', task);
+
+    // Both calls should still have a Bullpen system message (stale one preserved on failure)
+    const firstBullpenMsgs = capturedMessageSnapshots[0]!
+      .filter(m => m.role === 'system' && typeof m.content === 'string' && (m.content as string).includes('[Bullpen'));
+    expect(firstBullpenMsgs).toHaveLength(1);
+
+    const secondBullpenMsgs = capturedMessageSnapshots[1]!
+      .filter(m => m.role === 'system' && typeof m.content === 'string' && (m.content as string).includes('[Bullpen'));
+    expect(secondBullpenMsgs).toHaveLength(1);
+    // Should still be the original content (stale, not updated)
+    expect(secondBullpenMsgs[0]!.content).toContain('Architecture review');
+  });
+});
