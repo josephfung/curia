@@ -3,7 +3,7 @@
 // Tests for the date-resolve skill. All tests are pure computation —
 // no mocks, no external services.
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { DateResolveHandler } from './handler.js';
 import type { SkillContext } from '../../src/skills/types.js';
 import { DateTime, Settings } from 'luxon';

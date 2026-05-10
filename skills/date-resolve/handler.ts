@@ -7,7 +7,7 @@
 //
 // Pure computation using luxon. No external services, no side effects.
 
-import { DateTime, Info } from 'luxon';
+import { DateTime } from 'luxon';
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
 
 /** Canonical day names for matching against user input. */
