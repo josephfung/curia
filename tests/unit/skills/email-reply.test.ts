@@ -115,3 +115,132 @@ describe('EmailReplyHandler', () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// CC modes — reply-all, reply-to-sender, explicit CC list
+// ---------------------------------------------------------------------------
+
+describe('EmailReplyHandler — CC modes', () => {
+  const handler = new EmailReplyHandler();
+
+  /** Extended makeCtx that supports selfEmail for CC filtering. */
+  function makeCtxWithSelf(
+    input: Record<string, unknown>,
+    gateway: Partial<{
+      getEmailMessage: (...args: unknown[]) => unknown;
+      send: (...args: unknown[]) => unknown;
+    }>,
+    selfEmail?: string,
+  ): SkillContext {
+    return {
+      input,
+      secret: () => { throw new Error('no secrets'); },
+      log: logger,
+      outboundGateway: gateway as never,
+      taskMetadata: {},
+      selfEmail,
+    } as SkillContext;
+  }
+
+  it('cc absent (undefined) — auto-populates from original to/cc, excluding primary To and selfEmail', async () => {
+    const gateway = {
+      getEmailMessage: vi.fn().mockResolvedValue({
+        from: [{ email: 'sender@example.com' }],
+        to: [{ email: 'curia@example.com' }, { email: 'bob@example.com' }],
+        cc: [{ email: 'carol@example.com' }],
+        subject: 'Group thread',
+      }),
+      send: vi.fn().mockResolvedValue({ success: true, messageId: 'sent-cc-1' }),
+    };
+
+    // cc is NOT in the input — triggers reply-all mode
+    const result = await handler.execute(
+      makeCtxWithSelf(
+        { reply_to_message_id: 'msg-group', body: 'Sounds good' },
+        gateway,
+        'curia@example.com',
+      ),
+    );
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const data = result.data as { cc: string };
+      // sender@example.com is excluded (primary To recipient), curia@example.com is excluded (selfEmail)
+      // bob@example.com and carol@example.com remain
+      expect(data.cc).toBe('bob@example.com, carol@example.com');
+    }
+
+    // Verify the send call received the CC array
+    expect(gateway.send).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cc: ['bob@example.com', 'carol@example.com'],
+      }),
+    );
+  });
+
+  it('cc === "" — reply to sender only, no CC', async () => {
+    const gateway = {
+      getEmailMessage: vi.fn().mockResolvedValue({
+        from: [{ email: 'sender@example.com' }],
+        to: [{ email: 'curia@example.com' }, { email: 'bob@example.com' }],
+        cc: [{ email: 'carol@example.com' }],
+        subject: 'Group thread',
+      }),
+      send: vi.fn().mockResolvedValue({ success: true, messageId: 'sent-cc-2' }),
+    };
+
+    // cc is explicitly empty string — reply to sender only
+    const result = await handler.execute(
+      makeCtxWithSelf(
+        { reply_to_message_id: 'msg-group', body: 'Private reply', cc: '' },
+        gateway,
+        'curia@example.com',
+      ),
+    );
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const data = result.data as { cc: string };
+      expect(data.cc).toBe('');
+    }
+
+    // Verify the send call does NOT include a cc property
+    const sendArg = (gateway.send as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(sendArg).not.toHaveProperty('cc');
+  });
+
+  it('cc is explicit comma-separated list — used as-is', async () => {
+    const gateway = {
+      getEmailMessage: vi.fn().mockResolvedValue({
+        from: [{ email: 'sender@example.com' }],
+        to: [{ email: 'curia@example.com' }],
+        cc: [],
+        subject: 'Forwarded',
+      }),
+      send: vi.fn().mockResolvedValue({ success: true, messageId: 'sent-cc-3' }),
+    };
+
+    // Explicit CC list overrides all auto-population logic
+    const result = await handler.execute(
+      makeCtxWithSelf(
+        { reply_to_message_id: 'msg-fwd', body: 'Adding you both', cc: 'a@example.com,b@example.com' },
+        gateway,
+        'curia@example.com',
+      ),
+    );
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const data = result.data as { cc: string };
+      // join(', ') produces a space after each comma
+      expect(data.cc).toBe('a@example.com, b@example.com');
+    }
+
+    // Verify the send call received the explicit CC array
+    expect(gateway.send).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cc: ['a@example.com', 'b@example.com'],
+      }),
+    );
+  });
+});

@@ -1588,3 +1588,157 @@ describe('ceoInitiated metadata stamping', () => {
   });
 
 });
+
+// ---------------------------------------------------------------------------
+// Thread-participants block injection (PR1-D)
+// ---------------------------------------------------------------------------
+
+describe('Dispatcher — thread-participants block', () => {
+  it('injects [Thread participants] line for email with participants metadata', async () => {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+
+    const tasks: AgentTaskEvent[] = [];
+    bus.subscribe('agent.task', 'agent', (e) => tasks.push(e as AgentTaskEvent));
+
+    const dispatcher = new Dispatcher({ bus, logger });
+    dispatcher.register();
+
+    await bus.publish('channel', createInboundMessage({
+      conversationId: 'email:thread-participants-1',
+      channelId: 'email',
+      senderId: 'alice@example.com',
+      content: 'Can we meet tomorrow?',
+      metadata: {
+        participants: [
+          { email: 'alice@example.com', role: 'from' },
+          { email: 'bob@example.com', role: 'to' },
+          { email: 'carol@example.com', role: 'cc' },
+        ],
+      },
+    }));
+
+    expect(tasks).toHaveLength(1);
+    const content = tasks[0]!.payload.content;
+    expect(content).toMatch(/^\[Thread participants — From: alice@example\.com; To: bob@example\.com; CC: carol@example\.com\]/);
+    expect(content).toContain('Can we meet tomorrow?');
+  });
+
+  it('substitutes selfEmail with "you" in the participants block', async () => {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+
+    const tasks: AgentTaskEvent[] = [];
+    bus.subscribe('agent.task', 'agent', (e) => tasks.push(e as AgentTaskEvent));
+
+    const dispatcher = new Dispatcher({ bus, logger, selfEmail: 'curia@example.com' });
+    dispatcher.register();
+
+    await bus.publish('channel', createInboundMessage({
+      conversationId: 'email:thread-participants-self',
+      channelId: 'email',
+      senderId: 'alice@example.com',
+      content: 'Looping you in.',
+      metadata: {
+        participants: [
+          { email: 'alice@example.com', role: 'from' },
+          { email: 'curia@example.com', role: 'to' },
+          { email: 'bob@example.com', role: 'cc' },
+        ],
+      },
+    }));
+
+    expect(tasks).toHaveLength(1);
+    const content = tasks[0]!.payload.content;
+    // Curia's own address replaced with "you"
+    expect(content).toContain('To: you');
+    expect(content).not.toContain('curia@example.com');
+  });
+
+  it('sanitizes participant emails containing newlines and angle brackets', async () => {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+
+    const tasks: AgentTaskEvent[] = [];
+    bus.subscribe('agent.task', 'agent', (e) => tasks.push(e as AgentTaskEvent));
+
+    const dispatcher = new Dispatcher({ bus, logger });
+    dispatcher.register();
+
+    await bus.publish('channel', createInboundMessage({
+      conversationId: 'email:thread-participants-sanitize',
+      channelId: 'email',
+      senderId: 'alice@example.com',
+      content: 'Hello',
+      metadata: {
+        participants: [
+          { email: 'alice@example.com', role: 'from' },
+          { email: 'evil\n@inject<>ed.com', role: 'to' },
+        ],
+      },
+    }));
+
+    expect(tasks).toHaveLength(1);
+    const content = tasks[0]!.payload.content;
+    // Newlines and angle brackets stripped
+    expect(content).not.toContain('\n@');
+    expect(content).not.toContain('<');
+    expect(content).not.toContain('>');
+    expect(content).toContain('To: evil@injected.com');
+  });
+
+  it('does not inject [Thread participants] when participants array is empty', async () => {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+
+    const tasks: AgentTaskEvent[] = [];
+    bus.subscribe('agent.task', 'agent', (e) => tasks.push(e as AgentTaskEvent));
+
+    const dispatcher = new Dispatcher({ bus, logger });
+    dispatcher.register();
+
+    await bus.publish('channel', createInboundMessage({
+      conversationId: 'email:thread-participants-empty',
+      channelId: 'email',
+      senderId: 'alice@example.com',
+      content: 'No participants.',
+      metadata: {
+        participants: [],
+      },
+    }));
+
+    expect(tasks).toHaveLength(1);
+    const content = tasks[0]!.payload.content;
+    expect(content).not.toContain('[Thread participants');
+    expect(content).toBe('No participants.');
+  });
+
+  it('does not inject [Thread participants] for non-email channels', async () => {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+
+    const tasks: AgentTaskEvent[] = [];
+    bus.subscribe('agent.task', 'agent', (e) => tasks.push(e as AgentTaskEvent));
+
+    const dispatcher = new Dispatcher({ bus, logger });
+    dispatcher.register();
+
+    await bus.publish('channel', createInboundMessage({
+      conversationId: 'signal:conv-participants',
+      channelId: 'signal',
+      senderId: '+15551234567',
+      content: 'Signal message.',
+      metadata: {
+        participants: [
+          { email: 'alice@example.com', role: 'from' },
+          { email: 'bob@example.com', role: 'to' },
+        ],
+      },
+    }));
+
+    expect(tasks).toHaveLength(1);
+    const content = tasks[0]!.payload.content;
+    expect(content).not.toContain('[Thread participants');
+    expect(content).toBe('Signal message.');
+  });
+});
