@@ -82,6 +82,9 @@ export interface DispatcherConfig {
   /** TTL for outbound context memos in milliseconds. Memos older than this are
    *  excluded from inbound injection. Default: 86400000 (24 hours). */
   contextMemoTtlMs?: number;
+  /** Curia's own email address — used to substitute "you" for Curia's address
+   *  in thread-participants blocks (PR1-D). */
+  selfEmail?: string;
 }
 
 /**
@@ -130,6 +133,8 @@ export class Dispatcher {
   private confidencePipeline?: import('../contacts/confidence-pipeline.js').ConfidencePipeline;
   private workingMemory?: WorkingMemory;
   private contextMemoTtlMs: number;
+  /** Curia's own email address — used in thread-participants substitution (PR1-D). */
+  private selfEmail?: string;
 
   constructor(config: DispatcherConfig) {
     this.bus = config.bus;
@@ -148,6 +153,7 @@ export class Dispatcher {
     this.confidencePipeline = config.confidencePipeline;
     this.workingMemory = config.workingMemory;
     this.contextMemoTtlMs = config.contextMemoTtlMs ?? 86_400_000;
+    this.selfEmail = config.selfEmail;
 
     // Warn if the trust floor is active but no held-message service was provided — the floor
     // silently becomes a no-op in that case, which is a security-relevant degradation.
@@ -165,6 +171,16 @@ export class Dispatcher {
       clearTimeout(timer);
     }
     this.checkpointTimers.clear();
+  }
+
+  /**
+   * Curia's own email address, used in PR1-D to substitute "you" for Curia's
+   * address in thread-participants blocks. Exposed as a getter so downstream
+   * components (e.g. thread-participants formatter) can read it from the Dispatcher
+   * without needing their own copy of the config.
+   */
+  getSelfEmail(): string | undefined {
+    return this.selfEmail;
   }
 
   register(): void {

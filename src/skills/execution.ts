@@ -83,6 +83,8 @@ export class ExecutionLayer {
   private agentContactId?: string;
   /** IANA timezone name used for normalizing offset-less timestamp inputs from the LLM. */
   private timezone: string;
+  /** Curia's own email address — used by email skills to filter self from CC lists. */
+  private selfEmail?: string;
   /** Max character length for sanitized skill output before truncation. */
   private skillOutputMaxLength: number;
 
@@ -106,6 +108,7 @@ export class ExecutionLayer {
     confidencePipeline?: import('../contacts/confidence-pipeline.js').ConfidencePipeline;
     agentContactId?: string;
     timezone?: string;
+    selfEmail?: string;
     skillOutputMaxLength?: number;
   }) {
     this.registry = registry;
@@ -129,6 +132,7 @@ export class ExecutionLayer {
     this.confidencePipeline = options?.confidencePipeline;
     this.agentContactId = options?.agentContactId;
     this.timezone = options?.timezone ?? 'UTC';
+    this.selfEmail = options?.selfEmail;
     this.skillOutputMaxLength = options?.skillOutputMaxLength ?? DEFAULT_SKILL_OUTPUT_MAX_LENGTH;
   }
 
@@ -462,6 +466,8 @@ export class ExecutionLayer {
       // Expose the configured timezone so skills can format output timestamps
       // in the user's local time. See toLocalIso() in src/time/timestamp.ts.
       timezone: this.timezone,
+      // Expose Curia's own email address so email skills can filter self from CC lists.
+      selfEmail: this.selfEmail,
     };
 
     // Capability-gated service injection.

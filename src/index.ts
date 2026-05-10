@@ -858,7 +858,7 @@ async function main(): Promise<void> {
   // capability-gated declarations. outboundGateway gives email skills their send path.
   // entityContextAssembler enables entity_enrichment pre-enrichment and the
   // entity-context skill. agentContactId enables entity_enrichment default='agent'.
-  const executionLayer = new ExecutionLayer(skillRegistry, logger, { bus, agentRegistry, contactService, outboundGateway, heldMessages, schedulerService, entityMemory, agentPersona, nylasCalendarClient, entityContextAssembler, agentContactId: agentIdentityContactId, autonomyService, executiveProfileService, browserService, bullpenService, approvalTrigger, actionLogRepo, confidencePipeline, timezone: config.timezone, skillOutputMaxLength: yamlConfig.skillOutput?.maxLength });
+  const executionLayer = new ExecutionLayer(skillRegistry, logger, { bus, agentRegistry, contactService, outboundGateway, heldMessages, schedulerService, entityMemory, agentPersona, nylasCalendarClient, entityContextAssembler, agentContactId: agentIdentityContactId, autonomyService, executiveProfileService, browserService, bullpenService, approvalTrigger, actionLogRepo, confidencePipeline, timezone: config.timezone, selfEmail: resolvedEmailAccounts[0]?.selfEmail, skillOutputMaxLength: yamlConfig.skillOutput?.maxLength });
 
   // Two-pass agent registration:
   // Pass 1: Register all agents in the registry so specialistSummary() is complete
@@ -1104,6 +1104,7 @@ async function main(): Promise<void> {
     maxMessageBytes: yamlConfig.channels?.max_message_bytes ?? 102_400,
     confidencePipeline,
     workingMemory: memory,
+    selfEmail: resolvedEmailAccounts[0]?.selfEmail,
   });
   dispatcher.register();
 
