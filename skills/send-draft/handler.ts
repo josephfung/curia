@@ -2,7 +2,7 @@
 //
 // Sends a Nylas draft email on explicit CEO authorization.
 //
-// SECURITY: The task-origin check (ctx.taskMetadata?.ceoInitiated === true) is the
+// SECURITY: The task-origin check (isPrincipalOriginated(ctx.taskMetadata)) is the
 // primary gate. That flag is stamped by the dispatch layer in TypeScript code before
 // the coordinator sees the task — the LLM cannot set it. Observation-mode tasks
 // (external emails) explicitly do not receive this flag, preventing prompt injection
@@ -170,10 +170,10 @@ export class SendDraftHandler implements SkillHandler {
     // Non-fatal: the message is already sent. If bus publish fails, log at error
     // so the missing audit trail is visible in alerting, but don't fail the skill.
     //
-    // senderId and channelId are stamped by the dispatcher in the same ceoMeta object
-    // as ceoInitiated, so they must be present if we passed the task-origin check.
+    // senderId and channelId are stamped by the dispatcher in the same originatorContext object
+    // as principal origin, so they must be present if we passed the task-origin check.
     // If they're missing, that indicates a dispatch-layer bug — log loudly but don't
-    // block the send (the CEO explicitly asked for it). See ADR-017.
+    // block the send (the principal explicitly asked for it). See ADR-017.
     const senderId = typeof ctx.taskMetadata?.senderId === 'string'
       ? ctx.taskMetadata.senderId
       : undefined;
@@ -184,7 +184,7 @@ export class SendDraftHandler implements SkillHandler {
     if (!senderId || !channelId || !ctx.taskEventId) {
       ctx.log.error(
         { senderId, channelId, taskEventId: ctx.taskEventId },
-        'send-draft: audit metadata incomplete — senderId/channelId/taskEventId should always be present when ceoInitiated is true. This indicates a dispatch-layer bug.',
+        'send-draft: audit metadata incomplete — senderId/channelId/taskEventId should always be present when task is principal-originated. This indicates a dispatch-layer bug.',
       );
     }
 

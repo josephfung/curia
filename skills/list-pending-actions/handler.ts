@@ -4,7 +4,7 @@
 // waiting for their decision. Read-only — no state changes.
 //
 // SECURITY: sensitivity: "elevated" ensures only the CEO can call this.
-// The ceoInitiated check is a defense-in-depth secondary gate.
+// The isPrincipalOriginated check is a defense-in-depth secondary gate.
 
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
 import { toLocalIso, formatDisplayTimezone } from '../../src/time/timestamp.js';

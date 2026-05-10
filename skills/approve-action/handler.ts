@@ -5,7 +5,7 @@
 // writes a child autonomy_action_log row for the re-execution result,
 // and publishes a human.decision audit event.
 //
-// SECURITY: sensitivity: "elevated" + ceoInitiated check.
+// SECURITY: sensitivity: "elevated" + isPrincipalOriginated check.
 // executionLayer capability is restricted to this skill.
 
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
