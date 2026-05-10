@@ -191,6 +191,8 @@ export interface SkillContext {
    *  Populated from the global config timezone. Skills returning timestamps for display
    *  should use toLocalIso() with this value rather than returning raw UTC strings. */
   timezone?: string;
+  /** Curia's own email address — used by email skills to filter self from CC lists. */
+  selfEmail?: string;
   /** Action log repo — available to skills declaring 'actionLogRepo' in capabilities.
    *  Provides read/write access to the autonomy_action_log table for approval lifecycle
    *  management. Used by approve-action, deny-action, dismiss-action, list-pending-actions. */
