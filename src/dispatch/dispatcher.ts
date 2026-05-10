@@ -22,9 +22,9 @@ function redactSenderId(value: string): string {
 
 /**
  * Merge channel-supplied metadata with injection findings and originator context.
- * SECURITY: strips both `ceoInitiated` (legacy) and `originator` from channel-supplied
- * metadata — originator is stamped exclusively by this function from the contact resolver.
- * A crafted inbound with a forged originator must never propagate.
+ * SECURITY: strips both `ceoInitiated` (legacy) and `originator` after all untrusted
+ * spreads — so neither channel metadata nor injection metadata can smuggle a forged
+ * originator. The trusted `originatorMeta` spread wins last.
  */
 function mergeTaskMetadata(
   channelMetadata: Record<string, unknown> | undefined,
@@ -34,10 +34,10 @@ function mergeTaskMetadata(
   if (!channelMetadata && !injectionMetadata && !originatorMeta) return undefined;
   return {
     ...(channelMetadata ?? {}),
-    ceoInitiated: undefined,          // strip legacy untrusted channel value
-    originator: undefined,            // strip untrusted channel value
     ...(injectionMetadata ?? {}),
-    ...(originatorMeta ?? {}),        // originatorMeta.originator wins if present
+    ceoInitiated: undefined,          // strip legacy untrusted channel value (after all untrusted spreads)
+    originator: undefined,            // strip untrusted channel value (after all untrusted spreads)
+    ...(originatorMeta ?? {}),        // trusted stamp wins last
   };
 }
 

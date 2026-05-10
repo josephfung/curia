@@ -90,6 +90,7 @@ import { BullpenService } from './memory/bullpen.js';
 import { BullpenDispatcher } from './dispatch/bullpen-dispatcher.js';
 import { ConversationCheckpointProcessor } from './checkpoint/processor.js';
 import { runStartupValidation } from './startup/validator.js';
+import { runReadinessChecks } from './startup/readiness.js';
 
 async function main(): Promise<void> {
   // 1. Config & logging — no dependencies, must come first.
@@ -706,11 +707,13 @@ async function main(): Promise<void> {
 
   // Load principal's channel identities for the outbound gateway recipient check.
   // Cached for the lifetime of the process — restart picks up changes.
+  // Load principal contact reference and cache it for the readiness check below (avoid a redundant DB query).
   let principalIdentities: ChannelIdentity[] = [];
+  let principalContact: import('./contacts/types.js').Contact | null = null;
   if (contactService) {
-    const principal = await contactService.findContactBySystemRole('principal');
-    if (principal) {
-      const withIdentities = await contactService.getContactWithIdentities(principal.id);
+    principalContact = await contactService.findContactBySystemRole('principal');
+    if (principalContact) {
+      const withIdentities = await contactService.getContactWithIdentities(principalContact.id);
       principalIdentities = withIdentities?.identities ?? [];
     }
   }
@@ -721,15 +724,12 @@ async function main(): Promise<void> {
   const readinessChecks = [
     {
       name: 'principal-contact',
-      check: async () => {
-        const principal = await contactService.findContactBySystemRole('principal');
-        return principal
-          ? { ready: true as const }
-          : { ready: false as const, reason: 'No contact with system_role=principal exists. Run setup to configure the principal user.' };
-      },
+      // Reuse the principalContact already loaded above — no redundant DB query.
+      check: async () => principalContact
+        ? { ready: true as const }
+        : { ready: false as const, reason: 'No contact with system_role=principal exists. Run setup to configure the principal user.' },
     },
   ];
-  const { runReadinessChecks } = await import('./startup/readiness.js');
   const readinessReport = await runReadinessChecks(readinessChecks);
 
   if (!readinessReport.ready) {
