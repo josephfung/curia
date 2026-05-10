@@ -18,6 +18,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Contact confidence scoring pipeline** — `contact_confidence` is now updated on each qualifying event (inbound/outbound message, CEO trust grant, verified identity pairing). Supports incremental and full-recompute modes with convergence guarantee (spec 06, #460)
 - **`contact-register` skill** — integration point for agents that read channels directly (e.g. the ceo-inbox agent) rather than through the dispatcher. Resolves or creates contacts, updates `last_seen_at`, triggers a confidence scoring delta, and emits a `contact.resolved` bus event (#485)
 - **MCP `fixed_inputs`** — MCP server entries in `skills.yaml` now support a `fixed_inputs` field that binds constant parameter values at the tool layer. Values are resolved from env vars or literals at startup, stripped from tool schemas (invisible to agents), and merged into every `callTool` invocation (#432)
+- **Thread-participants block** injected into LLM context for all inbound email tasks, showing From / To / CC with self displayed as "you"
 
 ### Changed
 - **Bullpen context refresh in tool-use loop** — `AgentRuntime` now re-fetches pending Bullpen threads before every `chatWithRetry` call, not just once at task start. Replies and closures that occur mid-task are visible to the model on the next loop iteration (#213)
@@ -26,6 +27,9 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Outbound gateway** — removed `setTrustLevel('high')` band-aid; outbound sends now trigger the confidence scoring pipeline instead, giving contacts a real `contact_confidence` value
 - **Smoke tests** — renamed three `email-triage-*` test cases to `email-prioritization-*` following the CEO inbox redesign; updated the `email-triage` tag to `email-prioritization` in each
 - **ADR-017** — added a note that observation mode has been removed since this ADR was written (v0.25.x, CEO inbox redesign)
+- **email-reply skill** now defaults to reply-all; pass `cc: ""` to reply to sender only, or a comma-separated list to override recipients explicitly
+- **sendOutboundReply** (implicit reply path) now includes CC recipients from the thread message by default, filtering self and the primary To recipient
+- **SkillContext** gains `selfEmail?: string` field (public API surface — skills can use this to filter self from CC lists)
 
 ### Fixed
 - **Trust floor confirmed-contact exemption** — confirmed contacts with `contact_confidence=0` and no `trust_level` override are no longer incorrectly held by the trust floor; the floor now exempts contacts with `status='confirmed'` since they have passed explicit CEO approval.
