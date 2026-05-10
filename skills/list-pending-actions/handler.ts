@@ -8,13 +8,14 @@
 
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
 import { toLocalIso, formatDisplayTimezone } from '../../src/time/timestamp.js';
+import { isPrincipalOriginated } from '../../src/contacts/principal.js';
 
 export class ListPendingActionsHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {
-    // CEO-origin check — defense-in-depth (elevated gate is primary)
-    if (ctx.taskMetadata?.ceoInitiated !== true) {
-      ctx.log.warn('list-pending-actions: rejected — ceoInitiated flag absent or false');
-      return { success: false, error: 'This skill requires direct CEO authorization.' };
+    // Principal-origin check — defense-in-depth (elevated gate is primary)
+    if (!isPrincipalOriginated(ctx.taskMetadata)) {
+      ctx.log.warn('list-pending-actions: rejected — task not originated by principal');
+      return { success: false, error: 'This skill requires principal authorization.' };
     }
 
     if (!ctx.actionLogRepo) {

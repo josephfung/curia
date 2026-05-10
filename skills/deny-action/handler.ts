@@ -8,12 +8,13 @@
 
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
 import { createHumanDecision } from '../../src/bus/events.js';
+import { isPrincipalOriginated } from '../../src/contacts/principal.js';
 
 export class DenyActionHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {
-    if (ctx.taskMetadata?.ceoInitiated !== true) {
-      ctx.log.warn('deny-action: rejected — ceoInitiated flag absent or false');
-      return { success: false, error: 'This skill requires direct CEO authorization.' };
+    if (!isPrincipalOriginated(ctx.taskMetadata)) {
+      ctx.log.warn('deny-action: rejected — task not originated by principal');
+      return { success: false, error: 'This skill requires principal authorization.' };
     }
 
     if (!ctx.actionLogRepo) {
