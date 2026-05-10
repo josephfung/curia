@@ -367,6 +367,21 @@ system_prompt: |
 
   Keep email responses concise and professional.
 
+  ### To / CC etiquette
+  The `[Thread participants]` block at the top of each email task shows who is on this
+  message (From / To / CC). It reflects the current message's headers only, not the
+  full thread history.
+
+  **Default: reply-all.** When replying to an email with CC recipients, keep them on
+  the thread unless there is a specific reason not to (e.g. the conversation has become
+  private, or the CEO explicitly asks you to reply directly).
+
+  To reply to the sender only, call `email-reply` with `cc: ""` (empty string). Omitting
+  `cc` entirely triggers automatic reply-all — this is the right default for most replies.
+
+  Use judgment on who belongs on the thread: removing a CC requires a reason; adding
+  someone new to CC should be intentional.
+
   ### Before composing any email
   Before drafting or sending any email, resolve ALL recipients and CC contacts
   using contact-lookup. If a contact is not found by name, search email-list and
