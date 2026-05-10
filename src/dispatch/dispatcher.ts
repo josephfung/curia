@@ -5,7 +5,7 @@ import type { Logger } from '../logger.js';
 import type { ContactResolver } from '../contacts/contact-resolver.js';
 import type { ContactService } from '../contacts/contact-service.js';
 import type { HeldMessageService } from '../contacts/held-messages.js';
-import type { InboundSenderContext, ChannelPolicyConfig, TrustLevel, UnknownSenderPolicy } from '../contacts/types.js';
+import type { InboundSenderContext, ChannelPolicyConfig, TrustLevel, UnknownSenderPolicy, TaskOriginator } from '../contacts/types.js';
 import type { InboundScanner } from './inbound-scanner.js';
 import type { RateLimiter } from './rate-limiter.js';
 import type { DbPool } from '../db/connection.js';
@@ -21,22 +21,23 @@ function redactSenderId(value: string): string {
 }
 
 /**
- * Merge channel-supplied metadata with injection findings and CEO identity.
- * SECURITY: always strips `ceoInitiated` from channel-supplied metadata — that
- * flag is stamped exclusively by the dispatcher from the contact resolver result.
- * Any pre-existing value from the channel is untrusted. See ADR-017.
+ * Merge channel-supplied metadata with injection findings and originator context.
+ * SECURITY: strips both `ceoInitiated` (legacy) and `originator` from channel-supplied
+ * metadata — originator is stamped exclusively by this function from the contact resolver.
+ * A crafted inbound with a forged originator must never propagate.
  */
 function mergeTaskMetadata(
   channelMetadata: Record<string, unknown> | undefined,
   injectionMetadata: Record<string, unknown> | undefined,
-  ceoMeta: Record<string, unknown> | undefined,
+  originatorMeta: Record<string, unknown> | undefined,
 ): Record<string, unknown> | undefined {
-  if (!channelMetadata && !injectionMetadata && !ceoMeta) return undefined;
+  if (!channelMetadata && !injectionMetadata && !originatorMeta) return undefined;
   return {
     ...(channelMetadata ?? {}),
-    ceoInitiated: undefined,          // strip untrusted channel value
+    ceoInitiated: undefined,          // strip legacy untrusted channel value
+    originator: undefined,            // strip untrusted channel value
     ...(injectionMetadata ?? {}),
-    ...(ceoMeta ?? {}),               // ceoMeta.ceoInitiated wins if present
+    ...(originatorMeta ?? {}),        // originatorMeta.originator wins if present
   };
 }
 
@@ -841,14 +842,21 @@ export class Dispatcher {
       }
     }
 
-    // Stamp ceoInitiated when the sender is the CEO directly.
-    // This flag is the hard gate in CEO-authorized skills (e.g. send-draft).
-    // See ADR-017 for the full security reasoning.
-    // Use `resolved` discriminant to narrow InboundSenderContext to SenderContext before
-    // accessing `.role`, which does not exist on UnknownSenderContext.
-    const ceoMeta = senderContext?.resolved && senderContext.role === 'ceo'
-      ? { ceoInitiated: true as const, senderId: payload.senderId, channelId: payload.channelId }
+    // Stamp TaskOriginator on every task — not just principal-originated ones.
+    // The originator tracks who started this task chain. For inbound messages,
+    // that's the sender. For self-initiated tasks (scheduler, proactive), the
+    // caller sets originator before invoking createAgentTask.
+    // SECURITY: originator is the ONLY source of systemRole for downstream
+    // authorization. Channel-supplied originator is stripped in mergeTaskMetadata.
+    const originator: TaskOriginator | undefined = senderContext?.resolved
+      ? {
+          contactId: senderContext.contactId,
+          systemRole: senderContext.systemRole ?? null,
+          channel: payload.channelId,
+          initiatedAt: new Date().toISOString(),
+        }
       : undefined;
+    const originatorMeta = originator ? { originator } : undefined;
 
     const taskEvent = createAgentTask({
       agentId: 'coordinator',
@@ -859,14 +867,14 @@ export class Dispatcher {
       content: taskContent,
       senderContext,
       messageTrustScore,
-      // SECURITY: always strip ceoInitiated from channel-supplied metadata —
-      // it is stamped exclusively by this function from the contact resolver.
-      // A crafted inbound with { ceoInitiated: true } must never propagate.
+      // SECURITY: always strip ceoInitiated (legacy) and originator from channel-supplied
+      // metadata — originator is stamped exclusively by this function from the contact resolver.
+      // A crafted inbound with a forged originator must never propagate.
       // See ADR-017.
       metadata: mergeTaskMetadata(
         payload.metadata as Record<string, unknown> | undefined,
         injectionMetadata,
-        ceoMeta,
+        originatorMeta,
       ),
       parentEventId: event.id,
     });
