@@ -173,16 +173,6 @@ export class Dispatcher {
     this.checkpointTimers.clear();
   }
 
-  /**
-   * Curia's own email address, used in PR1-D to substitute "you" for Curia's
-   * address in thread-participants blocks. Exposed as a getter so downstream
-   * components (e.g. thread-participants formatter) can read it from the Dispatcher
-   * without needing their own copy of the config.
-   */
-  getSelfEmail(): string | undefined {
-    return this.selfEmail;
-  }
-
   register(): void {
     // inbound.message → agent.task
     this.bus.subscribe('inbound.message', 'dispatch', async (event) => {
@@ -724,6 +714,47 @@ export class Dispatcher {
         }
         // Always return if the hold succeeded — a publish failure is not a reason to forward to the coordinator.
         if (held) return;
+      }
+    }
+
+    // Thread-participants block: inject structured participant context for every
+    // inbound email so the coordinator can reason about who's on the thread.
+    // Placed before the CC preamble so the CC role marker appears on top.
+    if (payload.channelId === 'email') {
+      const emailMeta = payload.metadata as Record<string, unknown> | undefined;
+      const rawParticipants = emailMeta?.participants;
+      if (Array.isArray(rawParticipants) && rawParticipants.length > 0) {
+        const selfLower = this.selfEmail?.toLowerCase();
+        const MAX_PARTICIPANTS = 15;
+
+        // Sanitize participant email addresses — they come from Nylas (attacker-controlled)
+        // and are injected into taskContent. Strip characters that could enable prompt
+        // injection. Same pattern as the CC preamble sanitization above.
+        const sanitize = (s: string): string =>
+          String(s).replace(/[\n\r\[\]<>]/g, '').trim().slice(0, 254);
+
+        const froms: string[] = [];
+        const tos: string[] = [];
+        const ccs: string[] = [];
+
+        for (const p of (rawParticipants as Array<{ email: string; role: string }>).slice(0, MAX_PARTICIPANTS)) {
+          const addr = sanitize(p.email);
+          if (!addr) continue;
+          // Replace Curia's own address with "you" for readability.
+          const display = selfLower && addr.toLowerCase() === selfLower ? 'you' : addr;
+          if (p.role === 'from') froms.push(display);
+          else if (p.role === 'to') tos.push(display);
+          else if (p.role === 'cc') ccs.push(display);
+        }
+
+        const parts: string[] = [];
+        if (froms.length > 0) parts.push(`From: ${froms.join(', ')}`);
+        if (tos.length > 0) parts.push(`To: ${tos.join(', ')}`);
+        if (ccs.length > 0) parts.push(`CC: ${ccs.join(', ')}`);
+
+        if (parts.length > 0) {
+          taskContent = `[Thread participants — ${parts.join('; ')}]\n` + taskContent;
+        }
       }
     }
 
