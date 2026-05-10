@@ -14,7 +14,8 @@
     "day_of_week": "string (full day name, e.g. 'Tuesday')",
     "formatted": "string (human-readable, e.g. 'Tuesday, May 19, 2026')",
     "correct": "boolean? (present only when expected_day is provided — true if day_of_week matches)",
-    "expected_day": "string? (echoed back when provided)"
+    "expected_day": "string? (echoed back when provided)",
+    "displayTimezone": "string? (human-readable timezone label, e.g. 'EDT (UTC-04:00)', or null if timezone not configured)"
   },
   "permissions": [],
   "secrets": [],
