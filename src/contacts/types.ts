@@ -5,6 +5,7 @@ export interface Contact {
   kgNodeId: string | null;
   displayName: string;
   role: string | null;
+  systemRole: SystemRole | null;
   status: ContactStatus;
   // Trust scoring fields (migration 020)
   contactConfidence: number;         // 0.0–1.0; accumulated over time
@@ -123,6 +124,24 @@ export interface UnknownSenderContext {
 
 export type InboundSenderContext = SenderContext | UnknownSenderContext;
 
+/**
+ * Identifies who originally initiated a task chain. Stamped by the dispatcher
+ * on every task — not just principal-originated ones. Survives task delegation
+ * when the creating code copies originator from the parent task.
+ *
+ * See docs/wip/2026-05-10-principal-identity-design.md
+ */
+export interface TaskOriginator {
+  /** Contact ID of the person or agent that started this chain */
+  contactId: string;
+  /** System designation at the time the task was created */
+  systemRole: SystemRole | null;
+  /** Channel the task was initiated from (email, signal, cli, scheduler, etc.) */
+  channel: string;
+  /** ISO timestamp — when the chain started */
+  initiatedAt: string;
+}
+
 // -- Authorization types --
 
 export interface RolePermissions {
@@ -137,6 +156,9 @@ export interface PermissionDef {
 }
 
 export type TrustLevel = 'ceo' | 'high' | 'medium' | 'low';
+
+/** System designation — drives authorization. Separate from the free-text `role` field. */
+export type SystemRole = 'principal' | 'agent';
 
 // Ordinal ranking for trust level comparison. Higher rank = more trusted.
 // Used by meetsMinimumTrust() so callers don't need to enumerate every level.
