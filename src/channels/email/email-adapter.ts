@@ -362,6 +362,11 @@ export class EmailAdapter {
         return;
       }
 
+      // Reply-all: include CC recipients from the thread message, excluding self.
+      const ccAddresses = threadMessage.cc
+        .map((r) => r.email)
+        .filter((email) => email.toLowerCase() !== this.config.selfEmail.toLowerCase());
+
       // Strip any existing "Re:" prefix before prepending our own to avoid
       // "Re: Re: Re: ..." chains when replying to already-replied threads.
       const baseSubject = threadMessage.subject.replace(/^Re:\s*/i, '');
@@ -373,6 +378,7 @@ export class EmailAdapter {
         subject: `Re: ${baseSubject}`,
         body: outbound.payload.content,
         replyToMessageId: threadMessage.id,
+        ...(ccAddresses.length > 0 ? { cc: ccAddresses } : {}),
       };
 
       await this.sendWithGatedDraftFallback(sendRequest, {
