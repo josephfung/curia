@@ -92,6 +92,7 @@ export interface ResolvedSender {
   contactId: string;
   displayName: string;
   role: string | null;
+  systemRole: SystemRole | null;
   status: ContactStatus;
   kgNodeId: string | null;
   verified: boolean;
@@ -105,6 +106,7 @@ export interface SenderContext {
   contactId: string;
   displayName: string;
   role: string | null;
+  systemRole: SystemRole | null;
   status: ContactStatus;
   verified: boolean;
   kgNodeId: string | null;
