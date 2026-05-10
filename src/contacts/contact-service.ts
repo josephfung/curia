@@ -30,6 +30,7 @@ import type {
   MergeResult,
   ResolvedSender,
   IdentitySource,
+  SystemRole,
   TrustLevel,
 } from './types.js';
 import type { DedupService } from './dedup-service.js';
@@ -42,7 +43,7 @@ interface ContactServiceBackend {
   getContact(id: string): Promise<Contact | undefined>;
   findContactByName(name: string): Promise<Contact[]>;
   findContactByRole(role: string): Promise<Contact[]>;
-  findContactBySystemRole(systemRole: string): Promise<Contact | null>;
+  findContactBySystemRole(systemRole: SystemRole): Promise<Contact | null>;
   listContacts(): Promise<Contact[]>;
   updateContact(contact: Contact): Promise<void>;
   createIdentity(identity: ChannelIdentity): Promise<void>;
@@ -304,7 +305,7 @@ export class ContactService {
   }
 
   /** Find the single contact with the given system role, or null. */
-  async findContactBySystemRole(systemRole: string): Promise<Contact | null> {
+  async findContactBySystemRole(systemRole: SystemRole): Promise<Contact | null> {
     return this.backend.findContactBySystemRole(systemRole);
   }
 
@@ -913,7 +914,7 @@ class PostgresContactBackend implements ContactServiceBackend {
     return result.rows.map((row) => this.rowToContact(row));
   }
 
-  async findContactBySystemRole(systemRole: string): Promise<Contact | null> {
+  async findContactBySystemRole(systemRole: SystemRole): Promise<Contact | null> {
     const result = await this.pool.query<{
       id: string;
       kg_node_id: string | null;
@@ -1418,7 +1419,7 @@ class InMemoryContactBackend implements ContactServiceBackend {
     return results;
   }
 
-  async findContactBySystemRole(systemRole: string): Promise<Contact | null> {
+  async findContactBySystemRole(systemRole: SystemRole): Promise<Contact | null> {
     for (const contact of this.contacts.values()) {
       if (contact.systemRole === systemRole) return contact;
     }
