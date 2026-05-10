@@ -42,6 +42,7 @@ import { loadSkillsFromDirectory } from './skills/loader.js';
 import { loadMcpServers } from './skills/mcp-loader.js';
 import type { McpSession } from './skills/mcp-client.js';
 import { ContactService } from './contacts/contact-service.js';
+import type { ChannelIdentity } from './contacts/types.js';
 import { ConfidencePipeline } from './contacts/confidence-pipeline.js';
 import { DedupService } from './contacts/dedup-service.js';
 import { ContactResolver } from './contacts/contact-resolver.js';
@@ -703,6 +704,17 @@ async function main(): Promise<void> {
   // can be passed to the gateway at construction time.
   const actionLogRepo = new ActionLogRepo(pool, logger);
 
+  // Load principal's channel identities for the outbound gateway recipient check.
+  // Cached for the lifetime of the process — restart picks up changes.
+  let principalIdentities: ChannelIdentity[] = [];
+  if (contactService) {
+    const principal = await contactService.findContactBySystemRole('principal');
+    if (principal) {
+      const withIdentities = await contactService.getContactWithIdentities(principal.id);
+      principalIdentities = withIdentities?.identities ?? [];
+    }
+  }
+
   // Outbound gateway — single choke-point for all outbound external communication.
   // Runs blocked-contact checks and content filtering before any message leaves Curia.
   //
@@ -726,12 +738,9 @@ async function main(): Promise<void> {
       contactService,
       contentFilter: outboundFilter,
       bus,
-      // ceoEmail is optional in OutboundGatewayConfig; only needed for email notifications.
-      // When Nylas is configured, this must be set or CEO blocked-content alerts won't send.
-      // Must be the CEO's primary email, NOT Curia's own Nylas address —
-      // notifications addressed to Curia's inbox were never visible to the CEO.
-      ceoEmail: config.ceoPrimaryEmail || undefined,
-      ceoSignalNumber: config.ceoSignalNumber,
+      // principalIdentities loaded from the DB at startup — used by isPrincipalRecipient()
+      // to bypass the autonomy gate for agent-to-principal communications.
+      principalIdentities,
       logger,
       autonomyService,
       piiRedactor,
