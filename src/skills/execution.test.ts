@@ -485,11 +485,21 @@ describe('autonomy gates', () => {
       autonomyService: makeAutonomyService(65), // well below 80
     });
 
-    // Must provide CEO caller context for elevated skills
+    // Must provide principal-originated taskMetadata for elevated skills —
+    // the gate now checks originator.systemRole, not caller.role.
     const result = await layer.invoke('set-autonomy', { score: 90 }, {
       contactId: 'primary-user',
       role: 'ceo',
       channel: 'cli',
+    }, {
+      taskMetadata: {
+        originator: {
+          contactId: 'primary-user',
+          systemRole: 'principal' as const,
+          channel: 'cli',
+          initiatedAt: new Date().toISOString(),
+        },
+      },
     });
 
     expect(result.success).toBe(true);

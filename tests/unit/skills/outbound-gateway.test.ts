@@ -38,6 +38,27 @@ function createMocks() {
   return { logger, nylasClient, contactService, contentFilter, bus };
 }
 
+/**
+ * Build a ChannelIdentity fixture for the principal (CEO) contact.
+ * Used to populate principalIdentities in OutboundGatewayConfig —
+ * the old ceoEmail / ceoSignalNumber string fields were replaced by this
+ * structure in Task 7 of the principal-identity feature.
+ */
+function makePrincipalIdentity(channelIdentifier: string, channel: 'email' | 'signal' = 'email') {
+  return {
+    id: `pi-${channel}-1`,
+    contactId: 'ceo-contact-id',
+    channel,
+    channelIdentifier,
+    label: null,
+    verified: true,
+    verifiedAt: null,
+    source: 'ceo_stated' as const,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  };
+}
+
 /** Build a stub AutonomyService that returns a fixed score. */
 function makeAutonomyService(score: number): AutonomyService {
   const config: AutonomyConfig = {
@@ -205,7 +226,7 @@ describe('OutboundGateway', () => {
         contactService: mocks.contactService,
         contentFilter: mocks.contentFilter,
         bus: mocks.bus,
-        ceoEmail: 'ceo@example.com',
+        principalIdentities: [makePrincipalIdentity('ceo@example.com')],
         logger: mocks.logger,
       });
 
@@ -237,7 +258,7 @@ describe('OutboundGateway', () => {
         contactService: mocks.contactService,
         contentFilter: mocks.contentFilter,
         bus: mocks.bus,
-        ceoEmail: 'ceo@example.com',
+        principalIdentities: [makePrincipalIdentity('ceo@example.com')],
         logger: mocks.logger,
       });
 
@@ -272,7 +293,7 @@ describe('OutboundGateway', () => {
         contactService: mocks.contactService,
         contentFilter: mocks.contentFilter,
         bus: mocks.bus,
-        ceoEmail: 'ceo@example.com',
+        principalIdentities: [makePrincipalIdentity('ceo@example.com')],
         logger: mocks.logger,
       });
 
@@ -303,7 +324,7 @@ describe('OutboundGateway', () => {
         contactService: mocks.contactService,
         contentFilter: mocks.contentFilter,
         bus: mocks.bus,
-        ceoEmail: 'ceo@example.com',
+        principalIdentities: [makePrincipalIdentity('ceo@example.com')],
         logger: mocks.logger,
       });
 
@@ -1151,7 +1172,8 @@ describe('OutboundGateway.sendEmailDraft', () => {
       contactService,
       contentFilter,
       bus,
-      ceoEmail: 'ceo@example.com',
+      // principalIdentities enables the CEO email bypass check in isPrincipalEmail()
+      principalIdentities: [makePrincipalIdentity('ceo@example.com')],
       logger,
       autonomyService: overrides.autonomyService,
     });
@@ -1501,7 +1523,7 @@ describe('gated draft-fallback (two-step pattern)', () => {
       contactService: mocks.contactService,
       contentFilter: mocks.contentFilter,
       bus: mocks.bus,
-      ceoEmail: 'ceo@example.com',
+      principalIdentities: [makePrincipalIdentity('ceo@example.com')],
       logger: mocks.logger,
       autonomyService: makeAutonomyService(65),
       actionLogRepo,
@@ -1535,7 +1557,7 @@ describe('gated draft-fallback (two-step pattern)', () => {
       contactService: mocks.contactService,
       contentFilter: mocks.contentFilter,
       bus: mocks.bus,
-      ceoEmail: 'ceo@example.com',
+      principalIdentities: [makePrincipalIdentity('ceo@example.com')],
       logger: mocks.logger,
       autonomyService: makeAutonomyService(65),
       actionLogRepo,
@@ -1797,7 +1819,7 @@ describe('CEO recipient bypass on send()', () => {
       contactService: mocks.contactService,
       contentFilter: mocks.contentFilter,
       bus: mocks.bus,
-      ceoEmail: 'ceo@example.com',
+      principalIdentities: [makePrincipalIdentity('ceo@example.com')],
       logger: mocks.logger,
       autonomyService: makeAutonomyService(65), // below 70 — would normally block
     });
@@ -1821,7 +1843,7 @@ describe('CEO recipient bypass on send()', () => {
       contactService: mocks.contactService,
       contentFilter: mocks.contentFilter,
       bus: mocks.bus,
-      ceoEmail: 'CEO@Example.COM',
+      principalIdentities: [makePrincipalIdentity('CEO@Example.COM')],
       logger: mocks.logger,
       autonomyService: makeAutonomyService(65),
     });
@@ -1845,7 +1867,7 @@ describe('CEO recipient bypass on send()', () => {
       contactService: mocks.contactService,
       contentFilter: mocks.contentFilter,
       bus: mocks.bus,
-      ceoSignalNumber: '+14155551234',
+      principalIdentities: [makePrincipalIdentity('+14155551234', 'signal')],
       logger: mocks.logger,
       autonomyService: makeAutonomyService(65),
     });
@@ -1890,7 +1912,7 @@ describe('CEO recipient bypass on send()', () => {
       contactService: mocks.contactService,
       contentFilter: mocks.contentFilter,
       bus: mocks.bus,
-      ceoEmail: 'ceo@example.com',
+      principalIdentities: [makePrincipalIdentity('ceo@example.com')],
       logger: mocks.logger,
       autonomyService: makeAutonomyService(65),
     });

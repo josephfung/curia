@@ -136,12 +136,19 @@ describe('ConfidencePipeline', () => {
   });
 
   describe('edge cases', () => {
-    it('skips CEO contacts (role = ceo)', async () => {
+    it('skips principal contacts (systemRole = principal)', async () => {
+      // The pipeline now uses systemRole === 'principal' as the skip guard,
+      // not role === 'ceo'. Use the private in-memory backend directly to set
+      // systemRole — ContactService doesn't expose a public setSystemRole method
+      // (it's set by bootstrap only), so we cast to access the backend.
       const ceo = await service.createContact({
         displayName: 'CEO',
         role: 'ceo',
         source: 'ceo_stated',
       });
+      // Promote to principal so the pipeline skips it
+      const backend = (service as unknown as { backend: { updateContact(c: Contact): Promise<void> } }).backend;
+      await backend.updateContact({ ...ceo, systemRole: 'principal' });
       await pipeline.incrementalUpdate(ceo.id, { type: 'message_seen' });
       const after = await service.getContact(ceo.id);
       expect(after!.inboundMessageCount).toBe(0);
