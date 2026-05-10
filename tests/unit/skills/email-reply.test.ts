@@ -12,6 +12,7 @@ function makeCtx(
     send: (...args: unknown[]) => unknown;
   }>,
   taskMetadata?: Record<string, unknown>,
+  opts?: { selfEmail?: string },
 ): SkillContext {
   return {
     input,
@@ -19,7 +20,8 @@ function makeCtx(
     log: logger,
     outboundGateway: gateway as never,
     taskMetadata,
-  };
+    ...(opts?.selfEmail ? { selfEmail: opts.selfEmail } : {}),
+  } as SkillContext;
 }
 
 describe('EmailReplyHandler', () => {
@@ -123,7 +125,7 @@ describe('EmailReplyHandler', () => {
 describe('EmailReplyHandler — CC modes', () => {
   const handler = new EmailReplyHandler();
 
-  /** Extended makeCtx that supports selfEmail for CC filtering. */
+  /** Delegates to makeCtx with selfEmail support. */
   function makeCtxWithSelf(
     input: Record<string, unknown>,
     gateway: Partial<{
@@ -132,14 +134,7 @@ describe('EmailReplyHandler — CC modes', () => {
     }>,
     selfEmail?: string,
   ): SkillContext {
-    return {
-      input,
-      secret: () => { throw new Error('no secrets'); },
-      log: logger,
-      outboundGateway: gateway as never,
-      taskMetadata: {},
-      selfEmail,
-    } as SkillContext;
+    return makeCtx(input, gateway, {}, { selfEmail });
   }
 
   it('cc absent (undefined) — auto-populates from original to/cc, excluding primary To and selfEmail', async () => {
@@ -164,7 +159,10 @@ describe('EmailReplyHandler — CC modes', () => {
 
     expect(result.success).toBe(true);
     if (result.success) {
-      const data = result.data as { cc: string };
+      const data = result.data as { message_id: string; to: string; subject: string; cc: string };
+      expect(data.message_id).toBe('sent-cc-1');
+      expect(data.to).toBe('sender@example.com');
+      expect(data.subject).toBe('Re: Group thread');
       // sender@example.com is excluded (primary To recipient), curia@example.com is excluded (selfEmail)
       // bob@example.com and carol@example.com remain
       expect(data.cc).toBe('bob@example.com, carol@example.com');
@@ -200,7 +198,10 @@ describe('EmailReplyHandler — CC modes', () => {
 
     expect(result.success).toBe(true);
     if (result.success) {
-      const data = result.data as { cc: string };
+      const data = result.data as { message_id: string; to: string; subject: string; cc: string };
+      expect(data.message_id).toBe('sent-cc-2');
+      expect(data.to).toBe('sender@example.com');
+      expect(data.subject).toBe('Re: Group thread');
       expect(data.cc).toBe('');
     }
 
@@ -231,7 +232,10 @@ describe('EmailReplyHandler — CC modes', () => {
 
     expect(result.success).toBe(true);
     if (result.success) {
-      const data = result.data as { cc: string };
+      const data = result.data as { message_id: string; to: string; subject: string; cc: string };
+      expect(data.message_id).toBe('sent-cc-3');
+      expect(data.to).toBe('sender@example.com');
+      expect(data.subject).toBe('Re: Forwarded');
       // join(', ') produces a space after each comma
       expect(data.cc).toBe('a@example.com, b@example.com');
     }
