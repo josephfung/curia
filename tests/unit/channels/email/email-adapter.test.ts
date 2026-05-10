@@ -796,3 +796,84 @@ describe('EmailAdapter — sendWithGatedDraftFallback gated-fallback', () => {
   });
 
 });
+
+// ---------------------------------------------------------------------------
+// sendOutboundReply — CC behaviour
+// ---------------------------------------------------------------------------
+
+describe('EmailAdapter — sendOutboundReply CC', () => {
+  let mocks: ReturnType<typeof createMocks>;
+  let adapter: EmailAdapter;
+  let triggerOutbound: (event: BusEvent) => Promise<void>;
+
+  beforeEach(() => {
+    mocks = createMocks();
+    triggerOutbound = captureHandler('outbound.message', mocks);
+    adapter = makeAdapter(mocks);
+    void adapter.start();
+  });
+
+  it('includes CC recipients from the thread message in the send call', async () => {
+    const threadMessage = makeMockMessage({
+      from: [{ email: CEO_EMAIL }],
+      to: [{ email: SELF_EMAIL }],
+      cc: [{ email: 'cc@example.com', name: 'CC Person' }],
+    });
+    (mocks.outboundGateway.listEmailMessages as ReturnType<typeof vi.fn>).mockResolvedValue([threadMessage]);
+
+    await triggerOutbound(makeOutboundEvent('email:thread-abc'));
+
+    expect(mocks.outboundGateway.send).toHaveBeenCalledWith(
+      expect.objectContaining({ cc: ['cc@example.com'] }),
+      expect.any(Object),
+    );
+  });
+
+  it('filters selfEmail from CC recipients', async () => {
+    // Thread message has self in CC — must be excluded from outbound reply CC
+    const threadMessage = makeMockMessage({
+      from: [{ email: CEO_EMAIL }],
+      to: [{ email: SELF_EMAIL }],
+      cc: [{ email: SELF_EMAIL, name: 'Curia' }],
+    });
+    (mocks.outboundGateway.listEmailMessages as ReturnType<typeof vi.fn>).mockResolvedValue([threadMessage]);
+
+    await triggerOutbound(makeOutboundEvent('email:thread-abc'));
+
+    // send() should not receive a cc property (empty CC list is omitted)
+    const sendArg = (mocks.outboundGateway.send as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(sendArg.cc).toBeUndefined();
+  });
+
+  it('filters the primary To recipient from CC recipients', async () => {
+    // Thread message has the primary recipient (CEO_EMAIL) also in CC.
+    // This can happen in thread shapes where a participant appears in both To and CC
+    // of the fetched message. The adapter must not double-address the recipient.
+    const threadMessage = makeMockMessage({
+      from: [{ email: CEO_EMAIL }],
+      to: [{ email: SELF_EMAIL }],
+      cc: [{ email: CEO_EMAIL, name: 'CEO' }, { email: 'other@example.com' }],
+    });
+    (mocks.outboundGateway.listEmailMessages as ReturnType<typeof vi.fn>).mockResolvedValue([threadMessage]);
+
+    await triggerOutbound(makeOutboundEvent('email:thread-abc'));
+
+    // CEO_EMAIL is the primary To recipient — it must NOT appear in CC
+    const sendArg = (mocks.outboundGateway.send as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(sendArg.cc).toEqual(['other@example.com']);
+  });
+
+  it('omits CC field from send when CC list is empty after filtering', async () => {
+    const threadMessage = makeMockMessage({
+      from: [{ email: CEO_EMAIL }],
+      to: [{ email: SELF_EMAIL }],
+      cc: [], // no CC at all
+    });
+    (mocks.outboundGateway.listEmailMessages as ReturnType<typeof vi.fn>).mockResolvedValue([threadMessage]);
+
+    await triggerOutbound(makeOutboundEvent('email:thread-abc'));
+
+    const sendArg = (mocks.outboundGateway.send as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(sendArg.cc).toBeUndefined();
+  });
+});
