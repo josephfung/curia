@@ -828,7 +828,7 @@ class PostgresContactBackend implements ContactServiceBackend {
     await this.pool.query(
       `INSERT INTO contacts (id, kg_node_id, display_name, role, system_role, status, notes, created_at, updated_at)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-      [contact.id, contact.kgNodeId, contact.displayName, contact.role, null, contact.status, contact.notes, contact.createdAt, contact.updatedAt],
+      [contact.id, contact.kgNodeId, contact.displayName, contact.role, contact.systemRole, contact.status, contact.notes, contact.createdAt, contact.updatedAt],
     );
   }
 
@@ -1390,6 +1390,18 @@ class InMemoryContactBackend implements ContactServiceBackend {
             code: '23505',
             constraint: 'idx_contacts_kg_node_unique',
           });
+          throw err;
+        }
+      }
+    }
+    // Enforce system_role uniqueness to match Postgres partial unique indexes
+    if (contact.systemRole) {
+      for (const existing of this.contacts.values()) {
+        if (existing.systemRole === contact.systemRole) {
+          const err = Object.assign(
+            new Error(`duplicate key value violates unique constraint "idx_contacts_system_role_${contact.systemRole}"`),
+            { code: '23505', constraint: `idx_contacts_system_role_${contact.systemRole}` },
+          );
           throw err;
         }
       }

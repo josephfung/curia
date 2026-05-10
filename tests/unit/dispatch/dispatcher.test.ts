@@ -24,6 +24,7 @@ function makeResolverWithContact(opts: { contactConfidence: number; trustLevel: 
       contactId: 'test-contact-id',
       displayName: 'Test Contact',
       role: null,
+      systemRole: null,
       status: opts.status,
       verified: true,
       kgNodeId: null,

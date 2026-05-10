@@ -857,6 +857,12 @@ export class Dispatcher {
         }
       : undefined;
     const originatorMeta = originator ? { originator } : undefined;
+    if (!originator) {
+      this.logger.warn(
+        { channelId: payload.channelId, senderId: payload.senderId },
+        'Dispatcher: dispatching task without TaskOriginator — sender was unresolved; isPrincipalOriginated will return false for this task',
+      );
+    }
 
     const taskEvent = createAgentTask({
       agentId: 'coordinator',

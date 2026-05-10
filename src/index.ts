@@ -711,10 +711,18 @@ async function main(): Promise<void> {
   let principalIdentities: ChannelIdentity[] = [];
   let principalContact: import('./contacts/types.js').Contact | null = null;
   if (contactService) {
-    principalContact = await contactService.findContactBySystemRole('principal');
-    if (principalContact) {
-      const withIdentities = await contactService.getContactWithIdentities(principalContact.id);
-      principalIdentities = withIdentities?.identities ?? [];
+    try {
+      principalContact = await contactService.findContactBySystemRole('principal');
+      if (principalContact) {
+        const withIdentities = await contactService.getContactWithIdentities(principalContact.id);
+        principalIdentities = withIdentities?.identities ?? [];
+      }
+    } catch (err) {
+      logger.fatal(
+        { err },
+        'Failed to load principal contact — check that migration 035 (add_system_role) has been applied',
+      );
+      process.exit(1);
     }
   }
 

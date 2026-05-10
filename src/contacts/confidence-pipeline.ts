@@ -34,7 +34,7 @@ export class ConfidencePipeline {
    * underlying data has already been updated by the caller — we just
    * recompute the score.
    *
-   * Skips CEO contacts (role = 'ceo') — their confidence is hardcoded to 1.0
+   * Skips principal contacts (systemRole = 'principal') — their confidence is hardcoded to 1.0
    * in ContactResolver.
    */
   async incrementalUpdate(contactId: string, signal: ConfidenceSignal): Promise<void> {
