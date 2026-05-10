@@ -5,6 +5,12 @@
 // This handler focuses on thread resolution (fetching the original message
 // to extract the sender address and subject line).
 //
+// CC behaviour (three modes):
+//   - cc absent (undefined): reply-all — auto-populate from original.to[] + original.cc[],
+//     excluding the primary To recipient and ctx.selfEmail (Curia's own address).
+//   - cc === "": reply to sender only — no CC recipients.
+//   - cc is a non-empty string: parse comma-separated addresses explicitly.
+//
 // sensitivity: "elevated" — enforced by the gateway's security pipeline.
 
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
@@ -13,9 +19,10 @@ const MAX_BODY_LENGTH = 50000;
 
 export class EmailReplyHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {
-    const { reply_to_message_id: replyToMessageId, body } = ctx.input as {
+    const { reply_to_message_id: replyToMessageId, body, cc: ccInput } = ctx.input as {
       reply_to_message_id?: string;
       body?: string;
+      cc?: string;
     };
 
     if (!replyToMessageId || typeof replyToMessageId !== 'string') {
@@ -52,12 +59,60 @@ export class EmailReplyHandler implements SkillHandler {
       const baseSubject = original.subject.replace(/^Re:\s*/i, '');
       const replySubject = `Re: ${baseSubject}`;
 
+      // Resolve CC addresses based on the three input modes.
+      let ccAddresses: string[] | undefined;
+
+      if (ccInput === undefined) {
+        // Reply-all mode: collect all addresses from the original To and CC fields,
+        // excluding the primary To recipient (already in To) and Curia's own address
+        // (must never CC itself). Use a lowercase Set for case-insensitive deduplication.
+        const excluded = new Set<string>();
+        excluded.add(originalFrom.toLowerCase());
+        if (ctx.selfEmail) {
+          excluded.add(ctx.selfEmail.toLowerCase());
+        }
+
+        const candidates = [
+          ...(original.to ?? []),
+          ...(original.cc ?? []),
+        ];
+
+        const resolved = candidates
+          .map((p) => p.email)
+          .filter((addr): addr is string => !!addr)
+          .filter((addr) => !excluded.has(addr.toLowerCase()));
+
+        // Deduplicate while preserving first-seen order.
+        const seen = new Set<string>();
+        ccAddresses = resolved.filter((addr) => {
+          const key = addr.toLowerCase();
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        });
+
+        // Treat an empty resolved list the same as no CC (don't pass an empty array).
+        if (ccAddresses.length === 0) ccAddresses = undefined;
+      } else if (ccInput === '') {
+        // Explicit reply-to-sender-only: omit CC entirely.
+        ccAddresses = undefined;
+      } else {
+        // Explicit CC list: parse comma-separated addresses, trim, and drop empties.
+        ccAddresses = ccInput
+          .split(',')
+          .map((addr) => addr.trim())
+          .filter((addr) => addr.length > 0);
+
+        if (ccAddresses.length === 0) ccAddresses = undefined;
+      }
+
       const result = await ctx.outboundGateway.send({
         channel: 'email',
         to: originalFrom,
         subject: replySubject,
         body,
         replyToMessageId,
+        ...(ccAddresses ? { cc: ccAddresses } : {}),
       });
 
       if (!result.success) {
@@ -65,7 +120,7 @@ export class EmailReplyHandler implements SkillHandler {
       }
 
       ctx.log.info(
-        { messageId: result.messageId, to: originalFrom, subject: replySubject },
+        { messageId: result.messageId, to: originalFrom, subject: replySubject, cc: ccAddresses },
         'Email reply sent successfully',
       );
 
@@ -75,6 +130,8 @@ export class EmailReplyHandler implements SkillHandler {
           message_id: result.messageId,
           to: originalFrom,
           subject: replySubject,
+          // Return the CC list that was used; empty string when none.
+          cc: ccAddresses?.join(', ') ?? '',
         },
       };
     } catch (err) {
