@@ -19,6 +19,7 @@
 
 import type { SkillResult, SkillContext, CallerContext, AgentPersona, ToolDefinition } from './types.js';
 import { normalizeTimestamp } from '../time/timestamp.js';
+import { isPrincipalOriginated } from '../contacts/principal.js';
 import type { SkillRegistry } from './registry.js';
 import { sanitizeOutput } from './sanitize.js';
 import { createSecretAccessed, createAutonomySkillBlocked } from '../bus/events.js';
@@ -298,22 +299,19 @@ export class ExecutionLayer {
       }
     }
 
-    // Elevated-skill gate: enforce caller verification before building context.
-    // Fail-closed — if caller context is missing, elevated skills are blocked.
-    // Role is authoritative — contact-resolver.ts already maps CLI callers to role: 'ceo'.
+    // Elevated-skill gate: require principal origination, not just caller role.
+    // The originator (who started the task chain) is the authorization signal,
+    // not the caller (who is executing this specific skill call).
+    // See docs/wip/2026-05-10-principal-identity-design.md
     if (manifest.sensitivity === 'elevated') {
-      if (!caller) {
-        this.logger.warn({ skillName }, 'Elevated skill blocked: no caller context (fail-closed)');
+      if (!isPrincipalOriginated(options?.taskMetadata)) {
+        this.logger.warn(
+          { skillName, caller: caller ? { role: caller.role, channel: caller.channel } : null },
+          'Elevated skill blocked: task not originated by principal',
+        );
         return {
           success: false,
-          error: this.wrapSkillError(`Skill '${skillName}' requires elevated privileges — no caller context provided (fail-closed)`),
-        };
-      }
-      if (caller.role !== 'ceo') {
-        this.logger.warn({ skillName, role: caller.role, channel: caller.channel }, 'Elevated skill blocked: unauthorized caller');
-        return {
-          success: false,
-          error: this.wrapSkillError(`Skill '${skillName}' requires elevated privileges — caller role '${caller.role ?? 'none'}' on channel '${caller.channel}' is not authorized`),
+          error: this.wrapSkillError(`Skill '${skillName}' requires elevated privileges — task was not originated by the principal`),
         };
       }
     }
