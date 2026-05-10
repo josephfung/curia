@@ -1,0 +1,23 @@
+{
+  "name": "date-resolve",
+  "description": "Verify or resolve dates deterministically. Use this any time you need to state a day-of-week for a specific date, resolve a relative date expression ('next Monday', 'this Friday'), or verify a date + day-of-week pairing. LLMs are unreliable at day-of-week arithmetic — always call this skill instead of computing dates yourself.",
+  "version": "1.0.0",
+  "sensitivity": "normal",
+  "action_risk": "none",
+  "inputs": {
+    "date": "string? (ISO date like '2026-05-19', or natural format like 'May 19, 2026')",
+    "relative": "string? (relative expression like 'next Monday', 'this Friday', 'Monday of the week of May 18')",
+    "expected_day": "string? (day-of-week to verify against the resolved date, e.g. 'Monday')"
+  },
+  "outputs": {
+    "date": "string (ISO date, e.g. '2026-05-19')",
+    "day_of_week": "string (full day name, e.g. 'Tuesday')",
+    "formatted": "string (human-readable, e.g. 'Tuesday, May 19, 2026')",
+    "correct": "boolean? (present only when expected_day is provided — true if day_of_week matches)",
+    "expected_day": "string? (echoed back when provided)"
+  },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 5000,
+  "capabilities": []
+}
