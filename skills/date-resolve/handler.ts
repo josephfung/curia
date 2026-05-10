@@ -9,6 +9,7 @@
 
 import { DateTime } from 'luxon';
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import { formatDisplayTimezone } from '../../src/time/timestamp.js';
 
 /** Canonical day names for matching against user input. */
 const DAY_NAMES = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'] as const;
@@ -151,6 +152,9 @@ export class DateResolveHandler implements SkillHandler {
       date: isoDate,
       day_of_week: dayOfWeek,
       formatted,
+      // Included so the LLM can label timezone context in its response,
+      // consistent with other skills that return formatted date/time output.
+      displayTimezone: ctx.timezone ? formatDisplayTimezone(ctx.timezone, new Date()) : null,
     };
 
     // Verification mode: check expected day-of-week

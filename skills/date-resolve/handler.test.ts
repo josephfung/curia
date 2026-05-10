@@ -287,4 +287,25 @@ describe('DateResolveHandler', () => {
       expect(data).not.toHaveProperty('expected_day');
     }
   });
+
+  it('includes displayTimezone when timezone is set', async () => {
+    const result = await handler.execute(makeCtx({ date: '2026-05-19' }, 'America/Toronto'));
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const data = result.data as Record<string, unknown>;
+      expect(typeof data.displayTimezone).toBe('string');
+      expect(data.displayTimezone).toMatch(/UTC/);
+    }
+  });
+
+  it('sets displayTimezone to null when timezone is not configured', async () => {
+    const ctx = makeCtx({ date: '2026-05-19' });
+    (ctx as Record<string, unknown>).timezone = undefined;
+    const result = await handler.execute(ctx);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const data = result.data as Record<string, unknown>;
+      expect(data.displayTimezone).toBeNull();
+    }
+  });
 });
