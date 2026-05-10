@@ -13,6 +13,7 @@
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
 import type { NylasMessage } from '../../src/channels/email/nylas-client.js';
 import { createHumanDecision } from '../../src/bus/events.js';
+import { isPrincipalOriginated } from '../../src/contacts/principal.js';
 
 /** Result of findDraftById — either the draft + owning account, or a structured error. */
 type DraftDiscoveryResult =
@@ -26,17 +27,14 @@ export class SendDraftHandler implements SkillHandler {
     // ------------------------------------------------------------------
     // ctx.taskMetadata is populated by the agent runtime from the agent.task
     // event payload; the LLM cannot influence it. Observation-mode tasks
-    // (triggered by external emails) explicitly do not receive ceoInitiated,
+    // (triggered by external emails) explicitly do not receive principal origin,
     // so prompt injection from an external email cannot reach this point with
     // the flag set.
-    if (ctx.taskMetadata?.ceoInitiated !== true) {
-      ctx.log.warn(
-        { ceoInitiated: ctx.taskMetadata?.ceoInitiated },
-        'send-draft: rejected — ceoInitiated flag absent or false in task metadata',
-      );
+    if (!isPrincipalOriginated(ctx.taskMetadata)) {
+      ctx.log.warn('send-draft: rejected — task not originated by principal');
       return {
         success: false,
-        error: 'send-draft requires direct CEO authorization. This skill can only be called from a task initiated by the CEO.',
+        error: 'send-draft requires principal authorization. This skill can only be called from a task initiated by the principal.',
       };
     }
 
