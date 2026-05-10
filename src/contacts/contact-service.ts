@@ -1058,13 +1058,14 @@ class PostgresContactBackend implements ContactServiceBackend {
       id: string;
       display_name: string;
       role: string | null;
+      system_role: string | null;
       status: string;
       kg_node_id: string | null;
       verified: boolean;
       contact_confidence: string;  // NUMERIC returned as string by node-pg
       trust_level: string | null;
     }>(
-      `SELECT c.id, c.display_name, c.role, c.status, c.kg_node_id, cci.verified,
+      `SELECT c.id, c.display_name, c.role, c.system_role, c.status, c.kg_node_id, cci.verified,
               c.contact_confidence, c.trust_level
        FROM contact_channel_identities cci
        JOIN contacts c ON c.id = cci.contact_id
@@ -1079,6 +1080,9 @@ class PostgresContactBackend implements ContactServiceBackend {
       contactId: row.id,
       displayName: row.display_name,
       role: row.role,
+      // Validate system_role — DB CHECK constraint normally prevents invalid values, but
+      // guard defensively the same way we guard trust_level below.
+      systemRole: (row.system_role === 'principal' || row.system_role === 'agent') ? row.system_role : null,
       status: row.status as ContactStatus,
       kgNodeId: row.kg_node_id,
       verified: row.verified,
@@ -1495,6 +1499,7 @@ class InMemoryContactBackend implements ContactServiceBackend {
             contactId: contact.id,
             displayName: contact.displayName,
             role: contact.role,
+            systemRole: contact.systemRole,
             status: contact.status,
             kgNodeId: contact.kgNodeId,
             verified: identity.verified,

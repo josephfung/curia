@@ -43,29 +43,29 @@ export class ContactResolver {
     // PostgreSQL errors. Fall back to the synthetic ID only if no CEO contact exists yet.
     if (channel === 'cli' || channel === 'smoke-test' || channel === 'web') {
       try {
-        const ceoContacts = await this.contactService.findContactByRole('ceo');
-        const ceo = ceoContacts[0];
-        if (ceo) {
+        const principal = await this.contactService.findContactBySystemRole('principal');
+        if (principal) {
           return {
             resolved: true,
-            contactId: ceo.id,
-            displayName: ceo.displayName,
-            role: 'ceo',
+            contactId: principal.id,
+            displayName: principal.displayName,
+            role: principal.role,
+            systemRole: principal.systemRole,
             status: 'confirmed' as const,
             verified: true,
-            kgNodeId: ceo.kgNodeId,
+            kgNodeId: principal.kgNodeId,
             knowledgeSummary: '',
             authorization: null,
-            contactConfidence: 1.0,   // CEO always gets max confidence
+            contactConfidence: 1.0,   // principal always gets max confidence
             trustLevel: null,
           };
         }
-        // DB call succeeded but no CEO contact row exists yet (fresh install before seeding).
+        // DB call succeeded but no principal contact row exists yet (fresh install before seeding).
         // Skills that need a real UUID will return empty results — best we can do.
-        this.logger.warn({ channel }, 'contact-resolver: no CEO contact found in DB, using synthetic primary-user ID');
+        this.logger.warn({ channel }, 'contact-resolver: no principal contact found in DB, using synthetic primary-user ID');
       } catch (err) {
         // Only suppress errors that look like DB-layer errors (pg driver attaches a .code).
-        // Anything else (TypeError, programming bug in findContactByRole, etc.) should propagate
+        // Anything else (TypeError, programming bug in findContactBySystemRole, etc.) should propagate
         // so it is not silently misclassified as a transient DB blip.
         const isDbError = err !== null && typeof err === 'object' && 'code' in err;
         if (!isDbError) {
@@ -73,19 +73,20 @@ export class ContactResolver {
         }
         // DB error: log at error level so Sentry captures it, then fall through to synthetic ID.
         // The CLI continuing to work in degraded mode is acceptable; operators still need to know.
-        this.logger.error({ err }, 'contact-resolver: DB error looking up CEO contact — falling back to synthetic ID');
+        this.logger.error({ err }, 'contact-resolver: DB error looking up principal contact — falling back to synthetic ID');
       }
       return {
         resolved: true,
         contactId: 'primary-user',
         displayName: 'CEO',
         role: 'ceo',
+        systemRole: 'principal',
         status: 'confirmed' as const,
         verified: true,
         kgNodeId: null,
         knowledgeSummary: '',
         authorization: null,
-        contactConfidence: 1.0,   // CEO always gets max confidence
+        contactConfidence: 1.0,   // principal always gets max confidence
         trustLevel: null,
       };
     }
@@ -150,6 +151,7 @@ export class ContactResolver {
       contactId: resolved.contactId,
       displayName: resolved.displayName,
       role: resolved.role,
+      systemRole: resolved.systemRole,
       status: resolved.status ?? 'confirmed',
       verified: resolved.verified,
       kgNodeId: resolved.kgNodeId,
