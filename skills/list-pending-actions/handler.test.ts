@@ -11,7 +11,16 @@ function makeCtx(overrides?: Partial<SkillContext>): SkillContext {
     input: {},
     secret: (name: string) => { throw new Error(`secret '${name}' not configured in test`); },
     log: createSilentLogger(),
-    taskMetadata: { ceoInitiated: true, senderId: 'ceo-1', channelId: 'cli' },
+    taskMetadata: {
+      originator: {
+        contactId: 'ceo-1',
+        systemRole: 'principal' as const,
+        channel: 'cli',
+        initiatedAt: new Date().toISOString(),
+      },
+      senderId: 'ceo-1',
+      channelId: 'cli',
+    },
     taskEventId: 'task-1',
     timezone: 'UTC',
     ...overrides,

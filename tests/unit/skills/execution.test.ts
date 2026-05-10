@@ -134,6 +134,10 @@ describe('ExecutionLayer', () => {
   });
 
   describe('elevated skill caller verification', () => {
+    // The elevated-skill gate now checks isPrincipalOriginated(taskMetadata) —
+    // the authorization signal is the task originator, not the immediate caller.
+    // See docs/wip/2026-05-10-principal-identity-design.md
+
     it('allows elevated skill when caller has ceo role', async () => {
       const handler: SkillHandler = {
         execute: async () => ({ success: true, data: 'ok' }),
@@ -143,12 +147,22 @@ describe('ExecutionLayer', () => {
       const result = await execution.invoke('elevated-skill', {}, {
         contactId: 'primary-user',
         role: 'ceo',
-        channel: 'email',
+        channel: 'cli',
+      }, {
+        taskMetadata: {
+          originator: {
+            contactId: 'primary-user',
+            systemRole: 'principal' as const,
+            channel: 'cli',
+            initiatedAt: new Date().toISOString(),
+          },
+        },
       });
       expect(result.success).toBe(true);
     });
 
     it('rejects elevated skill when caller is not ceo', async () => {
+      // No principal originator — task was not started by the principal
       const handler: SkillHandler = {
         execute: async () => ({ success: true, data: 'should not reach' }),
       };
@@ -162,32 +176,11 @@ describe('ExecutionLayer', () => {
       expect(result.success).toBe(false);
       if (!result.success) {
         expect(result.error).toContain('elevated privileges');
-        expect(result.error).toContain('cfo');
-        expect(result.error).toContain('email');
-      }
-    });
-
-    it('rejects elevated skill when caller has cli channel but non-ceo role (no channel bypass)', async () => {
-      const handler: SkillHandler = {
-        execute: async () => ({ success: true, data: 'should not reach' }),
-      };
-      registry.register(makeManifest({ name: 'elevated-skill', sensitivity: 'elevated' }), handler);
-
-      // Ensures a spoofed channelId: 'cli' with a non-CEO role cannot bypass the gate.
-      // contact-resolver.ts already maps real CLI sessions to role: 'ceo', so this
-      // combination should never arrive legitimately.
-      const result = await execution.invoke('elevated-skill', {}, {
-        contactId: 'contact-spoofed',
-        role: 'advisor',
-        channel: 'cli',
-      });
-      expect(result.success).toBe(false);
-      if (!result.success) {
-        expect(result.error).toContain('elevated privileges');
       }
     });
 
     it('rejects elevated skill when caller has null role on non-cli channel', async () => {
+      // No principal originator — gate checks taskMetadata, not caller
       const handler: SkillHandler = {
         execute: async () => ({ success: true, data: 'should not reach' }),
       };
@@ -201,12 +194,11 @@ describe('ExecutionLayer', () => {
       expect(result.success).toBe(false);
       if (!result.success) {
         expect(result.error).toContain('elevated privileges');
-        expect(result.error).toContain('none');
-        expect(result.error).toContain('email');
       }
     });
 
     it('rejects elevated skill when no caller context (fail-closed)', async () => {
+      // No taskMetadata and no caller — gate rejects (fail-closed)
       const handler: SkillHandler = {
         execute: async () => ({ success: true, data: 'should not reach' }),
       };
@@ -216,7 +208,29 @@ describe('ExecutionLayer', () => {
       expect(result.success).toBe(false);
       if (!result.success) {
         expect(result.error).toContain('elevated privileges');
-        expect(result.error).toContain('no caller context');
+      }
+    });
+
+    it('rejects elevated skill when originator.systemRole is not principal', async () => {
+      // Agent-originated task must not be able to invoke elevated skills
+      const handler: SkillHandler = {
+        execute: async () => ({ success: true, data: 'should not reach' }),
+      };
+      registry.register(makeManifest({ name: 'elevated-skill', sensitivity: 'elevated' }), handler);
+
+      const result = await execution.invoke('elevated-skill', {}, undefined, {
+        taskMetadata: {
+          originator: {
+            contactId: 'agent-id',
+            systemRole: 'agent' as const,
+            channel: 'scheduler',
+            initiatedAt: new Date().toISOString(),
+          },
+        },
+      });
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error).toContain('elevated privileges');
       }
     });
 
@@ -241,7 +255,16 @@ describe('ExecutionLayer', () => {
       registry.register(makeManifest({ name: 'elevated-skill', sensitivity: 'elevated' }), handler);
 
       const caller = { contactId: 'primary-user', role: 'ceo' as const, channel: 'cli' };
-      await execution.invoke('elevated-skill', {}, caller);
+      await execution.invoke('elevated-skill', {}, caller, {
+        taskMetadata: {
+          originator: {
+            contactId: 'primary-user',
+            systemRole: 'principal' as const,
+            channel: 'cli',
+            initiatedAt: new Date().toISOString(),
+          },
+        },
+      });
       expect(receivedCaller).toEqual(caller);
     });
   });

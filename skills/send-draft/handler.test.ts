@@ -62,7 +62,16 @@ function makeCtx(overrides: {
     bus,
     taskMetadata: 'taskMetadata' in overrides
       ? overrides.taskMetadata
-      : { ceoInitiated: true, senderId: '+14155551234', channelId: 'signal' },
+      : {
+          originator: {
+            contactId: 'ceo-contact-id',
+            systemRole: 'principal' as const,
+            channel: 'signal',
+            initiatedAt: new Date().toISOString(),
+          },
+          senderId: '+14155551234',
+          channelId: 'signal',
+        },
     taskEventId: overrides.taskEventId ?? 'task-event-1',
     actionLogRepo,
   } as unknown as SkillContext;
@@ -79,15 +88,15 @@ describe('SendDraftHandler', () => {
 
   // ─── Security gate ────────────────────────────────────────────────────────
 
-  it('rejects when ceoInitiated is absent from taskMetadata', async () => {
+  it('rejects when originator is absent from taskMetadata', async () => {
     const ctx = makeCtx({ taskMetadata: {} });
     const result = await handler.execute(ctx);
     expect(result.success).toBe(false);
-    if (!result.success) expect(result.error).toMatch(/CEO authorization|ceoInitiated/i);
+    if (!result.success) expect(result.error).toMatch(/principal authorization/i);
   });
 
-  it('rejects when ceoInitiated is false', async () => {
-    const ctx = makeCtx({ taskMetadata: { ceoInitiated: false } });
+  it('rejects when originator.systemRole is not principal', async () => {
+    const ctx = makeCtx({ taskMetadata: { originator: { contactId: 'other-id', systemRole: 'agent', channel: 'cli', initiatedAt: new Date().toISOString() } } });
     const result = await handler.execute(ctx);
     expect(result.success).toBe(false);
   });
@@ -96,7 +105,7 @@ describe('SendDraftHandler', () => {
     const ctx = makeCtx({ taskMetadata: undefined });
     const result = await handler.execute(ctx);
     expect(result.success).toBe(false);
-    if (!result.success) expect(result.error).toMatch(/CEO authorization|ceoInitiated/i);
+    if (!result.success) expect(result.error).toMatch(/principal authorization/i);
   });
 
   // ─── Capability guards ────────────────────────────────────────────────────
