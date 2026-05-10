@@ -23,7 +23,7 @@ import { randomUUID } from 'node:crypto';
 import type { NylasClient, NylasMessage, ListMessagesOptions, SendEmailOptions } from '../channels/email/nylas-client.js';
 import type { SignalRpcClient } from '../channels/signal/signal-rpc-client.js';
 import type { ContactService } from '../contacts/contact-service.js';
-import type { TrustLevel } from '../contacts/types.js';
+import type { TrustLevel, ChannelIdentity } from '../contacts/types.js';
 import type { OutboundContentFilter } from '../dispatch/outbound-filter.js';
 import type { PiiRedactor } from '../dispatch/pii-redactor.js';
 import type { EventBus } from '../bus/bus.js';
@@ -138,24 +138,14 @@ export interface OutboundGatewayConfig {
   bus: EventBus;
 
   /**
-   * CEO's own email — used as the allowlist entry in the content filter's contact-data-leak
-   * rule and as the To address for blocked-content CEO notifications.
+   * Cached channel identities of the principal contact (the human Curia serves).
+   * Loaded at startup from the database. Used by isPrincipalRecipient() to
+   * determine whether an outbound message is directed at the principal —
+   * principal-bound messages bypass the autonomy gate.
    *
-   * Required when nylasClient is present (notifications are sent via email).
-   * When email is absent (Signal-only), blocked messages are logged and audited
-   * but no CEO notification is sent. A future version may add a Signal notification path.
-   *
-   * TODO: add a Signal-based blocked-content notification path so the CEO is informed
-   * even without email configured. For now log.error + audit trail is the fallback.
+   * When empty (no principal contact exists), the principal bypass does not fire.
    */
-  ceoEmail?: string;
-
-  /**
-   * CEO's Signal phone number in E.164 format — used by the autonomy gate to
-   * exempt CEO-bound Signal messages. Same pattern as ceoEmail for email.
-   * Optional — when absent, the Signal CEO bypass does not fire.
-   */
-  ceoSignalNumber?: string;
+  principalIdentities?: ChannelIdentity[];
 
   logger: Logger;
 
@@ -236,8 +226,7 @@ export class OutboundGateway {
   private readonly contactService: ContactService;
   private readonly contentFilter: OutboundContentFilter;
   private readonly bus: EventBus;
-  private readonly ceoEmail: string;
-  private readonly ceoSignalNumber: string;
+  private readonly principalIdentities: ChannelIdentity[];
   private readonly log: Logger;
   private readonly autonomyService?: AutonomyService;
   private readonly piiRedactor?: PiiRedactor;
@@ -252,15 +241,8 @@ export class OutboundGateway {
     this.contactService = config.contactService;
     this.contentFilter = config.contentFilter;
     this.bus = config.bus;
-    this.ceoEmail = config.ceoEmail ?? '';
-    this.ceoSignalNumber = config.ceoSignalNumber ?? '';
+    this.principalIdentities = config.principalIdentities ?? [];
     this.log = config.logger.child({ component: 'outbound-gateway' });
-    if (this.ceoSignalNumber && !/^\+\d{7,15}$/.test(this.ceoSignalNumber)) {
-      this.log.warn(
-        { ceoSignalNumber: this.ceoSignalNumber },
-        'outbound-gateway: ceoSignalNumber does not look like E.164 format (expected +digits) — CEO Signal bypass may not match',
-      );
-    }
     this.autonomyService = config.autonomyService;
     this.piiRedactor = config.piiRedactor;
     this.actionLogRepo = config.actionLogRepo;
@@ -352,15 +334,15 @@ export class OutboundGateway {
         { channel: request.channel },
         'outbound-gateway: autonomy gate skipped — isSystemNotification flag set (infrastructure alert to CEO)',
       );
-    } else if (this.autonomyService && this.isCeoRecipient(request)) {
+    } else if (this.autonomyService && this.isPrincipalRecipient(request)) {
       // Agent-to-principal communication — the autonomy gate must not silence
       // the agent's ability to communicate with its oversight authority. Gating
-      // CEO-bound messages reduces oversight rather than improving it.
+      // principal-bound messages reduces oversight rather than improving it.
       // All other safety checks (blocked-contact, content filter, PII redaction)
       // still run below.
       this.log.info(
         { channel: request.channel },
-        'outbound-gateway: autonomy gate skipped — recipient is CEO (agent-to-principal communication)',
+        'outbound-gateway: autonomy gate skipped — recipient is principal (agent-to-principal communication)',
       );
     } else if (this.autonomyService) {
       // Fail-open on config read only — getConfig() failure must not block sends.
@@ -439,10 +421,11 @@ export class OutboundGateway {
           // never throws. Only stamp notification_sent_at if the publish succeeded.
           // setNotificationSentAt is wrapped separately so a DB failure there does not
           // discard the fact that the insert (and the notification delivery) succeeded.
-          if (rowId !== undefined && this.ceoEmail) {
+          const principalEmail = this.principalIdentities.find((id) => id.channel === 'email')?.channelIdentifier;
+          if (rowId !== undefined && principalEmail) {
             const sent = await this.sendNotification({
               notificationType: 'approval_requested',
-              ceoEmail: this.ceoEmail,
+              ceoEmail: principalEmail,
               subject: `Approval needed — ${recipe.description}`,
               body: [
                 recipe.description,
@@ -466,12 +449,12 @@ export class OutboundGateway {
                 );
               }
             }
-          } else if (rowId !== undefined && !this.ceoEmail) {
-            // Row was written but ceoEmail is not configured — notification silently skipped.
+          } else if (rowId !== undefined && !principalEmail) {
+            // Row was written but no principal email identity configured — notification silently skipped.
             // Surface this as an error so misconfigured deployments are detectable in alerting.
             this.log.error(
               { rowId, taskEventId: options.taskEventId },
-              'outbound-gateway: pending_approval row written but CEO notification skipped — ceoEmail not configured',
+              'outbound-gateway: pending_approval row written but principal notification skipped — no principal email identity configured',
             );
           }
         }
@@ -685,13 +668,14 @@ export class OutboundGateway {
       //      a notification delivery. If the filter is broken (crash → fail-closed), this
       //      flag prevents send() from re-publishing outbound.notification, breaking the
       //      cycle: send → block → sendNotification → EmailAdapter → send(skip) → block → stop.
-      if (this.ceoEmail && !options?.skipNotificationOnBlock) {
+      const principalEmailForBlock = this.principalIdentities.find((id) => id.channel === 'email')?.channelIdentifier;
+      if (principalEmailForBlock && !options?.skipNotificationOnBlock) {
         // sendNotification() catches errors internally — await is safe and ensures
         // the bus.publish call completes before we return the blocked result.
         await this.sendNotification(
           {
             notificationType: 'blocked_content',
-            ceoEmail: this.ceoEmail,
+            ceoEmail: principalEmailForBlock,
             subject: 'Action needed — blocked outbound reply',
             body: [
               'An outbound message was blocked by the content filter.',
@@ -716,10 +700,10 @@ export class OutboundGateway {
           { blockId, channel: request.channel },
           'outbound-gateway: notification delivery was blocked by content filter — recursion guard active, CEO will NOT receive this alert',
         );
-      } else {
+      } else if (!options?.skipNotificationOnBlock) {
         this.log.error(
           { blockId, channel: request.channel, recipientId: redactId(recipientId) },
-          'outbound-gateway: CEO notification skipped — ceoEmail not configured. Block recorded in audit log only.',
+          'outbound-gateway: principal notification skipped — no principal email identity configured. Block recorded in audit log only.',
         );
       }
       return { success: false, blockedReason: 'Content blocked by filter' };
@@ -789,36 +773,37 @@ export class OutboundGateway {
   }
 
   /**
-   * Check whether the outbound request is addressed to the CEO.
-   * Used by the autonomy gate to exempt agent-to-principal communications.
-   *
-   * Email: case-insensitive comparison against configured ceoEmail.
-   * Signal: exact comparison against configured ceoSignalNumber (E.164 format).
-   *
-   * Returns false when the relevant CEO identifier is not configured — the bypass
-   * is inert rather than broken, matching the pattern of other optional config fields.
+   * Check whether the recipient is the principal (the human Curia serves).
+   * Resolves against the principal contact's verified channel identities,
+   * loaded from the database at startup.
    */
-  private isCeoRecipient(request: OutboundSendRequest): boolean {
-    if (request.channel === 'email') {
-      return this.isCeoEmail(request.to);
+  private isPrincipalRecipient(request: OutboundSendRequest): boolean {
+    if (this.principalIdentities.length === 0) return false;
+
+    if (request.channel === 'email' && request.to) {
+      const normalized = request.to.toLowerCase();
+      return this.principalIdentities.some(
+        (id) => id.channel === 'email' && id.channelIdentifier.toLowerCase() === normalized,
+      );
     }
     if (request.channel === 'signal' && 'recipient' in request && request.recipient) {
-      return this.ceoSignalNumber !== '' && request.recipient === this.ceoSignalNumber;
+      return this.principalIdentities.some(
+        (id) => id.channel === 'signal' && id.channelIdentifier === request.recipient,
+      );
     }
-    // Signal group sends (groupId without recipient) intentionally excluded — resolving
-    // group membership at gate time would require an async RPC call to signal-cli.
-    // Group messages to the CEO will be subject to normal autonomy gating.
     return false;
   }
 
   /**
-   * Check whether an email address belongs to the CEO.
-   * Canonical comparison: case-insensitive, with null/undefined guard.
-   * Used by both isCeoRecipient() and the sendEmailDraft() autonomy bypass.
+   * Check whether an email address belongs to the principal.
+   * Used by sendEmailDraft() for the autonomy bypass.
    */
-  private isCeoEmail(email: string | undefined | null): boolean {
-    if (!email || this.ceoEmail === '') return false;
-    return email.toLowerCase() === this.ceoEmail.toLowerCase();
+  private isPrincipalEmail(email: string | undefined | null): boolean {
+    if (!email || this.principalIdentities.length === 0) return false;
+    const normalized = email.toLowerCase();
+    return this.principalIdentities.some(
+      (id) => id.channel === 'email' && id.channelIdentifier.toLowerCase() === normalized,
+    );
   }
 
   /**
@@ -1071,12 +1056,12 @@ export class OutboundGateway {
         { draftId },
         'outbound-gateway: autonomy gate skipped — humanApproved flag set (CEO-authorized draft send, see ADR-017)',
       );
-    } else if (this.autonomyService && this.isCeoEmail(draftMeta.recipientEmail)) {
-      // Agent-to-principal: CEO-bound draft sends bypass the autonomy gate.
-      // Same rationale as the send() CEO bypass — see isCeoRecipient() comment.
+    } else if (this.autonomyService && this.isPrincipalEmail(draftMeta.recipientEmail)) {
+      // Agent-to-principal: principal-bound draft sends bypass the autonomy gate.
+      // Same rationale as the send() principal bypass — see isPrincipalRecipient() comment.
       this.log.info(
         { draftId, channel: 'email' },
-        'outbound-gateway: autonomy gate skipped — draft recipient is CEO (agent-to-principal communication)',
+        'outbound-gateway: autonomy gate skipped — draft recipient is principal (agent-to-principal communication)',
       );
     } else if (this.autonomyService) {
       try {
@@ -1196,11 +1181,12 @@ export class OutboundGateway {
         );
       }
 
-      if (this.ceoEmail) {
+      const principalEmailForDraftBlock = this.principalIdentities.find((id) => id.channel === 'email')?.channelIdentifier;
+      if (principalEmailForDraftBlock) {
         await this.sendNotification(
           {
             notificationType: 'blocked_content',
-            ceoEmail: this.ceoEmail,
+            ceoEmail: principalEmailForDraftBlock,
             subject: 'Action needed — blocked draft send',
             body: [
               'A draft send was blocked by the content filter.',
