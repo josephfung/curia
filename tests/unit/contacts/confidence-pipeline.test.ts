@@ -109,7 +109,12 @@ describe('ConfidencePipeline', () => {
       await pipeline.fullRecompute(contact.id);
       const second = await service.getContact(contact.id);
 
-      expect(second!.contactConfidence).toBe(first!.contactConfidence);
+      // Use toBeCloseTo rather than toBe: the recency component uses `new Date()` for
+      // decay calculation, so two calls milliseconds apart produce values that differ at
+      // floating-point epsilon (e.g. 0.375 vs 0.37499999997). The scores are functionally
+      // identical — the precision (10 decimal places) is far tighter than any meaningful
+      // confidence distinction.
+      expect(second!.contactConfidence).toBeCloseTo(first!.contactConfidence, 10);
     });
 
     it('does not modify message counts or lastSeenAt', async () => {
