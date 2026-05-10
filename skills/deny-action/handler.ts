@@ -4,7 +4,7 @@
 // to outcome = 'denied' and publishes a human.decision audit event.
 // No re-execution — the originally blocked skill stays blocked.
 //
-// SECURITY: sensitivity: "elevated" + ceoInitiated check.
+// SECURITY: sensitivity: "elevated" + isPrincipalOriginated check.
 
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
 import { createHumanDecision } from '../../src/bus/events.js';

@@ -1,6 +1,6 @@
 {
   "name": "send-draft",
-  "description": "Send a draft email that the CEO has explicitly authorized. Only call this skill when the CEO has directly instructed Curia to send a specific draft. Do NOT call this autonomously or infer authorization from ambiguous messages. action_risk is 'none' because this is a CEO-directed action, not an autonomous one — the real gate is the task-origin check (ceoInitiated). See ADR-017.",
+  "description": "Send a draft email that the CEO has explicitly authorized. Only call this skill when the CEO has directly instructed Curia to send a specific draft. Do NOT call this autonomously or infer authorization from ambiguous messages. action_risk is 'none' because this is a CEO-directed action, not an autonomous one — the real gate is the task-origin check (isPrincipalOriginated). See ADR-017.",
   "version": "1.0.0",
   "sensitivity": "normal",
   "action_risk": "none",

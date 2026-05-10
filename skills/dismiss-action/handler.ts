@@ -3,7 +3,7 @@
 // Dismisses a pending approval request: transitions to outcome = 'resolved_externally'.
 // Used when the CEO handled the action outside Curia.
 //
-// SECURITY: sensitivity: "elevated" + ceoInitiated check.
+// SECURITY: sensitivity: "elevated" + isPrincipalOriginated check.
 
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
 import { createHumanDecision } from '../../src/bus/events.js';
