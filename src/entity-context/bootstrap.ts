@@ -73,10 +73,10 @@ export async function bootstrapAgentIdentity(
     // ON CONFLICT fires when a concurrent INSERT tries to create a second contact for
     // the same KG node.
     const contactResult = await pool.query<{ id: string }>(
-      `INSERT INTO contacts (kg_node_id, display_name, role, status, created_at, updated_at)
-       VALUES ($1, $2, 'agent', 'confirmed', now(), now())
+      `INSERT INTO contacts (kg_node_id, display_name, role, status, system_role, created_at, updated_at)
+       VALUES ($1, $2, 'agent', 'confirmed', 'agent', now(), now())
        ON CONFLICT (kg_node_id) WHERE kg_node_id IS NOT NULL
-       DO UPDATE SET role = 'agent', updated_at = now()
+       DO UPDATE SET role = 'agent', system_role = 'agent', updated_at = now()
        RETURNING id`,
       [kgNodeId, displayName],
     );

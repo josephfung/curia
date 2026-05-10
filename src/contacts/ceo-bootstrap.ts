@@ -79,9 +79,10 @@ export async function bootstrapCeoContact(
         `UPDATE contacts
          SET role = 'ceo',
              trust_level = 'ceo',
+             system_role = 'principal',
              updated_at = now()
          WHERE id = $1
-           AND (role IS DISTINCT FROM 'ceo' OR trust_level IS DISTINCT FROM 'ceo')`,
+           AND (role IS DISTINCT FROM 'ceo' OR trust_level IS DISTINCT FROM 'ceo' OR system_role IS DISTINCT FROM 'principal')`,
         [contact_id],
       );
     } catch (err) {
@@ -149,8 +150,8 @@ export async function bootstrapCeoContact(
   try {
     await client.query('BEGIN');
     await client.query(
-      `INSERT INTO contacts (id, kg_node_id, display_name, role, status, trust_level, created_at, updated_at)
-       VALUES ($1, $2, $3, 'ceo', 'confirmed', 'ceo', now(), now())`,
+      `INSERT INTO contacts (id, kg_node_id, display_name, role, status, trust_level, system_role, created_at, updated_at)
+       VALUES ($1, $2, $3, 'ceo', 'confirmed', 'ceo', 'principal', now(), now())`,
       [contactId, kgNodeId, displayName],
     );
     await client.query(
