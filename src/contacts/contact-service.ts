@@ -42,6 +42,7 @@ interface ContactServiceBackend {
   getContact(id: string): Promise<Contact | undefined>;
   findContactByName(name: string): Promise<Contact[]>;
   findContactByRole(role: string): Promise<Contact[]>;
+  findContactBySystemRole(systemRole: string): Promise<Contact | null>;
   listContacts(): Promise<Contact[]>;
   updateContact(contact: Contact): Promise<void>;
   createIdentity(identity: ChannelIdentity): Promise<void>;
@@ -209,6 +210,9 @@ export class ContactService {
       kgNodeId,
       displayName: safeName,
       role: options.role ?? null,
+      // system_role is set only by bootstrap via direct SQL or updateContact; new contacts
+      // created through the normal flow always start with null and get assigned explicitly.
+      systemRole: null,
       status: options.status ?? 'confirmed',
       // Trust scoring fields default to zero/null on creation; updated by the scoring pipeline
       contactConfidence: 0,
@@ -297,6 +301,11 @@ export class ContactService {
   /** Find contacts by role. */
   async findContactByRole(role: string): Promise<Contact[]> {
     return this.backend.findContactByRole(role);
+  }
+
+  /** Find the single contact with the given system role, or null. */
+  async findContactBySystemRole(systemRole: string): Promise<Contact | null> {
+    return this.backend.findContactBySystemRole(systemRole);
   }
 
   /** List all contacts. */
@@ -816,9 +825,9 @@ class PostgresContactBackend implements ContactServiceBackend {
   async createContact(contact: Contact): Promise<void> {
     this.logger.debug({ contactId: contact.id }, 'contacts: creating contact');
     await this.pool.query(
-      `INSERT INTO contacts (id, kg_node_id, display_name, role, status, notes, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-      [contact.id, contact.kgNodeId, contact.displayName, contact.role, contact.status, contact.notes, contact.createdAt, contact.updatedAt],
+      `INSERT INTO contacts (id, kg_node_id, display_name, role, system_role, status, notes, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+      [contact.id, contact.kgNodeId, contact.displayName, contact.role, null, contact.status, contact.notes, contact.createdAt, contact.updatedAt],
     );
   }
 
@@ -828,6 +837,7 @@ class PostgresContactBackend implements ContactServiceBackend {
       kg_node_id: string | null;
       display_name: string;
       role: string | null;
+      system_role: string | null;
       status: string;
       contact_confidence: string;
       trust_level: string | null;
@@ -838,7 +848,7 @@ class PostgresContactBackend implements ContactServiceBackend {
       created_at: Date;
       updated_at: Date;
     }>(
-      `SELECT id, kg_node_id, display_name, role, status, contact_confidence, trust_level, last_seen_at, inbound_message_count, outbound_message_count, notes, created_at, updated_at
+      `SELECT id, kg_node_id, display_name, role, system_role, status, contact_confidence, trust_level, last_seen_at, inbound_message_count, outbound_message_count, notes, created_at, updated_at
        FROM contacts WHERE id = $1`,
       [id],
     );
@@ -859,6 +869,7 @@ class PostgresContactBackend implements ContactServiceBackend {
       kg_node_id: string | null;
       display_name: string;
       role: string | null;
+      system_role: string | null;
       status: string;
       contact_confidence: string;
       trust_level: string | null;
@@ -869,7 +880,7 @@ class PostgresContactBackend implements ContactServiceBackend {
       created_at: Date;
       updated_at: Date;
     }>(
-      `SELECT id, kg_node_id, display_name, role, status, contact_confidence, trust_level, last_seen_at, inbound_message_count, outbound_message_count, notes, created_at, updated_at
+      `SELECT id, kg_node_id, display_name, role, system_role, status, contact_confidence, trust_level, last_seen_at, inbound_message_count, outbound_message_count, notes, created_at, updated_at
        FROM contacts WHERE display_name ILIKE $1`,
       [`%${name}%`],
     );
@@ -883,6 +894,7 @@ class PostgresContactBackend implements ContactServiceBackend {
       kg_node_id: string | null;
       display_name: string;
       role: string | null;
+      system_role: string | null;
       status: string;
       contact_confidence: string;
       trust_level: string | null;
@@ -893,12 +905,39 @@ class PostgresContactBackend implements ContactServiceBackend {
       created_at: Date;
       updated_at: Date;
     }>(
-      `SELECT id, kg_node_id, display_name, role, status, contact_confidence, trust_level, last_seen_at, inbound_message_count, outbound_message_count, notes, created_at, updated_at
+      `SELECT id, kg_node_id, display_name, role, system_role, status, contact_confidence, trust_level, last_seen_at, inbound_message_count, outbound_message_count, notes, created_at, updated_at
        FROM contacts WHERE role = $1 ORDER BY created_at ASC`,
       [role],
     );
 
     return result.rows.map((row) => this.rowToContact(row));
+  }
+
+  async findContactBySystemRole(systemRole: string): Promise<Contact | null> {
+    const result = await this.pool.query<{
+      id: string;
+      kg_node_id: string | null;
+      display_name: string;
+      role: string | null;
+      system_role: string | null;
+      status: string;
+      contact_confidence: string;
+      trust_level: string | null;
+      last_seen_at: Date | null;
+      inbound_message_count: string;
+      outbound_message_count: string;
+      notes: string | null;
+      created_at: Date;
+      updated_at: Date;
+    }>(
+      `SELECT id, kg_node_id, display_name, role, system_role, status, contact_confidence, trust_level, last_seen_at, inbound_message_count, outbound_message_count, notes, created_at, updated_at
+       FROM contacts WHERE system_role = $1 LIMIT 1`,
+      [systemRole],
+    );
+
+    const row = result.rows[0];
+    if (!row) return null;
+    return this.rowToContact(row);
   }
 
   async listContacts(): Promise<Contact[]> {
@@ -907,6 +946,7 @@ class PostgresContactBackend implements ContactServiceBackend {
       kg_node_id: string | null;
       display_name: string;
       role: string | null;
+      system_role: string | null;
       status: string;
       contact_confidence: string;
       trust_level: string | null;
@@ -917,7 +957,7 @@ class PostgresContactBackend implements ContactServiceBackend {
       created_at: Date;
       updated_at: Date;
     }>(
-      `SELECT id, kg_node_id, display_name, role, status, contact_confidence, trust_level, last_seen_at, inbound_message_count, outbound_message_count, notes, created_at, updated_at
+      `SELECT id, kg_node_id, display_name, role, system_role, status, contact_confidence, trust_level, last_seen_at, inbound_message_count, outbound_message_count, notes, created_at, updated_at
        FROM contacts ORDER BY created_at ASC`,
     );
 
@@ -927,11 +967,12 @@ class PostgresContactBackend implements ContactServiceBackend {
   async updateContact(contact: Contact): Promise<void> {
     this.logger.debug({ contactId: contact.id }, 'contacts: updating contact');
     // trust_level is included because ContactService.setTrustLevel writes through this path.
+    // system_role is included so bootstrap and any future setter can persist it through the standard update path.
     // contact_confidence and last_seen_at remain scoring-owned and are not updated here.
     await this.pool.query(
-      `UPDATE contacts SET kg_node_id = $2, display_name = $3, role = $4, status = $5, notes = $6, trust_level = $7, updated_at = $8
+      `UPDATE contacts SET kg_node_id = $2, display_name = $3, role = $4, system_role = $5, status = $6, notes = $7, trust_level = $8, updated_at = $9
        WHERE id = $1`,
-      [contact.id, contact.kgNodeId, contact.displayName, contact.role, contact.status, contact.notes, contact.trustLevel, contact.updatedAt],
+      [contact.id, contact.kgNodeId, contact.displayName, contact.role, contact.systemRole, contact.status, contact.notes, contact.trustLevel, contact.updatedAt],
     );
   }
 
@@ -1235,6 +1276,7 @@ class PostgresContactBackend implements ContactServiceBackend {
     kg_node_id: string | null;
     display_name: string;
     role: string | null;
+    system_role: string | null;
     status: string;
     contact_confidence: string;  // NUMERIC returned as string by node-pg
     trust_level: string | null;
@@ -1250,6 +1292,7 @@ class PostgresContactBackend implements ContactServiceBackend {
       kgNodeId: row.kg_node_id,
       displayName: row.display_name,
       role: row.role,
+      systemRole: (row.system_role === 'principal' || row.system_role === 'agent') ? row.system_role : null,
       status: row.status as ContactStatus,
       // PostgreSQL returns NUMERIC as a string via node-pg.
       // Guard against NaN — if migration 020 hasn't run, the column is absent and
@@ -1373,6 +1416,13 @@ class InMemoryContactBackend implements ContactServiceBackend {
       }
     }
     return results;
+  }
+
+  async findContactBySystemRole(systemRole: string): Promise<Contact | null> {
+    for (const contact of this.contacts.values()) {
+      if (contact.systemRole === systemRole) return contact;
+    }
+    return null;
   }
 
   async listContacts(): Promise<Contact[]> {
