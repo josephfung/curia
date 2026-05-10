@@ -362,10 +362,20 @@ export class EmailAdapter {
         return;
       }
 
-      // Reply-all: include CC recipients from the thread message, excluding self.
+      // Reply-all: include CC recipients from the thread message, excluding self and the
+      // primary To recipient — in rare thread shapes the To recipient may appear in the
+      // CC list of the fetched message, which would produce duplicate addressing.
       const ccAddresses = threadMessage.cc
         .map((r) => r.email)
-        .filter((email) => email.toLowerCase() !== this.config.selfEmail.toLowerCase());
+        .filter(
+          (email) =>
+            email.toLowerCase() !== this.config.selfEmail.toLowerCase() &&
+            email.toLowerCase() !== recipientEmail.toLowerCase(),
+        );
+
+      if (ccAddresses.length > 0) {
+        logger.debug({ ccAddresses, count: ccAddresses.length }, 'sendOutboundReply: reply-all including CC recipients');
+      }
 
       // Strip any existing "Re:" prefix before prepending our own to avoid
       // "Re: Re: Re: ..." chains when replying to already-replied threads.
