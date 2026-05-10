@@ -715,6 +715,31 @@ async function main(): Promise<void> {
     }
   }
 
+  // --- Startup readiness checks ---
+  // All checks must pass before the system accepts inbound messages.
+  // See docs/wip/2026-05-10-principal-identity-design.md
+  const readinessChecks = [
+    {
+      name: 'principal-contact',
+      check: async () => {
+        const principal = await contactService.findContactBySystemRole('principal');
+        return principal
+          ? { ready: true as const }
+          : { ready: false as const, reason: 'No contact with system_role=principal exists. Run setup to configure the principal user.' };
+      },
+    },
+  ];
+  const { runReadinessChecks } = await import('./startup/readiness.js');
+  const readinessReport = await runReadinessChecks(readinessChecks);
+
+  if (!readinessReport.ready) {
+    for (const failure of readinessReport.failures) {
+      logger.error({ check: failure.name, reason: failure.reason }, 'Startup readiness check failed');
+    }
+    throw new Error(`Startup readiness failed: ${readinessReport.failures.map((f) => f.name).join(', ')}`);
+  }
+  logger.info('All startup readiness checks passed');
+
   // Outbound gateway — single choke-point for all outbound external communication.
   // Runs blocked-contact checks and content filtering before any message leaves Curia.
   //
