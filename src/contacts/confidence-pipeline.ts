@@ -44,8 +44,8 @@ export class ConfidencePipeline {
       return;
     }
 
-    // Skip CEO contacts — confidence is hardcoded in ContactResolver
-    if (contact.role === 'ceo') return; // CEO confidence is hardcoded in ContactResolver
+    // Skip principal contacts — confidence is hardcoded in ContactResolver
+    if (contact.systemRole === 'principal') return; // Principal confidence is hardcoded in ContactResolver
 
     const count = ('count' in signal ? signal.count : undefined) ?? 1;
     if (!Number.isInteger(count) || count < 1) {
@@ -115,8 +115,8 @@ export class ConfidencePipeline {
     }
     const { contact, identities } = result;
 
-    // Skip CEO
-    if (contact.role === 'ceo') return 1.0;
+    // Skip principal
+    if (contact.systemRole === 'principal') return 1.0;
 
     const newConfidence = computeConfidence({
       inboundMessageCount: contact.inboundMessageCount,
