@@ -738,6 +738,7 @@ export class Dispatcher {
         const ccs: string[] = [];
 
         for (const p of (rawParticipants as Array<{ email: string; role: string }>).slice(0, MAX_PARTICIPANTS)) {
+          if (p.email == null) continue;  // guard: skip participants with missing email field
           const addr = sanitize(p.email);
           if (!addr) continue;
           // Replace Curia's own address with "you" for readability.

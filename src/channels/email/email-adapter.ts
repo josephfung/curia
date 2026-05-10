@@ -362,10 +362,9 @@ export class EmailAdapter {
         return;
       }
 
-      // Reply-all: include CC recipients from the thread message, excluding self and the
-      // primary To recipient — in rare thread shapes the To recipient may appear in the
-      // CC list of the fetched message, which would produce duplicate addressing.
-      const ccAddresses = threadMessage.cc
+      // Reply-all: include To and CC recipients from the thread message, excluding self and the primary recipient.
+      // Both to[] and cc[] are candidates — mirrors the email-reply skill's reply-all logic.
+      const ccAddresses = [...(threadMessage.to ?? []), ...(threadMessage.cc ?? [])]
         .map((r) => r.email)
         .filter(
           (email) =>

@@ -864,6 +864,7 @@ describe('EmailAdapter — sendOutboundReply CC', () => {
   });
 
   it('omits CC field from send when CC list is empty after filtering', async () => {
+    // to[] only contains selfEmail (filtered out), cc[] is empty — no CC should be set.
     const threadMessage = makeMockMessage({
       from: [{ email: CEO_EMAIL }],
       to: [{ email: SELF_EMAIL }],
@@ -875,5 +876,23 @@ describe('EmailAdapter — sendOutboundReply CC', () => {
 
     const sendArg = (mocks.outboundGateway.send as ReturnType<typeof vi.fn>).mock.calls[0][0];
     expect(sendArg.cc).toBeUndefined();
+  });
+
+  it('includes To recipients in reply-all CC', async () => {
+    // Thread message has an extra address in to[] that is neither the primary recipient
+    // nor selfEmail — it should appear in the outbound CC (reply-all behaviour).
+    const threadMessage = makeMockMessage({
+      from: [{ email: CEO_EMAIL }],
+      to: [{ email: 'extra@example.com' }],
+      cc: [],
+    });
+    (mocks.outboundGateway.listEmailMessages as ReturnType<typeof vi.fn>).mockResolvedValue([threadMessage]);
+
+    await triggerOutbound(makeOutboundEvent('email:thread-abc'));
+
+    expect(mocks.outboundGateway.send).toHaveBeenCalledWith(
+      expect.objectContaining({ cc: ['extra@example.com'] }),
+      expect.any(Object),
+    );
   });
 });

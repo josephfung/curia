@@ -70,6 +70,8 @@ export class EmailReplyHandler implements SkillHandler {
         excluded.add(originalFrom.toLowerCase());
         if (ctx.selfEmail) {
           excluded.add(ctx.selfEmail.toLowerCase());
+        } else {
+          ctx.log.warn({ replyToMessageId }, 'email-reply: selfEmail not configured — Curia may CC itself in reply-all');
         }
 
         const candidates = [
