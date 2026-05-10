@@ -1594,13 +1594,18 @@ describe('ceoInitiated metadata stamping', () => {
 // ---------------------------------------------------------------------------
 
 describe('Dispatcher — thread-participants block', () => {
-  it('injects [Thread participants] line for email with participants metadata', async () => {
-    const logger = createLogger('error');
-    const bus = new EventBus(logger);
+  let logger: ReturnType<typeof createLogger>;
+  let bus: EventBus;
+  let tasks: AgentTaskEvent[];
 
-    const tasks: AgentTaskEvent[] = [];
+  beforeEach(() => {
+    logger = createLogger('error');
+    bus = new EventBus(logger);
+    tasks = [];
     bus.subscribe('agent.task', 'agent', (e) => tasks.push(e as AgentTaskEvent));
+  });
 
+  it('injects [Thread participants] line for email with participants metadata', async () => {
     const dispatcher = new Dispatcher({ bus, logger });
     dispatcher.register();
 
@@ -1625,12 +1630,6 @@ describe('Dispatcher — thread-participants block', () => {
   });
 
   it('substitutes selfEmail with "you" in the participants block', async () => {
-    const logger = createLogger('error');
-    const bus = new EventBus(logger);
-
-    const tasks: AgentTaskEvent[] = [];
-    bus.subscribe('agent.task', 'agent', (e) => tasks.push(e as AgentTaskEvent));
-
     const dispatcher = new Dispatcher({ bus, logger, selfEmail: 'curia@example.com' });
     dispatcher.register();
 
@@ -1656,12 +1655,6 @@ describe('Dispatcher — thread-participants block', () => {
   });
 
   it('sanitizes participant emails containing newlines and angle brackets', async () => {
-    const logger = createLogger('error');
-    const bus = new EventBus(logger);
-
-    const tasks: AgentTaskEvent[] = [];
-    bus.subscribe('agent.task', 'agent', (e) => tasks.push(e as AgentTaskEvent));
-
     const dispatcher = new Dispatcher({ bus, logger });
     dispatcher.register();
 
@@ -1688,12 +1681,6 @@ describe('Dispatcher — thread-participants block', () => {
   });
 
   it('does not inject [Thread participants] when participants array is empty', async () => {
-    const logger = createLogger('error');
-    const bus = new EventBus(logger);
-
-    const tasks: AgentTaskEvent[] = [];
-    bus.subscribe('agent.task', 'agent', (e) => tasks.push(e as AgentTaskEvent));
-
     const dispatcher = new Dispatcher({ bus, logger });
     dispatcher.register();
 
@@ -1713,13 +1700,25 @@ describe('Dispatcher — thread-participants block', () => {
     expect(content).toBe('No participants.');
   });
 
+  it('does not inject [Thread participants] when metadata.participants is absent', async () => {
+    const dispatcher = new Dispatcher({ bus, logger });
+    dispatcher.register();
+
+    await bus.publish('channel', createInboundMessage({
+      conversationId: 'email:thread-participants-absent',
+      channelId: 'email',
+      senderId: 'alice@example.com',
+      content: 'No participants key at all.',
+      metadata: { someOtherField: true },
+    }));
+
+    expect(tasks).toHaveLength(1);
+    const content = tasks[0]!.payload.content;
+    expect(content).not.toContain('[Thread participants');
+    expect(content).toBe('No participants key at all.');
+  });
+
   it('does not inject [Thread participants] for non-email channels', async () => {
-    const logger = createLogger('error');
-    const bus = new EventBus(logger);
-
-    const tasks: AgentTaskEvent[] = [];
-    bus.subscribe('agent.task', 'agent', (e) => tasks.push(e as AgentTaskEvent));
-
     const dispatcher = new Dispatcher({ bus, logger });
     dispatcher.register();
 
