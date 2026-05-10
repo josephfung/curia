@@ -309,7 +309,9 @@ export class AgentRuntime {
         : '';
 
       let senderInfo = `Current sender: ${safeName}`;
-      if (safeRole) senderInfo += ` (${safeRole})`;
+      // Show system role first (deterministic system designation), then descriptive role
+      if (senderCtx.systemRole) senderInfo += ` (${senderCtx.systemRole})`;
+      else if (safeRole) senderInfo += ` (${safeRole})`;
       senderInfo += senderCtx.verified ? ' [verified]' : ' [unverified]';
       // Include the channel and sender identifier so the coordinator knows
       // HOW the message arrived and WHO sent it (e.g., their email address).
