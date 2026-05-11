@@ -377,6 +377,98 @@ describe('MemoryValidator', () => {
         expect(result.existingNodeId).toBe(existingFact.id);
       }
     });
+
+    it('auto-resolves when existing fact has lower confidence', async () => {
+      const entity = await store.createNode({
+        type: 'person', label: 'Bob', properties: {}, source: 'test',
+      });
+      const existingFact = await store.createNode({
+        type: 'fact',
+        label: 'Bob lives in Kitchener',
+        properties: { attribute: 'location' },
+        confidence: 0.6,
+        source: 'test',
+      });
+      await store.createEdge({
+        sourceNodeId: entity.id,
+        targetNodeId: existingFact.id,
+        type: 'relates_to',
+        properties: {},
+        source: 'test',
+      });
+
+      const result = await validator.validateContradiction({
+        entityNodeId: entity.id,
+        label: 'Bob lives in Toronto',
+        properties: { attribute: 'location' },
+        confidence: 0.9, // higher than existing 0.6
+        source: 'agent:coordinator/task:t1/channel:email',
+      });
+
+      expect(result.action).toBe('auto_resolved');
+      if (result.action === 'auto_resolved') {
+        expect(result.existingNodeId).toBe(existingFact.id);
+        expect(result.newLabel).toBe('Bob lives in Toronto');
+        expect(result.newConfidence).toBe(0.9);
+
+        const pv = result.newProperties.previous_values as Array<{
+          label: string; confidence: number; replacedAt: string; replacedBy: string;
+        }>;
+        expect(Array.isArray(pv)).toBe(true);
+        expect(pv).toHaveLength(1);
+        expect(pv[0]!.label).toBe('Bob lives in Kitchener');
+        expect(pv[0]!.confidence).toBe(0.6);
+        expect(pv[0]!.replacedBy).toBe('agent:coordinator/task:t1/channel:email');
+        expect(typeof pv[0]!.replacedAt).toBe('string');
+      }
+    });
+
+    it('appends to previous_values when a fact is superseded a second time', async () => {
+      const entity = await store.createNode({
+        type: 'person', label: 'Bob', properties: {}, source: 'test',
+      });
+      // Existing fact already has one previous_values entry from a prior supersession
+      const existingFact = await store.createNode({
+        type: 'fact',
+        label: 'Bob lives in Toronto',
+        properties: {
+          attribute: 'location',
+          previous_values: [
+            {
+              label: 'Bob lives in Kitchener',
+              confidence: 0.5,
+              replacedAt: '2026-01-01T00:00:00.000Z',
+              replacedBy: 'agent:coordinator/task:t0/channel:email',
+            },
+          ],
+        },
+        confidence: 0.7,
+        source: 'test',
+      });
+      await store.createEdge({
+        sourceNodeId: entity.id,
+        targetNodeId: existingFact.id,
+        type: 'relates_to',
+        properties: {},
+        source: 'test',
+      });
+
+      const result = await validator.validateContradiction({
+        entityNodeId: entity.id,
+        label: 'Bob lives in Vancouver',
+        properties: { attribute: 'location' },
+        confidence: 0.95,
+        source: 'agent:coordinator/task:t2/channel:signal',
+      });
+
+      expect(result.action).toBe('auto_resolved');
+      if (result.action === 'auto_resolved') {
+        const pv = result.newProperties.previous_values as Array<{ label: string }>;
+        expect(pv).toHaveLength(2);
+        expect(pv[0]!.label).toBe('Bob lives in Kitchener');
+        expect(pv[1]!.label).toBe('Bob lives in Toronto');
+      }
+    });
   });
 
   describe('source attribution', () => {

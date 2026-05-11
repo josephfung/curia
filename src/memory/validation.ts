@@ -20,10 +20,11 @@ export const MAX_WRITES_PER_AGENT_TASK = 50;
  * 3. Contradiction detection — conflicting facts → escalate to user
  * 4. Source attribution — every write records full provenance chain
  *
- * Note: Auto-resolution for contradictions is stubbed out.
- * Currently all contradictions are flagged for human review regardless of
- * relative confidence. TODO: Implement auto-resolution for lower-confidence
- * contradictions (spec lines 121-123).
+ * Contradiction resolution follows spec lines 121-123:
+ * - Higher existing confidence → auto_rejected (incoming write discarded)
+ * - Lower existing confidence → auto_resolved (existing superseded, old value
+ *   appended to properties.previous_values for an audit trail)
+ * - Equal confidence → conflict (escalated to human review)
  */
 export class MemoryValidator {
   // Tracks write counts per agent+task key across a task execution.
@@ -146,13 +147,10 @@ export class MemoryValidator {
    *
    * Checks if an existing fact on the same entity has the same `attribute`
    * property but a different label value. Per spec (lines 118-123):
-   * - Higher confidence existing → reject (TODO: auto-resolution)
-   * - Lower confidence existing → update (TODO: auto-resolution)
-   * - Equal confidence → flag for human review
-   *
-   * TODO: Implement auto-resolution for higher/lower confidence cases.
-   * For now, all contradictions are escalated to the user regardless of
-   * relative confidence — this is the safest default while the system matures.
+   * - Higher existing confidence → 'auto_rejected' (incoming write discarded)
+   * - Lower existing confidence → 'auto_resolved' (existing superseded; old
+   *   value appended to properties.previous_values for an append-only audit trail)
+   * - Equal confidence → 'conflict' (escalated to human review)
    *
    * Falls through to validate() when:
    * - No `attribute` property is present (can't detect contradictions)
@@ -195,10 +193,36 @@ export class MemoryValidator {
           };
         }
 
-        // existingConfidence <= incomingConfidence:
-        // auto_resolved path (existingConfidence < incomingConfidence) is implemented in Task 4.
-        // For now, all non-rejection contradictions still escalate to the user.
-        // @TODO: Implement auto_resolved path (spec line 122)
+        if (existingConfidence < incomingConfidence) {
+          // Spec line 122: incoming has higher confidence — supersede existing fact,
+          // preserving the old value in an append-only previous_values audit trail.
+          const existingPreviousValues = Array.isArray(targetNode.properties.previous_values)
+            ? (targetNode.properties.previous_values as Array<Record<string, unknown>>)
+            : [];
+
+          return {
+            action: 'auto_resolved',
+            existingNodeId: targetNode.id,
+            newLabel: options.label,
+            newConfidence: incomingConfidence,
+            newProperties: {
+              ...targetNode.properties,
+              ...(options.properties ?? {}),
+              previous_values: [
+                ...existingPreviousValues,
+                {
+                  label: targetNode.label,
+                  confidence: existingConfidence,
+                  replacedAt: new Date().toISOString(),
+                  replacedBy: options.source,
+                },
+              ],
+            },
+            reason: `Incoming fact "${options.label}" (confidence: ${incomingConfidence}) supersedes existing "${targetNode.label}" (confidence: ${existingConfidence}) — previous value preserved in properties.previous_values`,
+          };
+        }
+
+        // Spec line 123: equal confidence — flag for human review
         return {
           action: 'conflict',
           existingNodeId: targetNode.id,
