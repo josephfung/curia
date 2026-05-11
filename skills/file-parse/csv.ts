@@ -68,6 +68,8 @@ function splitCsvFields(row: string): string[] {
         current += '"';
         i++;
       } else {
+        // Toggles quote mode. Per RFC 4180, quotes mid-field on unquoted values
+        // are non-conformant input — we accept them permissively rather than error.
         inQuotes = !inQuotes;
       }
     } else if (ch === ',' && !inQuotes) {
