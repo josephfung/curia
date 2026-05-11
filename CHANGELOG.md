@@ -16,6 +16,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Added
 
 - **Startup readiness checks** — system refuses inbound messages if no principal contact exists (`system_role='principal'`). Extensible `ReadinessCheck` interface for future setup validation.
+- **Research-analyst memory access** — pinned `memory-query` and `memory-store` to the research-analyst agent with domain-specific recall and storage guidance. Stored context about known entities now informs research; important findings about CEO-relevant entities are persisted to the knowledge graph.
 
 ### Removed
 
