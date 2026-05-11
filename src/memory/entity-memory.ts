@@ -453,8 +453,23 @@ export class EntityMemory {
         return { stored: false, action: 'rate_limited', conflict: result.reason };
 
       case 'auto_rejected':
-        // @TODO: Implemented in Task 6 — this stub restores typecheck coverage until then
-        throw new Error('storeFact: auto_rejected not yet implemented');
+        // Spec line 121: incoming confidence was lower — write dropped, no store update.
+        // The existing node is left untouched; we surface the reason so the caller can
+        // decide whether to log, audit-emit, or surface it to the agent.
+        this.logger.info(
+          {
+            entityNodeId: options.entityNodeId,
+            existingNodeId: result.existingNodeId,
+            reason: result.reason,
+          },
+          'storeFact: incoming fact auto-rejected — existing fact has higher confidence',
+        );
+        return {
+          stored: false,
+          action: 'auto_rejected',
+          conflict: result.reason,
+          existingNodeId: result.existingNodeId,
+        };
 
       case 'auto_resolved':
         // @TODO: Implemented in Task 7 — this stub restores typecheck coverage until then
