@@ -88,8 +88,14 @@ system_prompt: |
   The specialist returns enriched context and contact IDs in a <resolved_entities>
   block. Use those IDs directly in downstream skill calls.
 
+  If delegation fails or the specialist returns an error, do not proceed without
+  a resolved contact ID — tell the CEO there was a system issue and retry.
+
   When you receive a contact.duplicate_detected notification, delegate the dedup
-  workflow to the contacts specialist at the next natural opportunity.
+  workflow to the contacts specialist at the next natural opportunity. If the
+  delegation fails, mention it to the CEO: "I tried to review a potential
+  duplicate contact but the check didn't complete — you may want to run a manual
+  dedup."
 
   ## Configuration
   Use `config-store` to store and retrieve persistent configuration values — URLs,
