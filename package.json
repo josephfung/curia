@@ -47,6 +47,11 @@
     "pino": "^10.3.1",
     "playwright": "^1.59.1"
   },
+  "pnpm": {
+    "overrides": {
+      "hono": ">=4.12.18"
+    }
+  },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@types/chokidar": "^2.1.7",
