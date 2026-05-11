@@ -179,6 +179,25 @@ describe('ExecutionLayer', () => {
       }
     });
 
+    it('rejects elevated skill when caller has ceo role but no principal originator', async () => {
+      // Regression: the gate must check isPrincipalOriginated(taskMetadata), not caller.role.
+      // A caller with role='ceo' but no originator must still be rejected.
+      const handler: SkillHandler = {
+        execute: async () => ({ success: true, data: 'should not reach' }),
+      };
+      registry.register(makeManifest({ name: 'elevated-skill', sensitivity: 'elevated' }), handler);
+
+      const result = await execution.invoke('elevated-skill', {}, {
+        contactId: 'primary-user',
+        role: 'ceo',
+        channel: 'cli',
+      });
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error).toContain('elevated privileges');
+      }
+    });
+
     it('rejects elevated skill when caller has null role on non-cli channel', async () => {
       // No principal originator — gate checks taskMetadata, not caller
       const handler: SkillHandler = {

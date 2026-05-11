@@ -92,7 +92,19 @@ export async function bootstrapAgentIdentity(
 
     return { kgNodeId, contactId };
   } catch (err) {
-    logger.error({ err, displayName }, 'agent-bootstrap: failed to bootstrap agent identity');
+    // Migration 035 introduced idx_contacts_system_role_agent. If a contact with
+    // system_role='agent' already exists under a different kg_node_id (e.g. from a
+    // stale deployment or botched manual fix), the INSERT will fail on that index
+    // rather than the kg_node_id conflict — log with clear guidance before rethrowing.
+    const constraint = (err as { constraint?: string }).constraint;
+    if (constraint === 'idx_contacts_system_role_agent') {
+      logger.error(
+        { err, displayName, constraint },
+        'agent-bootstrap: another contact already holds system_role=agent under a different kg_node_id — reconcile contacts before retrying',
+      );
+    } else {
+      logger.error({ err, displayName }, 'agent-bootstrap: failed to bootstrap agent identity');
+    }
     throw err;
   }
 }

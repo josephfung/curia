@@ -102,7 +102,7 @@ describe('OutboundGateway', () => {
       contactService: mocks.contactService,
       contentFilter: mocks.contentFilter,
       bus: mocks.bus,
-      ceoEmail: 'ceo@example.com',
+      principalIdentities: [makePrincipalIdentity('ceo@example.com')],
       logger: mocks.logger,
     });
 
@@ -131,7 +131,7 @@ describe('OutboundGateway', () => {
       contactService: mocks.contactService,
       contentFilter: mocks.contentFilter,
       bus: mocks.bus,
-      ceoEmail: 'ceo@example.com',
+      principalIdentities: [makePrincipalIdentity('ceo@example.com')],
       logger: mocks.logger,
     });
 
@@ -151,7 +151,7 @@ describe('OutboundGateway', () => {
       contactService: mocks.contactService,
       contentFilter: mocks.contentFilter,
       bus: mocks.bus,
-      ceoEmail: 'ceo@example.com',
+      principalIdentities: [makePrincipalIdentity('ceo@example.com')],
       logger: mocks.logger,
     });
 
@@ -174,7 +174,7 @@ describe('OutboundGateway', () => {
       contactService: mocks.contactService,
       contentFilter: mocks.contentFilter,
       bus: mocks.bus,
-      ceoEmail: 'ceo@example.com',
+      principalIdentities: [makePrincipalIdentity('ceo@example.com')],
       logger: mocks.logger,
     });
 
@@ -200,7 +200,7 @@ describe('OutboundGateway', () => {
         contactService: mocks.contactService,
         contentFilter: mocks.contentFilter,
         bus: mocks.bus,
-        ceoEmail: 'ceo@example.com',
+        principalIdentities: [makePrincipalIdentity('ceo@example.com')],
         logger: mocks.logger,
       });
 
@@ -354,7 +354,7 @@ describe('OutboundGateway', () => {
         contactService: mocks.contactService,
         contentFilter: mocks.contentFilter,
         bus: mocks.bus,
-        ceoEmail: 'ceo@example.com',
+        principalIdentities: [makePrincipalIdentity('ceo@example.com')],
         logger: mocks.logger,
       });
 
@@ -394,7 +394,7 @@ describe('OutboundGateway', () => {
         contactService: mocks.contactService,
         contentFilter: mocks.contentFilter,
         bus: mocks.bus,
-        ceoEmail: 'ceo@example.com',
+        principalIdentities: [makePrincipalIdentity('ceo@example.com')],
         logger: mocks.logger,
       });
 
@@ -457,7 +457,7 @@ describe('OutboundGateway.createEmailDraft', () => {
       contactService,
       contentFilter,
       bus,
-      ceoEmail: 'ceo@example.com',
+      principalIdentities: [makePrincipalIdentity('ceo@example.com')],
       logger,
     });
 
@@ -597,7 +597,7 @@ describe('OutboundGateway.getSignalGroupMembers', () => {
       contactService,
       contentFilter,
       bus,
-      ceoEmail: 'ceo@example.com',
+      principalIdentities: [makePrincipalIdentity('ceo@example.com')],
       logger,
     });
 
@@ -630,7 +630,7 @@ describe('OutboundGateway contact promotion on successful send', () => {
       contactService,
       contentFilter,
       bus,
-      ceoEmail: 'ceo@example.com',
+      principalIdentities: [makePrincipalIdentity('ceo@example.com')],
       logger,
       confidencePipeline: confidencePipeline as unknown as import('../../../src/contacts/confidence-pipeline.js').ConfidencePipeline,
     });
@@ -801,7 +801,7 @@ describe('autonomy gate on send()', () => {
       contactService: mocks.contactService,
       contentFilter: mocks.contentFilter,
       bus: mocks.bus,
-      ceoEmail: 'ceo@example.com',
+      principalIdentities: [makePrincipalIdentity('ceo@example.com')],
       logger: mocks.logger,
       autonomyService: makeAutonomyService(65),
     });
@@ -826,7 +826,7 @@ describe('autonomy gate on send()', () => {
       contactService: mocks.contactService,
       contentFilter: mocks.contentFilter,
       bus: mocks.bus,
-      ceoEmail: 'ceo@example.com',
+      principalIdentities: [makePrincipalIdentity('ceo@example.com')],
       logger: mocks.logger,
       autonomyService: makeAutonomyService(75),
     });
@@ -848,7 +848,7 @@ describe('autonomy gate on send()', () => {
       contactService: mocks.contactService,
       contentFilter: mocks.contentFilter,
       bus: mocks.bus,
-      ceoEmail: 'ceo@example.com',
+      principalIdentities: [makePrincipalIdentity('ceo@example.com')],
       logger: mocks.logger,
       autonomyService: makeAutonomyService(65),
     });
@@ -880,7 +880,7 @@ describe('autonomy gate on send()', () => {
       contactService: mocks.contactService,
       contentFilter: mocks.contentFilter,
       bus: mocks.bus,
-      ceoEmail: 'ceo@example.com',
+      principalIdentities: [makePrincipalIdentity('ceo@example.com')],
       logger: mocks.logger,
       // autonomyService intentionally omitted
     });
@@ -906,7 +906,7 @@ describe('autonomy gate on send()', () => {
       contactService: mocks.contactService,
       contentFilter: mocks.contentFilter,
       bus: mocks.bus,
-      ceoEmail: 'ceo@example.com',
+      principalIdentities: [makePrincipalIdentity('ceo@example.com')],
       logger: mocks.logger,
       autonomyService: nullService,
     });
@@ -936,7 +936,7 @@ describe('autonomy gate on send()', () => {
       contactService: mocks.contactService,
       contentFilter: mocks.contentFilter,
       bus: mocks.bus,
-      ceoEmail: 'ceo@example.com',
+      principalIdentities: [makePrincipalIdentity('ceo@example.com')],
       logger: mocks.logger,
       autonomyService: throwingService,
     });
@@ -961,7 +961,7 @@ describe('autonomy gate on send()', () => {
       contactService: mocks.contactService,
       contentFilter: mocks.contentFilter,
       bus: mocks.bus,
-      ceoEmail: 'ceo@example.com',
+      principalIdentities: [makePrincipalIdentity('ceo@example.com')],
       logger: mocks.logger,
       autonomyService: makeAutonomyService(50), // well below 70
     });
@@ -1022,7 +1022,7 @@ describe('PII redaction pipeline step', () => {
       contactService,
       contentFilter,
       bus,
-      ceoEmail: 'ceo@example.com',
+      principalIdentities: [makePrincipalIdentity('ceo@example.com')],
       logger,
       piiRedactor,
     });
@@ -1276,7 +1276,7 @@ describe('humanApproved option on send()', () => {
       contactService: mocks.contactService,
       contentFilter: mocks.contentFilter,
       bus: mocks.bus,
-      ceoEmail: 'ceo@example.com',
+      principalIdentities: [makePrincipalIdentity('ceo@example.com')],
       logger: mocks.logger,
       autonomyService: makeAutonomyService(65), // below 70 — would normally block
     });
@@ -1305,7 +1305,7 @@ describe('humanApproved option on send()', () => {
       contactService: mocks.contactService,
       contentFilter: mocks.contentFilter,
       bus: mocks.bus,
-      ceoEmail: 'ceo@example.com',
+      principalIdentities: [makePrincipalIdentity('ceo@example.com')],
       logger: mocks.logger,
       autonomyService: makeAutonomyService(65),
     });
@@ -1331,7 +1331,7 @@ describe('humanApproved option on send()', () => {
       contactService: mocks.contactService,
       contentFilter: mocks.contentFilter,
       bus: mocks.bus,
-      ceoEmail: 'ceo@example.com',
+      principalIdentities: [makePrincipalIdentity('ceo@example.com')],
       logger: mocks.logger,
       autonomyService: makeAutonomyService(65),
     });
@@ -1378,7 +1378,7 @@ describe('gated draft-fallback (two-step pattern)', () => {
       contactService: mocks.contactService,
       contentFilter: mocks.contentFilter,
       bus: mocks.bus,
-      ceoEmail: 'ceo@example.com',
+      principalIdentities: [makePrincipalIdentity('ceo@example.com')],
       logger: mocks.logger,
       autonomyService: makeAutonomyService(65),
       actionLogRepo,
@@ -1406,7 +1406,7 @@ describe('gated draft-fallback (two-step pattern)', () => {
       contactService: mocks.contactService,
       contentFilter: mocks.contentFilter,
       bus: mocks.bus,
-      ceoEmail: 'ceo@example.com',
+      principalIdentities: [makePrincipalIdentity('ceo@example.com')],
       logger: mocks.logger,
       autonomyService: makeAutonomyService(65),
       actionLogRepo,
@@ -1432,7 +1432,7 @@ describe('gated draft-fallback (two-step pattern)', () => {
       contactService: mocks.contactService,
       contentFilter: mocks.contentFilter,
       bus: mocks.bus,
-      ceoEmail: 'ceo@example.com',
+      principalIdentities: [makePrincipalIdentity('ceo@example.com')],
       logger: mocks.logger,
       autonomyService: makeAutonomyService(65),
       actionLogRepo,
@@ -1468,7 +1468,7 @@ describe('gated draft-fallback (two-step pattern)', () => {
       contactService: mocks.contactService,
       contentFilter: mocks.contentFilter,
       bus: mocks.bus,
-      ceoEmail: 'ceo@example.com',
+      principalIdentities: [makePrincipalIdentity('ceo@example.com')],
       logger: mocks.logger,
       autonomyService: makeAutonomyService(65),
       // actionLogRepo intentionally omitted
@@ -1494,7 +1494,7 @@ describe('gated draft-fallback (two-step pattern)', () => {
       contactService: mocks.contactService,
       contentFilter: mocks.contentFilter,
       bus: mocks.bus,
-      ceoEmail: 'ceo@example.com',
+      principalIdentities: [makePrincipalIdentity('ceo@example.com')],
       logger: mocks.logger,
       autonomyService: makeAutonomyService(65),
       actionLogRepo,
@@ -1584,7 +1584,7 @@ describe('gated draft-fallback (two-step pattern)', () => {
       contactService: mocks.contactService,
       contentFilter: mocks.contentFilter,
       bus: mocks.bus,
-      ceoEmail: 'ceo@example.com',
+      principalIdentities: [makePrincipalIdentity('ceo@example.com')],
       logger: mocks.logger,
       autonomyService: makeAutonomyService(65),
       actionLogRepo,
@@ -1618,7 +1618,7 @@ describe('gated draft-fallback (two-step pattern)', () => {
       contactService: mocks.contactService,
       contentFilter: mocks.contentFilter,
       bus: mocks.bus,
-      ceoEmail: 'ceo@example.com',
+      principalIdentities: [makePrincipalIdentity('ceo@example.com')],
       logger: mocks.logger,
       autonomyService: makeAutonomyService(65),
       actionLogRepo,
@@ -1650,7 +1650,7 @@ describe('OutboundGateway.linkGatedAction', () => {
       contactService: mocks.contactService,
       contentFilter: mocks.contentFilter,
       bus: mocks.bus,
-      ceoEmail: 'ceo@example.com',
+      principalIdentities: [makePrincipalIdentity('ceo@example.com')],
       logger: mocks.logger,
       actionLogRepo,
     });
@@ -1669,7 +1669,7 @@ describe('OutboundGateway.linkGatedAction', () => {
       contactService: mocks.contactService,
       contentFilter: mocks.contentFilter,
       bus: mocks.bus,
-      ceoEmail: 'ceo@example.com',
+      principalIdentities: [makePrincipalIdentity('ceo@example.com')],
       logger: mocks.logger,
       // actionLogRepo intentionally omitted
     });
@@ -1699,7 +1699,7 @@ describe('OutboundGateway.linkGatedAction', () => {
       contactService: mocks.contactService,
       contentFilter: mocks.contentFilter,
       bus: mocks.bus,
-      ceoEmail: 'ceo@example.com',
+      principalIdentities: [makePrincipalIdentity('ceo@example.com')],
       logger,
       actionLogRepo,
     });
@@ -1729,7 +1729,7 @@ describe('isSystemNotification option on send()', () => {
       contactService: mocks.contactService,
       contentFilter: mocks.contentFilter,
       bus: mocks.bus,
-      ceoEmail: 'ceo@example.com',
+      principalIdentities: [makePrincipalIdentity('ceo@example.com')],
       logger: mocks.logger,
       autonomyService: makeAutonomyService(65), // below 70 — would normally block
     });
@@ -1763,7 +1763,7 @@ describe('isSystemNotification option on send()', () => {
       contactService: mocks.contactService,
       contentFilter: mocks.contentFilter,
       bus: mocks.bus,
-      ceoEmail: 'ceo@example.com',
+      principalIdentities: [makePrincipalIdentity('ceo@example.com')],
       logger: mocks.logger,
       autonomyService: makeAutonomyService(65),
     });
@@ -1789,7 +1789,7 @@ describe('isSystemNotification option on send()', () => {
       contactService: mocks.contactService,
       contentFilter: mocks.contentFilter,
       bus: mocks.bus,
-      ceoEmail: 'ceo@example.com',
+      principalIdentities: [makePrincipalIdentity('ceo@example.com')],
       logger: mocks.logger,
       autonomyService: makeAutonomyService(65),
     });
@@ -1887,7 +1887,7 @@ describe('CEO recipient bypass on send()', () => {
       contactService: mocks.contactService,
       contentFilter: mocks.contentFilter,
       bus: mocks.bus,
-      ceoEmail: 'ceo@example.com',
+      principalIdentities: [makePrincipalIdentity('ceo@example.com')],
       logger: mocks.logger,
       autonomyService: makeAutonomyService(65),
     });
@@ -1926,14 +1926,14 @@ describe('CEO recipient bypass on send()', () => {
     expect(mocks.nylasClient.sendMessage).not.toHaveBeenCalled();
   });
 
-  it('does not bypass when ceoEmail is not configured', async () => {
+  it('does not bypass when no principal email identity is configured', async () => {
     const mocks = createMocks();
     const gateway = new OutboundGateway({
       nylasClients: new Map([['curia', mocks.nylasClient]]),
       contactService: mocks.contactService,
       contentFilter: mocks.contentFilter,
       bus: mocks.bus,
-      // ceoEmail intentionally omitted
+      // principalIdentities intentionally omitted — empty array is the default
       logger: mocks.logger,
       autonomyService: makeAutonomyService(65),
     });
@@ -1946,7 +1946,7 @@ describe('CEO recipient bypass on send()', () => {
     expect(result.gated).toBe(true);
   });
 
-  it('does not bypass Signal when ceoSignalNumber is not configured', async () => {
+  it('does not bypass Signal when no principal Signal identity is configured', async () => {
     const mocks = createMocks();
     const signalClient = {
       send: vi.fn().mockResolvedValue(undefined),
@@ -1957,7 +1957,7 @@ describe('CEO recipient bypass on send()', () => {
       contactService: mocks.contactService,
       contentFilter: mocks.contentFilter,
       bus: mocks.bus,
-      // ceoSignalNumber intentionally omitted
+      // principalIdentities intentionally omitted — empty array is the default
       logger: mocks.logger,
       autonomyService: makeAutonomyService(65),
     });

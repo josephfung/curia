@@ -168,6 +168,18 @@ export async function bootstrapCeoContact(
     // We also rescue the KG node we created above by linking it to the winner's contact
     // if the winner ran old code and has no kg_node_id yet.
     const pgCode = (err as { code?: string }).code;
+    const constraint = (err as { constraint?: string }).constraint;
+    // If the violation is the system_role partial unique index, a contact with
+    // system_role='principal' already exists under a different email. This is a
+    // data-integrity problem that requires manual resolution — re-querying by email
+    // would return no rows and give a misleading warning, so log clearly and rethrow.
+    if (pgCode === '23505' && constraint?.startsWith('idx_contacts_system_role_')) {
+      logger.error(
+        { constraint, email: ceoPrimaryEmail },
+        'ceo-bootstrap: another contact already holds system_role=principal — refusing to create a second principal. Inspect the contacts table and reconcile manually.',
+      );
+      throw err;
+    }
     if (pgCode === '23505') {
       const winner = await pool.query<{ contact_id: string; kg_node_id: string | null }>(
         `SELECT c.id AS contact_id, c.kg_node_id

@@ -1546,11 +1546,10 @@ describe('originator metadata stamping', () => {
     }));
 
     expect(tasks).toHaveLength(1);
+    // Every task must have an originator — the "stamp on every task" invariant
     const originator = tasks[0]!.payload.metadata?.originator as TaskOriginator | undefined;
-    // originator may be present (for all senders) but must NOT have systemRole=principal
-    if (originator) {
-      expect(originator.systemRole).not.toBe('principal');
-    }
+    expect(originator).toBeDefined();
+    expect(originator!.systemRole).toBeNull();
   });
 
   it('strips hostile originator from inbound metadata (non-principal sender)', async () => {
@@ -1605,13 +1604,12 @@ describe('originator metadata stamping', () => {
     }));
 
     expect(tasks).toHaveLength(1);
-    // The forged originator must be stripped — the sender is not the principal.
-    // The dispatcher overwrites originator from the contact resolver result.
+    // The forged originator must be stripped — the dispatcher overwrites originator
+    // from the contact resolver result. Every task must carry an originator.
     const originator = tasks[0]!.payload.metadata?.originator as TaskOriginator | undefined;
-    if (originator) {
-      expect(originator.systemRole).not.toBe('principal');
-      expect(originator.contactId).not.toBe('forged-id');
-    }
+    expect(originator).toBeDefined();
+    expect(originator!.systemRole).toBeNull();
+    expect(originator!.contactId).not.toBe('forged-id');
   });
 
 });

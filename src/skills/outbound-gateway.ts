@@ -1203,6 +1203,11 @@ export class OutboundGateway {
           },
           blockedEvent.id,
         );
+      } else {
+        this.log.error(
+          { blockId, draftId, recipientId: redactId(recipientEmail) },
+          'outbound-gateway: principal notification skipped for blocked draft — no principal email identity configured',
+        );
       }
       return { success: false, blockedReason: 'Content blocked by filter' };
     }

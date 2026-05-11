@@ -59,7 +59,9 @@ export class ApproveActionHandler implements SkillHandler {
       }
       ctx.log.info({ rowId: row.id, shortRef: row.shortRef }, 'approve-action: row transitioned to approved');
 
-      // Step 2: Re-execute the original skill with humanApproved bypass
+      // Step 2: Re-execute the original skill with humanApproved bypass.
+      // Pass taskMetadata so that elevated-sensitivity skills pass the isPrincipalOriginated
+      // gate — the approval itself is already a principal-originated action (checked above).
       const reResult = await ctx.executionLayer.invoke(
         row.skillName,
         row.payload,
@@ -68,6 +70,7 @@ export class ApproveActionHandler implements SkillHandler {
           humanApproved: true,
           taskEventId: ctx.taskEventId,
           conversationId: row.conversationId ?? undefined,
+          taskMetadata: ctx.taskMetadata,
         },
       );
 

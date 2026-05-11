@@ -181,35 +181,39 @@ export class SendDraftHandler implements SkillHandler {
     const channelId = originator?.channel;
 
     if (!senderId || !channelId || !ctx.taskEventId) {
+      // Provenance fields are missing — this indicates a dispatch-layer bug.
+      // Log loudly so the missing audit trail is visible in alerting, but don't
+      // block the send (the principal explicitly asked for it). Do NOT publish a
+      // human.decision with fake IDs — a counterfeit audit row is worse than no row.
       ctx.log.error(
         { senderId, channelId, taskEventId: ctx.taskEventId },
         'send-draft: audit metadata incomplete — originator/taskEventId should always be present when task is principal-originated. This indicates a dispatch-layer bug.',
       );
-    }
-
-    try {
-      await ctx.bus.publish(
-        'dispatch',
-        createHumanDecision({
-          decision: 'approve',
-          deciderId: senderId ?? 'unknown:dispatch-bug',
-          deciderChannel: channelId ?? 'unknown:dispatch-bug',
-          // subjectEventId: the task event that drove the CEO's "send it" instruction.
-          subjectEventId: ctx.taskEventId ?? '',
-          subjectSummary: `CEO authorized send of draft '${draft.subject}' to ${recipient}`,
-          contextShown: ['draft_id', 'draft_subject', 'draft_recipient'],
-          // presentedAt: draft creation time as proxy for when the decision was presented.
-          presentedAt: new Date(draft.date * 1000),
-          decidedAt: new Date(),
-          defaultAction: 'block',
-          parentEventId: ctx.taskEventId ?? '',
-        }),
-      );
-    } catch (err) {
-      ctx.log.error(
-        { err, draftId },
-        'send-draft: failed to publish human.decision event — message was sent but audit event is missing',
-      );
+    } else {
+      try {
+        await ctx.bus.publish(
+          'dispatch',
+          createHumanDecision({
+            decision: 'approve',
+            deciderId: senderId,
+            deciderChannel: channelId,
+            // subjectEventId: the task event that drove the CEO's "send it" instruction.
+            subjectEventId: ctx.taskEventId,
+            subjectSummary: `CEO authorized send of draft '${draft.subject}' to ${recipient}`,
+            contextShown: ['draft_id', 'draft_subject', 'draft_recipient'],
+            // presentedAt: draft creation time as proxy for when the decision was presented.
+            presentedAt: new Date(draft.date * 1000),
+            decidedAt: new Date(),
+            defaultAction: 'block',
+            parentEventId: ctx.taskEventId,
+          }),
+        );
+      } catch (err) {
+        ctx.log.error(
+          { err, draftId },
+          'send-draft: failed to publish human.decision event — message was sent but audit event is missing',
+        );
+      }
     }
 
     ctx.log.info(

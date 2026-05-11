@@ -99,6 +99,7 @@ describe('SendDraftHandler', () => {
     const ctx = makeCtx({ taskMetadata: { originator: { contactId: 'other-id', systemRole: 'agent', channel: 'cli', initiatedAt: new Date().toISOString() } } });
     const result = await handler.execute(ctx);
     expect(result.success).toBe(false);
+    if (!result.success) expect(result.error).toMatch(/principal authorization/i);
   });
 
   it('rejects when taskMetadata is undefined', async () => {
