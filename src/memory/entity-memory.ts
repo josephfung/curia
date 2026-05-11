@@ -59,9 +59,9 @@ export interface StoreFactResult {
   sensitivityFallback?: boolean;
   /** Human-readable reason for a conflict or rate-limit rejection. */
   conflict?: string;
-  /** The ID of the existing fact node that conflicts with the incoming fact.
-   *  Populated only when action === 'conflict' — lets the caller surface the
-   *  conflict to the CEO along with the contradicting node's details. */
+  /** The ID of the existing fact node involved in a contradiction.
+   *  Populated when action === 'conflict' or action === 'auto_rejected' — lets
+   *  the caller surface details or record the superseded node. */
   existingNodeId?: string;
 }
 
