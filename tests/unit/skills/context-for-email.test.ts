@@ -122,7 +122,7 @@ describe('ContextForEmailHandler', () => {
       cs.getContactWithIdentities.mockResolvedValue({
         contact: { id: 'c1', displayName: 'Alice Smith', role: 'cfo', kgNodeId: null, status: 'confirmed', notes: null, createdAt: new Date(), updatedAt: new Date() },
         identities: [
-          { id: 'i1', contactId: 'c1', channel: 'email', channelIdentifier: 'alice@example.com', label: null, verified: true, verifiedAt: new Date(), source: 'ceo_stated', createdAt: new Date(), updatedAt: new Date() },
+          { id: 'i1', contactId: 'c1', channel: 'email', channelIdentifier: 'alice@example.com', label: null, verified: true, verifiedAt: new Date(), source: 'ceo_stated', status: 'active' as const, createdAt: new Date(), updatedAt: new Date() },
         ],
       });
 
@@ -176,6 +176,35 @@ describe('ContextForEmailHandler', () => {
           const data = result.data as { guidelines_source: string };
           expect(data.guidelines_source).toBe('default');
         }
+      }
+    });
+
+    it('prefers active identity over defunct when contact has both', async () => {
+      // Verifies that lookupRecipient's active-preference sort selects the active
+      // email identity even when it appears after a defunct one in the list.
+      const cs = makeContactService();
+      cs.findContactByName.mockResolvedValue([
+        { id: 'c1', displayName: 'Bob Smith', role: null, kgNodeId: null, status: 'confirmed', notes: null, createdAt: new Date(), updatedAt: new Date() },
+      ]);
+      cs.getContactWithIdentities.mockResolvedValue({
+        contact: { id: 'c1', displayName: 'Bob Smith', role: null, kgNodeId: null, status: 'confirmed', notes: null, createdAt: new Date(), updatedAt: new Date() },
+        identities: [
+          // defunct comes first in array — active must still win
+          { id: 'i1', contactId: 'c1', channel: 'email', channelIdentifier: 'bob-old@example.com', label: null, verified: false, verifiedAt: null, source: 'ceo_stated', status: 'defunct' as const, createdAt: new Date(), updatedAt: new Date() },
+          { id: 'i2', contactId: 'c1', channel: 'email', channelIdentifier: 'bob@example.com', label: null, verified: true, verifiedAt: null, source: 'ceo_stated', status: 'active' as const, createdAt: new Date(), updatedAt: new Date() },
+        ],
+      });
+
+      const result = await handler.execute(makeCtx(
+        { email_type: 'doc-request', recipient_name: 'Bob' },
+        { contactService: cs as never },
+      ));
+
+      expect(result.success).toBe(true);
+      if (result.success) {
+        const data = result.data as { recipient: { email: string } };
+        // Must select the active address, not the defunct one
+        expect(data.recipient.email).toBe('bob@example.com');
       }
     });
   });

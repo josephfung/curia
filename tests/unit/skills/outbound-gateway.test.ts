@@ -54,6 +54,7 @@ function makePrincipalIdentity(channelIdentifier: string, channel: 'email' | 'si
     verified: true,
     verifiedAt: null,
     source: 'ceo_stated' as const,
+    status: 'active' as const,
     createdAt: new Date(),
     updatedAt: new Date(),
   };
