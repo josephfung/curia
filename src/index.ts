@@ -715,7 +715,9 @@ async function main(): Promise<void> {
       principalContact = await contactService.findContactBySystemRole('principal');
       if (principalContact) {
         const withIdentities = await contactService.getContactWithIdentities(principalContact.id);
-        principalIdentities = withIdentities?.identities ?? [];
+        // Only use verified identities for the autonomy-bypass check — an unverified
+        // identity should not grant principal-bypass to an unverified address.
+        principalIdentities = (withIdentities?.identities ?? []).filter((id) => id.verified);
       }
     } catch (err) {
       logger.fatal(

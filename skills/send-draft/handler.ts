@@ -14,6 +14,7 @@ import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/t
 import type { NylasMessage } from '../../src/channels/email/nylas-client.js';
 import { createHumanDecision } from '../../src/bus/events.js';
 import { isPrincipalOriginated } from '../../src/contacts/principal.js';
+import type { TaskOriginator } from '../../src/contacts/types.js';
 
 /** Result of findDraftById — either the draft + owning account, or a structured error. */
 type DraftDiscoveryResult =
@@ -170,21 +171,19 @@ export class SendDraftHandler implements SkillHandler {
     // Non-fatal: the message is already sent. If bus publish fails, log at error
     // so the missing audit trail is visible in alerting, but don't fail the skill.
     //
-    // senderId and channelId are stamped by the dispatcher in the same originatorContext object
-    // as principal origin, so they must be present if we passed the task-origin check.
-    // If they're missing, that indicates a dispatch-layer bug — log loudly but don't
-    // block the send (the principal explicitly asked for it). See ADR-017.
-    const senderId = typeof ctx.taskMetadata?.senderId === 'string'
-      ? ctx.taskMetadata.senderId
-      : undefined;
-    const channelId = typeof ctx.taskMetadata?.channelId === 'string'
-      ? ctx.taskMetadata.channelId
-      : undefined;
+    // originator is stamped by the dispatcher on every task and carries the contactId
+    // and channel of whoever initiated the task chain. Must be present if we passed
+    // the task-origin check — if missing, that indicates a dispatch-layer bug.
+    // Log loudly but don't block the send (the principal explicitly asked for it).
+    // See ADR-017.
+    const originator = ctx.taskMetadata?.originator as TaskOriginator | undefined;
+    const senderId = originator?.contactId;
+    const channelId = originator?.channel;
 
     if (!senderId || !channelId || !ctx.taskEventId) {
       ctx.log.error(
         { senderId, channelId, taskEventId: ctx.taskEventId },
-        'send-draft: audit metadata incomplete — senderId/channelId/taskEventId should always be present when task is principal-originated. This indicates a dispatch-layer bug.',
+        'send-draft: audit metadata incomplete — originator/taskEventId should always be present when task is principal-originated. This indicates a dispatch-layer bug.',
       );
     }
 
