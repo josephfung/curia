@@ -47,7 +47,7 @@ export interface StoreFactResult {
   stored: boolean;
   /** The pipeline outcome — lets callers distinguish create/update from conflict / entity_not_found / rate_limited
    *  and take action accordingly (e.g. surfacing a conflict to the CEO). */
-  action: 'created' | 'updated' | 'conflict' | 'entity_not_found' | 'rate_limited';
+  action: 'created' | 'updated' | 'conflict' | 'auto_rejected' | 'auto_resolved' | 'entity_not_found' | 'rate_limited';
   /** The ID of the persisted (or existing) fact node, if stored is true. */
   nodeId?: string;
   /** The sensitivity level that was assigned to the node (for audit event emission). */
@@ -451,6 +451,14 @@ export class EntityMemory {
 
       case 'rate_limited':
         return { stored: false, action: 'rate_limited', conflict: result.reason };
+
+      case 'auto_rejected':
+        // @TODO: Implemented in Task 6 — this stub restores typecheck coverage until then
+        throw new Error('storeFact: auto_rejected not yet implemented');
+
+      case 'auto_resolved':
+        // @TODO: Implemented in Task 7 — this stub restores typecheck coverage until then
+        throw new Error('storeFact: auto_resolved not yet implemented');
     }
   }
 
