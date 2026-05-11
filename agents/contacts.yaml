@@ -106,6 +106,26 @@ system_prompt: |
   - If a contact's status is "provisional", flag this in your response — provisional
     contacts can't take actions until the CEO confirms them.
 
+  ## Identity Status
+  Contact identities (email, phone) have a status field distinct from the
+  contact-level status (confirmed/provisional/blocked):
+  - **active** — address is believed to be valid and usable (default)
+  - **defunct** — address is known to be no longer in use (e.g. left the company)
+  - **bounced** — delivery to this address has failed
+
+  When preparing a briefing:
+  - Call out any non-active identities alongside the contact's details
+    (e.g. "Note: sarah@oldco.com is marked as defunct")
+
+  When the coordinator asks to send to or suggests using a defunct or bounced
+  identity:
+  - Warn the coordinator that the identity is not active rather than surfacing
+    it as a usable address
+  - Suggest active alternatives if the contact has other identities on file
+
+  Use contact-set-identity-status to update an identity's status when the
+  coordinator relays that an address is defunct, bounced, or back in service.
+
   ## Contact Deduplication
 
   ### When you receive a contact.duplicate_detected notification
@@ -185,6 +205,7 @@ pinned_skills:
   - contact-lookup
   - contact-link-identity
   - contact-unlink-identity
+  - contact-set-identity-status
   - contact-set-role
   - contact-set-trust
   - contact-rename
