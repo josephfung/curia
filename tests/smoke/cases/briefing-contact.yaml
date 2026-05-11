@@ -1,0 +1,48 @@
+name: Contact Briefing Delegation
+description: >
+  Coordinator should delegate contact resolution to the contacts specialist when
+  preparing for an interaction, receive a briefing with a <resolved_entities> block,
+  and use the returned contact ID for downstream skill calls — without exposing
+  delegation internals to the CEO.
+tags:
+  - contacts
+  - delegation
+  - single-turn
+
+turns:
+  - role: user
+    content: |
+      Schedule a 30-minute meeting with Sarah Johnson next week.
+
+expected_behaviors:
+  - id: delegates-to-contacts
+    description: >
+      Coordinator delegates to the contacts specialist (via the "brief me" pattern)
+      rather than calling contact-lookup directly
+    weight: critical
+  - id: correct-contact-resolved
+    description: >
+      The correct contact (Sarah Johnson) is identified and her details are used
+      in the scheduling request
+    weight: critical
+  - id: no-second-lookup
+    description: >
+      Coordinator does not attempt to re-resolve Sarah's identity after receiving
+      the briefing — it uses the ID from the <resolved_entities> block directly
+    weight: important
+  - id: no-internals-exposed
+    description: >
+      CEO-facing response does not mention the contacts specialist, delegation,
+      contact IDs, or any internal system details
+    weight: critical
+  - id: scheduling-proceeds
+    description: >
+      Coordinator proceeds to schedule the meeting (or asks for clarifying details
+      like time preference) using the resolved contact
+    weight: important
+
+failure_modes:
+  - Coordinator calls contact-lookup directly instead of delegating
+  - Contact ID is not passed to the calendar or scheduling skill
+  - Response mentions "contacts specialist", "delegating", or internal IDs
+  - Coordinator asks "Who is Sarah Johnson?" despite contacts being available
