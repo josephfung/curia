@@ -226,6 +226,28 @@ export class MemoryStoreHandler implements SkillHandler {
             success: true,
             data: { stored: false, action: 'rate_limited', reason: result.conflict },
           };
+        case 'auto_rejected':
+          // Auto-rejected: existing fact had higher confidence — write was dropped.
+          // Surface to the agent so it knows the write was skipped and why.
+          ctx.log.info(
+            { entity, field, existingNodeId: result.existingNodeId },
+            'memory-store: fact auto-rejected — existing has higher confidence',
+          );
+          return {
+            success: true,
+            data: {
+              stored: false,
+              action: 'auto_rejected',
+              reason: result.conflict,
+              existing_node_id: result.existingNodeId,
+            },
+          };
+        case 'auto_resolved':
+          // Unreachable at runtime: auto_resolved has stored=true and is handled by
+          // the `if (result.stored)` block above. TypeScript cannot narrow result.action
+          // through the stored boolean check, so this case is required to keep the
+          // exhaustive switch type-correct.
+          throw new Error('memory-store: unreachable — auto_resolved must be handled in the stored=true branch');
         default: {
           // Exhaustive check — TypeScript will error here if a new action variant is added
           // to StoreFactResult without a corresponding case above.
