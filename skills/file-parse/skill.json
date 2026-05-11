@@ -1,0 +1,22 @@
+{
+  "name": "file-parse",
+  "description": "Parse a document (CSV, PDF, HTML, or image) and extract structured data. Accepts base64-encoded content and a MIME type. Optionally provide extract_as to get structured fields (receipt, bank_statement, invoice) instead of raw text. For CSV files, parsing is direct and deterministic. For images, PDFs, and HTML, uses Claude for text extraction and structuring. Returns a confidence score (0–1) for LLM-extracted results.",
+  "version": "1.0.0",
+  "sensitivity": "normal",
+  "action_risk": "none",
+  "inputs": {
+    "content_base64": "string (base64-encoded file content)",
+    "mime_type": "string (MIME type, e.g. 'text/csv', 'application/pdf', 'image/jpeg', 'text/html')",
+    "extract_as": "string? (optional extraction schema: 'receipt', 'bank_statement', 'invoice', or 'raw'; defaults to 'raw')"
+  },
+  "outputs": {
+    "type": "string (detected content category: 'csv', 'pdf', 'image', 'html')",
+    "raw_text": "string (extracted plain text content)",
+    "structured": "object (extracted fields per extract_as schema; null when extract_as is 'raw' or omitted)",
+    "confidence": "number (0–1 confidence in the extraction; 1.0 for deterministic CSV parsing)"
+  },
+  "permissions": [],
+  "secrets": ["ANTHROPIC_API_KEY"],
+  "timeout": 30000,
+  "capabilities": []
+}
