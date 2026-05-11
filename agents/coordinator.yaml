@@ -546,6 +546,7 @@ pinned_skills:
   - memory-query
   - memory-store
   - image-generate
+  - file-parse
   - skill-registry
   - approve-action
   - deny-action

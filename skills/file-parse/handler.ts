@@ -257,8 +257,10 @@ export class FileParseHandler implements SkillHandler {
 
     // Try to parse the LLM response as JSON
     try {
-      // Strip markdown fences if the LLM included them despite instructions
-      const cleaned = llmText.replace(/^```(?:json)?\s*/m, '').replace(/\s*```$/m, '').trim();
+      // Extract JSON from the LLM response. The LLM may wrap it in markdown fences
+      // despite instructions; the capture-group approach handles prose before/after the block.
+      const fenceMatch = llmText.match(/```(?:json)?\s*\n?([\s\S]*?)\n?\s*```/);
+      const cleaned = (fenceMatch ? fenceMatch[1] : llmText).trim();
       const structured = JSON.parse(cleaned);
       return {
         success: true,
