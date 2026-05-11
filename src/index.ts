@@ -42,7 +42,7 @@ import { loadSkillsFromDirectory } from './skills/loader.js';
 import { loadMcpServers } from './skills/mcp-loader.js';
 import type { McpSession } from './skills/mcp-client.js';
 import { ContactService } from './contacts/contact-service.js';
-import type { ChannelIdentity } from './contacts/types.js';
+import type { ChannelIdentity, Contact } from './contacts/types.js';
 import { ConfidencePipeline } from './contacts/confidence-pipeline.js';
 import { DedupService } from './contacts/dedup-service.js';
 import { ContactResolver } from './contacts/contact-resolver.js';
@@ -709,23 +709,21 @@ async function main(): Promise<void> {
   // Cached for the lifetime of the process — restart picks up changes.
   // Load principal contact reference and cache it for the readiness check below (avoid a redundant DB query).
   let principalIdentities: ChannelIdentity[] = [];
-  let principalContact: import('./contacts/types.js').Contact | null = null;
-  if (contactService) {
-    try {
-      principalContact = await contactService.findContactBySystemRole('principal');
-      if (principalContact) {
-        const withIdentities = await contactService.getContactWithIdentities(principalContact.id);
-        // Only use verified identities for the autonomy-bypass check — an unverified
-        // identity should not grant principal-bypass to an unverified address.
-        principalIdentities = (withIdentities?.identities ?? []).filter((id) => id.verified);
-      }
-    } catch (err) {
-      logger.fatal(
-        { err },
-        'Failed to load principal contact — check that migration 035 (add_system_role) has been applied',
-      );
-      process.exit(1);
+  let principalContact: Contact | null = null;
+  try {
+    principalContact = await contactService.findContactBySystemRole('principal');
+    if (principalContact) {
+      const withIdentities = await contactService.getContactWithIdentities(principalContact.id);
+      // Only use verified identities for the autonomy-bypass check — an unverified
+      // identity should not grant principal-bypass to an unverified address.
+      principalIdentities = (withIdentities?.identities ?? []).filter((id) => id.verified);
     }
+  } catch (err) {
+    logger.fatal(
+      { err },
+      'Failed to load principal contact — check that migration 035 (add_system_role) has been applied',
+    );
+    process.exit(1);
   }
 
   // --- Startup readiness checks ---

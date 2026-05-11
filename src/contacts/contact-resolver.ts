@@ -67,7 +67,13 @@ export class ContactResolver {
         // Only suppress errors that look like DB-layer errors (pg driver attaches a .code).
         // Anything else (TypeError, programming bug in findContactBySystemRole, etc.) should propagate
         // so it is not silently misclassified as a transient DB blip.
-        const isDbError = err !== null && typeof err === 'object' && 'code' in err;
+        // Narrow to real pg/SQLSTATE errors — a five-character alphanumeric code.
+        // 'code' in err is too broad: AgentErrors and TypeErrors can also carry a .code field,
+        // and misclassifying them as a DB blip would silently promote an error to principal identity.
+        const sqlState = err !== null && typeof err === 'object' && 'code' in err
+          ? (err as { code?: unknown }).code
+          : undefined;
+        const isDbError = typeof sqlState === 'string' && /^[0-9A-Z]{5}$/.test(sqlState);
         if (!isDbError) {
           throw err;
         }
