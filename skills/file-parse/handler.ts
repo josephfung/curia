@@ -26,7 +26,9 @@ const MIME_MAP: Record<string, 'csv' | 'pdf' | 'image' | 'html'> = {
   'text/html': 'html',
 };
 
-const VALID_EXTRACT_AS = new Set<string>(['receipt', 'bank_statement', 'invoice', 'raw']);
+// extract_as is open-ended: 'receipt', 'bank_statement', 'invoice' have tailored prompts;
+// 'raw' opts out of LLM extraction; any other non-empty string gets a generic prompt.
+// See prompts.ts — agents can define new document types without modifying this file.
 
 export class FileParseHandler implements SkillHandler {
   constructor(private readonly anthropicClient?: Anthropic) {}
@@ -51,8 +53,10 @@ export class FileParseHandler implements SkillHandler {
     if (!contentType) {
       return { success: false, error: `Unsupported mime_type: ${mimeType}. Supported: ${Object.keys(MIME_MAP).join(', ')}` };
     }
-    if (!VALID_EXTRACT_AS.has(extractAs)) {
-      return { success: false, error: `Invalid extract_as: ${extractAs}. Supported: receipt, bank_statement, invoice, raw` };
+    // Only reject empty strings — any non-empty extract_as is valid.
+    // Known schemas get tailored prompts; unknown strings get a generic prompt.
+    if (!extractAs) {
+      return { success: false, error: 'Invalid extract_as: value must be a non-empty string (e.g. receipt, bank_statement, invoice, raw, or a custom schema name)' };
     }
 
     try {
