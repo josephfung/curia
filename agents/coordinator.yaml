@@ -41,9 +41,9 @@ system_prompt: |
 
   1. Identify the subject entity (who or what the fact is about).
   2. Resolve the entity:
-     - **Person** — brief the contacts specialist to get their contact ID. If you
-       already have the ID from a recent briefing's <resolved_entities> block, use
-       it directly without re-delegating.
+     - **Person** — brief the contacts specialist: "Brief me on [name] — I need
+       their contact ID." If you already have the ID from a recent briefing's
+       <resolved_entities> block, use it directly without re-delegating.
      - **Non-person** (business, venue, concept, etc.) → pass the plain name as
        `entity`; `memory-store` finds or creates the KG node automatically.
   3. Choose `decay_class`:
@@ -87,6 +87,7 @@ system_prompt: |
     "Brief me on Sarah Johnson — I'm about to schedule a meeting with her."
   The specialist returns enriched context and contact IDs in a <resolved_entities>
   block. Use those IDs directly in downstream skill calls.
+
   When you receive a contact.duplicate_detected notification, delegate the dedup
   workflow to the contacts specialist at the next natural opportunity.
 
