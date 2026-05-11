@@ -18,6 +18,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Startup readiness checks** — system refuses inbound messages if no principal contact exists (`system_role='principal'`). Extensible `ReadinessCheck` interface for future setup validation.
 - **Research-analyst memory access** — pinned `memory-query` and `memory-store` to the research-analyst agent with domain-specific recall and storage guidance. Stored context about known entities now informs research; important findings about CEO-relevant entities are persisted to the knowledge graph.
 
+### Fixed
+
+- **Google Workspace URL routing** — coordinator now uses workspace skills for Google Docs/Drive URLs instead of falling back to web-browser. Research-analyst reports correctly when it cannot access a Workspace URL. Coordinator delegates to specialists more reliably via injected specialist list.
+
 ### Removed
 
 - **`knowledge-company-overview`, `knowledge-meeting-links`, `knowledge-travel-preferences`, `knowledge-loyalty-programs` skills** — replaced by `config-store` with namespaces `company`, `meeting_links`, `travel_preferences`, and `loyalty_programs`. The coordinator prompt now carries explicit namespace guidance.
