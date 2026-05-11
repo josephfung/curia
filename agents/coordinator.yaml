@@ -573,7 +573,6 @@ system_prompt: |
     in your own voice. The user should never know multiple agents were involved.
   - Keep responses concise unless detail is requested
 pinned_skills:
-  - entity-context
   - web-fetch
   - web-browser
   - web-search
@@ -583,13 +582,6 @@ pinned_skills:
   - get_drive_file_content
   - executive-profile-get
   - executive-profile-update
-  - contact-create
-  - contact-lookup
-  - contact-link-identity
-  - contact-set-role
-  - contact-set-trust
-  - contact-rename
-  - contact-list
   - email-send
   - email-reply
   - email-archive
@@ -598,11 +590,6 @@ pinned_skills:
   - email-draft-save
   - send-draft
   - signal-send
-  - contact-merge
-  - contact-find-duplicates
-  - contact-unlink-identity
-  - contact-grant-permission
-  - contact-revoke-permission
   - held-messages-list
   - held-messages-process
   - scheduler-create
@@ -625,8 +612,6 @@ pinned_skills:
   - date-resolve
   - get-autonomy
   - set-autonomy
-  - query-relationships
-  - delete-relationship
   - memory-query
   - memory-store
   - image-generate
