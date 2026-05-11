@@ -224,6 +224,65 @@ describe('ContactService', () => {
       });
       expect(identity.verified).toBe(false);
     });
+
+    it('defaults status to active', async () => {
+      const contact = await service.createContact({ displayName: 'Jenna', source: 'test' });
+      const identity = await service.linkIdentity({
+        contactId: contact.id,
+        channel: 'email',
+        channelIdentifier: 'jenna-status@acme.com',
+        source: 'ceo_stated',
+      });
+      expect(identity.status).toBe('active');
+    });
+
+    it('respects explicit status', async () => {
+      const contact = await service.createContact({ displayName: 'Jenna', source: 'test' });
+      const identity = await service.linkIdentity({
+        contactId: contact.id,
+        channel: 'email',
+        channelIdentifier: 'jenna-bounced@acme.com',
+        source: 'ceo_stated',
+        status: 'bounced',
+      });
+      expect(identity.status).toBe('bounced');
+    });
+  });
+
+  describe('setIdentityStatus', () => {
+    it('updates an identity status from active to defunct', async () => {
+      const contact = await service.createContact({ displayName: 'Jenna', source: 'test' });
+      const identity = await service.linkIdentity({
+        contactId: contact.id,
+        channel: 'email',
+        channelIdentifier: 'jenna-set@acme.com',
+        source: 'ceo_stated',
+      });
+      expect(identity.status).toBe('active');
+
+      const updated = await service.setIdentityStatus(identity.id, 'defunct');
+      expect(updated.status).toBe('defunct');
+      expect(updated.id).toBe(identity.id);
+    });
+
+    it('updates an identity status to bounced', async () => {
+      const contact = await service.createContact({ displayName: 'Jenna', source: 'test' });
+      const identity = await service.linkIdentity({
+        contactId: contact.id,
+        channel: 'email',
+        channelIdentifier: 'jenna-bounce@acme.com',
+        source: 'ceo_stated',
+      });
+
+      const updated = await service.setIdentityStatus(identity.id, 'bounced');
+      expect(updated.status).toBe('bounced');
+    });
+
+    it('throws for non-existent identity', async () => {
+      await expect(
+        service.setIdentityStatus('00000000-0000-0000-0000-000000000000', 'defunct'),
+      ).rejects.toThrow(/not found/i);
+    });
   });
 
   describe('resolveByChannelIdentity', () => {
