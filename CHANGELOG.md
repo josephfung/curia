@@ -19,7 +19,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Removed
 
-- **`knowledge-company-overview`, `knowledge-meeting-links`, `knowledge-travel-preferences`, `knowledge-loyalty-programs` skills** — replaced by `config-store` with namespaces `company`, `meeting_links`, `travel_preferences`, and `loyalty_programs`. The coordinator prompt now carries explicit namespace guidance. A one-time migration script (`scripts/migrate-knowledge-skills-to-config-store.ts`) re-writes existing KG data into the new namespaces.
+- **`knowledge-company-overview`, `knowledge-meeting-links`, `knowledge-travel-preferences`, `knowledge-loyalty-programs` skills** — replaced by `config-store` with namespaces `company`, `meeting_links`, `travel_preferences`, and `loyalty_programs`. The coordinator prompt now carries explicit namespace guidance.
 
 ### Changed
 
