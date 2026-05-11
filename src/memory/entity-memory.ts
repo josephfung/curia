@@ -471,9 +471,50 @@ export class EntityMemory {
           existingNodeId: result.existingNodeId,
         };
 
-      case 'auto_resolved':
-        // @TODO: Implemented in Task 7 — this stub restores typecheck coverage until then
-        throw new Error('storeFact: auto_resolved not yet implemented');
+      case 'auto_resolved': {
+        // Incoming fact has higher confidence than the existing one — supersede in place.
+        // The validator already built newProperties with the previous_values audit trail,
+        // so we don't need to reconstruct it here.
+        //
+        // Apply the same sensitivity ratchet as the 'update' case: merged content can
+        // only increase sensitivity, never decrease. This ensures a high-confidence
+        // replacement that adds PII or financial data is stored at the correct level.
+        await this.store.updateNode(result.existingNodeId, {
+          label: result.newLabel,
+          properties: result.newProperties,
+          confidence: result.newConfidence,
+        });
+        this.validator.recordWrite(options.source);
+
+        // Read the node back to get its current sensitivity for the ratchet calculation.
+        // If getNode returns undefined (unexpected transient error after a successful update),
+        // flag it via sensitivityFallback so the caller can log a warning — same pattern
+        // as the 'update' case.
+        const existingNode = await this.store.getNode(result.existingNodeId);
+        const sensitivityFallback = existingNode === undefined;
+        const existingSensitivity: Sensitivity = existingNode?.sensitivity ?? 'internal';
+
+        const incomingSensitivity: Sensitivity = options.sensitivity
+          ?? this.sensitivityClassifier?.classify(
+            result.newLabel,
+            result.newProperties ?? options.properties ?? {},
+            options.sensitivityCategory,
+          )
+          ?? 'internal';
+        const sensitivity = maxSensitivity(existingSensitivity, incomingSensitivity);
+
+        if (!sensitivityFallback && sensitivity !== existingSensitivity) {
+          await this.store.updateNode(result.existingNodeId, { sensitivity });
+        }
+
+        return {
+          stored: true,
+          action: 'auto_resolved',
+          nodeId: result.existingNodeId,
+          sensitivity,
+          sensitivityFallback,
+        };
+      }
     }
   }
 
