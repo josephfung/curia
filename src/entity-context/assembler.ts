@@ -253,9 +253,41 @@ export class EntityContextAssembler {
 
   /**
    * Resolve an input ID to a KG node ID.
-   * Tries contacts.id first, then kg_nodes.id directly.
+   *
+   * Resolution priority:
+   *   1. Email address → contact_channel_identities → contacts.kg_node_id
+   *   2. Contact UUID → contacts.kg_node_id
+   *   3. KG node UUID → kg_nodes.id directly
+   *
+   * Email detection uses a simple @ check. This handles the common case where
+   * LLMs pass raw email addresses from CC preambles or inbox triage rather than
+   * resolving to a contact UUID first.
    */
   private async resolveKgNodeId(id: string): Promise<string | undefined> {
+    // Email address detection: if the input contains '@' with non-whitespace on
+    // both sides, resolve via contact_channel_identities instead of UUID columns.
+    // This handles CC flows and ceo-inbox triage where the LLM passes a raw email.
+    if (/^\S+@\S+$/.test(id)) {
+      const emailResult = await this.pool.query<{ contact_id: string; kg_node_id: string | null }>(
+        `SELECT c.id AS contact_id, c.kg_node_id
+         FROM contact_channel_identities cci
+         JOIN contacts c ON c.id = cci.contact_id
+         WHERE cci.channel = 'email' AND LOWER(cci.channel_identifier) = LOWER($1)`,
+        [id],
+      );
+      if (emailResult.rows.length > 0) {
+        const row = emailResult.rows[0];
+        const kgNodeId = row?.kg_node_id;
+        if (!kgNodeId) {
+          this.logger.debug({ email: id, contactId: row?.contact_id }, 'entity-context: email resolved to contact with no linked KG node');
+          return undefined;
+        }
+        return kgNodeId;
+      }
+      // Email not found in contact_channel_identities — genuinely unknown contact
+      return undefined;
+    }
+
     try {
       // Try as a contact ID first
       const contactResult = await this.pool.query<{ kg_node_id: string | null }>(
