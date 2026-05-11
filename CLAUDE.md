@@ -112,6 +112,10 @@ When creating a new GitHub issue:
 
 3. **Include acceptance criteria** — every issue must list specific, testable conditions that define when the work is done.
 
+## Creating Pull Requests
+
+Every PR that resolves a tracked issue must include `Closes #N` (or `Fixes #N`) in the PR body. GitHub uses this to auto-close the linked issue on merge. Include it in the Summary section.
+
 ## Architecture Decision Records (ADRs)
 
 ADRs live in `docs/adr/`. Each ADR documents a significant architectural decision — the context, the choice made, and the consequences.
