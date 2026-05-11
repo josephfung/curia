@@ -124,6 +124,15 @@ export type ValidationResult =
   | { action: 'create'; validated: ValidatedFactData }
   | { action: 'update'; existingNodeId: string; mergedProperties: Record<string, unknown> }
   | { action: 'conflict'; existingNodeId: string; reason: string }
+  | { action: 'auto_rejected'; existingNodeId: string; reason: string }
+  | {
+      action: 'auto_resolved';
+      existingNodeId: string;
+      newLabel: string;
+      newProperties: Record<string, unknown>;
+      newConfidence: number;
+      reason: string;
+    }
   | { action: 'entity_not_found'; reason: string }
   | { action: 'rate_limited'; reason: string };
 
