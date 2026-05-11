@@ -119,6 +119,7 @@ export class ContextForEmailHandler implements SkillHandler {
       recipient.display_name = recipientResult.displayName;
       if (recipientResult.role) recipient.role = recipientResult.role;
       if (recipientResult.email) recipient.email = recipientResult.email;
+      if (recipientResult.identityStatus) recipient.identity_status = recipientResult.identityStatus;
     }
     if (meetingLinkResult) {
       recipient.meeting_link = meetingLinkResult;
@@ -152,7 +153,7 @@ export class ContextForEmailHandler implements SkillHandler {
   private async lookupRecipient(
     ctx: SkillContext,
     recipientName: string,
-  ): Promise<{ displayName: string; role?: string; email?: string } | null> {
+  ): Promise<{ displayName: string; role?: string; email?: string; identityStatus?: string } | null> {
     if (!ctx.contactService) return null;
 
     try {
@@ -163,17 +164,27 @@ export class ContextForEmailHandler implements SkillHandler {
       // Fetch identities to find their email address
       const withIdentities = await ctx.contactService.getContactWithIdentities(contact.id);
       let email: string | undefined;
+      let identityStatus: string | undefined;
       if (withIdentities) {
-        const emailIdentity = withIdentities.identities.find(
-          (id) => id.channel === 'email',
-        );
-        if (emailIdentity) email = emailIdentity.channelIdentifier;
+        // Prefer active identities over defunct/bounced ones
+        const emailIdentity = withIdentities.identities
+          .filter((id) => id.channel === 'email')
+          .sort((a, b) => {
+            if (a.status === 'active' && b.status !== 'active') return -1;
+            if (a.status !== 'active' && b.status === 'active') return 1;
+            return 0;
+          })[0];
+        if (emailIdentity) {
+          email = emailIdentity.channelIdentifier;
+          identityStatus = emailIdentity.status;
+        }
       }
 
       return {
         displayName: contact.displayName,
         role: contact.role ?? undefined,
         email,
+        identityStatus,
       };
     } catch (err) {
       // Contact lookup failure is non-fatal — we just won't have contact info
