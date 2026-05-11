@@ -1,0 +1,22 @@
+{
+  "name": "contact-set-identity-status",
+  "description": "Set the status of a contact's channel identity (email or phone). status must be 'active', 'defunct', or 'bounced'. identity_id must be a UUID from contact-lookup. Use when the CEO reports an address is no longer valid, or to mark a bounced address.",
+  "version": "1.0.0",
+  "sensitivity": "normal",
+  "action_risk": "low",
+  "inputs": {
+    "identity_id": "string (UUID from contact-lookup identities list)",
+    "status": "string (one of 'active', 'defunct', 'bounced')"
+  },
+  "outputs": {
+    "identity_id": "string",
+    "channel": "string",
+    "identifier": "string",
+    "status": "string",
+    "contact_id": "string"
+  },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 15000,
+  "capabilities": []
+}
