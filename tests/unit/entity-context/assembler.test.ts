@@ -428,5 +428,24 @@ describe('EntityContextAssembler', () => {
       // Second entity served from cache — same underlying contact
       expect(entities[1].entityId).toBe('node-1');
     });
+
+    it('propagates DB errors from the email query path out of assembleOne', async () => {
+      const pool = makeMockPool();
+      const dbError = new Error('Connection reset by peer');
+      vi.mocked(pool.query).mockRejectedValueOnce(dbError);
+
+      const assembler = new EntityContextAssembler(pool, logger);
+      await expect(assembler.assembleOne('jenna@example.com')).rejects.toThrow('Connection reset by peer');
+    });
+
+    it('treats email DB errors as unresolved in assembleMany', async () => {
+      const pool = makeMockPool();
+      vi.mocked(pool.query).mockRejectedValueOnce(new Error('pool timeout'));
+
+      const assembler = new EntityContextAssembler(pool, logger);
+      const { entities, unresolved } = await assembler.assembleMany(['jenna@example.com']);
+      expect(entities).toHaveLength(0);
+      expect(unresolved).toEqual(['jenna@example.com']);
+    });
   });
 });
