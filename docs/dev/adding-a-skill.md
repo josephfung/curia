@@ -442,15 +442,14 @@ When the risk is between two levels, use the higher one. It's easier to lower au
 
 ---
 
-## Don't write a new `knowledge-*` skill for config
+## Use `config-store` for persistent agent config
 
 If your agent needs to store values that persist across runs (URLs, account numbers,
-preferences), use the existing `config-store` skill instead of writing a new
-`knowledge-<domain>` skill.
+preferences), use the `config-store` skill — not a bespoke KG skill.
 
-The `knowledge-*` skills (`knowledge-company-overview`, `knowledge-meeting-links`, etc.)
-are a legacy pattern — each is near-identical boilerplate for storing namespaced facts in
-the KG. `config-store` replaces this pattern with a single generic skill.
+`config-store` is a generic namespaced key-value store: each agent picks a stable
+namespace string and stores arbitrary string values under user-defined keys. Data
+survives restarts and does not decay.
 
 See [Adding an Agent — Using config-store](adding-an-agent.md#using-config-store-for-persistent-agent-config) for the usage pattern.
 

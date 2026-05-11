@@ -432,7 +432,7 @@ Calendars, email accounts, and CRM connections have fundamentally different sche
 
 ### Phase 3: Broader Adoption
 
-8. **Knowledge skills** — `knowledge-travel-preferences`, `knowledge-loyalty-programs`, etc. adopt entity-context instead of hard-coding caller assumptions
+8. **Config-store namespaces** — `travel_preferences`, `loyalty_programs`, and similar config-store namespaces adopt entity-context enrichment instead of returning raw key-value lists
 9. **Email skills** — when email accounts are added to connected accounts, `email-send`/`email-reply` use entity-context to resolve sender accounts
 10. **`entity-lookup` skill** — a new broad-based search skill for resolving any KG entity (orgs, events, places, projects) to entity IDs. Separate from `contact-lookup`, which stays focused on people — contact resolution is identity-sensitive and mistakes there have real consequences (wrong person's calendar, wrong email). `entity-lookup` is more exploratory: fuzzy matching is acceptable, and results are used for context enrichment rather than identity verification.
 
