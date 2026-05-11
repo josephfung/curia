@@ -178,8 +178,7 @@ The framework ships with these skills (in `skills/` as part of core):
 - `held-messages-list` / `held-messages-process` — review and act on held/deferred messages
 - Calendar skills (`calendar-list-calendars`, `calendar-list-events`, `calendar-create-event`, etc.) — Nylas calendar CRUD
 - Contact skills (`contact-create`, `contact-lookup`, `contact-merge`, etc.) — contact management and KG linking
-- Knowledge skills (`knowledge-company-overview`, `knowledge-meeting-links`, etc.) — structured KG queries (legacy pattern — use `config-store` for new agents)
-- `config-store` — generic namespaced key-value store for persistent agent configuration; backs writing-config, travel preferences, and any future per-agent config needs
+- `config-store` — generic namespaced key-value store for persistent agent configuration; backs `company`, `meeting_links`, `travel_preferences`, `loyalty_programs`, `writing_config`, and any future per-agent config needs
 - `entity-context` — assemble full context for a list of contacts/entities
 - `get-autonomy` / `set-autonomy` — read and write the global autonomy score (CEO only)
 - `bullpen` — inter-agent discussion threads

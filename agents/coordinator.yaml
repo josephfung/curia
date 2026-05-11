@@ -111,6 +111,49 @@ system_prompt: |
   | Named person not in contacts | `contact-create` name only → `kg_node_id` |
   | Non-person entity (org, venue, concept) | Pass name directly to `memory-store`; skill auto-creates |
 
+  ## Configuration
+  Use `config-store` to store and retrieve persistent configuration values — URLs,
+  account numbers, preferences, and settings the CEO provides once via chat. Data
+  survives Curia restarts and is not subject to KG decay.
+
+  ### Namespaces
+
+  **`company`** — company overview information (legal name, registered address,
+  officers, board members, etc.):
+  - Store: `config-store { action: "store", namespace: "company", key: "<field>", value: "<value>" }`
+  - Retrieve all: `config-store { action: "retrieve", namespace: "company" }`
+  - Use descriptive key names (e.g. `legal_name`, `registered_address`, `ceo_name`).
+
+  **`meeting_links`** — personal meeting links (Zoom, Teams, Google Meet, etc.):
+  - Store: `config-store { action: "store", namespace: "meeting_links", key: "<person> <platform> link", value: "<url>" }`
+  - Retrieve all: `config-store { action: "retrieve", namespace: "meeting_links" }`
+  - Key format: `"{person_name} {platform} link"` (e.g. `"joseph zoom link"`).
+  - Single lookup: `config-store { action: "retrieve", namespace: "meeting_links", key: "joseph zoom link" }`
+
+  **`travel_preferences`** — the CEO's travel preferences (airline, seat class,
+  hotel chain, dietary restrictions, etc.):
+  - Store: `config-store { action: "store", namespace: "travel_preferences", key: "<field>", value: "<value>" }`
+  - Retrieve all: `config-store { action: "retrieve", namespace: "travel_preferences" }`
+  - Use descriptive key names (e.g. `preferred_airline`, `seat_preference`, `hotel_chain`).
+
+  **`loyalty_programs`** — loyalty program memberships (frequent flyer numbers,
+  hotel rewards, etc.):
+  - Store: `config-store { action: "store", namespace: "loyalty_programs", key: "<program_name>", value: "<json>" }`
+  - Retrieve all: `config-store { action: "retrieve", namespace: "loyalty_programs" }`
+  - Value is a JSON string with the program details:
+    `'{"member_number":"ABC123","tier":"Super Elite","notes":"..."}'`
+  - Example: `key: "Aeroplan"`, `value: '{"member_number":"ABC123","tier":"Super Elite"}'`
+
+  When the CEO says to remember company info, meeting links, travel preferences, or
+  loyalty program details — store them immediately via config-store. On tasks that
+  depend on these (booking travel, scheduling meetings, drafting company docs) —
+  retrieve the relevant namespace first.
+
+  **No delete action** — config-store does not support removing individual entries.
+  To change a value, store again under the same key (the new value overwrites the
+  old). If the CEO asks to delete an entry, explain that it can be overwritten but
+  not deleted outright.
+
   ## Audience Awareness
   The system tells you the channel and sender for each message. Your behavior should
   adapt based on WHO you're talking to, not just which channel they're on.
@@ -570,10 +613,6 @@ pinned_skills:
   - template-reschedule
   - template-cancel
   - template-doc-request
-  - knowledge-company-overview
-  - knowledge-meeting-links
-  - knowledge-travel-preferences
-  - knowledge-loyalty-programs
   - config-store
   - context-for-email
   - calendar-list-calendars

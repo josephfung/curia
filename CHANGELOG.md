@@ -17,6 +17,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 - **Startup readiness checks** — system refuses inbound messages if no principal contact exists (`system_role='principal'`). Extensible `ReadinessCheck` interface for future setup validation.
 
+### Removed
+
+- **`knowledge-company-overview`, `knowledge-meeting-links`, `knowledge-travel-preferences`, `knowledge-loyalty-programs` skills** — replaced by `config-store` with namespaces `company`, `meeting_links`, `travel_preferences`, and `loyalty_programs`. The coordinator prompt now carries explicit namespace guidance. A one-time migration script (`scripts/migrate-knowledge-skills-to-config-store.ts`) re-writes existing KG data into the new namespaces.
+
 ### Changed
 
 - **Principal identity consolidation** — replaced fragmented CEO identity (env var config, `role` column, `OutboundGatewayConfig` flat fields) with a database-driven `system_role` column on the `contacts` table. One contact holds `system_role='principal'`, one holds `system_role='agent'`. Enforced by partial unique indexes.

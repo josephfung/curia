@@ -163,7 +163,6 @@ Current built-in skills include (see `skills/` for the full list):
 | **Autonomy** | `get-autonomy`, `set-autonomy` |
 | **Context** | `entity-context`, `context-for-email`, `held-messages-list`, `held-messages-process` |
 | **Templates** | `template-meeting-request`, `template-reschedule`, `template-cancel`, `template-doc-request` |
-| **Knowledge** | `knowledge-company-overview`, `knowledge-meeting-links`, `knowledge-travel-preferences`, `knowledge-loyalty-programs` (legacy — see Config below) |
 | **Config** | `config-store` — generic key-value agent config; namespace-scoped, KG-backed, permanent decay |
 
 #### Using `config-store` for persistent agent config
