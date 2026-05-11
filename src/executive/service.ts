@@ -130,7 +130,7 @@ export class ExecutiveProfileService {
    * upsert all happen inside a single transaction.
    */
   async update(config: ExecutiveProfile, changedBy: string, note?: string): Promise<void> {
-    this.validateProfile(config);
+    validateProfile(config);
 
     // Snapshot the previous config before writing — used for the diff summary.
     const previousConfig = this.cached;
@@ -267,66 +267,10 @@ export class ExecutiveProfileService {
 
   /**
    * Compiles the writing voice config into a system prompt block.
-   *
-   * The executiveName parameter comes from the contact system — the executive's
-   * identity lives there, not in this profile. This avoids storing the name in
-   * two places and keeps the profile purely about style/preferences.
-   *
-   * Output order:
-   *   1. Header with executive name and context instruction
-   *   2. Tone guidance (free-form descriptors + formality band)
-   *   3. Writing patterns (ordered list)
-   *   4. Vocabulary (prefer / avoid)
-   *   5. Sign-off
+   * Delegates to the exported pure function — see compileWritingVoiceBlock() below.
    */
   compileWritingVoiceBlock(executiveName: string): string {
-    const profile = this.get();
-    const voice = profile.writingVoice;
-    const lines: string[] = [];
-
-    lines.push('## Executive Writing Voice');
-    lines.push('');
-    lines.push(`When drafting emails or content under ${executiveName}'s name, follow this voice guidance.`);
-    lines.push('This is NOT your (the assistant\'s) voice — this is the executive\'s voice.');
-    lines.push('');
-
-    // 1. Tone
-    if (voice.tone.length > 0) {
-      const tonePhrase = voice.tone.join(' and ');
-      lines.push('**Tone:**');
-      lines.push(`Write in a tone that is ${tonePhrase}.`);
-      lines.push(formalityGuidance(voice.formality));
-      lines.push('');
-    }
-
-    // 2. Writing patterns
-    if (voice.patterns.length > 0) {
-      lines.push('**Writing patterns (follow these closely):**');
-      for (const pattern of voice.patterns) {
-        lines.push(`- ${pattern}`);
-      }
-      lines.push('');
-    }
-
-    // 3. Vocabulary
-    if (voice.vocabulary.prefer.length > 0 || voice.vocabulary.avoid.length > 0) {
-      lines.push('**Vocabulary:**');
-      if (voice.vocabulary.prefer.length > 0) {
-        lines.push(`Prefer: ${voice.vocabulary.prefer.join(', ')}`);
-      }
-      if (voice.vocabulary.avoid.length > 0) {
-        lines.push(`Avoid: ${voice.vocabulary.avoid.join(', ')}`);
-      }
-      lines.push('');
-    }
-
-    // 4. Sign-off
-    if (voice.signOff) {
-      lines.push('**Sign-off:**');
-      lines.push(`End emails with: ${voice.signOff}`);
-    }
-
-    return lines.join('\n');
+    return compileWritingVoiceBlock(this.get(), executiveName);
   }
 
   /**
@@ -418,47 +362,6 @@ export class ExecutiveProfileService {
     };
   }
 
-  /** Validate that the profile config is well-formed before persisting. */
-  private validateProfile(config: ExecutiveProfile): void {
-    // Guard nested fields before dereferencing — API payloads are not guaranteed
-    // to match the TypeScript shape at runtime.
-    if (!config.writingVoice) {
-      throw new Error('Executive profile requires writingVoice');
-    }
-    const voice = config.writingVoice;
-
-    if (!Array.isArray(voice.tone) || !voice.tone.every(item => typeof item === 'string')) {
-      throw new Error('writingVoice.tone must be an array of strings');
-    }
-    if (voice.tone.length > 3) {
-      throw new Error(`writingVoice.tone may contain at most 3 descriptors; got ${voice.tone.length}`);
-    }
-    // Tone values are free-form strings — no predefined set validation.
-    // The executive's voice is personal and should not be artificially constrained.
-
-    if (!Number.isInteger(voice.formality) || voice.formality < 0 || voice.formality > 100) {
-      throw new Error(`writingVoice.formality must be an integer between 0 and 100; got ${voice.formality}`);
-    }
-
-    if (!Array.isArray(voice.patterns) || !voice.patterns.every(item => typeof item === 'string')) {
-      throw new Error('writingVoice.patterns must be an array of strings');
-    }
-
-    if (
-      !voice.vocabulary ||
-      !Array.isArray(voice.vocabulary.prefer) ||
-      !voice.vocabulary.prefer.every(item => typeof item === 'string') ||
-      !Array.isArray(voice.vocabulary.avoid) ||
-      !voice.vocabulary.avoid.every(item => typeof item === 'string')
-    ) {
-      throw new Error('writingVoice.vocabulary must have prefer and avoid string arrays');
-    }
-
-    if (typeof voice.signOff !== 'string') {
-      throw new Error('writingVoice.signOff must be a string');
-    }
-  }
-
   /** Start watching the config file for changes. Writes a new DB version on change. */
   private startFileWatcher(): void {
     this.watcher = chokidar.watch(this.configFilePath, {
@@ -496,4 +399,114 @@ export class ExecutiveProfileService {
 
     this.logger.debug({ path: this.configFilePath }, 'Executive profile file watcher started');
   }
+}
+
+// -- Exported pure functions --
+// These are extracted from the class so they can be unit-tested without a DB pool.
+
+/**
+ * Validates that an ExecutiveProfile config is well-formed.
+ * Throws a descriptive error if any field fails validation.
+ *
+ * Guard nested fields before dereferencing — API payloads are not guaranteed
+ * to match the TypeScript shape at runtime.
+ */
+export function validateProfile(config: ExecutiveProfile): void {
+  if (!config.writingVoice) {
+    throw new Error('Executive profile requires writingVoice');
+  }
+  const voice = config.writingVoice;
+
+  if (!Array.isArray(voice.tone) || !voice.tone.every(item => typeof item === 'string')) {
+    throw new Error('writingVoice.tone must be an array of strings');
+  }
+  if (voice.tone.length > 3) {
+    throw new Error(`writingVoice.tone may contain at most 3 descriptors; got ${voice.tone.length}`);
+  }
+  // Tone values are free-form strings — no predefined set validation.
+  // The executive's voice is personal and should not be artificially constrained.
+
+  if (!Number.isInteger(voice.formality) || voice.formality < 0 || voice.formality > 100) {
+    throw new Error(`writingVoice.formality must be an integer between 0 and 100; got ${voice.formality}`);
+  }
+
+  if (!Array.isArray(voice.patterns) || !voice.patterns.every(item => typeof item === 'string')) {
+    throw new Error('writingVoice.patterns must be an array of strings');
+  }
+
+  if (
+    !voice.vocabulary ||
+    !Array.isArray(voice.vocabulary.prefer) ||
+    !voice.vocabulary.prefer.every(item => typeof item === 'string') ||
+    !Array.isArray(voice.vocabulary.avoid) ||
+    !voice.vocabulary.avoid.every(item => typeof item === 'string')
+  ) {
+    throw new Error('writingVoice.vocabulary must have prefer and avoid string arrays');
+  }
+
+  if (typeof voice.signOff !== 'string') {
+    throw new Error('writingVoice.signOff must be a string');
+  }
+}
+
+/**
+ * Compiles a writing voice config into a system prompt block.
+ *
+ * The executiveName comes from the contact system — the executive's identity
+ * lives there, not in the profile, to avoid storing the name in two places.
+ *
+ * Output order:
+ *   1. Header with executive name and context instruction
+ *   2. Tone guidance (free-form descriptors + formality band)
+ *   3. Writing patterns (ordered list)
+ *   4. Vocabulary (prefer / avoid)
+ *   5. Sign-off
+ */
+export function compileWritingVoiceBlock(profile: ExecutiveProfile, executiveName: string): string {
+  const voice = profile.writingVoice;
+  const lines: string[] = [];
+
+  lines.push('## Executive Writing Voice');
+  lines.push('');
+  lines.push(`When drafting emails or content under ${executiveName}'s name, follow this voice guidance.`);
+  lines.push('This is NOT your (the assistant\'s) voice — this is the executive\'s voice.');
+  lines.push('');
+
+  // 1. Tone
+  if (voice.tone.length > 0) {
+    const tonePhrase = voice.tone.join(' and ');
+    lines.push('**Tone:**');
+    lines.push(`Write in a tone that is ${tonePhrase}.`);
+    lines.push(formalityGuidance(voice.formality));
+    lines.push('');
+  }
+
+  // 2. Writing patterns
+  if (voice.patterns.length > 0) {
+    lines.push('**Writing patterns (follow these closely):**');
+    for (const pattern of voice.patterns) {
+      lines.push(`- ${pattern}`);
+    }
+    lines.push('');
+  }
+
+  // 3. Vocabulary
+  if (voice.vocabulary.prefer.length > 0 || voice.vocabulary.avoid.length > 0) {
+    lines.push('**Vocabulary:**');
+    if (voice.vocabulary.prefer.length > 0) {
+      lines.push(`Prefer: ${voice.vocabulary.prefer.join(', ')}`);
+    }
+    if (voice.vocabulary.avoid.length > 0) {
+      lines.push(`Avoid: ${voice.vocabulary.avoid.join(', ')}`);
+    }
+    lines.push('');
+  }
+
+  // 4. Sign-off
+  if (voice.signOff) {
+    lines.push('**Sign-off:**');
+    lines.push(`End emails with: ${voice.signOff}`);
+  }
+
+  return lines.join('\n');
 }

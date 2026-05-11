@@ -1,6 +1,7 @@
 // Tests for ExecutiveProfileService — validation, YAML mapping, and prompt compilation.
 //
-// These are unit tests that exercise the service's public methods without a database.
+// These are unit tests that exercise the service's pure-function exports directly,
+// without needing a database or a full service instance.
 // The service's DB lifecycle (initialize, update, reload, history) follows the same
 // pattern as OfficeIdentityService and is covered by integration tests.
 
@@ -9,6 +10,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import yaml from 'js-yaml';
 import type { ExecutiveProfile } from '../../../src/executive/types.js';
+import { validateProfile, compileWritingVoiceBlock } from '../../../src/executive/service.js';
 
 describe('Executive profile YAML schema', () => {
   it('loads the default config/executive-profile.yaml', () => {
@@ -47,100 +49,91 @@ describe('Executive profile YAML schema', () => {
   });
 });
 
-describe('ExecutiveProfile validation', () => {
-  // Since validateProfile is private, we test via the type shape and
-  // known constraints that the compiler relies on.
+describe('validateProfile', () => {
+  const validProfile: ExecutiveProfile = {
+    writingVoice: {
+      tone: ['direct', 'warm'],
+      formality: 50,
+      patterns: ['Short sentences.'],
+      vocabulary: { prefer: ['folks'], avoid: ['synergy'] },
+      signOff: '-- Joseph',
+    },
+  };
 
-  it('rejects formality outside 0-100', () => {
-    const badProfile: ExecutiveProfile = {
-      writingVoice: {
-        tone: ['direct'],
-        formality: 150,
-        patterns: ['Short sentences'],
-        vocabulary: { prefer: [], avoid: [] },
-        signOff: '',
-      },
-    };
-
-    // Formality must be 0-100
-    expect(badProfile.writingVoice.formality).toBeGreaterThan(100);
+  it('accepts a valid profile without throwing', () => {
+    expect(() => validateProfile(validProfile)).not.toThrow();
   });
 
-  it('allows up to 3 tone descriptors', () => {
-    const profile: ExecutiveProfile = {
-      writingVoice: {
-        tone: ['direct', 'warm', 'confident'],
-        formality: 50,
-        patterns: [],
-        vocabulary: { prefer: [], avoid: [] },
-        signOff: '',
-      },
+  it('rejects a profile missing writingVoice', () => {
+    expect(() => validateProfile({} as ExecutiveProfile)).toThrow('Executive profile requires writingVoice');
+  });
+
+  it('rejects formality outside 0-100', () => {
+    const bad: ExecutiveProfile = {
+      writingVoice: { ...validProfile.writingVoice, formality: 150 },
     };
-    expect(profile.writingVoice.tone).toHaveLength(3);
+    expect(() => validateProfile(bad)).toThrow(
+      'writingVoice.formality must be an integer between 0 and 100',
+    );
+  });
+
+  it('rejects non-integer formality', () => {
+    const bad: ExecutiveProfile = {
+      writingVoice: { ...validProfile.writingVoice, formality: 50.5 },
+    };
+    expect(() => validateProfile(bad)).toThrow(
+      'writingVoice.formality must be an integer between 0 and 100',
+    );
+  });
+
+  it('accepts exactly 3 tone descriptors', () => {
+    const profile: ExecutiveProfile = {
+      writingVoice: { ...validProfile.writingVoice, tone: ['direct', 'warm', 'confident'] },
+    };
+    expect(() => validateProfile(profile)).not.toThrow();
+  });
+
+  it('rejects more than 3 tone descriptors', () => {
+    const bad: ExecutiveProfile = {
+      writingVoice: { ...validProfile.writingVoice, tone: ['a', 'b', 'c', 'd'] },
+    };
+    expect(() => validateProfile(bad)).toThrow(
+      'writingVoice.tone may contain at most 3 descriptors',
+    );
+  });
+
+  it('rejects non-string tone entries', () => {
+    const bad = {
+      writingVoice: { ...validProfile.writingVoice, tone: [1, 2] },
+    } as unknown as ExecutiveProfile;
+    expect(() => validateProfile(bad)).toThrow('writingVoice.tone must be an array of strings');
+  });
+
+  it('rejects non-string patterns entries', () => {
+    const bad = {
+      writingVoice: { ...validProfile.writingVoice, patterns: [42] },
+    } as unknown as ExecutiveProfile;
+    expect(() => validateProfile(bad)).toThrow('writingVoice.patterns must be an array of strings');
+  });
+
+  it('rejects missing vocabulary', () => {
+    const bad = {
+      writingVoice: { ...validProfile.writingVoice, vocabulary: null },
+    } as unknown as ExecutiveProfile;
+    expect(() => validateProfile(bad)).toThrow(
+      'writingVoice.vocabulary must have prefer and avoid string arrays',
+    );
+  });
+
+  it('rejects non-string signOff', () => {
+    const bad = {
+      writingVoice: { ...validProfile.writingVoice, signOff: 42 },
+    } as unknown as ExecutiveProfile;
+    expect(() => validateProfile(bad)).toThrow('writingVoice.signOff must be a string');
   });
 });
 
-describe('compileWritingVoiceBlock output', () => {
-  // We test the compiled output format by importing the service and using a
-  // helper that bypasses initialization. Since compileWritingVoiceBlock just
-  // reads from the cached profile, we can test the output format directly.
-
-  // We can't construct the full service without a pool, so we test the
-  // compilation logic via a standalone implementation that mirrors the service.
-  // This is intentionally duplicated from the service to keep the test
-  // independent of DB setup.
-
-  function compileWritingVoiceBlock(profile: ExecutiveProfile, executiveName: string): string {
-    const voice = profile.writingVoice;
-    const lines: string[] = [];
-
-    lines.push('## Executive Writing Voice');
-    lines.push('');
-    lines.push(`When drafting emails or content under ${executiveName}'s name, follow this voice guidance.`);
-    lines.push('This is NOT your (the assistant\'s) voice — this is the executive\'s voice.');
-    lines.push('');
-
-    if (voice.tone.length > 0) {
-      const tonePhrase = voice.tone.join(' and ');
-      lines.push('**Tone:**');
-      lines.push(`Write in a tone that is ${tonePhrase}.`);
-      // formality guidance
-      let formalityText: string;
-      if (voice.formality <= 25) formalityText = 'Keep the register casual — like a Slack message to a colleague.';
-      else if (voice.formality <= 50) formalityText = 'Write conversationally but with structure — like a thoughtful email to a peer.';
-      else if (voice.formality <= 75) formalityText = 'Professional and composed — like a well-crafted business email.';
-      else formalityText = 'Formal and precise — like a board communication or investor letter.';
-      lines.push(formalityText);
-      lines.push('');
-    }
-
-    if (voice.patterns.length > 0) {
-      lines.push('**Writing patterns (follow these closely):**');
-      for (const pattern of voice.patterns) {
-        lines.push(`- ${pattern}`);
-      }
-      lines.push('');
-    }
-
-    if (voice.vocabulary.prefer.length > 0 || voice.vocabulary.avoid.length > 0) {
-      lines.push('**Vocabulary:**');
-      if (voice.vocabulary.prefer.length > 0) {
-        lines.push(`Prefer: ${voice.vocabulary.prefer.join(', ')}`);
-      }
-      if (voice.vocabulary.avoid.length > 0) {
-        lines.push(`Avoid: ${voice.vocabulary.avoid.join(', ')}`);
-      }
-      lines.push('');
-    }
-
-    if (voice.signOff) {
-      lines.push('**Sign-off:**');
-      lines.push(`End emails with: ${voice.signOff}`);
-    }
-
-    return lines.join('\n');
-  }
-
+describe('compileWritingVoiceBlock', () => {
   const testProfile: ExecutiveProfile = {
     writingVoice: {
       tone: ['direct', 'warm'],
