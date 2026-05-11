@@ -32,6 +32,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Principal identity consolidation** — replaced fragmented CEO identity (env var config, `role` column, `OutboundGatewayConfig` flat fields) with a database-driven `system_role` column on the `contacts` table. One contact holds `system_role='principal'`, one holds `system_role='agent'`. Enforced by partial unique indexes.
 - **TaskOriginator on every task** — replaced `ceoInitiated: boolean` with a `TaskOriginator` object stamped by the dispatcher on every task, carrying `contactId`, `systemRole`, `channel`, and `initiatedAt`. CEO-authorization checks now use `isPrincipalOriginated(taskMetadata)`. Originator context survives task delegation, resolving the autonomy gate bug for scheduled CEO-authorized actions.
 
+### Fixed
+
+- **Entity-context email resolution** — `resolveKgNodeId` now resolves email addresses via `contact_channel_identities` before attempting UUID-based queries, fixing missing KG context in CC flows and ceo-inbox triage for known contacts ([#461](https://github.com/josephfung/curia/issues/461))
+
 ---
 
 ## [0.26.0] — 2026-05-10 — "In the Record"
