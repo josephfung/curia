@@ -49,7 +49,8 @@
   },
   "pnpm": {
     "overrides": {
-      "hono": ">=4.12.18"
+      "hono": ">=4.12.18",
+      "fast-uri": ">=3.1.2"
     }
   },
   "devDependencies": {
