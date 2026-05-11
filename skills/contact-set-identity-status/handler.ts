@@ -8,6 +8,7 @@
 
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
 import type { IdentityStatus } from '../../src/contacts/types.js';
+import { IdentityNotFoundError } from '../../src/contacts/types.js';
 
 const VALID_STATUSES = new Set<string>(['active', 'defunct', 'bounced']);
 
@@ -73,9 +74,8 @@ export class ContactSetIdentityStatusHandler implements SkillHandler {
         },
       };
     } catch (err) {
-      // setIdentityStatus throws when the identity is not found
-      const message = err instanceof Error ? err.message : String(err);
-      if (message.includes('not found')) {
+      if (err instanceof IdentityNotFoundError) {
+        ctx.log.info({ identity_id }, 'Identity not found');
         return {
           success: false,
           error: `No identity exists with id ${identity_id}. Use contact-lookup to verify the UUID.`,

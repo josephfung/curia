@@ -3,6 +3,7 @@ import { ContactSetIdentityStatusHandler } from './handler.js';
 import type { SkillContext } from '../../src/skills/types.js';
 import type { ContactService } from '../../src/contacts/contact-service.js';
 import type { ChannelIdentity } from '../../src/contacts/types.js';
+import { IdentityNotFoundError } from '../../src/contacts/types.js';
 import pino from 'pino';
 
 function makeLogger() {
@@ -90,12 +91,22 @@ describe('ContactSetIdentityStatusHandler', () => {
 
   it('returns error when identity is not found', async () => {
     const contactService = {
-      setIdentityStatus: vi.fn().mockRejectedValue(new Error('Identity not found: ' + VALID_UUID)),
+      setIdentityStatus: vi.fn().mockRejectedValue(new IdentityNotFoundError(VALID_UUID)),
     };
     const ctx = makeCtx({ input: { identity_id: VALID_UUID, status: 'defunct' }, contactService });
     const result = await handler.execute(ctx);
     expect(result.success).toBe(false);
     if (!result.success) expect(result.error).toMatch(/No identity exists/);
+  });
+
+  it('returns generic error when an unexpected error occurs', async () => {
+    const contactService = {
+      setIdentityStatus: vi.fn().mockRejectedValue(new Error('connection refused')),
+    };
+    const ctx = makeCtx({ input: { identity_id: VALID_UUID, status: 'defunct' }, contactService });
+    const result = await handler.execute(ctx);
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error).toMatch(/See logs/);
   });
 
   it('successfully updates identity status', async () => {
