@@ -239,6 +239,13 @@ ${text}`,
           });
 
           if (result.stored) {
+            if (result.action === 'auto_resolved') {
+              // Incoming fact superseded a lower-confidence existing fact — audit trail preserved.
+              ctx.log.info(
+                { subject, attribute, source, nodeId: result.nodeId },
+                'extract-facts: fact auto-resolved — existing superseded by higher-confidence incoming',
+              );
+            }
             stored++;
           } else if (result.action === 'rate_limited') {
             // The 50-writes-per-task limit is exhausted — all remaining storeFact calls
@@ -251,7 +258,7 @@ ${text}`,
             failed++;
             break;
           } else {
-            // conflict or entity_not_found — expected semantic outcomes, not infra failures.
+            // conflict, auto_rejected, or entity_not_found — expected semantic outcomes, not infra failures.
             ctx.log.warn({ subject, attribute, conflict: result.conflict, action: result.action, source }, 'extract-facts: fact not stored');
           }
         } catch (err) {
