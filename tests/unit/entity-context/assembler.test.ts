@@ -80,6 +80,12 @@ const relationshipRow = {
   related_type: 'organization',
 };
 
+// -- Channel identity fixture for email resolution --
+const channelIdentityRow = {
+  contact_id: 'contact-1',
+  kg_node_id: 'node-1',
+};
+
 describe('EntityContextAssembler', () => {
   describe('assembleOne — person entity via contact ID', () => {
     it('assembles a full EntityContext for a person with facts and calendars', async () => {
@@ -340,6 +346,87 @@ describe('EntityContextAssembler', () => {
       const assembler = new EntityContextAssembler(pool, logger);
       const ctx = await assembler.assembleOne('contact-1');
       expect(ctx!.facts[0].category).toBe('unknown');
+    });
+  });
+
+  describe('resolveKgNodeId — email address resolution', () => {
+    it('resolves a registered email address to a KG node via contact_channel_identities', async () => {
+      // Query order for email path:
+      // 1. resolveKgNodeId: email → contact_channel_identities JOIN contacts → contact_id + kg_node_id
+      // 2. getKgNode
+      // 3. getFacts
+      // 4. getContactByKgNodeId
+      // 5. getConnectedAccounts
+      // 6. getRelationships
+      const pool = makeSequentialPool([
+        { rows: [channelIdentityRow] },   // email resolution: found
+        { rows: [personNodeRow] },         // getKgNode
+        { rows: [timezoneFactRow] },       // getFacts
+        { rows: [contactRow] },            // getContactByKgNodeId
+        { rows: [calendarRow] },           // getConnectedAccounts
+        { rows: [relationshipRow] },       // getRelationships
+      ]);
+
+      const assembler = new EntityContextAssembler(pool, logger);
+      const ctx = await assembler.assembleOne('jenna@example.com');
+
+      expect(ctx).toBeDefined();
+      expect(ctx!.entityId).toBe('node-1');
+      expect(ctx!.entityType).toBe('person');
+      expect(ctx!.label).toBe('Jenna Smith');
+      expect(ctx!.contact).toEqual({
+        contactId: 'contact-1',
+        displayName: 'Jenna Smith',
+        role: null,
+      });
+    });
+
+    it('returns undefined when email resolves to a contact with no KG node', async () => {
+      const pool = makeSequentialPool([
+        { rows: [{ contact_id: 'contact-1', kg_node_id: null }] }, // email found, no KG node
+      ]);
+
+      const assembler = new EntityContextAssembler(pool, logger);
+      const ctx = await assembler.assembleOne('jenna@example.com');
+      expect(ctx).toBeUndefined();
+    });
+
+    it('returns undefined for an unregistered email address', async () => {
+      const pool = makeSequentialPool([
+        { rows: [] }, // email not found in contact_channel_identities
+      ]);
+
+      const assembler = new EntityContextAssembler(pool, logger);
+      const ctx = await assembler.assembleOne('stranger@unknown.com');
+      expect(ctx).toBeUndefined();
+    });
+
+    it('assembleMany resolves a mix of email addresses and contact UUIDs', async () => {
+      // putInCache stores under all aliases: inputId ('jenna@example.com'),
+      // entityId ('node-1'), and contactId ('contact-1'). So the second
+      // lookup for 'contact-1' is a cache hit — no extra DB queries needed.
+      const pool = makeSequentialPool([
+        // First ID: email address — full resolution + assembly
+        { rows: [channelIdentityRow] },    // email resolution
+        { rows: [personNodeRow] },          // getKgNode
+        { rows: [] },                       // getFacts
+        { rows: [contactRow] },             // getContactByKgNodeId
+        { rows: [] },                       // getConnectedAccounts
+        { rows: [] },                       // getRelationships
+        // Second ID 'contact-1': cache hit, no DB queries
+      ]);
+
+      const assembler = new EntityContextAssembler(pool, logger);
+      const { entities, unresolved } = await assembler.assembleMany([
+        'jenna@example.com',
+        'contact-1',
+      ]);
+
+      expect(entities).toHaveLength(2);
+      expect(unresolved).toHaveLength(0);
+      expect(entities[0].entityId).toBe('node-1');
+      // Second entity served from cache — same underlying contact
+      expect(entities[1].entityId).toBe('node-1');
     });
   });
 });
