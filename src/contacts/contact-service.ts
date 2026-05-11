@@ -1447,6 +1447,19 @@ class InMemoryContactBackend implements ContactServiceBackend {
   }
 
   async updateContact(contact: Contact): Promise<void> {
+    // Enforce system_role uniqueness on update, to match Postgres partial unique indexes.
+    // Exclude the contact being updated from the duplicate check.
+    if (contact.systemRole) {
+      for (const [existingId, existing] of this.contacts.entries()) {
+        if (existingId !== contact.id && existing.systemRole === contact.systemRole) {
+          const err = Object.assign(
+            new Error(`duplicate key value violates unique constraint "idx_contacts_system_role_${contact.systemRole}"`),
+            { code: '23505', constraint: `idx_contacts_system_role_${contact.systemRole}` },
+          );
+          throw err;
+        }
+      }
+    }
     this.contacts.set(contact.id, contact);
   }
 
