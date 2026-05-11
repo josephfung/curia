@@ -23,6 +23,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
+- **Entity resolution:** `resolveOrCreate` now logs a warning when a single label match has a different type than the caller's hint, improving observability without changing resolution behaviour ([#474](https://github.com/josephfung/curia/issues/474))
 - **Principal identity consolidation** — replaced fragmented CEO identity (env var config, `role` column, `OutboundGatewayConfig` flat fields) with a database-driven `system_role` column on the `contacts` table. One contact holds `system_role='principal'`, one holds `system_role='agent'`. Enforced by partial unique indexes.
 - **TaskOriginator on every task** — replaced `ceoInitiated: boolean` with a `TaskOriginator` object stamped by the dispatcher on every task, carrying `contactId`, `systemRole`, `channel`, and `initiatedAt`. CEO-authorization checks now use `isPrincipalOriginated(taskMetadata)`. Originator context survives task delegation, resolving the autonomy gate bug for scheduled CEO-authorized actions.
 
