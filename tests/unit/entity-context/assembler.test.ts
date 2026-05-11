@@ -429,6 +429,31 @@ describe('EntityContextAssembler', () => {
       expect(entities[1].entityId).toBe('node-1');
     });
 
+    it('resolves a mixed-case email address to the same KG node (case-insensitive)', async () => {
+      // Exercises the LOWER() match in the contact_channel_identities query.
+      const pool = makeSequentialPool([
+        { rows: [channelIdentityRow] },   // email resolution: found (case-insensitive match)
+        { rows: [personNodeRow] },         // getKgNode
+        { rows: [timezoneFactRow] },       // getFacts
+        { rows: [contactRow] },            // getContactByKgNodeId
+        { rows: [calendarRow] },           // getConnectedAccounts
+        { rows: [relationshipRow] },       // getRelationships
+      ]);
+
+      const assembler = new EntityContextAssembler(pool, logger);
+      const ctx = await assembler.assembleOne('Jenna@Example.com');
+
+      expect(ctx).toBeDefined();
+      expect(ctx!.entityId).toBe('node-1');
+      expect(ctx!.entityType).toBe('person');
+      expect(ctx!.label).toBe('Jenna Smith');
+      expect(ctx!.contact).toEqual({
+        contactId: 'contact-1',
+        displayName: 'Jenna Smith',
+        role: null,
+      });
+    });
+
     it('propagates DB errors from the email query path out of assembleOne', async () => {
       const pool = makeMockPool();
       const dbError = new Error('Connection reset by peer');
