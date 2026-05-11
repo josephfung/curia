@@ -147,6 +147,53 @@ describe('EntityMemory.resolveOrCreate', () => {
 });
 
 describe('EntityMemory.storeFact — contradiction auto-resolution', () => {
+  it('returns auto_resolved, updates existing node label and confidence, and populates previous_values', async () => {
+    const { mem, store } = makeEntityMemory();
+    const { entity } = await mem.createEntity({
+      type: 'person', label: 'Bob', properties: {}, source: 'test',
+    });
+
+    // Store initial lower-confidence location fact
+    const initial = await mem.storeFact({
+      entityNodeId: entity.id,
+      label: 'location: Kitchener',
+      properties: { attribute: 'location', value: 'Kitchener' },
+      confidence: 0.6,
+      source: 'test',
+    });
+    expect(initial.action).toBe('created');
+    const existingNodeId = initial.nodeId!;
+
+    // Supersede with higher-confidence fact
+    const result = await mem.storeFact({
+      entityNodeId: entity.id,
+      label: 'location: Toronto',
+      properties: { attribute: 'location', value: 'Toronto' },
+      confidence: 0.9,
+      source: 'agent:coordinator/task:t1/channel:email',
+    });
+
+    expect(result.stored).toBe(true);
+    expect(result.action).toBe('auto_resolved');
+    // Same node ID — the existing node was updated in place, not replaced
+    expect(result.nodeId).toBe(existingNodeId);
+
+    // Verify node was updated in the store
+    const updatedNode = await store.getNode(existingNodeId);
+    expect(updatedNode?.label).toBe('location: Toronto');
+    expect(updatedNode?.temporal.confidence).toBe(0.9);
+
+    // Verify audit trail
+    const pv = updatedNode!.properties.previous_values as Array<{
+      label: string; confidence: number; replacedBy: string;
+    }>;
+    expect(Array.isArray(pv)).toBe(true);
+    expect(pv).toHaveLength(1);
+    expect(pv[0]!.label).toBe('location: Kitchener');
+    expect(pv[0]!.confidence).toBe(0.6);
+    expect(pv[0]!.replacedBy).toBe('agent:coordinator/task:t1/channel:email');
+  });
+
   it('returns auto_rejected and leaves existing node unchanged when incoming confidence is lower', async () => {
     const { mem, store } = makeEntityMemory();
     const { entity } = await mem.createEntity({
