@@ -137,6 +137,7 @@ async function enrichContact(
           identifier: i.channelIdentifier,
           label: i.label,
           verified: i.verified,
+          status: i.status,
         })),
       };
     }
