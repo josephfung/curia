@@ -15,8 +15,13 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **Contact Specialist agent** (`agents/contacts.yaml`) — new specialist that owns the full contact domain: briefings, CRUD, deduplication, relationship management, and entity resolution for people and organizations. The coordinator delegates contact intelligence via a "brief me" natural-language pattern; the specialist returns enriched context and resolved contact IDs in a `<resolved_entities>` XML block. Weekly dedup scan migrated from the coordinator's scheduler to the contact specialist's `schedule:` entry. (#498)
 - **Startup readiness checks** — system refuses inbound messages if no principal contact exists (`system_role='principal'`). Extensible `ReadinessCheck` interface for future setup validation.
 - **Research-analyst memory access** — pinned `memory-query` and `memory-store` to the research-analyst agent with domain-specific recall and storage guidance. Stored context about known entities now informs research; important findings about CEO-relevant entities are persisted to the knowledge graph.
+
+### Changed
+
+- **Coordinator contact domain cleanup** — removed ~165 lines of contact-domain prompt guidance (Contact Awareness, Contact Lookup Best Practices, Contact Deduplication, Relationship Management, entity resolution quick reference) and 15 contact skills from the coordinator's `pinned_skills`. Replaced with an 8-line delegation note. (#498)
 
 ### Fixed
 
