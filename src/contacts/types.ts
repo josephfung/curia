@@ -27,6 +27,7 @@ export interface ChannelIdentity {
   label: string | null;
   verified: boolean;
   verifiedAt: Date | null;
+  status: IdentityStatus;
   source: IdentitySource;
   createdAt: Date;
   updatedAt: Date;
@@ -43,6 +44,13 @@ export type IdentitySource =
   // outside the normal dispatcher pipeline. Treated with the same trust as
   // email_participant — the agent is responsible for sourcing the identifier.
   | 'agent_called';
+
+// -- Identity status --
+// active: address is believed to be valid and usable (default)
+// defunct: address is known to be no longer in use (e.g. left the company)
+// bounced: delivery to this address has failed
+// Orthogonal to `verified` — an address can be verified-but-bounced.
+export type IdentityStatus = 'active' | 'defunct' | 'bounced';
 
 // -- Contact status --
 // confirmed: CEO has verified this contact
@@ -85,6 +93,7 @@ export interface LinkIdentityOptions {
   label?: string;
   source: IdentitySource;
   verified?: boolean;
+  status?: IdentityStatus;
 }
 
 /** Result of resolving an inbound sender */
