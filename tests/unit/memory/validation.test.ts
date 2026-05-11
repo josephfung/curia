@@ -215,7 +215,7 @@ describe('MemoryValidator', () => {
       expect(result.action).toBe('conflict');
     });
 
-    it('includes existing and new fact labels in the conflict reason', async () => {
+    it('includes existing and new fact labels in the reason (auto_rejected when existing has higher confidence)', async () => {
       const entity = await store.createNode({
         type: 'person',
         label: 'Bob',
@@ -238,6 +238,7 @@ describe('MemoryValidator', () => {
         source: 'test',
       });
 
+      // Existing confidence (0.9) > incoming confidence (0.7) → auto_rejected (spec line 121)
       const result = await validator.validateContradiction({
         entityNodeId: entity.id,
         label: 'Bob lives in Vancouver',
@@ -246,8 +247,8 @@ describe('MemoryValidator', () => {
         source: 'test',
       });
 
-      expect(result.action).toBe('conflict');
-      if (result.action === 'conflict') {
+      expect(result.action).toBe('auto_rejected');
+      if (result.action === 'auto_rejected') {
         expect(result.reason).toContain('Kitchener');
         expect(result.reason).toContain('Vancouver');
       }
@@ -306,6 +307,75 @@ describe('MemoryValidator', () => {
       });
 
       expect(result.action).toBe('create');
+    });
+
+    it('auto-rejects when existing fact has higher confidence', async () => {
+      const entity = await store.createNode({
+        type: 'person', label: 'Bob', properties: {}, source: 'test',
+      });
+      const existingFact = await store.createNode({
+        type: 'fact',
+        label: 'Bob lives in Kitchener',
+        properties: { attribute: 'location' },
+        confidence: 0.9,
+        source: 'test',
+      });
+      await store.createEdge({
+        sourceNodeId: entity.id,
+        targetNodeId: existingFact.id,
+        type: 'relates_to',
+        properties: {},
+        source: 'test',
+      });
+
+      const result = await validator.validateContradiction({
+        entityNodeId: entity.id,
+        label: 'Bob lives in Toronto',
+        properties: { attribute: 'location' },
+        confidence: 0.7, // lower than existing 0.9
+        source: 'agent:coordinator/task:t1/channel:email',
+      });
+
+      expect(result.action).toBe('auto_rejected');
+      if (result.action === 'auto_rejected') {
+        expect(result.reason).toContain('Kitchener');
+        expect(result.reason).toContain('Toronto');
+        expect(result.reason).toContain('0.9');
+        expect(result.reason).toContain('0.7');
+      }
+    });
+
+    it('preserves the existingNodeId in auto_rejected result', async () => {
+      const entity = await store.createNode({
+        type: 'person', label: 'Bob', properties: {}, source: 'test',
+      });
+      const existingFact = await store.createNode({
+        type: 'fact',
+        label: 'Bob works at Acme',
+        properties: { attribute: 'employer' },
+        confidence: 0.95,
+        source: 'test',
+      });
+      await store.createEdge({
+        sourceNodeId: entity.id,
+        targetNodeId: existingFact.id,
+        type: 'relates_to',
+        properties: {},
+        source: 'test',
+      });
+
+      const result = await validator.validateContradiction({
+        entityNodeId: entity.id,
+        label: 'Bob works at Globex',
+        properties: { attribute: 'employer' },
+        confidence: 0.5,
+        source: 'test',
+      });
+
+      expect(result.action).toBe('auto_rejected');
+      if (result.action === 'auto_rejected') {
+        expect(result.existingNodeId).toBe(existingFact.id);
+      }
     });
   });
 
