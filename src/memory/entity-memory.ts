@@ -285,7 +285,21 @@ export class EntityMemory {
     }
 
     if (matches.length === 1) {
-      return { kind: 'found', node: matches[0]! };
+      const node = matches[0]!;
+      // Single-match returns 'found' even when the type doesn't match the caller's
+      // hint. This is intentional: a lone label match almost always represents the
+      // same real-world entity under a different type classification. The 2+ path
+      // uses type as a tiebreaker because multiple nodes genuinely share a name;
+      // with one match there is nothing to disambiguate. We log a warning so
+      // operators can spot patterns that suggest genuinely distinct entities.
+      // See: https://github.com/josephfung/curia/issues/474
+      if (node.type !== options.type) {
+        this.logger.warn(
+          { label: options.label, expectedType: options.type, actualType: node.type, nodeId: node.id },
+          'resolveOrCreate: single match type differs from caller hint',
+        );
+      }
+      return { kind: 'found', node };
     }
 
     // 2+ matches — prefer a node whose type matches the caller's expected type.
