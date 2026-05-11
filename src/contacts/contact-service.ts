@@ -51,7 +51,7 @@ interface ContactServiceBackend {
   getIdentitiesForContact(contactId: string): Promise<ChannelIdentity[]>;
   resolveByChannelIdentity(channel: string, channelIdentifier: string): Promise<ResolvedSender | null>;
   unlinkIdentity(identityId: string): Promise<boolean>;
-  setIdentityStatus(identityId: string, status: import('./types.js').IdentityStatus): Promise<ChannelIdentity>;
+  setIdentityStatus(identityId: string, status: IdentityStatus): Promise<ChannelIdentity>;
   getAuthOverrides(contactId: string): Promise<Array<{ permission: string; granted: boolean }>>;
   createAuthOverride(override: AuthOverride): Promise<void>;
   revokeAuthOverride(contactId: string, permission: string): Promise<boolean>;
