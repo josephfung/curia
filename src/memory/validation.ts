@@ -183,12 +183,26 @@ export class MemoryValidator {
       // Same entity, same attribute, different label → contradiction.
       // Identical label is not a contradiction (dedup will handle it).
       if (targetNode.label !== options.label) {
-        // @TODO: Auto-resolution stub. All contradictions escalate to user review
-        // until the auto-resolver is implemented (spec lines 121-123).
+        const existingConfidence = targetNode.temporal.confidence;
+        const incomingConfidence = options.confidence;
+
+        if (existingConfidence > incomingConfidence) {
+          // Spec line 121: existing fact has higher confidence — reject incoming write
+          return {
+            action: 'auto_rejected',
+            existingNodeId: targetNode.id,
+            reason: `Existing fact "${targetNode.label}" (confidence: ${existingConfidence}) has higher confidence than incoming "${options.label}" (confidence: ${incomingConfidence}) — write rejected`,
+          };
+        }
+
+        // existingConfidence <= incomingConfidence:
+        // auto_resolved path (existingConfidence < incomingConfidence) is implemented in Task 4.
+        // For now, all non-rejection contradictions still escalate to the user.
+        // @TODO: Implement auto_resolved path (spec line 122)
         return {
           action: 'conflict',
           existingNodeId: targetNode.id,
-          reason: `Contradicting fact: existing "${targetNode.label}" (confidence: ${targetNode.temporal.confidence}) vs new "${options.label}" (confidence: ${options.confidence})`,
+          reason: `Contradicting fact: existing "${targetNode.label}" (confidence: ${existingConfidence}) vs new "${options.label}" (confidence: ${incomingConfidence})`,
         };
       }
     }
