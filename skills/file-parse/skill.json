@@ -7,7 +7,7 @@
   "inputs": {
     "content_base64": "string (base64-encoded file content)",
     "mime_type": "string (MIME type, e.g. 'text/csv', 'application/pdf', 'image/jpeg', 'text/html')",
-    "extract_as": "string? (optional extraction schema: 'receipt', 'bank_statement', 'invoice', or 'raw'; defaults to 'raw')"
+    "extract_as": "string? (optional extraction schema hint; defaults to 'raw'. Known schemas with tailored prompts: 'receipt', 'bank_statement', 'invoice'. Use 'raw' to skip LLM structuring. Any other non-empty string (e.g. 'purchase_order', 'business_card') triggers a generic extraction prompt using the schema name as a hint.)"
   },
   "outputs": {
     "type": "string (detected content category: 'csv', 'pdf', 'image', 'html')",

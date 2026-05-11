@@ -3,8 +3,16 @@
 // Each prompt returns instructions for Claude to produce structured JSON from
 // raw text or image content. The prompts are separate from the handler to keep
 // the handler focused on orchestration.
+//
+// Known schemas have specific, well-structured prompts. Unknown schemas (any
+// other string) get a generic prompt that uses the schema name as a hint —
+// this allows agents to define new document types without modifying this file.
 
-export type ExtractAs = 'receipt' | 'bank_statement' | 'invoice' | 'raw';
+// ExtractAs is intentionally open-ended: 'receipt', 'bank_statement', and
+// 'invoice' have built-in prompts; 'raw' opts out of LLM extraction entirely;
+// any other string (e.g. 'purchase_order', 'business_card') gets a generic
+// prompt using the schema name as an extraction hint.
+export type ExtractAs = string;
 
 const RECEIPT_PROMPT = `Extract structured data from this receipt or purchase confirmation.
 Return ONLY valid JSON matching this exact schema (no markdown fences, no explanation):
@@ -73,13 +81,25 @@ Rules:
 
 /**
  * Get the extraction prompt for the given extract_as schema.
- * Returns null for 'raw' — no LLM extraction needed.
+ *
+ * - Known schemas ('receipt', 'bank_statement', 'invoice') return a tailored prompt.
+ * - 'raw' returns null — the caller skips LLM extraction and returns raw text only.
+ * - Any other string returns a generic prompt using the schema name as a hint,
+ *   letting agents define new document types without modifying this file.
  */
 export function getExtractionPrompt(extractAs: ExtractAs): string | null {
   switch (extractAs) {
-    case 'receipt': return RECEIPT_PROMPT;
+    case 'receipt':       return RECEIPT_PROMPT;
     case 'bank_statement': return BANK_STATEMENT_PROMPT;
-    case 'invoice': return INVOICE_PROMPT;
-    case 'raw': return null;
+    case 'invoice':       return INVOICE_PROMPT;
+    case 'raw':           return null;
+    default:
+      // Generic prompt for agent-defined schemas (e.g. 'purchase_order', 'business_card').
+      // The schema name is used as a hint — Claude infers the appropriate fields from
+      // the document content and the name. Output is still valid JSON.
+      return `Extract structured data from this document as a ${extractAs.replace(/_/g, ' ')}.
+Return ONLY valid JSON with the fields that are relevant and visible in the document
+(no markdown fences, no explanation). Use null for fields that cannot be determined.
+Dates should be ISO 8601 (YYYY-MM-DD). Amounts should be numbers, not strings.`;
   }
 }

@@ -77,15 +77,30 @@ describe('FileParseHandler', () => {
       if (!result.success) expect(result.error).toMatch(/unsupported/i);
     });
 
-    it('rejects invalid extract_as value', async () => {
+    it('rejects empty extract_as value', async () => {
+      // Empty string is the only invalid value — any non-empty string is accepted
+      // (unknown schemas get a generic extraction prompt). Use '' to test the guard.
       const content = Buffer.from('a,b\n1,2').toString('base64');
       const result = await handler.execute(makeCtx({
         content_base64: content,
         mime_type: 'text/csv',
-        extract_as: 'spreadsheet',
+        extract_as: '',
       }));
       expect(result.success).toBe(false);
       if (!result.success) expect(result.error).toMatch(/extract_as/);
+    });
+
+    it('accepts an unknown extract_as schema (e.g. purchase_order)', async () => {
+      // Non-standard schemas should succeed with CSV — CSV is deterministic and
+      // doesn't use the extract_as hint for structured extraction.
+      const csv = 'vendor,amount\nAcme,500';
+      const content = Buffer.from(csv).toString('base64');
+      const result = await handler.execute(makeCtx({
+        content_base64: content,
+        mime_type: 'text/csv',
+        extract_as: 'purchase_order',
+      }));
+      expect(result.success).toBe(true);
     });
   });
 
