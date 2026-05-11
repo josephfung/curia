@@ -30,6 +30,7 @@ import type {
   MergeResult,
   ResolvedSender,
   IdentitySource,
+  IdentityStatus,
   SystemRole,
   TrustLevel,
 } from './types.js';
@@ -50,6 +51,7 @@ interface ContactServiceBackend {
   getIdentitiesForContact(contactId: string): Promise<ChannelIdentity[]>;
   resolveByChannelIdentity(channel: string, channelIdentifier: string): Promise<ResolvedSender | null>;
   unlinkIdentity(identityId: string): Promise<boolean>;
+  setIdentityStatus(identityId: string, status: import('./types.js').IdentityStatus): Promise<ChannelIdentity>;
   getAuthOverrides(contactId: string): Promise<Array<{ permission: string; granted: boolean }>>;
   createAuthOverride(override: AuthOverride): Promise<void>;
   revokeAuthOverride(contactId: string, permission: string): Promise<boolean>;
@@ -470,6 +472,7 @@ export class ContactService {
       label: options.label ?? null,
       verified,
       verifiedAt: verified ? now : null,
+      status: options.status ?? 'active',
       source: options.source,
       createdAt: now,
       updatedAt: now,
@@ -542,6 +545,11 @@ export class ContactService {
   /** Remove a channel identity by its ID. Returns true if found and removed, false if not found. */
   async unlinkIdentity(identityId: string): Promise<boolean> {
     return this.backend.unlinkIdentity(identityId);
+  }
+
+  /** Update the status of a channel identity (active, defunct, bounced). */
+  async setIdentityStatus(identityId: string, status: IdentityStatus): Promise<ChannelIdentity> {
+    return this.backend.setIdentityStatus(identityId, status);
   }
 
   /** Get active (non-revoked) auth overrides for a contact. */
@@ -1012,8 +1020,8 @@ class PostgresContactBackend implements ContactServiceBackend {
     );
     await this.pool.query(
       `INSERT INTO contact_channel_identities
-         (id, contact_id, channel, channel_identifier, label, verified, verified_at, source, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+         (id, contact_id, channel, channel_identifier, label, verified, verified_at, source, status, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
       [
         identity.id,
         identity.contactId,
@@ -1023,6 +1031,7 @@ class PostgresContactBackend implements ContactServiceBackend {
         identity.verified,
         identity.verifiedAt,
         identity.source,
+        identity.status,
         identity.createdAt,
         identity.updatedAt,
       ],
@@ -1038,11 +1047,12 @@ class PostgresContactBackend implements ContactServiceBackend {
       label: string | null;
       verified: boolean;
       verified_at: Date | null;
+      status: string;
       source: string;
       created_at: Date;
       updated_at: Date;
     }>(
-      `SELECT id, contact_id, channel, channel_identifier, label, verified, verified_at, source, created_at, updated_at
+      `SELECT id, contact_id, channel, channel_identifier, label, verified, verified_at, status, source, created_at, updated_at
        FROM contact_channel_identities WHERE contact_id = $1 ORDER BY created_at ASC`,
       [contactId],
     );
@@ -1106,6 +1116,34 @@ class PostgresContactBackend implements ContactServiceBackend {
     this.logger.debug({ identityId }, 'Unlinking channel identity');
     const result = await this.pool.query('DELETE FROM contact_channel_identities WHERE id = $1', [identityId]);
     return (result.rowCount ?? 0) > 0;
+  }
+
+  async setIdentityStatus(identityId: string, status: IdentityStatus): Promise<ChannelIdentity> {
+    const result = await this.pool.query<{
+      id: string;
+      contact_id: string;
+      channel: string;
+      channel_identifier: string;
+      label: string | null;
+      verified: boolean;
+      verified_at: Date | null;
+      status: string;
+      source: string;
+      created_at: Date;
+      updated_at: Date;
+    }>(
+      `UPDATE contact_channel_identities
+       SET status = $1, updated_at = now()
+       WHERE id = $2
+       RETURNING id, contact_id, channel, channel_identifier, label, verified, verified_at, status, source, created_at, updated_at`,
+      [status, identityId],
+    );
+
+    const row = result.rows[0];
+    if (!row) {
+      throw new Error(`Identity not found: ${identityId}`);
+    }
+    return this.rowToIdentity(row);
   }
 
   async getAuthOverrides(contactId: string): Promise<Array<{ permission: string; granted: boolean }>> {
@@ -1326,6 +1364,7 @@ class PostgresContactBackend implements ContactServiceBackend {
     label: string | null;
     verified: boolean;
     verified_at: Date | null;
+    status: string;
     source: string;
     created_at: Date;
     updated_at: Date;
@@ -1338,6 +1377,7 @@ class PostgresContactBackend implements ContactServiceBackend {
       label: row.label,
       verified: row.verified,
       verifiedAt: row.verified_at,
+      status: row.status as IdentityStatus,
       source: row.source as IdentitySource,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
@@ -1539,6 +1579,20 @@ class InMemoryContactBackend implements ContactServiceBackend {
 
   async unlinkIdentity(identityId: string): Promise<boolean> {
     return this.identities.delete(identityId);
+  }
+
+  async setIdentityStatus(identityId: string, status: IdentityStatus): Promise<ChannelIdentity> {
+    const identity = this.identities.get(identityId);
+    if (!identity) {
+      throw new Error(`Identity not found: ${identityId}`);
+    }
+    const updated: ChannelIdentity = {
+      ...identity,
+      status,
+      updatedAt: new Date(),
+    };
+    this.identities.set(identityId, updated);
+    return updated;
   }
 
   async getAuthOverrides(contactId: string): Promise<Array<{ permission: string; granted: boolean }>> {
