@@ -264,33 +264,34 @@ export class EntityContextAssembler {
    * resolving to a contact UUID first.
    */
   private async resolveKgNodeId(id: string): Promise<string | undefined> {
-    // Email address detection: if the input looks like an email address (local-part @
-    // domain with at least one dot), resolve via contact_channel_identities instead of
-    // UUID columns. This handles CC flows and ceo-inbox triage where the LLM passes a
-    // raw email rather than a contact UUID.
-    if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(id)) {
-      const emailResult = await this.pool.query<{ contact_id: string; kg_node_id: string | null }>(
-        `SELECT c.id AS contact_id, c.kg_node_id
-         FROM contact_channel_identities cci
-         JOIN contacts c ON c.id = cci.contact_id
-         WHERE cci.channel = 'email' AND LOWER(cci.channel_identifier) = LOWER($1)`,
-        [id],
-      );
-      if (emailResult.rows.length > 0) {
-        const row = emailResult.rows[0];
-        const kgNodeId = row?.kg_node_id;
-        if (!kgNodeId) {
-          this.logger.debug({ email: id, contactId: row?.contact_id }, 'entity-context: email resolved to contact with no linked KG node');
-          return undefined;
-        }
-        return kgNodeId;
-      }
-      // Email not found in contact_channel_identities — unregistered contact
-      this.logger.debug({ email: id }, 'entity-context: email not found in contact_channel_identities — treating as unresolved');
-      return undefined;
-    }
-
     try {
+      // Email address detection: if the input looks like an email address (local-part @
+      // domain with at least one dot), resolve via contact_channel_identities instead of
+      // UUID columns. This handles CC flows and ceo-inbox triage where the LLM passes a
+      // raw email rather than a contact UUID.
+      if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(id)) {
+        const emailResult = await this.pool.query<{ contact_id: string; kg_node_id: string | null }>(
+          `SELECT c.id AS contact_id, c.kg_node_id
+           FROM contact_channel_identities cci
+           JOIN contacts c ON c.id = cci.contact_id
+           WHERE cci.channel = 'email' AND LOWER(cci.channel_identifier) = LOWER($1)`,
+          [id],
+        );
+        if (emailResult.rows.length > 0) {
+          const row = emailResult.rows[0];
+          const kgNodeId = row?.kg_node_id;
+          if (!kgNodeId) {
+            // Use inputKind rather than the raw email — 'email' is on the pino redact list.
+            this.logger.debug({ inputKind: 'email', contactId: row?.contact_id }, 'entity-context: email resolved to contact with no linked KG node');
+            return undefined;
+          }
+          return kgNodeId;
+        }
+        // Email not found in contact_channel_identities — unregistered contact
+        this.logger.debug({ inputKind: 'email' }, 'entity-context: email not found in contact_channel_identities — treating as unresolved');
+        return undefined;
+      }
+
       // Try as a contact ID first
       const contactResult = await this.pool.query<{ kg_node_id: string | null }>(
         'SELECT kg_node_id FROM contacts WHERE id = $1',
