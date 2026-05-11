@@ -19,10 +19,6 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Startup readiness checks** — system refuses inbound messages if no principal contact exists (`system_role='principal'`). Extensible `ReadinessCheck` interface for future setup validation.
 - **Research-analyst memory access** — pinned `memory-query` and `memory-store` to the research-analyst agent with domain-specific recall and storage guidance. Stored context about known entities now informs research; important findings about CEO-relevant entities are persisted to the knowledge graph.
 
-### Changed
-
-- **Coordinator contact domain cleanup** — removed ~165 lines of contact-domain prompt guidance (Contact Awareness, Contact Lookup Best Practices, Contact Deduplication, Relationship Management, entity resolution quick reference) and 15 contact skills from the coordinator's `pinned_skills`. Replaced with an 8-line delegation note. (#498)
-
 ### Fixed
 
 - **Google Workspace URL routing** — coordinator now uses workspace skills for Google Docs/Drive URLs instead of falling back to web-browser. Research-analyst reports correctly when it cannot access a Workspace URL. Coordinator delegates to specialists more reliably via injected specialist list.
@@ -34,6 +30,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Changed
 
 - **Contradiction auto-resolution** (spec 01): `validateContradiction` now auto-rejects incoming facts with lower confidence than the existing contradicting fact, and auto-resolves (updates in place) when the incoming confidence is higher, preserving the old value in a `properties.previous_values` audit trail. Equal-confidence contradictions continue to escalate to human review unchanged.
+- **Coordinator contact domain cleanup** — removed ~165 lines of contact-domain prompt guidance (Contact Awareness, Contact Lookup Best Practices, Contact Deduplication, Relationship Management, entity resolution quick reference) and 15 contact skills from the coordinator's `pinned_skills`. Replaced with an 8-line delegation note. (#498)
 - **Entity resolution:** `resolveOrCreate` now logs a warning when a single label match has a different type than the caller's hint, improving observability without changing resolution behaviour ([#474](https://github.com/josephfung/curia/issues/474))
 - **Principal identity consolidation** — replaced fragmented CEO identity (env var config, `role` column, `OutboundGatewayConfig` flat fields) with a database-driven `system_role` column on the `contacts` table. One contact holds `system_role='principal'`, one holds `system_role='agent'`. Enforced by partial unique indexes.
 - **TaskOriginator on every task** — replaced `ceoInitiated: boolean` with a `TaskOriginator` object stamped by the dispatcher on every task, carrying `contactId`, `systemRole`, `channel`, and `initiatedAt`. CEO-authorization checks now use `isPrincipalOriginated(taskMetadata)`. Originator context survives task delegation, resolving the autonomy gate bug for scheduled CEO-authorized actions.
