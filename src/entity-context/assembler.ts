@@ -264,10 +264,11 @@ export class EntityContextAssembler {
    * resolving to a contact UUID first.
    */
   private async resolveKgNodeId(id: string): Promise<string | undefined> {
-    // Email address detection: if the input contains '@' with non-whitespace on
-    // both sides, resolve via contact_channel_identities instead of UUID columns.
-    // This handles CC flows and ceo-inbox triage where the LLM passes a raw email.
-    if (/^\S+@\S+$/.test(id)) {
+    // Email address detection: if the input looks like an email address (local-part @
+    // domain with at least one dot), resolve via contact_channel_identities instead of
+    // UUID columns. This handles CC flows and ceo-inbox triage where the LLM passes a
+    // raw email rather than a contact UUID.
+    if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(id)) {
       const emailResult = await this.pool.query<{ contact_id: string; kg_node_id: string | null }>(
         `SELECT c.id AS contact_id, c.kg_node_id
          FROM contact_channel_identities cci
@@ -284,7 +285,8 @@ export class EntityContextAssembler {
         }
         return kgNodeId;
       }
-      // Email not found in contact_channel_identities — genuinely unknown contact
+      // Email not found in contact_channel_identities — unregistered contact
+      this.logger.debug({ email: id }, 'entity-context: email not found in contact_channel_identities — treating as unresolved');
       return undefined;
     }
 
