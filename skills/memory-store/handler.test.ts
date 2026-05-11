@@ -323,6 +323,56 @@ describe('MemoryStoreHandler', () => {
     });
   });
 
+  describe('action: auto_rejected', () => {
+    it('returns auto_rejected with reason and existing_node_id when incoming fact has lower confidence', async () => {
+      const ctx = {
+        input: VALID_INPUT,
+        secret: () => 'test-key',
+        log: pino({ level: 'silent' }),
+        entityMemory: makeMockEntityMemory({
+          stored: false,
+          action: 'auto_rejected',
+          conflict: 'Existing fact "location: Kitchener" (confidence: 0.9) has higher confidence than incoming "location: Toronto" (confidence: 0.7) — write rejected',
+          existingNodeId: 'existing-node-123',
+        }),
+      } as unknown as SkillContext;
+
+      const result = await handler.execute(ctx);
+
+      expect(result.success).toBe(true);
+      const data = (result as { success: true; data: Record<string, unknown> }).data;
+      expect(data.stored).toBe(false);
+      expect(data.action).toBe('auto_rejected');
+      expect(String(data.reason)).toMatch(/Kitchener/);
+      expect(data.existing_node_id).toBe('existing-node-123');
+    });
+  });
+
+  describe('action: auto_resolved', () => {
+    it('returns auto_resolved with node_id and sensitivity when incoming fact has higher confidence and replaces the existing one', async () => {
+      const ctx = {
+        input: VALID_INPUT,
+        secret: () => 'test-key',
+        log: pino({ level: 'silent' }),
+        entityMemory: makeMockEntityMemory({
+          stored: true,
+          action: 'auto_resolved',
+          nodeId: 'existing-node-123',
+          sensitivity: 'internal',
+        }),
+      } as unknown as SkillContext;
+
+      const result = await handler.execute(ctx);
+
+      expect(result.success).toBe(true);
+      const data = (result as { success: true; data: Record<string, unknown> }).data;
+      expect(data.stored).toBe(true);
+      expect(data.action).toBe('auto_resolved');
+      expect(data.node_id).toBe('existing-node-123');
+      expect(data.sensitivity).toBe('internal');
+    });
+  });
+
   // ── Infrastructure error handling ─────────────────────────────────────────
 
   describe('error handling', () => {
