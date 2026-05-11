@@ -105,6 +105,11 @@ export class FileParseHandler implements SkillHandler {
     const textPrompt = prompt
       ?? 'Transcribe all visible text from this image. Return the text verbatim, preserving layout where possible.';
 
+    // Normalize the non-standard image/jpg alias to the IANA-registered image/jpeg.
+    // The Anthropic API only accepts the canonical MIME types; passing image/jpg would
+    // produce an API error at runtime despite the TypeScript cast.
+    const normalizedMimeType = mimeType === 'image/jpg' ? 'image/jpeg' : mimeType;
+
     try {
       const response = await client.messages.create({
         model: EXTRACTION_MODEL,
@@ -116,7 +121,7 @@ export class FileParseHandler implements SkillHandler {
               type: 'image',
               source: {
                 type: 'base64',
-                media_type: mimeType as 'image/jpeg' | 'image/png' | 'image/webp' | 'image/gif',
+                media_type: normalizedMimeType as 'image/jpeg' | 'image/png' | 'image/webp' | 'image/gif',
                 data: contentBase64,
               },
             },
@@ -133,7 +138,7 @@ export class FileParseHandler implements SkillHandler {
         return { success: true, data: { type: 'image', raw_text: '', structured: null, confidence: 0 } };
       }
 
-      return this.buildResult('image', textBlock.text, extractAs, prompt !== null);
+      return this.buildResult(ctx, 'image', textBlock.text, extractAs, prompt !== null);
     } catch (err) {
       ctx.log.error({ err }, 'file-parse: Claude vision extraction failed');
       return { success: false, error: 'Failed to extract content from image' };
@@ -228,7 +233,7 @@ export class FileParseHandler implements SkillHandler {
         return { success: true, data: { type, raw_text: rawText, structured: null, confidence: 0 } };
       }
 
-      return this.buildResult(type, textBlock.text, extractAs, true, rawText);
+      return this.buildResult(ctx, type, textBlock.text, extractAs, true, rawText);
     } catch (err) {
       ctx.log.error({ err, extractAs }, 'file-parse: LLM structured extraction failed');
       return { success: false, error: `Failed to extract structured data as ${extractAs}` };
@@ -238,6 +243,7 @@ export class FileParseHandler implements SkillHandler {
   // --- Result builder: parse LLM output into structured data ---
 
   private buildResult(
+    ctx: SkillContext,
     type: 'csv' | 'pdf' | 'image' | 'html',
     llmText: string,
     extractAs: ExtractAs,
@@ -264,7 +270,9 @@ export class FileParseHandler implements SkillHandler {
         },
       };
     } catch {
-      // LLM returned non-JSON — return with low confidence
+      // LLM returned non-JSON — return with low confidence so the caller can surface
+      // this to the user for manual review. Log at debug so repeated occurrences are visible.
+      ctx.log.debug({ type, extractAs }, 'file-parse: LLM response was not valid JSON; returning low-confidence result');
       return {
         success: true,
         data: {
