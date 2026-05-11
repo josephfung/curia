@@ -99,6 +99,24 @@ describe('EntityMemory.resolveOrCreate', () => {
     expect(result.candidates).toHaveLength(2);
   });
 
+  it('returns found (with existing type) when 1 match exists but type differs from caller hint', async () => {
+    const { mem } = makeEntityMemory();
+    const { entity } = await mem.createEntity({
+      type: 'person', label: 'Acme', properties: {}, source: 'test',
+    });
+
+    const result = await mem.resolveOrCreate({
+      label: 'Acme',
+      type: 'organization',  // differs from the existing 'person' node
+      source: 'test',
+    });
+
+    expect(result.kind).toBe('found');
+    if (result.kind !== 'found') throw new Error('narrowing');
+    expect(result.node.id).toBe(entity.id);
+    expect(result.node.type).toBe('person');  // returns the existing node as-is
+  });
+
   it('uses the caller-supplied confidence when auto-creating', async () => {
     const { mem } = makeEntityMemory();
     const result = await mem.resolveOrCreate({
