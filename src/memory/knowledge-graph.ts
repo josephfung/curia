@@ -191,7 +191,12 @@ export class KnowledgeGraphStore {
    */
   async updateNode(
     id: string,
-    updates: { label?: string; properties?: Record<string, unknown>; sensitivity?: Sensitivity },
+    updates: {
+      label?: string;
+      properties?: Record<string, unknown>;
+      sensitivity?: Sensitivity;
+      confidence?: number; // allows auto_resolved to raise stored confidence
+    },
   ): Promise<KgNode> {
     const existing = await this.backend.getNode(id);
     if (!existing) {
@@ -212,6 +217,7 @@ export class KnowledgeGraphStore {
       temporal: {
         ...existing.temporal,
         lastConfirmedAt: new Date(),
+        confidence: updates.confidence ?? existing.temporal.confidence,
       },
     };
 
@@ -415,15 +421,18 @@ class PostgresBackend implements KnowledgeGraphBackend {
   async updateNode(id: string, node: KgNode): Promise<void> {
     this.logger.debug({ nodeId: id }, 'kg: updating node');
     const embeddingStr = node.embedding ? `[${node.embedding.join(',')}]` : null;
+    // confidence is included so that auto_resolved paths that raise confidence
+    // via KnowledgeGraphStore.updateNode() are durably persisted to the DB.
     await this.pool.query(
       `UPDATE kg_nodes
-       SET label = $1, properties = $2, embedding = $3::vector, last_confirmed_at = $4
-       WHERE id = $5`,
+       SET label = $1, properties = $2, embedding = $3::vector, last_confirmed_at = $4, confidence = $5
+       WHERE id = $6`,
       [
         node.label,
         JSON.stringify(node.properties),
         embeddingStr,
         node.temporal.lastConfirmedAt,
+        node.temporal.confidence,
         id,
       ],
     );
