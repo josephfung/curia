@@ -29,6 +29,7 @@ function makeIdentity(
     verified: true,
     verifiedAt: null,
     source: 'ceo_stated',
+    status: 'active' as const,
     createdAt: new Date('2025-01-01'),
     updatedAt: new Date('2025-01-01'),
   };
