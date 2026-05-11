@@ -166,7 +166,9 @@ export class ContextForEmailHandler implements SkillHandler {
       let email: string | undefined;
       let identityStatus: string | undefined;
       if (withIdentities) {
-        // Prefer active identities over defunct/bounced ones
+        // Prefer active identities over defunct/bounced ones. If no active
+        // identity exists, fall back to the first by creation order (the sort
+        // is stable). The LLM receives identity_status and can warn accordingly.
         const emailIdentity = withIdentities.identities
           .filter((id) => id.channel === 'email')
           .sort((a, b) => {
