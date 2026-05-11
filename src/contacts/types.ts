@@ -290,6 +290,14 @@ export interface MergeResult {
   mergedAt: Date;
 }
 
+/** Thrown by ContactService when the requested identity does not exist. */
+export class IdentityNotFoundError extends Error {
+  constructor(identityId: string) {
+    super(`Identity not found: ${identityId}`);
+    this.name = 'IdentityNotFoundError';
+  }
+}
+
 // -- ContactService dependency injection for dedup wiring --
 
 export interface ContactServiceOptions {

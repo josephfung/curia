@@ -14,7 +14,7 @@ import type { DbPool } from '../db/connection.js';
 import type { Logger } from '../logger.js';
 import type { EntityMemory } from '../memory/entity-memory.js';
 import { sanitizeDisplayName } from '../skills/sanitize.js';
-import { TRUST_RANK } from './types.js';
+import { TRUST_RANK, IdentityNotFoundError } from './types.js';
 import type {
   AuthOverride,
   Contact,
@@ -1141,7 +1141,7 @@ class PostgresContactBackend implements ContactServiceBackend {
 
     const row = result.rows[0];
     if (!row) {
-      throw new Error(`Identity not found: ${identityId}`);
+      throw new IdentityNotFoundError(identityId);
     }
     return this.rowToIdentity(row);
   }
@@ -1584,7 +1584,7 @@ class InMemoryContactBackend implements ContactServiceBackend {
   async setIdentityStatus(identityId: string, status: IdentityStatus): Promise<ChannelIdentity> {
     const identity = this.identities.get(identityId);
     if (!identity) {
-      throw new Error(`Identity not found: ${identityId}`);
+      throw new IdentityNotFoundError(identityId);
     }
     const updated: ChannelIdentity = {
       ...identity,
