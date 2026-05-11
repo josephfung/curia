@@ -6,5 +6,8 @@
 -- See: https://github.com/josephfung/curia/issues/377
 
 ALTER TABLE contact_channel_identities
-  ADD COLUMN status TEXT NOT NULL DEFAULT 'active'
-  CHECK (status IN ('active', 'defunct', 'bounced'));
+  ADD COLUMN status TEXT NOT NULL DEFAULT 'active';
+
+ALTER TABLE contact_channel_identities
+  ADD CONSTRAINT contact_channel_identities_status_check
+    CHECK (status IN ('active', 'defunct', 'bounced'));
