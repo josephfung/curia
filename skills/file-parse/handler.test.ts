@@ -154,6 +154,30 @@ describe('FileParseHandler', () => {
         expect(data.structured.vendor).toBe('Starbucks');
       }
     });
+
+    it('normalizes image/jpg to image/jpeg for the Anthropic API', async () => {
+      // The Anthropic API only accepts image/jpeg, not the non-standard image/jpg alias.
+      // Verify the normalization happens before the API call.
+      const mockCreate = vi.fn().mockResolvedValue({
+        content: [{ type: 'text', text: '{"vendor":"Test","amount":1,"currency":"CAD","date":"2026-01-01","tax":null,"line_items":[]}' }],
+      });
+      const mockClient = { messages: { create: mockCreate } };
+      const handler = new FileParseHandler(mockClient as any);
+
+      const content = Buffer.from('fake-image-bytes').toString('base64');
+      await handler.execute(makeCtx({
+        content_base64: content,
+        mime_type: 'image/jpg',
+        extract_as: 'receipt',
+      }));
+
+      expect(mockCreate).toHaveBeenCalledOnce();
+      const callArgs = mockCreate.mock.calls[0][0];
+      const imageBlock = callArgs.messages[0].content.find(
+        (c: { type: string }) => c.type === 'image',
+      );
+      expect(imageBlock.source.media_type).toBe('image/jpeg');
+    });
   });
 
   describe('HTML handling', () => {
