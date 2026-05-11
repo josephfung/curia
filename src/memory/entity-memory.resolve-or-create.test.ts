@@ -146,6 +146,45 @@ describe('EntityMemory.resolveOrCreate', () => {
   });
 });
 
+describe('EntityMemory.storeFact — contradiction auto-resolution', () => {
+  it('returns auto_rejected and leaves existing node unchanged when incoming confidence is lower', async () => {
+    const { mem, store } = makeEntityMemory();
+    const { entity } = await mem.createEntity({
+      type: 'person', label: 'Bob', properties: {}, source: 'test',
+    });
+
+    // Store a high-confidence location fact first
+    const initial = await mem.storeFact({
+      entityNodeId: entity.id,
+      label: 'location: Kitchener',
+      properties: { attribute: 'location', value: 'Kitchener' },
+      confidence: 0.9,
+      source: 'test',
+    });
+    expect(initial.action).toBe('created');
+    const existingNodeId = initial.nodeId!;
+
+    // Attempt to override with lower confidence — should be silently rejected
+    const result = await mem.storeFact({
+      entityNodeId: entity.id,
+      label: 'location: Toronto',
+      properties: { attribute: 'location', value: 'Toronto' },
+      confidence: 0.7,
+      source: 'agent:coordinator/task:t1/channel:email',
+    });
+
+    expect(result.stored).toBe(false);
+    expect(result.action).toBe('auto_rejected');
+    expect(result.conflict).toContain('Kitchener');
+    expect(result.existingNodeId).toBe(existingNodeId);
+
+    // The existing node must be untouched — no label or confidence change
+    const existingNode = await store.getNode(existingNodeId);
+    expect(existingNode?.label).toBe('location: Kitchener');
+    expect(existingNode?.temporal.confidence).toBe(0.9);
+  });
+});
+
 describe('EntityMemory.storeFact — updated action codes', () => {
   it('returns action:entity_not_found when entity node does not exist', async () => {
     const { mem } = makeEntityMemory();
