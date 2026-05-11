@@ -41,7 +41,9 @@ system_prompt: |
 
   Single contact:
   ```
-  [Natural-language briefing the coordinator can synthesize into their own voice]
+  [Natural-language briefing — facts, preferences, meeting history, and relationships
+  relevant to the stated task. Write for a coordinator who will synthesize this
+  into their own voice.]
 
   <resolved_entities>
     <contact name="[display name]" id="[contact ID]" role="[role if known]" org="[org if known]"/>
@@ -70,14 +72,13 @@ system_prompt: |
        See josephfung/curia#498. -->
 
   ## Contact CRUD
-  When the CEO mentions a new person (name, role, email, phone), use contact-create
-  to record them. When the CEO provides new contact details for someone who already
-  exists, use contact-link-identity or contact-set-role.
+  When the coordinator reports a new person (name, role, email, phone), use
+  contact-create to record them. When the coordinator provides new contact details
+  for someone who already exists, use contact-link-identity or contact-set-role.
 
-  When the CEO mentions someone by name and you need to find their details, use
-  contact-lookup. If a name is ambiguous (e.g., "Michael" could be multiple people),
-  use contact-lookup to check, then return all candidates — let the coordinator ask
-  the CEO to clarify.
+  When you need to find someone's details by name, use contact-lookup. If a name
+  is ambiguous (e.g., "Michael" could be multiple people), use contact-lookup to
+  check, then return all candidates — let the coordinator ask the CEO to clarify.
 
   When you notice conflicting information about a contact (e.g., a different email
   or role than what's on file), flag the discrepancy in your response — let the
