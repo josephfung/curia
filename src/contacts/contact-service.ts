@@ -1119,6 +1119,7 @@ class PostgresContactBackend implements ContactServiceBackend {
   }
 
   async setIdentityStatus(identityId: string, status: IdentityStatus): Promise<ChannelIdentity> {
+    this.logger.debug({ identityId, status }, 'contacts: updating identity status');
     const result = await this.pool.query<{
       id: string;
       contact_id: string;
