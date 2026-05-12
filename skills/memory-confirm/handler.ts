@@ -19,9 +19,15 @@ export class MemoryConfirmHandler implements SkillHandler {
       return { success: false, error: 'Entity memory service not available. Declare "entityMemory" in capabilities.' };
     }
 
-    const { nodeId, action } = ctx.input as { nodeId: string; action: string };
+    // Guard ctx.input before destructuring — a missing or non-object input must
+    // return { success: false } rather than throwing (per the skill never-throw contract).
+    const input = ctx.input != null && typeof ctx.input === 'object'
+      ? (ctx.input as Record<string, unknown>)
+      : {};
+    const nodeId = input.nodeId;
+    const action = input.action;
 
-    if (!nodeId || typeof nodeId !== 'string') {
+    if (typeof nodeId !== 'string' || nodeId.length === 0) {
       return { success: false, error: 'nodeId is required.' };
     }
 

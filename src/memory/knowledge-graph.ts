@@ -783,6 +783,12 @@ class PostgresBackend implements KnowledgeGraphBackend {
       [nodeId],
     );
     if (!result.rows[0]) return { success: false };
+    // Cascade: archive incident edges immediately, matching archiveNode() behaviour.
+    // Without this, live edges dangle until the next DreamEngine decay pass (up to 24h).
+    await this.pool.query(
+      'UPDATE kg_edges SET archived_at = now() WHERE (source_node_id = $1 OR target_node_id = $1) AND archived_at IS NULL',
+      [nodeId],
+    );
     return { success: true, label: result.rows[0].label };
   }
 }
@@ -1214,7 +1220,9 @@ class InMemoryBackend implements KnowledgeGraphBackend {
     const node = this.nodes.get(nodeId);
     if (!node) return { success: false };
     this.warnedNodes.delete(nodeId);
-    this.archivedNodes.add(nodeId);
+    // archiveNode handles both node and incident edge archival, keeping
+    // behaviour consistent with the Postgres backend and archiveNode().
+    await this.archiveNode(nodeId);
     return { success: true, label: node.label };
   }
 }
