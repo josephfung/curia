@@ -9,7 +9,6 @@ import { EmbeddingService } from './embedding.js';
 import { EntityMemory, FUZZY_RESOLVE_THRESHOLD, FUZZY_AMBIGUITY_FLOOR, MAX_ALIASES_PER_ENTITY } from './entity-memory.js';
 import { MemoryValidator, MAX_WRITES_PER_AGENT_TASK } from './validation.js';
 import { createSilentLogger } from '../logger.js';
-import type { KgNode } from './types.js';
 
 function makeEntityMemory() {
   const embeddingService = EmbeddingService.createForTesting();
@@ -520,8 +519,7 @@ describe('EntityMemory.findEntities — alias awareness', () => {
       source: 'test',
     });
     // Simulate a learned alias by updating the node's aliases directly
-    const withAlias: KgNode = { ...node, aliases: ['darlise'] };
-    await store.updateNode(node.id, withAlias);
+    await store.updateNode(node.id, { aliases: ['darlise'] });
 
     const results = await mem.findEntities('Darlise');
     expect(results).toHaveLength(1);
@@ -540,8 +538,7 @@ describe('EntityMemory.findEntities — alias awareness', () => {
       properties: {},
       source: 'test',
     });
-    const withAlias: KgNode = { ...node, aliases: ['darlise'] };
-    await store.updateNode(node.id, withAlias);
+    await store.updateNode(node.id, { aliases: ['darlise'] });
     await store.archiveNode(node.id);
 
     const results = await mem.findEntities('Darlise');
