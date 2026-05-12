@@ -526,7 +526,7 @@ export function loadYamlConfig(configDir: string): YamlConfig {
           throw new Error(`dreaming.decay.halfLifeDays.permanent must be null (permanent nodes never decay), got: ${String(halfLifeDays.permanent)}`);
         }
       }
-      if (decay.edgeCountPercentile !== undefined && (typeof decay.edgeCountPercentile !== 'number' || decay.edgeCountPercentile < 0 || decay.edgeCountPercentile > 1)) {
+      if (decay.edgeCountPercentile !== undefined && (!Number.isFinite(decay.edgeCountPercentile) || decay.edgeCountPercentile < 0 || decay.edgeCountPercentile > 1)) {
         throw new Error(`dreaming.decay.edgeCountPercentile must be a number between 0 and 1, got: ${decay.edgeCountPercentile}`);
       }
       if (decay.edgeCountFloor !== undefined && (!Number.isInteger(decay.edgeCountFloor) || decay.edgeCountFloor < 0)) {
