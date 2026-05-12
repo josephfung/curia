@@ -6,7 +6,7 @@
 import { describe, it, expect } from 'vitest';
 import { KnowledgeGraphStore } from './knowledge-graph.js';
 import { EmbeddingService } from './embedding.js';
-import { EntityMemory } from './entity-memory.js';
+import { EntityMemory, FUZZY_RESOLVE_THRESHOLD, FUZZY_AMBIGUITY_FLOOR, MAX_ALIASES_PER_ENTITY } from './entity-memory.js';
 import { MemoryValidator, MAX_WRITES_PER_AGENT_TASK } from './validation.js';
 import { createSilentLogger } from '../logger.js';
 import type { KgNode } from './types.js';
@@ -339,6 +339,53 @@ describe('EntityMemory.addAlias', () => {
     const afterReject = await store.getNode(entity.id);
     expect(afterReject!.aliases).toHaveLength(10);
     expect(afterReject!.aliases).not.toContain('one-too-many');
+  });
+});
+
+describe('EntityMemory.resolveOrCreate — fuzzy fallback', () => {
+  it('creates a new entity when no fuzzy match exceeds the ambiguity floor', async () => {
+    const { mem } = makeEntityMemory();
+    // Create an entity with a completely unrelated name
+    await mem.createEntity({
+      type: 'organization', label: 'Alpha Industries', properties: {}, source: 'test',
+    });
+    await mem.createEntity({
+      type: 'organization', label: 'Beta Systems', properties: {}, source: 'test',
+    });
+
+    // This label is unrelated — should create, not match
+    const result = await mem.resolveOrCreate({
+      label: 'Gamma Innovations',
+      type: 'organization',
+      source: 'test',
+    });
+
+    expect(result.kind).toBe('created');
+  });
+
+  it('finds via alias so no fuzzy fallback is needed', async () => {
+    const { mem } = makeEntityMemory();
+    const { entity } = await mem.createEntity({
+      type: 'organization', label: 'Darlise Restaurant', properties: {}, source: 'test',
+    });
+
+    await mem.addAlias(entity.id, 'darlise');
+
+    const result = await mem.resolveOrCreate({
+      label: 'Darlise',
+      type: 'organization',
+      source: 'test',
+    });
+
+    expect(result.kind).toBe('found');
+    if (result.kind !== 'found') throw new Error('narrowing');
+    expect(result.node.id).toBe(entity.id);
+  });
+
+  it('exports threshold constants with correct relative ordering', () => {
+    expect(FUZZY_RESOLVE_THRESHOLD).toBe(0.90);
+    expect(FUZZY_AMBIGUITY_FLOOR).toBe(0.75);
+    expect(FUZZY_RESOLVE_THRESHOLD).toBeGreaterThan(FUZZY_AMBIGUITY_FLOOR);
   });
 });
 

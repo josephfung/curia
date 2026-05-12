@@ -97,6 +97,20 @@ const FACT_TYPE: NodeType = 'fact';
  *  real entities rarely have more than 3-4 name variants. */
 export const MAX_ALIASES_PER_ENTITY = 10;
 
+/** Cosine similarity threshold for auto-resolving a fuzzy entity match.
+ *  At or above this, the match is confident enough to return 'found' without
+ *  asking the CEO. Lower than the 0.92 fact dedup threshold because entity
+ *  labels are shorter phrases with less semantic signal. */
+export const FUZZY_RESOLVE_THRESHOLD = 0.90;
+
+/** Cosine similarity floor for surfacing ambiguous fuzzy candidates.
+ *  Below this, names are too different to be plausible variants. */
+export const FUZZY_AMBIGUITY_FLOOR = 0.75;
+
+/** Max candidates to retrieve from semantic search during fuzzy resolution.
+ *  Kept small — we only need the top few potential matches. */
+const FUZZY_SEARCH_LIMIT = 5;
+
 /**
  * EntityMemory: the high-level query layer that agents interact with.
  *
@@ -275,18 +289,8 @@ export class EntityMemory {
    * extract-facts takes candidates[0] to avoid stalling a batch job.
    */
   async resolveOrCreate(options: ResolveOrCreateOptions): Promise<ResolveOrCreateResult> {
+    // Phase 1: exact match on canonical label + aliases
     const matches = await this.store.findNodesByLabel(options.label);
-
-    if (matches.length === 0) {
-      const { entity } = await this.createEntity({
-        type: options.type,
-        label: options.label,
-        properties: {},
-        source: options.source,
-        confidence: options.confidence ?? 0.6,
-      });
-      return { kind: 'created', node: entity };
-    }
 
     if (matches.length === 1) {
       const node = matches[0]!;
@@ -306,14 +310,64 @@ export class EntityMemory {
       return { kind: 'found', node };
     }
 
-    // 2+ matches — prefer a node whose type matches the caller's expected type.
-    const typeMatch = matches.find(n => n.type === options.type);
-    if (typeMatch) {
-      return { kind: 'found', node: typeMatch };
+    if (matches.length > 1) {
+      // 2+ matches — prefer a node whose type matches the caller's expected type.
+      const typeMatch = matches.find(n => n.type === options.type);
+      if (typeMatch) {
+        return { kind: 'found', node: typeMatch };
+      }
+      // No type match — caller must ask the user to pick one.
+      return { kind: 'ambiguous', candidates: matches };
     }
 
-    // No type match — caller must ask the user to pick one.
-    return { kind: 'ambiguous', candidates: matches };
+    // Phase 2: no exact match — try embedding-based fuzzy resolution.
+    // semanticSearch() embeds the query and returns results sorted by score desc.
+    // Does not filter by type — consistent with single-match behavior above (which
+    // also returns 'found' across types). Type is only used as a tiebreaker.
+    const fuzzyResults = await this.store.semanticSearch(options.label, {
+      limit: FUZZY_SEARCH_LIMIT,
+    });
+
+    // Filter out fact nodes — we only want entity nodes for disambiguation
+    const entityCandidates = fuzzyResults.filter(r => r.node.type !== 'fact');
+
+    // Partition candidates by threshold
+    const autoResolve = entityCandidates.filter(r => r.score >= FUZZY_RESOLVE_THRESHOLD);
+    const ambiguous = entityCandidates.filter(
+      r => r.score >= FUZZY_AMBIGUITY_FLOOR && r.score < FUZZY_RESOLVE_THRESHOLD,
+    );
+
+    if (autoResolve.length > 0) {
+      // Pick the best match; use type as tiebreaker if multiple exceed the threshold
+      const typeMatch = autoResolve.find(r => r.node.type === options.type);
+      const best = typeMatch ?? autoResolve[0]!;
+
+      if (best.node.type !== options.type) {
+        this.logger.warn(
+          { label: options.label, expectedType: options.type, actualType: best.node.type, nodeId: best.node.id },
+          'resolveOrCreate: fuzzy auto-resolve type differs from caller hint',
+        );
+      }
+
+      // Learn the alias so future lookups resolve via exact match
+      await this.addAlias(best.node.id, options.label);
+
+      return { kind: 'found', node: best.node };
+    }
+
+    if (ambiguous.length > 0) {
+      return { kind: 'ambiguous', candidates: ambiguous.map(r => r.node) };
+    }
+
+    // Phase 3: no match at all — create a new entity
+    const { entity } = await this.createEntity({
+      type: options.type,
+      label: options.label,
+      properties: {},
+      source: options.source,
+      confidence: options.confidence ?? 0.6,
+    });
+    return { kind: 'created', node: entity };
   }
 
   /**
