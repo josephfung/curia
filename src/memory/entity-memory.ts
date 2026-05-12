@@ -1,4 +1,4 @@
-import type { KnowledgeGraphStore } from './knowledge-graph.js';
+import type { KnowledgeGraphStore, DecayWarningRow, DecayWarningActionResult } from './knowledge-graph.js';
 // EmbeddingService is part of the public constructor signature so callers don't need
 // to know whether it's used directly here or delegated to the store. Currently the store
 // owns all embedding calls (createNode embeds labels, semanticSearch embeds queries),
@@ -951,6 +951,21 @@ export class EntityMemory {
     options?: { limit?: number; type?: NodeType; maxSensitivity?: Sensitivity },
   ): Promise<SearchResult[]> {
     return this.store.semanticSearch(query, options);
+  }
+
+  /** List KG nodes flagged for CEO re-confirmation by the decay warning pass. */
+  async listDecayWarnings(): Promise<DecayWarningRow[]> {
+    return this.store.listDecayWarnings();
+  }
+
+  /** Confirm a warned node: reset its decay clock. Called when CEO verifies the fact is still current. */
+  async confirmDecayWarning(nodeId: string): Promise<DecayWarningActionResult> {
+    return this.store.confirmDecayWarning(nodeId);
+  }
+
+  /** Dismiss a warned node: archive it immediately. Called when CEO says it's no longer relevant. */
+  async dismissDecayWarning(nodeId: string): Promise<DecayWarningActionResult> {
+    return this.store.dismissDecayWarning(nodeId);
   }
 
   /**

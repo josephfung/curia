@@ -46,6 +46,25 @@ export interface TraversalOptions {
   maxDepth?: number; // defaults to 3 per spec
 }
 
+/** Returned by listDecayWarnings — one entry per warned node. */
+export interface DecayWarningRow {
+  nodeId: string;
+  nodeType: NodeType;
+  label: string;
+  confidence: number;
+  sensitivity: Sensitivity;
+  edgeCount: number;
+  reason: 'high_sensitivity' | 'high_connectivity' | 'both';
+  warnedAt: Date;
+}
+
+/** Returned by confirmDecayWarning and dismissDecayWarning. */
+export interface DecayWarningActionResult {
+  success: boolean;
+  /** The node's label, included so the skill can confirm back to the coordinator. */
+  label?: string;
+}
+
 // -- Internal backend interface --
 
 interface KnowledgeGraphBackend {
@@ -75,6 +94,14 @@ interface KnowledgeGraphBackend {
     limit: number,
     filters?: { type?: NodeType; maxSensitivity?: Sensitivity },
   ): Promise<SearchResult[]>;
+  /** List all warned (warned_at IS NOT NULL), non-archived nodes, sorted oldest-first. */
+  listDecayWarnings(): Promise<DecayWarningRow[]>;
+  /** Confirm a warned node: reset last_confirmed_at = NOW(), confidence = 1.0, warned_at = NULL.
+   *  Returns success: false if the node is not in a warned state. */
+  confirmDecayWarning(nodeId: string): Promise<DecayWarningActionResult>;
+  /** Dismiss a warned node: set archived_at = NOW(), warned_at = NULL.
+   *  Returns success: false if the node is not in a warned state. */
+  dismissDecayWarning(nodeId: string): Promise<DecayWarningActionResult>;
 }
 
 /**
@@ -344,6 +371,21 @@ export class KnowledgeGraphStore {
       type: options?.type,
       maxSensitivity: options?.maxSensitivity,
     });
+  }
+
+  /** List all warned (warned_at IS NOT NULL), non-archived nodes for the CEO re-confirmation flow. */
+  async listDecayWarnings(): Promise<DecayWarningRow[]> {
+    return this.backend.listDecayWarnings();
+  }
+
+  /** Confirm a warned node: reset decay clock (last_confirmed_at = NOW(), confidence = 1.0), clear warned_at. */
+  async confirmDecayWarning(nodeId: string): Promise<DecayWarningActionResult> {
+    return this.backend.confirmDecayWarning(nodeId);
+  }
+
+  /** Dismiss a warned node: archive it immediately, clear warned_at. */
+  async dismissDecayWarning(nodeId: string): Promise<DecayWarningActionResult> {
+    return this.backend.dismissDecayWarning(nodeId);
   }
 }
 
@@ -672,6 +714,75 @@ class PostgresBackend implements KnowledgeGraphBackend {
       edges: [], // Edges are not included in basic semantic search results
     }));
   }
+
+  async listDecayWarnings(): Promise<DecayWarningRow[]> {
+    const result = await this.pool.query<{
+      id: string;
+      type: NodeType;
+      label: string;
+      confidence: number;
+      sensitivity: Sensitivity;
+      edge_count: string;  // pg returns bigint counts as strings
+      warn_reason: 'high_sensitivity' | 'high_connectivity' | 'both';
+      warned_at: Date;
+    }>(
+      `SELECT n.id, n.type, n.label, n.confidence, n.sensitivity,
+              n.warn_reason,
+              n.warned_at,
+              COUNT(e.id) AS edge_count
+         FROM kg_nodes n
+         LEFT JOIN kg_edges e ON (e.source_node_id = n.id OR e.target_node_id = n.id)
+                               AND e.archived_at IS NULL
+        WHERE n.warned_at IS NOT NULL
+          AND n.archived_at IS NULL
+        GROUP BY n.id, n.type, n.label, n.confidence, n.sensitivity,
+                 n.warn_reason, n.warned_at
+        ORDER BY n.warned_at ASC`,
+    );
+    return result.rows.map(row => ({
+      nodeId: row.id,
+      nodeType: row.type,
+      label: row.label,
+      confidence: row.confidence,
+      sensitivity: row.sensitivity,
+      edgeCount: parseInt(row.edge_count, 10),
+      reason: row.warn_reason,
+      warnedAt: row.warned_at,
+    }));
+  }
+
+  async confirmDecayWarning(nodeId: string): Promise<DecayWarningActionResult> {
+    const result = await this.pool.query<{ label: string }>(
+      `UPDATE kg_nodes
+          SET last_confirmed_at = NOW(),
+              confidence = 1.0,
+              warned_at = NULL,
+              warn_reason = NULL
+        WHERE id = $1
+          AND warned_at IS NOT NULL
+          AND archived_at IS NULL
+        RETURNING label`,
+      [nodeId],
+    );
+    if (!result.rows[0]) return { success: false };
+    return { success: true, label: result.rows[0].label };
+  }
+
+  async dismissDecayWarning(nodeId: string): Promise<DecayWarningActionResult> {
+    const result = await this.pool.query<{ label: string }>(
+      `UPDATE kg_nodes
+          SET archived_at = NOW(),
+              warned_at = NULL,
+              warn_reason = NULL
+        WHERE id = $1
+          AND warned_at IS NOT NULL
+          AND archived_at IS NULL
+        RETURNING label`,
+      [nodeId],
+    );
+    if (!result.rows[0]) return { success: false };
+    return { success: true, label: result.rows[0].label };
+  }
 }
 
 // -- Postgres row types and converters --
@@ -772,6 +883,8 @@ class InMemoryBackend implements KnowledgeGraphBackend {
   // Soft-deleted IDs — rows are retained but invisible to all read paths
   private archivedNodes = new Set<string>();
   private archivedEdges = new Set<string>();
+  // warned state — tracks nodeId → { warnedAt, reason } for decay warning tests
+  private warnedNodes = new Map<string, { warnedAt: Date; reason: 'high_sensitivity' | 'high_connectivity' | 'both' }>();
 
   async createNode(node: KgNode): Promise<void> {
     this.nodes.set(node.id, node);
@@ -1048,5 +1161,53 @@ class InMemoryBackend implements KnowledgeGraphBackend {
     // Sort by similarity descending, then take top N
     scored.sort((a, b) => b.score - a.score);
     return scored.slice(0, limit);
+  }
+
+  async listDecayWarnings(): Promise<DecayWarningRow[]> {
+    const rows: DecayWarningRow[] = [];
+    for (const [nodeId, warnState] of this.warnedNodes) {
+      if (this.archivedNodes.has(nodeId)) continue;
+      const node = this.nodes.get(nodeId);
+      if (!node) continue;
+      const edgeCount = Array.from(this.edges.values()).filter(
+        e => !this.archivedEdges.has(e.id) && (e.sourceNodeId === nodeId || e.targetNodeId === nodeId),
+      ).length;
+      rows.push({
+        nodeId,
+        nodeType: node.type,
+        label: node.label,
+        confidence: node.temporal.confidence,
+        sensitivity: node.sensitivity,
+        edgeCount,
+        reason: warnState.reason,
+        warnedAt: warnState.warnedAt,
+      });
+    }
+    return rows.sort((a, b) => a.warnedAt.getTime() - b.warnedAt.getTime());
+  }
+
+  async confirmDecayWarning(nodeId: string): Promise<DecayWarningActionResult> {
+    if (!this.warnedNodes.has(nodeId) || this.archivedNodes.has(nodeId)) {
+      return { success: false };
+    }
+    const node = this.nodes.get(nodeId);
+    if (!node) return { success: false };
+    this.warnedNodes.delete(nodeId);
+    this.nodes.set(nodeId, {
+      ...node,
+      temporal: { ...node.temporal, lastConfirmedAt: new Date(), confidence: 1.0 },
+    });
+    return { success: true, label: node.label };
+  }
+
+  async dismissDecayWarning(nodeId: string): Promise<DecayWarningActionResult> {
+    if (!this.warnedNodes.has(nodeId) || this.archivedNodes.has(nodeId)) {
+      return { success: false };
+    }
+    const node = this.nodes.get(nodeId);
+    if (!node) return { success: false };
+    this.warnedNodes.delete(nodeId);
+    this.archivedNodes.add(nodeId);
+    return { success: true, label: node.label };
   }
 }
