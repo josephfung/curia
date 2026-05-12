@@ -179,13 +179,13 @@ export class DreamEngine {
       }
 
       const durationMs = Date.now() - start;
-      const { warnedRows: _warnedRows, ...counts } = result;
+      const { nodesDecayed, edgesDecayed, nodesWarned, nodesExpired, nodesArchived, edgesArchived } = result;
       this.logger.info(
-        { ...counts, durationMs },
+        { nodesDecayed, edgesDecayed, nodesWarned, nodesExpired, nodesArchived, edgesArchived, durationMs },
         'DreamEngine: decay pass complete',
       );
 
-      return { ...counts, durationMs };
+      return { nodesDecayed, edgesDecayed, nodesWarned, nodesExpired, nodesArchived, edgesArchived, durationMs };
     } catch (err) {
       await client.query('ROLLBACK');
       throw err;
