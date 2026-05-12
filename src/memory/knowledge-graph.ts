@@ -430,14 +430,15 @@ class PostgresBackend implements KnowledgeGraphBackend {
     // via KnowledgeGraphStore.updateNode() are durably persisted to the DB.
     await this.pool.query(
       `UPDATE kg_nodes
-       SET label = $1, properties = $2, embedding = $3::vector, last_confirmed_at = $4, confidence = $5
-       WHERE id = $6`,
+       SET label = $1, properties = $2, embedding = $3::vector, last_confirmed_at = $4, confidence = $5, aliases = $6
+       WHERE id = $7`,
       [
         node.label,
         JSON.stringify(node.properties),
         embeddingStr,
         node.temporal.lastConfirmedAt,
         node.temporal.confidence,
+        node.aliases,
         id,
       ],
     );
