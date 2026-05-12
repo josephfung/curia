@@ -16,6 +16,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Fixed
 
 - **file-parse skill** — fixed ESM import of `pdf-parse` (CJS-only package) using `createRequire`, which caused the skill to fail to load in production
+- **Coordinator: Google Drive sharing** — pinned Drive management skills (search, list, share, permissions) to the coordinator and added prompt guidance for Drive management and capability discovery, fixing a bug where the coordinator claimed it couldn't share Drive files despite the skills being registered
 
 ### Added
 
