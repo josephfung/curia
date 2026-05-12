@@ -326,18 +326,18 @@ describe('EntityMemory.addAlias', () => {
       type: 'organization', label: 'Darlise Restaurant', properties: {}, source: 'test',
     });
 
-    // Fill up to the cap (10)
-    for (let i = 0; i < 10; i++) {
+    // Fill up to the cap
+    for (let i = 0; i < MAX_ALIASES_PER_ENTITY; i++) {
       await mem.addAlias(entity.id, `alias-${i}`);
     }
 
     const updated = await store.getNode(entity.id);
-    expect(updated!.aliases).toHaveLength(10);
+    expect(updated!.aliases).toHaveLength(MAX_ALIASES_PER_ENTITY);
 
-    // 11th alias should be silently rejected
+    // One more alias should be silently rejected
     await mem.addAlias(entity.id, 'one-too-many');
     const afterReject = await store.getNode(entity.id);
-    expect(afterReject!.aliases).toHaveLength(10);
+    expect(afterReject!.aliases).toHaveLength(MAX_ALIASES_PER_ENTITY);
     expect(afterReject!.aliases).not.toContain('one-too-many');
   });
 });
