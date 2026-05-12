@@ -208,9 +208,9 @@ function makePoolWithResponses(responses: Array<{ rowCount?: number; rows?: unkn
 
 const warnConfig = {
   ...defaultConfig,
-  edgeCountPercentile: 0.95,
-  edgeCountFloor: 5,
-  warnHoldBackDays: 7,
+  edgeCountPercentile: 0.90,  // different from defaultConfig (0.95)
+  edgeCountFloor: 3,           // different from defaultConfig (5)
+  warnHoldBackDays: 14,        // different from defaultConfig (7)
 };
 
 describe('DreamEngine warn pass', () => {
@@ -275,8 +275,8 @@ describe('DreamEngine warn pass', () => {
 
     const thresholdQuery = queries.find(q => q.sql.includes('percentile_disc'));
     expect(thresholdQuery).toBeDefined();
-    expect(thresholdQuery!.params).toContain(0.95);
-    expect(thresholdQuery!.params).toContain(5);
+    expect(thresholdQuery!.params).toContain(0.90);
+    expect(thresholdQuery!.params).toContain(3);
   });
 
   it('sets warned_at and warn_reason in the warn UPDATE query', async () => {
