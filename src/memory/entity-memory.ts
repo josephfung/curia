@@ -357,7 +357,15 @@ export class EntityMemory {
     }
 
     const updatedAliases = [...node.aliases, lowerAlias];
-    await this.store.updateNode(nodeId, { aliases: updatedAliases });
+    try {
+      await this.store.updateNode(nodeId, { aliases: updatedAliases });
+    } catch (err) {
+      this.logger.warn(
+        { nodeId, alias, error: err instanceof Error ? err.message : String(err) },
+        'addAlias: failed to persist aliases — skipping',
+      );
+      // Best-effort: do not rethrow
+    }
   }
 
   /**
