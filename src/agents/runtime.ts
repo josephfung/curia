@@ -870,41 +870,51 @@ export class AgentRuntime {
     // Called after every successful provider.chat() — initial call and each retry.
     // Error responses are skipped: there is no API body to extract provenance from.
     // TODO: emit llm.call for error paths when spec 10 cost-on-failure policy is settled.
+    //
+    // The entire helper is wrapped in try-catch because llm.call is telemetry — any
+    // failure here (audit DB write error from the bus onEvent hook, JSON.stringify on a
+    // circular tool input, etc.) must not abort a valid agent response. A token tracking
+    // gap is acceptable; losing the user's answer is not.
     const publishLlmCallEvent = async (
       response: LLMResponse,
       callLatencyMs: number,
     ): Promise<void> => {
       if (response.type === 'error') return;
+      try {
+        // SHA-256 of the prompt input — stable fingerprint for deduplication and diffing.
+        // Includes messages and tools since both affect what the model sees.
+        const promptHash = createHash('sha256')
+          .update(JSON.stringify({ messages: params.messages, tools: params.tools ?? [] }))
+          .digest('hex');
 
-      // SHA-256 of the prompt input — stable fingerprint for deduplication and diffing.
-      // Includes messages and tools since both affect what the model sees.
-      const promptHash = createHash('sha256')
-        .update(JSON.stringify({ messages: params.messages, tools: params.tools ?? [] }))
-        .digest('hex');
+        // SHA-256 of the response output — fingerprint for the model's actual reply.
+        const responseHash = createHash('sha256')
+          .update(response.type === 'text' ? response.content : JSON.stringify(response.toolCalls))
+          .digest('hex');
 
-      // SHA-256 of the response output — fingerprint for the model's actual reply.
-      const responseHash = createHash('sha256')
-        .update(response.type === 'text' ? response.content : JSON.stringify(response.toolCalls))
-        .digest('hex');
-
-      const event = createLlmCall({
-        agentId,
-        conversationId: taskEvent.payload.conversationId,
-        requestedModel: response.provenance.requestedModel,
-        actualModel: response.provenance.actualModel,
-        provider: provider.id,
-        providerRequestId: response.provenance.providerRequestId,
-        inputTokens: response.usage.inputTokens,
-        outputTokens: response.usage.outputTokens,
-        cacheCreationInputTokens: response.usage.cacheCreationInputTokens,
-        cacheReadInputTokens: response.usage.cacheReadInputTokens,
-        estimatedCostUsd: estimateCostUsd(response.provenance.actualModel, response.usage, logger),
-        latencyMs: callLatencyMs,
-        promptHash,
-        responseHash,
-        parentEventId: taskEvent.id,
-      });
-      await bus.publish('agent', event);
+        const event = createLlmCall({
+          agentId,
+          conversationId: taskEvent.payload.conversationId,
+          requestedModel: response.provenance.requestedModel,
+          actualModel: response.provenance.actualModel,
+          provider: provider.id,
+          providerRequestId: response.provenance.providerRequestId,
+          inputTokens: response.usage.inputTokens,
+          outputTokens: response.usage.outputTokens,
+          cacheCreationInputTokens: response.usage.cacheCreationInputTokens,
+          cacheReadInputTokens: response.usage.cacheReadInputTokens,
+          estimatedCostUsd: estimateCostUsd(response.provenance.actualModel, response.usage, logger),
+          latencyMs: callLatencyMs,
+          promptHash,
+          responseHash,
+          parentEventId: taskEvent.id,
+        });
+        await bus.publish('agent', event);
+      } catch (err) {
+        // Telemetry failure must not abort the agent task. Log at error so the gap
+        // is visible in production, but allow chatWithRetry to return the response.
+        logger.error({ err, agentId, eventId: taskEvent.id }, 'Failed to publish llm.call telemetry event — token tracking gap');
+      }
     };
 
     const callStartMs = Date.now();
