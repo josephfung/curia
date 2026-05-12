@@ -1,0 +1,16 @@
+{
+  "name": "decay-warnings-list",
+  "description": "List knowledge graph nodes flagged for CEO re-confirmation before archival. Returns nodeId, label, nodeType, sensitivity, edgeCount, reason (high_sensitivity/high_connectivity/both), daysRemaining, and warnedAt per warning. Sorted oldest-first.",
+  "version": "1.0.0",
+  "sensitivity": "normal",
+  "action_risk": "none",
+  "inputs": {},
+  "outputs": {
+    "warnings": "object[]",
+    "count": "number"
+  },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 10000,
+  "capabilities": ["entityMemory"]
+}
