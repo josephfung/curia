@@ -56,8 +56,7 @@ export class DecayWarningsListHandler implements SkillHandler {
       };
     } catch (err) {
       ctx.log.error({ err }, 'decay-warnings-list: failed to list warnings');
-      const message = err instanceof Error ? err.message : String(err);
-      return { success: false, error: `Failed to list decay warnings: ${message}` };
+      return { success: false, error: 'Failed to retrieve decay warnings due to a database error. Please try again.' };
     }
   }
 }

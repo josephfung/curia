@@ -746,7 +746,9 @@ class PostgresBackend implements KnowledgeGraphBackend {
       confidence: row.confidence,
       sensitivity: row.sensitivity,
       edgeCount: parseInt(row.edge_count, 10),
-      reason: row.warn_reason,
+      // warn_reason is always set alongside warned_at, but the column is nullable.
+      // Defensive fallback prevents undefined flowing to the coordinator.
+      reason: row.warn_reason ?? 'high_sensitivity',
       warnedAt: row.warned_at,
     }));
   }

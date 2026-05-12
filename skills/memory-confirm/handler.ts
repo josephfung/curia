@@ -33,6 +33,7 @@ export class MemoryConfirmHandler implements SkillHandler {
       if (action === 'confirm') {
         const result = await ctx.entityMemory.confirmDecayWarning(nodeId);
         if (!result.success) {
+          ctx.log.warn({ nodeId, action }, 'memory-confirm: node not in warned state');
           return { success: false, error: `Node ${nodeId} is not in a warned state (may already be archived or confirmed).` };
         }
         ctx.log.info({ nodeId, label: result.label }, 'memory-confirm: confirmed node');
@@ -40,6 +41,7 @@ export class MemoryConfirmHandler implements SkillHandler {
       } else {
         const result = await ctx.entityMemory.dismissDecayWarning(nodeId);
         if (!result.success) {
+          ctx.log.warn({ nodeId, action }, 'memory-confirm: node not in warned state');
           return { success: false, error: `Node ${nodeId} is not in a warned state (may already be archived or dismissed).` };
         }
         ctx.log.info({ nodeId, label: result.label }, 'memory-confirm: dismissed node');
@@ -47,8 +49,7 @@ export class MemoryConfirmHandler implements SkillHandler {
       }
     } catch (err) {
       ctx.log.error({ err, nodeId, action }, 'memory-confirm: failed');
-      const message = err instanceof Error ? err.message : String(err);
-      return { success: false, error: `Failed to ${action} node: ${message}` };
+      return { success: false, error: `Failed to ${action} node due to a database error. Please try again.` };
     }
   }
 }
