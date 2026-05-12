@@ -13,7 +13,8 @@
     "decay_class": "string? (one of: permanent, slow_decay, fast_decay; defaults to slow_decay)",
     "sensitivity": "string? (one of: public, internal, confidential, restricted; when omitted the engine auto-classifies from content and defaults to internal)",
     "sensitivity_category": "string? (optional category hint for the auto-classifier, e.g. 'financial'; only used when sensitivity is omitted)",
-    "entity_type": "string? (optional node type hint for auto-creation when the entity does not exist yet — one of: person, organization, project, decision, event, concept; defaults to 'concept'; has no effect if the entity already exists or if entity is a node ID)"
+    "entity_type": "string? (optional node type hint for auto-creation when the entity does not exist yet — one of: person, organization, project, decision, event, concept; defaults to 'concept'; has no effect if the entity already exists or if entity is a node ID)",
+    "alias_for": "string? (original name variant the CEO used, supplied when re-submitting after disambiguation — e.g. 'Darlise' when the confirmed entity is 'Darlise Restaurant'. The handler stores this as an alias on the confirmed entity so future calls with the same variant resolve instantly via exact match rather than embedding search)"
   },
   "outputs": {
     "stored": "boolean — true when the fact was persisted (created or updated)",

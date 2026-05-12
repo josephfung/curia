@@ -23,6 +23,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **Fuzzy entity resolution** — `resolveOrCreate()` now falls back to embedding-based semantic search when exact label match fails, preventing duplicate KG nodes from name variants like "Darlise" / "Darlise Restaurant". Confirmed matches are stored as aliases for instant future resolution. New `addAlias()` method on `EntityMemory`; `memory-store` handler learns aliases after disambiguation and auto-resolve. New migration `038_add_kg_node_aliases.sql` adds `aliases TEXT[]` column with GIN index. (#467)
+
 - **Calendar Specialist agent** (`agents/calendar.yaml`) — new specialist that owns the full calendar domain: scheduling intelligence, free/busy queries, conflict resolution, event CRUD, and scheduling-related email composition. The coordinator delegates scheduling intent in natural language; the specialist resolves entities, finds available time, creates events, and composes meeting request/reschedule/cancellation email text. Includes preference-sensitive scheduling (queries memory for stored CEO preferences), multi-party timezone-aware slot finding, and conflict escalation patterns. (#499)
 - **General pronoun-resolution rule** — coordinator now resolves possessive pronouns ("my calendar", "your schedule") to explicit entity identities before delegating to any specialist, replacing the calendar-specific disambiguation section.
 
