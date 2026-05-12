@@ -154,13 +154,38 @@ export class DreamEngine {
 
       await client.query('COMMIT');
 
+      // Emit bus events AFTER commit — DB state is now authoritative.
+      // Bus/audit failures here don't affect the committed warn state.
+      // We catch per-node to ensure one bad publish doesn't prevent the rest.
+      for (const row of result.warnedRows) {
+        try {
+          await this.bus.publish('system', createMemoryDecayWarning({
+            nodeId: row.id,
+            nodeType: row.type as MemoryDecayWarningPayload['nodeType'],
+            label: row.label,
+            confidence: row.confidence,
+            sensitivity: row.sensitivity as MemoryDecayWarningPayload['sensitivity'],
+            edgeCount: parseInt(row.edge_count, 10),
+            reason: row.warn_reason as 'high_sensitivity' | 'high_connectivity' | 'both',
+          }));
+        } catch (err) {
+          // Log but do not rethrow — the DB write already committed.
+          // The node IS warned in the DB; the audit gap is noted.
+          this.logger.error(
+            { err, nodeId: row.id },
+            'DreamEngine: failed to emit memory.decay_warning — node is warned in DB but audit event was not delivered',
+          );
+        }
+      }
+
       const durationMs = Date.now() - start;
+      const { warnedRows: _warnedRows, ...counts } = result;
       this.logger.info(
-        { ...result, durationMs },
+        { ...counts, durationMs },
         'DreamEngine: decay pass complete',
       );
 
-      return { ...result, durationMs };
+      return { ...counts, durationMs };
     } catch (err) {
       await client.query('ROLLBACK');
       throw err;
@@ -173,7 +198,7 @@ export class DreamEngine {
     client: PoolClient,
     archiveThreshold: number,
     halfLifeDays: DecayConfig['halfLifeDays'],
-  ): Promise<Omit<DecayPassResult, 'durationMs'>> {
+  ): Promise<Omit<DecayPassResult, 'durationMs'> & { warnedRows: Array<{ id: string; type: string; label: string; confidence: number; sensitivity: string; edge_count: string; warn_reason: string; warned_at: Date }> }> {
     // Pass 1a: Decay slow_decay nodes
     // Uses COALESCE(last_decayed_at, last_confirmed_at) so each run only applies
     // decay for the interval since the last run rather than re-applying the full
@@ -253,7 +278,14 @@ export class DreamEngine {
        ) AS threshold`,
       [this.config.edgeCountPercentile, this.config.edgeCountFloor],
     );
-    const edgeCountThreshold = thresholdResult.rows[0]?.threshold ?? this.config.edgeCountFloor;
+    const computedThreshold = thresholdResult.rows[0]?.threshold;
+    if (computedThreshold == null) {
+      this.logger.warn(
+        { edgeCountFloor: this.config.edgeCountFloor },
+        'DreamEngine: percentile query returned no rows — using edgeCountFloor as threshold (graph may be empty)',
+      );
+    }
+    const edgeCountThreshold = computedThreshold ?? this.config.edgeCountFloor;
 
     // Step B: flag important nodes (skip already-warned nodes for idempotency)
     const warnResult = await client.query<{
@@ -305,23 +337,8 @@ export class DreamEngine {
 
     const nodesWarned = warnResult.rowCount ?? 0;
 
-    // Emit a bus event for each warned node (audit trail + future subscriber hooks)
-    for (const row of warnResult.rows) {
-      try {
-        await this.bus.publish('system', createMemoryDecayWarning({
-          nodeId: row.id,
-          nodeType: row.type as MemoryDecayWarningPayload['nodeType'],
-          label: row.label,
-          confidence: row.confidence,
-          sensitivity: row.sensitivity as MemoryDecayWarningPayload['sensitivity'],
-          edgeCount: parseInt(row.edge_count, 10),
-          reason: row.warn_reason as 'high_sensitivity' | 'high_connectivity' | 'both',
-        }));
-      } catch (err) {
-        this.logger.error({ err, nodeId: row.id }, 'DreamEngine: failed to emit memory.decay_warning');
-        throw err;
-      }
-    }
+    // NOTE: bus events for warnedRows are emitted in runDecayPass() AFTER COMMIT,
+    // so a publish failure cannot roll back committed DB state or cause audit/DB divergence.
 
     // Pass 2a: Archive expired warnings — nodes whose hold-back window has closed
     // without a CEO response. These were warned but never confirmed or dismissed.
@@ -370,6 +387,6 @@ export class DreamEngine {
 
     const edgesArchived = archiveEdgeResult.rowCount ?? 0;
 
-    return { nodesDecayed, edgesDecayed, nodesWarned, nodesExpired, nodesArchived, edgesArchived };
+    return { nodesDecayed, edgesDecayed, nodesWarned, nodesExpired, nodesArchived, edgesArchived, warnedRows: warnResult.rows };
   }
 }
