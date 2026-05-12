@@ -513,6 +513,7 @@ pinned_skills:
   - held-messages-list
   - held-messages-process
   - decay-warnings-list
+  - memory-confirm
   - scheduler-create
   - scheduler-list
   - scheduler-cancel
