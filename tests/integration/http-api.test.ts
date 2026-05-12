@@ -10,6 +10,7 @@ import { agentRoutes } from '../../src/channels/http/routes/agents.js';
 import { Dispatcher } from '../../src/dispatch/dispatcher.js';
 import { validateBearerToken } from '../../src/channels/http/auth.js';
 import type { LLMProvider } from '../../src/agents/llm/provider.js';
+const MOCK_PROVENANCE = { requestedModel: 'mock-model', actualModel: 'mock-model', providerRequestId: 'msg_mock_000' } as const;
 import type { ContactResolver } from '../../src/contacts/contact-resolver.js';
 import type { InboundSenderContext } from '../../src/contacts/types.js';
 import type { AgentTaskEvent } from '../../src/bus/events.js';
@@ -35,7 +36,8 @@ describe('HTTP API integration', () => {
     chat: async () => ({
       type: 'text' as const,
       content: 'Hello from the HTTP API!',
-      usage: { inputTokens: 10, outputTokens: 5 },
+      usage: { inputTokens: 10, outputTokens: 5, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+      provenance: MOCK_PROVENANCE,
     }),
   };
 
@@ -206,7 +208,8 @@ describe('HTTP API — bearer token authentication', () => {
       chat: async () => ({
         type: 'text' as const,
         content: 'auth test response',
-        usage: { inputTokens: 1, outputTokens: 1 },
+        usage: { inputTokens: 1, outputTokens: 1, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+        provenance: MOCK_PROVENANCE,
       }),
     };
 
@@ -361,7 +364,8 @@ describe('Trust scoring — unknown sender via HTTP', () => {
     chat: async () => ({
       type: 'text' as const,
       content: 'Trust test response',
-      usage: { inputTokens: 5, outputTokens: 3 },
+      usage: { inputTokens: 5, outputTokens: 3, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+      provenance: MOCK_PROVENANCE,
     }),
   };
 

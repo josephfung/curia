@@ -13,12 +13,14 @@ function setupTestBus() {
   const bus = new EventBus(logger);
   const memory = WorkingMemory.createInMemory();
 
+  const MOCK_PROVENANCE = { requestedModel: 'mock-model', actualModel: 'mock-model', providerRequestId: 'msg_mock_000' } as const;
   const mockProvider: LLMProvider = {
     id: 'mock',
     chat: vi.fn().mockResolvedValue({
       type: 'text' as const,
       content: 'Response from Coordinator',
-      usage: { inputTokens: 10, outputTokens: 5 },
+      usage: { inputTokens: 10, outputTokens: 5, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+      provenance: MOCK_PROVENANCE,
     }),
   };
 

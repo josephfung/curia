@@ -21,10 +21,84 @@ vi.mock('@anthropic-ai/sdk', () => ({
 }));
 
 // A valid text-only Anthropic API response. Used as the default mock return.
+// Includes id, model, and cache token fields to match the full Anthropic SDK shape.
 const makeTextResponse = () => ({
+  id: 'msg_test_123',
+  model: 'claude-sonnet-4-6',
   content: [{ type: 'text', text: 'hello' }],
-  usage: { input_tokens: 10, output_tokens: 5 },
+  usage: { input_tokens: 10, output_tokens: 5, cache_creation_input_tokens: null, cache_read_input_tokens: null },
   stop_reason: 'end_turn',
+});
+
+describe('AnthropicProvider — provenance and cache tokens', () => {
+  beforeEach(() => {
+    mockCreate.mockReset();
+    mockCreate.mockResolvedValue(makeTextResponse());
+  });
+
+  it('returns provenance with requestedModel, actualModel, and providerRequestId on text response', async () => {
+    const provider = new AnthropicProvider('test-key', createSilentLogger());
+    const result = await provider.chat({
+      messages: [{ role: 'user', content: 'Hello' }],
+      options: { model: 'claude-opus-4-6' },
+    });
+
+    expect(result.type).toBe('text');
+    if (result.type !== 'text') return;
+    expect(result.provenance.requestedModel).toBe('claude-opus-4-6');
+    expect(result.provenance.actualModel).toBe('claude-sonnet-4-6'); // from mock response.model
+    expect(result.provenance.providerRequestId).toBe('msg_test_123');
+  });
+
+  it('returns provenance on tool_use response', async () => {
+    mockCreate.mockResolvedValue({
+      id: 'msg_tool_456',
+      model: 'claude-sonnet-4-6',
+      content: [{ type: 'tool_use', id: 'tu_1', name: 'search', input: { query: 'test' } }],
+      usage: { input_tokens: 20, output_tokens: 10, cache_creation_input_tokens: null, cache_read_input_tokens: null },
+      stop_reason: 'tool_use',
+    });
+
+    const provider = new AnthropicProvider('test-key', createSilentLogger());
+    const result = await provider.chat({
+      messages: [{ role: 'user', content: 'Search something' }],
+      tools: [{ name: 'search', description: 'Search', input_schema: { type: 'object' as const, properties: {} } }],
+    });
+
+    expect(result.type).toBe('tool_use');
+    if (result.type !== 'tool_use') return;
+    expect(result.provenance.requestedModel).toBe('claude-sonnet-4-6'); // default model
+    expect(result.provenance.actualModel).toBe('claude-sonnet-4-6');
+    expect(result.provenance.providerRequestId).toBe('msg_tool_456');
+  });
+
+  it('defaults cache token fields to 0 when API returns null', async () => {
+    const provider = new AnthropicProvider('test-key', createSilentLogger());
+    const result = await provider.chat({ messages: [{ role: 'user', content: 'Hi' }] });
+
+    expect(result.type).toBe('text');
+    if (result.type !== 'text') return;
+    expect(result.usage.cacheCreationInputTokens).toBe(0);
+    expect(result.usage.cacheReadInputTokens).toBe(0);
+  });
+
+  it('captures non-zero cache tokens from the API response', async () => {
+    mockCreate.mockResolvedValue({
+      id: 'msg_cache_789',
+      model: 'claude-sonnet-4-6',
+      content: [{ type: 'text', text: 'cached' }],
+      usage: { input_tokens: 100, output_tokens: 50, cache_creation_input_tokens: 1500, cache_read_input_tokens: 300 },
+      stop_reason: 'end_turn',
+    });
+
+    const provider = new AnthropicProvider('test-key', createSilentLogger());
+    const result = await provider.chat({ messages: [{ role: 'user', content: 'Hi' }] });
+
+    expect(result.type).toBe('text');
+    if (result.type !== 'text') return;
+    expect(result.usage.cacheCreationInputTokens).toBe(1500);
+    expect(result.usage.cacheReadInputTokens).toBe(300);
+  });
 });
 
 describe('AnthropicProvider — prompt caching', () => {

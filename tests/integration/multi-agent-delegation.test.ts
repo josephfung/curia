@@ -6,6 +6,7 @@ import { SkillRegistry } from '../../src/skills/registry.js';
 import { ExecutionLayer } from '../../src/skills/execution.js';
 import { DelegateHandler } from '../../skills/delegate/handler.js';
 import type { LLMProvider, Message, ContentBlock } from '../../src/agents/llm/provider.js';
+const MOCK_PROVENANCE = { requestedModel: 'mock-model', actualModel: 'mock-model', providerRequestId: 'msg_mock_000' } as const;
 import type { SkillManifest } from '../../src/skills/types.js';
 import { createAgentTask } from '../../src/bus/events.js';
 import pino from 'pino';
@@ -54,7 +55,8 @@ describe('Multi-agent delegation integration', () => {
               name: 'delegate',
               input: { agent: 'research-analyst', task: 'Research the latest AI trends', conversation_id: 'test-conv' },
             }],
-            usage: { inputTokens: 100, outputTokens: 50 },
+            usage: { inputTokens: 100, outputTokens: 50, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+            provenance: MOCK_PROVENANCE,
           };
         }
         // After getting delegation result, synthesize
@@ -64,7 +66,8 @@ describe('Multi-agent delegation integration', () => {
         return {
           type: 'text' as const,
           content: `Based on my research team's findings${hasToolResult ? ' (delegation successful)' : ''}: AI is advancing rapidly.`,
-          usage: { inputTokens: 200, outputTokens: 60 },
+          usage: { inputTokens: 200, outputTokens: 60, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+          provenance: MOCK_PROVENANCE,
         };
       },
     };
@@ -78,7 +81,8 @@ describe('Multi-agent delegation integration', () => {
         return {
           type: 'text' as const,
           content: 'Key AI trends: LLMs are becoming multimodal, agents are emerging as a paradigm.',
-          usage: { inputTokens: 50, outputTokens: 30 },
+          usage: { inputTokens: 50, outputTokens: 30, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+          provenance: MOCK_PROVENANCE,
         };
       },
     };

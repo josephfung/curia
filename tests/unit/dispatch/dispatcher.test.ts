@@ -11,6 +11,9 @@ import type { InboundSenderContext, ContactStatus, TrustLevel, TaskOriginator } 
 import { HeldMessageService } from '../../../src/contacts/held-messages.js';
 import { createLogger } from '../../../src/logger.js';
 
+// Minimal provenance block for all mock LLM responses — satisfies the required field.
+const MOCK_PROVENANCE = { requestedModel: 'mock-model', actualModel: 'mock-model', providerRequestId: 'msg_mock_000' } as const;
+
 // -- Test helpers --
 
 /**
@@ -67,7 +70,8 @@ describe('Dispatcher', () => {
       chat: vi.fn().mockResolvedValue({
         type: 'text' as const,
         content: 'Response from Coordinator',
-        usage: { inputTokens: 10, outputTokens: 5 },
+        usage: { inputTokens: 10, outputTokens: 5, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+        provenance: MOCK_PROVENANCE,
       }),
     };
 
@@ -210,7 +214,8 @@ describe('Dispatcher unknown_sender: ignore policy', () => {
       chat: vi.fn().mockResolvedValue({
         type: 'text' as const,
         content: 'OK',
-        usage: { inputTokens: 1, outputTokens: 1 },
+        usage: { inputTokens: 1, outputTokens: 1, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+        provenance: MOCK_PROVENANCE,
       }),
     };
 
@@ -386,7 +391,8 @@ describe('Dispatcher — messageTrustScore', () => {
       chat: vi.fn().mockResolvedValue({
         type: 'text' as const,
         content: 'OK',
-        usage: { inputTokens: 1, outputTokens: 1 },
+        usage: { inputTokens: 1, outputTokens: 1, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+        provenance: MOCK_PROVENANCE,
       }),
     };
     const coordinator = new AgentRuntime({
@@ -583,7 +589,8 @@ describe('Dispatcher — contact.unknown event payload', () => {
       chat: vi.fn().mockResolvedValue({
         type: 'text' as const,
         content: 'OK',
-        usage: { inputTokens: 1, outputTokens: 1 },
+        usage: { inputTokens: 1, outputTokens: 1, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+        provenance: MOCK_PROVENANCE,
       }),
     };
     const coordinator = new AgentRuntime({
@@ -669,7 +676,8 @@ describe('Dispatcher — rate limiting', () => {
       chat: vi.fn().mockResolvedValue({
         type: 'text' as const,
         content: 'OK',
-        usage: { inputTokens: 1, outputTokens: 1 },
+        usage: { inputTokens: 1, outputTokens: 1, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+        provenance: MOCK_PROVENANCE,
       }),
     };
     const coordinator = new AgentRuntime({
@@ -1070,7 +1078,8 @@ describe('Dispatcher message size limit', () => {
       chat: vi.fn().mockResolvedValue({
         type: 'text' as const,
         content: 'ok',
-        usage: { inputTokens: 1, outputTokens: 1 },
+        usage: { inputTokens: 1, outputTokens: 1, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+        provenance: MOCK_PROVENANCE,
       }),
     };
     const coordinator = new AgentRuntime({
@@ -1420,7 +1429,8 @@ describe('Dispatcher thread-originated trust bypass', () => {
       chat: vi.fn().mockResolvedValue({
         type: 'text' as const,
         content: 'Reply from Coordinator',
-        usage: { inputTokens: 10, outputTokens: 5 },
+        usage: { inputTokens: 10, outputTokens: 5, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+        provenance: MOCK_PROVENANCE,
       }),
     };
     const coordinator = new AgentRuntime({

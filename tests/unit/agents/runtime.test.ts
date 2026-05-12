@@ -8,13 +8,22 @@ import { createLogger } from '../../../src/logger.js';
 import { WorkingMemory } from '../../../src/memory/working-memory.js';
 import type { AgentError } from '../../../src/errors/types.js';
 
+// Minimal provenance block for mock LLM responses — satisfies the required field
+// without tying tests to specific model names.
+const MOCK_PROVENANCE = {
+  requestedModel: 'mock-model',
+  actualModel: 'mock-model',
+  providerRequestId: 'msg_mock_000',
+} as const;
+
 function createMockProvider(response: string): LLMProvider {
   return {
     id: 'mock',
     chat: vi.fn().mockResolvedValue({
       type: 'text' as const,
       content: response,
-      usage: { inputTokens: 10, outputTokens: 5 },
+      usage: { inputTokens: 10, outputTokens: 5, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+      provenance: MOCK_PROVENANCE,
     }),
   };
 }
@@ -403,13 +412,15 @@ function createToolUseProvider(toolCallName: string, toolCallInput: Record<strin
         return {
           type: 'tool_use' as const,
           toolCalls: [{ id: 'call-1', name: toolCallName, input: toolCallInput }],
-          usage: { inputTokens: 100, outputTokens: 50 },
+          usage: { inputTokens: 100, outputTokens: 50, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+          provenance: MOCK_PROVENANCE,
         };
       }
       return {
         type: 'text' as const,
         content: `Tool result was processed. Call count: ${callCount}`,
-        usage: { inputTokens: 200, outputTokens: 60 },
+        usage: { inputTokens: 200, outputTokens: 60, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+        provenance: MOCK_PROVENANCE,
       };
     },
   };
@@ -528,14 +539,16 @@ describe('AgentRuntime tool-use loop', () => {
           return {
             type: 'tool_use' as const,
             toolCalls: [{ id: 'call-extract-1', name: 'extract-relationships', input: { text: 'Hello', source: 'test' } }],
-            usage: { inputTokens: 100, outputTokens: 20 },
+            usage: { inputTokens: 100, outputTokens: 20, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+            provenance: MOCK_PROVENANCE,
           };
         }
         // Second call: LLM returns end_turn with empty content array
         return {
           type: 'text' as const,
           content: '',
-          usage: { inputTokens: 150, outputTokens: 0 },
+          usage: { inputTokens: 150, outputTokens: 0, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+          provenance: MOCK_PROVENANCE,
         };
       }),
     };
@@ -592,13 +605,15 @@ describe('AgentRuntime tool-use loop', () => {
           return {
             type: 'tool_use' as const,
             toolCalls: [{ id: 'call-extract-2', name: 'extract-relationships', input: { text: 'Hello', source: 'test' } }],
-            usage: { inputTokens: 100, outputTokens: 20 },
+            usage: { inputTokens: 100, outputTokens: 20, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+            provenance: MOCK_PROVENANCE,
           };
         }
         return {
           type: 'text' as const,
           content: '\n',
-          usage: { inputTokens: 150, outputTokens: 1 },
+          usage: { inputTokens: 150, outputTokens: 1, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+          provenance: MOCK_PROVENANCE,
         };
       }),
     };
@@ -651,7 +666,8 @@ describe('AgentRuntime tool-use loop', () => {
         type: 'tool_use' as const,
         toolCalls: [{ id: `call-${callId++}`, name: 'web-fetch', input: { url: 'https://example.com' } }],
         content: 'Still trying...',
-        usage: { inputTokens: 50, outputTokens: 20 },
+        usage: { inputTokens: 50, outputTokens: 20, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+        provenance: MOCK_PROVENANCE,
       }),
     };
 
@@ -717,7 +733,8 @@ describe('AgentRuntime error budget', () => {
       chat: vi.fn(async () => ({
         type: 'tool_use' as const,
         toolCalls: [{ id: `call-${callId++}`, name: 'web-fetch', input: {} }],
-        usage: { inputTokens: 50, outputTokens: 20 },
+        usage: { inputTokens: 50, outputTokens: 20, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+        provenance: MOCK_PROVENANCE,
       })),
     };
 
@@ -779,7 +796,8 @@ describe('AgentRuntime error budget', () => {
           { id: `call-${callId++}`, name: 'web-fetch', input: {} },
           { id: `call-${callId++}`, name: 'web-fetch', input: {} },
         ],
-        usage: { inputTokens: 50, outputTokens: 20 },
+        usage: { inputTokens: 50, outputTokens: 20, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+        provenance: MOCK_PROVENANCE,
       })),
     };
 
@@ -844,13 +862,15 @@ describe('AgentRuntime error budget', () => {
           return {
             type: 'tool_use' as const,
             toolCalls: [{ id: `call-${callId++}`, name: 'web-fetch', input: {} }],
-            usage: { inputTokens: 50, outputTokens: 20 },
+            usage: { inputTokens: 50, outputTokens: 20, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+            provenance: MOCK_PROVENANCE,
           };
         }
         return {
           type: 'text' as const,
           content: 'Done!',
-          usage: { inputTokens: 50, outputTokens: 20 },
+          usage: { inputTokens: 50, outputTokens: 20, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+          provenance: MOCK_PROVENANCE,
         };
       }),
     };
@@ -913,7 +933,8 @@ describe('AgentRuntime error budget', () => {
       chat: vi.fn(async () => ({
         type: 'tool_use' as const,
         toolCalls: [{ id: `call-${callId++}`, name: 'web-fetch', input: {} }],
-        usage: { inputTokens: 50, outputTokens: 20 },
+        usage: { inputTokens: 50, outputTokens: 20, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+        provenance: MOCK_PROVENANCE,
       })),
     };
 
@@ -974,13 +995,15 @@ describe('AgentRuntime structured error injection', () => {
           return {
             type: 'tool_use' as const,
             toolCalls: [{ id: 'call-err-1', name: 'email-send', input: { to: 'test@example.com' } }],
-            usage: { inputTokens: 50, outputTokens: 20 },
+            usage: { inputTokens: 50, outputTokens: 20, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+            provenance: MOCK_PROVENANCE,
           };
         }
         return {
           type: 'text' as const,
           content: 'I see the error, let me try differently.',
-          usage: { inputTokens: 100, outputTokens: 30 },
+          usage: { inputTokens: 100, outputTokens: 30, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+          provenance: MOCK_PROVENANCE,
         };
       }),
     };
@@ -1085,7 +1108,8 @@ describe('AgentRuntime chatWithRetry', () => {
         return {
           type: 'text' as const,
           content: 'Success after retry!',
-          usage: { inputTokens: 50, outputTokens: 20 },
+          usage: { inputTokens: 50, outputTokens: 20, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+          provenance: MOCK_PROVENANCE,
         };
       }),
     };
@@ -1192,7 +1216,7 @@ describe('AgentRuntime chatWithRetry', () => {
         id: 'mock',
         chat: vi.fn(async ({ messages }) => {
           capturedMessages = messages;
-          return { type: 'text' as const, content: 'OK', usage: { inputTokens: 10, outputTokens: 2 } };
+          return { type: 'text' as const, content: 'OK', usage: { inputTokens: 10, outputTokens: 2, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 }, provenance: MOCK_PROVENANCE };
         }),
       };
 
@@ -1254,7 +1278,7 @@ describe('AgentRuntime chatWithRetry', () => {
         id: 'mock',
         chat: vi.fn(async ({ messages }) => {
           capturedMessages = messages;
-          return { type: 'text' as const, content: 'OK', usage: { inputTokens: 10, outputTokens: 2 } };
+          return { type: 'text' as const, content: 'OK', usage: { inputTokens: 10, outputTokens: 2, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 }, provenance: MOCK_PROVENANCE };
         }),
       };
 
@@ -1322,7 +1346,7 @@ describe('AgentRuntime chatWithRetry', () => {
         id: 'mock',
         chat: vi.fn(async ({ messages }) => {
           capturedMessages = messages;
-          return { type: 'text' as const, content: 'OK', usage: { inputTokens: 10, outputTokens: 2 } };
+          return { type: 'text' as const, content: 'OK', usage: { inputTokens: 10, outputTokens: 2, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 }, provenance: MOCK_PROVENANCE };
         }),
       };
 
@@ -1374,10 +1398,11 @@ describe('AgentRuntime chatWithRetry', () => {
             return {
               type: 'tool_use' as const,
               toolCalls: [{ id: 'call-delegate', name: 'delegate', input: { agent: 'essay-editor', task: 'polish essay' } }],
-              usage: { inputTokens: 100, outputTokens: 50 },
+              usage: { inputTokens: 100, outputTokens: 50, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+              provenance: MOCK_PROVENANCE,
             };
           }
-          return { type: 'text' as const, content: 'Done', usage: { inputTokens: 200, outputTokens: 60 } };
+          return { type: 'text' as const, content: 'Done', usage: { inputTokens: 200, outputTokens: 60, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 }, provenance: MOCK_PROVENANCE };
         }),
       };
 
@@ -1434,10 +1459,11 @@ describe('AgentRuntime chatWithRetry', () => {
             return {
               type: 'tool_use' as const,
               toolCalls: [{ id: 'call-delegate-2', name: 'delegate', input: { agent: 'essay-editor', task: 'polish', timeout_ms: 30000 } }],
-              usage: { inputTokens: 100, outputTokens: 50 },
+              usage: { inputTokens: 100, outputTokens: 50, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+              provenance: MOCK_PROVENANCE,
             };
           }
-          return { type: 'text' as const, content: 'Done', usage: { inputTokens: 200, outputTokens: 60 } };
+          return { type: 'text' as const, content: 'Done', usage: { inputTokens: 200, outputTokens: 60, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 }, provenance: MOCK_PROVENANCE };
         }),
       };
 
@@ -1496,10 +1522,11 @@ describe('AgentRuntime chatWithRetry', () => {
             return {
               type: 'tool_use' as const,
               toolCalls: [{ id: 'call-delegate-sched', name: 'delegate', input: { agent: 'essay-editor', task: 'polish essay' } }],
-              usage: { inputTokens: 100, outputTokens: 50 },
+              usage: { inputTokens: 100, outputTokens: 50, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+              provenance: MOCK_PROVENANCE,
             };
           }
-          return { type: 'text' as const, content: 'Done', usage: { inputTokens: 200, outputTokens: 60 } };
+          return { type: 'text' as const, content: 'Done', usage: { inputTokens: 200, outputTokens: 60, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 }, provenance: MOCK_PROVENANCE };
         }),
       };
 
@@ -1558,10 +1585,11 @@ describe('AgentRuntime chatWithRetry', () => {
             return {
               type: 'tool_use' as const,
               toolCalls: [{ id: 'call-delegate-3', name: 'delegate', input: { agent: 'research-analyst', task: 'research' } }],
-              usage: { inputTokens: 100, outputTokens: 50 },
+              usage: { inputTokens: 100, outputTokens: 50, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+              provenance: MOCK_PROVENANCE,
             };
           }
-          return { type: 'text' as const, content: 'Done', usage: { inputTokens: 200, outputTokens: 60 } };
+          return { type: 'text' as const, content: 'Done', usage: { inputTokens: 200, outputTokens: 60, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 }, provenance: MOCK_PROVENANCE };
         }),
       };
 
@@ -1616,10 +1644,11 @@ describe('AgentRuntime chatWithRetry', () => {
               type: 'tool_use' as const,
               // LLM uses @-mention style — runtime should strip the '@'
               toolCalls: [{ id: 'call-delegate-at', name: 'delegate', input: { agent: '@essay-editor', task: 'polish essay' } }],
-              usage: { inputTokens: 100, outputTokens: 50 },
+              usage: { inputTokens: 100, outputTokens: 50, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+              provenance: MOCK_PROVENANCE,
             };
           }
-          return { type: 'text' as const, content: 'Done', usage: { inputTokens: 200, outputTokens: 60 } };
+          return { type: 'text' as const, content: 'Done', usage: { inputTokens: 200, outputTokens: 60, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 }, provenance: MOCK_PROVENANCE };
         }),
       };
 
@@ -1692,14 +1721,16 @@ describe('AgentRuntime Bullpen context refresh', () => {
           return {
             type: 'tool_use' as const,
             toolCalls: [{ id: 'call-bp-1', name: 'web-fetch', input: { url: 'https://example.com' } }],
-            usage: { inputTokens: 100, outputTokens: 50 },
+            usage: { inputTokens: 100, outputTokens: 50, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+            provenance: MOCK_PROVENANCE,
           };
         }
         // Second call: LLM returns text (exit tool-use loop)
         return {
           type: 'text' as const,
           content: 'All done.',
-          usage: { inputTokens: 200, outputTokens: 60 },
+          usage: { inputTokens: 200, outputTokens: 60, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+          provenance: MOCK_PROVENANCE,
         };
       }),
     };
@@ -1814,13 +1845,15 @@ describe('AgentRuntime Bullpen context refresh', () => {
           return {
             type: 'tool_use' as const,
             toolCalls: [{ id: 'call-bp-2', name: 'web-fetch', input: {} }],
-            usage: { inputTokens: 100, outputTokens: 50 },
+            usage: { inputTokens: 100, outputTokens: 50, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+            provenance: MOCK_PROVENANCE,
           };
         }
         return {
           type: 'text' as const,
           content: 'Done.',
-          usage: { inputTokens: 200, outputTokens: 60 },
+          usage: { inputTokens: 200, outputTokens: 60, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+          provenance: MOCK_PROVENANCE,
         };
       }),
     };
@@ -1905,13 +1938,15 @@ describe('AgentRuntime Bullpen context refresh', () => {
           return {
             type: 'tool_use' as const,
             toolCalls: [{ id: 'call-bp-3', name: 'web-fetch', input: {} }],
-            usage: { inputTokens: 100, outputTokens: 50 },
+            usage: { inputTokens: 100, outputTokens: 50, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+            provenance: MOCK_PROVENANCE,
           };
         }
         return {
           type: 'text' as const,
           content: 'Done.',
-          usage: { inputTokens: 200, outputTokens: 60 },
+          usage: { inputTokens: 200, outputTokens: 60, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+          provenance: MOCK_PROVENANCE,
         };
       }),
     };
