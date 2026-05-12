@@ -15,7 +15,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
-- **Spec docs** — normalized Implementation Status tables across all 17 specs: replaced vague status labels with item-by-item counts, stripped explanatory suffixes and issue numbers from "Done" entries, standardized section headings, added spec 17 (Meeting Debrief) to the master index in `00-overview.md`
+- **Spec docs** — updated spec documentation to match implementation status
 
 ### Removed
 
