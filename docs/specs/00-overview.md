@@ -10,7 +10,7 @@
 | 00 | This file | Architecture, layers, bus, message flow, design principles | ✅ Implemented |
 | 01 | [Memory System](01-memory-system.md) | Knowledge graph, entity memory, working memory, Bullpen, embeddings | ✅ 12 of 12 Done |
 | 02 | [Agent System](02-agent-system.md) | Agent definition, lifecycle, state, execution modes, LLM providers | 16 of 22 Done |
-| 03 | [Skills & Execution](03-skills-and-execution.md) | Local skills, MCP, discovery, secrets, permissions | 17 of 22 Done |
+| 03 | [Skills & Execution](03-skills-and-execution.md) | Local skills, MCP, discovery, secrets, permissions | 17 of 20 Done |
 | 04 | [Channels](04-channels.md) | Adapter interface, CLI, HTTP, Signal, Email channels, message normalization | 8 of 15 Done |
 | 05 | [Error Recovery](05-error-recovery.md) | Error budgets, state continuity, pattern detection, failure model | 10 of 18 Done |
 | 06 | [Audit & Security](06-audit-and-security.md) | Audit log, redaction, tool sanitization, intent drift, security | 20 of 22 Done |
