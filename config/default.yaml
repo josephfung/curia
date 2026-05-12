@@ -239,6 +239,12 @@ dreaming:
       permanent: null
       slow_decay: 180
       fast_decay: 21
+    # Decay warning (#280): warn important nodes before archiving.
+    # A node is "important" if it has high sensitivity (confidential/restricted)
+    # OR high connectivity (edge count >= p95 of all nodes, floor 5).
+    edgeCountPercentile: 0.95  # top 5% by edge count triggers a warning
+    edgeCountFloor: 5           # minimum edge count threshold regardless of percentile
+    warnHoldBackDays: 7         # days to hold a warned node before archiving anyway
 
   # Autonomy scoring — background Phase 3 auto-adjustment (issue #148).
   # Runs daily alongside the decay pass. Scores completed actions on three

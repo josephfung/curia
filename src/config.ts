@@ -211,6 +211,12 @@ export interface YamlConfig {
         slow_decay?: number;
         fast_decay?: number;
       };
+      /** Percentile (0–1) for computing edge-count threshold. Default: 0.95 (top 5%). */
+      edgeCountPercentile?: number;
+      /** Minimum edge count threshold. Default: 5. */
+      edgeCountFloor?: number;
+      /** Days a warned node is held back from archiving. Default: 7. */
+      warnHoldBackDays?: number;
     };
     autonomy_scoring?: {
       intervalMs?: number;
@@ -519,6 +525,15 @@ export function loadYamlConfig(configDir: string): YamlConfig {
         if (halfLifeDays.permanent !== undefined && halfLifeDays.permanent !== null) {
           throw new Error(`dreaming.decay.halfLifeDays.permanent must be null (permanent nodes never decay), got: ${String(halfLifeDays.permanent)}`);
         }
+      }
+      if (decay.edgeCountPercentile !== undefined && (typeof decay.edgeCountPercentile !== 'number' || decay.edgeCountPercentile < 0 || decay.edgeCountPercentile > 1)) {
+        throw new Error(`dreaming.decay.edgeCountPercentile must be a number between 0 and 1, got: ${decay.edgeCountPercentile}`);
+      }
+      if (decay.edgeCountFloor !== undefined && (!Number.isInteger(decay.edgeCountFloor) || decay.edgeCountFloor < 0)) {
+        throw new Error(`dreaming.decay.edgeCountFloor must be a non-negative integer, got: ${decay.edgeCountFloor}`);
+      }
+      if (decay.warnHoldBackDays !== undefined && (!Number.isInteger(decay.warnHoldBackDays) || decay.warnHoldBackDays < 0)) {
+        throw new Error(`dreaming.decay.warnHoldBackDays must be a non-negative integer, got: ${decay.warnHoldBackDays}`);
       }
     }
     const autonomyScoring = dreaming.autonomy_scoring;

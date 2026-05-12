@@ -47,6 +47,9 @@ const defaultConfig = {
     slow_decay: 180,
     fast_decay: 21,
   },
+  edgeCountPercentile: 0.95,
+  edgeCountFloor: 5,
+  warnHoldBackDays: 7,
 };
 
 describe('DreamEngine.runDecayPass', () => {
