@@ -13,6 +13,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Google Workspace tools** pinned to coordinator agent — `create_doc`, `modify_doc_text`, formatting tools (`insert_doc_elements`, `update_paragraph_style`), sharing tools (`set_drive_file_permissions`, `get_drive_shareable_link`), and document comments were missing from `pinned_skills`, forcing the coordinator to discover them via `skill-registry` each conversation. The substring-based search couldn't find them (see #497), causing repeated "No doc creation skill available" failures.
+
 ---
 
 ## [0.27.0] — 2026-05-12 — "Gerty"
