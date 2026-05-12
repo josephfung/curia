@@ -1,0 +1,21 @@
+{
+  "name": "memory-confirm",
+  "description": "Confirm or dismiss a knowledge graph node flagged by the decay warning pass. Use 'confirm' when the CEO says a fact is still accurate (resets decay clock to full confidence). Use 'dismiss' when the CEO says it's no longer relevant (archives immediately). Returns success, the action taken, and the node label.",
+  "version": "1.0.0",
+  "sensitivity": "normal",
+  "action_risk": "low",
+  "inputs": {
+    "nodeId": "string",
+    "action": "string"
+  },
+  "outputs": {
+    "success": "boolean",
+    "action": "string",
+    "nodeId": "string",
+    "label": "string"
+  },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 10000,
+  "capabilities": ["entityMemory"]
+}
