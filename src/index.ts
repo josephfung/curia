@@ -865,6 +865,9 @@ async function main(): Promise<void> {
       slow_decay: yamlConfig.dreaming?.decay?.halfLifeDays?.slow_decay ?? 180,
       fast_decay: yamlConfig.dreaming?.decay?.halfLifeDays?.fast_decay ?? 21,
     },
+    edgeCountPercentile: yamlConfig.dreaming?.decay?.edgeCountPercentile ?? 0.95,
+    edgeCountFloor: yamlConfig.dreaming?.decay?.edgeCountFloor ?? 5,
+    warnHoldBackDays: yamlConfig.dreaming?.decay?.warnHoldBackDays ?? 7,
   };
   // Autonomy scoring pass — Phase 3 automatic score adjustment (issue #148).
   // Runs as a sibling DreamEngine pass alongside memory decay.

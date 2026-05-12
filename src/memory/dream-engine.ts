@@ -13,6 +13,16 @@ export interface DecayConfig {
     slow_decay: number;
     fast_decay: number;
   };
+  /** Percentile (0–1) used to compute the edge-count threshold for "high connectivity".
+   *  A node is high-connectivity if its edge count >= percentile_disc(edgeCountPercentile)
+   *  across all non-archived nodes, subject to edgeCountFloor. Default: 0.95 (top 5%). */
+  edgeCountPercentile: number;
+  /** Minimum edge count for the high-connectivity criterion regardless of percentile.
+   *  Prevents warnings on trivially-connected nodes in a sparse graph. Default: 5. */
+  edgeCountFloor: number;
+  /** Days a warned node is held back from archiving while awaiting CEO re-confirmation.
+   *  After this window, the node is archived by the next decay pass. Default: 7. */
+  warnHoldBackDays: number;
 }
 
 export interface DecayPassResult {
