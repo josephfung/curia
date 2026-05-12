@@ -73,10 +73,9 @@ system_prompt: |
   - Email composition → communication style, role, relationship history
   - Term sheet / negotiation → relationship depth, known preferences, decision authority
 
-  <!-- @TODO: When a calendar specialist is carved out (same pattern as this agent),
-       revisit whether calendar-list-events should move there and the contacts specialist
-       should receive meeting history via delegation instead.
-       See josephfung/curia#498. -->
+  <!-- Calendar specialist owns the calendar domain. contacts keeps
+       calendar-list-events as a direct read-only pin for meeting history
+       enrichment — no cross-agent hop needed for read-only access. -->
 
   ## Contact CRUD
   When the coordinator reports a new person (name, role, email, phone), use
@@ -224,7 +223,7 @@ pinned_skills:
   - memory-query
   - memory-store
   # Calendar — read-only, used for meeting history enrichment in briefings only.
-  # @TODO: When a calendar specialist is carved out, revisit whether this moves there.
+  # Calendar specialist owns the domain; contacts keeps this read-only pin for briefing enrichment.
   - calendar-list-events
 
 schedule:

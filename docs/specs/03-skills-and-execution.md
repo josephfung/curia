@@ -182,7 +182,7 @@ The framework ships with these skills (in `skills/` as part of core):
 - `entity-context` — assemble full context for a list of contacts/entities
 - `get-autonomy` / `set-autonomy` — read and write the global autonomy score (CEO only)
 - `bullpen` — inter-agent discussion threads
-- Template skills (`template-meeting-request`, `template-reschedule`, etc.) — structured outbound templates
+- `template-doc-request` — structured document request template (scheduling templates retired; calendar specialist composes scheduling email text directly)
 - `image-generate` — generate an image from a text prompt via DALL-E 3; returns a temporary CDN URL (~1hr TTL)
 
 **Not yet built:** `file-reader`, `file-writer`
