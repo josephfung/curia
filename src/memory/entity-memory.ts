@@ -278,10 +278,15 @@ export class EntityMemory {
    * Find or create an entity node by label.
    *
    * Resolution logic (in order):
-   *   0 matches → create via createEntity(), return { kind: 'created', node }
-   *   1 match   → return { kind: 'found', node }
-   *   2+ matches, one has the expected type → return { kind: 'found', node: typeMatch }
-   *   2+ matches, no type match → return { kind: 'ambiguous', candidates }
+   *   1 exact match  → return { kind: 'found', node }
+   *   2+ exact matches, one has the expected type → return { kind: 'found', node: typeMatch }
+   *   2+ exact matches, no type match → return { kind: 'ambiguous', candidates }
+   *   0 exact matches, fuzzy score ≥ 0.90 → auto-resolve, learn alias, return { kind: 'found', node }
+   *   0 exact matches, fuzzy score 0.75–0.90 → return { kind: 'ambiguous', candidates }
+   *   0 exact matches, fuzzy score < 0.75 → create via createEntity(), return { kind: 'created', node }
+   *
+   * Three phases: (1) exact label match via findNodesByLabel, (2) embedding-based fuzzy
+   * resolution when exact match finds nothing, (3) create if no plausible candidate exists.
    *
    * This is the shared primitive used by both memory-store (agent-directed writes)
    * and extract-facts (background batch extraction). Callers handle 'ambiguous'
@@ -329,7 +334,7 @@ export class EntityMemory {
     });
 
     // Filter out fact nodes — we only want entity nodes for disambiguation
-    const entityCandidates = fuzzyResults.filter(r => r.node.type !== 'fact');
+    const entityCandidates = fuzzyResults.filter(r => r.node.type !== FACT_TYPE);
 
     // Partition candidates by threshold
     const autoResolve = entityCandidates.filter(r => r.score >= FUZZY_RESOLVE_THRESHOLD);
@@ -352,7 +357,10 @@ export class EntityMemory {
       // Learn the alias so future lookups resolve via exact match
       await this.addAlias(best.node.id, options.label);
 
-      return { kind: 'found', node: best.node };
+      // Re-fetch so the returned node reflects the newly learned alias.
+      // addAlias is best-effort — if re-fetch fails, fall back to the pre-alias snapshot.
+      const refreshed = await this.store.getNode(best.node.id);
+      return { kind: 'found', node: refreshed ?? best.node };
     }
 
     if (ambiguous.length > 0) {
