@@ -141,7 +141,10 @@
                 "slow_decay": { "type": "integer", "minimum": 1 },
                 "fast_decay": { "type": "integer", "minimum": 1 }
               }
-            }
+            },
+            "edgeCountPercentile": { "type": "number", "minimum": 0, "maximum": 1 },
+            "edgeCountFloor": { "type": "integer", "minimum": 0 },
+            "warnHoldBackDays": { "type": "integer", "minimum": 0 }
           }
         },
         "autonomy_scoring": {
