@@ -197,7 +197,7 @@ Open `CHANGELOG.md` and review all entries under `## [Unreleased]`. Read for the
 
 **2. Name the release and determine the version bump**
 
-Pick a short, evocative release name that captures the dominant theme (e.g. "Memory Stabilization", "Autonomy Foundations", "Signal Clarity"). Keep it dignified — not whimsical, not corporate.
+Name each release after a sci-fi character whose nature embodies the dominant theme of the changes. Choose characters that readers are likely to know; draw from a broad canon (films, novels, games — not just one franchise). The fit should be genuinely tight, not forced. If no character fits well, defer to a short evocative phrase.
 
 Use the bump table above to determine the version bump. If the unreleased batch mixes types, the highest applicable bump wins (any minor → minor; all patches → patch).
 
@@ -205,7 +205,11 @@ Use the bump table above to determine the version bump. If the unreleased batch 
 
 - Create a new heading immediately after `## [Unreleased]`:
   ```
-  ## [X.Y.Z] — YYYY-MM-DD — "Release Name"
+  ## [X.Y.Z] — YYYY-MM-DD — "Character Name"
+  ```
+- Immediately below the heading, add a blockquote with the character's name, source (work + year + creator), and a brief statement about who they are and why the fit is apt:
+  ```
+  > **Character Name** *(Work, Year, creator)* — one or two sentences: who they are, what defines them, and why this release embodies that.
   ```
 - Move all `[Unreleased]` bullets under it. Leave `## [Unreleased]` in place above it, empty, ready for the next batch.
 - Condense and group the bullets — aim for clarity over completeness. Merge related entries, cut implementation detail, and make it readable to someone who uses Curia but didn't write the code. The CHANGELOG is a reader document, not a commit log.
@@ -222,8 +226,8 @@ Write a haiku thematically aligned with the release — drawn from the changes, 
 **6. Open a release PR**
 
 - Branch: `chore/release-X.Y.Z`
-- PR title: `chore: release vX.Y.Z — Release Name`
-- PR body: the new CHANGELOG section, followed by the haiku
+- PR title: `chore: release vX.Y.Z — "Character Name"`
+- PR body: the character blockquote, followed by the new CHANGELOG section, followed by the haiku
 - No other code changes — this PR is the release commit only
 - Watch CI; wait for merge before proceeding
 
@@ -237,16 +241,18 @@ git -C /path/to/repo fetch origin main
 git -C /path/to/repo show origin/main:CHANGELOG.md | grep "X.Y.Z"
 
 # Tag origin/main directly — no checkout or pull needed
-git -C /path/to/repo tag -a vX.Y.Z -m "vX.Y.Z — Release Name" origin/main
+git -C /path/to/repo tag -a vX.Y.Z -m "vX.Y.Z — Character Name" origin/main
 git -C /path/to/repo push origin vX.Y.Z
 ```
 
-Then write the release notes (rewrite the CHANGELOG bullets into natural, friendly prose — past tense, as if narrating what changed; prioritize what a user of Curia would care about; close with a horizontal rule and the haiku) and create the GitHub release:
+Then write the release notes (open with the character blockquote; rewrite the CHANGELOG bullets into natural, friendly prose — past tense, as if narrating what changed; prioritize what a user of Curia would care about; close with a horizontal rule and the haiku) and create the GitHub release:
 
 ```bash
 gh release create vX.Y.Z \
-  --title 'vX.Y.Z — "Release Name"' \
+  --title 'vX.Y.Z — "Character Name"' \
   --notes "$(cat <<'EOF'
+[character blockquote here]
+
 [release prose here]
 
 ---
