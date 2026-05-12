@@ -44,6 +44,23 @@ export interface Message {
 export interface LLMUsage {
   inputTokens: number;
   outputTokens: number;
+  /** Tokens written to the prompt cache on this call. 0 when not applicable. */
+  cacheCreationInputTokens: number;
+  /** Tokens served from the prompt cache on this call. 0 when not applicable. */
+  cacheReadInputTokens: number;
+}
+
+/**
+ * Provider-level metadata returned alongside every successful LLM response.
+ * Only available on successful calls — error responses carry no API body to extract these from.
+ */
+export interface LLMCallProvenance {
+  /** Model string passed to the provider (what the caller requested). */
+  requestedModel: string;
+  /** Model that actually ran, from the API response body (may differ if provider aliases). */
+  actualModel: string;
+  /** Anthropic: response.id (msg_xxx) — shown in Anthropic's console for support correlation. */
+  providerRequestId: string;
 }
 
 // Import and re-export ToolDefinition from the canonical location in skills/types.ts
@@ -72,9 +89,11 @@ export interface ToolResult {
 // Discriminated union — agents switch on response.type to decide what to do.
 // 'error' is a first-class value (not a thrown exception) so callers can handle
 // partial failures gracefully without try/catch boilerplate throughout the agent.
+// Successful variants carry provenance — the runtime uses it to publish llm.call events.
+// Error paths omit provenance: when the API fails there is no response body to extract from.
 export type LLMResponse =
-  | { type: 'text'; content: string; usage: LLMUsage }
-  | { type: 'tool_use'; toolCalls: ToolCall[]; content?: string; usage: LLMUsage }
+  | { type: 'text'; content: string; usage: LLMUsage; provenance: LLMCallProvenance }
+  | { type: 'tool_use'; toolCalls: ToolCall[]; content?: string; usage: LLMUsage; provenance: LLMCallProvenance }
   | { type: 'error'; error: AgentError; usage?: LLMUsage };
 
 export interface LLMProvider {

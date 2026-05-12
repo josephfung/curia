@@ -5,6 +5,7 @@ import { AgentRuntime } from '../../src/agents/runtime.js';
 import { WorkingMemory } from '../../src/memory/working-memory.js';
 import { createInboundMessage, type OutboundMessageEvent } from '../../src/bus/events.js';
 import type { LLMProvider } from '../../src/agents/llm/provider.js';
+const MOCK_PROVENANCE = { requestedModel: 'mock-model', actualModel: 'mock-model', providerRequestId: 'msg_mock_000' } as const;
 import { createLogger } from '../../src/logger.js';
 
 describe('Multi-turn conversation with working memory', () => {
@@ -24,7 +25,8 @@ describe('Multi-turn conversation with working memory', () => {
         return Promise.resolve({
           type: 'text' as const,
           content: `Response ${callCount}`,
-          usage: { inputTokens: 10, outputTokens: 5 },
+          usage: { inputTokens: 10, outputTokens: 5, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+          provenance: MOCK_PROVENANCE,
         });
       }),
     };
@@ -90,7 +92,8 @@ describe('Multi-turn conversation with working memory', () => {
       chat: vi.fn().mockResolvedValue({
         type: 'text' as const,
         content: 'Reply',
-        usage: { inputTokens: 10, outputTokens: 5 },
+        usage: { inputTokens: 10, outputTokens: 5, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+        provenance: MOCK_PROVENANCE,
       }),
     };
 

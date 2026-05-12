@@ -13,6 +13,15 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Added
+
+- **LLM token tracking** — every successful Anthropic API call now publishes a structured `llm.call` bus event (spec 10) with full model provenance, token counts (including prompt-cache breakdown), estimated cost, latency, and SHA-256 content fingerprints. Events land in `audit_log` automatically via the existing audit logger, enabling per-agent attribution and data-driven context budgeting (closes #326, prerequisite for #24).
+
+### Changed
+
+- **`LLMUsage`** extended with `cacheCreationInputTokens` and `cacheReadInputTokens` fields (previously silently dropped from the Anthropic API response).
+- **`LlmCallPayload`** extended with `cacheCreationInputTokens` and `cacheReadInputTokens` fields; `providerRequestId` comment corrected to reflect response body id (`msg_xxx`), not the HTTP header.
+
 ### Fixed
 
 - **Google Workspace tools** pinned to coordinator — doc creation, editing, formatting, sharing, and drive tools are now always available without requiring `skill-registry` discovery (see #497).

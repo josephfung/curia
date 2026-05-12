@@ -1,6 +1,8 @@
 import type { LLMProvider, LLMResponse, Message, ToolDefinition, ContentBlock, ToolUseContent, ToolResultContent, TextContent } from './llm/provider.js';
 import type { EventBus } from '../bus/bus.js';
-import { createAgentResponse, createAgentError, createSkillInvoke, createSkillResult, type AgentTaskEvent } from '../bus/events.js';
+import { createAgentResponse, createAgentError, createSkillInvoke, createSkillResult, createLlmCall, type AgentTaskEvent } from '../bus/events.js';
+import { createHash } from 'node:crypto';
+import { estimateCostUsd } from './llm/pricing.js';
 import type { Logger } from '../logger.js';
 import type { WorkingMemory } from '../memory/working-memory.js';
 import type { EntityMemory } from '../memory/entity-memory.js';
@@ -862,12 +864,56 @@ export class AgentRuntime {
     budget: ErrorBudget,
     taskEvent: AgentTaskEvent,
   ): Promise<LLMResponse | null> {
-    const { agentId, logger } = this.config;
+    const { agentId, bus, logger } = this.config;
 
+    // Helper: publish a llm.call event for a successful provider response.
+    // Called after every successful provider.chat() — initial call and each retry.
+    // Error responses are skipped: there is no API body to extract provenance from.
+    // TODO: emit llm.call for error paths when spec 10 cost-on-failure policy is settled.
+    const publishLlmCallEvent = async (
+      response: LLMResponse,
+      callLatencyMs: number,
+    ): Promise<void> => {
+      if (response.type === 'error') return;
+
+      // SHA-256 of the prompt input — stable fingerprint for deduplication and diffing.
+      // Includes messages and tools since both affect what the model sees.
+      const promptHash = createHash('sha256')
+        .update(JSON.stringify({ messages: params.messages, tools: params.tools ?? [] }))
+        .digest('hex');
+
+      // SHA-256 of the response output — fingerprint for the model's actual reply.
+      const responseHash = createHash('sha256')
+        .update(response.type === 'text' ? response.content : JSON.stringify(response.toolCalls))
+        .digest('hex');
+
+      const event = createLlmCall({
+        agentId,
+        conversationId: taskEvent.payload.conversationId,
+        requestedModel: response.provenance.requestedModel,
+        actualModel: response.provenance.actualModel,
+        provider: provider.id,
+        providerRequestId: response.provenance.providerRequestId,
+        inputTokens: response.usage.inputTokens,
+        outputTokens: response.usage.outputTokens,
+        cacheCreationInputTokens: response.usage.cacheCreationInputTokens,
+        cacheReadInputTokens: response.usage.cacheReadInputTokens,
+        estimatedCostUsd: estimateCostUsd(response.provenance.actualModel, response.usage, logger),
+        latencyMs: callLatencyMs,
+        promptHash,
+        responseHash,
+        parentEventId: taskEvent.id,
+      });
+      await bus.publish('agent', event);
+    };
+
+    const callStartMs = Date.now();
     const response = await provider.chat(params);
+    const latencyMs = Date.now() - callStartMs;
     if (response.type !== 'error') {
-      // LLM call succeeded — reset consecutive error counter
+      // LLM call succeeded — reset consecutive error counter and publish telemetry
       budget.consecutiveErrors = 0;
+      await publishLlmCallEvent(response, latencyMs);
       return response;
     }
 
@@ -903,10 +949,13 @@ export class AgentRuntime {
 
       await new Promise(resolve => setTimeout(resolve, backoffMs));
 
+      const retryStartMs = Date.now();
       const retryResponse = await provider.chat(params);
+      const retryLatencyMs = Date.now() - retryStartMs;
       if (retryResponse.type !== 'error') {
-        // Retry succeeded — reset consecutive error counter
+        // Retry succeeded — reset consecutive error counter and publish telemetry
         budget.consecutiveErrors = 0;
+        await publishLlmCallEvent(retryResponse, retryLatencyMs);
         return retryResponse;
       }
 

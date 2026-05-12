@@ -4,6 +4,7 @@ import { Dispatcher } from '../../src/dispatch/dispatcher.js';
 import { AgentRuntime } from '../../src/agents/runtime.js';
 import { createInboundMessage, type OutboundMessageEvent, type ContactUnknownEvent, type MessageHeldEvent, type AgentTaskEvent } from '../../src/bus/events.js';
 import type { LLMProvider } from '../../src/agents/llm/provider.js';
+const MOCK_PROVENANCE = { requestedModel: 'mock-model', actualModel: 'mock-model', providerRequestId: 'msg_mock_000' } as const;
 import { createLogger } from '../../src/logger.js';
 import type { ContactResolver } from '../../src/contacts/contact-resolver.js';
 import { HeldMessageService } from '../../src/contacts/held-messages.js';
@@ -28,7 +29,8 @@ describe('Vertical Slice: CLI → Dispatch → Coordinator → Response', () => 
       chat: vi.fn().mockResolvedValue({
         type: 'text' as const,
         content: 'Hello! How can I help you today?',
-        usage: { inputTokens: 20, outputTokens: 10 },
+        usage: { inputTokens: 20, outputTokens: 10, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+        provenance: MOCK_PROVENANCE,
       }),
     };
 
@@ -85,15 +87,17 @@ describe('Vertical Slice: CLI → Dispatch → Coordinator → Response', () => 
     expect(outbound[0]?.payload.channelId).toBe('cli');
     expect(outbound[0]?.payload.conversationId).toBe('cli:local:default');
 
-    // -- Assert the complete 4-event audit trail --
+    // -- Assert the complete 5-event audit trail --
     // This sequence is the spec-mandated message flow from 00-overview.md.
     // The order is guaranteed because the bus awaits each publish before returning.
-    expect(auditLog).toHaveLength(4);
+    // llm.call is published inside agent task processing (between agent.task and agent.response).
+    expect(auditLog).toHaveLength(5);
     expect(auditLog.map((e) => e.type)).toEqual([
       'inbound.message',  // 1. Channel publishes user input
       'agent.task',       // 2. Dispatcher converts inbound.message to a task for the coordinator
-      'agent.response',   // 3. Coordinator publishes the LLM result
-      'outbound.message', // 4. Dispatcher converts agent.response back to a channel message
+      'llm.call',         // 3. Runtime publishes LLM provenance after the API call (spec 10)
+      'agent.response',   // 4. Coordinator publishes the LLM result
+      'outbound.message', // 5. Dispatcher converts agent.response back to a channel message
     ]);
 
     // -- Assert the causal chain is intact --

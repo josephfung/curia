@@ -14,7 +14,7 @@
 
 import Anthropic from '@anthropic-ai/sdk';
 import type { MessageParam, ToolUseBlock, TextBlock, TextBlockParam, ToolResultBlockParam } from '@anthropic-ai/sdk/resources/messages/messages.js';
-import type { LLMProvider, LLMResponse, LLMUsage, Message, ToolCall, ToolDefinition, ToolResult } from './provider.js';
+import type { LLMProvider, LLMResponse, LLMUsage, LLMCallProvenance, Message, ToolCall, ToolDefinition, ToolResult } from './provider.js';
 import type { Logger } from '../../logger.js';
 import { classifyError } from '../../errors/classify.js';
 
@@ -149,6 +149,8 @@ export class AnthropicProvider implements LLMProvider {
           model,
           inputTokens: response.usage.input_tokens,
           outputTokens: response.usage.output_tokens,
+          cacheCreationTokens: response.usage.cache_creation_input_tokens ?? 0,
+          cacheReadTokens: response.usage.cache_read_input_tokens ?? 0,
           stopReason: response.stop_reason,
         },
         'Anthropic API call completed',
@@ -157,6 +159,16 @@ export class AnthropicProvider implements LLMProvider {
       const usage: LLMUsage = {
         inputTokens: response.usage.input_tokens,
         outputTokens: response.usage.output_tokens,
+        cacheCreationInputTokens: response.usage.cache_creation_input_tokens ?? 0,
+        cacheReadInputTokens: response.usage.cache_read_input_tokens ?? 0,
+      };
+
+      // Provenance captures what model was requested vs. what actually ran, plus the
+      // Anthropic response ID for cross-referencing with Anthropic's own audit console.
+      const provenance: LLMCallProvenance = {
+        requestedModel: model,
+        actualModel: response.model,
+        providerRequestId: response.id,
       };
 
       // Use type guard functions for narrowing — avoids casting and is safer
@@ -184,6 +196,7 @@ export class AnthropicProvider implements LLMProvider {
           toolCalls,
           content: textBlock?.text,
           usage,
+          provenance,
         };
       }
 
@@ -204,6 +217,7 @@ export class AnthropicProvider implements LLMProvider {
         type: 'text',
         content,
         usage,
+        provenance,
       };
     } catch (err) {
       this.logger.error({ err, model }, 'Anthropic API call failed');

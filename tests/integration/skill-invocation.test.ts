@@ -4,6 +4,7 @@ import { AgentRuntime } from '../../src/agents/runtime.js';
 import { SkillRegistry } from '../../src/skills/registry.js';
 import { ExecutionLayer } from '../../src/skills/execution.js';
 import type { LLMProvider, Message, ContentBlock } from '../../src/agents/llm/provider.js';
+const MOCK_PROVENANCE = { requestedModel: 'mock-model', actualModel: 'mock-model', providerRequestId: 'msg_mock_000' } as const;
 import type { SkillManifest, SkillHandler, SkillContext } from '../../src/skills/types.js';
 import { createAgentTask } from '../../src/bus/events.js';
 import pino from 'pino';
@@ -51,7 +52,8 @@ describe('Skill invocation integration', () => {
           return {
             type: 'tool_use' as const,
             toolCalls: [{ id: 'call-1', name: 'echo', input: { message: 'Hello from integration test' } }],
-            usage: { inputTokens: 50, outputTokens: 20 },
+            usage: { inputTokens: 50, outputTokens: 20, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+            provenance: MOCK_PROVENANCE,
           };
         }
         // On the second call, check if tool results were passed as content blocks
@@ -62,7 +64,8 @@ describe('Skill invocation integration', () => {
         return {
           type: 'text' as const,
           content: `The echo skill responded. Tool results were provided: ${hasToolResults ? 'yes' : 'no'}`,
-          usage: { inputTokens: 100, outputTokens: 30 },
+          usage: { inputTokens: 100, outputTokens: 30, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+          provenance: MOCK_PROVENANCE,
         };
       },
     };
@@ -138,7 +141,8 @@ describe('Skill invocation integration', () => {
           return {
             type: 'tool_use' as const,
             toolCalls: [{ id: 'call-1', name: 'fail-skill', input: {} }],
-            usage: { inputTokens: 50, outputTokens: 20 },
+            usage: { inputTokens: 50, outputTokens: 20, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+            provenance: MOCK_PROVENANCE,
           };
         }
         // Check if any tool_result block in messages has is_error set
@@ -150,7 +154,8 @@ describe('Skill invocation integration', () => {
         return {
           type: 'text' as const,
           content: `Handled the failure: ${hasError ? 'got error' : 'no error'}`,
-          usage: { inputTokens: 100, outputTokens: 30 },
+          usage: { inputTokens: 100, outputTokens: 30, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+          provenance: MOCK_PROVENANCE,
         };
       },
     };

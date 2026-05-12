@@ -363,11 +363,15 @@ interface LlmCallPayload {
   // Token accounting
   inputTokens: number;
   outputTokens: number;
-  estimatedCostUsd: number;     // computed from provider pricing at call time
+  /** Tokens written to the prompt cache on this call. 0 when not applicable. */
+  cacheCreationInputTokens: number;
+  /** Tokens served from the prompt cache on this call. 0 when not applicable. */
+  cacheReadInputTokens: number;
+  estimatedCostUsd: number;     // computed from all four token types at call time
   // Timing
   latencyMs: number;
   // Upstream correlation — enables cross-referencing with the provider's own audit logs
-  providerRequestId: string;    // Anthropic: x-request-id header; OpenAI: x-request-id header
+  providerRequestId: string;    // Anthropic: response.id (msg_xxx body field); OpenAI: response.id
   // Content fingerprints — SHA-256 of full prompt/response (not raw content;
   // full prompts/responses go in llm_call_archive, see spec 10)
   promptHash: string;
