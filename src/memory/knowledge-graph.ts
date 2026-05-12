@@ -360,8 +360,8 @@ class PostgresBackend implements KnowledgeGraphBackend {
     this.logger.debug({ nodeId: node.id, type: node.type, sensitivity: node.sensitivity }, 'kg: creating node');
     const embeddingStr = node.embedding ? `[${node.embedding.join(',')}]` : null;
     await this.pool.query(
-      `INSERT INTO kg_nodes (id, type, label, properties, embedding, confidence, decay_class, source, created_at, last_confirmed_at, sensitivity)
-       VALUES ($1, $2, $3, $4, $5::vector, $6, $7, $8, $9, $10, $11)`,
+      `INSERT INTO kg_nodes (id, type, label, properties, embedding, confidence, decay_class, source, created_at, last_confirmed_at, sensitivity, aliases)
+       VALUES ($1, $2, $3, $4, $5::vector, $6, $7, $8, $9, $10, $11, $12)`,
       [
         node.id,
         node.type,
@@ -374,6 +374,7 @@ class PostgresBackend implements KnowledgeGraphBackend {
         node.temporal.createdAt,
         node.temporal.lastConfirmedAt,
         node.sensitivity,
+        node.aliases,
       ],
     );
   }
@@ -382,8 +383,8 @@ class PostgresBackend implements KnowledgeGraphBackend {
     this.logger.debug({ type: node.type, label: node.label }, 'kg: upserting node');
     const embeddingStr = node.embedding ? `[${node.embedding.join(',')}]` : null;
     const result = await this.pool.query<PgNodeRow & { is_new: boolean }>(
-      `INSERT INTO kg_nodes (id, type, label, properties, embedding, confidence, decay_class, source, created_at, last_confirmed_at, sensitivity)
-       VALUES ($1, $2, $3, $4, $5::vector, $6, $7, $8, $9, $9, $10)
+      `INSERT INTO kg_nodes (id, type, label, properties, embedding, confidence, decay_class, source, created_at, last_confirmed_at, sensitivity, aliases)
+       VALUES ($1, $2, $3, $4, $5::vector, $6, $7, $8, $9, $9, $10, $11)
        ON CONFLICT (lower(label), type) WHERE type != 'fact' AND archived_at IS NULL
        DO UPDATE SET
          confidence = GREATEST(kg_nodes.confidence, EXCLUDED.confidence),
@@ -400,6 +401,7 @@ class PostgresBackend implements KnowledgeGraphBackend {
         node.temporal.source,
         node.temporal.createdAt,
         node.sensitivity,
+        node.aliases,
       ],
     );
     const row = result.rows[0];
