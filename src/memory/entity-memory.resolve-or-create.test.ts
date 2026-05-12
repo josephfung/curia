@@ -478,6 +478,12 @@ describe('EntityMemory.resolveOrCreate — fuzzy auto-resolve end-to-end', () =>
       return i === 0 ? scaled + norm * Math.sqrt(1 - 0.82 * 0.82) : scaled;
     });
 
+    // Verify the perturbation math lands in the ambiguous zone [0.75, 0.90)
+    // before proceeding — this makes the test self-validating.
+    const actualSimilarity = EmbeddingService.cosineSimilarity(queryEmbedding, perturbedEmbedding);
+    expect(actualSimilarity).toBeGreaterThanOrEqual(FUZZY_AMBIGUITY_FLOOR);
+    expect(actualSimilarity).toBeLessThan(FUZZY_RESOLVE_THRESHOLD);
+
     await store.createNode({
       type: 'organization',
       label: 'Another Restaurant',
