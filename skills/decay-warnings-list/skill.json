@@ -4,7 +4,9 @@
   "version": "1.0.0",
   "sensitivity": "normal",
   "action_risk": "none",
-  "inputs": {},
+  "inputs": {
+    "holdBackDays": "number?"
+  },
   "outputs": {
     "warnings": "object[]",
     "count": "number"

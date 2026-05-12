@@ -11,10 +11,9 @@
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
 import { toLocalIso, formatDisplayTimezone } from '../../src/time/timestamp.js';
 
-// Hold-back window in days — must match DreamEngine's warnHoldBackDays default.
-// Skills don't have access to DreamEngine config, so this is a shared constant.
-// If the DreamEngine config is changed, update this value to match.
-const WARN_HOLD_BACK_DAYS = 7;
+// Hold-back window default — must match DreamEngine's warnHoldBackDays config default.
+// Pass holdBackDays input to override if the DreamEngine config changes.
+const WARN_HOLD_BACK_DAYS_DEFAULT = 7;
 
 export class DecayWarningsListHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {
@@ -22,6 +21,7 @@ export class DecayWarningsListHandler implements SkillHandler {
       return { success: false, error: 'Entity memory service not available. Declare "entityMemory" in capabilities.' };
     }
 
+    const holdBackDays = (ctx.input as { holdBackDays?: number }).holdBackDays ?? WARN_HOLD_BACK_DAYS_DEFAULT;
     const tz = ctx.timezone;
     const now = Date.now();
 
@@ -30,7 +30,7 @@ export class DecayWarningsListHandler implements SkillHandler {
 
       const summaries = warnings.map(w => {
         const warnedAtMs = w.warnedAt.getTime();
-        const expiresAtMs = warnedAtMs + WARN_HOLD_BACK_DAYS * 24 * 60 * 60 * 1000;
+        const expiresAtMs = warnedAtMs + holdBackDays * 24 * 60 * 60 * 1000;
         const daysRemaining = Math.max(0, Math.ceil((expiresAtMs - now) / (24 * 60 * 60 * 1000)));
         return {
           nodeId: w.nodeId,
