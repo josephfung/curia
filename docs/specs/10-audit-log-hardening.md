@@ -422,13 +422,13 @@ This spec is designed to be implemented incrementally. Each phase is independent
 
 ---
 
-## Implementation Completion Status
+## Implementation Status
 
 | Item | Status |
 |---|---|
 | Migration: structured columns on `audit_log` (`action`, `outcome`, `target_type`, `target_id`, `initiator_type`, `initiator_id`) | Not Done |
 | Field extraction logic in `AuditLogger.log()` | Not Done |
-| `llm.call` event type added to `events.ts` | Done (#187) |
+| `llm.call` event type added to `events.ts` | Done |
 | LLM providers emit `llm.call` events with provenance fields | Not Done |
 | `llm_call_archive` table created and populated | Not Done |
 | Redaction applied to prompt/response archive writes | Not Done |

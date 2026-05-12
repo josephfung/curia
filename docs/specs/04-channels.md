@@ -138,8 +138,8 @@ Each adapter implements reconnection with exponential backoff:
 | Item | Status |
 |---|---|
 | `ChannelAdapter` interface (`start`, `stop`, `send`) | Partial — no shared TypeScript interface; each adapter implements the pattern independently |
-| `InboundMessage` type | Done — defined as `InboundMessagePayload` in `src/bus/events.ts` |
-| `OutboundMessage` type | Done — defined as `OutboundMessagePayload` in `src/bus/events.ts` |
+| `InboundMessage` type | Done |
+| `OutboundMessage` type | Done |
 | CLI channel adapter | Done |
 | Email channel adapter (Nylas API, polling, participant extraction) | Done |
 | Signal channel adapter (signal-cli JSON-RPC subprocess) | Done |

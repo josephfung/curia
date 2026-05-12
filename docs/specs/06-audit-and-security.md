@@ -338,31 +338,31 @@ Even if all preventive layers fail, the audit trail enables full post-incident f
 
 ---
 
-## Security Completion Status
+## Implementation Status
 
 These are non-negotiable for launch.
 
 | Item | Status |
 |---|---|
-| Bus layer enforcement tested (channel cannot publish `skill.invoke`) | Done (#187) |
-| Audit log append-only verified (no UPDATE or DELETE code paths) and DB-level trigger enforcement | Done (#248) |
+| Bus layer enforcement tested (channel cannot publish `skill.invoke`) | Done |
+| Audit log append-only verified (no UPDATE or DELETE code paths) and DB-level trigger enforcement | Done |
 | Secret values never appear in logs, audit, or LLM context | Not Done |
 | Tool output sanitization active for all skill results | Done |
 | Inbound message sanitization active (injection pattern detection) | Done |
-| Error strings scrubbed before LLM injection | Done (#250) |
-| Agent config validation blocks malformed YAML at startup | Done (#263) |
+| Error strings scrubbed before LLM injection | Done |
+| Agent config validation blocks malformed YAML at startup | Done |
 | HTTP API channel requires token authentication | Done |
-| Rate limiting active at dispatch layer | Done (#198) |
-| Intent drift detection pauses tasks (not just logs) | Done (#199) |
-| Email channel exposes provider-level SPF/DKIM/DMARC validation via Nylas message metadata | Done (#195) |
-| Anti-injection system prompt hardening and architectural containment (Layers 2 & 3) | Done (#194) |
+| Rate limiting active at dispatch layer | Done |
+| Intent drift detection pauses tasks (not just logs) | Done |
+| Email channel exposes provider-level SPF/DKIM/DMARC validation via Nylas message metadata | Done |
+| Anti-injection system prompt hardening and architectural containment (Layers 2 & 3) | Done |
 | Migration 020 adds `contact_confidence`, `trust_level`, `last_seen_at` columns to existing `contacts` table | Done |
 | All `agent.task` events carry `messageTrustScore` (computed float); `trustLevel` and `contactConfidence` are inputs only, not propagated to bus events | Done |
 | Unknown sender lookup targets `contact_channel_identities (channel, channel_identifier)` | Done |
 | Unknown sender routing configured in `config/channel-trust.yaml` using `allow` / `hold_and_notify` / `ignore` | Done |
-| `contact.unknown` event includes `routingDecision` field so audit trail is self-contained without downstream correlation | Done (#254) |
-| Unknown sender → `hold_and_notify` path covered by integration test (in-memory `HeldMessageService`, verifies score, event payload, and store write) | Done (#254) |
+| `contact.unknown` event includes `routingDecision` field so audit trail is self-contained without downstream correlation | Done |
+| Unknown sender → `hold_and_notify` path covered by integration test (in-memory `HeldMessageService`, verifies score, event payload, and store write) | Done |
 | Trust score floor: messages below `security.trust_score_floor` (default 0.2) trigger `hold_and_notify` regardless of per-channel policy | Done |
 | Trust-gated action thresholds use `messageTrustScore` numeric values, enforced via Coordinator system prompt | Done |
-| Data sensitivity tags on knowledge graph entities | Done (#200) |
+| Data sensitivity tags on knowledge graph entities | Done |
 | Bulk export gates active for confidential+ data | Not Done |

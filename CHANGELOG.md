@@ -13,6 +13,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Changed
+
+- **Spec docs** — normalized Implementation Status tables across all 17 specs: replaced vague status labels with item-by-item counts, stripped explanatory suffixes and issue numbers from "Done" entries, standardized section headings, added spec 17 (Meeting Debrief) to the master index in `00-overview.md`
+
 ### Removed
 
 - **`file-reader` and `file-writer` skills** removed from spec scope (spec 03, 06). General-purpose filesystem access from LLM-driven agents is an unacceptable prompt-injection vector on a single-tenant VPS. Email attachments are handled in-memory via Nylas SDK; agent-created documents should use the knowledge graph.
