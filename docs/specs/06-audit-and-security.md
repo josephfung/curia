@@ -308,7 +308,7 @@ Default sensitivity for new data is `internal`. Financial data defaults to `conf
 
 ### Bulk Export Controls
 
-Skills that export data (file-writer, Google Drive MCP, email-send with attachments) enforce:
+Skills that export data (Google Drive MCP, email-send with attachments) enforce:
 
 1. **Item count threshold** — exporting more than 10 items tagged `confidential` or higher in a single invocation triggers a human approval gate
 2. **Destination allowlisting** — external destinations (Drive folder IDs, email addresses, URLs) can be allowlisted in config. Unknown destinations trigger approval: "You're asking me to send financial data to a destination I haven't seen before. Can you confirm?"
