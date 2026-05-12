@@ -754,7 +754,7 @@ class PostgresBackend implements KnowledgeGraphBackend {
   async confirmDecayWarning(nodeId: string): Promise<DecayWarningActionResult> {
     const result = await this.pool.query<{ label: string }>(
       `UPDATE kg_nodes
-          SET last_confirmed_at = NOW(),
+          SET last_confirmed_at = now(),
               confidence = 1.0,
               warned_at = NULL,
               warn_reason = NULL
@@ -771,7 +771,7 @@ class PostgresBackend implements KnowledgeGraphBackend {
   async dismissDecayWarning(nodeId: string): Promise<DecayWarningActionResult> {
     const result = await this.pool.query<{ label: string }>(
       `UPDATE kg_nodes
-          SET archived_at = NOW(),
+          SET archived_at = now(),
               warned_at = NULL,
               warn_reason = NULL
         WHERE id = $1
@@ -1161,6 +1161,11 @@ class InMemoryBackend implements KnowledgeGraphBackend {
     // Sort by similarity descending, then take top N
     scored.sort((a, b) => b.score - a.score);
     return scored.slice(0, limit);
+  }
+
+  // @internal — for tests only. Seeds a node into the warned state, as DreamEngine would via SQL.
+  _setWarnedState(nodeId: string, warnedAt: Date, reason: 'high_sensitivity' | 'high_connectivity' | 'both'): void {
+    this.warnedNodes.set(nodeId, { warnedAt, reason });
   }
 
   async listDecayWarnings(): Promise<DecayWarningRow[]> {
