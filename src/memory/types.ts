@@ -71,6 +71,10 @@ export interface KgNode {
   // Sensitivity classification assigned at creation time (#200).
   // Immutable after creation — changing sensitivity requires a manual data migration.
   sensitivity: Sensitivity;
+  // Confirmed name variants for fuzzy entity resolution (#467).
+  // Stored as lowercased strings; exact-match resolution checks aliases
+  // alongside the canonical label. Capped at MAX_ALIASES_PER_ENTITY (10).
+  aliases: string[];
 }
 
 // -- Knowledge Graph Edge --
