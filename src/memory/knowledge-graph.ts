@@ -198,6 +198,8 @@ export class KnowledgeGraphStore {
       properties?: Record<string, unknown>;
       sensitivity?: Sensitivity;
       confidence?: number; // allows auto_resolved to raise stored confidence
+      /** Replaces the full aliases array when provided (e.g. after alias learning). */
+      aliases?: string[];
     },
   ): Promise<KgNode> {
     const existing = await this.backend.getNode(id);
@@ -212,6 +214,7 @@ export class KnowledgeGraphStore {
       label: updates.label ?? existing.label,
       properties: updates.properties ?? existing.properties,
       sensitivity: updates.sensitivity ?? existing.sensitivity,
+      aliases: updates.aliases ?? existing.aliases,
       // Re-embed if the label changed, otherwise keep existing embedding
       embedding: labelChanged
         ? await this.embeddingService.embed(updates.label!)
@@ -472,10 +475,14 @@ class PostgresBackend implements KnowledgeGraphBackend {
   }
 
   async findNodesByLabel(label: string): Promise<KgNode[]> {
-    // Case-insensitive exact match using lower() to leverage the idx_kg_nodes_label index.
-    // ILIKE would require a pg_trgm index; lower() = lower() uses the btree on lower(label).
+    // Case-insensitive match on canonical label OR any stored alias.
+    // Aliases are stored pre-lowercased, so lower($1) matches directly.
+    // The btree index on lower(label) handles the first condition;
+    // the GIN index on aliases handles the second.
     const result = await this.pool.query<PgNodeRow>(
-      'SELECT * FROM kg_nodes WHERE lower(label) = lower($1) AND archived_at IS NULL',
+      `SELECT * FROM kg_nodes
+       WHERE (lower(label) = lower($1) OR lower($1) = ANY(aliases))
+         AND archived_at IS NULL`,
       [label],
     );
     return result.rows.map(pgRowToNode);
@@ -848,7 +855,10 @@ class InMemoryBackend implements KnowledgeGraphBackend {
     const lowerLabel = label.toLowerCase();
     const results: KgNode[] = [];
     for (const node of this.nodes.values()) {
-      if (node.label.toLowerCase() === lowerLabel && !this.archivedNodes.has(node.id)) {
+      if (this.archivedNodes.has(node.id)) continue;
+      const labelMatch = node.label.toLowerCase() === lowerLabel;
+      const aliasMatch = node.aliases.some(a => a === lowerLabel);
+      if (labelMatch || aliasMatch) {
         results.push(node);
       }
     }

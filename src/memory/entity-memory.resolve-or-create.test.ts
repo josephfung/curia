@@ -9,6 +9,7 @@ import { EmbeddingService } from './embedding.js';
 import { EntityMemory } from './entity-memory.js';
 import { MemoryValidator, MAX_WRITES_PER_AGENT_TASK } from './validation.js';
 import { createSilentLogger } from '../logger.js';
+import type { KgNode } from './types.js';
 
 function makeEntityMemory() {
   const embeddingService = EmbeddingService.createForTesting();
@@ -278,5 +279,49 @@ describe('EntityMemory.storeFact — updated action codes', () => {
 
     expect(result.stored).toBe(false);
     expect(result.action).toBe('rate_limited');
+  });
+});
+
+describe('EntityMemory.findEntities — alias awareness', () => {
+  it('finds an entity by alias when the canonical label does not match', async () => {
+    const embeddingService = EmbeddingService.createForTesting();
+    const store = KnowledgeGraphStore.createInMemory(embeddingService);
+    const validator = new MemoryValidator(store, embeddingService);
+    const mem = new EntityMemory(store, validator, embeddingService, createSilentLogger());
+
+    // Create a node and manually set an alias on it via the store
+    const node = await store.createNode({
+      type: 'organization',
+      label: 'Darlise Restaurant',
+      properties: {},
+      source: 'test',
+    });
+    // Simulate a learned alias by updating the node's aliases directly
+    const withAlias: KgNode = { ...node, aliases: ['darlise'] };
+    await store.updateNode(node.id, withAlias);
+
+    const results = await mem.findEntities('Darlise');
+    expect(results).toHaveLength(1);
+    expect(results[0]!.id).toBe(node.id);
+  });
+
+  it('does not match archived nodes via alias', async () => {
+    const embeddingService = EmbeddingService.createForTesting();
+    const store = KnowledgeGraphStore.createInMemory(embeddingService);
+    const validator = new MemoryValidator(store, embeddingService);
+    const mem = new EntityMemory(store, validator, embeddingService, createSilentLogger());
+
+    const node = await store.createNode({
+      type: 'organization',
+      label: 'Darlise Restaurant',
+      properties: {},
+      source: 'test',
+    });
+    const withAlias: KgNode = { ...node, aliases: ['darlise'] };
+    await store.updateNode(node.id, withAlias);
+    await store.archiveNode(node.id);
+
+    const results = await mem.findEntities('Darlise');
+    expect(results).toHaveLength(0);
   });
 });
