@@ -13,6 +13,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Removed
+
+- **`file-reader` and `file-writer` skills** removed from spec scope (spec 03, 06). General-purpose filesystem access from LLM-driven agents is an unacceptable prompt-injection vector on a single-tenant VPS. Email attachments are handled in-memory via Nylas SDK; agent-created documents should use the knowledge graph.
+
 ### Added
 
 - **Calendar Specialist agent** (`agents/calendar.yaml`) — new specialist that owns the full calendar domain: scheduling intelligence, free/busy queries, conflict resolution, event CRUD, and scheduling-related email composition. The coordinator delegates scheduling intent in natural language; the specialist resolves entities, finds available time, creates events, and composes meeting request/reschedule/cancellation email text. Includes preference-sensitive scheduling (queries memory for stored CEO preferences), multi-party timezone-aware slot finding, and conflict escalation patterns. (#499)

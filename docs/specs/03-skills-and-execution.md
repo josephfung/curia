@@ -185,7 +185,7 @@ The framework ships with these skills (in `skills/` as part of core):
 - `template-doc-request` — structured document request template (scheduling templates retired; calendar specialist composes scheduling email text directly)
 - `image-generate` — generate an image from a text prompt via DALL-E 3; returns a temporary CDN URL (~1hr TTL)
 
-**Not yet built:** `file-reader`, `file-writer`
+> **Removed from scope:** `file-reader` and `file-writer` were originally planned but removed after security review. General-purpose filesystem access from LLM-driven agents on a single-tenant VPS creates an unacceptable prompt-injection-to-file-exfiltration attack vector. Email attachments (the primary use case) are handled in-memory via the Nylas SDK's streaming/buffer APIs. Agent-created documents should use the knowledge graph. If a narrowly-scoped filesystem need arises later, build a purpose-specific skill rather than a general reader/writer.
 
 ---
 
@@ -227,5 +227,3 @@ These are not bundled but documented as recommended integrations:
 | Built-in skill: `image-generate` (DALL-E 3 image generation) | Done |
 | Built-in skill: `memory-query` (freeform KG search) | Done |
 | Built-in skill: `memory-store` (write-with-validation) | Done |
-| Built-in skill: `file-reader` | Not Done |
-| Built-in skill: `file-writer` | Not Done |
