@@ -329,42 +329,66 @@ export class EntityMemory {
     // semanticSearch() embeds the query and returns results sorted by score desc.
     // Does not filter by type — consistent with single-match behavior above (which
     // also returns 'found' across types). Type is only used as a tiebreaker.
-    const fuzzyResults = await this.store.semanticSearch(options.label, {
-      limit: FUZZY_SEARCH_LIMIT,
-    });
+    //
+    // The entire phase is wrapped so that embedding API failures or transient DB
+    // errors fall through gracefully to Phase 3 (entity creation). This preserves
+    // the pre-PR behavior as the degraded-mode path — fact storage must not block
+    // on embedding service availability.
+    try {
+      const fuzzyResults = await this.store.semanticSearch(options.label, {
+        limit: FUZZY_SEARCH_LIMIT,
+      });
 
-    // Filter out fact nodes — we only want entity nodes for disambiguation
-    const entityCandidates = fuzzyResults.filter(r => r.node.type !== FACT_TYPE);
+      // Filter out fact nodes — we only want entity nodes for disambiguation
+      const entityCandidates = fuzzyResults.filter(r => r.node.type !== FACT_TYPE);
 
-    // Partition candidates by threshold
-    const autoResolve = entityCandidates.filter(r => r.score >= FUZZY_RESOLVE_THRESHOLD);
-    const ambiguous = entityCandidates.filter(
-      r => r.score >= FUZZY_AMBIGUITY_FLOOR && r.score < FUZZY_RESOLVE_THRESHOLD,
-    );
+      // Partition candidates by threshold
+      const autoResolve = entityCandidates.filter(r => r.score >= FUZZY_RESOLVE_THRESHOLD);
+      const ambiguous = entityCandidates.filter(
+        r => r.score >= FUZZY_AMBIGUITY_FLOOR && r.score < FUZZY_RESOLVE_THRESHOLD,
+      );
 
-    if (autoResolve.length > 0) {
-      // Pick the best match; use type as tiebreaker if multiple exceed the threshold
-      const typeMatch = autoResolve.find(r => r.node.type === options.type);
-      const best = typeMatch ?? autoResolve[0]!;
+      if (autoResolve.length > 0) {
+        // Pick the best match; use type as tiebreaker if multiple exceed the threshold
+        const typeMatch = autoResolve.find(r => r.node.type === options.type);
+        const best = typeMatch ?? autoResolve[0]!;
 
-      if (best.node.type !== options.type) {
-        this.logger.warn(
-          { label: options.label, expectedType: options.type, actualType: best.node.type, nodeId: best.node.id },
-          'resolveOrCreate: fuzzy auto-resolve type differs from caller hint',
-        );
+        if (best.node.type !== options.type) {
+          this.logger.warn(
+            { label: options.label, expectedType: options.type, actualType: best.node.type, nodeId: best.node.id },
+            'resolveOrCreate: fuzzy auto-resolve type differs from caller hint',
+          );
+        }
+
+        // Learn the alias so future lookups resolve via exact match.
+        // addAlias is best-effort — never throws.
+        await this.addAlias(best.node.id, options.label);
+
+        // Re-fetch so the returned node reflects the newly learned alias.
+        // Falls back to the pre-alias snapshot on getNode failure (best-effort).
+        let refreshed: KgNode | undefined;
+        try {
+          refreshed = await this.store.getNode(best.node.id) ?? undefined;
+        } catch (err) {
+          this.logger.warn(
+            { nodeId: best.node.id, error: err instanceof Error ? err.message : String(err) },
+            'resolveOrCreate: failed to re-fetch node after alias learning — returning pre-alias snapshot',
+          );
+        }
+        return { kind: 'found', node: refreshed ?? best.node };
       }
 
-      // Learn the alias so future lookups resolve via exact match
-      await this.addAlias(best.node.id, options.label);
-
-      // Re-fetch so the returned node reflects the newly learned alias.
-      // addAlias is best-effort — if re-fetch fails, fall back to the pre-alias snapshot.
-      const refreshed = await this.store.getNode(best.node.id);
-      return { kind: 'found', node: refreshed ?? best.node };
-    }
-
-    if (ambiguous.length > 0) {
-      return { kind: 'ambiguous', candidates: ambiguous.map(r => r.node) };
+      if (ambiguous.length > 0) {
+        return { kind: 'ambiguous', candidates: ambiguous.map(r => r.node) };
+      }
+    } catch (err) {
+      this.logger.warn(
+        { label: options.label, error: err instanceof Error ? err.message : String(err) },
+        'resolveOrCreate: fuzzy semantic search failed — falling back to entity creation',
+      );
+      // Fall through to Phase 3 intentionally: fact storage must not block on
+      // embedding API availability. The entity will be created as a new node,
+      // which is the same behavior as before this fuzzy-resolution feature.
     }
 
     // Phase 3: no match at all — create a new entity
@@ -391,40 +415,41 @@ export class EntityMemory {
    * block fact storage.
    */
   async addAlias(nodeId: string, alias: string): Promise<void> {
-    const lowerAlias = alias.toLowerCase();
-
-    const node = await this.store.getNode(nodeId);
-    if (!node) {
-      this.logger.warn({ nodeId, alias }, 'addAlias: entity node not found');
-      return;
-    }
-
-    // Skip if alias matches canonical label
-    if (node.label.toLowerCase() === lowerAlias) {
-      return;
-    }
-
-    // Skip if alias already exists
-    if (node.aliases.includes(lowerAlias)) {
-      return;
-    }
-
-    // Skip if at cap
-    if (node.aliases.length >= MAX_ALIASES_PER_ENTITY) {
-      this.logger.warn(
-        { nodeId, alias, count: node.aliases.length, max: MAX_ALIASES_PER_ENTITY },
-        'addAlias: alias cap reached — skipping',
-      );
-      return;
-    }
-
-    const updatedAliases = [...node.aliases, lowerAlias];
+    // Entire method is wrapped so no DB or network error can violate the non-throwing contract.
     try {
+      const lowerAlias = alias.toLowerCase();
+
+      const node = await this.store.getNode(nodeId);
+      if (!node) {
+        this.logger.warn({ nodeId, alias }, 'addAlias: entity node not found');
+        return;
+      }
+
+      // Skip if alias matches canonical label
+      if (node.label.toLowerCase() === lowerAlias) {
+        return;
+      }
+
+      // Skip if alias already exists
+      if (node.aliases.includes(lowerAlias)) {
+        return;
+      }
+
+      // Skip if at cap
+      if (node.aliases.length >= MAX_ALIASES_PER_ENTITY) {
+        this.logger.warn(
+          { nodeId, alias, count: node.aliases.length, max: MAX_ALIASES_PER_ENTITY },
+          'addAlias: alias cap reached — skipping',
+        );
+        return;
+      }
+
+      const updatedAliases = [...node.aliases, lowerAlias];
       await this.store.updateNode(nodeId, { aliases: updatedAliases });
     } catch (err) {
       this.logger.warn(
         { nodeId, alias, error: err instanceof Error ? err.message : String(err) },
-        'addAlias: failed to persist aliases — skipping',
+        'addAlias: unexpected error — skipping',
       );
       // Best-effort: do not rethrow
     }
