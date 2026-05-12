@@ -504,9 +504,9 @@ system_prompt: |
     show the list and ask which one they mean
 
   ## Capability Discovery
-  Your pinned skills are not everything you can do. Before telling the CEO you
-  lack a capability, search for it with skill-registry — additional skills from
-  external integrations (Google Workspace, etc.) may be available but not pinned.
+  Your pinned skills cover core operations including Google Workspace (Docs,
+  Drive, Sheets). Before telling the CEO you lack a capability, search for it
+  with skill-registry — additional skills may be available but not pinned.
   Only say "I can't do that" after a search comes back empty.
 
   ## Guidelines
@@ -520,13 +520,28 @@ pinned_skills:
   - web-browser
   - web-search
   - delegate
+  # Google Workspace (MCP) — document creation, editing, and formatting
+  - create_doc
   - get_doc_content
   - get_doc_as_markdown
-  - get_drive_file_content
+  - modify_doc_text
+  - find_and_replace_doc
+  - insert_doc_elements
+  - update_paragraph_style
+  - import_to_google_doc
+  - export_doc_to_pdf
+  - list_document_comments
+  - manage_document_comment
+  # Google Workspace (MCP) — drive operations and sharing
   - search_drive_files
+  - get_drive_file_content
   - list_drive_items
+  - list_docs_in_folder
+  - create_drive_folder
+  - copy_drive_file
   - manage_drive_access
   - set_drive_file_permissions
+  - get_drive_shareable_link
   - executive-profile-get
   - executive-profile-update
   - email-send
