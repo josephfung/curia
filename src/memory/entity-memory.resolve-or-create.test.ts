@@ -232,6 +232,17 @@ describe('EntityMemory.storeFact — contradiction auto-resolution', () => {
   });
 });
 
+describe('KgNode aliases field', () => {
+  it('newly created entity nodes have an empty aliases array', async () => {
+    const { mem } = makeEntityMemory();
+    const { entity } = await mem.createEntity({
+      type: 'organization', label: 'Acme Corp', properties: {}, source: 'test',
+    });
+
+    expect(entity.aliases).toEqual([]);
+  });
+});
+
 describe('EntityMemory.storeFact — updated action codes', () => {
   it('returns action:entity_not_found when entity node does not exist', async () => {
     const { mem } = makeEntityMemory();

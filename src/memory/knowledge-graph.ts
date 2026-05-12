@@ -139,6 +139,7 @@ export class KnowledgeGraphStore {
         source: options.source,
       },
       sensitivity: options.sensitivity ?? 'internal',
+      aliases: [],
     };
 
     await this.backend.createNode(node);
@@ -175,6 +176,7 @@ export class KnowledgeGraphStore {
         source: options.source,
       },
       sensitivity: options.sensitivity ?? 'internal',
+      aliases: [],
     };
 
     return this.backend.upsertNode(node);
@@ -676,6 +678,7 @@ interface PgNodeRow {
   last_confirmed_at: Date;
   sensitivity: string;
   archived_at: Date | null;
+  aliases: string[];
 }
 
 interface PgEdgeRow {
@@ -707,6 +710,7 @@ function pgRowToNode(row: PgNodeRow): KgNode {
       source: row.source,
     },
     sensitivity: (row.sensitivity as Sensitivity) ?? 'internal',
+    aliases: row.aliases ?? [],
   };
 }
 
