@@ -348,7 +348,7 @@ These are out of scope for this feature but identified during design:
 
 ---
 
-## 12. Implementation Status
+## Implementation Status
 
 | Number | Item | Status |
 |---|---|---|
