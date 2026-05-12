@@ -13,43 +13,47 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+---
+
+## [0.27.0] — 2026-05-12 — "Gerty"
+
+> **Gerty** *(Moon, 2009, dir. Duncan Jones)* — the AI station manager aboard Sarang lunar base. Unobtrusive, precise, deeply loyal. Remembers everything, knows the identity of everyone under its care, and manages complex operations without fanfare. When things get uncertain, Gerty resolves them quietly. Nothing important gets forgotten.
+
 ### Added
 
-- **Fuzzy entity resolution** — `resolveOrCreate()` now falls back to embedding-based semantic search when exact label match fails, preventing duplicate KG nodes from name variants like "Darlise" / "Darlise Restaurant". Confirmed matches are stored as aliases for instant future resolution. New `addAlias()` method on `EntityMemory`; `memory-store` handler learns aliases after disambiguation and auto-resolve. New migration `038_add_kg_node_aliases.sql` adds `aliases TEXT[]` column with GIN index. (#467)
-- **Decay warnings (#280):** DreamEngine now flags important KG nodes before archiving — high-sensitivity (`confidential`/`restricted`) or high-connectivity (top 5th percentile by edge count, floor 5) nodes get a 7-day hold-back window instead of silent archival. The coordinator proactively surfaces re-confirmation nudges to the CEO; confirming resets the decay clock, dismissing archives immediately.
-- **`decay-warnings-list` skill:** Lists KG nodes currently in the warned state with `daysRemaining` until auto-archive.
-- **`memory-confirm` skill:** Records the CEO's confirm or dismiss decision on a warned node.
-- **`memory.decay_warning` bus event:** Emitted by DreamEngine for each newly warned node (audit trail).
-- **Calendar Specialist agent** (`agents/calendar.yaml`) — new specialist that owns the full calendar domain: scheduling intelligence, free/busy queries, conflict resolution, event CRUD, and scheduling-related email composition. The coordinator delegates scheduling intent in natural language; the specialist resolves entities, finds available time, creates events, and composes meeting request/reschedule/cancellation email text. Includes preference-sensitive scheduling (queries memory for stored CEO preferences), multi-party timezone-aware slot finding, and conflict escalation patterns. (#499)
-- **General pronoun-resolution rule** — coordinator now resolves possessive pronouns ("my calendar", "your schedule") to explicit entity identities before delegating to any specialist, replacing the calendar-specific disambiguation section.
-- **file-parse skill** — general-purpose document parser that extracts structured data from CSV, PDF, HTML, and image files. CSV is parsed deterministically (no LLM, confidence 1.0); images use Claude vision; PDFs and HTML use text extraction with optional LLM structuring. Supports `extract_as` hint for `receipt`, `bank_statement`, and `invoice` schemas. Reusable by any agent.
-- **Identity status** — contact channel identities now carry a `status` field (`active`/`defunct`/`bounced`), orthogonal to `verified`. contact-lookup surfaces status alongside each identity. context-for-email prefers active identities and includes `identity_status` in the recipient context. New `contact-set-identity-status` skill (pinned to contacts agent) for manual updates. Contacts specialist warns the coordinator when non-active identities are about to be suggested. (#377)
-- **Contact Specialist agent** (`agents/contacts.yaml`) — new specialist that owns the full contact domain: briefings, CRUD, deduplication, relationship management, and entity resolution for people and organizations. The coordinator delegates contact intelligence via a "brief me" natural-language pattern; the specialist returns enriched context and resolved contact IDs in a `<resolved_entities>` XML block. Weekly dedup scan migrated from the coordinator's scheduler to the contact specialist's `schedule:` entry. (#498)
-- **Startup readiness checks** — system refuses inbound messages if no principal contact exists (`system_role='principal'`). Extensible `ReadinessCheck` interface for future setup validation.
-- **Research-analyst memory access** — pinned `memory-query` and `memory-store` to the research-analyst agent with domain-specific recall and storage guidance. Stored context about known entities now informs research; important findings about CEO-relevant entities are persisted to the knowledge graph.
+- **Contact Specialist agent** — new dedicated agent for all contact-domain work: briefings, CRUD, deduplication, and entity resolution. The coordinator now delegates rather than handles contact tasks directly. (#498)
+- **Calendar Specialist agent** — new dedicated agent for all scheduling work: finding time, resolving conflicts, creating events, and drafting scheduling emails. Multi-party, timezone-aware, preference-sensitive. (#499)
+- **Fuzzy entity resolution** — the knowledge graph now resolves near-matches by semantic similarity, preventing duplicate nodes from name variants ("Darlise" / "Darlise Restaurant"). Confirmed matches are stored as aliases for instant future resolution. (#467)
+- **Decay warnings** — important KG nodes are flagged before archival rather than silently deleted. High-sensitivity or highly-connected nodes enter a 7-day hold-back window; the coordinator nudges the CEO to confirm before anything is lost. (#280)
+- **`file-parse` skill** — parses CSV, PDF, HTML, and images into structured data. CSV is deterministic; images use vision; PDFs and HTML use text extraction with optional LLM structuring.
+- **Identity status** — channel identities now carry an `active`/`defunct`/`bounced` status, separate from `verified`. Outbound routing and contact lookup both prefer active identities. (#377)
+- **Startup readiness gate** — Curia refuses inbound messages until a principal contact is configured.
+- **Research-analyst memory** — the research analyst can now read from and write to the knowledge graph; important findings about known entities persist across sessions.
 
 ### Changed
 
-- **Spec docs** — updated spec documentation to match implementation status
-- **Coordinator prompt reduced** — removed Calendar Disambiguation, Scheduling Behavior, and calendar account identity exception sections (~40 lines). Removed 8 calendar skills and 3 template skills from coordinator's pinned_skills. Net reduction: ~35 lines of prompt text and 11 pinned skills.
-- **Contradiction auto-resolution** (spec 01): `validateContradiction` now auto-rejects incoming facts with lower confidence than the existing contradicting fact, and auto-resolves (updates in place) when the incoming confidence is higher, preserving the old value in a `properties.previous_values` audit trail. Equal-confidence contradictions continue to escalate to human review unchanged.
-- **Coordinator contact domain cleanup** — removed ~165 lines of contact-domain prompt guidance (Contact Awareness, Contact Lookup Best Practices, Contact Deduplication, Relationship Management, entity resolution quick reference) and 15 contact skills from the coordinator's `pinned_skills`. Replaced with an 8-line delegation note. (#498)
-- **Entity resolution:** `resolveOrCreate` now logs a warning when a single label match has a different type than the caller's hint, improving observability without changing resolution behaviour ([#474](https://github.com/josephfung/curia/issues/474))
-- **Principal identity consolidation** — replaced fragmented CEO identity (env var config, `role` column, `OutboundGatewayConfig` flat fields) with a database-driven `system_role` column on the `contacts` table. One contact holds `system_role='principal'`, one holds `system_role='agent'`. Enforced by partial unique indexes.
-- **TaskOriginator on every task** — replaced `ceoInitiated: boolean` with a `TaskOriginator` object stamped by the dispatcher on every task, carrying `contactId`, `systemRole`, `channel`, and `initiatedAt`. CEO-authorization checks now use `isPrincipalOriginated(taskMetadata)`. Originator context survives task delegation, resolving the autonomy gate bug for scheduled CEO-authorized actions.
+- **Specialists absorb their domains** — the coordinator sheds ~200 lines of prompt text and 26 pinned skills as Contact and Calendar specialists take full ownership of their areas.
+- **Contradiction auto-resolution** — conflicting facts are now resolved automatically by confidence: lower-confidence incoming facts are rejected; higher-confidence ones update in place with the prior value preserved in an audit trail. Equal-confidence contradictions still escalate for human review.
+- **Principal identity is database-driven** — CEO identity is now `system_role='principal'` on the contacts table instead of env vars and config fields. *(Public API change: `TaskOriginator` replaces `ceoInitiated: boolean`; use `isPrincipalOriginated()`.)*
+- **`config-store` replaces knowledge-* skills** — `knowledge-company-overview`, `knowledge-meeting-links`, `knowledge-travel-preferences`, `knowledge-loyalty-programs` replaced by `config-store` with equivalent namespaces.
 
 ### Fixed
 
-- **file-parse skill** — fixed ESM import of `pdf-parse` (CJS-only package) using `createRequire`, which caused the skill to fail to load in production
-- **Coordinator: Google Drive sharing** — pinned Drive management skills (search, list, share, permissions) to the coordinator and added prompt guidance for Drive management and capability discovery, fixing a bug where the coordinator claimed it couldn't share Drive files despite the skills being registered
-- **Google Workspace URL routing** — coordinator now uses workspace skills for Google Docs/Drive URLs instead of falling back to web-browser. Research-analyst reports correctly when it cannot access a Workspace URL. Coordinator delegates to specialists more reliably via injected specialist list.
-- **Entity-context email resolution** — `resolveKgNodeId` now resolves email addresses via `contact_channel_identities` before attempting UUID-based queries, fixing missing KG context in CC flows and ceo-inbox triage for known contacts ([#461](https://github.com/josephfung/curia/issues/461))
+- **`file-parse`** — ESM import of the CJS-only `pdf-parse` package now works; the skill was failing silently in production.
+- **Google Drive sharing** — the coordinator correctly surfaces Drive management skills instead of claiming it cannot share files.
+- **Entity-context email resolution** — known contacts referenced by email address in CC'd threads now receive full KG context. (#461)
 
 ### Removed
 
-- **`file-reader` and `file-writer` skills** removed from spec scope (spec 03, 06). General-purpose filesystem access from LLM-driven agents is an unacceptable prompt-injection vector on a single-tenant VPS. Email attachments are handled in-memory via Nylas SDK; agent-created documents should use the knowledge graph.
-- **Template scheduling skills** — `template-meeting-request`, `template-reschedule`, and `template-cancel` deleted. The calendar specialist composes scheduling email text directly with full scheduling context, producing better results than parameterized templates.
-- **`knowledge-company-overview`, `knowledge-meeting-links`, `knowledge-travel-preferences`, `knowledge-loyalty-programs` skills** — replaced by `config-store` with namespaces `company`, `meeting_links`, `travel_preferences`, and `loyalty_programs`. The coordinator prompt now carries explicit namespace guidance.
+- **`file-reader` and `file-writer` skills** — general filesystem access from LLM agents is a prompt-injection risk; removed from spec scope.
+- **Template scheduling skills** — `template-meeting-request`, `template-reschedule`, and `template-cancel` deleted; the Calendar Specialist composes scheduling emails directly.
+- **`knowledge-*` static skills** — see `config-store` above.
+
+---
+
+*know your own domain —*
+*names blur into the known shape;*
+*memory holds true.*
 
 ---
 
