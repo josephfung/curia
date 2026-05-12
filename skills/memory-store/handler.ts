@@ -39,6 +39,7 @@ export class MemoryStoreHandler implements SkillHandler {
       sensitivity,
       sensitivity_category,
       entity_type,
+      alias_for,
     } = ctx.input as {
       entity?: string;
       field?: string;
@@ -49,6 +50,7 @@ export class MemoryStoreHandler implements SkillHandler {
       sensitivity?: string;
       sensitivity_category?: string;
       entity_type?: string;
+      alias_for?: string;
     };
 
     // --- Input validation ---
@@ -133,6 +135,11 @@ export class MemoryStoreHandler implements SkillHandler {
           };
         }
         entityNode = byId;
+        // Learn alias from disambiguation: coordinator confirmed this UUID
+        // for the original name variant carried in alias_for.
+        if (alias_for && typeof alias_for === 'string') {
+          await ctx.entityMemory.addAlias(entityNode.id, alias_for);
+        }
       } else {
         const resolved = await ctx.entityMemory.resolveOrCreate({
           label: entity,
@@ -153,6 +160,14 @@ export class MemoryStoreHandler implements SkillHandler {
         }
 
         entityNode = resolved.node;
+        // Learn alias when the coordinator confirms a disambiguation.
+        // alias_for carries the original name variant that the CEO used;
+        // resolveOrCreate's fuzzy auto-resolve path learns aliases automatically,
+        // but the disambiguation path needs explicit alias learning because the
+        // coordinator re-submits with a UUID, not the original name.
+        if (alias_for && typeof alias_for === 'string' && resolved.kind === 'found') {
+          await ctx.entityMemory.addAlias(entityNode.id, alias_for);
+        }
       }
 
       // --- Fact storage ---
