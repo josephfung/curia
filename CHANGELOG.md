@@ -13,6 +13,19 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Added
+
+- **Calendar Specialist agent** (`agents/calendar.yaml`) — new specialist that owns the full calendar domain: scheduling intelligence, free/busy queries, conflict resolution, event CRUD, and scheduling-related email composition. The coordinator delegates scheduling intent in natural language; the specialist resolves entities, finds available time, creates events, and composes meeting request/reschedule/cancellation email text. Includes preference-sensitive scheduling (queries memory for stored CEO preferences), multi-party timezone-aware slot finding, and conflict escalation patterns. (#499)
+- **General pronoun-resolution rule** — coordinator now resolves possessive pronouns ("my calendar", "your schedule") to explicit entity identities before delegating to any specialist, replacing the calendar-specific disambiguation section.
+
+### Changed
+
+- **Coordinator prompt reduced** — removed Calendar Disambiguation, Scheduling Behavior, and calendar account identity exception sections (~40 lines). Removed 8 calendar skills and 3 template skills from coordinator's pinned_skills. Net reduction: ~35 lines of prompt text and 11 pinned skills.
+
+### Removed
+
+- **Template scheduling skills** — `template-meeting-request`, `template-reschedule`, and `template-cancel` deleted. The calendar specialist composes scheduling email text directly with full scheduling context, producing better results than parameterized templates.
+
 ### Fixed
 
 - **file-parse skill** — fixed ESM import of `pdf-parse` (CJS-only package) using `createRequire`, which caused the skill to fail to load in production
