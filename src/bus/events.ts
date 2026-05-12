@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { ErrorType } from '../errors/types.js';
 import type { DedupConfidence } from '../contacts/types.js';
-import type { Sensitivity } from '../memory/types.js';
+import type { Sensitivity, NodeType } from '../memory/types.js';
 import type { ActionRisk } from '../skills/types.js';
 
 // -- Base event shape --
@@ -574,6 +574,26 @@ export interface MemoryQueryEvent extends BaseEvent {
   payload: MemoryQueryPayload;
 }
 
+// memory.decay_warning — emitted by DreamEngine (system layer) when an important
+// KG node is flagged for CEO re-confirmation before archival (#280).
+// "important" = high sensitivity (confidential/restricted) OR high edge-count (top p95, floor 5).
+export interface MemoryDecayWarningPayload {
+  nodeId: string;
+  nodeType: NodeType;
+  label: string;
+  confidence: number;
+  sensitivity: Sensitivity;
+  edgeCount: number;
+  /** Why this node was flagged as important. */
+  reason: 'high_sensitivity' | 'high_connectivity' | 'both';
+}
+
+export interface MemoryDecayWarningEvent extends BaseEvent {
+  type: 'memory.decay_warning';
+  sourceLayer: 'system';
+  payload: MemoryDecayWarningPayload;
+}
+
 export interface ScheduleCreatedEvent extends BaseEvent {
   type: 'schedule.created';
   sourceLayer: 'system';
@@ -682,6 +702,7 @@ export type BusEvent =
   | AgentDiscussEvent        // Bullpen: inter-agent discussion message
   | MemoryStoreEvent      // Phase 6: knowledge graph write audit
   | MemoryQueryEvent      // Phase 6: knowledge graph read audit
+  | MemoryDecayWarningEvent  // #280: DreamEngine flags important node for CEO re-confirmation
   | ContactResolvedEvent  // Contacts Phase A: sender matched to a known contact
   | ContactUnknownEvent   // Contacts Phase A: sender has no contact record
   | ContactDuplicateDetectedEvent   // Dedup: new contact matches an existing one
@@ -901,6 +922,20 @@ export function createMemoryQuery(
     timestamp: new Date(),
     type: 'memory.query',
     sourceLayer: 'agent',
+    payload: rest,
+    parentEventId,
+  };
+}
+
+export function createMemoryDecayWarning(
+  payload: MemoryDecayWarningPayload & { parentEventId?: string },
+): MemoryDecayWarningEvent {
+  const { parentEventId, ...rest } = payload;
+  return {
+    id: randomUUID(),
+    timestamp: new Date(),
+    type: 'memory.decay_warning',
+    sourceLayer: 'system',
     payload: rest,
     parentEventId,
   };
