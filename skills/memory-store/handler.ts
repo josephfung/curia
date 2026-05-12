@@ -160,11 +160,12 @@ export class MemoryStoreHandler implements SkillHandler {
         }
 
         entityNode = resolved.node;
-        // Learn alias when the coordinator confirms a disambiguation.
-        // alias_for carries the original name variant that the CEO used;
-        // resolveOrCreate's fuzzy auto-resolve path learns aliases automatically,
-        // but the disambiguation path needs explicit alias learning because the
-        // coordinator re-submits with a UUID, not the original name.
+        // Learn alias when the coordinator confirms a disambiguation by re-submitting
+        // the canonical entity name (not a UUID) alongside the original name variant.
+        // alias_for = original variant (e.g. "the Darlise place"); entity = confirmed
+        // canonical name (e.g. "Darlise Restaurant"). resolveOrCreate's auto-resolve
+        // path already adds options.label as an alias, but alias_for is a different
+        // string — the variant the CEO actually said — so it needs explicit learning here.
         if (alias_for && typeof alias_for === 'string' && resolved.kind === 'found') {
           await ctx.entityMemory.addAlias(entityNode.id, alias_for);
         }

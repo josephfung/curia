@@ -136,7 +136,7 @@ no embedding call, no vector search.
 
 ## Migration
 
-Migration `037_add_kg_node_aliases.sql`:
+Migration `038_add_kg_node_aliases.sql`:
 
 ```sql
 ALTER TABLE kg_nodes ADD COLUMN aliases TEXT[] NOT NULL DEFAULT '{}';
