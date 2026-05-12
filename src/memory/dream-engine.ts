@@ -307,15 +307,20 @@ export class DreamEngine {
 
     // Emit a bus event for each warned node (audit trail + future subscriber hooks)
     for (const row of warnResult.rows) {
-      await this.bus.publish('system', createMemoryDecayWarning({
-        nodeId: row.id,
-        nodeType: row.type as MemoryDecayWarningPayload['nodeType'],
-        label: row.label,
-        confidence: row.confidence,
-        sensitivity: row.sensitivity as MemoryDecayWarningPayload['sensitivity'],
-        edgeCount: parseInt(row.edge_count, 10),
-        reason: row.warn_reason as 'high_sensitivity' | 'high_connectivity' | 'both',
-      }));
+      try {
+        await this.bus.publish('system', createMemoryDecayWarning({
+          nodeId: row.id,
+          nodeType: row.type as MemoryDecayWarningPayload['nodeType'],
+          label: row.label,
+          confidence: row.confidence,
+          sensitivity: row.sensitivity as MemoryDecayWarningPayload['sensitivity'],
+          edgeCount: parseInt(row.edge_count, 10),
+          reason: row.warn_reason as 'high_sensitivity' | 'high_connectivity' | 'both',
+        }));
+      } catch (err) {
+        this.logger.error({ err, nodeId: row.id }, 'DreamEngine: failed to emit memory.decay_warning');
+        throw err;
+      }
     }
 
     // Pass 2a: Archive expired warnings — nodes whose hold-back window has closed
@@ -327,7 +332,7 @@ export class DreamEngine {
               warn_reason = NULL
         WHERE archived_at IS NULL
           AND warned_at IS NOT NULL
-          AND warned_at <= now() - ($1 || ' days')::INTERVAL`,
+          AND warned_at <= now() - ($1 * INTERVAL '1 day')`,
       [this.config.warnHoldBackDays],
     );
     const nodesExpired = archiveExpiredResult.rowCount ?? 0;
