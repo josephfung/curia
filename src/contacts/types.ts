@@ -292,6 +292,9 @@ export interface MergeResult {
 
 /** Thrown by ContactService when the requested identity does not exist. */
 export class IdentityNotFoundError extends Error {
+  // Stable code for callers that need string-based discrimination (e.g. classifyError)
+  readonly code = 'IDENTITY_NOT_FOUND' as const;
+
   constructor(identityId: string) {
     super(`Identity not found: ${identityId}`);
     this.name = 'IdentityNotFoundError';
