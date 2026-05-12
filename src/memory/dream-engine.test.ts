@@ -52,27 +52,54 @@ const defaultConfig = {
   warnHoldBackDays: 7,
 };
 
+// Default 9-response set for tests that only care about specific queries and don't
+// need custom row counts. Provides a valid threshold row and zero-count results.
+const defaultResponses = () => [
+  { rowCount: 0 },                        // 1a slow nodes
+  { rowCount: 0 },                        // 1b fast nodes
+  { rowCount: 0 },                        // 1c slow edges
+  { rowCount: 0 },                        // 1d fast edges
+  { rows: [{ threshold: 10 }] },         // percentile threshold
+  { rowCount: 0, rows: [] },             // warn pass
+  { rowCount: 0 },                        // expire warnings
+  { rowCount: 0 },                        // archive nodes
+  { rowCount: 0 },                        // archive edges
+];
+
 describe('DreamEngine.runDecayPass', () => {
   it('runs all three passes and returns counts', async () => {
-    const { pool, queries } = makePool([5, 3, 2, 1, 4, 2]);
-    const engine = new DreamEngine(pool, makeBus(), createSilentLogger(), defaultConfig);
+    // Query order: BEGIN, slow nodes, fast nodes, slow edges, fast edges,
+    //   percentile threshold, warn pass, expire warnings, archive nodes, archive edges, COMMIT
+    const { pool, queries } = makePoolWithResponses([
+      { rowCount: 5 },                         // 1a slow nodes
+      { rowCount: 3 },                         // 1b fast nodes
+      { rowCount: 2 },                         // 1c slow edges
+      { rowCount: 1 },                         // 1d fast edges
+      { rows: [{ threshold: 10 }] },          // percentile threshold
+      { rowCount: 1, rows: [                   // warn pass
+        { id: 'n1', type: 'fact', label: 'L', confidence: 0.04,
+          sensitivity: 'confidential', edge_count: '2', warn_reason: 'high_sensitivity', warned_at: new Date() },
+      ] },
+      { rowCount: 0 },                         // expire warnings
+      { rowCount: 4 },                         // archive nodes
+      { rowCount: 2 },                         // archive edges
+    ]);
+    const bus = makeBus();
+    const engine = new DreamEngine(pool, bus, createSilentLogger(), warnConfig);
     const result = await engine.runDecayPass();
 
-    // Should have executed: BEGIN, slow_decay nodes, fast_decay nodes, slow_decay edges,
-    // fast_decay edges, archive nodes, archive edges, COMMIT = 8 total
-    expect(queries.length).toBe(8);
+    expect(queries.length).toBe(11);  // BEGIN + 9 data queries + COMMIT
     expect(result.durationMs).toBeGreaterThanOrEqual(0);
-    // Row counts from the mock: [5, 3, 2, 1, 4, 2]
-    // nodesDecayed = slow_decay nodes (5) + fast_decay nodes (3)
-    // edgesDecayed = slow_decay edges (2) + fast_decay edges (1)
     expect(result.nodesDecayed).toBe(8);   // 5 + 3
     expect(result.edgesDecayed).toBe(3);   // 2 + 1
+    expect(result.nodesWarned).toBe(1);
+    expect(result.nodesExpired).toBe(0);
     expect(result.nodesArchived).toBe(4);
     expect(result.edgesArchived).toBe(2);
   });
 
   it('does not run any SQL for permanent nodes (halfLifeDays.permanent is null)', async () => {
-    const { pool, queries } = makePool();
+    const { pool, queries } = makePoolWithResponses(defaultResponses());
     const engine = new DreamEngine(pool, makeBus(), createSilentLogger(), defaultConfig);
     await engine.runDecayPass();
     // No data query should reference 'permanent' as a decay_class parameter
@@ -83,7 +110,7 @@ describe('DreamEngine.runDecayPass', () => {
   });
 
   it('uses the configured half-life for slow_decay nodes', async () => {
-    const { pool, queries } = makePool();
+    const { pool, queries } = makePoolWithResponses(defaultResponses());
     const engine = new DreamEngine(pool, makeBus(), createSilentLogger(), defaultConfig);
     await engine.runDecayPass();
     // Find the slow_decay node decay query — it should include 180 (the half-life)
@@ -95,7 +122,7 @@ describe('DreamEngine.runDecayPass', () => {
   });
 
   it('uses the configured half-life for fast_decay nodes', async () => {
-    const { pool, queries } = makePool();
+    const { pool, queries } = makePoolWithResponses(defaultResponses());
     const engine = new DreamEngine(pool, makeBus(), createSilentLogger(), defaultConfig);
     await engine.runDecayPass();
     const fastDecayNodeQuery = queries.find(q =>
@@ -106,18 +133,22 @@ describe('DreamEngine.runDecayPass', () => {
   });
 
   it('uses the configured archiveThreshold in the archive pass', async () => {
-    const { pool, queries } = makePool();
+    const { pool, queries } = makePoolWithResponses(defaultResponses());
     const engine = new DreamEngine(pool, makeBus(), createSilentLogger(), defaultConfig);
     await engine.runDecayPass();
+    // Pass 2b archives regular nodes — it uses archiveThreshold as its sole param.
+    // Find it by looking for a kg_nodes archive query whose params include the threshold value.
     const archiveNodeQuery = queries.find(q =>
-      q.sql.includes('kg_nodes') && q.sql.includes('archived_at = now()'),
+      q.sql.trimStart().startsWith('UPDATE kg_nodes') &&
+      q.sql.includes('archived_at = now()') &&
+      q.params.includes(0.05),
     );
     expect(archiveNodeQuery).toBeDefined();
     expect(archiveNodeQuery!.params).toContain(0.05);
   });
 
   it('archives edges whose endpoints were archived in the same pass', async () => {
-    const { pool, queries } = makePool();
+    const { pool, queries } = makePoolWithResponses(defaultResponses());
     const engine = new DreamEngine(pool, makeBus(), createSilentLogger(), defaultConfig);
     await engine.runDecayPass();
     const archiveEdgeQuery = queries.find(q =>
@@ -129,7 +160,7 @@ describe('DreamEngine.runDecayPass', () => {
   });
 
   it('wraps the pass in a transaction and releases the client on success', async () => {
-    const { pool } = makePool([1, 1, 1, 1, 1, 1]);
+    const { pool } = makePoolWithResponses(defaultResponses());
     const engine = new DreamEngine(pool, makeBus(), createSilentLogger(), defaultConfig);
     await engine.runDecayPass();
 
@@ -144,6 +175,161 @@ describe('DreamEngine.runDecayPass', () => {
     );
     expect(allSqls[0]).toBe('BEGIN');
     expect(allSqls[allSqls.length - 1]).toBe('COMMIT');
+  });
+});
+
+// Richer mock: each response maps to a query call in order.
+// { rowCount, rows } — rows defaults to [], rowCount defaults to 0.
+function makePoolWithResponses(responses: Array<{ rowCount?: number; rows?: unknown[] }>): {
+  pool: Pool;
+  queries: Array<{ sql: string; params: unknown[] }>;
+} {
+  const queries: Array<{ sql: string; params: unknown[] }> = [];
+  let callIndex = 0;
+
+  const client = {
+    query: vi.fn(async (sql: string, params?: unknown[]) => {
+      queries.push({ sql, params: params ?? [] });
+      if (sql === 'BEGIN' || sql === 'COMMIT' || sql === 'ROLLBACK') {
+        return { rowCount: 0, rows: [] } as unknown as QueryResult;
+      }
+      const resp = responses[callIndex++] ?? { rowCount: 0, rows: [] };
+      return { rowCount: resp.rowCount ?? 0, rows: resp.rows ?? [] } as unknown as QueryResult;
+    }),
+    release: vi.fn(),
+  } as unknown as PoolClient;
+
+  const pool = {
+    connect: vi.fn(async () => client),
+  } as unknown as Pool;
+
+  return { pool, queries };
+}
+
+const warnConfig = {
+  ...defaultConfig,
+  edgeCountPercentile: 0.95,
+  edgeCountFloor: 5,
+  warnHoldBackDays: 7,
+};
+
+describe('DreamEngine warn pass', () => {
+  it('emits memory.decay_warning for each newly warned node', async () => {
+    const warnedRows = [
+      { id: 'node-1', type: 'person', label: 'Alice', confidence: 0.04,
+        sensitivity: 'confidential', edge_count: '3', warn_reason: 'high_sensitivity', warned_at: new Date() },
+      { id: 'node-2', type: 'fact', label: 'Budget 2025', confidence: 0.04,
+        sensitivity: 'internal', edge_count: '12', warn_reason: 'high_connectivity', warned_at: new Date() },
+    ];
+    const { pool } = makePoolWithResponses([
+      { rowCount: 5 },                             // 1a: slow nodes
+      { rowCount: 3 },                             // 1b: fast nodes
+      { rowCount: 2 },                             // 1c: slow edges
+      { rowCount: 1 },                             // 1d: fast edges
+      { rows: [{ threshold: 10 }] },              // percentile threshold
+      { rowCount: 2, rows: warnedRows },           // warn pass RETURNING
+      { rowCount: 0 },                             // expire stale warnings
+      { rowCount: 0 },                             // archive regular nodes
+      { rowCount: 0 },                             // archive edges
+    ]);
+    const bus = makeBus();
+    const engine = new DreamEngine(pool, bus, createSilentLogger(), warnConfig);
+    const result = await engine.runDecayPass();
+
+    expect(result.nodesWarned).toBe(2);
+    expect(bus.publish).toHaveBeenCalledTimes(2);
+    const firstCall = (bus.publish as ReturnType<typeof vi.fn>).mock.calls[0]!;
+    expect(firstCall[0]).toBe('system');
+    expect(firstCall[1].type).toBe('memory.decay_warning');
+    expect(firstCall[1].payload.nodeId).toBe('node-1');
+    expect(firstCall[1].payload.reason).toBe('high_sensitivity');
+    const secondCall = (bus.publish as ReturnType<typeof vi.fn>).mock.calls[1]!;
+    expect(secondCall[1].payload.nodeId).toBe('node-2');
+    expect(secondCall[1].payload.reason).toBe('high_connectivity');
+  });
+
+  it('does not emit events when no nodes are warned', async () => {
+    const { pool } = makePoolWithResponses([
+      { rowCount: 0 }, { rowCount: 0 }, { rowCount: 0 }, { rowCount: 0 },
+      { rows: [{ threshold: 10 }] },
+      { rowCount: 0, rows: [] },
+      { rowCount: 0 }, { rowCount: 0 }, { rowCount: 0 },
+    ]);
+    const bus = makeBus();
+    const engine = new DreamEngine(pool, bus, createSilentLogger(), warnConfig);
+    const result = await engine.runDecayPass();
+
+    expect(result.nodesWarned).toBe(0);
+    expect(bus.publish).not.toHaveBeenCalled();
+  });
+
+  it('passes edgeCountPercentile and edgeCountFloor to the threshold query', async () => {
+    const { pool, queries } = makePoolWithResponses([
+      { rowCount: 0 }, { rowCount: 0 }, { rowCount: 0 }, { rowCount: 0 },
+      { rows: [{ threshold: 10 }] },
+      { rowCount: 0, rows: [] },
+      { rowCount: 0 }, { rowCount: 0 }, { rowCount: 0 },
+    ]);
+    const engine = new DreamEngine(pool, makeBus(), createSilentLogger(), warnConfig);
+    await engine.runDecayPass();
+
+    const thresholdQuery = queries.find(q => q.sql.includes('percentile_disc'));
+    expect(thresholdQuery).toBeDefined();
+    expect(thresholdQuery!.params).toContain(0.95);
+    expect(thresholdQuery!.params).toContain(5);
+  });
+
+  it('sets warned_at and warn_reason in the warn UPDATE query', async () => {
+    const { pool, queries } = makePoolWithResponses([
+      { rowCount: 0 }, { rowCount: 0 }, { rowCount: 0 }, { rowCount: 0 },
+      { rows: [{ threshold: 10 }] },
+      { rowCount: 0, rows: [] },
+      { rowCount: 0 }, { rowCount: 0 }, { rowCount: 0 },
+    ]);
+    const engine = new DreamEngine(pool, makeBus(), createSilentLogger(), warnConfig);
+    await engine.runDecayPass();
+
+    const warnQuery = queries.find(q =>
+      q.sql.includes('warned_at') && q.sql.includes('warn_reason') && q.sql.includes('RETURNING'),
+    );
+    expect(warnQuery).toBeDefined();
+    expect(warnQuery!.sql).toMatch(/HAVING/);
+  });
+
+  it('returns nodesExpired count from expired-warning archive pass', async () => {
+    const { pool } = makePoolWithResponses([
+      { rowCount: 0 }, { rowCount: 0 }, { rowCount: 0 }, { rowCount: 0 },
+      { rows: [{ threshold: 10 }] },
+      { rowCount: 0, rows: [] },
+      { rowCount: 3 },   // expire stale warnings
+      { rowCount: 1 },   // archive regular nodes
+      { rowCount: 2 },   // archive edges
+    ]);
+    const engine = new DreamEngine(pool, makeBus(), createSilentLogger(), warnConfig);
+    const result = await engine.runDecayPass();
+
+    expect(result.nodesExpired).toBe(3);
+    expect(result.nodesArchived).toBe(1);
+  });
+
+  it('excludes warned nodes (within hold-back window) from the regular archive pass', async () => {
+    const { pool, queries } = makePoolWithResponses([
+      { rowCount: 0 }, { rowCount: 0 }, { rowCount: 0 }, { rowCount: 0 },
+      { rows: [{ threshold: 10 }] },
+      { rowCount: 0, rows: [] },
+      { rowCount: 0 }, { rowCount: 0 }, { rowCount: 0 },
+    ]);
+    const engine = new DreamEngine(pool, makeBus(), createSilentLogger(), warnConfig);
+    await engine.runDecayPass();
+
+    // Filter to queries that UPDATE kg_nodes and set archived_at (excludes the edge
+    // archive query, which updates kg_edges even though it subqueries kg_nodes).
+    const regularArchiveQuery = queries.filter(q =>
+      q.sql.trimStart().startsWith('UPDATE kg_nodes') && q.sql.includes('archived_at = now()'),
+    );
+    expect(regularArchiveQuery.length).toBeGreaterThanOrEqual(2);
+    const pass2b = regularArchiveQuery[regularArchiveQuery.length - 1]!;
+    expect(pass2b.sql).toMatch(/warned_at IS NULL/);
   });
 });
 

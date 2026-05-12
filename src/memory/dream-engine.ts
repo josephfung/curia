@@ -1,5 +1,7 @@
 import type { Pool, PoolClient } from 'pg';
 import type { EventBus } from '../bus/bus.js';
+import { createMemoryDecayWarning } from '../bus/events.js';
+import type { MemoryDecayWarningPayload } from '../bus/events.js';
 import type { Logger } from '../logger.js';
 import type { AutonomyScoringPass } from '../autonomy/scoring-pass.js';
 
@@ -28,6 +30,8 @@ export interface DecayConfig {
 export interface DecayPassResult {
   nodesDecayed: number;
   edgesDecayed: number;
+  nodesWarned: number;    // nodes newly flagged in this pass
+  nodesExpired: number;   // warned nodes archived because hold-back expired
   nodesArchived: number;
   edgesArchived: number;
   durationMs: number;
@@ -43,11 +47,12 @@ export interface DecayPassResult {
  * Future passes (decay warning #280, contradiction resolution, synthesis) will
  * be added as sibling methods with their own config keys under `dreaming`.
  *
- * EventBus is injected now but unused — reserved for the decay warning pass (#280)
- * which will emit `memory.decay_warning` before archiving important nodes.
+ * EventBus is injected and used by the decay warning pass (#280) to emit
+ * `memory.decay_warning` before archiving important nodes.
  */
 export class DreamEngine {
   private pool: Pool;
+  private bus: EventBus;
   private logger: Logger;
   private config: DecayConfig;
   private intervalHandle: ReturnType<typeof setInterval> | null = null;
@@ -59,11 +64,9 @@ export class DreamEngine {
   // wasting LLM spend and applying the adjustment formula twice.
   private scoringPassInFlight = false;
 
-  // _bus is accepted but not stored — it is reserved for the decay warning pass
-  // (#280) which will emit `memory.decay_warning` before archiving important nodes.
-  // The underscore prefix signals intentional non-use to TypeScript.
-  constructor(pool: Pool, _bus: EventBus, logger: Logger, config: DecayConfig, scoringPass?: AutonomyScoringPass) {
+  constructor(pool: Pool, bus: EventBus, logger: Logger, config: DecayConfig, scoringPass?: AutonomyScoringPass) {
     this.pool = pool;
+    this.bus = bus;
     this.logger = logger;
     this.config = config;
     this.scoringPass = scoringPass;
@@ -227,13 +230,118 @@ export class DreamEngine {
     const nodesDecayed = (slowNodeResult.rowCount ?? 0) + (fastNodeResult.rowCount ?? 0);
     const edgesDecayed = (slowEdgeResult.rowCount ?? 0) + (fastEdgeResult.rowCount ?? 0);
 
-    // Pass 2: Archive nodes at or below threshold (permanent nodes are never archived)
+    // Pass 1.5: Warn pass — flag important nodes approaching archive threshold.
+    // "Important" = high sensitivity (confidential/restricted) OR high edge-count.
+    // Edge-count threshold computed dynamically as p95 of all non-archived nodes,
+    // with a floor of edgeCountFloor so the bar stays calibrated as the graph grows.
+
+    // Step A: compute the edge-count threshold for this pass
+    const thresholdResult = await client.query<{ threshold: number }>(
+      `SELECT GREATEST(
+         (SELECT percentile_disc($1) WITHIN GROUP (ORDER BY edge_count)
+            FROM (
+              SELECT n.id, COUNT(e.id) AS edge_count
+                FROM kg_nodes n
+                LEFT JOIN kg_edges e
+                  ON (e.source_node_id = n.id OR e.target_node_id = n.id)
+                 AND e.archived_at IS NULL
+               WHERE n.archived_at IS NULL
+               GROUP BY n.id
+            ) sub
+         ),
+         $2
+       ) AS threshold`,
+      [this.config.edgeCountPercentile, this.config.edgeCountFloor],
+    );
+    const edgeCountThreshold = thresholdResult.rows[0]?.threshold ?? this.config.edgeCountFloor;
+
+    // Step B: flag important nodes (skip already-warned nodes for idempotency)
+    const warnResult = await client.query<{
+      id: string;
+      type: string;
+      label: string;
+      confidence: number;
+      sensitivity: string;
+      edge_count: string;
+      warn_reason: string;
+      warned_at: Date;
+    }>(
+      `WITH candidates AS (
+         SELECT n.id, n.type, n.label, n.confidence, n.sensitivity,
+                COUNT(e.id) AS edge_count,
+                CASE
+                  WHEN n.sensitivity IN ('confidential', 'restricted')
+                   AND COUNT(e.id) >= $2 THEN 'both'
+                  WHEN n.sensitivity IN ('confidential', 'restricted') THEN 'high_sensitivity'
+                  ELSE 'high_connectivity'
+                END AS reason
+           FROM kg_nodes n
+           LEFT JOIN kg_edges e
+                  ON (e.source_node_id = n.id OR e.target_node_id = n.id)
+                 AND e.archived_at IS NULL
+          WHERE n.archived_at IS NULL
+            AND n.warned_at IS NULL
+            AND n.decay_class != 'permanent'
+            AND n.confidence <= $1
+          GROUP BY n.id, n.type, n.label, n.confidence, n.sensitivity
+         HAVING n.sensitivity IN ('confidential', 'restricted')
+             OR COUNT(e.id) >= $2
+       )
+       UPDATE kg_nodes
+          SET warned_at = now(),
+              warn_reason = candidates.reason
+         FROM candidates
+        WHERE kg_nodes.id = candidates.id
+       RETURNING candidates.id,
+                 candidates.type,
+                 candidates.label,
+                 candidates.confidence,
+                 candidates.sensitivity,
+                 candidates.edge_count,
+                 candidates.reason AS warn_reason,
+                 kg_nodes.warned_at`,
+      [archiveThreshold, edgeCountThreshold],
+    );
+
+    const nodesWarned = warnResult.rowCount ?? 0;
+
+    // Emit a bus event for each warned node (audit trail + future subscriber hooks)
+    for (const row of warnResult.rows) {
+      await this.bus.publish('system', createMemoryDecayWarning({
+        nodeId: row.id,
+        nodeType: row.type as MemoryDecayWarningPayload['nodeType'],
+        label: row.label,
+        confidence: row.confidence,
+        sensitivity: row.sensitivity as MemoryDecayWarningPayload['sensitivity'],
+        edgeCount: parseInt(row.edge_count, 10),
+        reason: row.warn_reason as 'high_sensitivity' | 'high_connectivity' | 'both',
+      }));
+    }
+
+    // Pass 2a: Archive expired warnings — nodes whose hold-back window has closed
+    // without a CEO response. These were warned but never confirmed or dismissed.
+    const archiveExpiredResult = await client.query(
+      `UPDATE kg_nodes
+          SET archived_at = now(),
+              warned_at = NULL,
+              warn_reason = NULL
+        WHERE archived_at IS NULL
+          AND warned_at IS NOT NULL
+          AND warned_at <= now() - ($1 || ' days')::INTERVAL`,
+      [this.config.warnHoldBackDays],
+    );
+    const nodesExpired = archiveExpiredResult.rowCount ?? 0;
+
+    // Pass 2b: Archive regular nodes at or below threshold. Excludes:
+    // - permanent nodes (never archived by design)
+    // - nodes with an active warning still within hold-back window (warned_at IS NOT NULL)
     const archiveNodeResult = await client.query(
       `UPDATE kg_nodes
-         SET archived_at = now()
-       WHERE archived_at IS NULL
-         AND decay_class != 'permanent'
-         AND confidence <= $1`,
+          SET archived_at = now()
+        WHERE archived_at IS NULL
+          AND decay_class != 'permanent'
+          AND confidence <= $1
+          AND warned_at IS NULL`,
       [archiveThreshold],
     );
 
@@ -241,8 +349,8 @@ export class DreamEngine {
 
     // Pass 3: Archive edges whose endpoint was just archived, OR whose own confidence
     // is at or below threshold. Using archived_at IS NOT NULL for nodes catches both
-    // the just-archived nodes from Pass 2 and any previously archived nodes, ensuring
-    // no edge is left dangling to an archived endpoint.
+    // the just-archived nodes from Passes 2a/2b and any previously archived nodes,
+    // ensuring no edge is left dangling to an archived endpoint.
     const archiveEdgeResult = await client.query(
       `UPDATE kg_edges
          SET archived_at = now()
@@ -257,6 +365,6 @@ export class DreamEngine {
 
     const edgesArchived = archiveEdgeResult.rowCount ?? 0;
 
-    return { nodesDecayed, edgesDecayed, nodesArchived, edgesArchived };
+    return { nodesDecayed, edgesDecayed, nodesWarned, nodesExpired, nodesArchived, edgesArchived };
   }
 }
