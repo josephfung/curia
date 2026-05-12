@@ -282,6 +282,66 @@ describe('EntityMemory.storeFact — updated action codes', () => {
   });
 });
 
+describe('EntityMemory.addAlias', () => {
+  it('appends a lowercased alias to the entity node', async () => {
+    const { mem, store } = makeEntityMemory();
+    const { entity } = await mem.createEntity({
+      type: 'organization', label: 'Darlise Restaurant', properties: {}, source: 'test',
+    });
+
+    await mem.addAlias(entity.id, 'Darlise');
+
+    const updated = await store.getNode(entity.id);
+    expect(updated!.aliases).toEqual(['darlise']);
+  });
+
+  it('does not add duplicate aliases', async () => {
+    const { mem, store } = makeEntityMemory();
+    const { entity } = await mem.createEntity({
+      type: 'organization', label: 'Darlise Restaurant', properties: {}, source: 'test',
+    });
+
+    await mem.addAlias(entity.id, 'Darlise');
+    await mem.addAlias(entity.id, 'DARLISE'); // same after lowering
+
+    const updated = await store.getNode(entity.id);
+    expect(updated!.aliases).toEqual(['darlise']);
+  });
+
+  it('does not add an alias that matches the canonical label', async () => {
+    const { mem, store } = makeEntityMemory();
+    const { entity } = await mem.createEntity({
+      type: 'organization', label: 'Darlise Restaurant', properties: {}, source: 'test',
+    });
+
+    await mem.addAlias(entity.id, 'Darlise Restaurant');
+
+    const updated = await store.getNode(entity.id);
+    expect(updated!.aliases).toEqual([]);
+  });
+
+  it('rejects when alias count reaches MAX_ALIASES_PER_ENTITY', async () => {
+    const { mem, store } = makeEntityMemory();
+    const { entity } = await mem.createEntity({
+      type: 'organization', label: 'Darlise Restaurant', properties: {}, source: 'test',
+    });
+
+    // Fill up to the cap (10)
+    for (let i = 0; i < 10; i++) {
+      await mem.addAlias(entity.id, `alias-${i}`);
+    }
+
+    const updated = await store.getNode(entity.id);
+    expect(updated!.aliases).toHaveLength(10);
+
+    // 11th alias should be silently rejected
+    await mem.addAlias(entity.id, 'one-too-many');
+    const afterReject = await store.getNode(entity.id);
+    expect(afterReject!.aliases).toHaveLength(10);
+    expect(afterReject!.aliases).not.toContain('one-too-many');
+  });
+});
+
 describe('EntityMemory.findEntities — alias awareness', () => {
   it('finds an entity by alias when the canonical label does not match', async () => {
     const embeddingService = EmbeddingService.createForTesting();

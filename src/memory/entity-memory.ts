@@ -93,6 +93,10 @@ export type ResolveOrCreateResult =
 // Per types.ts, 'fact' is the only node type that carries atomic facts about entities.
 const FACT_TYPE: NodeType = 'fact';
 
+/** Maximum aliases per entity node. Guardrail against degenerate alias accumulation;
+ *  real entities rarely have more than 3-4 name variants. */
+export const MAX_ALIASES_PER_ENTITY = 10;
+
 /**
  * EntityMemory: the high-level query layer that agents interact with.
  *
@@ -310,6 +314,50 @@ export class EntityMemory {
 
     // No type match — caller must ask the user to pick one.
     return { kind: 'ambiguous', candidates: matches };
+  }
+
+  /**
+   * Store a confirmed name variant as an alias on an entity node.
+   *
+   * Lowercases the alias before storing. Silently skips if:
+   * - The alias matches the canonical label (case-insensitive)
+   * - The alias already exists in the aliases array
+   * - The entity has reached MAX_ALIASES_PER_ENTITY (10)
+   * - The entity node does not exist
+   *
+   * Does not throw — alias learning is best-effort and should never
+   * block fact storage.
+   */
+  async addAlias(nodeId: string, alias: string): Promise<void> {
+    const lowerAlias = alias.toLowerCase();
+
+    const node = await this.store.getNode(nodeId);
+    if (!node) {
+      this.logger.warn({ nodeId, alias }, 'addAlias: entity node not found');
+      return;
+    }
+
+    // Skip if alias matches canonical label
+    if (node.label.toLowerCase() === lowerAlias) {
+      return;
+    }
+
+    // Skip if alias already exists
+    if (node.aliases.includes(lowerAlias)) {
+      return;
+    }
+
+    // Skip if at cap
+    if (node.aliases.length >= MAX_ALIASES_PER_ENTITY) {
+      this.logger.warn(
+        { nodeId, alias, count: node.aliases.length, max: MAX_ALIASES_PER_ENTITY },
+        'addAlias: alias cap reached — skipping',
+      );
+      return;
+    }
+
+    const updatedAliases = [...node.aliases, lowerAlias];
+    await this.store.updateNode(nodeId, { aliases: updatedAliases });
   }
 
   /**
