@@ -389,6 +389,116 @@ describe('EntityMemory.resolveOrCreate — fuzzy fallback', () => {
   });
 });
 
+describe('EntityMemory.resolveOrCreate — fuzzy auto-resolve end-to-end', () => {
+  it('auto-resolves via fuzzy match when embedding similarity >= FUZZY_RESOLVE_THRESHOLD', async () => {
+    const embeddingService = EmbeddingService.createForTesting();
+    const store = KnowledgeGraphStore.createInMemory(embeddingService);
+    const validator = new MemoryValidator(store, embeddingService);
+    const mem = new EntityMemory(store, validator, embeddingService, createSilentLogger());
+
+    // Pre-compute the embedding for the query label we will use
+    const queryLabel = 'Darlise';
+    const queryEmbedding = await embeddingService.embed(queryLabel);
+
+    // Create a node whose embedding matches the query exactly (cosine similarity = 1.0)
+    // but whose canonical label is different — so Phase 1 (exact match) will miss
+    // and Phase 2 (fuzzy) will fire.
+    const node = await store.createNode({
+      type: 'organization',
+      label: 'Darlise Restaurant',
+      properties: {},
+      source: 'test',
+      embedding: queryEmbedding,  // identical vector → similarity 1.0
+    });
+
+    const result = await mem.resolveOrCreate({
+      label: queryLabel,
+      type: 'organization',
+      source: 'test',
+    });
+
+    // Phase 2 fires: similarity = 1.0 ≥ 0.90 → auto-resolve
+    expect(result.kind).toBe('found');
+    if (result.kind !== 'found') throw new Error('narrowing');
+    expect(result.node.id).toBe(node.id);
+
+    // Alias is learned as a side effect of auto-resolve
+    const refreshed = await store.getNode(node.id);
+    expect(refreshed!.aliases).toContain(queryLabel.toLowerCase());
+  });
+
+  it('does not create a duplicate when a fuzzy match auto-resolves', async () => {
+    const embeddingService = EmbeddingService.createForTesting();
+    const store = KnowledgeGraphStore.createInMemory(embeddingService);
+    const validator = new MemoryValidator(store, embeddingService);
+    const mem = new EntityMemory(store, validator, embeddingService, createSilentLogger());
+
+    const queryLabel = 'the Darlise place';
+    const queryEmbedding = await embeddingService.embed(queryLabel);
+
+    await store.createNode({
+      type: 'organization',
+      label: 'Darlise Restaurant',
+      properties: {},
+      source: 'test',
+      embedding: queryEmbedding,
+    });
+
+    // Resolve once — should auto-resolve, not create
+    const result = await mem.resolveOrCreate({
+      label: queryLabel,
+      type: 'organization',
+      source: 'test',
+    });
+
+    expect(result.kind).toBe('found');
+
+    // Only one organization node should exist — no duplicate created
+    const allOrgs = await store.findNodesByType('organization');
+    expect(allOrgs).toHaveLength(1);
+  });
+
+  it('returns ambiguous when best score is in the uncertain zone (0.75-0.90)', async () => {
+    const embeddingService = EmbeddingService.createForTesting();
+    const store = KnowledgeGraphStore.createInMemory(embeddingService);
+    const validator = new MemoryValidator(store, embeddingService);
+    const mem = new EntityMemory(store, validator, embeddingService, createSilentLogger());
+
+    const queryLabel = 'Restaurant X';
+    const queryEmbedding = await embeddingService.embed(queryLabel);
+
+    // Build a vector that is 0.82 similar to the query embedding (in the ambiguous zone).
+    // We do this by computing a weighted blend: blend = 0.82 * query + sqrt(1 - 0.82^2) * perp
+    // where perp is orthogonal to query, giving exact cosine(blend, query) = 0.82.
+    // For a simpler approximation: scale query and add a small orthogonal component.
+    const norm = Math.sqrt(queryEmbedding.reduce((s, v) => s + v * v, 0));
+    // Create a perturbed vector: keep 82% of the direction, add 18% noise on first dim
+    const perturbedEmbedding = queryEmbedding.map((v, i) => {
+      const scaled = v * 0.82;
+      return i === 0 ? scaled + norm * Math.sqrt(1 - 0.82 * 0.82) : scaled;
+    });
+
+    await store.createNode({
+      type: 'organization',
+      label: 'Another Restaurant',
+      properties: {},
+      source: 'test',
+      embedding: perturbedEmbedding,
+    });
+
+    const result = await mem.resolveOrCreate({
+      label: queryLabel,
+      type: 'organization',
+      source: 'test',
+    });
+
+    // Should be ambiguous (0.75 ≤ score < 0.90), not found and not created
+    expect(result.kind).toBe('ambiguous');
+    if (result.kind !== 'ambiguous') throw new Error('narrowing');
+    expect(result.candidates).toHaveLength(1);
+  });
+});
+
 describe('EntityMemory.findEntities — alias awareness', () => {
   it('finds an entity by alias when the canonical label does not match', async () => {
     const embeddingService = EmbeddingService.createForTesting();
