@@ -6,9 +6,14 @@
 // - PDF: pdf-parse text extraction, then optional LLM structuring
 // - HTML: tag stripping, then optional LLM structuring
 
+import { createRequire } from 'node:module';
 import Anthropic from '@anthropic-ai/sdk';
-import pdfParse from 'pdf-parse';
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+
+// pdf-parse is CJS-only and doesn't provide a default ESM export.
+// Use createRequire to load it reliably under Node ESM + tsx.
+const require = createRequire(import.meta.url);
+const pdfParse = require('pdf-parse') as typeof import('pdf-parse');
 import { parseCsv } from './csv.js';
 import { getExtractionPrompt, type ExtractAs } from './prompts.js';
 

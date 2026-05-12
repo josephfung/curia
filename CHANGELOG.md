@@ -13,6 +13,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Fixed
+
+- **file-parse skill** — fixed ESM import of `pdf-parse` (CJS-only package) using `createRequire`, which caused the skill to fail to load in production
+
 ### Added
 
 - **file-parse skill** — general-purpose document parser that extracts structured data from CSV, PDF, HTML, and image files. CSV is parsed deterministically (no LLM, confidence 1.0); images use Claude vision; PDFs and HTML use text extraction with optional LLM structuring. Supports `extract_as` hint for `receipt`, `bank_statement`, and `invoice` schemas. Reusable by any agent.
