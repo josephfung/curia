@@ -32,11 +32,13 @@ export class AnthropicProvider implements LLMProvider {
     messages,
     tools,
     toolResults,
+    model: modelOverride,
     options,
   }: {
     messages: Message[];
     tools?: ToolDefinition[];
     toolResults?: ToolResult[];
+    model?: string;
     options?: Record<string, unknown>;
   }): Promise<LLMResponse> {
     // Anthropic requires the system prompt as a separate top-level parameter,
@@ -101,9 +103,9 @@ export class AnthropicProvider implements LLMProvider {
       conversationMessages.push({ role: 'user', content: toolResultBlocks });
     }
 
-    // Default to the latest Claude Sonnet; callers can override via options.model.
-    // Using a default here ensures we never accidentally call without a model.
-    const model = (options?.model as string) ?? 'claude-sonnet-4-6';
+    // Prefer the explicit model param; fall back to options.model for backward
+    // compatibility; default to sonnet if neither is provided.
+    const model = modelOverride ?? (options?.model as string) ?? 'claude-sonnet-4-6';
 
     try {
       const createParams: Anthropic.Messages.MessageCreateParamsNonStreaming = {

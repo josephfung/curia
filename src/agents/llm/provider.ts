@@ -109,6 +109,7 @@ export interface LLMProvider {
     messages: Message[];
     tools?: ToolDefinition[];
     toolResults?: ToolResult[];
+    model?: string;
     options?: Record<string, unknown>;
   }): Promise<LLMResponse>;
 }

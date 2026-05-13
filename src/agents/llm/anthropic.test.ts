@@ -99,6 +99,39 @@ describe('AnthropicProvider — provenance and cache tokens', () => {
     expect(result.usage.cacheCreationInputTokens).toBe(1500);
     expect(result.usage.cacheReadInputTokens).toBe(300);
   });
+
+  it('uses explicit model param over options.model', async () => {
+    const provider = new AnthropicProvider('test-key', createSilentLogger());
+    await provider.chat({
+      messages: [{ role: 'user', content: 'Hello' }],
+      model: 'claude-haiku-4-5',
+      options: { model: 'claude-opus-4-6' },
+    });
+
+    const params = mockCreate.mock.calls[0]![0];
+    expect(params.model).toBe('claude-haiku-4-5');
+  });
+
+  it('falls back to options.model when model param is not provided', async () => {
+    const provider = new AnthropicProvider('test-key', createSilentLogger());
+    await provider.chat({
+      messages: [{ role: 'user', content: 'Hello' }],
+      options: { model: 'claude-opus-4-6' },
+    });
+
+    const params = mockCreate.mock.calls[0]![0];
+    expect(params.model).toBe('claude-opus-4-6');
+  });
+
+  it('defaults to claude-sonnet-4-6 when neither model param nor options.model provided', async () => {
+    const provider = new AnthropicProvider('test-key', createSilentLogger());
+    await provider.chat({
+      messages: [{ role: 'user', content: 'Hello' }],
+    });
+
+    const params = mockCreate.mock.calls[0]![0];
+    expect(params.model).toBe('claude-sonnet-4-6');
+  });
 });
 
 describe('AnthropicProvider — prompt caching', () => {
