@@ -55,6 +55,13 @@ export interface AgentYamlConfig {
     max_cost_usd?: number;
     max_errors?: number;
   };
+  /** Context budget config — controls how much of the model's context window is
+   *  reserved for the response. The budgeting layer in runtime.ts uses this to
+   *  enforce tier-based inclusion/exclusion. */
+  context_budget?: {
+    /** Tokens reserved for the model's response. Default: 8192. */
+    response_reserve?: number;
+  };
   /**
    * When true, ${available_specialists} in the system_prompt is replaced at bootstrap
    * with the list of registered specialist agents. Used by specialists that need to

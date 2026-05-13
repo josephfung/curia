@@ -4,6 +4,8 @@ description: Central coordinator — routes all messages, delegates to specialis
 model:
   provider: anthropic
   model: claude-sonnet-4-6
+context_budget:
+  response_reserve: 8192
 system_prompt: |
   ${office_identity_block}
 

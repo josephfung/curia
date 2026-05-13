@@ -378,6 +378,30 @@ interface LlmCallPayload {
   responseHash: string;
 }
 
+// ContextBudgetPayload — emitted by the agent runtime after assembling context
+// for each LLM call. Reports per-tier token estimates, budget utilization, and
+// which tiers were dropped. Co-located with llm.call events in audit_log for
+// correlating budget utilization with actual token usage.
+// Design: docs/wip/2026-05-12-context-budget-design.md
+interface ContextBudgetPayload {
+  agentId: string;
+  conversationId: string;
+  model: string;
+  contextWindow: number;
+  responseReserve: number;
+  availableBudget: number;
+  totalUsed: number;
+  utilizationPct: number;
+  tiers: Array<{
+    name: string;
+    estimatedTokens: number;
+    included: boolean;
+    droppedReason?: 'budget_exceeded' | 'empty';
+  }>;
+  historyTurnsTotal: number;
+  historyTurnsIncluded: number;
+}
+
 // SecretAccessedPayload — emitted by the execution layer whenever a skill calls ctx.secret().
 // Records which skill accessed which secret, from which agent/task — never the secret value.
 // This is the primary audit trail for secrets isolation (spec 06, Secrets Isolation).
@@ -642,6 +666,14 @@ export interface LlmCallEvent extends BaseEvent {
   payload: LlmCallPayload;
 }
 
+// ContextBudgetEvent — published by the agent layer after assembling context for each LLM call.
+// parentEventId references the agent.task that triggered it.
+export interface ContextBudgetEvent extends BaseEvent {
+  type: 'context.budget';
+  sourceLayer: 'agent';
+  payload: ContextBudgetPayload;
+}
+
 // HumanDecisionEvent — published by the dispatch layer when a human resolves an approval gate.
 // parentEventId references the event (e.g., outbound.message, message.held) that triggered the gate.
 export interface HumanDecisionEvent extends BaseEvent {
@@ -724,6 +756,7 @@ export type BusEvent =
   | ConfigChangeEvent        // System: config object changed (office identity, etc.)
   | ConversationCheckpointEvent // Checkpoint pipeline: Dispatch fires after inactivity window
   | LlmCallEvent             // Spec 10: LLM API call provenance (model, tokens, cost, hashes)
+  | ContextBudgetEvent        // #24: context budget utilization per LLM call
   | HumanDecisionEvent       // Spec 10: human-in-the-loop decision record (approve/deny/etc.)
   | SecretAccessedEvent      // Spec 06: secrets isolation audit trail (name only, never value)
   | AutonomySkillBlockedEvent  // Autonomy Phase 2: skill blocked by action_risk gate
@@ -1140,6 +1173,20 @@ export function createLlmCall(
     id: randomUUID(),
     timestamp: new Date(),
     type: 'llm.call',
+    sourceLayer: 'agent',
+    payload: rest,
+    parentEventId,
+  };
+}
+
+export function createContextBudget(
+  payload: ContextBudgetPayload & { parentEventId: string },
+): ContextBudgetEvent {
+  const { parentEventId, ...rest } = payload;
+  return {
+    id: randomUUID(),
+    timestamp: new Date(),
+    type: 'context.budget',
     sourceLayer: 'agent',
     payload: rest,
     parentEventId,
