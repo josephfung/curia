@@ -11,7 +11,7 @@ describe('loadAgentConfig', () => {
     const config = loadAgentConfig(path.join(agentsDir, 'coordinator.yaml'));
     expect(config.name).toBe('coordinator');
     expect(config.role).toBe('coordinator');
-    expect(config.model.provider).toBe('anthropic');
+    expect(config.model.tier).toBe('standard');
     // The identity block token is present — system prompt is meaningful.
     expect(config.system_prompt).toContain('${office_identity_block}');
   });
@@ -43,8 +43,7 @@ describe('loadAgentConfig', () => {
     const yamlContent = `
 name: test-agent
 model:
-  provider: anthropic
-  model: claude-sonnet-4-6
+  tier: standard
 system_prompt: "Test agent"
 error_budget:
   max_turns: 10
@@ -64,8 +63,7 @@ error_budget:
     const yamlContent = `
 name: writing-scout
 model:
-  provider: anthropic
-  model: claude-sonnet-4-6
+  tier: standard
 system_prompt: "Scout agent"
 schedule:
   - cron: "30 8 * * 2"
@@ -89,8 +87,7 @@ schedule:
     const yamlContent = `
 name: test-sched
 model:
-  provider: anthropic
-  model: claude-sonnet-4-6
+  tier: standard
 system_prompt: "Test"
 schedule:
   - cron: "0 9 * * 1"
@@ -101,6 +98,27 @@ schedule:
 
     const config = loadAgentConfig(filePath);
     expect(config.schedule![0].agent_id).toBeUndefined();
+
+    fs.rmSync(tempDir, { recursive: true });
+  });
+
+  it('parses model tier with needs array', () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'curia-test-'));
+    const yamlContent = `
+name: vision-agent
+model:
+  tier: powerful
+  needs:
+    - vision
+    - large_context
+system_prompt: "Agent with vision"
+`;
+    const filePath = path.join(tempDir, 'vision-agent.yaml');
+    fs.writeFileSync(filePath, yamlContent);
+
+    const config = loadAgentConfig(filePath);
+    expect(config.model.tier).toBe('powerful');
+    expect(config.model.needs).toEqual(['vision', 'large_context']);
 
     fs.rmSync(tempDir, { recursive: true });
   });
