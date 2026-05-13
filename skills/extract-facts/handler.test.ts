@@ -252,6 +252,24 @@ describe('ExtractFactsHandler', () => {
     expect(storeFact).toHaveBeenCalledTimes(2);
   });
 
+  it('programming error (TypeError) in per-fact loop is re-thrown — returns { success: false }', async () => {
+    const entityMemory = makeEntityMemory();
+    const facts = JSON.stringify([
+      { subject: 'Jane Doe', subjectType: 'person', attribute: 'home_city', value: 'Toronto', confidence: 0.9, decayClass: 'slow_decay' },
+    ]);
+    const anthropic = makeMockAnthropicClient(['yes', facts]);
+    const handler = new ExtractFactsHandler(anthropic as never);
+
+    // TypeError signals a programming bug — should escape the per-fact catch and
+    // reach the outer catch, returning { success: false } instead of { failed: 1 }.
+    vi.spyOn(entityMemory, 'storeFact').mockRejectedValueOnce(new TypeError("Cannot read properties of undefined (reading 'id')"));
+
+    const ctx = makeCtx(entityMemory, { text: 'Jane Doe lives in Toronto.', source: 'test' });
+    const result = await handler.execute(ctx);
+
+    expect(result).toEqual({ success: false, error: "Cannot read properties of undefined (reading 'id')" });
+  });
+
   it('catch block is safe when storeFact throws — failed incremented, no ReferenceError', async () => {
     const entityMemory = makeEntityMemory();
     const facts = JSON.stringify([
