@@ -502,13 +502,34 @@ export class SchedulerService {
         SELECT $1, $2, $3, $4, $5
         WHERE NOT EXISTS (SELECT 1 FROM agent_tasks WHERE scheduled_job_id = $5)
       `;
-      await this.pool.query(taskSql, [
-        agentId,
-        schedule.intent_anchor,
-        'active',
-        JSON.stringify({}),
-        jobId,
-      ]);
+      let taskResult: { rowCount: number | null };
+      try {
+        taskResult = await this.pool.query(taskSql, [
+          agentId,
+          schedule.intent_anchor,
+          'active',
+          JSON.stringify({}),
+          jobId,
+        ]);
+      } catch (err) {
+        // Re-throw so loadDeclarativeJobs treats the whole upsert as failed.
+        // The scheduled_jobs row was already written, but without the agent_tasks
+        // link the drift detector cannot fire — running silently in a degraded state
+        // is worse than a loud failure that prompts operator attention.
+        this.logger.error(
+          { err, agentId, jobId, intentAnchor: schedule.intent_anchor },
+          'upsertDeclarativeJob: failed to create agent_tasks row — job will run without drift detection until this is resolved',
+        );
+        throw err;
+      }
+      // rowCount === 0 means the WHERE NOT EXISTS guard fired — an existing row was preserved.
+      const anchorCreated = (taskResult.rowCount ?? 0) > 0;
+      this.logger.info(
+        { agentId, jobId, intentAnchor: schedule.intent_anchor, anchorCreated },
+        anchorCreated
+          ? 'upsertDeclarativeJob: agent_tasks row created for intent_anchor (drift detection enabled)'
+          : 'upsertDeclarativeJob: agent_tasks row already exists — skipped (restart idempotency)',
+      );
     }
 
     return jobId;

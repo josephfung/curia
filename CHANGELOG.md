@@ -17,10 +17,6 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 - **LLM token tracking** — every successful Anthropic API call now publishes a structured `llm.call` bus event (spec 10) with full model provenance, token counts (including prompt-cache breakdown), estimated cost, latency, and SHA-256 content fingerprints. Events land in `audit_log` automatically via the existing audit logger, enabling per-agent attribution and data-driven context budgeting (closes #326, prerequisite for #24).
 
-### Fixed
-
-- **Declarative job drift detection** — `upsertDeclarativeJob()` now accepts `intent_anchor` from YAML schedule blocks and creates the linked `agent_tasks` row so the drift detector fires for those jobs. Previously `agent_task_id` was always `null` for declarative jobs, silently bypassing drift detection (closes #416). Spec 07 updated to document `intent_anchor` as a valid schedule field.
-
 ### Changed
 
 - **`LLMUsage`** extended with `cacheCreationInputTokens` and `cacheReadInputTokens` fields (previously silently dropped from the Anthropic API response).
@@ -29,6 +25,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **Declarative job drift detection** — declarative (YAML-defined) scheduled jobs now support `intent_anchor`, enabling drift detection. Previously ignored at upsert time, causing the drift detector to silently skip all YAML jobs (closes #416).
 - **Google Workspace tools** pinned to coordinator — doc creation, editing, formatting, sharing, and drive tools are now always available without requiring `skill-registry` discovery (see #497).
 - **`extract-facts`** — programming errors in the per-fact loop now re-throw instead of silently incrementing `failed`. (#493)
 
