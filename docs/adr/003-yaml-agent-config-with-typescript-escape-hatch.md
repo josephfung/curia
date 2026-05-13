@@ -27,3 +27,7 @@ The TypeScript escape hatch (`handler: ./coordinator.handler.ts`) is available f
 - Custom agents (like the Coordinator) can express arbitrary dispatch logic in the handler without polluting the base runtime.
 - The YAML schema is a public API surface — changes are breaking and must be called out in the changelog even in the `0.x` range.
 - Schema validation runs at startup; malformed agent files crash early rather than failing silently at runtime.
+
+## Superseded (partial)
+
+The `model.provider` + `model.model` fields originally defined in this ADR have been replaced by capability-tier routing. See [ADR-014](./014-capability-tier-model-routing.md) for the current model declaration schema.
