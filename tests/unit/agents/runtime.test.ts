@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { AgentRuntime } from '../../../src/agents/runtime.js';
 import { EventBus } from '../../../src/bus/bus.js';
-import { createAgentTask, type AgentResponseEvent, type AgentErrorEvent } from '../../../src/bus/events.js';
+import { createAgentTask, type AgentResponseEvent, type AgentErrorEvent, type ContextBudgetEvent } from '../../../src/bus/events.js';
 import type { LLMProvider, ToolResult } from '../../../src/agents/llm/provider.js';
 import type { ExecutionLayer } from '../../../src/skills/execution.js';
 import { createLogger } from '../../../src/logger.js';
@@ -2096,5 +2096,67 @@ describe('AgentRuntime Bullpen context refresh', () => {
     expect(secondBullpenMsgs).toHaveLength(1);
     // Should still be the original content (stale, not updated)
     expect(secondBullpenMsgs[0]!.content).toContain('Architecture review');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Context budget event emission (#24)
+// ---------------------------------------------------------------------------
+
+describe('context budget', () => {
+  it('emits context.budget event on every agent task', async () => {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+    const provider = createMockProvider('Hello back!');
+    const budgetEvents: ContextBudgetEvent[] = [];
+
+    const runtime = new AgentRuntime({
+      agentId: 'coordinator',
+      systemPrompt: 'You are a helpful assistant.',
+      provider,
+      bus,
+      logger,
+      contextBudget: { responseReserve: 8192 },
+    });
+    runtime.register();
+
+    // 'system' layer has subscribe permission for context.budget (same as llm.call).
+    bus.subscribe('context.budget', 'system', (event) => {
+      budgetEvents.push(event as ContextBudgetEvent);
+    });
+
+    // 'dispatch' layer subscribe is required because AgentRuntime publishes agent.response
+    // and the bus validates that at least one subscriber exists for the event.
+    bus.subscribe('agent.response', 'dispatch', () => {});
+
+    const task = createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'conv-budget-1',
+      channelId: 'cli',
+      senderId: 'user',
+      content: 'Hello',
+      parentEventId: 'parent-1',
+    });
+    await bus.publish('dispatch', task);
+
+    // The runtime should emit exactly one context.budget event per task.
+    expect(budgetEvents).toHaveLength(1);
+    const payload = budgetEvents[0]!.payload;
+    expect(payload.agentId).toBe('coordinator');
+    expect(payload.conversationId).toBe('conv-budget-1');
+    // contextWindow is looked up from the model registry — must be > 0
+    expect(payload.contextWindow).toBeGreaterThan(0);
+    // responseReserve should match the configured value
+    expect(payload.responseReserve).toBe(8192);
+    expect(payload.availableBudget).toBeGreaterThan(0);
+    // The system prompt is non-empty, so totalUsed must be > 0
+    expect(payload.totalUsed).toBeGreaterThan(0);
+    // utilizationPct is totalUsed / contextWindow — must be in (0, 1]
+    expect(payload.utilizationPct).toBeGreaterThan(0);
+    expect(payload.utilizationPct).toBeLessThanOrEqual(1);
+    // At least the system_prompt tier must be present and included
+    expect(payload.tiers.length).toBeGreaterThanOrEqual(1);
+    expect(payload.tiers[0]!.name).toBe('system_prompt');
+    expect(payload.tiers[0]!.included).toBe(true);
   });
 });
