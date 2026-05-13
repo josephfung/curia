@@ -30,6 +30,8 @@ import { AgentRuntime } from './agents/runtime.js';
 import { Dispatcher } from './dispatch/dispatcher.js';
 import { CliAdapter } from './channels/cli/cli-adapter.js';
 import { loadAllAgentConfigs, interpolateRuntimeContext } from './agents/loader.js';
+import { ModelRouter } from './agents/llm/model-router.js';
+import type { LLMProvider } from './agents/llm/provider.js';
 import { AgentRegistry } from './agents/agent-registry.js';
 import { WorkingMemory } from './memory/working-memory.js';
 import { EmbeddingService } from './memory/embedding.js';
@@ -263,6 +265,21 @@ async function main(): Promise<void> {
     process.exit(1);
   }
   const llmProvider = new AnthropicProvider(config.anthropicApiKey, logger);
+
+  // Capability-tier model routing (ADR-014).
+  // The ModelRouter resolves tier declarations from agent YAML to concrete
+  // provider + model pairs. The provider registry maps provider names to
+  // LLMProvider instances. Today only 'anthropic' exists; when OpenRouter
+  // lands (#379), a second entry is added here.
+  const modelRoutingConfig = yamlConfig.model_routing;
+  if (!modelRoutingConfig) {
+    logger.fatal('model_routing config section is required in config/default.yaml');
+    process.exit(1);
+  }
+  const modelRouter = new ModelRouter(modelRoutingConfig, logger);
+  const providerRegistry = new Map<string, LLMProvider>([
+    ['anthropic', llmProvider],
+  ]);
 
   // Working memory — created after the pool is confirmed healthy so we know
   // the working_memory table is reachable before the first message arrives.
@@ -1040,12 +1057,20 @@ async function main(): Promise<void> {
       }
     }
 
+    // Resolve this agent's capability tier to a concrete provider + model.
+    const resolved = modelRouter.resolve(agentConfig.model.tier, agentConfig.model.needs);
+    const agentProvider = providerRegistry.get(resolved.provider);
+    if (!agentProvider) {
+      logger.fatal({ provider: resolved.provider, agent: agentConfig.name, tier: resolved.tier },
+        'No provider registered for tier-resolved provider name');
+      process.exit(1);
+    }
+
     const agent = new AgentRuntime({
       agentId: agentConfig.name,
       systemPrompt,
-      provider: llmProvider,
-      // resolvedModel is wired in Task 9 via ModelRouter — placeholder for now
-      resolvedModel: 'claude-sonnet-4-6',
+      provider: agentProvider,
+      resolvedModel: resolved.model,
       bus,
       logger,
       memory,
