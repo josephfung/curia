@@ -18,11 +18,25 @@ export interface ContextBudgetConfig {
 }
 
 // Tracks a single tier allocation decision for later logging/diagnostics.
-interface TierRecord {
+export interface TierRecord {
   name: string;
   estimatedTokens: number;
   included: boolean;
   droppedReason?: 'budget_exceeded' | 'empty';
+}
+
+// A snapshot of the context budget state after all tiers have been allocated.
+// Emitted on the context.budget bus event (Task 7) and used for observability.
+export interface ContextBudgetReport {
+  model: string;
+  contextWindow: number;
+  responseReserve: number;
+  availableBudget: number;
+  totalUsed: number;
+  utilizationPct: number;
+  tiers: TierRecord[];
+  historyTurnsTotal: number;
+  historyTurnsIncluded: number;
 }
 
 export class ContextBudget {
@@ -142,6 +156,27 @@ export class ContextBudget {
     this.historyTurnsIncluded = included.length;
     this.tiers.push({ name: 'conversation_history', estimatedTokens: tokens, included: true });
     return included;
+  }
+
+  // Returns a point-in-time report of all allocation decisions made so far.
+  // Safe to call at any point during allocation; typically called after all
+  // tiers have been evaluated. The tiers array is a shallow copy.
+  getReport(): ContextBudgetReport {
+    const totalUsed = this.tiers
+      .filter(t => t.included)
+      .reduce((sum, t) => sum + t.estimatedTokens, 0);
+
+    return {
+      model: this.config.model,
+      contextWindow: this.config.contextWindow,
+      responseReserve: this.config.responseReserve,
+      availableBudget: this.availableBudget,
+      totalUsed,
+      utilizationPct: this.availableBudget > 0 ? totalUsed / this.availableBudget : 0,
+      tiers: [...this.tiers],
+      historyTurnsTotal: this.historyTurnsTotal,
+      historyTurnsIncluded: this.historyTurnsIncluded,
+    };
   }
 
   // Include this tier only if it fits within the remaining budget AND the

@@ -201,4 +201,59 @@ describe('ContextBudget', () => {
       expect(included[1]).toBe(turns[3]);
     });
   });
+
+  describe('getReport', () => {
+    it('returns correct report after mixed allocation', () => {
+      const budget = new ContextBudget({
+        model: 'claude-sonnet-4-6',
+        contextWindow: 10_000,
+        responseReserve: 1_000,
+        safetyMargin: 0.0,
+      });
+
+      budget.allocateRequired('system_prompt', [{ role: 'system', content: 'x'.repeat(350) }]);
+      budget.allocate('sender_context', [{ role: 'system', content: 'x'.repeat(35) }]);
+      budget.allocateHistory([
+        { role: 'user', content: 'x'.repeat(35) },
+        { role: 'assistant', content: 'x'.repeat(35) },
+        { role: 'user', content: 'x'.repeat(35) },
+      ]);
+      budget.allocate('bullpen', []);
+
+      const report = budget.getReport();
+      expect(report.model).toBe('claude-sonnet-4-6');
+      expect(report.contextWindow).toBe(10_000);
+      expect(report.responseReserve).toBe(1_000);
+      expect(report.availableBudget).toBe(9_000);
+      expect(report.totalUsed).toBe(160);
+      expect(report.utilizationPct).toBeCloseTo(160 / 9_000, 5);
+      expect(report.tiers).toHaveLength(4);
+      expect(report.tiers[0]).toEqual({ name: 'system_prompt', estimatedTokens: 104, included: true });
+      expect(report.tiers[1]).toEqual({ name: 'sender_context', estimatedTokens: 14, included: true });
+      expect(report.tiers[2]).toEqual({ name: 'conversation_history', estimatedTokens: 42, included: true });
+      expect(report.tiers[3]).toEqual({ name: 'bullpen', estimatedTokens: 0, included: false, droppedReason: 'empty' });
+      expect(report.historyTurnsTotal).toBe(3);
+      expect(report.historyTurnsIncluded).toBe(3);
+    });
+
+    it('reports correct utilization when tiers are dropped', () => {
+      const budget = new ContextBudget({
+        model: 'claude-sonnet-4-6',
+        contextWindow: 200,
+        responseReserve: 50,
+        safetyMargin: 0.0,
+      });
+      budget.allocateRequired('system_prompt', [{ role: 'system', content: 'x'.repeat(350) }]);
+      budget.allocate('sender_context', [{ role: 'system', content: 'x'.repeat(700) }]);
+
+      const report = budget.getReport();
+      expect(report.totalUsed).toBe(104);
+      expect(report.tiers[1]).toEqual({
+        name: 'sender_context',
+        estimatedTokens: 204,
+        included: false,
+        droppedReason: 'budget_exceeded',
+      });
+    });
+  });
 });
