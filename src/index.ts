@@ -1044,6 +1044,7 @@ async function main(): Promise<void> {
       agentId: agentConfig.name,
       systemPrompt,
       provider: llmProvider,
+      resolvedModel: agentConfig.model.model,
       bus,
       logger,
       memory,
