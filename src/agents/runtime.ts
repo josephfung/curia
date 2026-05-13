@@ -1,6 +1,8 @@
 import type { LLMProvider, LLMResponse, Message, ToolDefinition, ContentBlock, ToolUseContent, ToolResultContent, TextContent } from './llm/provider.js';
 import type { EventBus } from '../bus/bus.js';
-import { createAgentResponse, createAgentError, createSkillInvoke, createSkillResult, createLlmCall, type AgentTaskEvent } from '../bus/events.js';
+import { createAgentResponse, createAgentError, createSkillInvoke, createSkillResult, createLlmCall, createContextBudget, type AgentTaskEvent } from '../bus/events.js';
+import { ContextBudget } from './llm/context-budget.js';
+import { getContextWindow, DEFAULT_SAFETY_MARGIN } from './llm/token-estimator.js';
 import { createHash } from 'node:crypto';
 import { estimateCostUsd } from './llm/pricing.js';
 import type { Logger } from '../logger.js';
@@ -71,6 +73,13 @@ export interface AgentConfig {
   errorBudget?: {
     maxTurns: number;
     maxConsecutiveErrors: number;
+  };
+  /** Model name from agent YAML (e.g. 'claude-sonnet-4-6'). Used by the context
+   *  budget to look up the model's context window size. */
+  modelName?: string;
+  /** Context budget config from agent YAML. */
+  contextBudget?: {
+    responseReserve?: number;
   };
   /** Optional Bullpen service for pending thread context injection.
    *  When provided, pending threads are injected as a system message before every LLM call. */
@@ -306,15 +315,37 @@ export class AgentRuntime {
       consecutiveErrors: 0,
     };
 
+    // Create context budget for token-aware assembly.
+    const modelName = this.config.modelName ?? 'claude-sonnet-4-6';
+    const ctxBudget = new ContextBudget({
+      model: modelName,
+      contextWindow: getContextWindow(modelName),
+      responseReserve: this.config.contextBudget?.responseReserve ?? 8_192,
+      safetyMargin: DEFAULT_SAFETY_MARGIN,
+    });
+
+    // Register system prompt with context budget — always included
+    ctxBudget.allocateRequired('system_prompt', [{ role: 'system', content: effectiveSystemPrompt }]);
+    if (ctxBudget.remaining < 0) {
+      logger.error(
+        { agentId, remaining: ctxBudget.remaining, availableBudget: ctxBudget.availableBudget },
+        'System prompt exceeds context budget — proceeding without enforcement',
+      );
+    }
+
     // Load conversation history from working memory (if configured)
     const history = memory
       ? await memory.getHistory(conversationId, agentId)
       : [];
 
+    const budgetedHistory = ctxBudget.allocateHistory(
+      history.map(t => ({ role: t.role, content: t.content }) as Message),
+    );
+
     // Assemble initial LLM context
     const messages: Message[] = [
       { role: 'system', content: effectiveSystemPrompt },
-      ...history,
+      ...budgetedHistory,
       { role: 'user', content },
     ];
 
@@ -411,9 +442,10 @@ export class AgentRuntime {
       }
 
       // Insert after system prompt (index 0) but before history
-      messages.splice(1, 0, { role: 'system', content: senderInfo });
-      // Bullpen block must come after sender context, so advance its insertion index
-      bullpenInsertAt = 2;
+      if (ctxBudget.allocate('sender_context', [{ role: 'system', content: senderInfo }])) {
+        messages.splice(1, 0, { role: 'system', content: senderInfo });
+        bullpenInsertAt = 2;
+      }
     } else {
       // Sender context is unresolved (unknown sender that passed the hold gate) or absent.
       // Still inject trust/risk scores when present — unknown senders are the highest-risk
@@ -445,8 +477,10 @@ export class AgentRuntime {
         if (typeof senderVerifiedUnknown === 'boolean') {
           unknownSenderBlock += ` senderVerified: ${senderVerifiedUnknown}.`;
         }
-        messages.splice(1, 0, { role: 'system', content: unknownSenderBlock });
-        bullpenInsertAt = 2;
+        if (ctxBudget.allocate('sender_context', [{ role: 'system', content: unknownSenderBlock }])) {
+          messages.splice(1, 0, { role: 'system', content: unknownSenderBlock });
+          bullpenInsertAt = 2;
+        }
       }
     }
 
@@ -457,11 +491,43 @@ export class AgentRuntime {
     // state, not a stale snapshot from the start of the task (#213).
     await this.refreshBullpenContext(messages, bullpenInsertAt, agentId);
 
+    // Record bullpen context in the budget for observability.
+    // The bullpen message is the system message at bullpenInsertAt (if one was inserted).
+    const bullpenMsg = messages[bullpenInsertAt];
+    if (bullpenMsg && bullpenMsg.role === 'system' && bullpenMsg !== messages[0]) {
+      ctxBudget.allocate('bullpen', [bullpenMsg]);
+    } else {
+      ctxBudget.allocate('bullpen', []);
+    }
+
     logger.info({ agentId, conversationId, historyLength: history.length }, 'Agent processing task');
 
     // Persist the incoming user message
     if (memory) {
       await memory.addTurn(conversationId, agentId, { role: 'user', content });
+    }
+
+    // Publish context budget telemetry — captures per-tier token estimates even if
+    // the LLM call subsequently fails. Wrapped in try-catch like llm.call telemetry.
+    try {
+      const budgetReport = ctxBudget.getReport();
+      const budgetEvent = createContextBudget({
+        agentId,
+        conversationId,
+        model: budgetReport.model,
+        contextWindow: budgetReport.contextWindow,
+        responseReserve: budgetReport.responseReserve,
+        availableBudget: budgetReport.availableBudget,
+        totalUsed: budgetReport.totalUsed,
+        utilizationPct: budgetReport.utilizationPct,
+        tiers: budgetReport.tiers,
+        historyTurnsTotal: budgetReport.historyTurnsTotal,
+        historyTurnsIncluded: budgetReport.historyTurnsIncluded,
+        parentEventId: taskEvent.id,
+      });
+      await bus.publish('agent', budgetEvent);
+    } catch (err) {
+      logger.error({ err, agentId }, 'Failed to publish context.budget event — budget tracking gap');
     }
 
     // Tool-use loop: call LLM, handle tool calls, feed results back, repeat.
