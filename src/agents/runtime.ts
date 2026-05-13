@@ -77,6 +77,11 @@ export interface AgentConfig {
   bullpenService?: BullpenService;
   /** How far back to look for active threads, in minutes. Default: 60. */
   bullpenWindowMinutes?: number;
+  /** Compiled security context block — injected into the effective system prompt on every
+   *  task. If the prompt contains ${security_context_block}, the placeholder is replaced at
+   *  that position. If the placeholder is absent, the block is appended unconditionally as a
+   *  platform safety net. When omitted, no injection occurs. */
+  securityContextBlock?: string;
 }
 
 // LLM retry backoff schedule (milliseconds). Three attempts with exponential backoff.
@@ -193,6 +198,24 @@ export class AgentRuntime {
         // and proceed with the placeholder literal visible — the misconfiguration will
         // be obvious in the LLM's response if the block is structurally broken.
         logger.error({ err, agentId }, 'Failed to compile identity block — ${office_identity_block} placeholder left in prompt');
+      }
+    }
+
+    // Inject the platform security context block. If the system prompt contains
+    // ${security_context_block}, replace it in-place so the operator controls
+    // positioning. If the placeholder is absent (e.g. a custom coordinator.yaml
+    // that predates this feature), append unconditionally — the block is a
+    // platform guarantee, not opt-in text. See design spec #500.
+    if (this.config.securityContextBlock) {
+      const replaced = effectiveSystemPrompt.replace(
+        '${security_context_block}',
+        this.config.securityContextBlock,
+      );
+      if (replaced === effectiveSystemPrompt) {
+        // Placeholder absent — append as the safety net.
+        effectiveSystemPrompt += '\n\n' + this.config.securityContextBlock;
+      } else {
+        effectiveSystemPrompt = replaced;
       }
     }
 
