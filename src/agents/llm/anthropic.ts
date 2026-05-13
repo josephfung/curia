@@ -105,7 +105,8 @@ export class AnthropicProvider implements LLMProvider {
 
     // Prefer the explicit model param; fall back to options.model for backward
     // compatibility; default to sonnet if neither is provided.
-    const model = modelOverride ?? (options?.model as string) ?? 'claude-sonnet-4-6';
+    const optionsModel = typeof options?.model === 'string' ? options.model : undefined;
+    const model = modelOverride ?? optionsModel ?? 'claude-sonnet-4-6';
 
     try {
       const createParams: Anthropic.Messages.MessageCreateParamsNonStreaming = {
