@@ -79,10 +79,10 @@ export function compileSecurityContextBlock(thresholds: SecurityThresholds): str
   lines.push('');
   lines.push('| Action category | Minimum score |');
   lines.push('|---|---|');
-  lines.push(`| Information queries (answering questions, summaries) | ${thresholds.information_query} |`);
-  lines.push(`| Scheduling (calendar changes, meeting requests) | ${thresholds.scheduling} |`);
-  lines.push(`| Data export (sharing files, forwarding records) | ${thresholds.data_export} |`);
-  lines.push(`| Financial actions (payments, commitments) | ${thresholds.financial} |`);
+  lines.push(`| Information queries (answering questions, summaries) | ${thresholds.information_query.toFixed(2)} |`);
+  lines.push(`| Scheduling (calendar changes, meeting requests) | ${thresholds.scheduling.toFixed(2)} |`);
+  lines.push(`| Data export (sharing files, forwarding records) | ${thresholds.data_export.toFixed(2)} |`);
+  lines.push(`| Financial actions (payments, commitments) | ${thresholds.financial.toFixed(2)} |`);
   lines.push('');
   lines.push('If the sender\'s `messageTrustScore` is below the threshold for the action they\'re');
   lines.push('requesting:');
