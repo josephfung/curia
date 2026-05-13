@@ -20,18 +20,18 @@
     },
     "model": {
       "type": "object",
-      "required": ["provider", "model"],
+      "required": ["tier"],
       "additionalProperties": false,
       "properties": {
-        "provider": { "type": "string", "minLength": 1 },
-        "model": { "type": "string", "minLength": 1 },
-        "fallback": {
-          "type": "object",
-          "required": ["provider", "model"],
-          "additionalProperties": false,
-          "properties": {
-            "provider": { "type": "string", "minLength": 1 },
-            "model": { "type": "string", "minLength": 1 }
+        "tier": {
+          "type": "string",
+          "enum": ["fast", "standard", "powerful"]
+        },
+        "needs": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["vision", "large_context", "reasoning", "coding", "audio", "image_generation"]
           }
         }
       }
