@@ -1044,7 +1044,8 @@ async function main(): Promise<void> {
       agentId: agentConfig.name,
       systemPrompt,
       provider: llmProvider,
-      resolvedModel: agentConfig.model.model,
+      // resolvedModel is wired in Task 9 via ModelRouter — placeholder for now
+      resolvedModel: 'claude-sonnet-4-6',
       bus,
       logger,
       memory,
