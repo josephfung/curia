@@ -2,7 +2,7 @@ import type { LLMProvider, LLMResponse, Message, ToolDefinition, ContentBlock, T
 import type { EventBus } from '../bus/bus.js';
 import { createAgentResponse, createAgentError, createSkillInvoke, createSkillResult, createLlmCall, createContextBudget, type AgentTaskEvent } from '../bus/events.js';
 import { ContextBudget } from './llm/context-budget.js';
-import { getContextWindow, DEFAULT_SAFETY_MARGIN } from './llm/token-estimator.js';
+import { getContextWindow, DEFAULT_SAFETY_MARGIN, isKnownContextWindowModel } from './llm/token-estimator.js';
 import { createHash } from 'node:crypto';
 import { estimateCostUsd } from './llm/pricing.js';
 import type { Logger } from '../logger.js';
@@ -317,9 +317,16 @@ export class AgentRuntime {
 
     // Create context budget for token-aware assembly.
     const modelName = this.config.modelName ?? 'claude-sonnet-4-6';
+    const contextWindow = getContextWindow(modelName);
+    if (!isKnownContextWindowModel(modelName)) {
+      logger.warn(
+        { agentId, modelName, fallbackWindow: contextWindow },
+        'Model not in context window map — using fallback; budget may be incorrect. Add this model to token-estimator.ts',
+      );
+    }
     const ctxBudget = new ContextBudget({
       model: modelName,
-      contextWindow: getContextWindow(modelName),
+      contextWindow,
       responseReserve: this.config.contextBudget?.responseReserve ?? 8_192,
       safetyMargin: DEFAULT_SAFETY_MARGIN,
     });
@@ -341,6 +348,12 @@ export class AgentRuntime {
     const budgetedHistory = ctxBudget.allocateHistory(
       history.map(t => ({ role: t.role, content: t.content }) as Message),
     );
+    if (history.length > 0 && budgetedHistory.length === 0) {
+      logger.warn(
+        { agentId, conversationId, historyTurnsAvailable: history.length, remaining: ctxBudget.remaining },
+        'All conversation history dropped by context budget — model will have no conversation context',
+      );
+    }
 
     // Assemble initial LLM context
     const messages: Message[] = [
@@ -445,6 +458,11 @@ export class AgentRuntime {
       if (ctxBudget.allocate('sender_context', [{ role: 'system', content: senderInfo }])) {
         messages.splice(1, 0, { role: 'system', content: senderInfo });
         bullpenInsertAt = 2;
+      } else {
+        logger.warn(
+          { agentId, conversationId, senderInfoLength: senderInfo.length },
+          'Sender context (including authorization) dropped by context budget — coordinator proceeding without sender identity',
+        );
       }
     } else {
       // Sender context is unresolved (unknown sender that passed the hold gate) or absent.
@@ -480,6 +498,11 @@ export class AgentRuntime {
         if (ctxBudget.allocate('sender_context', [{ role: 'system', content: unknownSenderBlock }])) {
           messages.splice(1, 0, { role: 'system', content: unknownSenderBlock });
           bullpenInsertAt = 2;
+        } else {
+          logger.warn(
+            { agentId, conversationId },
+            'Unknown sender context dropped by context budget — coordinator proceeding without trust/risk signals',
+          );
         }
       }
     }
@@ -499,6 +522,11 @@ export class AgentRuntime {
     } else {
       ctxBudget.allocate('bullpen', []);
     }
+
+    // Track the user message in the budget for accurate utilization reporting.
+    // Like the system prompt, the user message is always included — it is the reason
+    // the task exists. We don't gate it, just measure it.
+    ctxBudget.allocateRequired('user_message', [{ role: 'user', content }]);
 
     logger.info({ agentId, conversationId, historyLength: history.length }, 'Agent processing task');
 
