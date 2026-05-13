@@ -19,6 +19,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
+- **Model routing** — agents declare a capability tier (`fast`/`standard`/`powerful`) instead of a specific model; operator maps tiers to models centrally in `config/default.yaml`. (#260)
 - **`LLMUsage`** extended with `cacheCreationInputTokens` and `cacheReadInputTokens` fields (previously silently dropped from the Anthropic API response).
 - **`LlmCallPayload`** extended with `cacheCreationInputTokens` and `cacheReadInputTokens` fields; `providerRequestId` comment corrected to reflect response body id (`msg_xxx`), not the HTTP header.
 - **`security.trust_thresholds` config** — action thresholds moved from hardcoded coordinator text to config; startup fails if missing or malformed.
