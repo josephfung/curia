@@ -429,10 +429,14 @@ export class SchedulerService {
    * scheduled_jobs_declarative_uq (agent_id, cron_expr, task_payload::text WHERE created_by = 'system').
    * Note: ON CONFLICT ON CONSTRAINT only works with named CONSTRAINTS, not named indexes —
    * so we use the column-based syntax here to match the CREATE UNIQUE INDEX definition.
+   *
+   * When schedule.intent_anchor is present, also creates a linked agent_tasks row so the
+   * drift detector can fire for this job. The INSERT is guarded by WHERE NOT EXISTS to
+   * preserve the existing agent_task row (and its accumulated progress) across restarts.
    */
   async upsertDeclarativeJob(
     agentId: string,
-    schedule: { cron: string; task: string; expectedDurationSeconds?: number },
+    schedule: { cron: string; task: string; expectedDurationSeconds?: number; intent_anchor?: string },
   ): Promise<string> {
     const taskPayload = { task: schedule.task };
     const nextRunAt = this.nextRunFromCron(schedule.cron);
@@ -487,7 +491,27 @@ export class SchedulerService {
     ];
 
     const { rows } = await this.pool.query(sql, params);
-    return (rows[0] as { id: string }).id;
+    const jobId = (rows[0] as { id: string }).id;
+
+    // If intent_anchor is set, create a linked agent_tasks row so the drift detector can
+    // fire for this job — same pattern as createJob(). The WHERE NOT EXISTS guard ensures
+    // this is a no-op on restart (preserving accumulated progress in the existing row).
+    if (schedule.intent_anchor) {
+      const taskSql = `
+        INSERT INTO agent_tasks (agent_id, intent_anchor, status, error_budget, scheduled_job_id)
+        SELECT $1, $2, $3, $4, $5
+        WHERE NOT EXISTS (SELECT 1 FROM agent_tasks WHERE scheduled_job_id = $5)
+      `;
+      await this.pool.query(taskSql, [
+        agentId,
+        schedule.intent_anchor,
+        'active',
+        JSON.stringify({}),
+        jobId,
+      ]);
+    }
+
+    return jobId;
   }
 
   /**

@@ -957,6 +957,36 @@ describe('Scheduler', () => {
       // Second one succeeded
       expect(logger.info).toHaveBeenCalled();
     });
+
+    it('passes intent_anchor from YAML schedule entry through to upsertDeclarativeJob', async () => {
+      schedulerService.upsertDeclarativeJob.mockResolvedValue('job-anchor-1');
+
+      const configs: AgentYamlConfig[] = [
+        {
+          name: 'coordinator',
+          model: { provider: 'anthropic', model: 'claude-3' },
+          system_prompt: 'Coord.',
+          schedule: [
+            {
+              cron: '0 9 * * 1',
+              task: 'weekly digest',
+              intent_anchor: 'Produce a weekly summary of key business metrics',
+            },
+          ],
+        },
+      ];
+
+      await scheduler.loadDeclarativeJobs(configs);
+
+      expect(schedulerService.upsertDeclarativeJob).toHaveBeenCalledWith(
+        'coordinator',
+        {
+          cron: '0 9 * * 1',
+          task: 'weekly digest',
+          intent_anchor: 'Produce a weekly summary of key business metrics',
+        },
+      );
+    });
   });
 
   // -- recoverStuckJobs --

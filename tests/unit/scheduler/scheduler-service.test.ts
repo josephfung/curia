@@ -736,6 +736,41 @@ describe('SchedulerService', () => {
         expect(params[params.length - 1]).toBeNull();
       }
     });
+
+    it('creates an agent_tasks row when intent_anchor is provided', async () => {
+      // First query: the scheduled_jobs upsert; second query: the agent_tasks INSERT.
+      pool.query.mockResolvedValueOnce({ rows: [{ id: 'job-anchor' }] });
+      pool.query.mockResolvedValueOnce({ rows: [] });
+
+      await svc.upsertDeclarativeJob('coordinator', {
+        cron: '0 9 * * 1',
+        task: 'weekly digest',
+        intent_anchor: 'Produce a weekly summary of key business metrics',
+      });
+
+      expect(pool.query).toHaveBeenCalledTimes(2);
+
+      // Second call must be the agent_tasks INSERT with WHERE NOT EXISTS guard.
+      const [taskSql, taskParams] = pool.query.mock.calls[1] as [string, unknown[]];
+      expect(taskSql).toContain('INSERT INTO agent_tasks');
+      expect(taskSql).toContain('WHERE NOT EXISTS');
+      expect(taskParams).toContain('coordinator');
+      expect(taskParams).toContain('Produce a weekly summary of key business metrics');
+      expect(taskParams).toContain('active');
+      expect(taskParams).toContain('job-anchor');
+    });
+
+    it('does not create an agent_tasks row when intent_anchor is absent', async () => {
+      pool.query.mockResolvedValueOnce({ rows: [{ id: 'job-no-anchor' }] });
+
+      await svc.upsertDeclarativeJob('coordinator', {
+        cron: '0 9 * * 1',
+        task: 'weekly standup',
+      });
+
+      // Only the scheduled_jobs upsert — no second query.
+      expect(pool.query).toHaveBeenCalledTimes(1);
+    });
   });
 
   // -- updateJob --

@@ -17,6 +17,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 - **LLM token tracking** — every successful Anthropic API call now publishes a structured `llm.call` bus event (spec 10) with full model provenance, token counts (including prompt-cache breakdown), estimated cost, latency, and SHA-256 content fingerprints. Events land in `audit_log` automatically via the existing audit logger, enabling per-agent attribution and data-driven context budgeting (closes #326, prerequisite for #24).
 
+### Fixed
+
+- **Declarative job drift detection** — `upsertDeclarativeJob()` now accepts `intent_anchor` from YAML schedule blocks and creates the linked `agent_tasks` row so the drift detector fires for those jobs. Previously `agent_task_id` was always `null` for declarative jobs, silently bypassing drift detection (closes #416). Spec 07 updated to document `intent_anchor` as a valid schedule field.
+
 ### Changed
 
 - **`LLMUsage`** extended with `cacheCreationInputTokens` and `cacheReadInputTokens` fields (previously silently dropped from the Anthropic API response).
