@@ -9,7 +9,7 @@
 // for deciding whether to prune history; the actual token count comes from the
 // API response after the call.
 
-import type { ContentBlock } from './provider.js';
+import type { ContentBlock, Message } from './provider.js';
 
 /** Characters-per-token ratio used for all estimates. */
 const CHARS_PER_TOKEN = 3.5;
@@ -48,3 +48,52 @@ export function estimateTokens(content: string | ContentBlock[]): number {
   if (totalChars === 0) return 0;
   return Math.ceil(totalChars / CHARS_PER_TOKEN);
 }
+
+// Per-message overhead: role token + structural delimiters.
+const MESSAGE_OVERHEAD_TOKENS = 4;
+
+/**
+ * Estimates the total token count for an array of messages.
+ *
+ * Each message contributes estimateTokens(content) + MESSAGE_OVERHEAD_TOKENS
+ * to account for the role name and structural delimiters that the API adds
+ * around each turn in the conversation.
+ *
+ * Returns 0 for an empty array.
+ */
+export function estimateMessagesTokens(messages: Message[]): number {
+  let total = 0;
+  for (const msg of messages) {
+    total += estimateTokens(msg.content) + MESSAGE_OVERHEAD_TOKENS;
+  }
+  return total;
+}
+
+// -- Context window map --
+// Maps model name prefixes to their advertised context window sizes (in tokens).
+// Sorted by descending key length so that more-specific prefixes match first
+// (e.g. "claude-haiku-4-5-20251001" matches "claude-haiku-4-5" before "claude").
+const CONTEXT_WINDOWS: Record<string, number> = {
+  'claude-opus-4-6': 200_000,
+  'claude-sonnet-4-6': 200_000,
+  'claude-haiku-4-5': 200_000,
+};
+
+const SORTED_WINDOW_ENTRIES = Object.entries(CONTEXT_WINDOWS)
+  .sort(([a], [b]) => b.length - a.length);
+
+const FALLBACK_WINDOW_MODEL = 'claude-sonnet-4-6';
+
+/**
+ * Returns the context window size for the given model identifier.
+ *
+ * Matches by prefix so versioned model names (e.g. "claude-haiku-4-5-20251001")
+ * resolve correctly. Falls back to the sonnet window for unrecognised models.
+ */
+export function getContextWindow(model: string): number {
+  const entry = SORTED_WINDOW_ENTRIES.find(([prefix]) => model.startsWith(prefix));
+  return entry ? entry[1] : CONTEXT_WINDOWS[FALLBACK_WINDOW_MODEL]!;
+}
+
+/** Safety margin (5%) subtracted from the context window before budgeting. */
+export const DEFAULT_SAFETY_MARGIN = 0.05;
