@@ -42,6 +42,14 @@ export function estimateTokens(content: string | ContentBlock[]): number {
       case 'tool_result':
         totalChars += block.content.length;
         break;
+      default: {
+        // Exhaustiveness guard — if ContentBlock union is extended, this line
+        // becomes a compile error, prompting the developer to handle the new type.
+        // At runtime, fall back to JSON.stringify as a conservative estimate.
+        const _exhaustive: never = block;
+        totalChars += JSON.stringify(_exhaustive).length;
+        break;
+      }
     }
   }
 
@@ -93,6 +101,11 @@ const FALLBACK_WINDOW_MODEL = 'claude-sonnet-4-6';
 export function getContextWindow(model: string): number {
   const entry = SORTED_WINDOW_ENTRIES.find(([prefix]) => model.startsWith(prefix));
   return entry ? entry[1] : CONTEXT_WINDOWS[FALLBACK_WINDOW_MODEL]!;
+}
+
+/** Returns true if the model is in the known context window map (not using fallback). */
+export function isKnownContextWindowModel(model: string): boolean {
+  return SORTED_WINDOW_ENTRIES.some(([prefix]) => model.startsWith(prefix));
 }
 
 /** Safety margin (5%) subtracted from the context window before budgeting. */

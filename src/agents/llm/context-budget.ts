@@ -41,7 +41,7 @@ export interface ContextBudgetReport {
 
 export class ContextBudget {
   readonly availableBudget: number;
-  remaining: number;
+  private _remaining: number;
 
   private readonly config: ContextBudgetConfig;
   private tiers: TierRecord[] = [];
@@ -56,9 +56,13 @@ export class ContextBudget {
     // Available tokens = total window minus what we reserve for the model's
     // response and the safety margin.
     this.availableBudget = config.contextWindow - config.responseReserve - safetyReserve;
-    // Remaining starts equal to available; decremented as tiers are allocated
-    // (see allocateRequired / allocate / allocateHistory in later tasks).
-    this.remaining = this.availableBudget;
+    // Remaining starts equal to available; decremented as tiers are allocated.
+    this._remaining = this.availableBudget;
+  }
+
+  /** Tokens remaining after all allocations so far. Can go negative after allocateRequired. */
+  get remaining(): number {
+    return this._remaining;
   }
 
   // Returns a snapshot of allocation decisions for logging and debugging.
@@ -74,7 +78,7 @@ export class ContextBudget {
     return {
       model: this.config.model,
       availableBudget: this.availableBudget,
-      remaining: this.remaining,
+      remaining: this._remaining,
       tiers: this.tiers,
       historyTurnsTotal: this.historyTurnsTotal,
       historyTurnsIncluded: this.historyTurnsIncluded,
@@ -86,7 +90,7 @@ export class ContextBudget {
   // that is acceptable (system prompt overflow is still better than no prompt).
   allocateRequired(tierName: string, messages: Message[]): void {
     const tokens = estimateMessagesTokens(messages);
-    this.remaining -= tokens;
+    this._remaining -= tokens;
     this.tiers.push({ name: tierName, estimatedTokens: tokens, included: true });
   }
 
@@ -118,8 +122,8 @@ export class ContextBudget {
 
     // Fast path: full history fits — no truncation needed.
     const fullTokens = estimateMessagesTokens(turns);
-    if (fullTokens <= this.remaining) {
-      this.remaining -= fullTokens;
+    if (fullTokens <= this._remaining) {
+      this._remaining -= fullTokens;
       this.historyTurnsIncluded = turns.length;
       this.tiers.push({ name: 'conversation_history', estimatedTokens: fullTokens, included: true });
       return turns;
@@ -134,7 +138,7 @@ export class ContextBudget {
     while (searchLo <= searchHi) {
       const mid = Math.floor((searchLo + searchHi) / 2);
       const slice = turns.slice(-mid);
-      if (estimateMessagesTokens(slice) <= this.remaining) {
+      if (estimateMessagesTokens(slice) <= this._remaining) {
         lo = mid;
         searchLo = mid + 1;
       } else {
@@ -152,7 +156,7 @@ export class ContextBudget {
 
     const included = turns.slice(-lo);
     const tokens = estimateMessagesTokens(included);
-    this.remaining -= tokens;
+    this._remaining -= tokens;
     this.historyTurnsIncluded = included.length;
     this.tiers.push({ name: 'conversation_history', estimatedTokens: tokens, included: true });
     return included;
@@ -191,8 +195,8 @@ export class ContextBudget {
       return false;
     }
 
-    if (tokens <= this.remaining) {
-      this.remaining -= tokens;
+    if (tokens <= this._remaining) {
+      this._remaining -= tokens;
       this.tiers.push({ name: tierName, estimatedTokens: tokens, included: true });
       return true;
     }
