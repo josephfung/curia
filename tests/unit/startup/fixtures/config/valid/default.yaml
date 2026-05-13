@@ -4,8 +4,8 @@ security:
     channel_weight: 0.4
     contact_weight: 0.4
     max_risk_penalty: 0.2
-trust_policy:
-  financial_actions: 0.8
-  data_export: 0.8
-  scheduling: 0.5
-  information_queries: 0.2
+  trust_thresholds:
+    information_query: 0.2
+    scheduling: 0.5
+    data_export: 0.8
+    financial: 0.8
