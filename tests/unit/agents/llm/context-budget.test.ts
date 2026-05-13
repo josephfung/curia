@@ -151,7 +151,7 @@ describe('ContextBudget', () => {
       expect(included[0]).toBe(turns[3]);
     });
 
-    it('respects minKeep — keeps at least minKeep recent turns', () => {
+    it('greedily includes all turns when budget allows (minKeep is a soft preference)', () => {
       const budget = new ContextBudget({
         model: 'claude-sonnet-4-6',
         contextWindow: 500,
@@ -163,7 +163,7 @@ describe('ContextBudget', () => {
       expect(included).toHaveLength(5);
     });
 
-    it('drops all history when even minKeep turns do not fit', () => {
+    it('drops all history when no single turn fits the remaining budget', () => {
       const budget = new ContextBudget({
         model: 'claude-sonnet-4-6',
         contextWindow: 100,

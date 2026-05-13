@@ -110,3 +110,7 @@ export function isKnownContextWindowModel(model: string): boolean {
 
 /** Safety margin (5%) subtracted from the context window before budgeting. */
 export const DEFAULT_SAFETY_MARGIN = 0.05;
+
+/** Default model used when agent YAML doesn't specify one. Kept alongside the
+ *  context window map so the default and the lookup stay in lockstep. */
+export const DEFAULT_MODEL_NAME = 'claude-sonnet-4-6';
