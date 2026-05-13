@@ -206,23 +206,20 @@ export class AgentRuntime {
     // positioning. If the placeholder is absent (e.g. a custom coordinator.yaml
     // that predates this feature), append unconditionally — the block is a
     // platform guarantee, not opt-in text. See design spec #500.
+    //
+    // No try-catch here: String.replace() and concatenation cannot throw.
+    // If this block ever changes to involve a throwing call, the correct
+    // handling is to abort the task — not to proceed without security policy.
     if (this.config.securityContextBlock) {
-      try {
-        const replaced = effectiveSystemPrompt.replace(
-          '${security_context_block}',
-          this.config.securityContextBlock,
-        );
-        if (replaced === effectiveSystemPrompt) {
-          // Placeholder absent — append as the safety net.
-          effectiveSystemPrompt += '\n\n' + this.config.securityContextBlock;
-        } else {
-          effectiveSystemPrompt = replaced;
-        }
-      } catch (err) {
-        // A failure here should not abort the task. Log at error (operator signal)
-        // and proceed — the prompt will be missing the security block but the task
-        // can still run. The misconfiguration will be obvious in audit logs.
-        logger.error({ err, agentId }, 'Failed to inject security context block — task will proceed but security policy may be missing from prompt');
+      const replaced = effectiveSystemPrompt.replace(
+        '${security_context_block}',
+        this.config.securityContextBlock,
+      );
+      if (replaced === effectiveSystemPrompt) {
+        // Placeholder absent — append as the safety net.
+        effectiveSystemPrompt += '\n\n' + this.config.securityContextBlock;
+      } else {
+        effectiveSystemPrompt = replaced;
       }
     }
 

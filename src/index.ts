@@ -109,15 +109,26 @@ async function main(): Promise<void> {
   // (other security sub-fields like extra_injection_patterns are optional too), so guard
   // explicitly here rather than relying on a non-null assertion that would crash unclearly.
   const rawThresholds = yamlConfig.security?.trust_thresholds;
-  if (
-    rawThresholds?.information_query === undefined ||
-    rawThresholds?.scheduling === undefined ||
-    rawThresholds?.data_export === undefined ||
-    rawThresholds?.financial === undefined
-  ) {
+  const missingFields = (['information_query', 'scheduling', 'data_export', 'financial'] as const)
+    .filter(f => rawThresholds?.[f] === undefined);
+  if (missingFields.length > 0) {
     logger.fatal(
-      'Missing required config: security.trust_thresholds must define information_query, ' +
-      'scheduling, data_export, and financial in config/default.yaml',
+      { missingFields },
+      'Missing required config fields in security.trust_thresholds in config/default.yaml — startup aborted',
+    );
+    process.exit(1);
+  }
+  // Validate ranges — schema validation (below) also checks this, but runs
+  // after this block. Catching out-of-range values here gives a clearer error.
+  const outOfRangeFields = (['information_query', 'scheduling', 'data_export', 'financial'] as const)
+    .filter(f => {
+      const v = rawThresholds![f];
+      return v < 0 || v > 1;
+    });
+  if (outOfRangeFields.length > 0) {
+    logger.fatal(
+      { outOfRangeFields },
+      'Invalid security.trust_thresholds values — all must be numbers in [0.0, 1.0]',
     );
     process.exit(1);
   }

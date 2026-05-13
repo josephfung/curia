@@ -26,11 +26,11 @@ describe('compileSecurityContextBlock', () => {
     };
     const block = compileSecurityContextBlock(custom);
     // Custom values must appear
-    expect(block).toContain('| 0.3 |');
-    expect(block).toContain('| 0.6 |');
-    // Default 0.2 / 0.5 must NOT appear (proves interpolation used the arg, not hardcoded)
-    expect(block).not.toContain('| 0.2 |');
-    expect(block).not.toContain('| 0.5 |');
+    expect(block).toContain('| 0.30 |');
+    expect(block).toContain('| 0.60 |');
+    // Default 0.20 / 0.50 must NOT appear (proves interpolation used the arg, not hardcoded)
+    expect(block).not.toContain('| 0.20 |');
+    expect(block).not.toContain('| 0.50 |');
   });
 
   it('includes the CEO/CLI trust exemption', () => {
@@ -41,10 +41,10 @@ describe('compileSecurityContextBlock', () => {
 
   it('default thresholds produce the correct table values', () => {
     const block = compileSecurityContextBlock(DEFAULT_THRESHOLDS);
-    expect(block).toContain('| 0.2 |');
-    expect(block).toContain('| 0.5 |');
-    // 0.8 appears twice — data_export and financial
-    const matches = [...block.matchAll(/\| 0\.8 \|/g)];
+    expect(block).toContain('| 0.20 |');
+    expect(block).toContain('| 0.50 |');
+    // 0.80 appears twice — data_export and financial
+    const matches = [...block.matchAll(/\| 0\.80 \|/g)];
     expect(matches.length).toBe(2);
   });
 
