@@ -63,7 +63,7 @@ export class SchedulerCreateHandler implements SkillHandler {
         originator,
       });
 
-      ctx.log.info({ jobId: result.jobId, agentId }, 'Scheduled job created via skill');
+      ctx.log.info({ jobId: result.jobId, agentId, originatorRole: originator?.systemRole ?? 'none' }, 'Scheduled job created via skill');
 
       return { success: true, data: result };
     } catch (err) {
