@@ -320,7 +320,7 @@ export class AgentRuntime {
     };
 
     // Create context budget for token-aware assembly.
-    const modelName = this.config.modelName ?? DEFAULT_MODEL_NAME;
+    const modelName = this.config.resolvedModel ?? this.config.modelName ?? DEFAULT_MODEL_NAME;
     const contextWindow = getContextWindow(modelName);
     if (!isKnownContextWindowModel(modelName)) {
       logger.warn(

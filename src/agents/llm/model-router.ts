@@ -46,6 +46,11 @@ export class ModelRouter {
         );
       }
     }
+    if (!VALID_TIERS.has(config.default_tier)) {
+      throw new Error(
+        `model_routing.default_tier must be one of ${[...VALID_TIERS].join(', ')}, got: "${config.default_tier}"`,
+      );
+    }
     this.config = config;
     this.logger = logger;
   }
