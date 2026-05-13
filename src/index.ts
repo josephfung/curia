@@ -109,8 +109,15 @@ async function main(): Promise<void> {
   // (other security sub-fields like extra_injection_patterns are optional too), so guard
   // explicitly here rather than relying on a non-null assertion that would crash unclearly.
   const rawThresholds = yamlConfig.security?.trust_thresholds;
+  // Explicit undefined check first so TypeScript narrows rawThresholds below.
+  if (rawThresholds === undefined) {
+    logger.fatal(
+      'Missing required config: security.trust_thresholds is absent from config/default.yaml — startup aborted',
+    );
+    process.exit(1);
+  }
   const missingFields = (['information_query', 'scheduling', 'data_export', 'financial'] as const)
-    .filter(f => rawThresholds?.[f] === undefined);
+    .filter(f => rawThresholds[f] === undefined);
   if (missingFields.length > 0) {
     logger.fatal(
       { missingFields },
@@ -122,7 +129,7 @@ async function main(): Promise<void> {
   // after this block. Catching out-of-range values here gives a clearer error.
   const outOfRangeFields = (['information_query', 'scheduling', 'data_export', 'financial'] as const)
     .filter(f => {
-      const v = rawThresholds![f];
+      const v = rawThresholds[f];
       return v < 0 || v > 1;
     });
   if (outOfRangeFields.length > 0) {
