@@ -266,7 +266,13 @@ ${text}`,
           // property access, invalid argument, unexpected resolveOrCreate return shape),
           // not transient infra failures. Absorbing them into `failed` hides regressions
           // behind a misleading metric; the outer catch will return { success: false }.
-          if (err instanceof TypeError || err instanceof ReferenceError || err instanceof RangeError) {
+          if (
+            err instanceof TypeError ||
+            err instanceof ReferenceError ||
+            err instanceof RangeError ||
+            err instanceof EvalError ||
+            err instanceof URIError
+          ) {
             ctx.log.error({ err, subject, attribute }, 'extract-facts: unexpected programming error in fact loop — re-throwing');
             throw err;
           }
@@ -281,7 +287,11 @@ ${text}`,
       ctx.log.info({ stored, failed }, 'extract-facts: complete');
       return { success: true, data: { stored, skipped: false, failed } };
     } catch (err) {
-      // Top-level catch for Anthropic API errors (rate limits, auth, timeouts, 5xx).
+      // Two categories of errors reach here:
+      // 1. Anthropic SDK errors (rate limits, auth, timeouts, 5xx) from the classifier
+      //    and extraction calls.
+      // 2. Programming errors (TypeError, ReferenceError, RangeError, EvalError, URIError)
+      //    re-thrown from the per-fact loop — indicate bugs in this handler, not infra issues.
       ctx.log.error({ err }, 'extract-facts: unexpected error');
       return { success: false, error: err instanceof Error ? err.message : String(err) };
     }
