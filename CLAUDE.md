@@ -160,6 +160,11 @@ Use these sections as needed:
 - **Security** — security fixes or hardening
 
 One bullet per logical change. Lead with the **feature name in bold**, then a brief description.
+Aim for one clause — what changed and the key consequence. Cut implementation detail; if it
+needs more than ~15 words after the em-dash, it's too long. For example:
+
+- **`extract-facts`** — programming errors in the per-fact loop now re-throw instead of silently incrementing `failed`. (#493)
+
 Reference spec numbers where relevant (e.g. "spec 14").
 
 ### When to bump the version number
