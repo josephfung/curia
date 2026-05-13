@@ -166,11 +166,18 @@ Agents are not required to call `scheduler-report`. Stateless jobs (e.g. a daily
 schedule:
   - cron: "0 9 * * 1"
     task: "Generate weekly expense summary"
+    intent_anchor: "Produce a one-page summary of all expenses incurred during the previous week"
   - cron: "0 */4 * * *"
     task: "Check inbox for new receipts"
 ```
 
 These are created at startup from the agent's YAML config.
+
+#### `intent_anchor` (optional)
+
+When `intent_anchor` is set on a declarative schedule entry, the scheduler creates a linked `agent_tasks` row at startup. This enables drift detection for the job — exactly the same mechanism used by runtime-created jobs with `intent_anchor`. The anchor should express the stable original goal of the recurring task in plain language.
+
+Without `intent_anchor`, the job runs normally but the drift detector never fires for it (the `agentTaskId` and `intentAnchor` fields remain `null` on the job row). Jobs without an `intent_anchor` are unaffected by this field's addition.
 
 ### From Agents at Runtime (via skill)
 

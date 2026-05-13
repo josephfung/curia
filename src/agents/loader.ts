@@ -42,6 +42,9 @@ export interface AgentYamlConfig {
     agent_id?: string;             // target agent for this job (defaults to config.name if omitted)
     /** Expected wall-clock duration in seconds. Drives stuck-job recovery timeout. */
     expectedDurationSeconds?: number;
+    /** When set, creates a linked agent_tasks row that enables drift detection for this job.
+     *  Should express the stable original goal of the recurring task in plain language. */
+    intent_anchor?: string;
   }>;
   /** Expected wall-clock duration for delegate calls targeting this agent, in seconds.
    *  When set, the runtime injects timeout_ms = expected_duration_seconds * 1000 into
