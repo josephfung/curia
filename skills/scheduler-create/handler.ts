@@ -5,6 +5,7 @@
 // When intent_anchor is provided, a persistent agent_task is linked to the job.
 
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { TaskOriginator } from '../../src/contacts/types.js';
 
 export class SchedulerCreateHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {
@@ -40,6 +41,12 @@ export class SchedulerCreateHandler implements SkillHandler {
 
     const agentId = agent_id ?? 'coordinator';
 
+    // Propagate the task originator from the parent task to the scheduled job so
+    // isPrincipalOriginated() returns correctly when the job fires. Without this,
+    // "email my mother tomorrow at 10am" would be blocked by the elevated-skill gate
+    // at fire time because the scheduler task would have no originator.
+    const originator = ctx.taskMetadata?.originator as TaskOriginator | undefined;
+
     try {
       const result = await ctx.schedulerService.createJob({
         agentId,
@@ -53,6 +60,7 @@ export class SchedulerCreateHandler implements SkillHandler {
         // run_at is already normalized to UTC by the execution layer, so timezone only affects cron jobs.
         // Normalize to undefined if blank so createJob() falls back to the service default.
         timezone: typeof timezone === 'string' && timezone.trim() !== '' ? timezone.trim() : undefined,
+        originator,
       });
 
       ctx.log.info({ jobId: result.jobId, agentId }, 'Scheduled job created via skill');

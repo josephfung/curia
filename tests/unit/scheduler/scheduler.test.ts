@@ -406,6 +406,38 @@ describe('Scheduler', () => {
     });
   });
 
+  // -- originator propagation --
+
+  describe('originator propagation', () => {
+    it('stamps originator from stored job row onto the fired agent.task', async () => {
+      const originator = {
+        contactId: 'ceo-contact-id',
+        systemRole: 'principal',
+        channel: 'email',
+        initiatedAt: '2026-05-01T10:00:00.000Z',
+      };
+      const row = fakeDbRow({ originator });
+      pool.query.mockResolvedValueOnce({ rows: [row] });
+      pool.query.mockResolvedValueOnce({ rowCount: 1, rows: [] }); // claim
+
+      await scheduler.pollDueJobs();
+
+      const [, taskEvent] = bus.publish.mock.calls[1] as [string, { payload: { metadata?: Record<string, unknown> } }];
+      expect(taskEvent.payload.metadata?.originator).toEqual(originator);
+    });
+
+    it('omits metadata from fired agent.task when job has no originator', async () => {
+      const row = fakeDbRow({ originator: null });
+      pool.query.mockResolvedValueOnce({ rows: [row] });
+      pool.query.mockResolvedValueOnce({ rowCount: 1, rows: [] }); // claim
+
+      await scheduler.pollDueJobs();
+
+      const [, taskEvent] = bus.publish.mock.calls[1] as [string, { payload: { metadata?: Record<string, unknown> } }];
+      expect(taskEvent.payload.metadata).toBeUndefined();
+    });
+  });
+
   // -- completion tracking --
 
   describe('handleCompletion (via bus subscribers)', () => {

@@ -77,6 +77,10 @@ export class BullpenDispatcher {
             taskOrigin: 'bullpen',
             threadId,
             mentioned: isMentioned,
+            // Propagate the originator from the discuss event so the receiving agent's
+            // task carries the original TaskOriginator. Without this, a specialist agent
+            // involved in a CEO-authorized bullpen thread cannot invoke elevated skills.
+            ...(event.payload.originator ? { originator: event.payload.originator } : {}),
           },
           parentEventId: event.id,
         });

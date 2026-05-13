@@ -194,6 +194,10 @@ interface AgentDiscussPayload {
   participants: string[];      // all thread participants
   mentionedAgentIds: string[]; // subset that get reply-expected tasks (empty = broadcast)
   content: string;
+  /** TaskOriginator of the task that published this discuss event. Forwarded by
+   *  BullpenDispatcher into the resulting agent.task metadata so that skills invoked
+   *  during bullpen work can pass the elevated-skill gate for principal-authorized tasks. */
+  originator?: import('../contacts/types.js').TaskOriginator;
 }
 
 // Contact event payloads — emitted by the dispatch layer during contact resolution (Contacts Phase A).

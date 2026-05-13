@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { SchedulerCreateHandler } from '../../../skills/scheduler-create/handler.js';
 import type { SkillContext } from '../../../src/skills/types.js';
+import type { TaskOriginator } from '../../../src/contacts/types.js';
 
 import pino from 'pino';
 
@@ -79,6 +80,7 @@ describe('SchedulerCreateHandler', () => {
       createdBy: 'coordinator',
       intentAnchor: undefined,
       errorBudget: undefined,
+      originator: undefined,
     });
   });
 
@@ -105,6 +107,7 @@ describe('SchedulerCreateHandler', () => {
       createdBy: 'research-analyst',
       intentAnchor: undefined,
       errorBudget: undefined,
+      originator: undefined,
     });
   });
 
@@ -140,6 +143,7 @@ describe('SchedulerCreateHandler', () => {
       createdBy: 'coordinator',
       intentAnchor: 'weekly-report-v1',
       errorBudget: { maxRetries: 3 },
+      originator: undefined,
     });
   });
 
@@ -159,5 +163,53 @@ describe('SchedulerCreateHandler', () => {
     if (!result.success) {
       expect(result.error).toContain('DB connection lost');
     }
+  });
+
+  it('passes originator from taskMetadata to createJob', async () => {
+    const originator: TaskOriginator = {
+      contactId: 'ceo-contact-id',
+      systemRole: 'principal',
+      channel: 'email',
+      initiatedAt: '2026-05-01T10:00:00.000Z',
+    };
+    const createResult = { jobId: 'job-4' };
+    const schedulerService = {
+      createJob: vi.fn().mockResolvedValue(createResult),
+      listJobs: vi.fn(),
+      cancelJob: vi.fn(),
+    };
+
+    const result = await handler.execute(makeCtx(
+      { task: 'birthday email', run_at: '2026-05-14T10:00:00Z' },
+      {
+        schedulerService: schedulerService as never,
+        taskMetadata: { originator },
+      },
+    ));
+
+    expect(result.success).toBe(true);
+    expect(schedulerService.createJob).toHaveBeenCalledWith(
+      expect.objectContaining({ originator }),
+    );
+  });
+
+  it('passes originator: undefined when taskMetadata has no originator', async () => {
+    const createResult = { jobId: 'job-5' };
+    const schedulerService = {
+      createJob: vi.fn().mockResolvedValue(createResult),
+      listJobs: vi.fn(),
+      cancelJob: vi.fn(),
+    };
+
+    await handler.execute(makeCtx(
+      { task: 'no-originator job', cron_expr: '0 9 * * *' },
+      {
+        schedulerService: schedulerService as never,
+        taskMetadata: { someOtherField: 'value' },
+      },
+    ));
+
+    const call = schedulerService.createJob.mock.calls[0]?.[0] as { originator?: unknown };
+    expect(call?.originator).toBeUndefined();
   });
 });
