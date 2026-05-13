@@ -201,12 +201,14 @@ The `AgentConfig` interface in `runtime.ts` gains a `resolvedModel` field:
 ```typescript
 export interface AgentConfig {
   // ... existing fields ...
-  resolvedModel?: string;  // set by bootstrap from ModelRouter
+  resolvedModel: string;  // set by bootstrap from ModelRouter; always present
 }
 ```
 
 `chatWithRetry()` passes `this.config.resolvedModel` as `params.model` to the
-provider. If unset, the provider uses its default (backward-compatible).
+provider. This field is required — bootstrap always resolves the tier before
+constructing the runtime. The `model` param on `LLMProvider.chat()` remains
+optional so the interface stays usable outside the agent bootstrap path.
 
 ## Agent YAML Migration
 
