@@ -270,6 +270,40 @@ describe('ExtractFactsHandler', () => {
     expect(result).toEqual({ success: false, error: "Cannot read properties of undefined (reading 'id')" });
   });
 
+  it('malformed-fact warn logs only structural metadata — not the raw fact object (PII guard)', async () => {
+    const entityMemory = makeEntityMemory();
+    // fact.value is null — triggers the malformed guard on line 183
+    const facts = JSON.stringify([
+      { subject: 'Jane Doe', subjectType: 'person', attribute: 'home_city', value: null, confidence: 0.9, decayClass: 'slow_decay' },
+    ]);
+    const anthropic = makeMockAnthropicClient(['yes', facts]);
+    const handler = new ExtractFactsHandler(anthropic as never);
+
+    // Build a real logger and spy on warn so we can inspect what was logged.
+    const log = pino({ level: 'silent' });
+    const warnSpy = vi.spyOn(log, 'warn');
+    const ctx = makeCtx(entityMemory, { text: 'Jane Doe lives in Toronto.', source: 'test' });
+    (ctx as Record<string, unknown>).log = log;
+
+    const result = await handler.execute(ctx);
+
+    expect(result).toEqual({ success: true, data: { stored: 0, skipped: false, failed: 1 } });
+
+    // Find the malformed-fact warn call by its message
+    const malformedCall = warnSpy.mock.calls.find(
+      (args) => typeof args[args.length - 1] === 'string' && (args[args.length - 1] as string).includes('skipping malformed fact'),
+    );
+    expect(malformedCall).toBeDefined();
+
+    const loggedData = malformedCall![0] as Record<string, unknown>;
+    // Raw fact must not be present — it contains PII (subject name, value strings)
+    expect(loggedData).not.toHaveProperty('fact');
+    // Structural metadata must be present instead
+    expect(loggedData).toHaveProperty('subjectType', 'string');   // typeof 'Jane Doe'
+    expect(loggedData).toHaveProperty('attributeType', 'string'); // typeof 'home_city'
+    expect(loggedData).toHaveProperty('valueType', 'object');     // typeof null
+  });
+
   it('catch block is safe when storeFact throws — failed incremented, no ReferenceError', async () => {
     const entityMemory = makeEntityMemory();
     const facts = JSON.stringify([
