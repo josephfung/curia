@@ -1,5 +1,5 @@
 name: test-agent
-description: Missing model provider
+description: Missing model tier
 model:
-  model: claude-sonnet-4-6
+  needs: [vision]
 system_prompt: You are a test agent.

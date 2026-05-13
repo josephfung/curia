@@ -4,6 +4,25 @@
   "type": "object",
   "additionalProperties": false,
   "properties": {
+    "model_routing": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "tiers": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "fast":     { "$ref": "#/definitions/tierConfig" },
+            "standard": { "$ref": "#/definitions/tierConfig" },
+            "powerful": { "$ref": "#/definitions/tierConfig" }
+          }
+        },
+        "default_tier": {
+          "type": "string",
+          "enum": ["fast", "standard", "powerful"]
+        }
+      }
+    },
     "channels": {
       "type": "object",
       "additionalProperties": false,
@@ -250,6 +269,17 @@
       "properties": {
         "max_per_message": { "type": "integer", "minimum": 1 },
         "max_per_hour": { "type": "integer", "minimum": 1 }
+      }
+    }
+  },
+  "definitions": {
+    "tierConfig": {
+      "type": "object",
+      "required": ["provider", "model"],
+      "additionalProperties": false,
+      "properties": {
+        "provider": { "type": "string", "minLength": 1 },
+        "model":    { "type": "string", "minLength": 1 }
       }
     }
   }
