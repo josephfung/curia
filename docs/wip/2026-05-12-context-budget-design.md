@@ -38,12 +38,10 @@ Add a token-aware budgeting layer that wraps the existing context assembly. It m
 A local function that estimates token count for a string without an API call.
 
 ```typescript
-export function estimateTokens(text: string): number;
+export function estimateTokens(content: string | ContentBlock[]): number;
 ```
 
-Uses a character-ratio heuristic (~3.5 characters per token for Claude's BPE tokenizer). This is adequate for budgeting decisions where the safety margin absorbs estimation error. Exact token counts come back in the API response and land in `llm.call` events, so estimates can be validated against actuals over time.
-
-Handles both plain strings and `ContentBlock[]` arrays (serializes structured content before measuring).
+For plain strings, uses a character-ratio heuristic (~3.5 characters per token for Claude's BPE tokenizer). For `ContentBlock[]` arrays, serializes structured content to text before measuring. This is adequate for budgeting decisions where the safety margin absorbs estimation error. Exact token counts come back in the API response and land in `llm.call` events, so estimates can be validated against actuals over time.
 
 **Safety margin:** A system-wide constant (default: 5%) applied at the budget level. This compensates for estimator inaccuracy and is a property of the estimator, not individual agents.
 
@@ -84,7 +82,7 @@ const budget = new ContextBudget({
 
 **System prompt overflow:** If the system prompt alone exceeds the available budget, logs an error but proceeds. The LLM API will reject the call, which is the correct failure mode for a misconfigured system prompt — the budget layer shouldn't mask it.
 
-**Tier drop policy:** Hard drop, bottom-up. When a tier doesn't fit, it's excluded entirely and all lower-priority tiers are also skipped. The exception is conversation history, which supports partial inclusion via oldest-turn truncation.
+**Tier drop policy:** Hard drop, independent evaluation. Tiers are processed in priority order (highest first). Each tier is independently checked against remaining budget — if it fits, include and deduct; if not, drop it and move on to the next tier (which may be smaller and still fit). The exception is conversation history, which supports partial inclusion via oldest-turn truncation.
 
 ### 3. Agent YAML Configuration
 
@@ -179,7 +177,7 @@ Fixed in code, matching spec 01:
 | 4 | Bullpen threads | Hard drop |
 | 5 (lowest) | Knowledge graph context | Hard drop (future) |
 
-When budget is tight, tiers are dropped bottom-up: KG first, then bullpen, then history truncation, then sender context. In practice, system prompt + sender context + reasonable history should fit comfortably in 200k tokens — tier dropping is a safety net, not the normal path.
+When budget is tight, each tier is tried in priority order and independently dropped if it doesn't fit. In practice, system prompt + sender context + reasonable history should fit comfortably in 200k tokens — tier dropping is a safety net, not the normal path.
 
 ---
 
