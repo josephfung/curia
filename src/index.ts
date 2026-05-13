@@ -91,6 +91,7 @@ import { BullpenDispatcher } from './dispatch/bullpen-dispatcher.js';
 import { ConversationCheckpointProcessor } from './checkpoint/processor.js';
 import { runStartupValidation } from './startup/validator.js';
 import { runReadinessChecks } from './startup/readiness.js';
+import { compileSecurityContextBlock } from './security/security-context.js';
 
 async function main(): Promise<void> {
   // 1. Config & logging — no dependencies, must come first.
@@ -101,6 +102,31 @@ async function main(): Promise<void> {
   const yamlConfig = loadYamlConfig(configDir);
   const logger = createLogger(config.logLevel);
   logger.info('Curia starting...');
+
+  // Compile the security context block from config at startup.
+  // The JSON schema validation above guarantees trust_thresholds is present and valid
+  // when security: is present in the YAML. But security: itself is optional at root
+  // (other security sub-fields like extra_injection_patterns are optional too), so guard
+  // explicitly here rather than relying on a non-null assertion that would crash unclearly.
+  const rawThresholds = yamlConfig.security?.trust_thresholds;
+  if (
+    rawThresholds?.information_query === undefined ||
+    rawThresholds?.scheduling === undefined ||
+    rawThresholds?.data_export === undefined ||
+    rawThresholds?.financial === undefined
+  ) {
+    logger.fatal(
+      'Missing required config: security.trust_thresholds must define information_query, ' +
+      'scheduling, data_export, and financial in config/default.yaml',
+    );
+    process.exit(1);
+  }
+  const securityContextBlock = compileSecurityContextBlock({
+    information_query: rawThresholds.information_query,
+    scheduling:        rawThresholds.scheduling,
+    data_export:       rawThresholds.data_export,
+    financial:         rawThresholds.financial,
+  });
 
   // 1b. Startup validation — fail fast before any I/O if configs are malformed.
   // Validates config/default.yaml, agents/*.yaml, and skills/*/skill.json against
@@ -595,6 +621,18 @@ async function main(): Promise<void> {
   // if the config uses a different role value (e.g., "chief-of-staff").
   const coordinatorConfig = agentConfigs.find(c => c.name === 'coordinator');
 
+  // Warn if the coordinator system prompt is missing the ${security_context_block} placeholder.
+  // The block is still injected unconditionally at runtime (unconditional append path in
+  // AgentRuntime.processTask()), but the missing placeholder means it will appear at the
+  // end of the prompt rather than at the intended position after ${office_identity_block}.
+  if (coordinatorConfig && !coordinatorConfig.system_prompt.includes('${security_context_block}')) {
+    logger.warn(
+      'coordinator.yaml is missing ${security_context_block} placeholder — ' +
+      'the security block will be appended at end of prompt instead of its intended position. ' +
+      'Add ${security_context_block} after ${office_identity_block} in agents/coordinator.yaml.',
+    );
+  }
+
   // Extract agent persona from the identity service — the single source of truth
   // for the agent's identity. Used by skills (via SkillContext.agentPersona) so
   // templates and outbound-facing code never hardcode the agent's name or title.
@@ -1013,6 +1051,11 @@ async function main(): Promise<void> {
       // fresh each turn for hot-reload support. The display name comes from the contact system.
       executiveProfileService: agentConfig.role === 'coordinator' ? executiveProfileService : undefined,
       executiveDisplayName: agentConfig.role === 'coordinator' ? executiveDisplayName : undefined,
+      // The coordinator gets per-turn security context block injection. The block replaces
+      // the ${security_context_block} placeholder if present, or is appended unconditionally.
+      // Specialists do not receive this — they operate in a trust-elevated context (tasks
+      // arrive from the coordinator after the security layer has already evaluated the sender).
+      securityContextBlock: agentConfig.role === 'coordinator' ? securityContextBlock : undefined,
       // Curia's own contact details — injected per-task so agents know which accounts to
       // use when MCP tools ask for an email address or phone number. Injected into ALL
       // agents (#387) — specialists like essay-editor need this to avoid hallucinating
