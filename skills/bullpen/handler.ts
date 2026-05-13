@@ -87,7 +87,14 @@ export class BullpenHandler implements SkillHandler {
             }));
           } catch (publishErr) {
             ctx.log.error(
-              { err: publishErr, threadId: thread.id },
+              {
+                err: publishErr,
+                threadId: thread.id,
+                // If an originator was present, it is now lost — participant tasks created
+                // via the poll fallback will have no originator and isPrincipalOriginated()
+                // will return false. TODO: fix by storing originator on bullpen_threads (#558).
+                originatorLost: !!ctx.taskMetadata?.originator,
+              },
               'Bullpen: thread created but discuss event publish failed — agents will see it on next poll',
             );
           }
@@ -139,7 +146,11 @@ export class BullpenHandler implements SkillHandler {
             }));
           } catch (publishErr) {
             ctx.log.error(
-              { err: publishErr, threadId },
+              {
+                err: publishErr,
+                threadId,
+                originatorLost: !!ctx.taskMetadata?.originator,
+              },
               'Bullpen: reply posted but discuss event publish failed — agents will see it on next poll',
             );
           }

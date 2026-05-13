@@ -101,6 +101,9 @@ export class DelegateHandler implements SkillHandler {
       channelId: 'internal',
       senderId: 'coordinator',
       content: task,
+      // Forward only the originator field, not the full taskMetadata. Other metadata fields
+      // (e.g. future billing context, routing hints) are coordinator-internal and should
+      // not propagate transitively down the delegation chain unless explicitly designed to.
       metadata: ctx.taskMetadata?.originator
         ? { originator: ctx.taskMetadata.originator }
         : undefined,
