@@ -87,17 +87,19 @@ describe('Vertical Slice: CLI → Dispatch → Coordinator → Response', () => 
     expect(outbound[0]?.payload.channelId).toBe('cli');
     expect(outbound[0]?.payload.conversationId).toBe('cli:local:default');
 
-    // -- Assert the complete 5-event audit trail --
+    // -- Assert the complete 6-event audit trail --
     // This sequence is the spec-mandated message flow from 00-overview.md.
     // The order is guaranteed because the bus awaits each publish before returning.
+    // context.budget is published after assembly, before the LLM call (#24).
     // llm.call is published inside agent task processing (between agent.task and agent.response).
-    expect(auditLog).toHaveLength(5);
+    expect(auditLog).toHaveLength(6);
     expect(auditLog.map((e) => e.type)).toEqual([
       'inbound.message',  // 1. Channel publishes user input
       'agent.task',       // 2. Dispatcher converts inbound.message to a task for the coordinator
-      'llm.call',         // 3. Runtime publishes LLM provenance after the API call (spec 10)
-      'agent.response',   // 4. Coordinator publishes the LLM result
-      'outbound.message', // 5. Dispatcher converts agent.response back to a channel message
+      'context.budget',   // 3. Runtime publishes context budget telemetry after assembly (#24)
+      'llm.call',         // 4. Runtime publishes LLM provenance after the API call (spec 10)
+      'agent.response',   // 5. Coordinator publishes the LLM result
+      'outbound.message', // 6. Dispatcher converts agent.response back to a channel message
     ]);
 
     // -- Assert the causal chain is intact --
