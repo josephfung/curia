@@ -104,10 +104,11 @@ async function main(): Promise<void> {
   logger.info('Curia starting...');
 
   // Compile the security context block from config at startup.
-  // The JSON schema validation above guarantees trust_thresholds is present and valid
-  // when security: is present in the YAML. But security: itself is optional at root
-  // (other security sub-fields like extra_injection_patterns are optional too), so guard
-  // explicitly here rather than relying on a non-null assertion that would crash unclearly.
+  // runStartupValidation (below) enforces the JSON schema, which requires trust_thresholds
+  // whenever the `security:` block is present. But `security:` itself is optional at the
+  // root (extra_injection_patterns et al. are also optional), and this block runs *before*
+  // schema validation, so guard explicitly here rather than relying on a non-null assertion
+  // that would crash unhelpfully.
   const rawThresholds = yamlConfig.security?.trust_thresholds;
   // Explicit undefined check first so TypeScript narrows rawThresholds below.
   if (rawThresholds === undefined) {

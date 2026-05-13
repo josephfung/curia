@@ -21,7 +21,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 - **`LLMUsage`** extended with `cacheCreationInputTokens` and `cacheReadInputTokens` fields (previously silently dropped from the Anthropic API response).
 - **`LlmCallPayload`** extended with `cacheCreationInputTokens` and `cacheReadInputTokens` fields; `providerRequestId` comment corrected to reflect response body id (`msg_xxx`), not the HTTP header.
-- **`security.trust_thresholds` config** — action threshold values moved from hardcoded coordinator text to `config/default.yaml` under `security.trust_thresholds`. Required by the JSON schema; startup fails if absent or malformed.
+- **`security.trust_thresholds` config** — action thresholds moved from hardcoded coordinator text to config; startup fails if missing or malformed.
 
 ### Fixed
 
@@ -30,11 +30,11 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Security
 
-- **Compiled security context block** — platform security policy (authorization enforcement, prompt injection defense, email verification, trust score thresholds) extracted from `coordinator.yaml` into a compiled `${security_context_block}` injected per-turn. Always present — the runtime appends unconditionally if the placeholder is missing from a custom coordinator.
+- **Compiled security context block** — four security sections extracted from `coordinator.yaml` into runtime-injected `${security_context_block}`, always present.
 
 ### Removed
 
-- **`trust_policy` config key** — dead top-level key removed from config, schema, and types. Replace with `security.trust_thresholds` (four fields: `information_query`, `scheduling`, `data_export`, `financial`).
+- **`trust_policy` config key** — dead config removed; replaced by `security.trust_thresholds`.
 
 ---
 
