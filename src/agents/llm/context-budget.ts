@@ -31,6 +31,8 @@ export class ContextBudget {
 
   private readonly config: ContextBudgetConfig;
   private tiers: TierRecord[] = [];
+  private historyTurnsTotal = 0;
+  private historyTurnsIncluded = 0;
 
   constructor(config: ContextBudgetConfig) {
     this.config = config;
@@ -45,6 +47,26 @@ export class ContextBudget {
     this.remaining = this.availableBudget;
   }
 
+  // Returns a snapshot of allocation decisions for logging and debugging.
+  // Includes per-tier records and history turn counts from allocateHistory.
+  get diagnostics(): {
+    model: string;
+    availableBudget: number;
+    remaining: number;
+    tiers: ReadonlyArray<Readonly<TierRecord>>;
+    historyTurnsTotal: number;
+    historyTurnsIncluded: number;
+  } {
+    return {
+      model: this.config.model,
+      availableBudget: this.availableBudget,
+      remaining: this.remaining,
+      tiers: this.tiers,
+      historyTurnsTotal: this.historyTurnsTotal,
+      historyTurnsIncluded: this.historyTurnsIncluded,
+    };
+  }
+
   // Always include this tier (e.g. system prompt) regardless of remaining budget.
   // Remaining can go negative — the caller is responsible for deciding whether
   // that is acceptable (system prompt overflow is still better than no prompt).
@@ -52,6 +74,74 @@ export class ContextBudget {
     const tokens = estimateMessagesTokens(messages);
     this.remaining -= tokens;
     this.tiers.push({ name: tierName, estimatedTokens: tokens, included: true });
+  }
+
+  // Include as many of the most-recent history turns as fit within the
+  // remaining budget. Turns are in chronological order (oldest first); we
+  // always keep the most recent turns when truncating.
+  //
+  // minKeep: soft preference for how many recent turns to guarantee. If the
+  // budget allows any turns at all, we greedily include as many as fit (up to
+  // the full history). The only hard drop-all case is when no single turn fits
+  // within the remaining budget — in that case we return an empty array.
+  //
+  // NOTE: minKeep is accepted as a parameter for API symmetry and future use
+  // (e.g. a caller could enforce a hard floor), but the current selection
+  // logic is purely greedy: include as many recent turns as fit.
+  allocateHistory(turns: Message[], minKeep = 2): Message[] {
+    // minKeep is intentionally unused in the selection logic for now — the
+    // greedy approach already ensures we include the most turns possible.
+    // It is preserved in the signature for forward compatibility.
+    void minKeep;
+
+    this.historyTurnsTotal = turns.length;
+
+    if (turns.length === 0) {
+      this.historyTurnsIncluded = 0;
+      this.tiers.push({ name: 'conversation_history', estimatedTokens: 0, included: false, droppedReason: 'empty' });
+      return [];
+    }
+
+    // Fast path: full history fits — no truncation needed.
+    const fullTokens = estimateMessagesTokens(turns);
+    if (fullTokens <= this.remaining) {
+      this.remaining -= fullTokens;
+      this.historyTurnsIncluded = turns.length;
+      this.tiers.push({ name: 'conversation_history', estimatedTokens: fullTokens, included: true });
+      return turns;
+    }
+
+    // Binary search for the maximum number of recent turns that fit within the
+    // remaining budget. Searches [1, turns.length]; lo tracks the best known
+    // count that fits (0 means nothing fits yet).
+    let lo = 0;
+    let searchLo = 1;
+    let searchHi = turns.length;
+    while (searchLo <= searchHi) {
+      const mid = Math.floor((searchLo + searchHi) / 2);
+      const slice = turns.slice(-mid);
+      if (estimateMessagesTokens(slice) <= this.remaining) {
+        lo = mid;
+        searchLo = mid + 1;
+      } else {
+        searchHi = mid - 1;
+      }
+    }
+
+    // If no single turn fits, drop all history rather than returning a partial
+    // result that could confuse the model.
+    if (lo === 0) {
+      this.historyTurnsIncluded = 0;
+      this.tiers.push({ name: 'conversation_history', estimatedTokens: fullTokens, included: false, droppedReason: 'budget_exceeded' });
+      return [];
+    }
+
+    const included = turns.slice(-lo);
+    const tokens = estimateMessagesTokens(included);
+    this.remaining -= tokens;
+    this.historyTurnsIncluded = included.length;
+    this.tiers.push({ name: 'conversation_history', estimatedTokens: tokens, included: true });
+    return included;
   }
 
   // Include this tier only if it fits within the remaining budget AND the

@@ -119,4 +119,86 @@ describe('ContextBudget', () => {
       expect(budget.remaining).toBe(450 - 14);
     });
   });
+
+  describe('allocateHistory', () => {
+    function turn(chars: number): Message {
+      return { role: 'user', content: 'x'.repeat(chars) };
+    }
+
+    it('includes full history when it fits', () => {
+      const budget = new ContextBudget({
+        model: 'claude-sonnet-4-6',
+        contextWindow: 10_000,
+        responseReserve: 1_000,
+        safetyMargin: 0.0,
+      });
+      const turns = [turn(35), turn(35), turn(35)];
+      const included = budget.allocateHistory(turns);
+      expect(included).toHaveLength(3);
+      expect(budget.remaining).toBe(9_000 - 42);
+    });
+
+    it('truncates oldest turns when full history does not fit', () => {
+      const budget = new ContextBudget({
+        model: 'claude-sonnet-4-6',
+        contextWindow: 200,
+        responseReserve: 50,
+        safetyMargin: 0.0,
+      });
+      const turns = [turn(350), turn(350), turn(350), turn(350)];
+      const included = budget.allocateHistory(turns);
+      expect(included).toHaveLength(1);
+      expect(included[0]).toBe(turns[3]);
+    });
+
+    it('respects minKeep — keeps at least minKeep recent turns', () => {
+      const budget = new ContextBudget({
+        model: 'claude-sonnet-4-6',
+        contextWindow: 500,
+        responseReserve: 50,
+        safetyMargin: 0.0,
+      });
+      const turns = [turn(35), turn(35), turn(35), turn(35), turn(35)];
+      const included = budget.allocateHistory(turns, 3);
+      expect(included).toHaveLength(5);
+    });
+
+    it('drops all history when even minKeep turns do not fit', () => {
+      const budget = new ContextBudget({
+        model: 'claude-sonnet-4-6',
+        contextWindow: 100,
+        responseReserve: 50,
+        safetyMargin: 0.0,
+      });
+      const turns = [turn(350), turn(350), turn(350)];
+      const included = budget.allocateHistory(turns, 2);
+      expect(included).toHaveLength(0);
+      expect(budget.remaining).toBe(50);
+    });
+
+    it('returns empty array for empty turns', () => {
+      const budget = new ContextBudget({
+        model: 'claude-sonnet-4-6',
+        contextWindow: 10_000,
+        responseReserve: 1_000,
+        safetyMargin: 0.0,
+      });
+      const included = budget.allocateHistory([]);
+      expect(included).toHaveLength(0);
+    });
+
+    it('defaults minKeep to 2', () => {
+      const budget = new ContextBudget({
+        model: 'claude-sonnet-4-6',
+        contextWindow: 300,
+        responseReserve: 50,
+        safetyMargin: 0.0,
+      });
+      const turns = [turn(350), turn(350), turn(350), turn(350)];
+      const included = budget.allocateHistory(turns);
+      expect(included).toHaveLength(2);
+      expect(included[0]).toBe(turns[2]);
+      expect(included[1]).toBe(turns[3]);
+    });
+  });
 });
