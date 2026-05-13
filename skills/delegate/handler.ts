@@ -90,12 +90,20 @@ export class DelegateHandler implements SkillHandler {
     // to the Coordinator's skill.invoke event, but SkillContext doesn't currently
     // carry the invoking event's ID. TODO: Add invokeEventId to SkillContext so
     // capability-gated skills can maintain the full audit causal chain.
+    //
+    // Forward the parent task's originator so the specialist inherits the original
+    // TaskOriginator. Without this, a CEO-initiated task delegated to a specialist
+    // would lose its originator at the delegation boundary and isPrincipalOriginated()
+    // would return false for all skill calls inside the specialist's turn.
     const taskEvent = createAgentTask({
       agentId: agent,
       conversationId,
       channelId: 'internal',
       senderId: 'coordinator',
       content: task,
+      metadata: ctx.taskMetadata?.originator
+        ? { originator: ctx.taskMetadata.originator }
+        : undefined,
       parentEventId: `delegate-${randomUUID()}`,
     });
 

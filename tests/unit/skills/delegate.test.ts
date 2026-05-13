@@ -192,4 +192,69 @@ describe('DelegateHandler', () => {
       expect(data.response).toContain('research findings');
     }
   });
+
+  it('forwards originator from taskMetadata into the specialist task metadata', async () => {
+    const agentRegistry = new AgentRegistry();
+    agentRegistry.register('coordinator', { role: 'coordinator', description: 'Main' });
+    agentRegistry.register('research-analyst', { role: 'specialist', description: 'Research' });
+    const bus = new EventBus(logger);
+
+    const originator = {
+      contactId: 'ceo-contact-id',
+      systemRole: 'principal' as const,
+      channel: 'email',
+      initiatedAt: '2026-05-01T10:00:00.000Z',
+    };
+
+    let capturedMetadata: Record<string, unknown> | undefined;
+    bus.subscribe('agent.task', 'agent', async (event) => {
+      if (event.type === 'agent.task' && event.payload.agentId === 'research-analyst') {
+        capturedMetadata = event.payload.metadata as Record<string, unknown> | undefined;
+        const { createAgentResponse } = await import('../../../src/bus/events.js');
+        await bus.publish('agent', createAgentResponse({
+          agentId: 'research-analyst',
+          conversationId: event.payload.conversationId,
+          content: 'Done',
+          parentEventId: event.id,
+        }));
+      }
+    });
+
+    const result = await handler.execute(makeCtx(
+      { agent: 'research-analyst', task: 'Research AI trends' },
+      { bus, agentRegistry, taskMetadata: { originator } },
+    ));
+
+    expect(result.success).toBe(true);
+    expect(capturedMetadata?.originator).toEqual(originator);
+  });
+
+  it('sets metadata to undefined on specialist task when no originator in parent', async () => {
+    const agentRegistry = new AgentRegistry();
+    agentRegistry.register('coordinator', { role: 'coordinator', description: 'Main' });
+    agentRegistry.register('research-analyst', { role: 'specialist', description: 'Research' });
+    const bus = new EventBus(logger);
+
+    let capturedMetadata: Record<string, unknown> | undefined = { sentinel: true };
+    bus.subscribe('agent.task', 'agent', async (event) => {
+      if (event.type === 'agent.task' && event.payload.agentId === 'research-analyst') {
+        capturedMetadata = event.payload.metadata as Record<string, unknown> | undefined;
+        const { createAgentResponse } = await import('../../../src/bus/events.js');
+        await bus.publish('agent', createAgentResponse({
+          agentId: 'research-analyst',
+          conversationId: event.payload.conversationId,
+          content: 'Done',
+          parentEventId: event.id,
+        }));
+      }
+    });
+
+    await handler.execute(makeCtx(
+      { agent: 'research-analyst', task: 'Research AI trends' },
+      { bus, agentRegistry },
+    ));
+
+    // No originator in parent task → specialist task should have no metadata
+    expect(capturedMetadata).toBeUndefined();
+  });
 });

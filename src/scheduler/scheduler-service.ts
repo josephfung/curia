@@ -4,6 +4,7 @@ import type { Pool } from 'pg';
 import type { EventBus } from '../bus/bus.js';
 import type { Logger } from '../logger.js';
 import { createScheduleCreated } from '../bus/events.js';
+import type { TaskOriginator } from '../contacts/types.js';
 
 // -- Public types --
 
@@ -21,6 +22,11 @@ export interface CreateJobParams {
    *  long-running jobs and to compute the watchdog recovery threshold. Must be a positive
    *  finite integer; non-integer, zero, negative, and non-finite values are rejected. */
   expectedDurationSeconds?: number;
+  /** Who originally initiated the task chain that created this schedule entry.
+   *  Preserved in the DB so fireJob() can stamp it on the resulting agent.task,
+   *  allowing isPrincipalOriginated() to return true for principal-authorized scheduled work.
+   *  Null for declarative (YAML-defined) jobs and jobs created before migration 040. */
+  originator?: TaskOriginator;
 }
 
 export interface CreateJobResult {
@@ -53,6 +59,9 @@ export interface JobRow {
   lastRunOutcome: 'completed' | 'failed' | 'timed_out' | null;
   lastRunSummary: string | null;
   lastRunContext: Record<string, unknown> | null;
+  /** TaskOriginator stored at schedule-creation time. Null for declarative jobs and
+   *  jobs created before migration 040. Stamped on the resulting agent.task by fireJob(). */
+  originator: TaskOriginator | null;
 }
 
 export interface ListJobsFilters {
@@ -84,6 +93,7 @@ interface DbJobRow {
   last_run_outcome: 'completed' | 'failed' | 'timed_out' | null;
   last_run_summary: string | null;   // agent-written summary; null until first scheduler-report call
   last_run_context: Record<string, unknown> | null; // opaque agent context; null until first scheduler-report call
+  originator: Record<string, unknown> | null; // JSONB — cast to TaskOriginator when mapping
 }
 
 // Threshold for auto-suspending jobs after consecutive failures.
@@ -182,9 +192,11 @@ export class SchedulerService {
     // for one-shot jobs use runAt directly (already UTC from timestamp normalization).
     const nextRunAt = cronExpr ? this.nextRunFromCron(cronExpr, jobTimezone) : runAt!;
 
+    // originator is always written — null for non-principal-initiated jobs. Always including
+    // it (rather than conditionally) keeps the SQL simpler and matches the nullable column.
     const insertSql = `
-      INSERT INTO scheduled_jobs (agent_id, cron_expr, run_at, task_payload, status, next_run_at, created_by, timezone${hasExpectedDuration ? ', expected_duration_seconds' : ''})
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8${hasExpectedDuration ? ', $9' : ''})
+      INSERT INTO scheduled_jobs (agent_id, cron_expr, run_at, task_payload, status, next_run_at, created_by, timezone, originator${hasExpectedDuration ? ', expected_duration_seconds' : ''})
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9${hasExpectedDuration ? ', $10' : ''})
       RETURNING id
     `;
     const insertParams: unknown[] = [
@@ -196,6 +208,8 @@ export class SchedulerService {
       nextRunAt,
       createdBy,
       jobTimezone,
+      // Serialize as JSON string for pg JSONB — null when no originator was provided.
+      params.originator ? JSON.stringify(params.originator) : null,
     ];
     if (hasExpectedDuration) {
       insertParams.push(rawDuration);
@@ -759,5 +773,7 @@ function mapJobRow(row: DbJobRow): JobRow {
     lastRunOutcome: row.last_run_outcome,
     lastRunSummary: row.last_run_summary,
     lastRunContext: row.last_run_context,
+    // pg returns JSONB columns as plain JS objects — cast to the typed interface.
+    originator: row.originator as TaskOriginator | null,
   };
 }

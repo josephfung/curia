@@ -13,6 +13,7 @@
 
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
 import { createAgentDiscuss } from '../../src/bus/events.js';
+import type { TaskOriginator } from '../../src/contacts/types.js';
 
 export class BullpenHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {
@@ -78,6 +79,10 @@ export class BullpenHandler implements SkillHandler {
               participants: thread.participants,
               mentionedAgentIds,
               content,
+              // Forward the parent task's originator so BullpenDispatcher can stamp it
+              // on the reply tasks it creates for each participant. This ensures
+              // isPrincipalOriginated() returns correctly for CEO-authorized bullpen work.
+              originator: ctx.taskMetadata?.originator as TaskOriginator | undefined,
               parentEventId: ctx.taskEventId,
             }));
           } catch (publishErr) {
@@ -127,6 +132,9 @@ export class BullpenHandler implements SkillHandler {
               participants: existing.thread.participants,
               mentionedAgentIds,
               content,
+              // Forward the parent task's originator so BullpenDispatcher can stamp it
+              // on the reply tasks it creates for each participant.
+              originator: ctx.taskMetadata?.originator as TaskOriginator | undefined,
               parentEventId: ctx.taskEventId,
             }));
           } catch (publishErr) {

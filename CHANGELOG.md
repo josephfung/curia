@@ -26,6 +26,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **`TaskOriginator` through delegation boundaries** — scheduled jobs, delegated specialist tasks, and bullpen-spawned tasks now carry the `TaskOriginator` from the task that created them, so `isPrincipalOriginated()` returns correctly and the elevated-skill gate no longer blocks principal-authorized deferred or delegated actions (closes #504). `AgentDiscussPayload` gains an optional `originator` field (backwards-compatible bus API change).
 - **Declarative job drift detection** — declarative (YAML-defined) scheduled jobs now support `intent_anchor`, enabling drift detection. Previously ignored at upsert time, causing the drift detector to silently skip all YAML jobs (closes #416).
 - **Google Workspace tools** pinned to coordinator — doc creation, editing, formatting, sharing, and drive tools are now always available without requiring `skill-registry` discovery (see #497).
 - **`extract-facts`** — programming errors in the per-fact loop now re-throw instead of silently incrementing `failed`. (#493)

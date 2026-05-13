@@ -99,6 +99,45 @@ describe('BullpenDispatcher', () => {
     expect(cTask?.payload.metadata?.mentioned).toBe(false);
   });
 
+  it('forwards originator from discuss event to task metadata', async () => {
+    const { thread } = await bullpenService.openThread(
+      'Originator test', 'coordinator', ['coordinator', 'agent-b'], 'Hi', ['agent-b'],
+    );
+    const originator = {
+      contactId: 'ceo-contact-id',
+      systemRole: 'principal' as const,
+      channel: 'email',
+      initiatedAt: '2026-05-01T10:00:00.000Z',
+    };
+    const event = createAgentDiscuss({
+      threadId: thread.id, messageId: 'msg-1', topic: 'Originator test',
+      senderAgentId: 'coordinator', participants: ['coordinator', 'agent-b'],
+      mentionedAgentIds: ['agent-b'], content: 'Hi', originator, parentEventId: 'task-1',
+    });
+    await bus._trigger('agent.discuss', event);
+    const task = (bus.publish as ReturnType<typeof vi.fn>).mock.calls
+      .find(([_l, e]) => (e as { type: string }).type === 'agent.task')?.[1] as
+      { payload: { metadata: Record<string, unknown> } };
+    expect(task?.payload.metadata?.originator).toEqual(originator);
+  });
+
+  it('omits originator from task metadata when discuss event has none', async () => {
+    const { thread } = await bullpenService.openThread(
+      'No originator', 'coordinator', ['coordinator', 'agent-b'], 'Hi', [],
+    );
+    const event = createAgentDiscuss({
+      threadId: thread.id, messageId: 'msg-1', topic: 'No originator',
+      senderAgentId: 'coordinator', participants: ['coordinator', 'agent-b'],
+      mentionedAgentIds: ['agent-b'], content: 'Hi', parentEventId: 'task-1',
+    });
+    await bus._trigger('agent.discuss', event);
+    const task = (bus.publish as ReturnType<typeof vi.fn>).mock.calls
+      .find(([_l, e]) => (e as { type: string }).type === 'agent.task')?.[1] as
+      { payload: { metadata: Record<string, unknown> } };
+    // originator key should be absent — not present as undefined
+    expect(task?.payload.metadata).not.toHaveProperty('originator');
+  });
+
   it('skips task creation when thread message_count >= 100', async () => {
     const { thread } = await bullpenService.openThread(
       'Cap test', 'coordinator', ['coordinator', 'agent-b'], 'Start', [],

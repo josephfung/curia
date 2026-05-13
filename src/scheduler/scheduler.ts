@@ -231,6 +231,8 @@ export class Scheduler {
           lastRunOutcome: row.last_run_outcome ?? null,
           lastRunSummary: row.last_run_summary ?? null,
           lastRunContext: row.last_run_context ?? null,
+          // pg returns JSONB as a plain object; null for pre-040 rows and declarative jobs.
+          originator: row.originator ?? null,
         };
         try {
           await this.fireJob(job);
@@ -319,6 +321,10 @@ export class Scheduler {
     const runId = randomUUID();
 
     // Publish agent.task so the coordinator picks up the work.
+    // Restore the TaskOriginator stored at schedule-creation time so the autonomy gate
+    // can correctly identify principal-authorized scheduled actions (e.g. "email my
+    // mother tomorrow at 10am"). Without this, the scheduler task fires with no originator
+    // and isPrincipalOriginated() returns false, blocking elevated skills.
     const taskEvent = createAgentTask({
       agentId: job.agentId,
       conversationId: `scheduler:${job.id}:${runId}`,
@@ -331,6 +337,8 @@ export class Scheduler {
       // Pass the duration hint so the runtime can widen the delegate timeout for
       // long-running scheduled tasks. null (no explicit duration) becomes undefined.
       expectedDurationSeconds: job.expectedDurationSeconds ?? undefined,
+      // Thread the stored originator through — null (declarative / pre-040 jobs) becomes undefined.
+      metadata: job.originator ? { originator: job.originator } : undefined,
       parentEventId: firedEvent.id,
     });
     // Track the mapping BEFORE publishing — bus.publish() awaits all handlers
