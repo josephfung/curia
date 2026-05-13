@@ -399,6 +399,89 @@ describe('AgentRuntime', () => {
     const systemMsg = chatCall.messages.find(m => m.role === 'system');
     expect(systemMsg?.content).not.toContain('## Original Task Intent');
   });
+
+  it('replaces ${security_context_block} placeholder when securityContextBlock is set', async () => {
+    const provider = createMockProvider('OK');
+    const runtime = new AgentRuntime({
+      agentId: 'coordinator',
+      systemPrompt: 'Before.\n${security_context_block}\nAfter.',
+      provider,
+      bus,
+      logger: createLogger('error'),
+      securityContextBlock: '## Security\nPolicy here.',
+    });
+    runtime.register();
+
+    const task = createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'conv-sec-1',
+      channelId: 'cli',
+      senderId: 'user',
+      content: 'Hello',
+      parentEventId: 'parent-sec-1',
+    });
+    await bus.publish('dispatch', task);
+
+    const systemMsg = (provider.chat as ReturnType<typeof vi.fn>).mock.calls[0][0].messages[0].content as string;
+    // Block replaces placeholder at its exact position
+    expect(systemMsg).toContain('Before.\n## Security\nPolicy here.\nAfter.');
+    // Block must not appear a second time (no duplicate at end)
+    expect(systemMsg.indexOf('## Security')).toBe(systemMsg.lastIndexOf('## Security'));
+  });
+
+  it('appends securityContextBlock unconditionally when placeholder is absent', async () => {
+    const provider = createMockProvider('OK');
+    const runtime = new AgentRuntime({
+      agentId: 'coordinator',
+      systemPrompt: 'No placeholder here.',
+      provider,
+      bus,
+      logger: createLogger('error'),
+      securityContextBlock: '## Security\nPolicy here.',
+    });
+    runtime.register();
+
+    const task = createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'conv-sec-2',
+      channelId: 'cli',
+      senderId: 'user',
+      content: 'Hello',
+      parentEventId: 'parent-sec-2',
+    });
+    await bus.publish('dispatch', task);
+
+    const systemMsg = (provider.chat as ReturnType<typeof vi.fn>).mock.calls[0][0].messages[0].content as string;
+    expect(systemMsg).toContain('No placeholder here.');
+    expect(systemMsg).toContain('## Security\nPolicy here.');
+  });
+
+  it('does not modify the prompt when securityContextBlock is not provided', async () => {
+    const provider = createMockProvider('OK');
+    const runtime = new AgentRuntime({
+      agentId: 'coordinator',
+      systemPrompt: 'Only this text.',
+      provider,
+      bus,
+      logger: createLogger('error'),
+      // securityContextBlock intentionally omitted
+    });
+    runtime.register();
+
+    const task = createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'conv-sec-3',
+      channelId: 'cli',
+      senderId: 'user',
+      content: 'Hello',
+      parentEventId: 'parent-sec-3',
+    });
+    await bus.publish('dispatch', task);
+
+    const systemMsg = (provider.chat as ReturnType<typeof vi.fn>).mock.calls[0][0].messages[0].content as string;
+    // No securityContextBlock provided, so no security block should appear
+    expect(systemMsg).not.toContain('## Security');
+  });
 });
 
 // Helper: mock LLM that returns tool_use on first call, text on second
