@@ -454,6 +454,8 @@ describe('AgentRuntime', () => {
     const systemMsg = (provider.chat as ReturnType<typeof vi.fn>).mock.calls[0][0].messages[0].content as string;
     expect(systemMsg).toContain('No placeholder here.');
     expect(systemMsg).toContain('## Security\nPolicy here.');
+    // Verify the '\n\n' separator is correct — the block must be appended with exactly two newlines
+    expect(systemMsg).toContain('No placeholder here.\n\n## Security');
   });
 
   it('does not modify the prompt when securityContextBlock is not provided', async () => {

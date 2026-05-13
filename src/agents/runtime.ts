@@ -207,15 +207,22 @@ export class AgentRuntime {
     // that predates this feature), append unconditionally — the block is a
     // platform guarantee, not opt-in text. See design spec #500.
     if (this.config.securityContextBlock) {
-      const replaced = effectiveSystemPrompt.replace(
-        '${security_context_block}',
-        this.config.securityContextBlock,
-      );
-      if (replaced === effectiveSystemPrompt) {
-        // Placeholder absent — append as the safety net.
-        effectiveSystemPrompt += '\n\n' + this.config.securityContextBlock;
-      } else {
-        effectiveSystemPrompt = replaced;
+      try {
+        const replaced = effectiveSystemPrompt.replace(
+          '${security_context_block}',
+          this.config.securityContextBlock,
+        );
+        if (replaced === effectiveSystemPrompt) {
+          // Placeholder absent — append as the safety net.
+          effectiveSystemPrompt += '\n\n' + this.config.securityContextBlock;
+        } else {
+          effectiveSystemPrompt = replaced;
+        }
+      } catch (err) {
+        // A failure here should not abort the task. Log at error (operator signal)
+        // and proceed — the prompt will be missing the security block but the task
+        // can still run. The misconfiguration will be obvious in audit logs.
+        logger.error({ err, agentId }, 'Failed to inject security context block — task will proceed but security policy may be missing from prompt');
       }
     }
 
