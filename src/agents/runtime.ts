@@ -2,7 +2,7 @@ import type { LLMProvider, LLMResponse, Message, ToolDefinition, ContentBlock, T
 import type { EventBus } from '../bus/bus.js';
 import { createAgentResponse, createAgentError, createSkillInvoke, createSkillResult, createLlmCall, createContextBudget, type AgentTaskEvent } from '../bus/events.js';
 import { ContextBudget } from './llm/context-budget.js';
-import { getContextWindow, DEFAULT_SAFETY_MARGIN, isKnownContextWindowModel } from './llm/token-estimator.js';
+import { getContextWindow, DEFAULT_SAFETY_MARGIN, DEFAULT_MODEL_NAME, isKnownContextWindowModel } from './llm/token-estimator.js';
 import { createHash } from 'node:crypto';
 import { estimateCostUsd } from './llm/pricing.js';
 import type { Logger } from '../logger.js';
@@ -316,7 +316,7 @@ export class AgentRuntime {
     };
 
     // Create context budget for token-aware assembly.
-    const modelName = this.config.modelName ?? 'claude-sonnet-4-6';
+    const modelName = this.config.modelName ?? DEFAULT_MODEL_NAME;
     const contextWindow = getContextWindow(modelName);
     if (!isKnownContextWindowModel(modelName)) {
       logger.warn(
@@ -331,35 +331,24 @@ export class AgentRuntime {
       safetyMargin: DEFAULT_SAFETY_MARGIN,
     });
 
-    // Register system prompt with context budget — always included
+    // Budget allocation order: reserve non-negotiable tiers first (system prompt,
+    // user message), then allocate in priority order (sender context, bullpen),
+    // and let history — which supports partial inclusion — take whatever's left.
+    // This matches the design spec priority order and ensures higher-priority tiers
+    // (especially security-relevant sender context) aren't starved by greedy history.
     ctxBudget.allocateRequired('system_prompt', [{ role: 'system', content: effectiveSystemPrompt }]);
+    ctxBudget.allocateRequired('user_message', [{ role: 'user', content }]);
     if (ctxBudget.remaining < 0) {
       logger.error(
         { agentId, remaining: ctxBudget.remaining, availableBudget: ctxBudget.availableBudget },
-        'System prompt exceeds context budget — proceeding without enforcement',
+        'System prompt + user message exceed context budget — proceeding without enforcement',
       );
     }
 
-    // Load conversation history from working memory (if configured)
-    const history = memory
-      ? await memory.getHistory(conversationId, agentId)
-      : [];
-
-    const budgetedHistory = ctxBudget.allocateHistory(
-      history.map(t => ({ role: t.role, content: t.content }) as Message),
-    );
-    if (history.length > 0 && budgetedHistory.length === 0) {
-      logger.warn(
-        { agentId, conversationId, historyTurnsAvailable: history.length, remaining: ctxBudget.remaining },
-        'All conversation history dropped by context budget — model will have no conversation context',
-      );
-    }
-
-    // Assemble initial LLM context
+    // Start building messages array — history and user message appended after
+    // sender context and bullpen are resolved.
     const messages: Message[] = [
       { role: 'system', content: effectiveSystemPrompt },
-      ...budgetedHistory,
-      { role: 'user', content },
     ];
 
     // Track insertion position for Bullpen context — it must follow sender context (if any)
@@ -514,19 +503,34 @@ export class AgentRuntime {
     // state, not a stale snapshot from the start of the task (#213).
     await this.refreshBullpenContext(messages, bullpenInsertAt, agentId);
 
-    // Record bullpen context in the budget for observability.
-    // The bullpen message is the system message at bullpenInsertAt (if one was inserted).
-    const bullpenMsg = messages[bullpenInsertAt];
-    if (bullpenMsg && bullpenMsg.role === 'system' && bullpenMsg !== messages[0]) {
-      ctxBudget.allocate('bullpen', [bullpenMsg]);
-    } else {
-      ctxBudget.allocate('bullpen', []);
+    // Record bullpen context in the budget for observability. Match by the
+    // same `[Bullpen` sentinel that refreshBullpenContext uses so the two
+    // detection sites can't drift apart.
+    const bullpenMsg = messages.find(
+      m => m.role === 'system' && typeof m.content === 'string' && m.content.startsWith('[Bullpen'),
+    );
+    ctxBudget.allocate('bullpen', bullpenMsg ? [bullpenMsg] : []);
+
+    // Load conversation history LAST — it has partial inclusion (truncation)
+    // so it takes whatever budget remains after higher-priority tiers are secured.
+    const history = memory
+      ? await memory.getHistory(conversationId, agentId)
+      : [];
+
+    const budgetedHistory = ctxBudget.allocateHistory(
+      history.map(t => ({ role: t.role, content: t.content }) as Message),
+    );
+    if (history.length > 0 && budgetedHistory.length === 0) {
+      logger.warn(
+        { agentId, conversationId, historyTurnsAvailable: history.length, remaining: ctxBudget.remaining },
+        'All conversation history dropped by context budget — model will have no conversation context',
+      );
     }
 
-    // Track the user message in the budget for accurate utilization reporting.
-    // Like the system prompt, the user message is always included — it is the reason
-    // the task exists. We don't gate it, just measure it.
-    ctxBudget.allocateRequired('user_message', [{ role: 'user', content }]);
+    // Append history and user message to complete the messages array.
+    // Final order: system prompt → sender context → bullpen → history → user message.
+    messages.push(...budgetedHistory);
+    messages.push({ role: 'user', content });
 
     logger.info({ agentId, conversationId, historyLength: history.length }, 'Agent processing task');
 

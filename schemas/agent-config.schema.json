@@ -80,6 +80,13 @@
         "max_errors": { "type": "integer", "minimum": 1 }
       }
     },
+    "context_budget": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "response_reserve": { "type": "integer", "minimum": 0 }
+      }
+    },
     "inject_specialists": {
       "type": "boolean",
       "description": "When true, ${available_specialists} in the system_prompt is replaced at bootstrap with the list of registered specialist agents."
