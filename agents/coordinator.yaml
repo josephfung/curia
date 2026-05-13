@@ -2,8 +2,7 @@ name: coordinator
 role: coordinator
 description: Central coordinator — routes all messages, delegates to specialists, maintains the unified persona
 model:
-  provider: anthropic
-  model: claude-sonnet-4-6
+  tier: standard
 context_budget:
   response_reserve: 8192
 system_prompt: |

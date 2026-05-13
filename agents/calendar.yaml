@@ -5,8 +5,7 @@ description: >
   event CRUD, and scheduling-related email composition for meeting requests,
   reschedules, and cancellations
 model:
-  provider: anthropic
-  model: claude-sonnet-4-6
+  tier: standard
 allow_discovery: false
 system_prompt: |
   ## Role

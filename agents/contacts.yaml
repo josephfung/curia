@@ -4,8 +4,7 @@ description: >
   Contact domain specialist — briefings, CRUD, deduplication, relationship management,
   and memory entity resolution for people and organizations
 model:
-  provider: anthropic
-  model: claude-sonnet-4-6
+  tier: standard
 allow_discovery: false
 system_prompt: |
   ## Role
