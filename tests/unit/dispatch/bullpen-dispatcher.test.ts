@@ -121,7 +121,7 @@ describe('BullpenDispatcher', () => {
     expect(task?.payload.metadata?.originator).toEqual(originator);
   });
 
-  it('omits originator from task metadata when discuss event has none', async () => {
+  it('omits originator from task metadata when discuss event has none and thread has none', async () => {
     const { thread } = await bullpenService.openThread(
       'No originator', 'coordinator', ['coordinator', 'agent-b'], 'Hi', [],
     );
@@ -136,6 +136,63 @@ describe('BullpenDispatcher', () => {
       { payload: { metadata: Record<string, unknown> } };
     // originator key should be absent — not present as undefined
     expect(task?.payload.metadata).not.toHaveProperty('originator');
+  });
+
+  it('uses thread stored originator as fallback when discuss event carries none', async () => {
+    // Simulate the poll-fallback path: the original agent.discuss publish failed
+    // so the event has no originator, but the thread was opened with one and it
+    // is stored on bullpen_threads.
+    const originator = {
+      contactId: 'ceo-contact-id',
+      systemRole: 'principal' as const,
+      channel: 'email',
+      initiatedAt: '2026-05-01T10:00:00.000Z',
+    };
+    const { thread } = await bullpenService.openThread(
+      'Fallback test', 'coordinator', ['coordinator', 'agent-b'], 'Hi', ['agent-b'],
+      originator,
+    );
+    // Event has no originator (simulates a reply on the poll-fallback path)
+    const event = createAgentDiscuss({
+      threadId: thread.id, messageId: 'msg-1', topic: 'Fallback test',
+      senderAgentId: 'coordinator', participants: ['coordinator', 'agent-b'],
+      mentionedAgentIds: ['agent-b'], content: 'Hi', parentEventId: 'task-1',
+    });
+    await bus._trigger('agent.discuss', event);
+    const task = (bus.publish as ReturnType<typeof vi.fn>).mock.calls
+      .find(([_l, e]) => (e as { type: string }).type === 'agent.task')?.[1] as
+      { payload: { metadata: Record<string, unknown> } };
+    expect(task?.payload.metadata?.originator).toEqual(originator);
+  });
+
+  it('event originator takes precedence over thread stored originator', async () => {
+    const threadOriginator = {
+      contactId: 'original-contact-id',
+      systemRole: 'principal' as const,
+      channel: 'email',
+      initiatedAt: '2026-05-01T10:00:00.000Z',
+    };
+    const eventOriginator = {
+      contactId: 'override-contact-id',
+      systemRole: 'principal' as const,
+      channel: 'email',
+      initiatedAt: '2026-05-02T12:00:00.000Z',
+    };
+    const { thread } = await bullpenService.openThread(
+      'Precedence test', 'coordinator', ['coordinator', 'agent-b'], 'Hi', ['agent-b'],
+      threadOriginator,
+    );
+    const event = createAgentDiscuss({
+      threadId: thread.id, messageId: 'msg-1', topic: 'Precedence test',
+      senderAgentId: 'coordinator', participants: ['coordinator', 'agent-b'],
+      mentionedAgentIds: ['agent-b'], content: 'Hi', originator: eventOriginator,
+      parentEventId: 'task-1',
+    });
+    await bus._trigger('agent.discuss', event);
+    const task = (bus.publish as ReturnType<typeof vi.fn>).mock.calls
+      .find(([_l, e]) => (e as { type: string }).type === 'agent.task')?.[1] as
+      { payload: { metadata: Record<string, unknown> } };
+    expect(task?.payload.metadata?.originator).toEqual(eventOriginator);
   });
 
   it('skips task creation when thread message_count >= 100', async () => {
