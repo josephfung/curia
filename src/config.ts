@@ -150,12 +150,13 @@ export interface YamlConfig {
     };
     /** Minimum trust score; messages below this are held unless channel policy is 'ignore'. Default: 0.2 */
     trust_score_floor?: number;
-  };
-  trust_policy?: {
-    financial_actions?: number;
-    data_export?: number;
-    scheduling?: number;
-    information_queries?: number;
+    /** Action threshold values compiled into the ${security_context_block} prompt injection. */
+    trust_thresholds?: {
+      information_query?: number;
+      scheduling?: number;
+      data_export?: number;
+      financial?: number;
+    };
   };
   pii?: {
     /**

@@ -138,6 +138,16 @@ security:
   # unless the channel is configured as 'ignore'.
   trust_score_floor: 0.2
 
+  # Action threshold values compiled into the ${security_context_block} prompt injection.
+  # The coordinator checks messageTrustScore against these thresholds before acting
+  # on behalf of a sender. Sourced from config at startup — changes take effect on restart.
+  # All values must be in [0.0, 1.0]. Startup fails if this block is absent or malformed.
+  trust_thresholds:
+    information_query: 0.2   # answering questions, summaries
+    scheduling: 0.5           # calendar changes, meeting requests
+    data_export: 0.8          # sharing files, forwarding records
+    financial: 0.8            # payments, financial commitments
+
 pii:
   # Extra PII patterns to scrub from LLM-facing error strings, beyond the built-in
   # defaults (spec §06-audit-and-security.md — PII Handling).
@@ -191,15 +201,6 @@ pii:
         allow: [email]         # email addresses are fine in email replies
       signal:
         allow: []              # everything blocked for Signal (except CEO)
-
-# Trust-gated action thresholds (spec §06-audit-and-security.md).
-# The Coordinator checks messageTrustScore against these thresholds before
-# taking actions on behalf of a sender. Enforced via the Coordinator's system prompt.
-trust_policy:
-  financial_actions: 0.8
-  data_export: 0.8
-  scheduling: 0.5
-  information_queries: 0.2
 
 # Intent drift detection (spec §06-audit-and-security.md — Intent Drift Detection).
 # After each burst of a persistent scheduled task, the LLM compares the current
