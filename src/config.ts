@@ -236,6 +236,17 @@ export interface YamlConfig {
     /** Maximum new contacts created per hour, per email account. Default: 100. */
     max_per_hour?: number;
   };
+  /** Capability-tier model routing (ADR-014).
+   *  Maps tier names to provider + model pairs. Agents declare a tier
+   *  in their YAML; the operator controls which model each tier resolves to. */
+  model_routing?: {
+    tiers: {
+      fast: { provider: string; model: string };
+      standard: { provider: string; model: string };
+      powerful: { provider: string; model: string };
+    };
+    default_tier: 'fast' | 'standard' | 'powerful';
+  };
 }
 
 /**

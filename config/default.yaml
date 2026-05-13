@@ -1,3 +1,20 @@
+# Capability-tier model routing (ADR-014).
+# Agents declare a tier (fast | standard | powerful) — this config maps each
+# tier to a concrete provider + model. Change these values to upgrade all
+# agents of a tier in one place, or route tiers through different providers.
+model_routing:
+  tiers:
+    fast:
+      provider: anthropic
+      model: claude-haiku-4-5
+    standard:
+      provider: anthropic
+      model: claude-sonnet-4-6
+    powerful:
+      provider: anthropic
+      model: claude-opus-4-6
+  default_tier: standard
+
 channels:
   cli:
     enabled: true
