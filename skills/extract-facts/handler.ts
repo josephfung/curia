@@ -262,8 +262,16 @@ ${text}`,
             ctx.log.warn({ subject, attribute, conflict: result.conflict, action: result.action, source }, 'extract-facts: fact not stored');
           }
         } catch (err) {
-          // Log at error — persistence failures are infrastructure errors (DB outage,
-          // connection loss) that must surface in Sentry, not soft warnings.
+          // Re-throw programming errors — these indicate bugs in this handler (wrong
+          // property access, invalid argument, unexpected resolveOrCreate return shape),
+          // not transient infra failures. Absorbing them into `failed` hides regressions
+          // behind a misleading metric; the outer catch will return { success: false }.
+          if (err instanceof TypeError || err instanceof ReferenceError || err instanceof RangeError) {
+            ctx.log.error({ err, subject, attribute }, 'extract-facts: unexpected programming error in fact loop — re-throwing');
+            throw err;
+          }
+          // Infrastructure errors (DB outage, connection loss) — log at error so they
+          // surface in Sentry, then continue processing the remaining facts in the batch.
           // subject and attribute are always in scope here (declared before this try).
           ctx.log.error({ err, subject, attribute }, 'extract-facts: failed to persist fact, skipping');
           failed++;
