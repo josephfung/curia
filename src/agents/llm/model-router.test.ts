@@ -32,7 +32,7 @@ describe('ModelRouter', () => {
 
   it('throws on unknown tier', () => {
     const router = new ModelRouter(defaultConfig, createSilentLogger());
-    expect(() => router.resolve('ultra' as any)).toThrow('Unknown model tier');
+    expect(() => router.resolve('ultra')).toThrow('Unknown model tier');
   });
 
   it('passes needs through without validation', () => {
@@ -48,12 +48,14 @@ describe('ModelRouter', () => {
   });
 
   it('throws at construction if a tier config is missing', () => {
-    const config = {
+    const config: ModelRoutingConfig = {
       tiers: {
         fast: { provider: 'anthropic', model: 'claude-haiku-4-5' },
         standard: { provider: 'anthropic', model: 'claude-sonnet-4-6' },
-      } as any,
-      default_tier: 'standard' as const,
+        // @ts-expect-error — intentionally omitting powerful to test validation
+        powerful: undefined,
+      },
+      default_tier: 'standard',
     };
     expect(() => new ModelRouter(config, createSilentLogger())).toThrow('model_routing.tiers.powerful');
   });
