@@ -25,6 +25,10 @@ export interface AgentConfig {
   agentId: string;
   systemPrompt: string;
   provider: LLMProvider;
+  /** The concrete model ID resolved from the agent's capability tier by the ModelRouter.
+   *  Passed to provider.chat() on every call so a single provider instance can serve
+   *  multiple tiers. Set by bootstrap — always present for tier-routed agents. */
+  resolvedModel: string;
   bus: EventBus;
   logger: Logger;
   /** Optional working memory for conversation persistence across turns. */
@@ -1043,7 +1047,7 @@ export class AgentRuntime {
     };
 
     const callStartMs = Date.now();
-    const response = await provider.chat(params);
+    const response = await provider.chat({ ...params, model: this.config.resolvedModel });
     const latencyMs = Date.now() - callStartMs;
     if (response.type !== 'error') {
       // LLM call succeeded — reset consecutive error counter and publish telemetry
@@ -1085,7 +1089,7 @@ export class AgentRuntime {
       await new Promise(resolve => setTimeout(resolve, backoffMs));
 
       const retryStartMs = Date.now();
-      const retryResponse = await provider.chat(params);
+      const retryResponse = await provider.chat({ ...params, model: this.config.resolvedModel });
       const retryLatencyMs = Date.now() - retryStartMs;
       if (retryResponse.type !== 'error') {
         // Retry succeeded — reset consecutive error counter and publish telemetry
