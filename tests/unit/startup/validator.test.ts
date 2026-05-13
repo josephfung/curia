@@ -31,10 +31,10 @@ describe('startup validator — agent configs', () => {
     ).rejects.toThrow(/description/);
   });
 
-  it('throws when agent YAML is missing model.provider', async () => {
+  it('throws when agent YAML is missing model.tier', async () => {
     await expect(
       runWith({ agents: path.join(F, 'agents/missing-model-provider') }),
-    ).rejects.toThrow(/provider/);
+    ).rejects.toThrow(/tier/);
   });
 
   it('includes the file path in the error message', async () => {

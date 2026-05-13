@@ -1,6 +1,5 @@
 name: test-agent
 description: A valid test agent
 model:
-  provider: anthropic
-  model: claude-sonnet-4-6
+  tier: standard
 system_prompt: You are a test agent.
