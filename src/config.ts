@@ -152,10 +152,10 @@ export interface YamlConfig {
     trust_score_floor?: number;
     /** Action threshold values compiled into the ${security_context_block} prompt injection. */
     trust_thresholds?: {
-      information_query?: number;
-      scheduling?: number;
-      data_export?: number;
-      financial?: number;
+      information_query: number;
+      scheduling: number;
+      data_export: number;
+      financial: number;
     };
   };
   pii?: {
