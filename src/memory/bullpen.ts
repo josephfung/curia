@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { Pool } from 'pg';
 import type { Logger } from '../logger.js';
+import type { TaskOriginator } from '../contacts/types.js';
 
 // -- Public types --
 
@@ -13,6 +14,10 @@ export interface BullpenThread {
   messageCount: number;
   lastMessageAt: Date | null;
   createdAt: Date;
+  // Stored at thread-creation time so the poll-fallback path (when the initial
+  // agent.discuss publish fails) can rehydrate the originator when dispatching
+  // participant tasks. null for threads opened without an authenticated originator.
+  originator: TaskOriginator | null;
 }
 
 export interface BullpenMessage {
@@ -124,9 +129,9 @@ class PostgresBullpenBackend implements BullpenBackend {
     try {
       await client.query('BEGIN');
       await client.query(
-        `INSERT INTO bullpen_threads (id, topic, creator_agent_id, participants, status, message_count, last_message_at, created_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-        [thread.id, thread.topic, thread.creatorAgentId, thread.participants, thread.status, thread.messageCount, thread.lastMessageAt, thread.createdAt],
+        `INSERT INTO bullpen_threads (id, topic, creator_agent_id, participants, status, message_count, last_message_at, created_at, originator)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+        [thread.id, thread.topic, thread.creatorAgentId, thread.participants, thread.status, thread.messageCount, thread.lastMessageAt, thread.createdAt, thread.originator ? JSON.stringify(thread.originator) : null],
       );
       await client.query(
         `INSERT INTO bullpen_messages (id, thread_id, sender_type, sender_id, content, mentioned_agent_ids, created_at)
@@ -188,8 +193,9 @@ class PostgresBullpenBackend implements BullpenBackend {
     const threadRes = await this.pool.query<{
       id: string; topic: string; creator_agent_id: string; participants: string[];
       status: string; message_count: number; last_message_at: Date | null; created_at: Date;
+      originator: Record<string, unknown> | null;
     }>(
-      `SELECT id, topic, creator_agent_id, participants, status, message_count, last_message_at, created_at
+      `SELECT id, topic, creator_agent_id, participants, status, message_count, last_message_at, created_at, originator
        FROM bullpen_threads WHERE id = $1`,
       [threadId],
     );
@@ -199,6 +205,7 @@ class PostgresBullpenBackend implements BullpenBackend {
       id: row.id, topic: row.topic, creatorAgentId: row.creator_agent_id,
       participants: row.participants, status: row.status as 'open' | 'closed',
       messageCount: row.message_count, lastMessageAt: row.last_message_at, createdAt: row.created_at,
+      originator: row.originator as TaskOriginator | null,
     };
 
     const msgRes = await this.pool.query<{
@@ -283,6 +290,7 @@ export class BullpenService {
     participants: string[],
     initialContent: string,
     mentionedAgentIds: string[],
+    originator?: TaskOriginator,
   ): Promise<{ thread: BullpenThread; message: BullpenMessage }> {
     // Normalize: always include the creator, deduplicate, preserve order.
     const normalizedParticipants = [...new Set([creatorAgentId, ...participants])];
@@ -290,6 +298,9 @@ export class BullpenService {
     const thread: BullpenThread = {
       id: randomUUID(), topic, creatorAgentId, participants: normalizedParticipants,
       status: 'open', messageCount: 1, lastMessageAt: now, createdAt: now,
+      // Persist originator so BullpenDispatcher can rehydrate it on the poll-fallback
+      // path if the initial agent.discuss event publish fails.
+      originator: originator ?? null,
     };
     const message: BullpenMessage = {
       id: randomUUID(), threadId: thread.id, senderType: 'agent',

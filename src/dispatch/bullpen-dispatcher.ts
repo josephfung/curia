@@ -53,6 +53,12 @@ export class BullpenDispatcher {
 
     const { topic, participants } = threadRecord.thread;
 
+    // Prefer the originator from the discuss event (fast path — already in memory).
+    // Fall back to the originator stored on the thread at creation time: this covers
+    // the poll-fallback path where the original agent.discuss publish failed, so the
+    // reply event has no originator but the thread row still holds the CEO's identity.
+    const effectiveOriginator = event.payload.originator ?? threadRecord.thread.originator ?? undefined;
+
     // Create one agent.task per participant, excluding the sender.
     // Mentioned agents get a reply-expected prompt; others get an FYI.
     const otherParticipants = participants.filter((id) => id !== senderAgentId);
@@ -77,10 +83,10 @@ export class BullpenDispatcher {
             taskOrigin: 'bullpen',
             threadId,
             mentioned: isMentioned,
-            // Propagate the originator from the discuss event so the receiving agent's
-            // task carries the original TaskOriginator. Without this, a specialist agent
-            // involved in a CEO-authorized bullpen thread cannot invoke elevated skills.
-            ...(event.payload.originator ? { originator: event.payload.originator } : {}),
+            // Propagate the originator so the receiving agent's task carries the original
+            // TaskOriginator. Without this, a specialist agent involved in a CEO-authorized
+            // bullpen thread cannot invoke elevated skills.
+            ...(effectiveOriginator ? { originator: effectiveOriginator } : {}),
           },
           parentEventId: event.id,
         });

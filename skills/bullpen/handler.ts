@@ -64,12 +64,18 @@ export class BullpenHandler implements SkillHandler {
             ? (rawMentioned as string[]).map(m => m.trim()).filter(m => m.length > 0 && cleanParticipants.includes(m))
             : cleanParticipants;
 
+          // Capture originator before openThread so we can pass it both to the thread
+          // record (for poll-fallback rehydration) and to the agent.discuss event payload.
+          const originator = ctx.taskMetadata?.originator as TaskOriginator | undefined;
+
           const { thread, message } = await ctx.bullpenService.openThread(
-            topic, ctx.agentId, cleanParticipants, content, mentionedAgentIds,
+            topic, ctx.agentId, cleanParticipants, content, mentionedAgentIds, originator,
           );
 
           // Publish is best-effort — thread is already persisted. If publish fails,
           // agents will still see the thread via pending-thread context injection.
+          // The originator is also stored on the thread row, so BullpenDispatcher can
+          // rehydrate it from DB when processing poll-fallback replies.
           try {
             await ctx.bus.publish('agent', createAgentDiscuss({
               threadId: thread.id,
@@ -82,20 +88,13 @@ export class BullpenHandler implements SkillHandler {
               // Forward the parent task's originator so BullpenDispatcher can stamp it
               // on the reply tasks it creates for each participant. This ensures
               // isPrincipalOriginated() returns correctly for CEO-authorized bullpen work.
-              originator: ctx.taskMetadata?.originator as TaskOriginator | undefined,
+              originator,
               parentEventId: ctx.taskEventId,
             }));
           } catch (publishErr) {
             ctx.log.error(
-              {
-                err: publishErr,
-                threadId: thread.id,
-                // If an originator was present, it is now lost — participant tasks created
-                // via the poll fallback will have no originator and isPrincipalOriginated()
-                // will return false. TODO: fix by storing originator on bullpen_threads (#558).
-                originatorLost: !!ctx.taskMetadata?.originator,
-              },
-              'Bullpen: thread created but discuss event publish failed — agents will see it on next poll',
+              { err: publishErr, threadId: thread.id, originatorRole: originator?.systemRole ?? 'none' },
+              'Bullpen: thread created but discuss event publish failed — agents will see it on next poll (originator preserved in thread row)',
             );
           }
 
@@ -146,11 +145,7 @@ export class BullpenHandler implements SkillHandler {
             }));
           } catch (publishErr) {
             ctx.log.error(
-              {
-                err: publishErr,
-                threadId,
-                originatorLost: !!ctx.taskMetadata?.originator,
-              },
+              { err: publishErr, threadId },
               'Bullpen: reply posted but discuss event publish failed — agents will see it on next poll',
             );
           }
