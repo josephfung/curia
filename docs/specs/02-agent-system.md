@@ -25,8 +25,7 @@ persona:
     Alex
     Office of the CEO
 model:
-  provider: anthropic
-  model: claude-sonnet-4-6
+  tier: standard
 system_prompt: |
   You are ${persona.display_name}, executive assistant to the CEO.
   You are the single point of contact for all communications.
@@ -46,6 +45,20 @@ allow_discovery: true
 
 The `role: coordinator` field tells the dispatch layer to route all inbound messages here. There is exactly one coordinator per deployment.
 
+### Model Routing
+
+Agents declare a capability tier rather than a specific model (see [ADR-014](../adr/014-capability-tier-model-routing.md)):
+
+| Tier | Intended use |
+|------|-------------|
+| `fast` | Classification, routing, simple extraction |
+| `standard` | General-purpose task execution |
+| `powerful` | Complex multi-step reasoning, synthesis |
+
+The operator maps tiers to models in `config/default.yaml` → `model_routing`. The `ModelRouter` service resolves each agent's tier to a `{ provider, model }` pair at startup.
+
+Optional `needs` flags (`vision`, `large_context`, `reasoning`, `coding`, `audio`, `image_generation`) are documentary — they inform future routing decisions but are not validated in this version.
+
 ### Internal Agent Handles
 
 Specialist agents have internal handles (e.g., `@expense-tracker`, `@research-analyst`) used in the Bullpen and audit log. These are never exposed to external users — they're internal identifiers for the Coordinator and other agents to reference.
@@ -61,8 +74,7 @@ Specialist agents have internal handles (e.g., `@expense-tracker`, `@research-an
 name: expense-tracker
 description: Tracks and categorizes expenses from receipts and emails
 model:
-  provider: anthropic
-  model: claude-sonnet-4-6
+  tier: standard
 system_prompt: |
   You are an expense tracking assistant for a CEO.
   Extract amounts, vendors, categories, and dates from receipts.
@@ -208,15 +220,12 @@ interface LLMProvider {
 
 ### Provider Configuration
 
-Agents specify provider + model in their config. A `fallback` provider can be configured for resilience:
+Agents declare a capability tier, and the system resolves it to a `{ provider, model }` pair via `ModelRouter`. Fallback logic is configured at the tier level in `config/default.yaml`:
 
 ```yaml
 model:
-  provider: anthropic
-  model: claude-sonnet-4-6
-  fallback:
-    provider: openai
-    model: gpt-4o
+  tier: standard
+  needs: [vision, large_context]  # optional hints for routing decisions
 ```
 
 ### Response Normalization
