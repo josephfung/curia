@@ -23,12 +23,8 @@ export interface AgentYamlConfig {
     email_signature?: string;
   };
   model: {
-    provider: string;
-    model: string;
-    fallback?: {
-      provider: string;
-      model: string;
-    };
+    tier: 'fast' | 'standard' | 'powerful';
+    needs?: string[];
   };
   system_prompt: string;
   pinned_skills?: string[];
