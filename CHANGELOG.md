@@ -25,7 +25,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Fixed
 
 - **Google Workspace tools** pinned to coordinator — doc creation, editing, formatting, sharing, and drive tools are now always available without requiring `skill-registry` discovery (see #497).
-- **`extract-facts` error handling** — per-fact catch block now re-throws `TypeError`/`ReferenceError`/`RangeError` instead of absorbing them into the `failed` counter; programming bugs propagate to the outer catch and return `{ success: false }` rather than hiding behind a misleading metric. (#493)
+- **`extract-facts`** — programming errors in the per-fact loop now re-throw instead of silently incrementing `failed`. (#493)
 
 ---
 
