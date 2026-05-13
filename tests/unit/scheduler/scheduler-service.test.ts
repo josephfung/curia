@@ -738,9 +738,9 @@ describe('SchedulerService', () => {
     });
 
     it('creates an agent_tasks row when intent_anchor is provided', async () => {
-      // First query: the scheduled_jobs upsert; second query: the agent_tasks INSERT.
+      // First query: the scheduled_jobs upsert; second query: the agent_tasks INSERT (row created).
       pool.query.mockResolvedValueOnce({ rows: [{ id: 'job-anchor' }] });
-      pool.query.mockResolvedValueOnce({ rows: [] });
+      pool.query.mockResolvedValueOnce({ rows: [], rowCount: 1 });
 
       await svc.upsertDeclarativeJob('coordinator', {
         cron: '0 9 * * 1',
@@ -758,6 +758,32 @@ describe('SchedulerService', () => {
       expect(taskParams).toContain('Produce a weekly summary of key business metrics');
       expect(taskParams).toContain('active');
       expect(taskParams).toContain('job-anchor');
+
+      // Logs at info level confirming the anchor was created.
+      expect(logger.info).toHaveBeenCalledWith(
+        expect.objectContaining({ agentId: 'coordinator', jobId: 'job-anchor', anchorCreated: true }),
+        expect.stringContaining('drift detection enabled'),
+      );
+    });
+
+    it('is idempotent on restart — skips agent_tasks INSERT when row already exists', async () => {
+      // rowCount: 0 means WHERE NOT EXISTS fired — the existing row was preserved.
+      pool.query.mockResolvedValueOnce({ rows: [{ id: 'job-anchor-2' }] });
+      pool.query.mockResolvedValueOnce({ rows: [], rowCount: 0 });
+
+      await svc.upsertDeclarativeJob('coordinator', {
+        cron: '0 9 * * 1',
+        task: 'weekly digest',
+        intent_anchor: 'Produce a weekly summary of key business metrics',
+      });
+
+      expect(pool.query).toHaveBeenCalledTimes(2);
+
+      // Logs at info level confirming the existing row was preserved.
+      expect(logger.info).toHaveBeenCalledWith(
+        expect.objectContaining({ agentId: 'coordinator', jobId: 'job-anchor-2', anchorCreated: false }),
+        expect.stringContaining('restart idempotency'),
+      );
     });
 
     it('does not create an agent_tasks row when intent_anchor is absent', async () => {
