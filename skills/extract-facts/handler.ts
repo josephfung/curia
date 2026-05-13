@@ -182,7 +182,15 @@ ${text}`,
             !attribute ||
             typeof fact.value !== 'string' || !fact.value.trim()
           ) {
-            ctx.log.warn({ fact }, 'extract-facts: skipping malformed fact');
+            ctx.log.warn(
+              {
+                // Log only field types — never the raw values (subject/attribute/value may contain PII).
+                subjectType: typeof fact?.subject,
+                attributeType: typeof fact?.attribute,
+                valueType: typeof fact?.value,
+              },
+              'extract-facts: skipping malformed fact',
+            );
             failed++;
             continue;
           }
