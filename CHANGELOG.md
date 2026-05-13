@@ -21,11 +21,20 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 - **`LLMUsage`** extended with `cacheCreationInputTokens` and `cacheReadInputTokens` fields (previously silently dropped from the Anthropic API response).
 - **`LlmCallPayload`** extended with `cacheCreationInputTokens` and `cacheReadInputTokens` fields; `providerRequestId` comment corrected to reflect response body id (`msg_xxx`), not the HTTP header.
+- **`security.trust_thresholds` config** — action threshold values are now sourced from `config/default.yaml` under `security.trust_thresholds` and compiled into the `${security_context_block}` at startup. The block is required by the JSON schema; startup fails if missing or malformed.
 
 ### Fixed
 
 - **Google Workspace tools** pinned to coordinator — doc creation, editing, formatting, sharing, and drive tools are now always available without requiring `skill-registry` discovery (see #497).
 - **`extract-facts`** — programming errors in the per-fact loop now re-throw instead of silently incrementing `failed`. (#493)
+
+### Security
+
+- **Compiled security context block** — extracted the four platform security policy sections (authorization enforcement, prompt injection defense, email sender verification, message trust score action thresholds) from `coordinator.yaml` into a platform-compiled `${security_context_block}` runtime injection. The block is always present regardless of whether the placeholder appears in a custom coordinator — the runtime appends it unconditionally as a safety net.
+
+### Removed
+
+- **`trust_policy` config key** — removed the previously unused top-level `trust_policy` key from `config/default.yaml`, `src/config.ts`, and the JSON schema. Operators with custom config overrides must add `security.trust_thresholds` with four required fields: `information_query`, `scheduling`, `data_export`, `financial`.
 
 ---
 
