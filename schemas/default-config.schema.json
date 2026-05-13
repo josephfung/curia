@@ -6,10 +6,12 @@
   "properties": {
     "model_routing": {
       "type": "object",
+      "required": ["tiers", "default_tier"],
       "additionalProperties": false,
       "properties": {
         "tiers": {
           "type": "object",
+          "required": ["fast", "standard", "powerful"],
           "additionalProperties": false,
           "properties": {
             "fast":     { "$ref": "#/definitions/tierConfig" },

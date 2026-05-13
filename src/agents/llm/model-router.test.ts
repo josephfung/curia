@@ -41,6 +41,35 @@ describe('ModelRouter', () => {
     expect(result.model).toBe('claude-sonnet-4-6');
   });
 
+  it('falls back to default_tier when tier is omitted', () => {
+    const router = new ModelRouter(defaultConfig, createSilentLogger());
+    const result = router.resolve(undefined);
+    expect(result).toEqual({ provider: 'anthropic', model: 'claude-sonnet-4-6', tier: 'standard' });
+  });
+
+  it('throws at construction if a tier config is missing', () => {
+    const config = {
+      tiers: {
+        fast: { provider: 'anthropic', model: 'claude-haiku-4-5' },
+        standard: { provider: 'anthropic', model: 'claude-sonnet-4-6' },
+      } as any,
+      default_tier: 'standard' as const,
+    };
+    expect(() => new ModelRouter(config, createSilentLogger())).toThrow('model_routing.tiers.powerful');
+  });
+
+  it('throws at construction if a tier has empty model', () => {
+    const config: ModelRoutingConfig = {
+      tiers: {
+        fast: { provider: 'anthropic', model: 'claude-haiku-4-5' },
+        standard: { provider: 'anthropic', model: '' },
+        powerful: { provider: 'anthropic', model: 'claude-opus-4-6' },
+      },
+      default_tier: 'standard',
+    };
+    expect(() => new ModelRouter(config, createSilentLogger())).toThrow('model_routing.tiers.standard');
+  });
+
   it('works with a non-anthropic provider in config', () => {
     const config: ModelRoutingConfig = {
       tiers: {
