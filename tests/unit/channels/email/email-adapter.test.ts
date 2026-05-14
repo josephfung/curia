@@ -799,6 +799,196 @@ describe('EmailAdapter — sendWithGatedDraftFallback gated-fallback', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Inbound poll — self-loop hardening (#37)
+// Three-layer defense: folder detection, sent-ID tracking, plus-address normalization
+// ---------------------------------------------------------------------------
+
+describe('EmailAdapter — inbound poll: self-loop hardening', () => {
+  // Helper to create an adapter with a single-shot poll and start it.
+  async function startWithMessages(msgs: NylasMessage[]) {
+    const mocks = createMocks();
+    const adapter = makeAdapter(mocks);
+    (mocks.outboundGateway.listEmailMessages as ReturnType<typeof vi.fn>).mockResolvedValueOnce(msgs);
+    await adapter.start();
+    await flushPoll();
+    return { mocks, adapter };
+  }
+
+  function wasPublished(mocks: ReturnType<typeof createMocks>) {
+    return (mocks.bus.publish as ReturnType<typeof vi.fn>).mock.calls
+      .find(([, ev]) => ev?.type === 'inbound.message') !== undefined;
+  }
+
+  // ── Layer 1: folder-based detection ───────────────────────────────────────
+
+  it('skips message in SENT folder regardless of From address', async () => {
+    const msg = makeMockMessage({
+      from: [{ email: CEO_EMAIL }],
+      folders: ['SENT'],
+    });
+    const { mocks, adapter } = await startWithMessages([msg]);
+    expect(wasPublished(mocks)).toBe(false);
+    await adapter.stop();
+  });
+
+  it('skips message in DRAFTS folder', async () => {
+    const msg = makeMockMessage({
+      from: [{ email: CEO_EMAIL }],
+      folders: ['DRAFTS'],
+    });
+    const { mocks, adapter } = await startWithMessages([msg]);
+    expect(wasPublished(mocks)).toBe(false);
+    await adapter.stop();
+  });
+
+  it('skips message with mixed folders when one is SENT', async () => {
+    // Some providers tag messages with both INBOX and SENT simultaneously
+    const msg = makeMockMessage({
+      from: [{ email: CEO_EMAIL }],
+      folders: ['INBOX', 'SENT'],
+    });
+    const { mocks, adapter } = await startWithMessages([msg]);
+    expect(wasPublished(mocks)).toBe(false);
+    await adapter.stop();
+  });
+
+  it('does not skip a normal INBOX message', async () => {
+    // Sanity check — regular inbound from CEO must still be published
+    const msg = makeMockMessage({
+      from: [{ email: CEO_EMAIL }],
+      folders: ['INBOX'],
+    });
+    const { mocks, adapter } = await startWithMessages([msg]);
+    expect(wasPublished(mocks)).toBe(true);
+    await adapter.stop();
+  });
+
+  // ── Layer 2: recently-sent message ID tracking ────────────────────────────
+
+  it('skips inbound message whose ID matches a recently-sent message', async () => {
+    const mocks = createMocks();
+    const triggerOutbound = captureHandler('outbound.message', mocks);
+    const adapter = makeAdapter(mocks);
+
+    // Outbound reply succeeds — gateway returns a messageId
+    (mocks.outboundGateway.send as ReturnType<typeof vi.fn>).mockResolvedValue({
+      success: true,
+      messageId: 'sent-loop-id',
+    });
+    const threadMsg = makeMockMessage({
+      id: 'thread-msg-1',
+      from: [{ email: CEO_EMAIL }],
+      to: [{ email: SELF_EMAIL }],
+    });
+    (mocks.outboundGateway.listEmailMessages as ReturnType<typeof vi.fn>).mockResolvedValue([threadMsg]);
+
+    await adapter.start();
+
+    // Trigger an outbound reply — this causes the adapter to call gateway.send()
+    // and track the returned 'sent-loop-id'
+    await triggerOutbound(makeOutboundEvent('email:thread-abc'));
+
+    // Simulate the next inbound poll returning the sent message (ID = 'sent-loop-id')
+    const sentMsgAsInbound = makeMockMessage({
+      id: 'sent-loop-id',
+      from: [{ email: SELF_EMAIL }], // From would match selfEmail — but folder + ID checks run first
+      folders: ['INBOX'], // Not in SENT — only the ID check would catch it
+    });
+    (mocks.outboundGateway.listEmailMessages as ReturnType<typeof vi.fn>).mockResolvedValueOnce([sentMsgAsInbound]);
+
+    // Reset publish spy so we only see events from this poll
+    (mocks.bus.publish as ReturnType<typeof vi.fn>).mockClear();
+    await (adapter as unknown as { poll(): Promise<void> }).poll();
+
+    expect(wasPublished(mocks)).toBe(false);
+
+    await adapter.stop();
+  });
+
+  it('does not skip a message whose ID is not in the recently-sent set', async () => {
+    // Regression: ensure the ID check does not filter legitimate inbound messages
+    const msg = makeMockMessage({
+      id: 'inbound-new-id',
+      from: [{ email: CEO_EMAIL }],
+    });
+    const { mocks, adapter } = await startWithMessages([msg]);
+    expect(wasPublished(mocks)).toBe(true);
+    await adapter.stop();
+  });
+
+  // ── Layer 3: plus-address normalization ──────────────────────────────────
+
+  it('skips message from selfEmail with a plus-address tag', async () => {
+    // SELF_EMAIL = 'curia@example.com'; from = 'curia+alerts@example.com'
+    const msg = makeMockMessage({
+      from: [{ email: 'curia+alerts@example.com' }],
+      folders: ['INBOX'],
+    });
+    const { mocks, adapter } = await startWithMessages([msg]);
+    expect(wasPublished(mocks)).toBe(false);
+    await adapter.stop();
+  });
+
+  it('skips message from selfEmail in all-caps (case normalization)', async () => {
+    const msg = makeMockMessage({
+      from: [{ email: SELF_EMAIL.toUpperCase() }],
+      folders: ['INBOX'],
+    });
+    const { mocks, adapter } = await startWithMessages([msg]);
+    expect(wasPublished(mocks)).toBe(false);
+    await adapter.stop();
+  });
+
+  it('does not skip a legitimate external sender that merely shares a domain with self', async () => {
+    // 'otherperson@example.com' is NOT selfEmail — must not be filtered
+    const msg = makeMockMessage({
+      from: [{ email: 'otherperson@example.com' }],
+      folders: ['INBOX'],
+    });
+    const { mocks, adapter } = await startWithMessages([msg]);
+    expect(wasPublished(mocks)).toBe(true);
+    await adapter.stop();
+  });
+
+  // ── Forwarding scenario (security@meetcuria.com → nathancuria1@gmail.com) ──
+
+  it('skips a send-as alias reply appearing in SENT — forwarding scenario', async () => {
+    // Curia uses security@meetcuria.com as send-as alias; selfEmail is nathancuria1@gmail.com.
+    // Mail provider may surface the sent message with From: security@meetcuria.com.
+    // The folder check (SENT) must catch it before the address check runs.
+    const mocks = createMocks();
+    const adapter = new EmailAdapter({
+      accountId: 'curia',
+      bus: mocks.bus,
+      logger: mocks.logger,
+      outboundGateway: mocks.outboundGateway,
+      contactService: mocks.contactService,
+      pollingIntervalMs: 999999,
+      selfEmail: 'nathancuria1@gmail.com',
+      excludedSenderEmails: [],
+      contactCreationMaxPerMessage: 10,
+      contactCreationMaxPerHour: 100,
+      ceoEmail: CEO_EMAIL,
+    });
+
+    const sentViaAlias = makeMockMessage({
+      from: [{ email: 'security@meetcuria.com' }], // alias, not selfEmail
+      folders: ['SENT'],
+    });
+    (mocks.outboundGateway.listEmailMessages as ReturnType<typeof vi.fn>).mockResolvedValueOnce([sentViaAlias]);
+
+    await adapter.start();
+    await flushPoll();
+
+    const published = (mocks.bus.publish as ReturnType<typeof vi.fn>).mock.calls
+      .find(([, ev]) => ev?.type === 'inbound.message');
+    expect(published).toBeUndefined();
+
+    await adapter.stop();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // sendOutboundReply — CC behaviour
 // ---------------------------------------------------------------------------
 

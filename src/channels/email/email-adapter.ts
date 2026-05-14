@@ -15,6 +15,24 @@ import { convertNylasMessage } from './message-converter.js';
 import { createInboundMessage, type OutboundMessageEvent, type OutboundNotificationEvent } from '../../bus/events.js';
 import { sanitizeOutput } from '../../skills/sanitize.js';
 
+// ---------------------------------------------------------------------------
+// Address normalization helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Normalize an email address for self-identity comparison.
+ * Strips plus-addressing (local+tag@domain → local@domain) and lowercases.
+ * This catches send-as alias variations and plus-address routing tricks that
+ * could otherwise bypass the self-email loop filter.
+ */
+function normalizeForComparison(email: string): string {
+  const at = email.lastIndexOf('@');
+  if (at === -1) return email.toLowerCase();
+  const local = email.slice(0, at).replace(/\+.*$/, '');
+  const domain = email.slice(at);
+  return local.toLowerCase() + domain.toLowerCase();
+}
+
 export interface EmailAdapterConfig {
   /**
    * Logical name for this email account (e.g. "curia", "joseph").
@@ -56,6 +74,25 @@ export class EmailAdapter {
   private pollTimer?: ReturnType<typeof setInterval>;
   private lastSeenTimestamp: number = 0;
   private processing = false;
+
+  // ── Recently-sent message ID tracking (self-loop guard) ───────────────────
+  // After a successful send, the Nylas message ID is added here so that the
+  // next inbound poll can skip it even if the mail provider returns it as unread
+  // or uses a send-as alias address that doesn't match selfEmail.
+  // The set is bounded to MAX_SENT_IDS entries; oldest entries are evicted when
+  // the cap is reached. 200 covers thousands of hours at normal send rates.
+
+  private readonly recentlySentIds = new Set<string>();
+  private static readonly MAX_SENT_IDS = 200;
+
+  private trackSentId(id: string): void {
+    this.recentlySentIds.add(id);
+    // Set preserves insertion order, so values().next() is the oldest entry.
+    if (this.recentlySentIds.size > EmailAdapter.MAX_SENT_IDS) {
+      const oldest = this.recentlySentIds.values().next().value;
+      if (oldest !== undefined) this.recentlySentIds.delete(oldest);
+    }
+  }
 
   // ── Contact auto-creation rate limiting (#36) ──────────────────────────────
   // In-memory counters — reset on process restart, which is fine for anti-flood.
@@ -211,18 +248,50 @@ export class EmailAdapter {
           this.lastSeenTimestamp = msg.date + 1;
         }
 
+        // ── Layer 1: folder-based detection ──────────────────────────────────
+        // Skip messages in sent or draft folders — they are never genuine inbound
+        // messages, regardless of the From address. This catches send-as aliases
+        // (e.g. security@meetcuria.com) where the From won't match selfEmail.
+        // Folder IDs vary by provider but always contain "sent" or "draft" as a
+        // substring (Gmail: "SENT"/"DRAFT"; IMAP: "Sent Mail"/"Drafts").
+        const inSentOrDrafts = msg.folders.some((f) => /\b(sent|draft)/i.test(f));
+        if (inSentOrDrafts) {
+          this.config.logger.debug(
+            { messageId: msg.id, folders: msg.folders, accountId: this.config.accountId },
+            'Email skipped — message is in sent/drafts folder',
+          );
+          continue;
+        }
+
+        // ── Layer 2: recently-sent message ID ────────────────────────────────
+        // Skip any message whose Nylas ID was recorded when we sent it.
+        // This is the most reliable alias-proof check — the ID is unique and
+        // does not depend on the From address matching selfEmail.
+        if (this.recentlySentIds.has(msg.id)) {
+          this.config.logger.debug(
+            { messageId: msg.id, accountId: this.config.accountId },
+            'Email skipped — matches recently-sent message ID',
+          );
+          continue;
+        }
+
+        // ── Layer 3: address-based self-check (with plus-address normalization) ─
         // Skip emails sent by this account (self) — we only want inbound messages
         // from external senders, not our own outgoing replies.
-        // Case-insensitive to guard against inconsistent casing from mail servers.
+        // normalizeForComparison strips plus-addressing and lowercases so that
+        // variations like curia+reply@example.com still match curia@example.com.
         const fromEmail = msg.from[0]?.email;
-        if (fromEmail?.toLowerCase() === this.config.selfEmail.toLowerCase()) continue;
+        if (
+          fromEmail &&
+          normalizeForComparison(fromEmail) === normalizeForComparison(this.config.selfEmail)
+        ) continue;
 
         // Skip emails from any additionally-excluded sender addresses (e.g. Curia's
         // outbound address on a monitored inbox, to prevent self-reply loops).
         if (
           fromEmail &&
           this.config.excludedSenderEmails.some(
-            (excluded) => excluded.toLowerCase() === fromEmail.toLowerCase(),
+            (excluded) => normalizeForComparison(excluded) === normalizeForComparison(fromEmail),
           )
         ) {
           this.config.logger.debug(
@@ -329,8 +398,10 @@ export class EmailAdapter {
       const latestFromEmail = threadMessage.from[0]?.email;
 
       // If the latest message was sent BY us, the human's address is in 'to'.
-      // Comparing case-insensitively guards against inconsistent casing from mail servers.
-      const latestIsOurs = latestFromEmail?.toLowerCase() === this.config.selfEmail.toLowerCase();
+      // normalizeForComparison handles casing and plus-addressing variations.
+      const latestIsOurs =
+        latestFromEmail !== undefined &&
+        normalizeForComparison(latestFromEmail) === normalizeForComparison(this.config.selfEmail);
 
       // When the latest message is ours, find the first non-self address in 'to'.
       // to[] can contain multiple recipients (e.g. a thread with a CC'd third party);
@@ -339,7 +410,7 @@ export class EmailAdapter {
       // the inbound message rather than inferring the recipient from the thread.
       const recipientEmail = latestIsOurs
         ? threadMessage.to.find(
-            (r) => r.email.toLowerCase() !== this.config.selfEmail.toLowerCase(),
+            (r) => normalizeForComparison(r.email) !== normalizeForComparison(this.config.selfEmail),
           )?.email
         : latestFromEmail;
 
@@ -354,7 +425,7 @@ export class EmailAdapter {
       // Guard: if the resolved recipient is still our own address (e.g. a self-addressed
       // thread or malformed to[] list), bail out rather than looping a reply to our own
       // inbox. This would produce a misleading "sent" log with no human ever receiving it.
-      if (recipientEmail.toLowerCase() === this.config.selfEmail.toLowerCase()) {
+      if (normalizeForComparison(recipientEmail) === normalizeForComparison(this.config.selfEmail)) {
         logger.error(
           { threadId, messageId: threadMessage.id, latestIsOurs },
           'Cannot reply — resolved recipient is selfEmail; thread may be self-addressed or to[] is malformed',
@@ -368,8 +439,8 @@ export class EmailAdapter {
         .map((r) => r.email)
         .filter(
           (email) =>
-            email.toLowerCase() !== this.config.selfEmail.toLowerCase() &&
-            email.toLowerCase() !== recipientEmail.toLowerCase(),
+            normalizeForComparison(email) !== normalizeForComparison(this.config.selfEmail) &&
+            normalizeForComparison(email) !== normalizeForComparison(recipientEmail),
         );
 
       if (ccAddresses.length > 0) {
@@ -429,7 +500,13 @@ export class EmailAdapter {
       },
     });
 
-    if (result.success) return;
+    if (result.success) {
+      // Track the sent message ID so the next inbound poll skips it.
+      // Guards against the case where the provider returns our own sent message
+      // as an unread inbox item (e.g. when using a send-as alias address).
+      if (result.messageId) this.trackSentId(result.messageId);
+      return;
+    }
 
     if (result.gated) {
       // Gateway blocked the send — create draft as fallback.
@@ -518,9 +595,9 @@ export class EmailAdapter {
     let hitPerHourCap = false;
 
     for (const p of participants) {
-      // Don't create a contact for ourselves — case-insensitive to guard against
-      // inconsistent casing from mail servers (e.g. "User@Example.com" vs "user@example.com").
-      if (p.email.toLowerCase() === selfEmail.toLowerCase()) continue;
+      // Don't create a contact for ourselves — normalizeForComparison handles casing
+      // and plus-address variations (e.g. "curia+tag@example.com" vs "curia@example.com").
+      if (normalizeForComparison(p.email) === normalizeForComparison(selfEmail)) continue;
 
       try {
         // Check if this email is already linked to a contact
