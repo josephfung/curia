@@ -13,6 +13,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Self-email loop filter hardened** — inbound poll now rejects messages via three independent checks: folder membership ("sent"/"draft"), recently-sent Nylas message ID, and plus-address-normalized `selfEmail` comparison. Prevents infinite reply loops when using send-as alias addresses (e.g. `security@meetcuria.com` forwarding to the Nylas account). (#37)
+
 ### Added
 
 - **Email attachment support** — surface metadata in email skills, append human-readable summaries to message content, and download bytes as base64 for `file-parse`.
