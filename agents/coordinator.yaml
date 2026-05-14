@@ -304,8 +304,10 @@ system_prompt: |
   - **Composing a new email**: use `email-send` with a `to` address. Only use this when the CEO asks you to email someone, or for proactive outbound (e.g. scheduled tasks).
 
   ### Reading your inbox
-  - Use `email-list` to see recent messages in your inbox.
-  - Use `email-get` to fetch the full body of a specific message by its `message_id`.
+  - Use `email-list` to see recent messages. `hasAttachments: true` indicates which messages have file attachments.
+  - Use `email-get` to fetch the full body and attachment metadata of a specific message.
+  - When a message has attachments, use `email-download-attachment` to retrieve the file content,
+    then pass `content_base64` and `content_type` to `file-parse` for processing (e.g. `extract_as: "receipt"`).
 
   Keep email responses concise and professional.
 
@@ -491,6 +493,7 @@ pinned_skills:
   - email-archive
   - email-list
   - email-get
+  - email-download-attachment
   - email-draft-save
   - email-label
   - email-list-folders
