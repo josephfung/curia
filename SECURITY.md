@@ -6,7 +6,7 @@ Security is the core design principle of Curia. We take vulnerability reports se
 
 **Do NOT file a public GitHub issue for security vulnerabilities.**
 
-Email **security@josephfung.ca** with:
+Email **security@meetcuria.com** with:
 
 1. Description of the vulnerability
 2. Steps to reproduce
