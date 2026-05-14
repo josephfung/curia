@@ -1,0 +1,24 @@
+{
+  "name": "email-label",
+  "description": "Apply one or more labels to an email message. Resolves label names to Gmail folder IDs, creating any labels that do not yet exist. Preserves existing labels on the message.",
+  "version": "1.0.0",
+  "sensitivity": "normal",
+  "action_risk": "low",
+  "inputs": {
+    "message_id": "string (Nylas message ID to label)",
+    "labels": "string[] (label names to apply, e.g. ['SECURITY', 'URGENT'])",
+    "account": "string? (named account, e.g. 'curia'; defaults to the primary account if omitted)"
+  },
+  "outputs": {
+    "message_id": "string",
+    "applied": "string[] (labels successfully applied)",
+    "created": "string[] (labels that were newly created)",
+    "folders": "string[] (full folder list after update)"
+  },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 30000,
+  "capabilities": [
+    "outboundGateway"
+  ]
+}
