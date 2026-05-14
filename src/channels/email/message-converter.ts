@@ -1,5 +1,5 @@
 import { htmlToText } from './html-to-text.js';
-import type { NylasMessage } from './nylas-client.js';
+import type { NylasMessage, EmailAttachment } from './nylas-client.js';
 
 // ---------------------------------------------------------------------------
 // Output types — represent the normalized shape fed into the message bus
@@ -56,7 +56,18 @@ export interface ConvertedEmail {
      * are retained.
      */
     primaryRecipientEmails: string[];
+    /** Non-inline file attachments on this email. Empty array when none. */
+    attachments: EmailAttachment[];
   };
+}
+
+/** Format bytes as a human-readable string (e.g. 1536 → "1.5 KB"). */
+function formatFileSize(bytes: number): string {
+  if (bytes === 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB'];
+  const i = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+  const value = bytes / Math.pow(1024, i);
+  return `${value < 10 ? value.toFixed(1) : Math.round(value)} ${units[i]}`;
 }
 
 /**
@@ -172,6 +183,18 @@ export function convertNylasMessage(msg: NylasMessage, selfEmail?: string): Conv
   // Prepend subject so the LLM always has full context even in isolated chunks
   const formattedContent = `Subject: ${msg.subject}\n\n${content}`;
 
+  // Append a human-readable attachment list so agents immediately see what's attached.
+  // Only appended when the message has real (non-inline) attachments.
+  // Guard with ?? [] for defensiveness against callers that pre-date the attachments field.
+  const attachments = msg.attachments ?? [];
+  let finalContent = formattedContent;
+  if (attachments.length > 0) {
+    const summary = attachments
+      .map((a) => `${a.filename} (${formatFileSize(a.size)})`)
+      .join(', ');
+    finalContent += `\n\n[Attachments: ${summary}]`;
+  }
+
   // Collect participants in declaration order: from → to → cc
   // BCC is intentionally omitted — we don't expose hidden recipients downstream
   const participants: EmailParticipant[] = [
@@ -190,7 +213,7 @@ export function convertNylasMessage(msg: NylasMessage, selfEmail?: string): Conv
     conversationId,
     channelId: 'email',
     senderId: fromEmail,
-    content: formattedContent,
+    content: finalContent,
     metadata: {
       subject: msg.subject,
       nylasMessageId: msg.id,
@@ -201,6 +224,7 @@ export function convertNylasMessage(msg: NylasMessage, selfEmail?: string): Conv
       senderVerified: parseSenderVerified(msg.headers),
       curiaRole,
       primaryRecipientEmails,
+      attachments,
     },
   };
 }
