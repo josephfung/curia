@@ -1359,6 +1359,12 @@ export class OutboundGateway {
       };
     }
 
+    // Declared outside try so partial progress is reported on failure.
+    // If label creation succeeds (commits server-side) but a later step fails,
+    // the caller still sees which labels were created as a side effect.
+    const created: string[] = [];
+    const resolvedIds: string[] = [];
+
     try {
       // Step 1: List existing folders to build a name → ID lookup
       const existingFolders = await client.listFolders();
@@ -1367,9 +1373,6 @@ export class OutboundGateway {
       );
 
       // Step 2: Resolve each label to a folder ID, creating if needed
-      const created: string[] = [];
-      const resolvedIds: string[] = [];
-
       for (const label of labels) {
         const key = label.toUpperCase();
         let folder = foldersByName.get(key);
@@ -1406,8 +1409,8 @@ export class OutboundGateway {
 
       return { success: true, applied: labels, created, folders: finalFolders };
     } catch (err) {
-      this.log.error({ err, messageId, labels, accountId }, 'outbound-gateway: labelEmailMessage failed');
-      return { success: false, applied: [], created: [], folders: [], error: 'Label operation failed' };
+      this.log.error({ err, messageId, labels, accountId, created }, 'outbound-gateway: labelEmailMessage failed');
+      return { success: false, applied: [], created, folders: [], error: 'Label operation failed' };
     }
   }
 
