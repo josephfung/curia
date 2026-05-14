@@ -1,0 +1,22 @@
+{
+  "name": "email-download-attachment",
+  "description": "Download an email attachment by its Nylas attachment ID and return the file content as base64. Use email-get first to get the attachment ID. Pass the returned content_base64 and content_type directly to file-parse for processing. Enforces a 10 MB size limit.",
+  "version": "1.0.0",
+  "sensitivity": "normal",
+  "action_risk": "none",
+  "inputs": {
+    "attachment_id": "string (Nylas attachment ID from email-get's attachments array)",
+    "message_id": "string (Nylas message ID the attachment belongs to)",
+    "account": "string? (named account to read from, as configured in channel_accounts.email. Defaults to the primary account.)"
+  },
+  "outputs": {
+    "content_base64": "string (base64-encoded file content, ready to pass to file-parse)",
+    "filename": "string (original attachment filename)",
+    "content_type": "string (MIME type, e.g. 'application/pdf')",
+    "size": "number (actual byte count after download)"
+  },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 30000,
+  "capabilities": ["outboundGateway"]
+}
