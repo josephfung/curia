@@ -1,0 +1,20 @@
+{
+  "name": "email-list-folders",
+  "description": "List all folders and labels in an email account. For Gmail, returns both system folders (INBOX, SENT, DRAFTS, etc.) and user-created labels. Useful for checking whether a label exists before applying it.",
+  "version": "1.0.0",
+  "sensitivity": "normal",
+  "action_risk": "none",
+  "inputs": {
+    "account": "string? (named account, e.g. 'curia'; defaults to the primary account if omitted)"
+  },
+  "outputs": {
+    "folders": "object[] (each with id and name)",
+    "count": "number"
+  },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 15000,
+  "capabilities": [
+    "outboundGateway"
+  ]
+}

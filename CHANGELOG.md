@@ -16,6 +16,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Added
 
 - **`email-label`** — apply Gmail labels to messages in any configured email account, creating labels that don't yet exist.
+- **`email-list-folders`** — list all folders and labels in an email account.
+- **`email-create-folder`** — create a new folder or label in an email account.
 - **`email-mark-read`** — mark messages as read in any configured email account.
 
 ---

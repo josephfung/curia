@@ -1312,6 +1312,34 @@ export class OutboundGateway {
   }
 
   /**
+   * List all folders/labels in an email account.
+   * For Gmail, returns both system folders (INBOX, SENT, etc.) and user-created labels.
+   */
+  async listEmailFolders(
+    accountId?: string,
+  ): Promise<NylasFolder[]> {
+    const client = this.getNylasClient(accountId);
+    if (!client) {
+      throw new Error(`outbound-gateway: listEmailFolders called but no email client configured for account: ${accountId ?? 'primary'}`);
+    }
+    return client.listFolders();
+  }
+
+  /**
+   * Create a new folder/label in an email account. For Gmail, creates a user label.
+   */
+  async createEmailFolder(
+    name: string,
+    accountId?: string,
+  ): Promise<NylasFolder> {
+    const client = this.getNylasClient(accountId);
+    if (!client) {
+      throw new Error(`outbound-gateway: createEmailFolder called but no email client configured for account: ${accountId ?? 'primary'}`);
+    }
+    return client.createFolder(name);
+  }
+
+  /**
    * Mark an email message as read.
    */
   async markEmailAsRead(

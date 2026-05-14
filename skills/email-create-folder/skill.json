@@ -1,0 +1,21 @@
+{
+  "name": "email-create-folder",
+  "description": "Create a new folder or label in an email account. For Gmail, creates a user-defined label. Returns the folder ID and name. Idempotent — if a label with the same name already exists in Gmail, the provider may return it or error depending on the backend.",
+  "version": "1.0.0",
+  "sensitivity": "normal",
+  "action_risk": "low",
+  "inputs": {
+    "name": "string (the folder/label name to create, e.g. 'SECURITY')",
+    "account": "string? (named account, e.g. 'curia'; defaults to the primary account if omitted)"
+  },
+  "outputs": {
+    "id": "string (Nylas folder ID)",
+    "name": "string (folder name as created)"
+  },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 15000,
+  "capabilities": [
+    "outboundGateway"
+  ]
+}
