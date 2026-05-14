@@ -960,6 +960,26 @@ export class OutboundGateway {
   }
 
   /**
+   * Download an email attachment's raw bytes by its Nylas attachment ID.
+   * Read-only — no security filtering applied.
+   *
+   * @param attachmentId  Nylas attachment ID (from email-get's attachments array)
+   * @param messageId     ID of the message the attachment belongs to (required by Nylas)
+   * @param accountId     Which account to query. Defaults to the primary account.
+   */
+  async downloadEmailAttachment(
+    attachmentId: string,
+    messageId: string,
+    accountId?: string,
+  ): Promise<Buffer> {
+    const client = this.getNylasClient(accountId);
+    if (!client) {
+      throw new Error('outbound-gateway: downloadEmailAttachment called but no nylasClient is configured');
+    }
+    return client.downloadAttachment(attachmentId, messageId);
+  }
+
+  /**
    * List email messages, optionally filtered by the provided options.
    * Read-only — no security filtering applied.
    *
