@@ -26,6 +26,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 - **Coordinator inbox delegation** — CEO inbox queries now delegate seamlessly to the ceo-inbox specialist instead of explaining the multi-agent architecture.
 
+### Fixed
+
+- **`calendar-create-event` / `calendar-update-event`** — confirmation timestamps now returned in the user's local timezone instead of UTC, matching the format used by the read-path handlers since #368. (#369)
+
 ### Security
 
 - **Gitleaks secret scanning** — CI now runs Gitleaks on every PR and push to `main`, blocking merge if secrets are detected. (#560)
