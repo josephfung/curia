@@ -80,6 +80,13 @@ interface NylasLike {
       requestBody: CreateFolderRequest;
     }): Promise<NylasResponse<NylasSdkFolder>>;
   };
+  attachments: {
+    downloadBytes(params: {
+      identifier: string;
+      attachmentId: string;
+      queryParams: { messageId: string };
+    }): Promise<Buffer>;
+  };
 }
 
 /**
@@ -112,6 +119,20 @@ export interface NylasMessage {
    * Used by the email adapter to extract Authentication-Results for SPF/DKIM/DMARC validation.
    */
   headers?: Array<{ name: string; value: string }>;
+  /** Non-inline file attachments. Empty array when no attachments are present. */
+  attachments: EmailAttachment[];
+}
+
+/** Metadata for a non-inline file attachment on an inbound email. */
+export interface EmailAttachment {
+  /** Nylas attachment ID — required for downloading via the Attachments API. */
+  id: string;
+  /** Original filename (e.g. "report.pdf"). */
+  filename: string;
+  /** MIME type (e.g. "application/pdf", "image/jpeg"). */
+  contentType: string;
+  /** Size in bytes. */
+  size: number;
 }
 
 /**
@@ -495,6 +516,36 @@ export class NylasClient {
       folders: msg.folders ?? [],
       // headers is only present when the request included fields: 'include_headers'
       headers: msg.headers?.map((h) => ({ name: h.name, value: h.value })),
+      // Filter out inline images (e.g. embedded logos) — only surface real file attachments.
+      // The Nylas SDK marks inline parts with isInline: true or contentDisposition: 'inline'.
+      attachments: (msg.attachments ?? [])
+        .filter((a) => !a.isInline && a.contentDisposition !== 'inline')
+        .map((a) => ({
+          id: a.id,
+          filename: a.filename ?? 'unnamed',
+          contentType: a.contentType,
+          size: a.size ?? 0,
+        })),
     };
+  }
+
+  /**
+   * Download a message attachment's raw bytes.
+   *
+   * @param attachmentId  Nylas attachment ID (from NylasMessage.attachments[].id)
+   * @param messageId     ID of the message the attachment belongs to (required by Nylas API)
+   */
+  async downloadAttachment(attachmentId: string, messageId: string): Promise<Buffer> {
+    this.log.debug({ attachmentId, messageId }, 'nylas: downloading attachment');
+    try {
+      return await this.nylas.attachments.downloadBytes({
+        identifier: this.grantId,
+        attachmentId,
+        queryParams: { messageId },
+      });
+    } catch (err) {
+      this.log.error({ err, attachmentId, messageId }, 'nylas: downloadAttachment failed');
+      throw err;
+    }
   }
 }
