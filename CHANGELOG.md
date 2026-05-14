@@ -15,7 +15,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
-- **Email attachment support** — `NylasMessage` now carries a typed `attachments` array; the message converter appends a human-readable attachment summary to email content; `email-get` returns full attachment metadata and `email-list` returns `attachmentCount`/`hasAttachments` flags; new `email-download-attachment` skill downloads attachment bytes as base64 ready for `file-parse`.
+- **Email attachment support** — surface metadata in email skills, append human-readable summaries to message content, and download bytes as base64 for `file-parse`.
 - **Email folder management skills** — `email-label`, `email-list-folders`, `email-create-folder`, and `email-mark-read` expose Nylas folder and read-state operations as general-purpose skills.
 
 ### Changed
