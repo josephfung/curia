@@ -18,6 +18,7 @@ const mockMessage = {
   date: 1700000000,
   unread: true,
   folders: ['INBOX'],
+  attachments: [],
 };
 
 function makeCtx(input: Record<string, unknown>, gateway?: Partial<{
