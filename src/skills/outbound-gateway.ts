@@ -20,7 +20,7 @@
 //   run for all channels before dispatch.
 
 import { randomUUID } from 'node:crypto';
-import type { NylasClient, NylasMessage, ListMessagesOptions, SendEmailOptions } from '../channels/email/nylas-client.js';
+import type { NylasClient, NylasMessage, NylasFolder, ListMessagesOptions, SendEmailOptions } from '../channels/email/nylas-client.js';
 import type { SignalRpcClient } from '../channels/signal/signal-rpc-client.js';
 import type { ContactService } from '../contacts/contact-service.js';
 import type { TrustLevel, ChannelIdentity } from '../contacts/types.js';
@@ -1308,6 +1308,106 @@ export class OutboundGateway {
     } catch (err) {
       this.log.error({ err, messageId, accountId }, 'outbound-gateway: archiveEmailMessage failed');
       return { success: false, error: 'Archive failed' };
+    }
+  }
+
+  /**
+   * Mark an email message as read.
+   */
+  async markEmailAsRead(
+    messageId: string,
+    accountId?: string,
+  ): Promise<{ success: boolean; error?: string }> {
+    const client = this.getNylasClient(accountId);
+    if (!client) {
+      return {
+        success: false,
+        error: `No email client configured for account: ${accountId ?? 'primary'}`,
+      };
+    }
+
+    try {
+      await client.markAsRead(messageId);
+      this.log.info({ messageId, accountId }, 'outbound-gateway: message marked as read');
+      return { success: true };
+    } catch (err) {
+      this.log.error({ err, messageId, accountId }, 'outbound-gateway: markEmailAsRead failed');
+      return { success: false, error: 'Mark as read failed' };
+    }
+  }
+
+  /**
+   * Apply one or more labels to an email message. Resolves label names to Gmail
+   * folder IDs, creating any labels that don't yet exist. Preserves existing
+   * folders on the message (merge, not replace).
+   *
+   * @returns Applied and created label names, or an error.
+   */
+  async labelEmailMessage(
+    messageId: string,
+    labels: string[],
+    accountId?: string,
+  ): Promise<{ success: boolean; applied: string[]; created: string[]; folders: string[]; error?: string }> {
+    const client = this.getNylasClient(accountId);
+    if (!client) {
+      return {
+        success: false,
+        applied: [],
+        created: [],
+        folders: [],
+        error: `No email client configured for account: ${accountId ?? 'primary'}`,
+      };
+    }
+
+    try {
+      // Step 1: List existing folders to build a name → ID lookup
+      const existingFolders = await client.listFolders();
+      const foldersByName = new Map<string, NylasFolder>(
+        existingFolders.map((f) => [f.name.toUpperCase(), f]),
+      );
+
+      // Step 2: Resolve each label to a folder ID, creating if needed
+      const created: string[] = [];
+      const resolvedIds: string[] = [];
+
+      for (const label of labels) {
+        const key = label.toUpperCase();
+        let folder = foldersByName.get(key);
+
+        if (!folder) {
+          this.log.info({ label, accountId }, 'outbound-gateway: creating new label');
+          folder = await client.createFolder(label);
+          foldersByName.set(key, folder);
+          created.push(label);
+        }
+
+        resolvedIds.push(folder.id);
+      }
+
+      // Step 3: Read current message folders
+      const msg = await client.getMessage(messageId);
+      const currentFolders = new Set(msg.folders);
+
+      // Step 4: Merge — add new folder IDs without removing existing ones
+      for (const id of resolvedIds) {
+        currentFolders.add(id);
+      }
+
+      const mergedFolders = [...currentFolders];
+
+      // Step 5: Write back the merged folder set
+      const result = await client.updateMessageFolders(messageId, mergedFolders);
+      const finalFolders = result.folders.length > 0 ? result.folders : mergedFolders;
+
+      this.log.info(
+        { messageId, applied: labels, created, accountId },
+        'outbound-gateway: labels applied',
+      );
+
+      return { success: true, applied: labels, created, folders: finalFolders };
+    } catch (err) {
+      this.log.error({ err, messageId, labels, accountId }, 'outbound-gateway: labelEmailMessage failed');
+      return { success: false, applied: [], created: [], folders: [], error: 'Label operation failed' };
     }
   }
 
