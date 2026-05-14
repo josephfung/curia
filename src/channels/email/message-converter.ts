@@ -185,8 +185,8 @@ export function convertNylasMessage(msg: NylasMessage, selfEmail?: string): Conv
 
   // Append a human-readable attachment list so agents immediately see what's attached.
   // Only appended when the message has real (non-inline) attachments.
-  // Guard with ?? [] for defensiveness against callers that pre-date the attachments field.
-  const attachments = msg.attachments ?? [];
+  // NylasMessage.attachments is required — direct access is safe and avoids masking type errors.
+  const attachments = msg.attachments;
   let finalContent = formattedContent;
   if (attachments.length > 0) {
     const summary = attachments

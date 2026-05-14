@@ -81,8 +81,23 @@ export class EmailDownloadAttachmentHandler implements SkillHandler {
         accountId,
       );
     } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
       ctx.log.error({ err, attachmentId, messageId }, 'email-download-attachment: download failed');
-      return { success: false, error: 'Failed to download attachment' };
+      return { success: false, error: `Failed to download attachment "${attachment.filename}": ${detail}` };
+    }
+
+    // Post-download size check — catches cases where the declared size was 0 (missing from API)
+    // or where the actual content was larger than declared.
+    if (buffer.length > MAX_DOWNLOAD_BYTES) {
+      const sizeMB = (buffer.length / (1024 * 1024)).toFixed(1);
+      ctx.log.warn(
+        { attachmentId, messageId, actualBytes: buffer.length, declaredSize: attachment.size },
+        'email-download-attachment: actual download size exceeded limit',
+      );
+      return {
+        success: false,
+        error: `Attachment "${attachment.filename}" actual size ${sizeMB} MB — exceeds the 10 MB download limit`,
+      };
     }
 
     return {
