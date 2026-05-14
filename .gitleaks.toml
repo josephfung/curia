@@ -2,12 +2,13 @@
 useDefault = true
 
 [allowlist]
-# Exclude test fixtures, generated files, and documentation
+# Exclude test fixtures and generated files.
+# tests/ excluded because test configs routinely contain placeholder credentials
+# that trigger false positives. dist/ and docs/ are NOT excluded — dist is
+# gitignored (never scanned), and docs should be scanned for accidental leaks.
 paths = [
   '''tests/''',
   '''pnpm-lock\.yaml''',
-  '''dist/''',
-  '''docs/''',
 ]
 regexes = [
   # Postgres connection strings pointing at localhost (test/dev configs, CI, .env.example)
