@@ -493,6 +493,8 @@ pinned_skills:
   - email-get
   - email-draft-save
   - email-label
+  - email-list-folders
+  - email-create-folder
   - email-mark-read
   - send-draft
   - signal-send
