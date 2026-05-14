@@ -13,6 +13,11 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Changed
+
+- **README** — slimmed from 314 to ~140 lines; detailed sections (security, memory, channels, scheduling, autonomy, LLM providers) now link to docs.meetcuria.com instead of duplicating content. Added ecosystem nav (website, docs, contributing, security). Comparison table updated: fairer characterization of other frameworks' memory and multi-channel support; new self-modification row.
+- **SECURITY.md** — vulnerability reporting email updated from security@josephfung.ca to security@meetcuria.com.
+
 ### Added
 
 - **LLM token tracking** — every successful Anthropic API call now publishes a structured `llm.call` bus event (spec 10) with full model provenance, token counts (including prompt-cache breakdown), estimated cost, latency, and SHA-256 content fingerprints. Events land in `audit_log` automatically via the existing audit logger, enabling per-agent attribution and data-driven context budgeting (closes #326, prerequisite for #24).
