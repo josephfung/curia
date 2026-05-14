@@ -51,6 +51,7 @@ export class EmailGetHandler implements SkillHandler {
           date: message.date,
           unread: message.unread,
           folders: message.folders,
+          attachments: message.attachments,
         },
       },
     };

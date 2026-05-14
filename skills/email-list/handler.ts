@@ -82,6 +82,8 @@ export class EmailListHandler implements SkillHandler {
           date: m.date,
           unread: m.unread,
           folders: m.folders,
+          attachmentCount: m.attachments.length,
+          hasAttachments: m.attachments.length > 0,
         })),
         count: messages.length,
       },
