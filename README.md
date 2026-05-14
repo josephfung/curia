@@ -3,15 +3,7 @@
 </p>
 
 <p align="center">
-  <strong>An open-source Digital Office of the CEO — communications, scheduling, research, and knowledge work with governance-first architecture.</strong><br/>
-  <em>Curia — the Roman administrative court. Where governance happened.</em>
-</p>
-
-<p align="center">
-  <a href="#quick-start">Quick Start</a> &middot;
-  <a href="#architecture">Architecture</a> &middot;
-  <a href="#security">Security</a> &middot;
-  <a href="docs/specs/00-overview.md">Full Spec</a>
+  <strong>An open-source Digital Office of the CEO — communications, scheduling, research, and knowledge work with governance-first architecture.</strong>
 </p>
 
 <p align="center">
@@ -22,43 +14,28 @@
   <img src="https://img.shields.io/badge/typescript-ESM-blue" alt="TypeScript ESM" />
 </p>
 
----
-
-## The Problem
-
-CEOs of knowledge-work companies are buried in digital work — email, scheduling, research, information processing. The traditional answer is an executive assistant, but the cycle is brutal: hire at $10k+/month, invest six months training them on your world, then watch all that institutional knowledge walk out the door when they leave.
-
-Meanwhile, AI agent frameworks promise automation but deliver black boxes with root access. They treat security as a configuration option, audit trails as an afterthought, and lose all context across restarts. That's fine for a demo. It's not fine when the agent is reading your email, managing your calendar, or acting on your behalf.
-
-**Curia was built for the people who need superhuman digital operations — and can't afford "it probably won't go rogue."**
+<p align="center">
+  <a href="https://meetcuria.com">Website</a> &middot;
+  <a href="https://docs.meetcuria.com">Documentation</a> &middot;
+  <a href="CONTRIBUTING.md">Contributing</a> &middot;
+  <a href="SECURITY.md">Security</a>
+</p>
 
 ---
 
 ## What Is Curia?
 
-Your Digital Office of the CEO. A coordinator and team of specialist agents handle your communications, scheduling, research, and knowledge work — running continuously on your own server, across multiple channels, with institutional memory that compounds over time and never walks out the door.
+CEOs of knowledge-work companies are buried in digital operations — email, scheduling, research, information processing. The traditional answer is an executive assistant, but the cycle is brutal: hire, invest six months training, watch the institutional knowledge walk out the door when they leave.
 
-Every action is logged. Every decision is traceable. Every agent stays in its lane. The architecture doesn't just discourage misuse — it prevents it.
+Curia is a coordinator and team of specialist agents that handle your communications, scheduling, research, and knowledge work — running continuously on your own server, with institutional memory that compounds over time and never walks out the door. Define agents in YAML, extend with custom skills, connect any channel.
 
-### What It Actually Does
-
-- **Manages your email** — triages your inbox, extracts action items, drafts replies, sends on your behalf
-- **Handles your calendar** — creates and updates events, finds free time, detects conflicts, with full context about attendees and past interactions
-- **Researches topics** across multiple sessions, building on previous findings
-- **Tracks expenses** from receipts and bank notifications, categorized and summarized
-- **Communicates on your behalf** across email, Signal, and HTTP API — with your voice and your boundaries
-- **Builds institutional memory** — who people are, what was decided, what's still pending — in a knowledge graph that gets smarter over time
-- **Extends with your own agents and skills** — YAML-based agent definition, 60+ built-in skills, and MCP integration
-
-### Why Governance-First?
-
-When a system handles your inbox, your calendar, and your communications, "it probably won't go rogue" isn't good enough. Curia was designed so that every action is auditable, every boundary is enforced architecturally, and every decision can be traced back to its origin.
+Every action is logged. Every decision is traceable. Every agent stays in its lane.
 
 | | Typical Agent Framework | Curia |
 |---|---|---|
 | **Security model** | "Trust the agent" | Hard-enforced layer separation — channel adapters *physically cannot* invoke tools |
 | **Audit trail** | Console.log | Append-only Postgres with causal tracing across every event |
-| **Institutional memory** | Conversation history (lost on restart) | Knowledge graph + entity memory + temporal awareness (survives restarts, ages gracefully) |
+| **Institutional memory** | Conversation history (lost on restart) | Knowledge graph + entity memory + temporal decay (survives restarts, ages gracefully) |
 | **Error handling** | Retry and hope | Error budgets, state continuity, pattern detection — agents resume, not restart |
 | **Agent coordination** | Agents work in isolation | The Bullpen — structured, auditable, threaded inter-agent discussions |
 | **Multi-channel** | Single chat interface | Email, Signal, CLI, HTTP API — same agent, any channel |
@@ -74,73 +51,13 @@ Five layers connected by a message bus — four domain layers with hard security
   <img src="docs/assets/architecture-overview.png" alt="Curia Architecture — 5 layers connected by message bus" width="800" />
 </p>
 
-The message bus enforces these boundaries at registration time. A channel adapter registered as `layer: "channel"` that attempts to publish a `skill.invoke` event gets an error — not a warning, not a log entry, an error. The architecture prevents misuse; it doesn't just discourage it.
-
-**[Full architecture spec →](docs/specs/00-overview.md)**
+**[Full architecture guide →](https://docs.meetcuria.com/core-concepts/architecture)**
 
 ---
 
-## Security
+## What It Looks Like
 
-Security isn't a feature of Curia. It's the reason it exists.
-
-### 1. Hard Layer Separation
-
-Every component declares its layer at startup. The bus enforces which event types each layer can publish or subscribe to. A compromised email adapter can spam inbound messages — but it cannot invoke a skill, write to memory, or execute code. The boundary is architectural, not policy.
-
-### 2. Append-Only Audit Trail
-
-Every event that flows through the bus — every message received, every tool invoked, every inter-agent discussion — is written to an append-only audit log in Postgres *before* it's delivered to subscribers. No UPDATE, no DELETE. If the process crashes mid-delivery, the event is still logged.
-
-Every event carries a `parent_event_id`, so you can trace the full causal chain: "This expense was categorized because this email was received, which triggered this agent, which invoked this skill, which returned this result."
-
-### 3. Secrets Never Touch the LLM
-
-Agents don't see passwords, API keys, or tokens. Ever. Skills access secrets through a scoped interface (`ctx.secret()`), validated against the skill's declared manifest. The LLM sees "email-parser connected to inbox" — never the IMAP password. Every secret access is audit-logged.
-
-### 4. Tool Output Sanitization
-
-All skill results are sanitized before being fed back to the LLM: XML/HTML tags stripped, outputs truncated, secret-like patterns redacted. Error messages are wrapped in structured tags to prevent prompt injection. Nothing from the outside world reaches the LLM unfiltered.
-
-### 5. Intent Drift Detection
-
-Long-running tasks store an intent anchor — the original task description. On each execution burst, the system compares current progress against the anchor. If the agent has drifted from its goal, the task is **paused**, not just flagged. In unattended mode, drift detection blocks — it doesn't advise.
-
-### 6. Error Budgets
-
-Every agent task has hard caps: maximum LLM round-trips, maximum dollar spend, maximum consecutive errors. When a budget is exceeded, the task stops. No infinite loops, no surprise bills, no runaway agents.
-
----
-
-## Memory
-
-Most agent frameworks forget everything between sessions. Curia remembers — and knows what it doesn't know anymore.
-
-### Knowledge Graph
-
-People, organizations, projects, decisions, events — stored as nodes and edges in Postgres with full relationship traversal. Ask "what decisions did we make about Project X that involved Person Y?" and get a real answer, not a hallucination.
-
-### Entity Memory
-
-Configurable facts about the people and things in your world. "The CEO takes their coffee black." "Board meetings are quarterly, first Thursday." Facts carry confidence scores and source attribution — the system knows *why* it believes something and *how recently* that belief was confirmed.
-
-### Temporal Awareness
-
-Not all facts age the same way. "The CEO was born in Toronto" is permanent. "The CEO lives in Kitchener" decays slowly. "The CEO's current project focus" decays fast. Every fact carries a decay class, so stale information loses confidence over time rather than being trusted forever.
-
-### Semantic Search
-
-Entity descriptions and facts are embedded via pgvector, enabling queries like "find everything related to our fundraising strategy" even when the word "fundraising" doesn't appear in any node labels.
-
-### The Bullpen
-
-Agents don't work in isolation. When the expense tracker finds a receipt that might relate to a benefits claim, it opens a thread in the Bullpen — a structured, auditable discussion space where agents coordinate. Every exchange is logged, visible to you, and interruptible. Think of it as overhearing your staff collaborate at their desks.
-
----
-
-## Agents
-
-Define agents in YAML. No code required for simple agents:
+Agents are defined in YAML. No code required for simple agents:
 
 ```yaml
 name: expense-tracker
@@ -173,101 +90,11 @@ error_budget:
   max_cost_usd: 1.00
 ```
 
-Need custom logic? Add a TypeScript handler as an escape hatch — same config, plus hooks for `onTask`, `onSkillResult`, and `beforeRespond`.
+Need custom logic? Add a TypeScript handler — same config, plus hooks for `onTask`, `onSkillResult`, and `beforeRespond`.
 
-Agents discover new skills automatically. A built-in skill registry lets agents find capabilities they weren't explicitly configured with. Sensitive skills (payments, deletions) require your approval on first use — once, not every time.
+Skills come in two flavours (local handlers and MCP servers) behind a single interface. Agents discover new skills automatically; sensitive skills require your approval on first use.
 
----
-
-## Skills
-
-Two types, one interface. Agents don't know or care which kind they're using.
-
-**Local skills** — directories with a manifest and handler:
-```
-skills/email-parser/
-  skill.json      # name, inputs, outputs, permissions, sensitivity
-  handler.ts      # implementation
-  handler.test.ts # tests
-```
-
-**MCP skills** — connect to any Model Context Protocol server:
-```yaml
-mcp_servers:
-  - name: github
-    transport: sse
-    url: https://mcp-server.example.com/sse
-```
-
-Skills declare their permissions and required secrets in their manifest. The execution layer validates both before invocation. No skill can access a secret it didn't declare. No skill can exceed its declared permissions.
-
----
-
-## Channels
-
-Talk to your agents wherever you are:
-
-| Channel | How It Works |
-|---|---|
-| **Email** | IMAP polling + SMTP. Agents read your inbox, extract action items, reply on your behalf. |
-| **Signal** | Via signal-cli. End-to-end encrypted messaging with your agents. |
-| **CLI** | Interactive terminal for local development and testing. |
-| **HTTP API** | REST + SSE for web dashboards, mobile apps, and programmatic access. |
-
-Every channel is a thin adapter that normalizes messages in and out. Adding a new channel means implementing one interface — no core changes required. All channels share the same security model: they can pass messages, nothing more.
-
----
-
-## Scheduling
-
-Agents work while you sleep.
-
-**Recurring tasks** via cron:
-```yaml
-schedule:
-  - cron: "0 9 * * 1"
-    task: "Generate weekly expense summary"
-  - cron: "0 */4 * * *"
-    task: "Check inbox for new receipts"
-```
-
-**Long-running tasks** execute in bursts. A research task spanning days doesn't hold a process open — it saves progress, sleeps, and the scheduler wakes it up for the next chunk. Full state in Postgres. Survives restarts.
-
-**Dynamic scheduling** — agents can create their own scheduled jobs at runtime. "Remind me every Friday to review the expense report" just works.
-
-## Autonomy Engine
-
-Curia operates at a configurable autonomy level — a single score from 0 to 100 that determines how independently it acts across all channels and skills.
-
-The score maps to one of five **autonomy bands**:
-
-| Band | Score | What it means |
-|---|---|---|
-| **Full** | 90–100 | Acts independently. Flags only genuinely novel or irreversible actions. |
-| **Spot-check** | 80–89 | Proceeds on routine tasks. Notes consequential actions for CEO visibility. |
-| **Approval Required** | 70–79 | Presents a plan and asks for confirmation before any consequential action. |
-| **Draft Only** | 60–69 | Prepares drafts and plans but does not send or act without explicit instruction. |
-| **Restricted** | < 60 | Advisory only. Takes no independent action whatsoever. |
-
-The current band is injected into Curia's system prompt on every task, so its self-governance adjusts immediately when the score changes — no restart required.
-
-**CEO controls (via CLI or email):**
-- *"What is your current autonomy score?"* — Curia reports its score, band, and recent change history
-- *"Set your autonomy score to 85"* — Curia updates the score and confirms the change
-
-The score defaults to **75 (Approval Required)** on first deployment. Scores are stored in Postgres with a full change history. Future versions will adjust the score automatically based on performance metrics (task success rate, factual correction rate, follow-through).
-
----
-
-## Multi-Provider LLM Support
-
-| Provider | Models | Use Case |
-|---|---|---|
-| **Anthropic** | Claude Opus, Sonnet, Haiku | Primary — best for nuanced reasoning and long context |
-| **OpenAI** | GPT-4o, o1-pro, GPT-4o-mini | Fallback, cost optimization |
-| **Ollama** | Llama, Mistral, Gemma, etc. | Local/private — no data leaves your server |
-
-Each agent specifies its provider and model. Configure fallbacks for resilience — if Anthropic is down, the agent switches to OpenAI automatically. All providers normalize to a common response type. No `any` types, no provider-specific leaks.
+**[Agents →](https://docs.meetcuria.com/agents/how-agents-work)** &middot; **[Skills →](https://docs.meetcuria.com/skills/how-skills-work)** &middot; **[Channels →](https://docs.meetcuria.com/channels/how-channels-work)** &middot; **[Security →](https://docs.meetcuria.com/security/overview)**
 
 ---
 
@@ -275,16 +102,20 @@ Each agent specifies its provider and model. Configure fallbacks for resilience 
 
 > **Note:** Curia is in pre-alpha. The spec is complete; implementation is underway. Star the repo to follow progress.
 
-Getting set up involves connecting a few external services (Postgres, an LLM provider, optionally Nylas for email). The full guide covers prerequisites, configuration tiers, and verification steps:
+**Prerequisites:** Node >= 22, PostgreSQL 16+ with pgvector, an LLM provider API key (Anthropic, OpenAI, or Ollama).
 
-**[→ Development Setup Guide](docs/dev/setup.md)**
+```bash
+git clone https://github.com/josephfung/curia.git
+cd curia
+cp .env.example .env        # add your API keys and DB connection
+npm install
+npm run db:migrate
+npm start
+```
 
+The full setup guide covers configuration tiers, channel setup, Docker Compose, and verification steps:
 
-### Web App
-
-Curia includes a built-in web app at `http://localhost:3000`. Current features include a knowledge graph browser for exploring nodes, relationships, and entity memory. More tools will be added here as the platform matures.
-
-The web app requires `WEB_APP_BOOTSTRAP_SECRET` in `.env` — set this to any long random string before starting. See the [setup guide](docs/dev/setup.md) for details.
+**[→ Full installation guide](https://docs.meetcuria.com/get-started/installation)**
 
 ---
 
@@ -292,7 +123,7 @@ The web app requires `WEB_APP_BOOTSTRAP_SECRET` in `.env` — set this to any lo
 
 Curia is in early development and welcomes contributions — including AI-assisted ones.
 
-- Read the **[Contributing Guide](CONTRIBUTING.md)** for dev setup, code standards, and how to add channels/skills/agents
+- Read the **[Contributing Guide](CONTRIBUTING.md)** for dev setup, code standards, and how to add channels, skills, and agents
 - Read **[CLAUDE.md](CLAUDE.md)** for repo-level conventions (if you're using Claude Code, these load automatically)
 - Check **[open issues](https://github.com/josephfung/curia/issues)** — look for `good first issue` labels
 - Report security vulnerabilities via **[SECURITY.md](SECURITY.md)** — not public issues
@@ -304,10 +135,3 @@ We evaluate code quality, not authorship. AI-generated contributions are held to
 ## License
 
 [MIT](LICENSE)
-
----
-
-<p align="center">
-  <strong>Auditable. Secure. Memory that lasts.</strong><br/>
-  <em>Your Digital Office of the CEO — governance-first, open source, built for the people who sign the checks.</em>
-</p>
