@@ -20,6 +20,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Security
 
 - **Gitleaks secret scanning** — CI now runs Gitleaks on every PR and push to `main`, blocking merge if secrets are detected. (#560)
+- **CodeQL static analysis** — weekly scheduled code scanning for JS/TS security vulnerabilities. (#561)
 
 ---
 
