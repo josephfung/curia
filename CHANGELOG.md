@@ -26,6 +26,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 - **Gitleaks secret scanning** — CI now runs Gitleaks on every PR and push to `main`, blocking merge if secrets are detected. (#560)
 - **CodeQL static analysis** — weekly scheduled code scanning for JS/TS security vulnerabilities. (#561)
+- **CodeQL Action v4 + Node.js 24** — bumped all three `codeql-action` steps to `@v4` and opted in to the Node.js 24 runner ahead of the June 2026 forced migration. (#582)
 
 ---
 
