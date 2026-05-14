@@ -63,13 +63,6 @@ Agents are defined in YAML. No code required for simple agents:
 name: expense-tracker
 description: Tracks and categorizes expenses from receipts and emails
 
-model:
-  provider: anthropic
-  model: claude-sonnet-4-6
-  fallback:
-    provider: openai
-    model: gpt-4o
-
 system_prompt: |
   You are an expense tracking assistant for a CEO.
   Extract amounts, vendors, categories, and dates from receipts.
