@@ -21,6 +21,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 - **Email attachment support** — surface metadata in email skills, append human-readable summaries to message content, and download bytes as base64 for `file-parse`.
 - **Email folder management skills** — `email-label`, `email-list-folders`, `email-create-folder`, and `email-mark-read` expose Nylas folder and read-state operations as general-purpose skills.
+- **`SuspensionNotifier`** — emails the CEO when a scheduled job is auto-suspended after 3 consecutive failures, bypassing the LLM pipeline so alerts arrive even when Anthropic is down. (#538)
 
 ### Changed
 
