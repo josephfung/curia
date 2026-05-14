@@ -33,6 +33,7 @@ function makeMockMessage(overrides: Partial<NylasMessage> = {}): NylasMessage {
     date: 1700000000,
     unread: true,
     folders: ['INBOX'],
+    attachments: [],
     ...overrides,
   };
 }

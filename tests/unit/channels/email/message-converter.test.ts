@@ -21,6 +21,7 @@ function mockMessage(overrides?: Partial<NylasMessage>): NylasMessage {
     date: 1711900800, // 2024-03-31T12:00:00Z
     unread: true,
     folders: ['inbox'],
+    attachments: [],
     ...overrides,
   };
 }
@@ -393,5 +394,66 @@ describe('convertNylasMessage — senderVerified in metadata', () => {
     });
     const result = convertNylasMessage(msg);
     expect(result.metadata.senderVerified).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Attachment handling
+// ---------------------------------------------------------------------------
+
+describe('convertNylasMessage — attachments', () => {
+  it('includes attachment in metadata.attachments', () => {
+    const result = convertNylasMessage(mockMessage({
+      attachments: [{ id: 'att-1', filename: 'report.pdf', contentType: 'application/pdf', size: 12288 }],
+    }));
+    expect(result.metadata.attachments).toHaveLength(1);
+    expect(result.metadata.attachments[0]).toMatchObject({
+      id: 'att-1',
+      filename: 'report.pdf',
+      contentType: 'application/pdf',
+      size: 12288,
+    });
+  });
+
+  it('appends [Attachments: ...] summary line to content when attachments present', () => {
+    const result = convertNylasMessage(mockMessage({
+      attachments: [{ id: 'att-1', filename: 'invoice.pdf', contentType: 'application/pdf', size: 1536 }],
+    }));
+    // 1536 bytes = 1.5 KB
+    expect(result.content).toContain('[Attachments: invoice.pdf (1.5 KB)]');
+  });
+
+  it('does not append [Attachments: ...] line when no attachments', () => {
+    const result = convertNylasMessage(mockMessage({ attachments: [] }));
+    expect(result.content).not.toContain('[Attachments:');
+  });
+
+  it('metadata.attachments is empty when no attachments', () => {
+    const result = convertNylasMessage(mockMessage({ attachments: [] }));
+    expect(result.metadata.attachments).toEqual([]);
+  });
+
+  it('formats sizes correctly: bytes under 1 KB', () => {
+    const result = convertNylasMessage(mockMessage({
+      attachments: [{ id: 'att-1', filename: 'small.txt', contentType: 'text/plain', size: 512 }],
+    }));
+    expect(result.content).toContain('[Attachments: small.txt (512 B)]');
+  });
+
+  it('formats sizes correctly: exactly 1 MB', () => {
+    const result = convertNylasMessage(mockMessage({
+      attachments: [{ id: 'att-1', filename: 'big.zip', contentType: 'application/zip', size: 1048576 }],
+    }));
+    expect(result.content).toContain('[Attachments: big.zip (1.0 MB)]');
+  });
+
+  it('lists multiple attachments separated by commas', () => {
+    const result = convertNylasMessage(mockMessage({
+      attachments: [
+        { id: 'att-1', filename: 'a.pdf', contentType: 'application/pdf', size: 1024 },
+        { id: 'att-2', filename: 'b.png', contentType: 'image/png', size: 2048 },
+      ],
+    }));
+    expect(result.content).toContain('[Attachments: a.pdf (1.0 KB), b.png (2.0 KB)]');
   });
 });
