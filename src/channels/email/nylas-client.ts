@@ -13,10 +13,12 @@
 import NylasDefault from 'nylas';
 import type {
   Message as NylasSdkMessage,
+  Folder as NylasSdkFolder,
   ListMessagesQueryParams,
   NylasResponse,
   NylasListResponse,
   SendMessageRequest,
+  CreateFolderRequest,
   MessageFields,
   Draft as NylasDraft,
   CreateDraftRequest,
@@ -68,6 +70,16 @@ interface NylasLike {
       draftId: string;
     }): Promise<NylasResponse<NylasSdkMessage>>;
   };
+  folders: {
+    list(params: {
+      identifier: string;
+    }): Promise<NylasListResponse<NylasSdkFolder>>;
+
+    create(params: {
+      identifier: string;
+      requestBody: CreateFolderRequest;
+    }): Promise<NylasResponse<NylasSdkFolder>>;
+  };
 }
 
 /**
@@ -100,6 +112,15 @@ export interface NylasMessage {
    * Used by the email adapter to extract Authentication-Results for SPF/DKIM/DMARC validation.
    */
   headers?: Array<{ name: string; value: string }>;
+}
+
+/**
+ * Simplified folder/label shape — normalized from the Nylas SDK's Folder type.
+ * Used by skills that need to list, create, or reference email folders.
+ */
+export interface NylasFolder {
+  id: string;
+  name: string;
 }
 
 export interface SendEmailOptions {
@@ -366,6 +387,86 @@ export class NylasClient {
       this.log.info({ messageId, updatedFolders: currentFolders }, 'message archived successfully');
     } catch (err) {
       this.log.error({ err, grantId: this.grantId, messageId }, 'Nylas messages.update failed during archive');
+      throw err;
+    }
+  }
+
+  /**
+   * Mark a message as read by setting its unread flag to false.
+   */
+  async markAsRead(messageId: string): Promise<void> {
+    this.log.debug({ messageId }, 'marking message as read');
+
+    try {
+      await this.nylas.messages.update({
+        identifier: this.grantId,
+        messageId,
+        requestBody: { unread: false },
+      });
+      this.log.info({ messageId }, 'message marked as read');
+    } catch (err) {
+      this.log.error({ err, grantId: this.grantId, messageId }, 'Nylas markAsRead failed');
+      throw err;
+    }
+  }
+
+  /**
+   * List all folders/labels in the email account.
+   * For Gmail, this returns both system folders (INBOX, SENT, etc.) and user-created labels.
+   */
+  async listFolders(): Promise<NylasFolder[]> {
+    this.log.debug('listing folders');
+
+    try {
+      const response = await this.nylas.folders.list({
+        identifier: this.grantId,
+      });
+      return response.data.map((f) => ({ id: f.id, name: f.name }));
+    } catch (err) {
+      this.log.error({ err, grantId: this.grantId }, 'Nylas listFolders failed');
+      throw err;
+    }
+  }
+
+  /**
+   * Create a new folder/label. For Gmail, this creates a user label.
+   */
+  async createFolder(name: string): Promise<NylasFolder> {
+    this.log.debug({ name }, 'creating folder');
+
+    try {
+      const response = await this.nylas.folders.create({
+        identifier: this.grantId,
+        requestBody: { name },
+      });
+      this.log.info({ folderId: response.data.id, name }, 'folder created');
+      return { id: response.data.id, name: response.data.name };
+    } catch (err) {
+      this.log.error({ err, grantId: this.grantId, name }, 'Nylas createFolder failed');
+      throw err;
+    }
+  }
+
+  /**
+   * Replace a message's folder list with the given folder IDs.
+   *
+   * This is a low-level operation — callers are responsible for preserving
+   * existing folders they want to keep. See OutboundGateway.labelEmailMessage()
+   * for the higher-level label-resolution-and-merge workflow.
+   */
+  async updateMessageFolders(messageId: string, folders: string[]): Promise<NylasMessage> {
+    this.log.debug({ messageId, folders }, 'updating message folders');
+
+    try {
+      const response = await this.nylas.messages.update({
+        identifier: this.grantId,
+        messageId,
+        requestBody: { folders },
+      });
+      this.log.info({ messageId, folders }, 'message folders updated');
+      return this.normalizeMessage(response.data);
+    } catch (err) {
+      this.log.error({ err, grantId: this.grantId, messageId }, 'Nylas updateMessageFolders failed');
       throw err;
     }
   }
