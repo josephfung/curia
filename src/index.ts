@@ -71,6 +71,7 @@ import type { TrustScorerWeights } from './dispatch/trust-scorer.js';
 import { SchedulerService } from './scheduler/scheduler-service.js';
 import { Scheduler } from './scheduler/scheduler.js';
 import { DriftDetector } from './scheduler/drift-detector.js';
+import { SuspensionNotifier } from './scheduler/suspension-notifier.js';
 import type { DriftConfig } from './scheduler/drift-detector.js';
 import { EntityContextAssembler } from './entity-context/assembler.js';
 import { bootstrapAgentIdentity } from './entity-context/bootstrap.js';
@@ -963,6 +964,24 @@ async function main(): Promise<void> {
   logger.info({ decayConfig }, 'DreamEngine configured');
 
   const scheduler = new Scheduler({ pool, bus, logger, schedulerService, driftDetector, dreamEngine });
+
+  // SuspensionNotifier — emails the CEO when a scheduled job is auto-suspended.
+  // Bypasses the LLM pipeline: notifies even when Anthropic is the thing that's down.
+  // Skipped (with a warning) if outboundGateway or ceoPrimaryEmail is absent.
+  if (outboundGateway && config.ceoPrimaryEmail) {
+    const suspensionNotifier = new SuspensionNotifier({
+      bus,
+      outboundGateway,
+      ceoEmail: config.ceoPrimaryEmail,
+      logger,
+    });
+    suspensionNotifier.register();
+  } else {
+    logger.warn(
+      { hasGateway: !!outboundGateway, hasCeoEmail: !!config.ceoPrimaryEmail },
+      'SuspensionNotifier not registered — outboundGateway or ceoPrimaryEmail absent; suspended jobs will not trigger CEO email alerts',
+    );
+  }
 
   // Approval trigger — creates pending_approval rows and notifies CEO
   // when autonomy gates block a skill. See ADR-018 and issue #427.
