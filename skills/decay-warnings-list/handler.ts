@@ -40,7 +40,7 @@ export class DecayWarningsListHandler implements SkillHandler {
           sensitivity: w.sensitivity,
           edgeCount: w.edgeCount,
           reason: w.reason,
-          warnedAt: toLocalIso(Math.floor(warnedAtMs / 1000), tz ?? 'UTC'),
+          warnedAt: toLocalIso(Math.floor(warnedAtMs / 1000), tz),
           daysRemaining,
         };
       });

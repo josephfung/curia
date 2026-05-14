@@ -76,16 +76,23 @@ export function normalizeTimestamp(iso: string, defaultZone: string): string {
  * Convert Unix seconds to an ISO 8601 string in the given IANA timezone,
  * with the local UTC offset baked in.
  *
+ * Returns null for null, non-finite, or non-positive inputs — these are never
+ * valid event timestamps (Unix 0 = 1970, negatives = before epoch).
+ *
+ * When timezone is omitted, falls back to a UTC Z-suffix string via new Date().
+ *
  * Example: toLocalIso(1775489400, 'America/Toronto') → "2026-04-06T11:30:00.000-04:00"
  *
  * This is the output-side complement to normalizeTimestamp() (which handles inputs).
  * The wall-clock digits in the returned string match the user's local time, so LLMs
  * read them correctly without needing to perform timezone arithmetic.
  *
- * @param unixSeconds  Unix epoch seconds (as returned by Nylas calendar API)
- * @param timezone     IANA timezone name (e.g. "America/Toronto")
+ * @param unixSeconds  Unix epoch seconds (as returned by Nylas calendar API), or null
+ * @param timezone     IANA timezone name (e.g. "America/Toronto"), or undefined for UTC
  */
-export function toLocalIso(unixSeconds: number, timezone: string): string {
+export function toLocalIso(unixSeconds: number | null, timezone?: string): string | null {
+  if (unixSeconds === null || !Number.isFinite(unixSeconds) || unixSeconds <= 0) return null;
+  if (!timezone) return new Date(unixSeconds * 1000).toISOString();
   const dt = DateTime.fromSeconds(unixSeconds, { zone: timezone });
   if (!dt.isValid) {
     throw new Error(`toLocalIso: invalid timezone "${timezone}" (${dt.invalidReason ?? 'unknown reason'})`);

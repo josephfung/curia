@@ -46,7 +46,7 @@ export class HeldMessagesListHandler implements SkillHandler {
           subject: m.subject,
           preview: plaintext.slice(0, 500),
           totalLength: plaintext.length,
-          receivedAt: tz ? toLocalIso(unixSeconds, tz) : m.createdAt.toISOString(),
+          receivedAt: toLocalIso(unixSeconds, tz),
         };
       });
 

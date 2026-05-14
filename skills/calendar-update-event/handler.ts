@@ -65,44 +65,18 @@ export class CalendarUpdateEventHandler implements SkillHandler {
 
       const event = await ctx.nylasCalendarClient.updateEvent(calendarId, eventId, changes);
       ctx.log.info({ calendarId, eventId }, 'Updated calendar event');
-      // Format timestamps in the user's local timezone so the confirmation matches what
-      // calendar-list-events returns. Falls back to UTC Z-suffix when timezone is not configured.
-      // Defensive fallback on bad timezone: the event was already written — a misconfigured
-      // ctx.timezone must not falsely report failure.
+      // Format timestamps in the user's local timezone so the confirmation matches
+      // what calendar-list-events returns. toLocalIso handles null/invalid values internally.
       const tz = ctx.timezone;
-      const toIso = (unix: number | null, field: string): string | null => {
-        if (unix === null) return null;
-        if (!Number.isFinite(unix) || unix <= 0) {
-          ctx.log.warn({ eventId, field, value: unix }, `calendar-update-event: suspicious ${field} value — omitting`);
-          return null;
-        }
-        if (tz) {
-          try {
-            return toLocalIso(unix, tz);
-          } catch {
-            ctx.log.warn({ tz }, 'calendar-update-event: invalid timezone — falling back to UTC');
-            return new Date(unix * 1000).toISOString();
-          }
-        }
-        return new Date(unix * 1000).toISOString();
-      };
-      let displayTimezone: string | null = null;
-      if (tz) {
-        try {
-          displayTimezone = formatDisplayTimezone(tz, new Date());
-        } catch {
-          ctx.log.warn({ tz }, 'calendar-update-event: invalid timezone for displayTimezone');
-        }
-      }
       return {
         success: true,
         data: {
           event: {
             ...event,
-            startTime: toIso(event.startTime, 'startTime'),
-            endTime: toIso(event.endTime, 'endTime'),
+            startTime: toLocalIso(event.startTime, tz),
+            endTime: toLocalIso(event.endTime, tz),
           },
-          displayTimezone,
+          displayTimezone: tz ? formatDisplayTimezone(tz, new Date()) : null,
         },
       };
     } catch (err) {

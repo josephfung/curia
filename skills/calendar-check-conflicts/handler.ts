@@ -59,20 +59,11 @@ export class CalendarCheckConflictsHandler implements SkillHandler {
         for (const slot of result.timeSlots) {
           // Check overlap: busy slot overlaps the proposed range
           if (slot.startTime < proposedEndTs && slot.endTime > proposedStartTs) {
-            // Guard non-finite and non-positive values the same way calendar-list-events does.
-            if (!Number.isFinite(slot.startTime) || slot.startTime <= 0 || !Number.isFinite(slot.endTime) || slot.endTime <= 0) {
-              ctx.log.warn({ calendarId: result.email, startTime: slot.startTime, endTime: slot.endTime }, 'calendar-check-conflicts: suspicious slot timestamp — skipping');
-              continue;
-            }
-            // Format timestamps in the user's local timezone so the LLM reads correct
-            // wall-clock times. Falls back to UTC Z-suffix when timezone is not configured.
-            conflicts.push({
-              calendarId: result.email,
-              contactName,
-              startTime: tz ? toLocalIso(slot.startTime, tz) : new Date(slot.startTime * 1000).toISOString(),
-              endTime: tz ? toLocalIso(slot.endTime, tz) : new Date(slot.endTime * 1000).toISOString(),
-              status: slot.status,
-            });
+            const startTime = toLocalIso(slot.startTime, tz);
+            const endTime = toLocalIso(slot.endTime, tz);
+            // Skip corrupt slots — a conflict entry with no timestamps is not actionable.
+            if (startTime === null || endTime === null) continue;
+            conflicts.push({ calendarId: result.email, contactName, startTime, endTime, status: slot.status });
           }
         }
       }

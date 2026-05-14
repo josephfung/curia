@@ -82,20 +82,10 @@ export class CalendarFindFreeTimeHandler implements SkillHandler {
         ? freeWindows.filter((w) => w.end - w.start >= minSeconds)
         : freeWindows;
 
-      // Format timestamps in the user's local timezone so the LLM reads correct
-      // wall-clock times. Falls back to UTC Z-suffix when timezone is not configured.
-      // Guard non-finite and non-positive values the same way calendar-list-events does.
       const tz = ctx.timezone;
-      const formatTs = (unix: number, field: string): string | null => {
-        if (!Number.isFinite(unix) || unix <= 0) {
-          ctx.log.warn({ value: unix, field }, 'calendar-find-free-time: suspicious timestamp — omitting');
-          return null;
-        }
-        return tz ? toLocalIso(unix, tz) : new Date(unix * 1000).toISOString();
-      };
       const freeWindowsFormatted = filtered.map((w) => ({
-        start: formatTs(w.start, 'start'),
-        end: formatTs(w.end, 'end'),
+        start: toLocalIso(w.start, tz),
+        end: toLocalIso(w.end, tz),
       }));
 
       ctx.log.info({ calendarCount: calendarIds.length, freeWindowCount: freeWindowsFormatted.length }, 'Found free time');
