@@ -1,6 +1,7 @@
 name: CodeQL
 
 on:
+  workflow_dispatch:
   schedule:
     # Weekly full scan — Wednesday 6am UTC (off-peak)
     - cron: '0 6 * * 3'
