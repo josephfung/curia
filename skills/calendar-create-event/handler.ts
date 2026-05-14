@@ -6,6 +6,7 @@
 
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
 import type { CreateEventInput } from '../../src/channels/calendar/nylas-calendar-client.js';
+import { toLocalIso, formatDisplayTimezone } from '../../src/time/timestamp.js';
 
 export class CalendarCreateEventHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {
@@ -68,17 +69,44 @@ export class CalendarCreateEventHandler implements SkillHandler {
 
       const event = await ctx.nylasCalendarClient.createEvent(calendarId, eventData);
       ctx.log.info({ calendarId, eventId: event.id }, 'Created calendar event');
-      // Format timestamps as UTC ISO strings — LLMs can't reliably convert raw Unix seconds.
+      // Format timestamps in the user's local timezone so the confirmation matches what
+      // calendar-list-events returns. Falls back to UTC Z-suffix when timezone is not configured.
+      // Defensive fallback on bad timezone: the event was already written — a misconfigured
+      // ctx.timezone must not falsely report failure.
+      const tz = ctx.timezone;
+      const toIso = (unix: number | null, field: string): string | null => {
+        if (unix === null) return null;
+        if (!Number.isFinite(unix) || unix <= 0) {
+          ctx.log.warn({ eventId: event.id, field, value: unix }, `calendar-create-event: suspicious ${field} value — omitting`);
+          return null;
+        }
+        if (tz) {
+          try {
+            return toLocalIso(unix, tz);
+          } catch {
+            ctx.log.warn({ tz }, 'calendar-create-event: invalid timezone — falling back to UTC');
+            return new Date(unix * 1000).toISOString();
+          }
+        }
+        return new Date(unix * 1000).toISOString();
+      };
+      let displayTimezone: string | null = null;
+      if (tz) {
+        try {
+          displayTimezone = formatDisplayTimezone(tz, new Date());
+        } catch {
+          ctx.log.warn({ tz }, 'calendar-create-event: invalid timezone for displayTimezone');
+        }
+      }
       return {
         success: true,
         data: {
           event: {
             ...event,
-            startTime: event.startTime !== null && Number.isFinite(event.startTime) && event.startTime > 0
-              ? new Date(event.startTime * 1000).toISOString() : null,
-            endTime: event.endTime !== null && Number.isFinite(event.endTime) && event.endTime > 0
-              ? new Date(event.endTime * 1000).toISOString() : null,
+            startTime: toIso(event.startTime, 'startTime'),
+            endTime: toIso(event.endTime, 'endTime'),
           },
+          displayTimezone,
         },
       };
     } catch (err) {
