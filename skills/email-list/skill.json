@@ -14,7 +14,7 @@
     "limit": "number? (max results to return, capped at 50, default 20)"
   },
   "outputs": {
-    "messages": "object[]",
+    "messages": "object[] ({ id, threadId, subject, from, snippet, date, unread, folders, attachmentCount, hasAttachments })",
     "count": "number"
   },
   "permissions": [],
