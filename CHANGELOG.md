@@ -13,6 +13,11 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Added
+
+- **`email-label`** — apply Gmail labels to messages in any configured email account, creating labels that don't yet exist.
+- **`email-mark-read`** — mark messages as read in any configured email account.
+
 ---
 
 ## [0.28.0] — 2026-05-14 — "Thufir Hawat"

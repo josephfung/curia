@@ -492,6 +492,8 @@ pinned_skills:
   - email-list
   - email-get
   - email-draft-save
+  - email-label
+  - email-mark-read
   - send-draft
   - signal-send
   - held-messages-list
