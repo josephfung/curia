@@ -252,9 +252,11 @@ export class EmailAdapter {
         // Skip messages in sent or draft folders — they are never genuine inbound
         // messages, regardless of the From address. This catches send-as aliases
         // (e.g. security@meetcuria.com) where the From won't match selfEmail.
-        // Folder IDs vary by provider but always contain "sent" or "draft" as a
-        // substring (Gmail: "SENT"/"DRAFT"; IMAP: "Sent Mail"/"Drafts").
-        const inSentOrDrafts = msg.folders.some((f) => /\b(sent|draft)/i.test(f));
+        // Folder IDs/names vary by provider but always contain "sent" or "draft"
+        // as a substring (Gmail: "SENT"/"DRAFT"; IMAP: "Sent Mail"/"Drafts").
+        // Using a plain substring match so provider-specific prefixes/suffixes
+        // like "recently-sent" still match without an asymmetric word boundary.
+        const inSentOrDrafts = msg.folders.some((f) => /(sent|draft)/i.test(f));
         if (inSentOrDrafts) {
           this.config.logger.debug(
             { messageId: msg.id, folders: msg.folders, accountId: this.config.accountId },
@@ -267,10 +269,13 @@ export class EmailAdapter {
         // Skip any message whose Nylas ID was recorded when we sent it.
         // This is the most reliable alias-proof check — the ID is unique and
         // does not depend on the From address matching selfEmail.
+        // Note: this only covers direct sends through sendWithGatedDraftFallback.
+        // Draft-to-send flows approved via the send-draft skill are not tracked
+        // here; those rely on Layers 1 and 3 for loop prevention.
         if (this.recentlySentIds.has(msg.id)) {
-          this.config.logger.debug(
+          this.config.logger.info(
             { messageId: msg.id, accountId: this.config.accountId },
-            'Email skipped — matches recently-sent message ID',
+            'Email skipped — matches recently-sent message ID (loop guard)',
           );
           continue;
         }
@@ -281,6 +286,15 @@ export class EmailAdapter {
         // normalizeForComparison strips plus-addressing and lowercases so that
         // variations like curia+reply@example.com still match curia@example.com.
         const fromEmail = msg.from[0]?.email;
+        if (!fromEmail) {
+          // Log a warning so misconfigured or malformed messages are observable.
+          // We still forward for processing — the downstream dispatcher applies its
+          // own sender policy and will surface the empty senderId appropriately.
+          this.config.logger.warn(
+            { messageId: msg.id, threadId: msg.threadId, accountId: this.config.accountId },
+            'Email received with missing From address — self-check skipped, processing with unknown sender',
+          );
+        }
         if (
           fromEmail &&
           normalizeForComparison(fromEmail) === normalizeForComparison(this.config.selfEmail)
@@ -504,7 +518,17 @@ export class EmailAdapter {
       // Track the sent message ID so the next inbound poll skips it.
       // Guards against the case where the provider returns our own sent message
       // as an unread inbox item (e.g. when using a send-as alias address).
-      if (result.messageId) this.trackSentId(result.messageId);
+      if (result.messageId) {
+        this.trackSentId(result.messageId);
+      } else {
+        // Gateway returned success without a message ID — Layer 2 loop guard
+        // is inactive for this specific message. Layers 1 (folder) and 3
+        // (address normalization) still apply.
+        this.config.logger.warn(
+          { accountId: this.config.accountId, conversationId: context.conversationId },
+          'email-adapter: send succeeded but gateway returned no messageId — Layer 2 loop guard inactive for this message',
+        );
+      }
       return;
     }
 
