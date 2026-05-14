@@ -456,4 +456,37 @@ describe('convertNylasMessage — attachments', () => {
     }));
     expect(result.content).toContain('[Attachments: a.pdf (1.0 KB), b.png (2.0 KB)]');
   });
+
+  it('appends the attachment summary after the email body, not before', () => {
+    const result = convertNylasMessage(mockMessage({
+      body: '<p>Main email body content</p>',
+      attachments: [{ id: 'att-1', filename: 'report.pdf', contentType: 'application/pdf', size: 1024 }],
+    }));
+    const bodyIdx = result.content.indexOf('Main email body content');
+    const attachIdx = result.content.indexOf('[Attachments:');
+    expect(bodyIdx).toBeGreaterThanOrEqual(0);
+    expect(attachIdx).toBeGreaterThan(bodyIdx);
+  });
+
+  it('coexists with "(empty email)" placeholder when body and snippet are both empty', () => {
+    const result = convertNylasMessage(mockMessage({
+      body: '',
+      snippet: '',
+      attachments: [{ id: 'att-1', filename: 'file.pdf', contentType: 'application/pdf', size: 512 }],
+    }));
+    expect(result.content).toContain('(empty email)');
+    expect(result.content).toContain('[Attachments:');
+    // Summary must appear after the placeholder, not before
+    const emptyIdx = result.content.indexOf('(empty email)');
+    const attachIdx = result.content.indexOf('[Attachments:');
+    expect(attachIdx).toBeGreaterThan(emptyIdx);
+  });
+
+  it('formats zero-size attachment as "0 B"', () => {
+    const result = convertNylasMessage(mockMessage({
+      attachments: [{ id: 'att-1', filename: 'empty.txt', contentType: 'text/plain', size: 0 }],
+    }));
+    expect(result.content).toContain('[Attachments: empty.txt (0 B)]');
+    expect(result.metadata.attachments[0]?.size).toBe(0);
+  });
 });
