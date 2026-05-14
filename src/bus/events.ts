@@ -135,6 +135,7 @@ interface OutboundBlockedPayload {
 //   - 'approval_requested':   CEO alert that an autonomy gate blocked a skill and approval is needed
 //   - 'approval_expired':     CEO alert that pending approvals expired without response (approval-expiry-sweep)
 //   - 'pending_actions_digest': Daily summary of open approvals awaiting CEO decision (pending-actions-digest)
+//   - 'schedule_suspended': CEO alert that a scheduled job was auto-suspended after consecutive failures (#538)
 export interface OutboundNotificationPayload {
   notificationType:
     | 'blocked_content'
@@ -142,7 +143,8 @@ export interface OutboundNotificationPayload {
     | 'contact_rate_limited'
     | 'approval_requested'
     | 'approval_expired'        // batched expiry notification (approval-expiry-sweep)
-    | 'pending_actions_digest'; // daily pending-actions summary (pending-actions-digest)
+    | 'pending_actions_digest'  // daily pending-actions summary (pending-actions-digest)
+    | 'schedule_suspended';     // scheduled job auto-suspended after consecutive failures (#538)
   /** Recipient email for this notification (always the CEO email today). */
   ceoEmail: string;
   subject: string;
