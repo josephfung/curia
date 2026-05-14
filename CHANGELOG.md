@@ -15,25 +15,22 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
-- **LLM token tracking** — every successful Anthropic API call now publishes a structured `llm.call` bus event (spec 10) with full model provenance, token counts (including prompt-cache breakdown), estimated cost, latency, and SHA-256 content fingerprints. Events land in `audit_log` automatically via the existing audit logger, enabling per-agent attribution and data-driven context budgeting (closes #326, prerequisite for #24).
+- **LLM token tracking** — every successful Anthropic API call now publishes a structured `llm.call` bus event with full model provenance, token counts (including prompt-cache breakdown), estimated cost, latency, and SHA-256 content fingerprints. Events land in `audit_log` via the existing audit logger, enabling per-agent attribution and data-driven context budgeting. (closes #326, prerequisite for #24)
+- **Context budget** — token-aware context assembly with per-tier budgeting and automatic estimation. Publishes `context.budget` events after each LLM call with per-tier token estimates, utilization percentage, and which tiers were dropped — preventing silent context-window overflow on large conversations. (#24)
 
 ### Changed
 
 - **Model routing** — agents declare `model.tier` instead of a specific model; operator maps tiers centrally (ADR-014). (#260)
-- **`LLMUsage`** extended with `cacheCreationInputTokens` and `cacheReadInputTokens` fields (previously silently dropped from the Anthropic API response).
-- **`LlmCallPayload`** extended with `cacheCreationInputTokens` and `cacheReadInputTokens` fields; `providerRequestId` comment corrected to reflect response body id (`msg_xxx`), not the HTTP header.
+- **Cache token fields** — `LLMUsage` and `LlmCallPayload` extended with `cacheCreationInputTokens` and `cacheReadInputTokens` (previously silently dropped from the Anthropic API response). `providerRequestId` comment corrected to reflect response body id (`msg_xxx`).
 - **`security.trust_thresholds` config** — action thresholds moved from hardcoded coordinator text to config; startup fails if missing or malformed.
+- **Compiled security context block** — four security sections extracted from `coordinator.yaml` into a runtime-injected `${security_context_block}`, always present regardless of coordinator customization.
 
 ### Fixed
 
-- **`TaskOriginator` through delegation boundaries** — originator now propagates through scheduler, delegate, and bullpen (including the poll-fallback path) so `isPrincipalOriginated()` works correctly (closes #504).
-- **Declarative job drift detection** — declarative (YAML-defined) scheduled jobs now support `intent_anchor`, enabling drift detection. Previously ignored at upsert time, causing the drift detector to silently skip all YAML jobs (closes #416).
-- **Google Workspace tools** pinned to coordinator — doc creation, editing, formatting, sharing, and drive tools are now always available without requiring `skill-registry` discovery (see #497).
-- **`extract-facts`** — programming errors in the per-fact loop now re-throw instead of silently incrementing `failed`. (#493)
-
-### Security
-
-- **Compiled security context block** — four security sections extracted from `coordinator.yaml` into runtime-injected `${security_context_block}`, always present.
+- **`TaskOriginator` through delegation boundaries** — originator now propagates through scheduler, delegate, and bullpen (including the poll-fallback path) so `isPrincipalOriginated()` works correctly. (closes #504)
+- **Declarative job drift detection** — declarative (YAML-defined) scheduled jobs now support `intent_anchor`, enabling drift detection. Previously ignored at upsert time, causing the drift detector to silently skip all YAML jobs. (closes #416)
+- **Google Workspace tools** — doc creation, editing, formatting, sharing, and Drive tools now reliably available to the coordinator without manual discovery. (#497)
+- **`extract-facts`** — programming errors in the per-fact loop now re-throw instead of being silently swallowed. (#493)
 
 ### Removed
 
