@@ -518,14 +518,32 @@ export class NylasClient {
       headers: msg.headers?.map((h) => ({ name: h.name, value: h.value })),
       // Filter out inline images (e.g. embedded logos) — only surface real file attachments.
       // The Nylas SDK marks inline parts with isInline: true or contentDisposition: 'inline'.
-      attachments: (msg.attachments ?? [])
-        .filter((a) => !a.isInline && a.contentDisposition !== 'inline')
-        .map((a) => ({
-          id: a.id,
-          filename: a.filename ?? 'unnamed',
-          contentType: a.contentType,
-          size: a.size ?? 0,
-        })),
+      attachments: (() => {
+        const allAttachments = msg.attachments ?? [];
+        const attachments = allAttachments
+          .filter((a) => {
+            // Exclude inline attachments (embedded images, email signature graphics, CID parts).
+            // Check both fields: providers set either one or both depending on their implementation.
+            const markedInline = a.isInline === true;
+            const dispositionInline =
+              typeof a.contentDisposition === 'string' &&
+              a.contentDisposition.toLowerCase().startsWith('inline');
+            return !markedInline && !dispositionInline;
+          })
+          .map((a) => ({
+            id: a.id,
+            filename: a.filename ?? 'unnamed',
+            contentType: a.contentType ?? 'application/octet-stream',
+            size: a.size ?? 0,
+          }));
+        if (allAttachments.length > attachments.length) {
+          this.log.debug(
+            { messageId: msg.id, filtered: allAttachments.length - attachments.length },
+            'nylas: filtered out inline attachments',
+          );
+        }
+        return attachments;
+      })(),
     };
   }
 

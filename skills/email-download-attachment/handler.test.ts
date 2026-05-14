@@ -165,11 +165,35 @@ describe('EmailDownloadAttachmentHandler — successful download', () => {
     const handler = new EmailDownloadAttachmentHandler();
     const result = await handler.execute(makeCtx({
       outboundGateway: makeMockGateway({
-        downloadEmailAttachment: vi.fn().mockRejectedValue(new Error('Download failed')),
+        downloadEmailAttachment: vi.fn().mockRejectedValue(new Error('Network timeout')),
       }),
     }));
     expect(result.success).toBe(false);
-    expect((result as { error: string }).error).toContain('Failed to download attachment');
+    const error = (result as { error: string }).error;
+    // Error message must include the filename and the underlying error detail
+    expect(error).toContain('report.pdf');
+    expect(error).toContain('Network timeout');
+  });
+
+  it('returns error when actual download size exceeds 10 MB even though declared size was 0', async () => {
+    // Simulates a provider that returns size: 0 in the attachment metadata (missing declared size),
+    // allowing the pre-check to pass, but the actual downloaded bytes exceed the limit.
+    const msgWithZeroSize = makeMessage({
+      attachments: [{ id: 'att-1', filename: 'sneaky.bin', contentType: 'application/octet-stream', size: 0 }],
+    });
+    // Allocate a buffer just over 10 MB
+    const oversizedBuffer = Buffer.alloc(10 * 1024 * 1024 + 1);
+    const handler = new EmailDownloadAttachmentHandler();
+    const result = await handler.execute(makeCtx({
+      outboundGateway: makeMockGateway({
+        getEmailMessage: vi.fn().mockResolvedValue(msgWithZeroSize),
+        downloadEmailAttachment: vi.fn().mockResolvedValue(oversizedBuffer),
+      }),
+    }));
+    expect(result.success).toBe(false);
+    const error = (result as { error: string }).error;
+    expect(error).toContain('sneaky.bin');
+    expect(error).toContain('10 MB');
   });
 
   it('passes accountId to gateway methods when account is provided', async () => {
