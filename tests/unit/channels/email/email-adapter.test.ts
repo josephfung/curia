@@ -863,6 +863,36 @@ describe('EmailAdapter — inbound poll: self-loop hardening', () => {
     await adapter.stop();
   });
 
+  it('skips message with Gmail-style folder name ([Gmail]/Sent Mail)', async () => {
+    const msg = makeMockMessage({
+      from: [{ email: CEO_EMAIL }],
+      folders: ['[Gmail]/Sent Mail'],
+    });
+    const { mocks, adapter } = await startWithMessages([msg]);
+    expect(wasPublished(mocks)).toBe(false);
+    await adapter.stop();
+  });
+
+  it('skips message with Outlook-style folder name (Sent Items)', async () => {
+    const msg = makeMockMessage({
+      from: [{ email: CEO_EMAIL }],
+      folders: ['Sent Items'],
+    });
+    const { mocks, adapter } = await startWithMessages([msg]);
+    expect(wasPublished(mocks)).toBe(false);
+    await adapter.stop();
+  });
+
+  it('skips message with suffixed draft folder name (Drafts_Old)', async () => {
+    const msg = makeMockMessage({
+      from: [{ email: CEO_EMAIL }],
+      folders: ['Drafts_Old'],
+    });
+    const { mocks, adapter } = await startWithMessages([msg]);
+    expect(wasPublished(mocks)).toBe(false);
+    await adapter.stop();
+  });
+
   // ── Layer 2: recently-sent message ID tracking ────────────────────────────
 
   it('skips inbound message whose ID matches a recently-sent message', async () => {
@@ -883,6 +913,7 @@ describe('EmailAdapter — inbound poll: self-loop hardening', () => {
     (mocks.outboundGateway.listEmailMessages as ReturnType<typeof vi.fn>).mockResolvedValue([threadMsg]);
 
     await adapter.start();
+    await flushPoll();
 
     // Trigger an outbound reply — this causes the adapter to call gateway.send()
     // and track the returned 'sent-loop-id'
