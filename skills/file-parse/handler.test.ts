@@ -195,6 +195,47 @@ describe('FileParseHandler', () => {
     });
   });
 
+  describe('HTML handling — security', () => {
+    // ── Security: js/bad-tag-filter ───────────────────────────────────────────
+
+    it('strips <script> blocks whose closing tag has trailing whitespace (</script >)', async () => {
+      const html = '<p>Safe</p><script>evil()</script > trailing';
+      const content = Buffer.from(html).toString('base64');
+      const handler = new FileParseHandler();
+      const result = await handler.execute(makeCtx({
+        content_base64: content,
+        mime_type: 'text/html',
+        extract_as: 'raw',
+      }));
+      expect(result.success).toBe(true);
+      if (result.success) {
+        const data = result.data as { raw_text: string };
+        expect(data.raw_text).not.toContain('evil');
+        expect(data.raw_text).toContain('Safe');
+      }
+    });
+
+    // ── Security: js/double-escaping ──────────────────────────────────────────
+
+    it('does not double-decode &amp;lt; into a literal < in HTML text', async () => {
+      // Original entity order decoded &amp; first, then &lt;, so &amp;lt; → &lt; → <
+      const html = '<p>Entity: &amp;lt;</p>';
+      const content = Buffer.from(html).toString('base64');
+      const handler = new FileParseHandler();
+      const result = await handler.execute(makeCtx({
+        content_base64: content,
+        mime_type: 'text/html',
+        extract_as: 'raw',
+      }));
+      expect(result.success).toBe(true);
+      if (result.success) {
+        const data = result.data as { raw_text: string };
+        expect(data.raw_text).toContain('&lt;');
+        expect(data.raw_text).not.toContain('Entity: <');
+      }
+    });
+  });
+
   describe('HTML handling', () => {
     it('extracts text from HTML and returns raw_text', async () => {
       const html = '<html><body><h1>Invoice</h1><p>Amount: $50.00</p></body></html>';

@@ -7,6 +7,8 @@
 //
 // Lesson from Zora: tool outputs without sanitization are a prompt injection vector.
 
+import sanitizeHtml from 'sanitize-html';
+
 export interface SanitizeOptions {
   /** Max output length in characters. Default: Infinity (no truncation). */
   maxLength?: number;
@@ -31,16 +33,53 @@ const SECRET_PATTERNS: RegExp[] = [
   /(?<![a-zA-Z0-9])[a-f0-9]{32,}(?![a-zA-Z0-9])/g,
 ];
 
-// Tags that could be interpreted as system-level instructions by an LLM.
-// We strip these entirely (tag + content for paired tags, just the tag for self-closing).
-const DANGEROUS_TAG_PATTERN = /<\/?(system|instruction|prompt|role|script|iframe|object|embed|applet)[^>]*>/gi;
+// Tags whose content must be stripped entirely (not just the tag delimiters).
+// sanitize-html's nonTextTags option removes these elements AND all their descendants.
+// Includes LLM instruction-like XML tags and classic XSS/injection vectors.
+const DANGEROUS_NONTEXTUAL_TAGS: string[] = [
+  'system', 'instruction', 'prompt', 'role',
+  'script', 'iframe', 'object', 'embed', 'applet', 'style',
+];
+
+/**
+ * Strip dangerous HTML/XML tags using a hardened library parser rather than
+ * home-grown regex chains.
+ *
+ * Tags in DANGEROUS_NONTEXTUAL_TAGS have their content stripped too (not just
+ * the opening/closing delimiters). All other HTML tags are stripped but their
+ * text content is preserved.
+ *
+ * sanitize-html encodes & < > " in text nodes as HTML entities; the post-decode
+ * step converts them back to literal characters since our output goes to an LLM
+ * (not to a browser renderer).
+ */
+function stripDangerousTags(text: string): string {
+  const stripped = sanitizeHtml(text, {
+    allowedTags: [],
+    allowedAttributes: {},
+    // Content inside these tags is removed entirely, not just the tag delimiters.
+    // This prevents injected payloads like <system>evil</system> from leaking their
+    // body text into LLM context even after the tags are stripped.
+    nonTextTags: DANGEROUS_NONTEXTUAL_TAGS,
+  });
+
+  // sanitize-html HTML-encodes bare & < > " ' in text nodes.
+  // Decode them back to literal characters: LLMs consume plain text, not HTML markup.
+  // Order: &amp; must be decoded LAST to avoid double-decoding (e.g. &amp;lt; → &lt;, not <).
+  return stripped
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#x27;/g, "'")
+    .replace(/&amp;/g, '&');
+}
 
 /**
  * Sanitize skill output before feeding it back to an LLM.
  *
  * Steps (in order):
  * 1. Coerce non-strings to JSON
- * 2. Strip dangerous HTML/XML tag pairs + content, then orphan tags
+ * 2. Strip dangerous HTML/XML tags (tag pairs + content for listed tags, just the tag for others)
  * 3. Redact secret patterns
  * 4. Truncate to length limit (only if caller passes maxLength; no limit by default)
  * 5. Wrap errors in <tool_error> tags
@@ -65,16 +104,12 @@ export function sanitizeOutput(
     }
   }
 
-  // 2. Strip dangerous tag pairs WITH their content first (e.g., <system>...</system>)
-  // This must happen before stripping orphan tags — if we strip tags first,
-  // the paired-content regex has nothing to match and the injected content survives.
-  text = text.replace(/<(system|instruction|prompt|role|script)[\s>][\s\S]*?<\/\1>/gi, '');
-  // Then strip any remaining orphan dangerous tags (self-closing or unmatched).
-  // Reset lastIndex on the shared global regex — .replace() does this internally,
-  // but explicit reset guards against subtle bugs if this regex is ever used with
-  // test() elsewhere, and matches the pattern used in sanitizeDisplayName.
-  DANGEROUS_TAG_PATTERN.lastIndex = 0;
-  text = text.replace(DANGEROUS_TAG_PATTERN, '');
+  // 2. Strip dangerous tags using a hardened HTML parser.
+  // Using a library (sanitize-html) instead of regex chains prevents:
+  //   - js/incomplete-multi-character-sanitization: the parser handles all tag variants
+  //   - js/bad-tag-filter: whitespace-padded closing tags (</script >) are handled correctly
+  //   - js/polynomial-redos: no catastrophic backtracking — parser runs in linear time
+  text = stripDangerousTags(text);
 
   // 3. Redact known secret patterns
   const allPatterns = [...SECRET_PATTERNS, ...extraRedactPatterns];
@@ -132,21 +167,17 @@ const WHITESPACE_COLLAPSE = /\s+/g;
  * go through the exact same steps.
  *
  * Steps:
- * 1. Strip dangerous XML/HTML tag pairs with content
- * 2. Strip orphan dangerous tags
- * 3. Remove characters outside the name allowlist
- * 4. Collapse whitespace and trim
- * 5. Truncate to DISPLAY_NAME_MAX_LENGTH
+ * 1. Strip dangerous HTML/XML tags (using library parser — immune to ReDoS and bypass tricks)
+ * 2. Remove characters outside the name allowlist
+ * 3. Collapse whitespace and trim
+ * 4. Truncate to DISPLAY_NAME_MAX_LENGTH
  */
 function applyDisplayNamePipeline(value: string): string {
-  let result = value;
-
-  // Strip dangerous tag pairs with content, then orphan tags.
-  // Reset lastIndex on the shared global regex for safety — consistent with
-  // how sanitizeOutput handles SECRET_PATTERNS above.
-  result = result.replace(/<(system|instruction|prompt|role|script)[\s>][\s\S]*?<\/\1>/gi, '');
-  DANGEROUS_TAG_PATTERN.lastIndex = 0;
-  result = result.replace(DANGEROUS_TAG_PATTERN, '');
+  // Strip dangerous tags using the same hardened library used in sanitizeOutput.
+  // The allowlist in step 2 below strips all remaining angle brackets anyway,
+  // so this step focuses on removing dangerous tag CONTENT (e.g. <system>evil</system>
+  // → content stripped, vs. a tag with allowed content where only the delimiters vanish).
+  let result = stripDangerousTags(value);
 
   // Remove non-allowlisted characters (strips colons, semicolons, angle brackets, etc.)
   result = result.replace(DISPLAY_NAME_ALLOWED, '');
