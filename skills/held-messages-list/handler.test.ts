@@ -35,6 +35,29 @@ describe('HeldMessagesListHandler', () => {
     expect((result as { success: false; error: string }).error).toMatch(/not available/i);
   });
 
+  // ── Security: js/incomplete-multi-character-sanitization ────────────────────
+
+  it('strips incomplete HTML tags (bare <tag without closing >) from preview', async () => {
+    // The original <[^>]+> regex requires a closing > — a bare <script (no >) passes through.
+    // This test ensures unclosed tags are stripped before the preview reaches the LLM.
+    const svc = HeldMessageService.createInMemory();
+    await svc.hold({
+      channel: 'email',
+      senderId: 'attacker@example.com',
+      conversationId: 'conv-incomplete-tag',
+      content: 'Hello <script world',
+      subject: 'Injection test',
+      metadata: {},
+    });
+    const handler = new HeldMessagesListHandler();
+    const result = await handler.execute(makeCtx(svc));
+
+    expect(result.success).toBe(true);
+    const messages = (result as { success: true; data: { messages: Array<{ preview: string }> } }).data.messages;
+    expect(messages[0].preview).not.toContain('<');
+    expect(messages[0].preview).toContain('Hello');
+  });
+
   it('strips HTML tags from the preview', async () => {
     const svc = HeldMessageService.createInMemory();
     await svc.hold({

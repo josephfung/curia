@@ -300,15 +300,27 @@ export class FileParseHandler implements SkillHandler {
 /** Strip HTML tags and decode common entities. Lightweight, no dependency. */
 function stripHtmlTags(html: string): string {
   return html
-    .replace(/<script[\s\S]*?<\/script>/gi, '')
-    .replace(/<style[\s\S]*?<\/style>/gi, '')
+    // Strip <script> and <style> blocks including their content.
+    // \s* before the closing > handles whitespace-padded closing tags like </script >
+    // which the original pattern (</script>) did not match (js/bad-tag-filter).
+    .replace(/<script[^>]*>[\s\S]*?<\/script\s*>/gi, '')
+    .replace(/<style[^>]*>[\s\S]*?<\/style\s*>/gi, '')
+    // Strip all complete HTML tags (< ... >).
     .replace(/<[^>]+>/g, ' ')
-    .replace(/&amp;/g, '&')
+    // Strip incomplete tags — bare <tagname without a closing > cannot be caught by
+    // <[^>]+> above (which requires >). This prevents <script fragments from leaking
+    // into the extracted text (js/incomplete-multi-character-sanitization).
+    .replace(/<[a-zA-Z][^>]*/g, ' ')
+    // Decode HTML entities.
+    // Order matters: &amp; must be decoded LAST to prevent double-decoding.
+    // Decoding &amp; first turns &amp;lt; into &lt;, which then decodes to <,
+    // smuggling a literal < through (js/double-escaping).
     .replace(/&lt;/g, '<')
     .replace(/&gt;/g, '>')
     .replace(/&quot;/g, '"')
     .replace(/&#39;/g, "'")
     .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
     .replace(/\s+/g, ' ')
     .trim();
 }

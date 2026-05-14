@@ -4,8 +4,8 @@
 // Optionally filters by channel. Returns a summary with sender, subject,
 // plaintext preview (500 chars), totalLength, and timestamp for each message.
 //
-// preview is stripped of HTML tags before slicing — a simple regex replacement
-// (<[^>]+> → empty string), not a full DOM parser. Good enough for preview
+// preview is stripped of HTML tags before slicing — two regex passes (complete tags
+// then incomplete tag fragments), not a full DOM parser. Good enough for preview
 // extraction; the coordinator LLM reads this to infer the nature of the request.
 //
 // totalLength is the character count of the full plaintext body. When preview
@@ -20,7 +20,13 @@ import { toLocalIso, formatDisplayTimezone } from '../../src/time/timestamp.js';
 // Strip HTML tags for plaintext extraction.
 // Not a full DOM parser — good enough for preview purposes.
 function stripHtml(content: string): string {
-  return content.replace(/<[^>]+>/g, '');
+  return content
+    // Strip complete tags (< ... >).
+    .replace(/<[^>]+>/g, '')
+    // Strip incomplete tags — bare <tagname without a closing > is not caught by <[^>]+>
+    // (which requires >). This prevents <script fragments from leaking into the preview
+    // and reaching the LLM context (js/incomplete-multi-character-sanitization).
+    .replace(/<[a-zA-Z][^>]*/g, '');
 }
 
 export class HeldMessagesListHandler implements SkillHandler {
