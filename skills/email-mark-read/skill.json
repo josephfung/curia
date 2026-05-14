@@ -1,0 +1,20 @@
+{
+  "name": "email-mark-read",
+  "description": "Mark an email message as read. Call after processing a message to prevent re-processing on subsequent triage runs.",
+  "version": "1.0.0",
+  "sensitivity": "normal",
+  "action_risk": "low",
+  "inputs": {
+    "message_id": "string (Nylas message ID to mark as read)",
+    "account": "string? (named account, e.g. 'curia'; defaults to the primary account if omitted)"
+  },
+  "outputs": {
+    "marked_read": "boolean — true when the message was successfully marked as read"
+  },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 10000,
+  "capabilities": [
+    "outboundGateway"
+  ]
+}
