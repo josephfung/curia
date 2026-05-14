@@ -1,0 +1,9 @@
+name: test-scheduled-agent
+description: A valid test agent with a scheduled task that includes intent_anchor
+model:
+  tier: standard
+system_prompt: You are a test agent.
+schedule:
+  - cron: "*/30 * * * *"
+    task: Check for new items to process.
+    intent_anchor: Scheduled processing of inbound items for triage.
