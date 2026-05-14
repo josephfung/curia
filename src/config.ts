@@ -698,6 +698,15 @@ export function loadConfig(): Config {
     throw new Error(`NYLAS_POLL_INTERVAL_MS must be a number >= 1000, got: ${process.env.NYLAS_POLL_INTERVAL_MS}`);
   }
 
+  // Validate IANA timezone before any consumer sees it — bad config should fail at
+  // startup, not silently produce wrong timestamps at runtime.
+  const timezone = process.env.TIMEZONE ?? 'America/Toronto';
+  try {
+    Intl.DateTimeFormat(undefined, { timeZone: timezone });
+  } catch {
+    throw new Error(`Invalid TIMEZONE configuration: "${timezone}" is not a recognized IANA timezone`);
+  }
+
   return {
     databaseUrl,
     anthropicApiKey: process.env.ANTHROPIC_API_KEY,
@@ -707,7 +716,7 @@ export function loadConfig(): Config {
     apiToken: process.env.API_TOKEN,
     webAppBootstrapSecret: process.env.WEB_APP_BOOTSTRAP_SECRET,
     appOrigin: process.env.APP_ORIGIN || undefined,
-    timezone: process.env.TIMEZONE ?? 'America/Toronto',
+    timezone,
     nylasApiKey: process.env.NYLAS_API_KEY,
     nylasGrantId: process.env.NYLAS_GRANT_ID,
     nylasPollingIntervalMs,

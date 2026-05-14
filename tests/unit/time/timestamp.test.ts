@@ -26,6 +26,25 @@ describe('toLocalIso', () => {
   it('throws on invalid timezone', () => {
     expect(() => toLocalIso(1775489400, 'Not/A/Zone')).toThrow('invalid timezone');
   });
+
+  it('returns null for null input', () => {
+    expect(toLocalIso(null, 'America/Toronto')).toBeNull();
+  });
+
+  it('returns null for non-finite input', () => {
+    expect(toLocalIso(NaN, 'America/Toronto')).toBeNull();
+    expect(toLocalIso(Infinity, 'America/Toronto')).toBeNull();
+  });
+
+  it('returns null for non-positive input', () => {
+    expect(toLocalIso(0, 'America/Toronto')).toBeNull();
+    expect(toLocalIso(-1, 'America/Toronto')).toBeNull();
+  });
+
+  it('falls back to UTC when timezone is omitted', () => {
+    // 1775489400 = 2026-04-06T15:30:00Z
+    expect(toLocalIso(1775489400)).toBe('2026-04-06T15:30:00.000Z');
+  });
 });
 
 describe('formatDisplayTimezone', () => {

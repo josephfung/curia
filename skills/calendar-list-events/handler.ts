@@ -122,27 +122,14 @@ export class CalendarListEventsHandler implements SkillHandler {
       }
 
       // Format events for LLM consumption.
-      // Nylas returns timed event timestamps as Unix seconds. Convert to the user's
-      // local timezone so the wall-clock digits in the ISO string match local time.
-      // The LLM reads these digits directly — it cannot reliably do UTC conversion.
-      // Falls back to UTC Z-suffix when timezone is not configured (defensive).
-      //
-      // Guard non-finite and non-positive values: Unix 0 is never a real calendar
-      // event time, and passing "1970-01-01T00:00:00Z" to the LLM would be silently
-      // wrong. Log and null-out rather than propagate corrupted data.
+      // toLocalIso converts Unix seconds to the user's local timezone so the LLM reads
+      // correct wall-clock times. Falls back to UTC when timezone is not configured,
+      // and returns null for null/invalid timestamp values.
       const tz = ctx.timezone;
-      const toIso = (unix: number | null, field: string, eventId: string): string | null => {
-        if (unix === null) return null;
-        if (!Number.isFinite(unix) || unix <= 0) {
-          ctx.log.warn({ eventId, field, value: unix }, `calendar-list-events: suspicious ${field} value — omitting`);
-          return null;
-        }
-        return tz ? toLocalIso(unix, tz) : new Date(unix * 1000).toISOString();
-      };
       const formattedEvents = events.map((evt) => ({
         ...evt,
-        startTime: toIso(evt.startTime, 'startTime', evt.id),
-        endTime: toIso(evt.endTime, 'endTime', evt.id),
+        startTime: toLocalIso(evt.startTime, tz),
+        endTime: toLocalIso(evt.endTime, tz),
       }));
 
       ctx.log.info({ calendarIds, count: formattedEvents.length, failedCalendarIds }, 'Listed events');

@@ -30,10 +30,8 @@ export class ListPendingActionsHandler implements SkillHandler {
         short_ref: row.shortRef,
         description: row.description,
         skill_name: row.skillName,
-        created_at: tz ? toLocalIso(Math.floor(row.createdAt.getTime() / 1000), tz) : row.createdAt.toISOString(),
-        expires_at: row.expiresAt
-          ? (tz ? toLocalIso(Math.floor(row.expiresAt.getTime() / 1000), tz) : row.expiresAt.toISOString())
-          : null,
+        created_at: toLocalIso(Math.floor(row.createdAt.getTime() / 1000), tz),
+        expires_at: row.expiresAt ? toLocalIso(Math.floor(row.expiresAt.getTime() / 1000), tz) : null,
       }));
 
       if (pending.length === 0) {
