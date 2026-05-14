@@ -17,6 +17,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 - **Email folder management skills** — `email-label`, `email-list-folders`, `email-create-folder`, and `email-mark-read` expose Nylas folder and read-state operations as general-purpose skills.
 
+### Security
+
+- **Gitleaks secret scanning** — CI now runs Gitleaks on every PR and push to `main`, blocking merge if secrets are detected. (#560)
+
 ---
 
 ## [0.28.0] — 2026-05-14 — "Thufir Hawat"

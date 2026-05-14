@@ -1,0 +1,15 @@
+[extend]
+useDefault = true
+
+[allowlist]
+# Exclude test fixtures, generated files, and documentation
+paths = [
+  '''tests/''',
+  '''pnpm-lock\.yaml''',
+  '''dist/''',
+  '''docs/''',
+]
+regexes = [
+  # Postgres connection strings pointing at localhost (test/dev configs, CI, .env.example)
+  '''postgres://[^@]*@localhost''',
+]
