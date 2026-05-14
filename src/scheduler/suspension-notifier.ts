@@ -38,7 +38,7 @@ export class SuspensionNotifier {
       // handled internally. The outer .catch() is a backstop for unexpected throws
       // not covered by handle()'s own error handling.
       void this.handle(event as ScheduleSuspendedEvent).catch((err: unknown) => {
-        this.log.error({ err }, 'SuspensionNotifier: unexpected error in handler');
+        this.log.error({ err, eventId: event.id, eventType: event.type }, 'SuspensionNotifier: unexpected error in handler');
       });
     });
     this.log.info('SuspensionNotifier registered');
@@ -72,7 +72,7 @@ export class SuspensionNotifier {
 
     if (!sent) {
       this.log.error(
-        { jobId, agentId },
+        { jobId, agentId, consecutiveFailures, lastError },
         'SuspensionNotifier: failed to publish notification — suspension already recorded in audit log',
       );
     }
