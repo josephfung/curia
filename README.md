@@ -34,11 +34,12 @@ Every action is logged. Every decision is traceable. Every agent stays in its la
 | | Typical Agent Framework | Curia |
 |---|---|---|
 | **Security model** | "Trust the agent" | Hard-enforced layer separation — channel adapters *physically cannot* invoke tools |
+| **Self-modification** | Agents can edit their own prompts, tools, and code at runtime | Agents cannot modify themselves — new skills, agents, and prompts always require human approval |
 | **Audit trail** | Console.log | Append-only Postgres with causal tracing across every event |
-| **Institutional memory** | Conversation history (lost on restart) | Knowledge graph + entity memory + temporal decay (survives restarts, ages gracefully) |
+| **Institutional memory** | Conversation history + flat files (lost or stale across restarts) | Knowledge graph + entity memory + temporal decay (survives restarts, ages gracefully) |
 | **Error handling** | Retry and hope | Error budgets, state continuity, pattern detection — agents resume, not restart |
 | **Agent coordination** | Agents work in isolation | The Bullpen — structured, auditable, threaded inter-agent discussions |
-| **Multi-channel** | Single chat interface | Email, Signal, CLI, HTTP API — same agent, any channel |
+| **Multi-channel** | Many channels, often without consistent security boundaries | Email, Signal, CLI, HTTP API — every channel shares the same security model and audit trail |
 | **Autonomy** | All or nothing | Five configurable bands — from advisory-only to fully independent, with intent drift detection |
 
 ---
