@@ -540,6 +540,88 @@ describe('autonomy gates', () => {
 
     expect(result.success).toBe(true);
   });
+
+  it('skips gates A and B when task is principal-originated (Gate B territory)', async () => {
+    const registry = new SkillRegistry();
+    const handler = makeHandler('ok');
+    // calendar-create-event uses action_risk: 'high' → requires score 80. Score 74 would normally block.
+    registry.register(makeRiskyManifest('calendar-create-event', 'high'), handler);
+
+    const layer = new ExecutionLayer(registry, logger, {
+      autonomyService: makeAutonomyService(74),
+    });
+
+    const result = await layer.invoke('calendar-create-event', {}, undefined, {
+      taskMetadata: {
+        originator: {
+          contactId: 'ceo-contact-id',
+          systemRole: 'principal' as const,
+          channel: 'email',
+          initiatedAt: new Date().toISOString(),
+        },
+      },
+    });
+
+    expect(result.success).toBe(true);
+    expect(handler.execute).toHaveBeenCalledOnce();
+  });
+
+  it('skips gates A and B when task is principal-originated (Gate A territory)', async () => {
+    const registry = new SkillRegistry();
+    const handler = makeHandler('ok');
+    // score 50 triggers Gate A (< 60 blocks all non-none) and Gate B (50 < 70 threshold for medium) —
+    // principal should bypass both
+    registry.register(makeRiskyManifest('send-email', 'medium'), handler);
+
+    const layer = new ExecutionLayer(registry, logger, {
+      autonomyService: makeAutonomyService(50),
+    });
+
+    const result = await layer.invoke('send-email', {}, undefined, {
+      taskMetadata: {
+        originator: {
+          contactId: 'ceo-contact-id',
+          systemRole: 'principal' as const,
+          channel: 'email',
+          initiatedAt: new Date().toISOString(),
+        },
+      },
+    });
+
+    expect(result.success).toBe(true);
+    expect(handler.execute).toHaveBeenCalledOnce();
+  });
+
+  it('does NOT bypass gates for agent-originated tasks', async () => {
+    const registry = new SkillRegistry();
+    const handler = makeHandler('should not run');
+    registry.register(makeRiskyManifest('calendar-create-event', 'high'), handler); // requires 80
+
+    const mockBus = { publish: vi.fn().mockResolvedValue(undefined) } as unknown as EventBus;
+    const layer = new ExecutionLayer(registry, logger, {
+      autonomyService: makeAutonomyService(74), // below 80 — should block non-principal
+      bus: mockBus,
+    });
+
+    const result = await layer.invoke('calendar-create-event', {}, undefined, {
+      taskMetadata: {
+        originator: {
+          contactId: 'agent-contact-id',
+          systemRole: 'agent' as const,
+          channel: 'internal',
+          initiatedAt: new Date().toISOString(),
+        },
+      },
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      // Gate B fired — error should reference the autonomy score and the required threshold (80)
+      expect(result.error).toContain('autonomy');
+      expect(result.error).toContain('80');
+    }
+    expect(handler.execute).not.toHaveBeenCalled();
+  });
 });
 
 // ---------------------------------------------------------------------------
