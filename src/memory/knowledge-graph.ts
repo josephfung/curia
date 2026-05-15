@@ -552,7 +552,7 @@ class PostgresBackend implements KnowledgeGraphBackend {
        WHERE id = $1
          AND archived_at IS NULL
          AND NOT ($2 = ANY(aliases))
-         AND cardinality(aliases) < 10`,
+         AND cardinality(aliases) < 10`,  /* must match MAX_ALIASES_PER_ENTITY */
       [nodeId, alias],
     );
     return (result.rowCount ?? 0) > 0;
@@ -1020,7 +1020,7 @@ class InMemoryBackend implements KnowledgeGraphBackend {
     const node = this.nodes.get(nodeId);
     if (!node || this.archivedNodes.has(nodeId)) return false;
     if (node.aliases.includes(alias)) return false;
-    if (node.aliases.length >= 10) return false;
+    if (node.aliases.length >= 10) return false; // must match MAX_ALIASES_PER_ENTITY
     this.nodes.set(nodeId, { ...node, aliases: [...node.aliases, alias] });
     return true;
   }
