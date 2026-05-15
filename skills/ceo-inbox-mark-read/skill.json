@@ -1,0 +1,18 @@
+{
+  "name": "ceo-inbox-mark-read",
+  "description": "Mark a message as read in the CEO's personal email inbox. Call this after processing each message to prevent re-processing on the next triage run. Intended for use by the ceo-inbox agent — accesses the CEO's personal email, do not call from other agents.",
+  "version": "0.1.0",
+  "sensitivity": "normal",
+  "action_risk": "low",
+  "inputs": {
+    "message_id": "string (Nylas message ID to mark as read)"
+  },
+  "outputs": {
+    "success": "boolean",
+    "message_id": "string"
+  },
+  "permissions": [],
+  "secrets": ["nylas_api_key", "ceo_nylas_grant_id"],
+  "timeout": 10000,
+  "capabilities": []
+}

@@ -1,0 +1,22 @@
+{
+  "name": "ceo-inbox-label",
+  "description": "Apply one or more labels to a message in the CEO's personal email inbox. Resolves label names to Gmail folder IDs, creating any labels that do not yet exist. Use this to apply decision-tagging classifications or rule-based labels. Intended for use by the ceo-inbox agent — accesses the CEO's personal email, do not call from other agents.",
+  "version": "0.1.0",
+  "sensitivity": "normal",
+  "action_risk": "low",
+  "inputs": {
+    "message_id": "string (Nylas message ID to label)",
+    "labels": "string[] (label names to apply, e.g. ['URGENT', 'BOARD'])"
+  },
+  "outputs": {
+    "success": "boolean",
+    "message_id": "string",
+    "applied": "string[] (labels successfully applied)",
+    "created": "string[] (labels that were newly created in Gmail)",
+    "folders": "string[] (full folder list after update)"
+  },
+  "permissions": [],
+  "secrets": ["nylas_api_key", "ceo_nylas_grant_id"],
+  "timeout": 30000,
+  "capabilities": []
+}

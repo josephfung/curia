@@ -1,0 +1,27 @@
+{
+  "name": "ceo-inbox-read",
+  "description": "Read a specific email message from the CEO's personal inbox, returning both plain text and HTML body. Intended for use by the ceo-inbox agent — accesses the CEO's personal email, do not call from other agents.",
+  "version": "0.1.0",
+  "sensitivity": "normal",
+  "action_risk": "none",
+  "inputs": {
+    "message_id": "string (Nylas message ID to fetch)"
+  },
+  "outputs": {
+    "id": "string",
+    "threadId": "string",
+    "from": "array of { name?, email }",
+    "to": "array of { name?, email }",
+    "cc": "array of { name?, email }",
+    "subject": "string",
+    "body_plain": "string (plain text body)",
+    "body_html": "string (HTML body)",
+    "date": "number (unix timestamp)",
+    "labels": "array of strings",
+    "attachments": "array of { id, filename, contentType, size } (non-inline file attachments; pass id + message id to ceo-inbox-download-attachment)"
+  },
+  "permissions": [],
+  "secrets": ["nylas_api_key", "ceo_nylas_grant_id"],
+  "timeout": 15000,
+  "capabilities": []
+}
