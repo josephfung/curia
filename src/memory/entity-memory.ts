@@ -970,6 +970,10 @@ export class EntityMemory {
    *   Nodes already returned by Path 1 are deduplicated.
    *
    * The two paths run concurrently. Results are truncated to `limit` after merging.
+   *
+   * Note: the final result count may be less than `limit` when alias matches overlap
+   * with the top vector results. This is a known trade-off of the concurrent design —
+   * the vector path is capped at `limit` upfront and overlap nodes are deduped out.
    */
   async search(
     query: string,
@@ -983,6 +987,15 @@ export class EntityMemory {
       options?.maxSensitivity !== undefined
         ? SENSITIVITY_LEVELS.indexOf(options.maxSensitivity)
         : undefined;
+
+    // Guard: reject unrecognized maxSensitivity values early.
+    // The vector path (semanticSearch) throws on unknown values; we must match
+    // that behavior so both paths fail consistently instead of diverging.
+    if (maxSensitivityRank === -1) {
+      throw new Error(
+        `Unknown maxSensitivity: "${options!.maxSensitivity}". Valid values: ${SENSITIVITY_LEVELS.join(', ')}`,
+      );
+    }
 
     // Run both paths concurrently — they are independent queries.
     const [labelMatches, vectorResults] = await Promise.all([
