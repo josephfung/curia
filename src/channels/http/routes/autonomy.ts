@@ -33,9 +33,14 @@ export async function autonomyRoutes(
     return assertSecret(request, reply, webAppBootstrapSecret, sessions);
   }
 
+  // Stricter per-route rate limit for all autonomy endpoints: 10 req/min per IP.
+  // These routes check credentials on every call — a brute-force target that
+  // needs tighter throttling than the global 200/min baseline.
+  const AUTH_RATE = { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } };
+
   // -- GET /api/autonomy — return current autonomy config --
 
-  app.get('/api/autonomy', async (request, reply) => {
+  app.get('/api/autonomy', AUTH_RATE, async (request, reply) => {
     if (!requireAuth(request, reply)) return;
 
     try {
@@ -64,7 +69,7 @@ export async function autonomyRoutes(
 
   // -- PUT /api/autonomy — set the autonomy score --
 
-  app.put('/api/autonomy', async (request, reply) => {
+  app.put('/api/autonomy', AUTH_RATE, async (request, reply) => {
     if (!requireAuth(request, reply)) return;
 
     const body = request.body as { score?: unknown; reason?: unknown } | null;
@@ -106,7 +111,7 @@ export async function autonomyRoutes(
 
   // -- GET /api/autonomy/history — paginated history of score changes --
 
-  app.get('/api/autonomy/history', async (request, reply) => {
+  app.get('/api/autonomy/history', AUTH_RATE, async (request, reply) => {
     if (!requireAuth(request, reply)) return;
 
     // Parse query params with safe defaults. Clamp limit to max 50 to prevent

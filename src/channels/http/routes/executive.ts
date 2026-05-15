@@ -30,9 +30,14 @@ export async function executiveRoutes(
     return assertSecret(request, reply, webAppBootstrapSecret, sessions);
   }
 
+  // Stricter per-route rate limit for all executive endpoints: 10 req/min per IP.
+  // These routes check credentials on every call — a brute-force target that
+  // needs tighter throttling than the global 200/min baseline.
+  const AUTH_RATE = { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } };
+
   // -- GET /api/executive — return current executive profile --
 
-  app.get('/api/executive', async (request, reply) => {
+  app.get('/api/executive', AUTH_RATE, async (request, reply) => {
     if (!requireAuth(request, reply)) return;
 
     try {
@@ -46,7 +51,7 @@ export async function executiveRoutes(
 
   // -- PUT /api/executive — save a new version and trigger hot reload --
 
-  app.put('/api/executive', async (request, reply) => {
+  app.put('/api/executive', AUTH_RATE, async (request, reply) => {
     if (!requireAuth(request, reply)) return;
 
     const body = request.body as {
@@ -81,7 +86,7 @@ export async function executiveRoutes(
 
   // -- GET /api/executive/history — return all versions, newest first --
 
-  app.get('/api/executive/history', async (request, reply) => {
+  app.get('/api/executive/history', AUTH_RATE, async (request, reply) => {
     if (!requireAuth(request, reply)) return;
 
     try {
@@ -95,7 +100,7 @@ export async function executiveRoutes(
 
   // -- POST /api/executive/reload — force a reload from DB --
 
-  app.post('/api/executive/reload', async (request, reply) => {
+  app.post('/api/executive/reload', AUTH_RATE, async (request, reply) => {
     if (!requireAuth(request, reply)) return;
 
     try {

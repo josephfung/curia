@@ -3836,7 +3836,18 @@ export async function knowledgeGraphRoutes(
     return reply.status(200).send({ ok: true });
   });
 
-  app.get('/assets/cytoscape.min.js', async (_request, reply) => {
+  // Per-route rate limits for KG handlers (CodeQL js/missing-rate-limiting).
+  // Two tiers, both well above normal usage:
+  //   ASSET_RATE — static JS bundles served with immutable Cache-Control;
+  //               browsers only fetch once, so 60/min is a generous ceiling
+  //               against scanners without affecting real users.
+  //   KG_RATE    — KG explorer and task/contact API endpoints; 60/min per IP
+  //               allows rapid interactive browsing while blocking DoS-level
+  //               query floods against the database.
+  const ASSET_RATE = { config: { rateLimit: { max: 60, timeWindow: '1 minute' } } };
+  const KG_RATE = { config: { rateLimit: { max: 60, timeWindow: '1 minute' } } };
+
+  app.get('/assets/cytoscape.min.js', ASSET_RATE, async (_request, reply) => {
     // Use createRequire so Node's module resolution finds cytoscape relative to
     // this source file, not relative to the compiled bundle output path.
     // The URL-relative approach (new URL('../../../../node_modules/...')) breaks
@@ -3855,7 +3866,7 @@ export async function knowledgeGraphRoutes(
 
   // cytoscape-fcose layout extension — requires layout-base and cose-base as UMD globals.
   // All three are served as self-hosted assets using the same createRequire pattern as cytoscape.
-  app.get('/assets/layout-base.js', async (_request, reply) => {
+  app.get('/assets/layout-base.js', ASSET_RATE, async (_request, reply) => {
     const require = createRequire(import.meta.url);
     const source = await readFile(require.resolve('layout-base/layout-base.js'), 'utf8');
     reply
@@ -3864,7 +3875,7 @@ export async function knowledgeGraphRoutes(
       .send(source);
   });
 
-  app.get('/assets/cose-base.js', async (_request, reply) => {
+  app.get('/assets/cose-base.js', ASSET_RATE, async (_request, reply) => {
     const require = createRequire(import.meta.url);
     const source = await readFile(require.resolve('cose-base/cose-base.js'), 'utf8');
     reply
@@ -3873,7 +3884,7 @@ export async function knowledgeGraphRoutes(
       .send(source);
   });
 
-  app.get('/assets/cytoscape-fcose.js', async (_request, reply) => {
+  app.get('/assets/cytoscape-fcose.js', ASSET_RATE, async (_request, reply) => {
     const require = createRequire(import.meta.url);
     const source = await readFile(require.resolve('cytoscape-fcose/cytoscape-fcose.js'), 'utf8');
     reply
@@ -3882,7 +3893,7 @@ export async function knowledgeGraphRoutes(
       .send(source);
   });
 
-  app.get('/api/kg/nodes', async (request, reply) => {
+  app.get('/api/kg/nodes', KG_RATE, async (request, reply) => {
     if (!assertSecret(request, reply, webAppBootstrapSecret, sessions)) return;
 
     const query = request.query as {
@@ -3925,7 +3936,7 @@ export async function knowledgeGraphRoutes(
     });
   });
 
-  app.get('/api/kg/graph', async (request, reply) => {
+  app.get('/api/kg/graph', KG_RATE, async (request, reply) => {
     if (!assertSecret(request, reply, webAppBootstrapSecret, sessions)) return;
 
     const query = request.query as {
@@ -4054,7 +4065,7 @@ export async function knowledgeGraphRoutes(
     };
   }
 
-  app.get('/api/kg/tasks', async (request, reply) => {
+  app.get('/api/kg/tasks', KG_RATE, async (request, reply) => {
     if (!assertSecret(request, reply, webAppBootstrapSecret, sessions)) return;
     const result = await pool.query(
       `SELECT id, agent_id, intent_anchor, status, progress, error_budget, conversation_id, scheduled_job_id, created_at, updated_at
@@ -4080,7 +4091,7 @@ export async function knowledgeGraphRoutes(
     });
   });
 
-  app.post('/api/kg/tasks', async (request, reply) => {
+  app.post('/api/kg/tasks', KG_RATE, async (request, reply) => {
     if (!assertSecret(request, reply, webAppBootstrapSecret, sessions)) return;
     const body = request.body as {
       agentId?: unknown;
@@ -4155,7 +4166,7 @@ export async function knowledgeGraphRoutes(
     });
   });
 
-  app.patch('/api/kg/tasks/:id', async (request, reply) => {
+  app.patch('/api/kg/tasks/:id', KG_RATE, async (request, reply) => {
     if (!assertSecret(request, reply, webAppBootstrapSecret, sessions)) return;
     const { id } = request.params as { id: string };
     if (!UUID_RE.test(id)) {
@@ -4268,7 +4279,7 @@ export async function knowledgeGraphRoutes(
     });
   });
 
-  app.delete('/api/kg/tasks/:id', async (request, reply) => {
+  app.delete('/api/kg/tasks/:id', KG_RATE, async (request, reply) => {
     if (!assertSecret(request, reply, webAppBootstrapSecret, sessions)) return;
     const { id } = request.params as { id: string };
     if (!UUID_RE.test(id)) {
@@ -4281,7 +4292,7 @@ export async function knowledgeGraphRoutes(
     return reply.status(204).send();
   });
 
-  app.get('/api/kg/contacts', async (request, reply) => {
+  app.get('/api/kg/contacts', KG_RATE, async (request, reply) => {
     if (!assertSecret(request, reply, webAppBootstrapSecret, sessions)) return;
     const contacts = await contactService.listContacts();
     return reply.send({
@@ -4298,7 +4309,7 @@ export async function knowledgeGraphRoutes(
     });
   });
 
-  app.post('/api/kg/contacts', async (request, reply) => {
+  app.post('/api/kg/contacts', KG_RATE, async (request, reply) => {
     if (!assertSecret(request, reply, webAppBootstrapSecret, sessions)) return;
     const body = request.body as {
       displayName?: unknown;
@@ -4347,7 +4358,7 @@ export async function knowledgeGraphRoutes(
     });
   });
 
-  app.patch('/api/kg/contacts/:id', async (request, reply) => {
+  app.patch('/api/kg/contacts/:id', KG_RATE, async (request, reply) => {
     if (!assertSecret(request, reply, webAppBootstrapSecret, sessions)) return;
     const { id } = request.params as { id: string };
     const body = request.body as {
@@ -4421,7 +4432,7 @@ export async function knowledgeGraphRoutes(
     });
   });
 
-  app.delete('/api/kg/contacts/:id', async (request, reply) => {
+  app.delete('/api/kg/contacts/:id', KG_RATE, async (request, reply) => {
     if (!assertSecret(request, reply, webAppBootstrapSecret, sessions)) return;
     const { id } = request.params as { id: string };
     const contact = await contactService.getContact(id);
