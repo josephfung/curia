@@ -1,0 +1,21 @@
+{
+  "name": "ceo-inbox-download-attachment",
+  "description": "Download an email attachment from the CEO's personal inbox by its Nylas attachment ID. Returns base64-encoded file content ready to pass directly to file-parse. Use ceo-inbox-read first to find attachment IDs. Enforces a 10 MB size limit.",
+  "version": "0.1.0",
+  "sensitivity": "normal",
+  "action_risk": "none",
+  "inputs": {
+    "attachment_id": "string (Nylas attachment ID from ceo-inbox-read's attachments array)",
+    "message_id": "string (Nylas message ID the attachment belongs to)"
+  },
+  "outputs": {
+    "content_base64": "string (base64-encoded file content, ready to pass to file-parse)",
+    "filename": "string (original attachment filename)",
+    "content_type": "string (MIME type, e.g. 'application/pdf')",
+    "size": "number (actual byte count after download)"
+  },
+  "permissions": [],
+  "secrets": ["nylas_api_key", "ceo_nylas_grant_id"],
+  "timeout": 30000,
+  "capabilities": []
+}
