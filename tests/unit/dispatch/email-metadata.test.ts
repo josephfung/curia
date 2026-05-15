@@ -166,6 +166,18 @@ describe('buildCcPreamble', () => {
     expect(result).toContain('+2 more');
   });
 
+  it('shows plain "unknown recipients" when every address sanitizes to empty — no "+N more" suffix', () => {
+    // Regression: previously produced "unknown recipients, +2 more" which is misleading
+    const result = buildCcPreamble(
+      makeMeta({ primaryRecipientEmails: ['\n\r', '\n\r\n'] }),
+      'curia',
+      'msg-abc123',
+    );
+
+    expect(result).toContain('unknown recipients');
+    expect(result).not.toContain('+');
+  });
+
   it('counts filtered-out (empty-after-sanitize) recipients in the omitted total', () => {
     // '\n\r' sanitizes to empty and should be counted as omitted
     const result = buildCcPreamble(

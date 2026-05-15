@@ -131,12 +131,13 @@ export function buildCcPreamble(
   // Count items dropped by the empty-string filter or by the 10-item cap.
   const omittedCount = Math.max(0, meta.primaryRecipientEmails.length - sanitizedRecipients.length);
 
-  const recipientListBase = sanitizedRecipients.length > 0
-    ? sanitizedRecipients.join(', ')
+  // Only append "+N more" when there are named recipients to precede it —
+  // "unknown recipients, +3 more" is misleading when every address was stripped.
+  const recipientList = sanitizedRecipients.length > 0
+    ? (omittedCount > 0
+        ? `${sanitizedRecipients.join(', ')}, +${omittedCount} more`
+        : sanitizedRecipients.join(', '))
     : 'unknown recipients';
-  const recipientList = omittedCount > 0
-    ? `${recipientListBase}, +${omittedCount} more`
-    : recipientListBase;
 
   // Include Message ID and Account so the coordinator can call email-reply
   // with the correct thread context. Without these identifiers it cannot use
