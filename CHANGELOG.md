@@ -30,6 +30,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
+- **Dispatcher email metadata refactor** — extracted `parseEmailMetadata`, `sanitizeNylasMessageId`, `buildCcPreamble`, and `buildThreadParticipantsBlock` from `handleInbound` into a standalone `email-metadata.ts` module with 34 unit tests; no change to observable behaviour. (#465)
 - **Coordinator inbox delegation** — CEO inbox queries now delegate seamlessly to the ceo-inbox specialist instead of explaining the multi-agent architecture.
 
 ### Fixed

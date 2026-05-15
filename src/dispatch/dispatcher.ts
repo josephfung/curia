@@ -765,7 +765,7 @@ export class Dispatcher {
         }
 
         this.logger.info(
-          { channelId: payload.channelId, senderId: payload.senderId, primaryRecipients: emailMeta.primaryRecipientEmails },
+          { channelId: payload.channelId, senderId: payload.senderId, primaryRecipientCount: emailMeta.primaryRecipientEmails.length },
           'CC role preamble injected — Curia was not the primary recipient',
         );
 
