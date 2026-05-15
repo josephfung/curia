@@ -13,6 +13,7 @@ import { computeTrustScore, DEFAULT_TRUST_WEIGHTS } from './trust-scorer.js';
 import type { TrustScorerWeights } from './trust-scorer.js';
 import type { WorkingMemory } from '../memory/working-memory.js';
 import { formatOutboundMemo, extractRecentMemos, buildContextPreamble } from './context-memo.js';
+import { parseEmailMetadata, sanitizeNylasMessageId, buildCcPreamble, buildThreadParticipantsBlock } from './email-metadata.js';
 
 /** Redact a channel identifier (email address or phone number) for safe log output. */
 function redactSenderId(value: string): string {
@@ -718,98 +719,37 @@ export class Dispatcher {
       }
     }
 
-    // Thread-participants block: inject structured participant context for every
-    // inbound email so the coordinator can reason about who's on the thread.
-    // Placed before the CC preamble so the CC role marker appears on top.
+    // Email metadata: parse once here and pass to the preamble builders below,
+    // replacing the repeated `payload.metadata as Record<string, unknown>` casts
+    // that previously appeared in both the thread-participants and CC preamble blocks.
     if (payload.channelId === 'email') {
-      const emailMeta = payload.metadata as Record<string, unknown> | undefined;
-      const rawParticipants = emailMeta?.participants;
-      if (Array.isArray(rawParticipants) && rawParticipants.length > 0) {
-        const selfLower = this.selfEmail?.toLowerCase();
-        const MAX_PARTICIPANTS = 15;
+      const emailMeta = parseEmailMetadata(payload.metadata);
 
-        // Sanitize participant email addresses — they come from Nylas (attacker-controlled)
-        // and are injected into taskContent. Strip characters that could enable prompt
-        // injection. Same pattern as the CC preamble sanitization above.
-        const sanitize = (s: string): string =>
-          String(s).replace(/[\n\r\[\]<>]/g, '').trim().slice(0, 254);
-
-        const froms: string[] = [];
-        const tos: string[] = [];
-        const ccs: string[] = [];
-
-        for (const p of (rawParticipants as Array<{ email: string; role: string }>).slice(0, MAX_PARTICIPANTS)) {
-          if (p.email == null) continue;  // guard: skip participants with missing email field
-          const addr = sanitize(p.email);
-          if (!addr) continue;
-          // Replace Curia's own address with "you" for readability.
-          const display = selfLower && addr.toLowerCase() === selfLower ? 'you' : addr;
-          if (p.role === 'from') froms.push(display);
-          else if (p.role === 'to') tos.push(display);
-          else if (p.role === 'cc') ccs.push(display);
-        }
-
-        const parts: string[] = [];
-        if (froms.length > 0) parts.push(`From: ${froms.join(', ')}`);
-        if (tos.length > 0) parts.push(`To: ${tos.join(', ')}`);
-        if (ccs.length > 0) parts.push(`CC: ${ccs.join(', ')}`);
-
-        if (parts.length > 0) {
-          taskContent = `[Thread participants — ${parts.join('; ')}]\n` + taskContent;
-        }
+      // Thread-participants block: inject structured participant context for every
+      // inbound email so the coordinator can reason about who's on the thread.
+      // Placed before the CC preamble so the CC role marker appears on top.
+      const participantsBlock = buildThreadParticipantsBlock(emailMeta, this.selfEmail);
+      if (participantsBlock !== null) {
+        taskContent = participantsBlock + taskContent;
       }
-    }
 
-    // CC role marker: when the email adapter determined that Curia was CC'd rather than
-    // directly addressed, prepend a context block so the coordinator knows it was an
-    // observer on this email (e.g. the CEO looping Curia in on a message to a third party).
-    if (payload.channelId === 'email') {
-      const meta = payload.metadata as Record<string, unknown> | undefined;
-      const curiaRole = meta?.curiaRole as string | undefined;
-      if (curiaRole === 'cc') {
-        // Runtime type guard — metadata values cross a Record<string, unknown> boundary,
-        // so a bare `as string[]` cast could silently accept a non-array from a future
-        // code path. Mirrors the isFinite guard on injectionRiskScore above.
-        const rawRecipients = meta?.primaryRecipientEmails;
-        const primaryRecipients = Array.isArray(rawRecipients) ? (rawRecipients as string[]) : [];
-        // Sanitize each address before interpolation — primaryRecipientEmails comes from
-        // the Nylas To-field (attacker-controlled) and is injected into taskContent AFTER
-        // the injection scanner has already run on payload.content. Without sanitization,
-        // a crafted email address could embed prompt injection patterns that bypass Layer 1.
-        // RFC 5321 limits email addresses to 254 characters; anything longer is malformed.
-        const MAX_RECIPIENTS_IN_PREAMBLE = 10;
-        const sanitizedRecipients = primaryRecipients
-          .map((addr) => String(addr).replace(/[\n\r\[\]<>]/g, '').trim().slice(0, 254))
-          .filter((addr) => addr.length > 0)
-          .slice(0, MAX_RECIPIENTS_IN_PREAMBLE);
-        const omittedCount = Math.max(0, primaryRecipients.length - sanitizedRecipients.length);
-        const recipientListBase = sanitizedRecipients.length > 0
-          ? sanitizedRecipients.join(', ')
-          : 'unknown recipients';
-        const recipientList = omittedCount > 0
-          ? `${recipientListBase}, +${omittedCount} more`
-          : recipientListBase;
-        // Extract the Nylas message ID from metadata so the coordinator can pass it
-        // to email-reply to thread a response from Curia's own account.
-        // Sanitize for the same reason as recipient addresses above — this value
-        // comes from Nylas and is interpolated into the task preamble after the
-        // injection scanner has run on payload.content.
-        const rawNylasMessageId = meta?.nylasMessageId;
+      // CC role marker: when the email adapter determined that Curia was CC'd rather than
+      // directly addressed, prepend a context block so the coordinator knows it was an
+      // observer on this email (e.g. the CEO looping Curia in on a message to a third party).
+      if (emailMeta.curiaRole === 'cc') {
+        const msgIdResult = sanitizeNylasMessageId(emailMeta.nylasMessageId);
         let nylasMessageId: string | undefined;
-        if (typeof rawNylasMessageId === 'string' && rawNylasMessageId.trim()) {
-          const sanitized = rawNylasMessageId.replace(/[\n\r\[\]<>]/g, '').trim().slice(0, 200);
-          if (sanitized.length === 0) {
-            // Non-empty raw value collapsed to empty after sanitization — structurally
-            // suspicious (e.g. a message ID composed entirely of stripped characters).
-            // Omit from preamble and warn so operators have an audit trail.
-            // rawNylasMessageId is deliberately excluded from the log — it may be attacker-controlled.
-            this.logger.warn(
-              { channelId: payload.channelId, conversationId: payload.conversationId },
-              'CC preamble: nylasMessageId was non-empty but sanitized to empty — omitting Message ID from preamble',
-            );
-          } else {
-            nylasMessageId = sanitized;
-          }
+        if (msgIdResult.ok) {
+          nylasMessageId = msgIdResult.value;
+        } else if (msgIdResult.reason === 'empty-after-sanitize') {
+          // Non-empty raw value collapsed to empty after sanitization — structurally
+          // suspicious (e.g. composed entirely of stripped characters).
+          // Omit from preamble and warn so operators have an audit trail.
+          // The raw value is deliberately excluded from the log — it may be attacker-controlled.
+          this.logger.warn(
+            { channelId: payload.channelId, conversationId: payload.conversationId },
+            'CC preamble: nylasMessageId was non-empty but sanitized to empty — omitting Message ID from preamble',
+          );
         } else {
           // nylasMessageId absent or non-string — warn so operators can diagnose
           // a coordinator that falls back to email-draft-save due to missing Message ID.
@@ -818,27 +758,18 @@ export class Dispatcher {
               channelId: payload.channelId,
               conversationId: payload.conversationId,
               senderId: redactSenderId(payload.senderId),
-              rawType: typeof rawNylasMessageId,
+              rawType: typeof emailMeta.nylasMessageId,
             },
             'CC preamble: nylasMessageId absent or invalid — Message ID omitted; coordinator may fall back to email-draft-save',
           );
         }
 
         this.logger.info(
-          { channelId: payload.channelId, senderId: payload.senderId, primaryRecipients: recipientList },
+          { channelId: payload.channelId, senderId: payload.senderId, primaryRecipients: emailMeta.primaryRecipientEmails },
           'CC role preamble injected — Curia was not the primary recipient',
         );
-        // Include Message ID and Account so the coordinator can call email-reply
-        // with the correct message ID.
-        // Without these identifiers the coordinator cannot use email-reply and falls back
-        // to email-draft-save, where it has historically chosen the wrong account (CEO's).
-        const ccIdentifierBlock = nylasMessageId
-          ? `Message ID: ${nylasMessageId}\nAccount: ${payload.accountId ?? 'curia'}\n\n`
-          : `Account: ${payload.accountId ?? 'curia'}\n\n`;
-        taskContent =
-          `[OWNER CC — this email was addressed to ${recipientList}; you were CC'd, not the primary recipient]\n` +
-          ccIdentifierBlock +
-          taskContent;
+
+        taskContent = buildCcPreamble(emailMeta, payload.accountId, nylasMessageId) + taskContent;
       }
     }
 
