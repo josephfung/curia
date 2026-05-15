@@ -72,6 +72,7 @@ import { SchedulerService } from './scheduler/scheduler-service.js';
 import { Scheduler } from './scheduler/scheduler.js';
 import { DriftDetector } from './scheduler/drift-detector.js';
 import { SuspensionNotifier } from './scheduler/suspension-notifier.js';
+import { RecoveryNotifier } from './scheduler/recovery-notifier.js';
 import type { DriftConfig } from './scheduler/drift-detector.js';
 import { EntityContextAssembler } from './entity-context/assembler.js';
 import { bootstrapAgentIdentity } from './entity-context/bootstrap.js';
@@ -980,6 +981,25 @@ async function main(): Promise<void> {
     logger.warn(
       { hasGateway: !!outboundGateway, hasCeoEmail: !!config.ceoPrimaryEmail },
       'SuspensionNotifier not registered — outboundGateway or ceoPrimaryEmail absent; suspended jobs will not trigger CEO email alerts',
+    );
+  }
+
+  // RecoveryNotifier — emails the CEO when the watchdog auto-recovers a stuck job.
+  // Bypasses the LLM pipeline for the same reason as SuspensionNotifier: the LLM
+  // may be the reason the job is stuck in the first place.
+  // Skipped (with a warning) if outboundGateway or ceoPrimaryEmail is absent.
+  if (outboundGateway && config.ceoPrimaryEmail) {
+    const recoveryNotifier = new RecoveryNotifier({
+      bus,
+      outboundGateway,
+      ceoEmail: config.ceoPrimaryEmail,
+      logger,
+    });
+    recoveryNotifier.register();
+  } else {
+    logger.warn(
+      { hasGateway: !!outboundGateway, hasCeoEmail: !!config.ceoPrimaryEmail },
+      'RecoveryNotifier not registered — outboundGateway or ceoPrimaryEmail absent; recovered stuck jobs will not trigger CEO email alerts',
     );
   }
 

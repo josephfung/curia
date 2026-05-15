@@ -136,6 +136,7 @@ interface OutboundBlockedPayload {
 //   - 'approval_expired':     CEO alert that pending approvals expired without response (approval-expiry-sweep)
 //   - 'pending_actions_digest': Daily summary of open approvals awaiting CEO decision (pending-actions-digest)
 //   - 'schedule_suspended': CEO alert that a scheduled job was auto-suspended after consecutive failures (#538)
+//   - 'schedule_recovered': CEO alert that a stuck job was auto-recovered (reset to pending or suspended) (#207)
 export interface OutboundNotificationPayload {
   notificationType:
     | 'blocked_content'
@@ -144,7 +145,8 @@ export interface OutboundNotificationPayload {
     | 'approval_requested'
     | 'approval_expired'        // batched expiry notification (approval-expiry-sweep)
     | 'pending_actions_digest'  // daily pending-actions summary (pending-actions-digest)
-    | 'schedule_suspended';     // scheduled job auto-suspended after consecutive failures (#538)
+    | 'schedule_suspended'      // scheduled job auto-suspended after consecutive failures (#538)
+    | 'schedule_recovered';     // stuck job auto-recovered after exceeding timeout threshold (#207)
   /** Recipient email for this notification (always the CEO email today). */
   ceoEmail: string;
   subject: string;

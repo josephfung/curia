@@ -29,6 +29,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Email attachment support** — surface metadata in email skills, append human-readable summaries to message content, and download bytes as base64 for `file-parse`.
 - **Email folder management skills** — `email-label`, `email-list-folders`, `email-create-folder`, and `email-mark-read` expose Nylas folder and read-state operations as general-purpose skills.
 - **`SuspensionNotifier`** — emails CEO when a scheduled job suspends after consecutive failures, bypassing the LLM pipeline for reliability during Anthropic outages. (#538)
+- **`RecoveryNotifier`** — emails CEO when the watchdog auto-recovers a stuck job (timeout exceeded), including stuck duration, timeout threshold, and whether the job was reset or suspended. (#207)
 
 ### Changed
 
