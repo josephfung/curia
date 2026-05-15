@@ -444,7 +444,15 @@ export class EntityMemory {
         return;
       }
 
-      await this.store.addAlias(nodeId, lowerAlias);
+      const added = await this.store.addAlias(nodeId, lowerAlias);
+      if (!added) {
+        // Backend rejected — likely a dedup or cap race between our pre-flight read and this write.
+        // The backend's atomic predicate handled it correctly; this is just for observability.
+        this.logger.debug(
+          { nodeId, alias: lowerAlias },
+          'addAlias: backend rejected (dedup or cap race)',
+        );
+      }
     } catch (err) {
       this.logger.warn(
         { nodeId, alias, error: err instanceof Error ? err.message : String(err) },
