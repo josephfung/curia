@@ -351,7 +351,7 @@ export class ExecutionLayer {
         // by intent. Log at info so bypasses are visible in production.
         if (isPrincipalOriginated(options?.taskMetadata)) {
           skillLogger.info(
-            { skillName, currentScore },
+            { skillName, currentScore, agentId: options?.agentId, taskEventId: options?.taskEventId },
             'autonomy gate: skipped — task originated by principal',
           );
         } else {
@@ -386,6 +386,8 @@ export class ExecutionLayer {
             };
           }
 
+          // action_risk: 'none' skills fall through Gate A above and reach Gate B.
+          // minScoreForActionRisk('none') returns 0, so Gate B is always a no-op for reads.
           // Gate B: Per-skill action_risk threshold.
           const requiredScore = AutonomyService.minScoreForActionRisk(manifest.action_risk);
           if (currentScore < requiredScore) {
