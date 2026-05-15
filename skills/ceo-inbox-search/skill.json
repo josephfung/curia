@@ -1,0 +1,19 @@
+{
+  "name": "ceo-inbox-search",
+  "description": "Search the CEO's personal email inbox using Gmail-native query syntax. Intended for use by the ceo-inbox agent — accesses the CEO's personal email, do not call from other agents.",
+  "version": "0.1.0",
+  "sensitivity": "normal",
+  "action_risk": "none",
+  "inputs": {
+    "query": "string (Gmail-native search query, e.g. 'from:alice subject:invoice')",
+    "limit": "number? (max results, 1–50, default 10)"
+  },
+  "outputs": {
+    "messages": "array of { id, threadId, from, subject, date, snippet, unread, folders }",
+    "count": "number of messages returned"
+  },
+  "permissions": [],
+  "secrets": ["nylas_api_key", "ceo_nylas_grant_id", "nylas_self_email"],
+  "timeout": 20000,
+  "capabilities": []
+}

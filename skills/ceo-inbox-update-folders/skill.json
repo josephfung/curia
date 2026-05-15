@@ -1,0 +1,21 @@
+{
+  "name": "ceo-inbox-update-folders",
+  "description": "Add or remove folders/labels on a message in the CEO's personal email inbox. Use to star (add STARRED), label, or move messages between folders. Intended for use by the ceo-inbox agent — accesses the CEO's personal email, do not call from other agents.",
+  "version": "0.1.0",
+  "sensitivity": "normal",
+  "action_risk": "low",
+  "inputs": {
+    "message_id": "string (Nylas message ID to update)",
+    "add_folders": "string[]? (folder/label names to add, e.g. ['STARRED', 'Follow-Up'])",
+    "remove_folders": "string[]? (folder/label names to remove, e.g. ['INBOX'])"
+  },
+  "outputs": {
+    "success": "boolean",
+    "message_id": "string",
+    "folders": "string[] (updated folder list after the change)"
+  },
+  "permissions": [],
+  "secrets": ["nylas_api_key", "ceo_nylas_grant_id"],
+  "timeout": 15000,
+  "capabilities": []
+}
