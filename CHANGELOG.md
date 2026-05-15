@@ -23,6 +23,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **`ceo-inbox` agent and 9 skills** — moved from `curia-deploy/custom/` into curia core; now covered by curia's CI and type-checked against real types. (#592)
 - **Email attachment support** — surface metadata in email skills, append human-readable summaries to message content, and download bytes as base64 for `file-parse`.
 - **Email folder management skills** — `email-label`, `email-list-folders`, `email-create-folder`, and `email-mark-read` expose Nylas folder and read-state operations as general-purpose skills.
 - **`SuspensionNotifier`** — emails CEO when a scheduled job suspends after consecutive failures, bypassing the LLM pipeline for reliability during Anthropic outages. (#538)
