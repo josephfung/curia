@@ -82,7 +82,7 @@ describe('RecoveryNotifier', () => {
     expect(logger.info).toHaveBeenCalledWith('RecoveryNotifier registered');
   });
 
-  it('sends a notification with correct fields for a recovered (non-suspended) job', async () => {
+  it('sends a notification with correct fields when a job is reset to pending', async () => {
     gateway.sendNotification.mockResolvedValue(true);
 
     // Call handle() directly so the test is synchronous and deterministic.
@@ -94,30 +94,21 @@ describe('RecoveryNotifier', () => {
     const call = gateway.sendNotification.mock.calls[0][0];
     expect(call.notificationType).toBe('schedule_recovered');
     expect(call.ceoEmail).toBe('ceo@example.com');
-    expect(call.subject).toContain('coordinator');                  // agentId in subject
-    expect(call.subject).not.toContain('suspended');               // should NOT say suspended
-    expect(call.body).toContain('coordinator');                    // agentId in body
-    expect(call.body).toContain('job-abc123');                     // jobId
-    expect(call.body).toContain('~20 min');                       // stuck duration (now - runStartedAt)
-    expect(call.body).toContain('15 min');                        // timeout threshold (900s)
-    expect(call.body).toContain('reset to pending');              // outcome
-    expect(call.body).toContain('rescheduled automatically');     // resume message for non-suspended
+    expect(call.subject).toContain('coordinator');        // agentId in subject
+    expect(call.body).toContain('coordinator');           // agentId in body
+    expect(call.body).toContain('job-abc123');            // jobId
+    expect(call.body).toContain('~20 min');              // stuck duration (now - runStartedAt)
+    expect(call.body).toContain('15 min');               // timeout threshold (900s)
+    expect(call.body).toContain('rescheduled automatically'); // outcome
   });
 
-  it('sends a notification with suspended-specific content when job is suspended', async () => {
-    gateway.sendNotification.mockResolvedValue(true);
-
+  it('skips sending a notification when the job was suspended (SuspensionNotifier handles it)', async () => {
+    // When suspended: true, recoverStuckJobs() also fires schedule.suspended,
+    // and SuspensionNotifier sends the CEO email. We must not send a second email.
     await (notifier as never as { handle(e: ScheduleRecoveredEvent): Promise<void> })
       .handle(makeEvent({ suspended: true, consecutiveFailures: 3 }));
 
-    expect(gateway.sendNotification).toHaveBeenCalledOnce();
-    const call = gateway.sendNotification.mock.calls[0][0];
-    expect(call.notificationType).toBe('schedule_recovered');
-    expect(call.subject).toContain('suspended');                   // subject flags suspension
-    expect(call.body).toContain('SUSPENDED');                     // outcome prominently marked
-    expect(call.body).toContain('3');                             // consecutiveFailures
-    expect(call.body).toContain('web app');                       // resume instructions for suspended
-    expect(call.body).not.toContain('rescheduled automatically'); // NOT the non-suspended message
+    expect(gateway.sendNotification).not.toHaveBeenCalled();
   });
 
   it('handles null runStartedAt (pre-migration rows) gracefully', async () => {
@@ -141,8 +132,8 @@ describe('RecoveryNotifier', () => {
       .handle(makeEvent({ timeoutSeconds: 3600, runStartedAt }));
 
     const call = gateway.sendNotification.mock.calls[0][0];
-    expect(call.body).toContain('1 h');       // timeout formatted as hours
-    expect(call.body).toContain('~1 h 30 min'); // stuck duration ~90 min
+    expect(call.body).toContain('1 h');           // timeout formatted as hours
+    expect(call.body).toContain('~1 h 30 min');  // stuck duration ~90 min
   });
 
   it('logs an error and resolves when sendNotification returns false', async () => {
