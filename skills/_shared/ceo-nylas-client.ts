@@ -114,6 +114,12 @@ export class CeoNylasClient {
       // Nylas v3: search_query_native cannot be combined with any other filter
       // param except limit and page_token — sending in/unread/received_after
       // alongside it returns HTTP 400 "invalid_request_error".
+      if (options.folder || options.unread !== undefined || options.receivedAfter !== undefined) {
+        this.log.warn(
+          { suppressedOptions: { folder: options.folder, unread: options.unread, receivedAfter: options.receivedAfter } },
+          'nylas: listMessages — folder/unread/receivedAfter ignored because search_query_native is set (Nylas v3 limitation)',
+        );
+      }
       params.set('search_query_native', options.query);
     } else {
       if (options.folder) params.set('in', options.folder);
