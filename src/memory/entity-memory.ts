@@ -415,27 +415,26 @@ export class EntityMemory {
    * block fact storage.
    */
   async addAlias(nodeId: string, alias: string): Promise<void> {
-    // Entire method is wrapped so no DB or network error can violate the non-throwing contract.
+    // Non-throwing contract: alias learning must never block fact storage.
     try {
       const lowerAlias = alias.toLowerCase();
 
+      // Reading the node here serves two purposes: canonical-label check (the
+      // backend predicate cannot cover this since the label is not in the aliases
+      // array) and cap-warning logging. The actual dedup+cap guard is atomic in
+      // the backend, so this read is for logging only — not for correctness.
       const node = await this.store.getNode(nodeId);
       if (!node) {
         this.logger.warn({ nodeId, alias }, 'addAlias: entity node not found');
         return;
       }
 
-      // Skip if alias matches canonical label
+      // Skip if alias matches the canonical label (backend predicate won't catch this)
       if (node.label.toLowerCase() === lowerAlias) {
         return;
       }
 
-      // Skip if alias already exists
-      if (node.aliases.includes(lowerAlias)) {
-        return;
-      }
-
-      // Skip if at cap
+      // Log before delegating so the warning appears even if the backend silently rejects.
       if (node.aliases.length >= MAX_ALIASES_PER_ENTITY) {
         this.logger.warn(
           { nodeId, alias, count: node.aliases.length, max: MAX_ALIASES_PER_ENTITY },
@@ -444,8 +443,7 @@ export class EntityMemory {
         return;
       }
 
-      const updatedAliases = [...node.aliases, lowerAlias];
-      await this.store.updateNode(nodeId, { aliases: updatedAliases });
+      await this.store.addAlias(nodeId, lowerAlias);
     } catch (err) {
       this.logger.warn(
         { nodeId, alias, error: err instanceof Error ? err.message : String(err) },
