@@ -78,6 +78,10 @@ interface KnowledgeGraphBackend {
   archiveEdge(id: string): Promise<void>;
   findNodesByType(type: NodeType): Promise<KgNode[]>;
   findNodesByLabel(label: string): Promise<KgNode[]>;
+  /** Atomically append an alias to a node's aliases array.
+   *  Returns true if the alias was appended, false if skipped
+   *  (already present, cap reached, or node not found). */
+  addAlias(nodeId: string, alias: string): Promise<boolean>;
   createEdge(edge: KgEdge): Promise<void>;
   getEdgesForNode(nodeId: string): Promise<KgEdge[]>;
   deleteEdge(id: string): Promise<void>;
@@ -283,6 +287,11 @@ export class KnowledgeGraphStore {
   /** Find nodes by label (case-insensitive exact match) */
   async findNodesByLabel(label: string): Promise<KgNode[]> {
     return this.backend.findNodesByLabel(label);
+  }
+
+  /** Atomically append an alias — see KnowledgeGraphBackend.addAlias for semantics. */
+  addAlias(nodeId: string, alias: string): Promise<boolean> {
+    return this.backend.addAlias(nodeId, alias);
   }
 
   /** Create an edge between two nodes */
@@ -532,6 +541,21 @@ class PostgresBackend implements KnowledgeGraphBackend {
       [label],
     );
     return result.rows.map(pgRowToNode);
+  }
+
+  async addAlias(nodeId: string, alias: string): Promise<boolean> {
+    // Single atomic UPDATE: predicate enforces dedup and cap at the DB level.
+    // No SELECT needed — rowCount tells us whether the guard passed.
+    const result = await this.pool.query(
+      `UPDATE kg_nodes
+       SET aliases = array_append(aliases, $2)
+       WHERE id = $1
+         AND archived_at IS NULL
+         AND NOT ($2 = ANY(aliases))
+         AND cardinality(aliases) < 10`,
+      [nodeId, alias],
+    );
+    return (result.rowCount ?? 0) > 0;
   }
 
   async createEdge(edge: KgEdge): Promise<void> {
@@ -988,6 +1012,17 @@ class InMemoryBackend implements KnowledgeGraphBackend {
       }
     }
     return results;
+  }
+
+  async addAlias(nodeId: string, alias: string): Promise<boolean> {
+    // JS is single-threaded so no true race exists, but this mirrors the
+    // Postgres predicate semantics so in-memory tests are reliable proxies.
+    const node = this.nodes.get(nodeId);
+    if (!node || this.archivedNodes.has(nodeId)) return false;
+    if (node.aliases.includes(alias)) return false;
+    if (node.aliases.length >= 10) return false;
+    this.nodes.set(nodeId, { ...node, aliases: [...node.aliases, alias] });
+    return true;
   }
 
   async createEdge(edge: KgEdge): Promise<void> {

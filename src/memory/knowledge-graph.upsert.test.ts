@@ -150,3 +150,51 @@ describe('KnowledgeGraphStore sensitivity defaults', () => {
     expect(node.sensitivity).toBe('restricted');
   });
 });
+
+describe('KnowledgeGraphStore.addAlias', () => {
+  it('returns true and appends alias when alias is new', async () => {
+    const store = makeStore();
+    const node = await store.createNode({ type: 'person', label: 'Alice', properties: {}, source: 'test' });
+
+    const added = await store.addAlias(node.id, 'al');
+
+    expect(added).toBe(true);
+    const updated = await store.getNode(node.id);
+    expect(updated!.aliases).toEqual(['al']);
+  });
+
+  it('returns false and does not duplicate when alias already exists', async () => {
+    const store = makeStore();
+    const node = await store.createNode({ type: 'person', label: 'Alice', properties: {}, source: 'test' });
+    await store.addAlias(node.id, 'al');
+
+    const added = await store.addAlias(node.id, 'al');
+
+    expect(added).toBe(false);
+    const updated = await store.getNode(node.id);
+    expect(updated!.aliases).toEqual(['al']); // still exactly one copy
+  });
+
+  it('returns false when alias cap (10) is reached', async () => {
+    const store = makeStore();
+    const node = await store.createNode({ type: 'person', label: 'Alice', properties: {}, source: 'test' });
+    for (let i = 0; i < 10; i++) {
+      await store.addAlias(node.id, `alias-${i}`);
+    }
+
+    const added = await store.addAlias(node.id, 'one-more');
+
+    expect(added).toBe(false);
+    const updated = await store.getNode(node.id);
+    expect(updated!.aliases).toHaveLength(10);
+    expect(updated!.aliases).not.toContain('one-more');
+  });
+
+  it('returns false for an unknown nodeId', async () => {
+    const store = makeStore();
+
+    const added = await store.addAlias('does-not-exist', 'some-alias');
+
+    expect(added).toBe(false);
+  });
+});
