@@ -35,9 +35,17 @@ const SECRET_PATTERNS: RegExp[] = [
 
 // Tags whose content must be stripped entirely (not just the tag delimiters).
 // sanitize-html's nonTextTags option removes these elements AND all their descendants.
-// Includes LLM instruction-like XML tags and classic XSS/injection vectors.
+//
+// IMPORTANT: passing a custom nonTextTags array REPLACES the library defaults, not
+// extends them. Library defaults are: ['script', 'style', 'textarea', 'option', 'xmp'].
+// We merge those defaults with our LLM-injection-specific additions so none are lost.
 const DANGEROUS_NONTEXTUAL_TAGS: string[] = [
+  // sanitize-html library defaults (raw-text elements whose inner markup is not re-parsed):
+  'textarea', 'option', 'xmp',
+  // LLM instruction-like XML tags — stripping content prevents prompt injection even if
+  // the tag structure survives other filter passes:
   'system', 'instruction', 'prompt', 'role',
+  // Classic XSS and content-injection vectors:
   'script', 'iframe', 'object', 'embed', 'applet', 'style',
 ];
 
@@ -52,16 +60,33 @@ const DANGEROUS_NONTEXTUAL_TAGS: string[] = [
  * sanitize-html encodes & < > " in text nodes as HTML entities; the post-decode
  * step converts them back to literal characters since our output goes to an LLM
  * (not to a browser renderer).
+ *
+ * Known limitation: HTML entity-encoded injection tags (e.g. &lt;system&gt;evil&lt;/system&gt;)
+ * are treated as text by the parser and survive this step. This was also true of the
+ * previous regex approach and is accepted — entity-encoded angle brackets are not parsed
+ * as XML/HTML by LLM chat templates.
  */
 function stripDangerousTags(text: string): string {
-  const stripped = sanitizeHtml(text, {
-    allowedTags: [],
-    allowedAttributes: {},
-    // Content inside these tags is removed entirely, not just the tag delimiters.
-    // This prevents injected payloads like <system>evil</system> from leaking their
-    // body text into LLM context even after the tags are stripped.
-    nonTextTags: DANGEROUS_NONTEXTUAL_TAGS,
-  });
+  let stripped: string;
+  try {
+    stripped = sanitizeHtml(text, {
+      allowedTags: [],
+      allowedAttributes: {},
+      // Content inside these tags is removed entirely, not just the tag delimiters.
+      // This prevents injected payloads like <system>evil</system> from leaking their
+      // body text into LLM context even after the tags are stripped.
+      nonTextTags: DANGEROUS_NONTEXTUAL_TAGS,
+    });
+  } catch (err) {
+    // sanitize-html / htmlparser2 threw unexpectedly. Re-throw with a clear message so
+    // the caller knows sanitization was NOT applied and can propagate a clean error.
+    // We must NOT pass the unsanitized text forward — throw here forces the caller to
+    // handle the failure explicitly rather than silently serving unfiltered content.
+    throw new Error(
+      `stripDangerousTags: sanitize-html threw unexpectedly — input not sanitized. ` +
+      `Cause: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
 
   // sanitize-html HTML-encodes bare & < > " ' in text nodes.
   // Decode them back to literal characters: LLMs consume plain text, not HTML markup.

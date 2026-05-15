@@ -29,8 +29,9 @@ export function htmlToText(html: string | undefined | null): string {
   // Strip incomplete tags — bare <tagname without a closing > is not caught by <[^>]+>
   // above (which requires >). Entity decoding happens below, so any < remaining at this
   // point must be from an incomplete tag in the original HTML source.
-  // (js/incomplete-multi-character-sanitization)
-  text = text.replace(/<[a-zA-Z][^>]*/g, '');
+  // {0,500} caps match length to prevent stripping large text bodies if the input
+  // happens to contain a lone < far from any > (js/incomplete-multi-character-sanitization).
+  text = text.replace(/<[a-zA-Z][^>]{0,500}/g, '');
 
   // Decode common HTML entities.
   // Order matters: &amp; must be decoded LAST to prevent double-decoding.
