@@ -1,0 +1,5 @@
+node_modules/
+dist/
+pnpm-lock.yaml
+# Snapshot files contain intentional patterns that would trigger false positives
+**/*.snap
