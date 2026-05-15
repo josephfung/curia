@@ -822,6 +822,25 @@ export class EntityMemory {
     // Update primary node with the merged property set
     await this.store.updateNode(primaryId, { properties: mergedProperties });
 
+    // Union secondary's aliases into primary.
+    // Primary's aliases take priority: secondary extras are dropped if combined > cap.
+    const newAliases = secondaryNode.aliases.filter(
+      a => !primaryNode.aliases.includes(a),
+    );
+    const combined = [...primaryNode.aliases, ...newAliases];
+    const capped = combined.slice(0, MAX_ALIASES_PER_ENTITY);
+
+    if (capped.length < combined.length) {
+      this.logger.warn(
+        { primaryId, secondaryId, dropped: combined.slice(MAX_ALIASES_PER_ENTITY) },
+        'mergeEntities: alias cap reached — dropping excess secondary aliases',
+      );
+    }
+
+    if (capped.length > primaryNode.aliases.length) {
+      await this.store.updateNode(primaryId, { aliases: capped });
+    }
+
     // Move facts: fetch secondary's facts and re-store them on primary.
     // getFacts() is more efficient than query() here — it returns only fact nodes
     // without resolving relationship edges, which we don't need for the merge.
