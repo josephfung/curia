@@ -197,4 +197,14 @@ describe('KnowledgeGraphStore.addAlias', () => {
 
     expect(added).toBe(false);
   });
+
+  it('returns false for an archived node', async () => {
+    const store = makeStore();
+    const node = await store.createNode({ type: 'person', label: 'Alice', properties: {}, source: 'test' });
+    await store.archiveNode(node.id);
+
+    const added = await store.addAlias(node.id, 'al');
+
+    expect(added).toBe(false);
+  });
 });
