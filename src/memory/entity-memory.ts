@@ -17,6 +17,7 @@ import type {
   StoreFactOptions,
   SearchResult,
 } from './types.js';
+import { SENSITIVITY_LEVELS } from './types.js';
 
 export interface EdgeResult {
   edge: KgEdge;
@@ -958,16 +959,60 @@ export class EntityMemory {
   }
 
   /**
-   * Semantic search across all nodes in the knowledge graph.
-   * Embeds the query string and finds the most similar nodes by cosine similarity.
+   * Search across all nodes using two complementary paths:
    *
-   * Returns SearchResult[] sorted by score descending (most similar first).
+   * Path 1 — exact alias/label match (GIN-indexed, no embedding cost):
+   *   Calls findNodesByLabel(query) which checks both canonical label and aliases.
+   *   Matched nodes receive score 1.0 and are returned first.
+   *
+   * Path 2 — vector semantic search (existing behaviour):
+   *   Embeds the query and finds nodes by cosine similarity.
+   *   Nodes already returned by Path 1 are deduplicated.
+   *
+   * The two paths run concurrently. Results are truncated to `limit` after merging.
    */
   async search(
     query: string,
     options?: { limit?: number; type?: NodeType; maxSensitivity?: Sensitivity },
   ): Promise<SearchResult[]> {
-    return this.store.semanticSearch(query, options);
+    const limit = options?.limit ?? 10;
+
+    // Pre-compute sensitivity ceiling rank for in-process filter on alias results.
+    // This mirrors the check inside KnowledgeGraphStore.semanticSearch.
+    const maxSensitivityRank =
+      options?.maxSensitivity !== undefined
+        ? SENSITIVITY_LEVELS.indexOf(options.maxSensitivity)
+        : undefined;
+
+    // Run both paths concurrently — they are independent queries.
+    const [labelMatches, vectorResults] = await Promise.all([
+      this.store.findNodesByLabel(query),
+      this.store.semanticSearch(query, options),
+    ]);
+
+    // Path 1: filter alias matches in-process (findNodesByLabel has no filter params).
+    const aliasMatchIds = new Set<string>();
+    const aliasResults: SearchResult[] = [];
+    for (const node of labelMatches) {
+      if (options?.type && node.type !== options.type) continue;
+      if (maxSensitivityRank !== undefined) {
+        const nodeRank = SENSITIVITY_LEVELS.indexOf(node.sensitivity);
+        // Exclude nodes with unrecognized sensitivity or above the ceiling.
+        if (nodeRank === -1 || nodeRank > maxSensitivityRank) continue;
+      }
+      aliasMatchIds.add(node.id);
+      aliasResults.push({ node, score: 1.0, edges: [] });
+    }
+
+    // Merge: alias results first, then vector results (dedup by node id).
+    const merged: SearchResult[] = [...aliasResults];
+    for (const r of vectorResults) {
+      if (!aliasMatchIds.has(r.node.id)) {
+        merged.push(r);
+      }
+    }
+
+    return merged.slice(0, limit);
   }
 
   /** List KG nodes flagged for CEO re-confirmation by the decay warning pass. */

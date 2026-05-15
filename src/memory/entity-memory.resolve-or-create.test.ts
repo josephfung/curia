@@ -643,3 +643,108 @@ describe('EntityMemory.mergeEntities — alias consolidation', () => {
     expect(surviving!.aliases).toEqual(['p-alias']);
   });
 });
+
+describe('EntityMemory.search — alias exact-match path', () => {
+  it('surfaces a node via its stored alias with score 1.0', async () => {
+    const { mem } = makeEntityMemory();
+    const { entity } = await mem.createEntity({
+      type: 'organization', label: 'Darlise Restaurant', properties: {}, source: 'test',
+    });
+    // The fake embedding for 'darlise' is completely different from 'Darlise Restaurant',
+    // so this node won't appear via vector search alone.
+    await mem.addAlias(entity.id, 'darlise');
+
+    const results = await mem.search('darlise');
+
+    expect(results.length).toBeGreaterThan(0);
+    const match = results.find(r => r.node.id === entity.id);
+    expect(match).toBeDefined();
+    expect(match!.score).toBe(1.0);
+  });
+
+  it('returns an alias-matched node exactly once even when vector search also finds it', async () => {
+    const { mem } = makeEntityMemory();
+    const { entity } = await mem.createEntity({
+      type: 'organization', label: 'Darlise Restaurant', properties: {}, source: 'test',
+    });
+    // Alias matches the canonical label (lower-cased) — findNodesByLabel and
+    // semanticSearch will both return this node.
+    await mem.addAlias(entity.id, 'darlise restaurant');
+
+    const results = await mem.search('darlise restaurant');
+
+    const matches = results.filter(r => r.node.id === entity.id);
+    expect(matches).toHaveLength(1);
+    expect(matches[0]!.score).toBe(1.0);
+  });
+
+  it('excludes alias-matched nodes that do not match the type filter', async () => {
+    const { mem } = makeEntityMemory();
+    const { entity } = await mem.createEntity({
+      type: 'organization', label: 'Darlise Restaurant', properties: {}, source: 'test',
+    });
+    await mem.addAlias(entity.id, 'darlise');
+
+    // Search for type: 'person' — the organization node should not appear
+    const results = await mem.search('darlise', { type: 'person' });
+
+    expect(results.every(r => r.node.id !== entity.id)).toBe(true);
+  });
+
+  it('excludes alias-matched nodes above the sensitivity ceiling', async () => {
+    const embeddingService = EmbeddingService.createForTesting();
+    const store = KnowledgeGraphStore.createInMemory(embeddingService);
+    const validator = new MemoryValidator(store, embeddingService);
+    const mem = new EntityMemory(store, validator, embeddingService, createSilentLogger());
+
+    // Create a restricted node directly via the store to set sensitivity
+    const restrictedNode = await store.createNode({
+      type: 'person',
+      label: 'Private Person',
+      properties: {},
+      source: 'test',
+      sensitivity: 'restricted',
+    });
+    // Add alias directly via store (EntityMemory.addAlias silently skips aliases
+    // matching the canonical label; here we bypass that to set up the test alias)
+    await store.addAlias(restrictedNode.id, 'private');
+
+    // Create an internal node with the same alias — this one should appear
+    const internalNode = await store.createNode({
+      type: 'person',
+      label: 'Internal Person',
+      properties: {},
+      source: 'test',
+      sensitivity: 'internal',
+    });
+    await store.addAlias(internalNode.id, 'private');
+
+    // Search with ceiling of 'internal' — 'restricted' is above that
+    const results = await mem.search('private', { maxSensitivity: 'internal' });
+
+    // Restricted node must not appear
+    expect(results.every(r => r.node.id !== restrictedNode.id)).toBe(true);
+    // Internal node must appear (positive assertion: filter allows valid nodes through)
+    expect(results.some(r => r.node.id === internalNode.id)).toBe(true);
+  });
+
+  it('alias-matched nodes appear before lower-scoring vector results', async () => {
+    const { mem } = makeEntityMemory();
+    // Create two nodes: one with an exact alias match, one that may appear via embedding
+    const { entity: aliasNode } = await mem.createEntity({
+      type: 'person', label: 'Completely Unrelated Label XYZ', properties: {}, source: 'test',
+    });
+    await mem.addAlias(aliasNode.id, 'searchterm');
+
+    await mem.createEntity({
+      type: 'person', label: 'searchterm adjacent', properties: {}, source: 'test',
+    });
+
+    const results = await mem.search('searchterm', { limit: 10 });
+
+    expect(results[0]!.node.id).toBe(aliasNode.id);
+    expect(results[0]!.score).toBe(1.0);
+    // Verify the secondary node (non-alias-matched) also appears via vector search
+    expect(results.some(r => r.node.label === 'searchterm adjacent')).toBe(true);
+  });
+});
