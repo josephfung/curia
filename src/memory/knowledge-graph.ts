@@ -290,7 +290,7 @@ export class KnowledgeGraphStore {
   }
 
   /** Atomically append an alias — see KnowledgeGraphBackend.addAlias for semantics. */
-  addAlias(nodeId: string, alias: string): Promise<boolean> {
+  async addAlias(nodeId: string, alias: string): Promise<boolean> {
     return this.backend.addAlias(nodeId, alias);
   }
 
