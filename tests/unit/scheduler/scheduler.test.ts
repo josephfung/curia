@@ -1058,7 +1058,7 @@ describe('Scheduler', () => {
       expect(event.type).toBe('schedule.recovered');
     });
 
-    it('publishes schedule.recovered with suspended:true when job is suspended', async () => {
+    it('publishes schedule.recovered then schedule.suspended when watchdog recovery leads to suspension', async () => {
       const stuckRow = {
         id: 'job-3fail',
         agent_id: 'agent-1',
@@ -1074,10 +1074,19 @@ describe('Scheduler', () => {
 
       await scheduler.recoverStuckJobs();
 
-      expect(bus.publish).toHaveBeenCalledOnce();
-      const [, event] = bus.publish.mock.calls[0] as [string, { type: string; payload: { suspended: boolean } }];
-      expect(event.type).toBe('schedule.recovered');
-      expect(event.payload.suspended).toBe(true);
+      // Two events: schedule.recovered (always) + schedule.suspended (when suspended)
+      expect(bus.publish).toHaveBeenCalledTimes(2);
+
+      const [, recoveredEvent] = bus.publish.mock.calls[0] as [string, { type: string; payload: { suspended: boolean } }];
+      expect(recoveredEvent.type).toBe('schedule.recovered');
+      expect(recoveredEvent.payload.suspended).toBe(true);
+
+      const [, suspendedEvent] = bus.publish.mock.calls[1] as [string, { type: string; payload: { jobId: string; agentId: string; consecutiveFailures: number; lastError: string } }];
+      expect(suspendedEvent.type).toBe('schedule.suspended');
+      expect(suspendedEvent.payload.jobId).toBe('job-3fail');
+      expect(suspendedEvent.payload.agentId).toBe('agent-1');
+      expect(suspendedEvent.payload.consecutiveFailures).toBe(3);
+      expect(suspendedEvent.payload.lastError).toContain('timed out');
     });
 
     it('skips publish and warn log when recoverStuckJob returns noOp:true (race condition)', async () => {

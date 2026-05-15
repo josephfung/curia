@@ -656,7 +656,7 @@ export class Scheduler {
             'Stuck job recovered',
           );
 
-          // Publish audit event separately — failure here is non-fatal since the DB
+          // Publish audit events separately — failures here are non-fatal since the DB
           // mutation already committed. Log at error but do not treat as a recovery failure.
           try {
             const recoveredEvent = createScheduleRecovered({
@@ -668,6 +668,22 @@ export class Scheduler {
               suspended: result.suspended,
             });
             await this.bus.publish('system', recoveredEvent);
+
+            // When watchdog recovery leads to suspension, also fire schedule.suspended
+            // so SuspensionNotifier can email the CEO through the same path as normal
+            // completion-failure suspensions. Uses recoveredEvent as parent to preserve
+            // the causal chain in the audit log.
+            if (result.suspended) {
+              const timeoutMinutes = Math.round(row.timeout_seconds / 60);
+              const suspendedEvent = createScheduleSuspended({
+                jobId: row.id,
+                agentId: row.agent_id,
+                lastError: `Job timed out after ${timeoutMinutes}m — auto-recovered`,
+                consecutiveFailures: result.consecutiveFailures,
+                parentEventId: recoveredEvent.id,
+              });
+              await this.bus.publish('system', suspendedEvent);
+            }
           } catch (publishErr) {
             this.logger.error({ publishErr, jobId: row.id }, 'Failed to publish schedule.recovered event — job was recovered in DB');
           }

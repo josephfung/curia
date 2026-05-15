@@ -11,10 +11,10 @@
 // outboundGateway.sendNotification() directly, which routes through the
 // outbound.notification → EmailAdapter → Nylas path.
 //
-// Note: if recovery results in suspension (suspended: true), this class sends
-// the only CEO email for that event — schedule.suspended is NOT also emitted
-// by recoverStuckJobs(). SuspensionNotifier covers only the normal-completion
-// failure path.
+// Scope: recovery-without-suspension only. When recoverStuckJobs() suspends a
+// job (consecutive_failures >= 3), it also fires schedule.suspended, so
+// SuspensionNotifier handles that CEO email. This class handles only the
+// reset-to-pending case to avoid sending two emails for one watchdog event.
 
 import type { EventBus } from '../bus/bus.js';
 import type { Logger } from '../logger.js';
@@ -56,37 +56,28 @@ export class RecoveryNotifier {
   private async handle(event: ScheduleRecoveredEvent): Promise<void> {
     const { jobId, agentId, runStartedAt, timeoutSeconds, consecutiveFailures, suspended } = event.payload;
 
+    // When recovery leads to suspension, schedule.suspended is also fired and
+    // SuspensionNotifier sends the CEO email. Skip here to avoid a duplicate.
+    if (suspended) return;
+
     // Compute how long the job was stuck. runStartedAt is null for pre-migration
     // rows that had no run_started_at recorded — fall back to the timeout value.
     const stuckDescription = runStartedAt
       ? formatStuckDuration(event.timestamp, new Date(runStartedAt))
       : `at least ${formatMinutes(timeoutSeconds)} (start time unknown — pre-migration row)`;
 
-    const timeoutDescription = formatMinutes(timeoutSeconds);
-
-    const outcome = suspended
-      ? `SUSPENDED after ${consecutiveFailures} consecutive ${consecutiveFailures === 1 ? 'failure' : 'failures'}`
-      : `reset to pending (${consecutiveFailures} consecutive ${consecutiveFailures === 1 ? 'failure' : 'failures'})`;
-
-    const subject = suspended
-      ? `Scheduled job recovered then suspended: ${agentId}`
-      : `Scheduled job recovered from stuck state: ${agentId}`;
-
+    const subject = `Scheduled job recovered from stuck state: ${agentId}`;
     const body = [
-      suspended
-        ? 'Scheduled job was stuck, auto-recovered, and then suspended due to consecutive failures.'
-        : 'Scheduled job was stuck and has been auto-recovered (reset to pending).',
+      'Scheduled job was stuck and has been auto-recovered (reset to pending).',
       '',
       `Agent:     ${agentId}`,
       `Stuck for: ${stuckDescription}`,
-      `Timeout:   ${timeoutDescription}`,
-      `Outcome:   ${outcome}`,
+      `Timeout:   ${formatMinutes(timeoutSeconds)}`,
+      `Failures:  ${consecutiveFailures} consecutive`,
       '',
       `Job ID: ${jobId}`,
       '',
-      suspended
-        ? 'To resume this job, open the web app and navigate to Scheduler → Jobs.'
-        : 'The job has been rescheduled automatically and will run again on its next trigger.',
+      'The job has been rescheduled automatically and will run again on its next trigger.',
     ].join('\n');
 
     // sendNotification() catches its own errors and returns false on failure —
@@ -101,7 +92,7 @@ export class RecoveryNotifier {
 
     if (!sent) {
       this.log.error(
-        { jobId, agentId, consecutiveFailures, suspended, stuckDescription },
+        { jobId, agentId, consecutiveFailures, stuckDescription },
         'RecoveryNotifier: failed to publish notification — recovery already recorded in audit log',
       );
     }
