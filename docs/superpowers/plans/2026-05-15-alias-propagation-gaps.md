@@ -10,7 +10,7 @@
 
 ---
 
-### Task 1: Write failing tests for `KnowledgeGraphStore.addAlias`
+## Task 1: Write failing tests for `KnowledgeGraphStore.addAlias`
 
 **Files:**
 - Modify: `src/memory/knowledge-graph.upsert.test.ts`
@@ -79,7 +79,7 @@ Expected: FAIL — `store.addAlias is not a function` (or equivalent TypeError).
 
 ---
 
-### Task 2: Implement `addAlias` in the backend interface, both backends, and the store
+## Task 2: Implement `addAlias` in the backend interface, both backends, and the store
 
 **Files:**
 - Modify: `src/memory/knowledge-graph.ts`
@@ -161,7 +161,7 @@ git -C /Users/josephfung/Projects/worktrees/curia-alias-propagation commit -m "f
 
 ---
 
-### Task 3: Update `entity-memory.addAlias` to use `store.addAlias`
+## Task 3: Update `entity-memory.addAlias` to use `store.addAlias`
 
 **Files:**
 - Modify: `src/memory/entity-memory.ts`
@@ -228,7 +228,7 @@ git -C /Users/josephfung/Projects/worktrees/curia-alias-propagation commit -m "f
 
 ---
 
-### Task 4: Write failing tests for `mergeEntities` alias union
+## Task 4: Write failing tests for `mergeEntities` alias union
 
 **Files:**
 - Modify: `src/memory/entity-memory.resolve-or-create.test.ts`
@@ -344,7 +344,7 @@ Expected: the four new `mergeEntities — alias consolidation` tests FAIL (secon
 
 ---
 
-### Task 5: Implement alias union in `mergeEntities`
+## Task 5: Implement alias union in `mergeEntities`
 
 **Files:**
 - Modify: `src/memory/entity-memory.ts`
@@ -398,7 +398,7 @@ git -C /Users/josephfung/Projects/worktrees/curia-alias-propagation commit -m "f
 
 ---
 
-### Task 6: Write failing tests for two-path `EntityMemory.search`
+## Task 6: Write failing tests for two-path `EntityMemory.search`
 
 **Files:**
 - Modify: `src/memory/entity-memory.resolve-or-create.test.ts`
@@ -513,7 +513,7 @@ Expected: the five new `EntityMemory.search — alias exact-match path` tests FA
 
 ---
 
-### Task 7: Implement two-path `EntityMemory.search`
+## Task 7: Implement two-path `EntityMemory.search`
 
 **Files:**
 - Modify: `src/memory/entity-memory.ts`
