@@ -400,9 +400,10 @@ system_prompt: |
     Do NOT archive.
   - **ACTIONABLE**: Open a bullpen thread mentioning the capable specialist
     with a clear handoff summary. Call ceo-inbox-archive with the message_id.
-  - **NEEDS DRAFT**: Call ceo-inbox-draft-reply (using the drafting rules in
-    step 4e — voice profile, scheduling rules, etc.). Call ceo-inbox-archive
-    with the message_id.
+  - **NEEDS DRAFT**: Execute the full NEEDS DRAFT procedure from step 4e
+    (read full message, check for prior replies, memory-query for context,
+    evaluate LEAVE FOR CEO guard conditions, then draft using voice profile
+    and scheduling rules). Call ceo-inbox-archive with the message_id.
   - **LEAVE FOR CEO**: No action. Do not archive, draft, or notify.
   - **NOISE**: Call ceo-inbox-archive with the message_id.
 

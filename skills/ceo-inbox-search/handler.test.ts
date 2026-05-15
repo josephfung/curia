@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { CeoInboxSearchHandler } from './handler.js';
 import type { SkillContext } from '../../src/skills/types.js';
 
@@ -47,6 +47,10 @@ describe('CeoInboxSearchHandler — query parameter', () => {
 
   beforeEach(() => {
     handler = new CeoInboxSearchHandler();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
   it('uses search_query_native instead of q', async () => {
