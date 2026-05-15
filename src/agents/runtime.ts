@@ -17,7 +17,7 @@ import { DEFAULT_ERROR_BUDGET, type AgentError, type ErrorBudget } from '../erro
 import { AutonomyService } from '../autonomy/autonomy-service.js';
 import { formatTimeContextBlock } from '../time/time-context.js';
 import type { OfficeIdentityService } from '../identity/service.js';
-import type { ExecutiveProfileService } from '../executive/service.js';
+import { compileWritingVoiceBlock, type ExecutiveProfileService } from '../executive/service.js';
 import { formatBullpenContext, type BullpenService } from '../memory/bullpen.js';
 import type { AgentRegistry } from './agent-registry.js';
 
@@ -242,10 +242,13 @@ export class AgentRuntime {
     // The executive's display name comes from the contact system (not the profile)
     // so that identity data has a single source of truth.
     if (executiveProfileService) {
+      // get() throws only when initialize() was never awaited — this is a startup
+      // programming error and should fail loudly, not be swallowed.
+      const executiveProfile = executiveProfileService.get();
       try {
         effectiveSystemPrompt = effectiveSystemPrompt.replace(
           '${executive_voice_block}',
-          executiveProfileService.compileWritingVoiceBlock(executiveDisplayName ?? 'the executive'),
+          compileWritingVoiceBlock(executiveProfile, executiveDisplayName ?? 'the executive'),
         );
       } catch (err) {
         logger.error({ err, agentId }, 'Failed to compile executive voice block — ${executive_voice_block} placeholder left in prompt');
