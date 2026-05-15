@@ -22,7 +22,10 @@ export async function healthRoutes(
   const { pool, logger, agentNames, skillNames } = options;
   const startTime = Date.now();
 
-  app.get('/api/health', async (_request, reply) => {
+  // Permissive rate limit: 60 req/min per IP — allows monitoring tools to probe every
+  // second while still preventing denial-of-service from rogue scanners. This is well
+  // above the expected load from any real health-check fleet.
+  app.get('/api/health', { config: { rateLimit: { max: 60, timeWindow: '1 minute' } } }, async (_request, reply) => {
     let dbStatus = 'connected';
 
     try {

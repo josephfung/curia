@@ -13,6 +13,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Security
+
+- **Per-route rate limiting** — all 24 CodeQL `js/missing-rate-limiting` alerts resolved; auth/authorization endpoints (identity, autonomy, executive) capped at 10 req/min per IP, KG explorer and health endpoints at 60 req/min. (#580)
+
 ### Fixed
 
 - **Self-email loop filter hardened** — inbound poll now rejects self-sent messages via folder, sent-ID, and normalized-address checks to prevent reply loops. (#37)

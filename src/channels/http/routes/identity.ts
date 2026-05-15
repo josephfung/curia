@@ -37,9 +37,14 @@ export async function identityRoutes(
     return assertSecret(request, reply, webAppBootstrapSecret, sessions);
   }
 
+  // Stricter per-route rate limit for all identity endpoints: 10 req/min per IP.
+  // These routes check credentials on every call — a brute-force target that
+  // needs tighter throttling than the global 200/min baseline.
+  const AUTH_RATE = { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } };
+
   // -- GET /api/identity — return current identity config --
 
-  app.get('/api/identity', async (request, reply) => {
+  app.get('/api/identity', AUTH_RATE, async (request, reply) => {
     if (!requireAuth(request, reply)) return;
 
     try {
@@ -65,7 +70,7 @@ export async function identityRoutes(
 
   // -- PUT /api/identity — save a new version and trigger hot reload --
 
-  app.put('/api/identity', async (request, reply) => {
+  app.put('/api/identity', AUTH_RATE, async (request, reply) => {
     if (!requireAuth(request, reply)) return;
 
     const body = request.body as {
@@ -109,7 +114,7 @@ export async function identityRoutes(
 
   // -- GET /api/identity/history — return all versions, newest first --
 
-  app.get('/api/identity/history', async (request, reply) => {
+  app.get('/api/identity/history', AUTH_RATE, async (request, reply) => {
     if (!requireAuth(request, reply)) return;
 
     try {
@@ -125,7 +130,7 @@ export async function identityRoutes(
   // Used by the wizard after saving, to ensure the latest DB version is reflected
   // in the in-memory cache before the next coordinator turn.
 
-  app.post('/api/identity/reload', async (request, reply) => {
+  app.post('/api/identity/reload', AUTH_RATE, async (request, reply) => {
     if (!requireAuth(request, reply)) return;
 
     try {
