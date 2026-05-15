@@ -545,3 +545,101 @@ describe('EntityMemory.findEntities — alias awareness', () => {
     expect(results).toHaveLength(0);
   });
 });
+
+describe('EntityMemory.mergeEntities — alias consolidation', () => {
+  it('unions secondary aliases into primary on merge', async () => {
+    const { mem, store } = makeEntityMemory();
+    const { entity: primary } = await mem.createEntity({
+      type: 'person', label: 'Jane Doe', properties: {}, source: 'test',
+    });
+    // Use a label that does not conflict with the aliases we intend to add:
+    // addAlias() silently skips aliases that match the canonical label (case-insensitive),
+    // so 'Jane Smith' lets us test 'jane' as a stored alias.
+    const { entity: secondary } = await mem.createEntity({
+      type: 'person', label: 'Jane Smith', properties: {}, source: 'test',
+    });
+    await mem.addAlias(primary.id, 'jane-doe');
+    await mem.addAlias(secondary.id, 'jane');
+    await mem.addAlias(secondary.id, 'j-doe');
+
+    await mem.mergeEntities(primary.id, secondary.id);
+
+    const surviving = await store.getNode(primary.id);
+    expect(surviving!.aliases).toContain('jane-doe');  // primary's own alias
+    expect(surviving!.aliases).toContain('jane');       // from secondary
+    expect(surviving!.aliases).toContain('j-doe');      // from secondary
+    // No duplicates
+    expect(new Set(surviving!.aliases).size).toBe(surviving!.aliases.length);
+  });
+
+  it('deduplicates aliases that appear on both nodes', async () => {
+    const { mem, store } = makeEntityMemory();
+    const { entity: primary } = await mem.createEntity({
+      type: 'person', label: 'Jane Doe', properties: {}, source: 'test',
+    });
+    const { entity: secondary } = await mem.createEntity({
+      type: 'person', label: 'Jane', properties: {}, source: 'test',
+    });
+    await mem.addAlias(primary.id, 'shared-alias');
+    await mem.addAlias(secondary.id, 'shared-alias');
+    await mem.addAlias(secondary.id, 'extra');
+
+    await mem.mergeEntities(primary.id, secondary.id);
+
+    const surviving = await store.getNode(primary.id);
+    const count = surviving!.aliases.filter(a => a === 'shared-alias').length;
+    expect(count).toBe(1);
+    expect(surviving!.aliases).toContain('extra');
+  });
+
+  it('caps the alias union at MAX_ALIASES_PER_ENTITY and preserves primary aliases first', async () => {
+    const { mem, store } = makeEntityMemory();
+    const { entity: primary } = await mem.createEntity({
+      type: 'person', label: 'Primary', properties: {}, source: 'test',
+    });
+    const { entity: secondary } = await mem.createEntity({
+      type: 'person', label: 'Secondary', properties: {}, source: 'test',
+    });
+
+    // Fill primary with 8 aliases
+    for (let i = 0; i < 8; i++) {
+      await mem.addAlias(primary.id, `primary-alias-${i}`);
+    }
+    // Give secondary 5 aliases (only 2 can fit into the cap of 10)
+    for (let i = 0; i < 5; i++) {
+      await mem.addAlias(secondary.id, `secondary-alias-${i}`);
+    }
+
+    await mem.mergeEntities(primary.id, secondary.id);
+
+    const surviving = await store.getNode(primary.id);
+    expect(surviving!.aliases).toHaveLength(10);
+    // All 8 primary aliases are preserved
+    for (let i = 0; i < 8; i++) {
+      expect(surviving!.aliases).toContain(`primary-alias-${i}`);
+    }
+    // The first 2 secondary aliases fit; the last 3 are dropped
+    expect(surviving!.aliases).toContain('secondary-alias-0');
+    expect(surviving!.aliases).toContain('secondary-alias-1');
+    expect(surviving!.aliases).not.toContain('secondary-alias-2');
+    expect(surviving!.aliases).not.toContain('secondary-alias-3');
+    expect(surviving!.aliases).not.toContain('secondary-alias-4');
+  });
+
+  it('leaves primary aliases unchanged when secondary has no aliases', async () => {
+    const { mem, store } = makeEntityMemory();
+    const { entity: primary } = await mem.createEntity({
+      type: 'person', label: 'Primary', properties: {}, source: 'test',
+    });
+    const { entity: secondary } = await mem.createEntity({
+      type: 'person', label: 'Secondary', properties: {}, source: 'test',
+    });
+    await mem.addAlias(primary.id, 'p-alias');
+    // secondary has no aliases
+
+    await mem.mergeEntities(primary.id, secondary.id);
+
+    const surviving = await store.getNode(primary.id);
+    expect(surviving!.aliases).toEqual(['p-alias']);
+  });
+});
