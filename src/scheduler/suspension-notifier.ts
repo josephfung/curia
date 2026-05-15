@@ -13,6 +13,7 @@ import type { EventBus } from '../bus/bus.js';
 import type { Logger } from '../logger.js';
 import type { OutboundGateway } from '../skills/outbound-gateway.js';
 import type { ScheduleSuspendedEvent, BusEvent } from '../bus/events.js';
+import { classifyError } from '../errors/classify.js';
 
 export interface SuspensionNotifierConfig {
   bus: EventBus;
@@ -38,7 +39,8 @@ export class SuspensionNotifier {
       // handled internally. The outer .catch() is a backstop for unexpected throws
       // not covered by handle()'s own error handling.
       void this.handle(event as ScheduleSuspendedEvent).catch((err: unknown) => {
-        this.log.error({ err, eventId: event.id, eventType: event.type }, 'SuspensionNotifier: unexpected error in handler');
+        const agentErr = classifyError(err, 'suspension-notifier');
+        this.log.error({ err: agentErr, eventId: event.id, eventType: event.type }, 'SuspensionNotifier: unexpected error in handler');
       });
     });
     this.log.info('SuspensionNotifier registered');
