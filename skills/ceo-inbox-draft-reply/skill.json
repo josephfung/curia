@@ -1,0 +1,21 @@
+{
+  "name": "ceo-inbox-draft-reply",
+  "description": "Create a reply-all draft in the CEO's personal email inbox. The draft is never sent automatically — the CEO reviews and sends from Gmail. Always replies to the original sender and CCs all other recipients. Intended for use by the ceo-inbox agent — accesses the CEO's personal email, do not call from other agents.",
+  "version": "0.1.0",
+  "sensitivity": "normal",
+  "action_risk": "low",
+  "inputs": {
+    "reply_to_message_id": "string (Nylas message ID of the message being replied to)",
+    "body": "string (HTML body of the draft reply)"
+  },
+  "outputs": {
+    "draft_id": "string (Nylas draft ID)",
+    "subject": "string (auto-generated Re: subject)",
+    "to": "array of { name?, email }",
+    "cc": "array of { name?, email }"
+  },
+  "permissions": [],
+  "secrets": ["nylas_api_key", "ceo_nylas_grant_id", "ceo_self_email"],
+  "timeout": 15000,
+  "capabilities": []
+}
