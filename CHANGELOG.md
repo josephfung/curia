@@ -15,6 +15,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Security
 
+- **Semgrep CE scanning** — adds pattern-based SAST on every PR and weekly schedule; covers TypeScript, Node.js OWASP Top 10, command injection, and secrets rulesets; SARIF results surface in the Security tab. (#562)
 - **Per-route rate limiting** — all 24 CodeQL `js/missing-rate-limiting` alerts resolved; auth/authorization endpoints (identity, autonomy, executive) capped at 10 req/min per IP, KG explorer and health endpoints at 60 req/min. (#580)
 
 ### Fixed

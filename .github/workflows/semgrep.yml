@@ -1,0 +1,49 @@
+name: Semgrep
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '0 7 * * 3'  # Weekly, Wednesday — staggered from CodeQL (06:00)
+
+permissions:
+  contents: read
+  security-events: write  # required for SARIF upload
+
+jobs:
+  semgrep:
+    name: Semgrep Scan
+    runs-on: ubuntu-latest
+    container:
+      image: semgrep/semgrep
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Run Semgrep
+        # continue-on-error so Semgrep's issue-found exit code (1) doesn't
+        # halt the job before we can upload the SARIF results
+        continue-on-error: true
+        run: |
+          semgrep \
+            --config p/typescript \
+            --config p/nodejs \
+            --config p/owasp-top-ten \
+            --config p/command-injection \
+            --config p/secrets \
+            --metrics=off \
+            --sarif \
+            --output semgrep.sarif \
+            --exclude 'node_modules/**' \
+            --exclude 'dist/**' \
+            --exclude 'pnpm-lock.yaml' \
+            --exclude 'tests/**/*.snap'
+
+      - name: Upload SARIF
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: semgrep.sarif
+        # Upload even when Semgrep finds issues so alerts appear in Security tab
+        if: always()
