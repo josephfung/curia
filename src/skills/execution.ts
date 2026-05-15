@@ -346,64 +346,74 @@ export class ExecutionLayer {
       if (autonomyConfig !== null) {
         const currentScore = autonomyConfig.score;
 
-        // Gate A: Full restriction — score < 60 blocks all non-read skills.
-        // action_risk: 'none' is exempt (reads, retrieval, summarisation).
-        if (currentScore < 60 && manifest.action_risk !== 'none') {
+        // Principal bypass — if the task was originated by the principal (CEO), skip gates A and B.
+        // The autonomy gate governs *autonomous* behavior; a direct CEO instruction overrides it
+        // by intent. Log at info so bypasses are visible in production.
+        if (isPrincipalOriginated(options?.taskMetadata)) {
           skillLogger.info(
-            { skillName, currentScore, actionRisk: manifest.action_risk },
-            'autonomy gate: skill blocked — agent is in restricted mode (score < 60)',
+            { skillName, currentScore },
+            'autonomy gate: skipped — task originated by principal',
           );
-          if (this.bus) {
-            this.bus.publish('execution', createAutonomySkillBlocked({
-              skillName,
-              actionRisk: manifest.action_risk,
-              currentScore,
-              requiredScore: 60,
-              agentId: options?.agentId,
-              taskEventId: options?.taskEventId,
-            })).catch((err) => {
-              skillLogger.warn({ err, skillName }, 'autonomy gate: failed to publish autonomy.skill_blocked event');
-            });
+        } else {
+          // Gate A: Full restriction — score < 60 blocks all non-read skills.
+          // action_risk: 'none' is exempt (reads, retrieval, summarisation).
+          if (currentScore < 60 && manifest.action_risk !== 'none') {
+            skillLogger.info(
+              { skillName, currentScore, actionRisk: manifest.action_risk },
+              'autonomy gate: skill blocked — agent is in restricted mode (score < 60)',
+            );
+            if (this.bus) {
+              this.bus.publish('execution', createAutonomySkillBlocked({
+                skillName,
+                actionRisk: manifest.action_risk,
+                currentScore,
+                requiredScore: 60,
+                agentId: options?.agentId,
+                taskEventId: options?.taskEventId,
+              })).catch((err) => {
+                skillLogger.warn({ err, skillName }, 'autonomy gate: failed to publish autonomy.skill_blocked event');
+              });
+            }
+            // Note: `input` here is post-timestamp-normalization (mutated in-place above).
+            // The stored payload in autonomy_action_log will contain normalized timestamps,
+            // which is correct — re-normalization on approve-action re-invocation is a no-op.
+            const gateAError = await this.buildGateError(
+              skillName, input, currentScore, 60, manifest.action_risk, options, skillLogger,
+            );
+            return {
+              success: false,
+              error: this.wrapSkillError(gateAError),
+            };
           }
-          // Note: `input` here is post-timestamp-normalization (mutated in-place above).
-          // The stored payload in autonomy_action_log will contain normalized timestamps,
-          // which is correct — re-normalization on approve-action re-invocation is a no-op.
-          const gateAError = await this.buildGateError(
-            skillName, input, currentScore, 60, manifest.action_risk, options, skillLogger,
-          );
-          return {
-            success: false,
-            error: this.wrapSkillError(gateAError),
-          };
-        }
 
-        // Gate B: Per-skill action_risk threshold.
-        const requiredScore = AutonomyService.minScoreForActionRisk(manifest.action_risk);
-        if (currentScore < requiredScore) {
-          skillLogger.info(
-            { skillName, currentScore, requiredScore, actionRisk: manifest.action_risk },
-            'autonomy gate: skill blocked — score below action_risk threshold',
-          );
-          if (this.bus) {
-            this.bus.publish('execution', createAutonomySkillBlocked({
-              skillName,
-              actionRisk: manifest.action_risk,
-              currentScore,
-              requiredScore,
-              agentId: options?.agentId,
-              taskEventId: options?.taskEventId,
-            })).catch((err) => {
-              skillLogger.warn({ err, skillName }, 'autonomy gate: failed to publish autonomy.skill_blocked event');
-            });
+          // Gate B: Per-skill action_risk threshold.
+          const requiredScore = AutonomyService.minScoreForActionRisk(manifest.action_risk);
+          if (currentScore < requiredScore) {
+            skillLogger.info(
+              { skillName, currentScore, requiredScore, actionRisk: manifest.action_risk },
+              'autonomy gate: skill blocked — score below action_risk threshold',
+            );
+            if (this.bus) {
+              this.bus.publish('execution', createAutonomySkillBlocked({
+                skillName,
+                actionRisk: manifest.action_risk,
+                currentScore,
+                requiredScore,
+                agentId: options?.agentId,
+                taskEventId: options?.taskEventId,
+              })).catch((err) => {
+                skillLogger.warn({ err, skillName }, 'autonomy gate: failed to publish autonomy.skill_blocked event');
+              });
+            }
+            // Note: same post-normalization `input` as Gate A — see comment above.
+            const gateBError = await this.buildGateError(
+              skillName, input, currentScore, requiredScore, manifest.action_risk, options, skillLogger,
+            );
+            return {
+              success: false,
+              error: this.wrapSkillError(gateBError),
+            };
           }
-          // Note: same post-normalization `input` as Gate A — see comment above.
-          const gateBError = await this.buildGateError(
-            skillName, input, currentScore, requiredScore, manifest.action_risk, options, skillLogger,
-          );
-          return {
-            success: false,
-            error: this.wrapSkillError(gateBError),
-          };
         }
       } else {
         // autonomyConfig is null — pre-migration or empty table. Fail-open.
