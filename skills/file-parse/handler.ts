@@ -309,8 +309,9 @@ function stripHtmlTags(html: string): string {
     .replace(/<[^>]+>/g, ' ')
     // Strip incomplete tags — bare <tagname without a closing > cannot be caught by
     // <[^>]+> above (which requires >). This prevents <script fragments from leaking
-    // into the extracted text (js/incomplete-multi-character-sanitization).
-    .replace(/<[a-zA-Z][^>]*/g, ' ')
+    // into the extracted text. {0,500} caps match length to prevent stripping large
+    // text bodies on inputs with a lone < far from any > (js/incomplete-multi-character-sanitization).
+    .replace(/<[a-zA-Z][^>]{0,500}/g, ' ')
     // Decode HTML entities.
     // Order matters: &amp; must be decoded LAST to prevent double-decoding.
     // Decoding &amp; first turns &amp;lt; into &lt;, which then decodes to <,

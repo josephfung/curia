@@ -25,8 +25,9 @@ function stripHtml(content: string): string {
     .replace(/<[^>]+>/g, '')
     // Strip incomplete tags — bare <tagname without a closing > is not caught by <[^>]+>
     // (which requires >). This prevents <script fragments from leaking into the preview
-    // and reaching the LLM context (js/incomplete-multi-character-sanitization).
-    .replace(/<[a-zA-Z][^>]*/g, '');
+    // and reaching the LLM context. {0,500} caps match length to prevent stripping large
+    // text bodies on inputs with a lone < far from any > (js/incomplete-multi-character-sanitization).
+    .replace(/<[a-zA-Z][^>]{0,500}/g, '');
 }
 
 export class HeldMessagesListHandler implements SkillHandler {
