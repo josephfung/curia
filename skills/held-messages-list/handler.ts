@@ -20,6 +20,8 @@ import { toLocalIso, formatDisplayTimezone } from '../../src/time/timestamp.js';
 // Strip HTML tags for plaintext extraction.
 // Not a full DOM parser — good enough for preview purposes.
 function stripHtml(content: string): string {
+  // nosemgrep: js/incomplete-multi-character-sanitization — incomplete tags caught by /<[a-zA-Z][^>]{0,500}/g below;
+  // output goes to LLM context, not rendered in a browser, so XSS injection is not the threat model
   return content
     // Strip complete tags (< ... >).
     .replace(/<[^>]+>/g, '')

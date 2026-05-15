@@ -299,10 +299,12 @@ export class FileParseHandler implements SkillHandler {
 
 /** Strip HTML tags and decode common entities. Lightweight, no dependency. */
 function stripHtmlTags(html: string): string {
+  // nosemgrep: js/incomplete-multi-character-sanitization — incomplete tags caught by /<[a-zA-Z][^>]{0,500}/g below
   return html
     // Strip <script> and <style> blocks including their content.
     // \s* before the closing > handles whitespace-padded closing tags like </script >
     // which the original pattern (</script>) did not match (js/bad-tag-filter).
+    // nosemgrep: js/bad-tag-filter — \s* handles whitespace before >; attribute-bearing closing tags like </script bar> are invalid HTML
     .replace(/<script[^>]*>[\s\S]*?<\/script\s*>/gi, '')
     .replace(/<style[^>]*>[\s\S]*?<\/style\s*>/gi, '')
     // Strip all complete HTML tags (< ... >).

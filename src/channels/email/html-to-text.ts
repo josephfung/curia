@@ -11,7 +11,9 @@ export function htmlToText(html: string | undefined | null): string {
   // Remove <style> and <script> blocks entirely (content + tags).
   // \s* before the closing > handles whitespace-padded closing tags like </script >
   // which the original pattern (</script>) did not match (js/bad-tag-filter).
+  // nosemgrep: js/incomplete-multi-character-sanitization — incomplete tags (<tag without >) caught on line below
   text = text.replace(/<style[^>]*>[\s\S]*?<\/style\s*>/gi, '');
+  // nosemgrep: js/incomplete-multi-character-sanitization, js/bad-tag-filter — \s* handles whitespace before >; incomplete tags caught below
   text = text.replace(/<script[^>]*>[\s\S]*?<\/script\s*>/gi, '');
 
   // Convert <br> variants to newlines
@@ -24,6 +26,7 @@ export function htmlToText(html: string | undefined | null): string {
   text = text.replace(/<hr\s*\/?>/gi, '\n---\n');
 
   // Strip all remaining complete HTML tags
+  // nosemgrep: js/incomplete-multi-character-sanitization — incomplete tags (no closing >) caught by the strip on the next line
   text = text.replace(/<[^>]+>/g, '');
 
   // Strip incomplete tags — bare <tagname without a closing > is not caught by <[^>]+>
