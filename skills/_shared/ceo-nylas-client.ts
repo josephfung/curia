@@ -110,10 +110,16 @@ export class CeoNylasClient {
   async listMessages(options: ListMessagesOptions = {}): Promise<NylasMessageSummary[]> {
     const params = new URLSearchParams();
     if (options.limit !== undefined) params.set('limit', String(options.limit));
-    if (options.folder) params.set('in', options.folder);
-    if (options.unread !== undefined) params.set('unread', String(options.unread));
-    if (options.query) params.set('q', options.query);
-    if (options.receivedAfter !== undefined) params.set('received_after', String(options.receivedAfter));
+    if (options.query) {
+      // Nylas v3: search_query_native cannot be combined with any other filter
+      // param except limit and page_token — sending in/unread/received_after
+      // alongside it returns HTTP 400 "invalid_request_error".
+      params.set('search_query_native', options.query);
+    } else {
+      if (options.folder) params.set('in', options.folder);
+      if (options.unread !== undefined) params.set('unread', String(options.unread));
+      if (options.receivedAfter !== undefined) params.set('received_after', String(options.receivedAfter));
+    }
 
     const url = `${this.baseUrl}/messages?${params}`;
     const data = await this.request<NylasApiMessage[]>('GET', url, 'listMessages');
