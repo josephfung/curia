@@ -1,0 +1,22 @@
+# Companion to ci.yml — reports the required `ci` status check as successful
+# for docs-only PRs where the main CI workflow is skipped via paths-ignore.
+# Without this, docs-only PRs stall indefinitely waiting for the `ci` check.
+
+name: CI (docs-only)
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '*.md'
+      - 'docs/**'
+      - '.github/**/*.md'
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Docs-only change — CI skipped"
