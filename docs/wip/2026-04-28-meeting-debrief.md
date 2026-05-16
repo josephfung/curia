@@ -1,16 +1,22 @@
 # Meeting Debrief Implementation Plan
 
+> **PARTIALLY SUPERSEDED (2026-05-16):** Tasks 1–5 of this plan (conversation claims infrastructure) have been replaced by context bridging v2 (#615). The reply-routing mechanism is now coordinator-mediated via the Bullpen-through-coordinator pattern, not dispatcher-level claim routing. See `docs/wip/2026-05-16-context-bridging-v2-design.md` for the new infrastructure design.
+>
+> Tasks 6–10 (config, agent YAML, status skill, changelog) remain directionally correct but will need a fresh plan once #615 lands — the agent YAML should not pin outbound skills, and prompt delivery uses Bullpen instead of direct send.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add a proactive meeting-debrief agent that detects ended meetings, prompts the CEO for takeaways via Signal, and executes follow-up actions.
 
-**Architecture:** New `meeting-debrief` specialist agent triggered by a 5-minute cron job. Uses a new "conversation claims" primitive (Postgres-backed registry in the dispatcher) so that CEO responses on Signal route back to the debrief agent instead of the coordinator. State persists between cron ticks via `scheduler-report` context. Cross-specialist work goes through the Bullpen.
+**Architecture:** New `meeting-debrief` specialist agent triggered by a 5-minute cron job. Proactive prompts are sent via the Bullpen-through-coordinator pattern (specialist requests outbound, coordinator sends with context bridge metadata). CEO replies route through the coordinator, who delegates back to the debrief agent based on active context bridge entries. State persists between cron ticks via `scheduler-report` context. Cross-specialist work goes through the Bullpen.
 
 **Tech Stack:** TypeScript/ESM, PostgreSQL, Vitest, Nylas Calendar SDK, pino logging
 
 **Spec:** `docs/specs/17-meeting-debrief.md`
 
-**Prerequisite:** Issue #374 — proactive outbound Signal messages from scheduled jobs. The OutboundGateway currently cannot initiate Signal messages from scheduled jobs (they are silently dropped). This must be resolved before the debrief agent can send prompts. Either fix #374 first, or incorporate it as Task 0 of this plan.
+**Prerequisites:**
+- Issue #374 — proactive outbound Signal messages from scheduled jobs (Done)
+- Issue #615 — context bridging v2 (delegation-aware outbound context registry)
 
 ---
 
