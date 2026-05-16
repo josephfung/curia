@@ -77,6 +77,7 @@ describe('HeldMessagesProcessHandler — identify action', () => {
     const contactService = {
       linkIdentity: vi.fn().mockResolvedValue({ id: 'identity-1' }),
       resolveByChannelIdentity: vi.fn(),
+      setStatus: vi.fn().mockResolvedValue({ id: CONTACT_ID, status: 'confirmed' }),
       setTrustLevel: vi.fn().mockResolvedValue({ id: CONTACT_ID, trustLevel: 'high' }),
     };
     const bus = makeBus();
@@ -92,6 +93,7 @@ describe('HeldMessagesProcessHandler — identify action', () => {
       channel: 'email',
       channelIdentifier: 'donna@example.com',
     }));
+    expect(contactService.setStatus).toHaveBeenCalledWith(CONTACT_ID, 'confirmed');
     expect(contactService.setTrustLevel).toHaveBeenCalledWith(CONTACT_ID, 'high');
     expect(bus.publish).toHaveBeenCalledOnce();
     expect(heldMessages.markProcessed).toHaveBeenCalledWith(HELD_MSG_ID, CONTACT_ID);
@@ -121,6 +123,7 @@ describe('HeldMessagesProcessHandler — identify action', () => {
         status: 'confirmed',
         trustLevel: null,
       }),
+      setStatus: vi.fn().mockResolvedValue({ id: CONTACT_ID, status: 'confirmed' }),
       setTrustLevel: vi.fn().mockResolvedValue({ id: CONTACT_ID, trustLevel: 'high' }),
     };
     const bus = makeBus();
@@ -232,6 +235,7 @@ describe('HeldMessagesProcessHandler — identify action', () => {
     const contactService = {
       linkIdentity: vi.fn().mockResolvedValue({ id: 'identity-1' }),
       resolveByChannelIdentity: vi.fn(),
+      setStatus: vi.fn().mockResolvedValue({ id: CONTACT_ID, status: 'confirmed' }),
       setTrustLevel: vi.fn().mockResolvedValue({ id: CONTACT_ID, trustLevel: 'high' }),
     };
     const bus = makeBus();
@@ -258,6 +262,7 @@ describe('HeldMessagesProcessHandler — identify action', () => {
     const contactService = {
       linkIdentity: vi.fn().mockResolvedValue({ id: 'identity-1' }),
       resolveByChannelIdentity: vi.fn(),
+      setStatus: vi.fn().mockResolvedValue({ id: CONTACT_ID, status: 'confirmed' }),
       setTrustLevel: vi.fn().mockRejectedValue(new Error('DB connection lost')),
     };
     const bus = makeBus();
