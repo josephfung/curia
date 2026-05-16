@@ -74,12 +74,12 @@ CREATE INDEX idx_conversation_claims_agent
 - [ ] **Step 2: Verify migration number is unique**
 
 Run: `ls src/db/migrations/ | sort`
-Expected: No duplicate `029` prefix. If one exists (from a concurrent branch), renumber to the next available slot.
+Expected: No duplicate `042` prefix. If one exists (from a concurrent branch), renumber to the next available slot.
 
 - [ ] **Step 3: Commit**
 
 ```bash
-git add src/db/migrations/029_create_conversation_claims.sql
+git add src/db/migrations/042_create_conversation_claims.sql
 git commit -m "feat: add conversation_claims migration (ADR-017)"
 ```
 
@@ -988,5 +988,10 @@ const isExternal = (email: string) =>
   !internalDomains.some(d => email.toLowerCase().endsWith(`@${d}`));
 ```
 
-### Conversation ID for Signal
-Signal conversation IDs follow the pattern `signal:<phone>:<thread>`. The agent must use this exact ID when claiming the conversation.
+### Conversation IDs by channel
+Each channel adapter generates a stable `conversationId` that groups related messages:
+- **Signal 1:1:** `signal:<E.164 phone>` (e.g., `signal:+15550001111`) — all messages from the same phone share one ID
+- **Signal group:** `signal:group=<base64 groupId>` — stable per group
+- **Email:** `email:<threadId>` — stable per email thread
+
+The debrief agent claims the conversation ID returned by the outbound gateway after sending the prompt. For Signal 1:1 (the typical debrief channel), this means claiming `signal:<ceo-phone>`, and all subsequent 1:1 messages from the CEO will route to the claiming agent.

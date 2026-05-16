@@ -86,7 +86,7 @@ The agent's `agent_tasks.progress` JSON field tracks:
   "pendingDebriefs": {
     "nylas_event_abc": {
       "promptedAt": "2026-04-28T14:05:00Z",
-      "conversationId": "signal:ceo:xyz",
+      "conversationId": "signal:+15550001111",
       "reminderJobId": "job_123",
       "meetingTitle": "Strategy sync with Meridian",
       "attendees": ["sarah@meridian.com", "david@meridian.com"],
