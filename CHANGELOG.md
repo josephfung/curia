@@ -21,6 +21,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **`held-messages-process`** — identify action with `existing_contact_id` now promotes the contact to `confirmed` before replaying; previously provisional contacts caused the replayed message to be re-held immediately by the dispatcher.
 - **`ceo-inbox-search`** — uses `search_query_native` instead of `q` (Nylas v3); suppresses incompatible filter params when a search query is active.
 - **`ceo-inbox` ACTIONABLE archive** — added step 4h action checklist so ACTIONABLE emails reliably get archived after specialist handoff; rewrote ambiguous classification note.
 - **Self-email loop filter hardened** — inbound poll now rejects self-sent messages via folder, sent-ID, and normalized-address checks to prevent reply loops. (#37)
