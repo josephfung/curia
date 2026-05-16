@@ -87,6 +87,26 @@ function buildChildEnv(configEnv: Record<string, string>): Record<string, string
  * Throws on connection failure — callers decide whether to warn-and-continue
  * or propagate.
  */
+function attachMcpTransportStderrLogging(
+  transport: { stderr?: NodeJS.ReadableStream | null },
+  serverName: string,
+  logger: Logger,
+): void {
+  // Some MCP transports expose a stderr stream (stdio child processes and any
+  // SDK transport implementation that forwards diagnostic stderr output).
+  // If present, we route it through structured logging with server context so
+  // operators can attribute third-party MCP errors to the correct server.
+  transport.stderr?.on('data', (chunk: Buffer) => {
+    // Trim trailing newlines so each log event is concise while preserving
+    // the original message body (including internal newlines). Empty chunks
+    // are ignored to avoid noisy warn logs with no actionable content.
+    const stderr = chunk.toString().trimEnd();
+    if (!stderr) return;
+
+    logger.warn({ server: serverName, stderr }, 'MCP server stderr');
+  });
+}
+
 export async function connectStdio(
   config: McpStdioServerConfig,
   logger: Logger,
@@ -115,6 +135,8 @@ export async function connectStdio(
     { name: 'curia', version: '1.0.0' },
     { capabilities: {} },
   );
+
+  attachMcpTransportStderrLogging(transport, config.name, logger);
 
   try {
     await client.connect(transport);
@@ -173,6 +195,10 @@ export async function connectSse(
     { name: 'curia', version: '1.0.0' },
     { capabilities: {} },
   );
+
+  // Keep stderr capture enabled for HTTP transports too: if an SDK transport
+  // exposes stderr diagnostics, we want the same structured attribution.
+  attachMcpTransportStderrLogging(transport, config.name, logger);
 
   await client.connect(transport);
 
