@@ -121,59 +121,45 @@ When a debrief prompt is sent, the agent creates a one-shot scheduler job:
 
 ---
 
-## 4. Conversation Claims (ADR-017)
+## 4. Reply Routing via Context Bridging v2
 
 ### The problem
 
-When the meeting-debrief agent sends a prompt via Signal, the CEO's response arrives as an `inbound.message`. The dispatcher currently hardcodes all inbound routing to the coordinator. The coordinator didn't send the prompt, so it has no conversation context.
+When the meeting-debrief agent sends a prompt via Signal, the CEO's response arrives as an `inbound.message`. The coordinator receives all inbound messages but has no context about which specialist sent the prompt or what kind of reply to expect.
 
-### The solution: Conversation claim registry
+### The solution: Bullpen-through-coordinator + enhanced context bridging
 
-A registry in the dispatcher where agents can claim ownership of a conversation ID.
+**Architectural principle:** The coordinator is the sole voice for all human-facing communication. Specialist agents never call outbound skills directly. When a specialist needs to send a proactive message, it requests the send via a Bullpen thread mentioning the coordinator.
 
-**Mechanism:**
-1. Meeting-debrief agent sends a prompt → registers a claim: `{ conversationId, agentId: "meeting-debrief", claimedAt, expiresAt }`
-2. CEO responds on Signal → dispatcher checks claims before routing
-3. Claim found → route `agent.task` to `meeting-debrief` instead of coordinator
-4. No claim → route to coordinator as usual (backward compatible)
+**Outbound flow (Bullpen-through-coordinator):**
+1. Meeting-debrief agent detects a meeting that warrants follow-up
+2. Agent posts a Bullpen thread mentioning the coordinator with: the message to send, channel, and context bridge metadata (originating agent, expected reply type, delegation hint, expiry)
+3. Coordinator receives via Bullpen task, applies judgment (timing, persona, relevance)
+4. Coordinator calls `signal-send` with `context_bridge` parameters
+5. Context bridge entry is written atomically with the send
 
-**Claim lifecycle:**
-- **Created** via a `claim-conversation` skill that the agent calls explicitly after sending a proactive outbound message. The agent decides when to claim — the OutboundGateway does not auto-claim. This keeps claims intentional and auditable.
-- **Expires** after a configurable TTL (default 48 hours)
-- **Released** when the agent explicitly releases it (debrief complete) or on expiry
-- **Fallback** on expiry: conversation reverts to coordinator routing
+**Inbound flow (delegation via context bridge):**
+1. CEO responds on Signal (or any channel)
+2. Dispatcher routes to coordinator (always — no routing bypass)
+3. Coordinator sees `[ACTIVE OUTBOUND CONTEXT]` block injected by dispatcher
+4. Coordinator judges relevance — if reply relates to an active entry, delegates to the hinted specialist via the existing `delegate` skill
+5. Specialist processes and returns result; coordinator relays in its own voice
 
-**Storage: Postgres from day one.** An in-process Map would be lost on restart, which is unacceptable given regular deployments. Mid-conversation claim loss would leave the CEO's responses orphaned (routed to the coordinator with no context).
+**Storage:** Dedicated `outbound_context` Postgres table with structured fields (agent_id, expected_reply, delegation_hint, metadata JSONB, expires_at, released flag). See `docs/wip/2026-05-16-context-bridging-v2-design.md` for full schema.
 
-```sql
-CREATE TABLE conversation_claims (
-  conversation_id  TEXT PRIMARY KEY,
-  agent_id         TEXT NOT NULL,
-  claimed_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
-  expires_at       TIMESTAMPTZ NOT NULL,
-  metadata         JSONB
-);
+**Lifecycle:**
+- **Created** atomically with the outbound send (via `context_bridge` param on send skills)
+- **Expires** after configurable TTL (default 48 hours)
+- **Released** explicitly by the coordinator (via `context-bridge-release` skill) when conversation completes
+- **Read** by the dispatcher on every inbound — all active entries injected into coordinator's task
 
--- Cleanup: periodic deletion of expired claims (or handled by dispatcher on lookup)
-CREATE INDEX idx_claims_expires ON conversation_claims (expires_at);
-```
+**Security properties preserved:**
+- Coordinator sees and approves all outbound before it's sent
+- Coordinator receives all inbound and applies judgment before delegating
+- No dispatcher routing bypass — coordinator is always the entry point
+- Skill registry enforcement: specialist agents do not have outbound communication skills pinned
 
-**Dispatcher change:** Small addition to `handleInbound()` — before the hardcoded coordinator routing (line ~184), check the claims table. This is a ~15-line change including the DB query (cached with short TTL for hot paths).
-
-### ADR-017: Conversation Claims for Proactive Agent Communication
-
-Will be written as a formal ADR in `docs/adr/017-conversation-claims.md` following the existing Nygard-style format.
-
-**Context:** Specialist agents that initiate proactive conversations (meeting debriefs, reminders, relationship check-ins) need responses routed back to them, not the coordinator. The current dispatcher hardcodes all inbound to the coordinator.
-
-**Decision:** A conversation claim registry backed by Postgres, with a `claim-conversation` skill for agents and TTL-based expiry. Claims are checked before default routing. Postgres chosen over in-process Map to survive restarts (regular deployments would otherwise lose claims mid-conversation).
-
-**Consequences:**
-- Enables proactive agent patterns without overloading the coordinator
-- Backward compatible — unclaimed conversations route to coordinator as before
-- Coordinator persona remains unified (agents still send through OutboundGateway)
-- Future proactive agents (task tracker, relationship manager) get the same infrastructure for free
-- Adds one Postgres table and one DB query per inbound message (mitigated by short-lived cache)
+**Design spec:** `docs/wip/2026-05-16-context-bridging-v2-design.md` (issue #615)
 
 ---
 
@@ -336,15 +322,20 @@ These are out of scope for this feature but identified during design:
 
 | File | Purpose |
 |---|---|
-| `agents/meeting-debrief.yaml` | Agent config: prompt, skills, schedule |
-| `src/dispatch/conversation-claims.ts` | Claim registry (Postgres-backed, with TTL) |
-| `src/dispatch/conversation-claims.test.ts` | Unit tests for claim registry |
-| `skills/claim-conversation/` | Skill for agents to claim/release conversation threads |
+| `agents/meeting-debrief.yaml` | Agent config: prompt, skills, schedule (no outbound skills pinned) |
 | `skills/debrief-status/` | Skill for coordinator to query debrief state |
-| `docs/adr/017-conversation-claims.md` | ADR for the conversation claims pattern |
-| `src/db/migrations/NNN_create_conversation_claims.sql` | Postgres table for durable claims |
 | Config additions to `config/default.yaml` | `debrief:` top-level block |
-| Dispatcher modification: `src/dispatch/dispatcher.ts` | Claim check before coordinator routing (~15 lines) |
+
+**Prerequisite infrastructure (delivered by #615 — context bridging v2):**
+
+| File | Purpose |
+|---|---|
+| `src/db/migrations/NNN_create_outbound_context.sql` | Dedicated table for context bridge entries |
+| `src/dispatch/outbound-context.ts` | Service class: write, query active, release |
+| `skills/context-bridge-release/` | Coordinator skill to mark entries as released |
+| Updates to `skills/signal-send/`, `skills/email-send/` | Accept optional `context_bridge` param |
+| Update to `src/dispatch/dispatcher.ts` | Read path queries new table for injection |
+| Update to `agents/coordinator.yaml` | Delegation guidance for active context entries |
 
 ---
 
@@ -353,23 +344,19 @@ These are out of scope for this feature but identified during design:
 | Number | Item | Status |
 |---|---|---|
 | 0 | Proactive outbound Signal from scheduled jobs (#374) — prerequisite | Done |
-| 1 | ADR-017 — conversation claims architectural decision record | Not Done |
-| 2 | Conversation claims DB migration (`conversation_claims` table) | Not Done |
-| 3 | `ConversationClaimRegistry` — Postgres-backed claim CRUD + TTL expiry | Not Done |
-| 4 | Dispatcher integration — claim check before coordinator routing | Not Done |
-| 5 | `claim-conversation` skill — agents claim/release conversation threads | Not Done |
-| 6 | `debrief:` config block in `config/default.yaml` + startup validation | Not Done |
-| 7 | `meeting-debrief` agent YAML config (prompt, skills, schedule) | Not Done |
-| 8 | Detection pipeline — calendar scan + internal/external classification | Not Done |
-| 9 | LLM judgment — Stage 2 contextual assessment of debrief-worthiness | Not Done |
-| 10 | Prompt delivery — outbound via configured channel, claim registration | Not Done |
-| 11 | Reminder scheduling — one-shot job for nudge if no response | Not Done |
-| 12 | Response processing — parse CEO notes, execute follow-up actions | Not Done |
-| 13 | Cross-specialist work via Bullpen — research delegation pattern | Not Done |
-| 14 | State persistence — `scheduler-report` context between cron runs | Not Done |
-| 15 | `debrief-status` skill — coordinator queries pending/completed debriefs | Not Done |
-| 16 | Preference learning — store CEO feedback as KG facts, wire into judgment | Not Done |
-| 17 | Audit events — state transitions, expired entry pruning, claim lifecycle | Not Done |
-| 18 | Unit tests — claim registry, detection pipeline, state management | Not Done |
-| 19 | Integration tests — end-to-end flows, reminder, preference learning | Not Done |
-| 20 | Smoke tests — GPT-4o judge scenarios for debrief detection and actions | Not Done |
+| 1 | Context bridging v2 (#615) — prerequisite infrastructure | Not Done |
+| 2 | `debrief:` config block in `config/default.yaml` + startup validation | Not Done |
+| 3 | `meeting-debrief` agent YAML config (prompt, skills, schedule) | Not Done |
+| 4 | Detection pipeline — calendar scan + internal/external classification | Not Done |
+| 5 | LLM judgment — Stage 2 contextual assessment of debrief-worthiness | Not Done |
+| 6 | Prompt delivery — Bullpen request to coordinator, context bridge registered | Not Done |
+| 7 | Reminder scheduling — one-shot job for nudge (via Bullpen) if no response | Not Done |
+| 8 | Response processing — coordinator delegates reply, agent executes follow-ups | Not Done |
+| 9 | Cross-specialist work via Bullpen — research delegation pattern | Not Done |
+| 10 | State persistence — `scheduler-report` context between cron runs | Not Done |
+| 11 | `debrief-status` skill — coordinator queries pending/completed debriefs | Not Done |
+| 12 | Preference learning — store CEO feedback as KG facts, wire into judgment | Not Done |
+| 13 | Audit events — state transitions, expired entry pruning | Not Done |
+| 14 | Unit tests — detection pipeline, state management | Not Done |
+| 15 | Integration tests — end-to-end Bullpen→coordinator→send→reply→delegate flows | Not Done |
+| 16 | Smoke tests — GPT-4o judge scenarios for debrief detection and actions | Not Done |
