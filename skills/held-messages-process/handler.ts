@@ -296,16 +296,22 @@ export class HeldMessagesProcessHandler implements SkillHandler {
       // provisional senders the same as unknown senders for hold policy.
       // The new-contact path doesn't need this — createContact already uses
       // status: 'confirmed'.
-      // Failure is non-fatal: the identity is linked and the message will be
-      // marked processed regardless.
+      // This IS fatal for the replay: if setStatus fails, the replayed message
+      // will be re-held by the dispatcher, creating an infinite hold loop. Fail
+      // the operation so the message stays in the held queue (retryable) rather
+      // than silently re-entering the hold cycle.
       if (existing_contact_id) {
         try {
           await ctx.contactService.setStatus(contactId, 'confirmed');
         } catch (err) {
-          ctx.log.warn(
-            { err, contactId },
-            'held-messages-process: setStatus failed — replayed message may be re-held if contact is still provisional',
+          ctx.log.error(
+            { err, contactId, heldMessageId: held_message_id },
+            'held-messages-process: setStatus failed — cannot replay safely; contact is still provisional and dispatcher would re-hold',
           );
+          return {
+            success: false,
+            error: 'Failed to promote contact to confirmed status — the message was not replayed to avoid a re-hold loop. Please retry.',
+          };
         }
       }
 

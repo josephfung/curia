@@ -66,7 +66,7 @@ describe('HeldMessagesProcessHandler — identify with existing_contact_id', () 
     expect(setStatusOrder).toBeLessThan(busPublishOrder);
   });
 
-  it('still succeeds when setStatus fails (non-fatal)', async () => {
+  it('fails the operation when setStatus throws (avoids re-hold loop)', async () => {
     const ctx = makeCtx();
     (ctx.contactService.setStatus as ReturnType<typeof vi.fn>).mockRejectedValue(
       new Error('DB connection timeout'),
@@ -74,11 +74,12 @@ describe('HeldMessagesProcessHandler — identify with existing_contact_id', () 
     const handler = new HeldMessagesProcessHandler();
     const result = await handler.execute(ctx);
 
-    expect(result.success).toBe(true);
-    expect(ctx.log.warn).toHaveBeenCalled();
-    // Replay and markProcessed should still proceed
-    expect(ctx.bus!.publish).toHaveBeenCalled();
-    expect(ctx.heldMessages!.markProcessed).toHaveBeenCalled();
+    expect(result.success).toBe(false);
+    expect((result as { error: string }).error).toMatch(/re-hold loop/);
+    expect(ctx.log.error).toHaveBeenCalled();
+    // Replay must NOT fire — replaying with a provisional contact would re-hold
+    expect(ctx.bus!.publish).not.toHaveBeenCalled();
+    expect(ctx.heldMessages!.markProcessed).not.toHaveBeenCalled();
   });
 
   it('does not call setStatus for the new-contact path (already confirmed at creation)', async () => {
