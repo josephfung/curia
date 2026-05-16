@@ -288,6 +288,27 @@ export class HeldMessagesProcessHandler implements SkillHandler {
         }
       }
 
+      // Promote to 'confirmed' so the dispatcher doesn't treat the contact as
+      // an unknown sender when the replay event goes through. The existing_contact_id
+      // path links the identity to a pre-existing contact that may still be
+      // provisional (auto-created by a channel adapter). Without this promotion,
+      // the replayed message gets re-held immediately — the dispatcher treats
+      // provisional senders the same as unknown senders for hold policy.
+      // The new-contact path doesn't need this — createContact already uses
+      // status: 'confirmed'.
+      // Failure is non-fatal: the identity is linked and the message will be
+      // marked processed regardless.
+      if (existing_contact_id) {
+        try {
+          await ctx.contactService.setStatus(contactId, 'confirmed');
+        } catch (err) {
+          ctx.log.warn(
+            { err, contactId },
+            'held-messages-process: setStatus failed — replayed message may be re-held if contact is still provisional',
+          );
+        }
+      }
+
       // Set trust_level = 'high' so subsequent messages from this sender score
       // above the trust floor. contactConfidence starts at 0 for new contacts
       // (enriched later via KG), so without this override the dispatcher's
