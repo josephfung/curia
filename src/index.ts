@@ -92,6 +92,7 @@ import type { AgentPersona } from './skills/types.js';
 import type { ConfigChangeEvent } from './bus/events.js';
 import { BullpenService } from './memory/bullpen.js';
 import { BullpenDispatcher } from './dispatch/bullpen-dispatcher.js';
+import { TempFileStore } from './skills/temp-file-store.js';
 import { ConversationCheckpointProcessor } from './checkpoint/processor.js';
 import { runStartupValidation } from './startup/validator.js';
 import { runReadinessChecks } from './startup/readiness.js';
@@ -1012,11 +1013,17 @@ async function main(): Promise<void> {
     actionLogRepo, outboundGateway, logger, config.ceoPrimaryEmail || undefined,
   );
 
+  // Temp file store — secure tmpfs-backed storage for binary attachment handoff.
+  // Skills declaring 'tempFileStore' capability get ctx.writeTempFile().
+  // See docs/specs/2026-05-16-temp-attachment-store-design.md for security model.
+  const tempFileStore = new TempFileStore();
+  await tempFileStore.init(logger);
+
   // Execution layer — services wired here are injected per-skill based on their
   // capability-gated declarations. outboundGateway gives email skills their send path.
   // entityContextAssembler enables entity_enrichment pre-enrichment and the
   // entity-context skill. agentContactId enables entity_enrichment default='agent'.
-  const executionLayer = new ExecutionLayer(skillRegistry, logger, { bus, agentRegistry, contactService, outboundGateway, heldMessages, schedulerService, entityMemory, agentPersona, nylasCalendarClient, entityContextAssembler, agentContactId: agentIdentityContactId, autonomyService, executiveProfileService, browserService, bullpenService, approvalTrigger, actionLogRepo, confidencePipeline, timezone: config.timezone, selfEmail: resolvedEmailAccounts[0]?.selfEmail, skillOutputMaxLength: yamlConfig.skillOutput?.maxLength });
+  const executionLayer = new ExecutionLayer(skillRegistry, logger, { bus, agentRegistry, contactService, outboundGateway, heldMessages, schedulerService, entityMemory, agentPersona, nylasCalendarClient, entityContextAssembler, agentContactId: agentIdentityContactId, autonomyService, executiveProfileService, browserService, bullpenService, approvalTrigger, actionLogRepo, confidencePipeline, tempFileStore, timezone: config.timezone, selfEmail: resolvedEmailAccounts[0]?.selfEmail, skillOutputMaxLength: yamlConfig.skillOutput?.maxLength });
 
   // Two-pass agent registration:
   // Pass 1: Register all agents in the registry so specialistSummary() is complete
@@ -1398,6 +1405,12 @@ async function main(): Promise<void> {
       dispatcher.close();
     } catch (err) {
       logger.error({ err }, 'Error clearing checkpoint timers during shutdown');
+    }
+    // Purge temp files and stop the sweep timer before exit.
+    try {
+      await tempFileStore.shutdown();
+    } catch (err) {
+      logger.error({ err }, 'Error shutting down temp file store during shutdown');
     }
     try {
       await pool.end();
