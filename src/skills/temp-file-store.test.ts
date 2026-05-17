@@ -106,7 +106,10 @@ describe('TempFileStore', () => {
     });
 
     it('is idempotent — does not throw for missing files', async () => {
-      await expect(store.delete('file:///nonexistent/path.txt')).resolves.not.toThrow();
+      // Write a file to get a valid URL pattern, then try to delete a non-existent file
+      // using the same store directory but a bogus UUID filename
+      const fakeUrl = `file://${testDir}/00000000-0000-0000-0000-000000000000.bin`;
+      await expect(store.delete(fakeUrl)).resolves.not.toThrow();
     });
   });
 
