@@ -319,6 +319,14 @@ describe('capability-gated service injection', () => {
   });
 
   it('does NOT inject writeTempFile for skills without tempFileStore capability', async () => {
+    // Wire a real TempFileStore into the layer but register the skill WITHOUT the capability.
+    // This proves the gate is enforced — not just that nothing was wired.
+    const gatingStore = new TempFileStore({
+      dir: `/tmp/curia-test-tempfiles-gate-${Date.now()}`,
+      sweepIntervalMs: 0,
+    });
+    await gatingStore.init();
+
     const registry = new SkillRegistry();
     let capturedCtx: SkillContext | undefined;
     const handler: SkillHandler = {
@@ -330,13 +338,15 @@ describe('capability-gated service injection', () => {
     // Register with empty capabilities — no tempFileStore declared
     registry.register(makeCapManifest('search-docs', []), handler);
 
-    // ExecutionLayer constructed WITHOUT tempFileStore wired
-    const layer = new ExecutionLayer(registry, logger);
+    // ExecutionLayer HAS tempFileStore, but skill did not declare the capability
+    const layer = new ExecutionLayer(registry, logger, { tempFileStore: gatingStore });
 
     await layer.invoke('search-docs', {});
 
     // writeTempFile must be absent — undeclared capabilities must not leak into ctx
     expect(capturedCtx?.writeTempFile).toBeUndefined();
+
+    await gatingStore.shutdown();
   });
 });
 

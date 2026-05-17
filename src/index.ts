@@ -1016,8 +1016,16 @@ async function main(): Promise<void> {
   // Temp file store — secure tmpfs-backed storage for binary attachment handoff.
   // Skills declaring 'tempFileStore' capability get ctx.writeTempFile().
   // See docs/specs/2026-05-16-temp-attachment-store-design.md for security model.
-  const tempFileStore = new TempFileStore();
-  await tempFileStore.init(logger);
+  // Non-fatal: if the tmpfs mount is unavailable and the fallback dir can't be
+  // created, we log and continue without this capability rather than aborting startup.
+  let tempFileStore: TempFileStore | undefined;
+  try {
+    tempFileStore = new TempFileStore();
+    await tempFileStore.init(logger);
+  } catch (err) {
+    logger.error({ err }, 'Temp file store init failed — continuing without tempFileStore capability');
+    tempFileStore = undefined;
+  }
 
   // Execution layer — services wired here are injected per-skill based on their
   // capability-gated declarations. outboundGateway gives email skills their send path.
@@ -1407,10 +1415,12 @@ async function main(): Promise<void> {
       logger.error({ err }, 'Error clearing checkpoint timers during shutdown');
     }
     // Purge temp files and stop the sweep timer before exit.
-    try {
-      await tempFileStore.shutdown();
-    } catch (err) {
-      logger.error({ err }, 'Error shutting down temp file store during shutdown');
+    if (tempFileStore) {
+      try {
+        await tempFileStore.shutdown();
+      } catch (err) {
+        logger.error({ err }, 'Error shutting down temp file store during shutdown');
+      }
     }
     try {
       await pool.end();

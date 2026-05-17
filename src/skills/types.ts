@@ -57,7 +57,7 @@ export interface SkillManifest {
    *  Valid capabilities: bus, agentRegistry, outboundGateway, heldMessages,
    *  schedulerService, entityMemory, nylasCalendarClient, autonomyService,
    *  executiveProfileService, browserService, bullpenService, skillSearch,
-   *  actionLogRepo, executionLayer, confidencePipeline.
+   *  actionLogRepo, executionLayer, confidencePipeline, tempFileStore.
    *
    *  Services NOT listed here (contactService, entityContextAssembler, agentPersona)
    *  are universal — available to every skill without declaration. */

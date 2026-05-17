@@ -35,13 +35,24 @@ export class TempFileStore {
   private logger?: { warn(obj: Record<string, unknown>, msg: string): void };
 
   constructor(options?: TempFileStoreOptions) {
-    this.dir = options?.dir
+    // path.resolve() ensures boundary checks work even if a relative dir is passed.
+    this.dir = path.resolve(
+      options?.dir
       ?? process.env.CURIA_TEMPFILE_DIR
-      ?? '/run/curia-tempfiles';
+      ?? '/run/curia-tempfiles',
+    );
+
+    // parseInt can return NaN for malformed env vars — fall back to compiled defaults.
+    const parsePositiveInt = (raw: string | undefined, fallback: number): number => {
+      if (!raw) return fallback;
+      const parsed = Number.parseInt(raw, 10);
+      return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+    };
+
     this.maxBytes = options?.maxBytes
-      ?? (process.env.CURIA_TEMPFILE_MAX_BYTES ? parseInt(process.env.CURIA_TEMPFILE_MAX_BYTES, 10) : MAX_TEMP_FILE_BYTES);
+      ?? parsePositiveInt(process.env.CURIA_TEMPFILE_MAX_BYTES, MAX_TEMP_FILE_BYTES);
     this.ttlMs = options?.ttlMs
-      ?? (process.env.CURIA_TEMPFILE_TTL_MS ? parseInt(process.env.CURIA_TEMPFILE_TTL_MS, 10) : 300_000);
+      ?? parsePositiveInt(process.env.CURIA_TEMPFILE_TTL_MS, 300_000);
 
     const sweepIntervalMs = options?.sweepIntervalMs ?? 60_000;
     if (sweepIntervalMs > 0) {
@@ -62,8 +73,15 @@ export class TempFileStore {
     let preExists = true;
     try {
       await fs.access(this.dir);
-    } catch {
-      preExists = false;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+        preExists = false;
+      } else {
+        // EACCES, EIO, or other unexpected error — surface it rather than silently
+        // treating the directory as "missing" and attempting to create it.
+        logger?.warn({ err, dir: this.dir }, 'TempFileStore.init: access check failed');
+        throw err;
+      }
     }
 
     if (!preExists) {
