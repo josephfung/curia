@@ -88,15 +88,22 @@ function buildChildEnv(configEnv: Record<string, string>): Record<string, string
  * or propagate.
  */
 function attachMcpTransportStderrLogging(
-  transport: { stderr?: NodeJS.ReadableStream | null },
+  transport: unknown,
   serverName: string,
   logger: Logger,
 ): void {
-  // Some MCP transports expose a stderr stream (stdio child processes and any
-  // SDK transport implementation that forwards diagnostic stderr output).
-  // If present, we route it through structured logging with server context so
-  // operators can attribute third-party MCP errors to the correct server.
-  transport.stderr?.on('data', (chunk: Buffer) => {
+  // StdioClientTransport exposes a typed `stderr` getter (Stream | null) when
+  // the transport is configured with stderr: 'pipe'. StreamableHTTPClientTransport
+  // has no stderr property at all — it's HTTP-based and manages no child process.
+  // Use a runtime guard so both transports flow through the same function without
+  // requiring a union type that couples us to specific SDK classes.
+  if (typeof transport !== 'object' || transport === null || !('stderr' in transport)) return;
+  // Cast to EventEmitter — the common base for Node streams. We only call .on(),
+  // which is available on both Stream (stdio) and any EventEmitter-shaped stderr.
+  const stderrStream = (transport as { stderr?: NodeJS.EventEmitter | null }).stderr;
+  if (!stderrStream) return;
+
+  stderrStream.on('data', (chunk: Buffer | string) => {
     // Trim trailing newlines so each log event is concise while preserving
     // the original message body (including internal newlines). Empty chunks
     // are ignored to avoid noisy warn logs with no actionable content.
