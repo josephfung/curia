@@ -11,7 +11,7 @@
   },
   "outputs": {
     "content_base64": "string (base64-encoded file content, ready to pass to file-parse)",
-    "temp_file_url": "string | undefined (file:// URL pointing to the downloaded bytes on disk — pass to create_drive_file fileUrl param for binary-safe uploads to Google Drive)",
+    "temp_file_url": "string | undefined (file:// URL of the downloaded bytes on disk — for binary-safe Drive uploads, pass this as create_drive_file's fileUrl param and use the `filename` field as the file_name param to preserve the original attachment name)",
     "filename": "string (original attachment filename)",
     "content_type": "string (MIME type, e.g. 'application/pdf')",
     "size": "number (actual byte count after download)"
