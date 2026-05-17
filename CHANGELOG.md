@@ -21,6 +21,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **Email attachment Drive uploads corrupted** — `create_drive_file` was receiving the base64 string via `content` and encoding it as UTF-8 text, producing Drive files containing ASCII base64 rather than decoded binary bytes. Downloads now write raw bytes to a secure noexec tmpfs store (`TempFileStore`) and return a `file://` URL; the agent passes this as `fileUrl` to upload binary-correctly. Both `ceo-inbox-download-attachment` and `email-download-attachment` return the new `temp_file_url` field alongside `content_base64`. (#622, #624)
 - **`held-messages-process`** — identify action with `existing_contact_id` now promotes the contact to `confirmed` before replaying; previously provisional contacts caused the replayed message to be re-held immediately by the dispatcher.
 - **`ceo-inbox-search`** — uses `search_query_native` instead of `q` (Nylas v3); suppresses incompatible filter params when a search query is active.
 - **`ceo-inbox` ACTIONABLE archive** — added step 4h action checklist so ACTIONABLE emails reliably get archived after specialist handoff; rewrote ambiguous classification note.
@@ -28,6 +29,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **`TempFileStore` platform capability** — new capability-gated service (`tempFileStore`) that writes binary buffers to a noexec RAM-only tmpfs mount and returns `file://` URLs; skills declare it in their manifest to receive `ctx.writeTempFile()`. TTL sweep (5 min) and startup purge ensure files never linger. (#624)
 - **`ceo-inbox` agent and 9 skills** — moved from `curia-deploy/custom/` into curia core; now covered by curia's CI and type-checked against real types. (#592)
 - **Email attachment support** — surface metadata in email skills, append human-readable summaries to message content, and download bytes as base64 for `file-parse`.
 - **Email folder management skills** — `email-label`, `email-list-folders`, `email-create-folder`, and `email-mark-read` expose Nylas folder and read-state operations as general-purpose skills.
