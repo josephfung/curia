@@ -32,6 +32,7 @@ export class TempFileStore {
   private readonly maxBytes: number;
   private readonly ttlMs: number;
   private sweepTimer: ReturnType<typeof setInterval> | null = null;
+  private logger?: { warn(obj: Record<string, unknown>, msg: string): void };
 
   constructor(options?: TempFileStoreOptions) {
     this.dir = options?.dir
@@ -56,6 +57,7 @@ export class TempFileStore {
    * and purges any stale files from a previous run.
    */
   async init(logger?: { warn(obj: Record<string, unknown>, msg: string): void }): Promise<void> {
+    this.logger = logger;
     // Check if the directory already exists (pre-mounted tmpfs in production)
     let preExists = true;
     try {
@@ -76,7 +78,7 @@ export class TempFileStore {
     }
 
     // Startup purge — clean slate after unclean shutdown
-    await this.purgeAll();
+    await this.purgeAll(logger);
   }
 
   /** Write binary content. Returns a file:// URL. Throws if size exceeds limit. */
@@ -100,8 +102,13 @@ export class TempFileStore {
   /** Delete a previously written file by its URL. Idempotent. */
   async delete(fileUrl: string): Promise<void> {
     const filePath = fileUrl.replace('file://', '');
+    const resolved = path.resolve(filePath);
+    // Refuse to delete files outside the store directory — prevents path traversal.
+    if (!resolved.startsWith(this.dir + path.sep) && resolved !== this.dir) {
+      throw new Error(`Refusing to delete file outside temp store: ${resolved}`);
+    }
     try {
-      await fs.unlink(filePath);
+      await fs.unlink(resolved);
     } catch (err) {
       // Idempotent — already deleted or never existed
       if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
@@ -116,8 +123,11 @@ export class TempFileStore {
     let entries: string[];
     try {
       entries = await fs.readdir(this.dir);
-    } catch {
-      return 0; // Directory doesn't exist yet
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return 0; // Not initialized yet
+      // Any other error (EACCES, EIO, ENOTDIR) means cleanup is broken — log it.
+      this.logger?.warn({ err, dir: this.dir }, 'TempFileStore.sweep: readdir failed — sweep skipped, files may accumulate');
+      return 0;
     }
 
     for (const entry of entries) {
@@ -128,8 +138,11 @@ export class TempFileStore {
           await fs.unlink(filePath);
           removed++;
         }
-      } catch {
-        // File disappeared between readdir and stat — benign race
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+          // ENOENT = benign race (file deleted between readdir and stat). Anything else is unexpected.
+          this.logger?.warn({ err, filePath }, 'TempFileStore.sweep: could not stat/unlink file');
+        }
       }
     }
     return removed;
@@ -141,22 +154,28 @@ export class TempFileStore {
       clearInterval(this.sweepTimer);
       this.sweepTimer = null;
     }
-    await this.purgeAll();
+    await this.purgeAll(this.logger);
   }
 
   /** Remove all files in the store directory. */
-  private async purgeAll(): Promise<void> {
+  private async purgeAll(logger?: { warn(obj: Record<string, unknown>, msg: string): void }): Promise<void> {
     let entries: string[];
     try {
       entries = await fs.readdir(this.dir);
-    } catch {
-      return; // Directory doesn't exist
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+        logger?.warn({ err, dir: this.dir }, 'TempFileStore.purgeAll: readdir failed — purge skipped, stale files may persist');
+      }
+      return; // ENOENT = directory doesn't exist, nothing to purge
     }
     for (const entry of entries) {
       try {
         await fs.unlink(path.join(this.dir, entry));
-      } catch {
-        // Best-effort cleanup
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+          // ENOENT = already gone, truly benign. Anything else is worth surfacing.
+          logger?.warn({ err, entry, dir: this.dir }, 'TempFileStore.purgeAll: could not unlink — file may persist');
+        }
       }
     }
   }
