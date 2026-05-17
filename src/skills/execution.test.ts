@@ -12,6 +12,7 @@ import { describe, it, expect, vi } from 'vitest';
 import pino from 'pino';
 import { SkillRegistry } from './registry.js';
 import { ExecutionLayer } from './execution.js';
+import { TempFileStore } from './temp-file-store.js';
 import type { SkillHandler, SkillManifest, SkillResult, SkillContext } from './types.js';
 import type { EventBus } from '../bus/bus.js';
 import type { OutboundGateway } from './outbound-gateway.js';
@@ -286,6 +287,56 @@ describe('capability-gated service injection', () => {
     }
     // Handler should NOT have been called — fail-closed
     expect(handler.execute).not.toHaveBeenCalled();
+  });
+
+  it('injects writeTempFile for skills declaring tempFileStore capability', async () => {
+    // Use a temp dir under /tmp so TempFileStore.init() can create it without
+    // needing the production /run/curia-tempfiles mount to be present.
+    const tempFileStore = new TempFileStore({
+      dir: `/tmp/curia-test-tempfiles-${Date.now()}`,
+      sweepIntervalMs: 0, // Disable auto-sweep so the test doesn't leave timers running
+    });
+    await tempFileStore.init();
+
+    const registry = new SkillRegistry();
+    let capturedCtx: SkillContext | undefined;
+    const handler: SkillHandler = {
+      execute: vi.fn(async (ctx): Promise<SkillResult> => {
+        capturedCtx = ctx;
+        return { success: true, data: 'ok' };
+      }),
+    };
+    registry.register(makeCapManifest('upload-attachment', ['tempFileStore']), handler);
+
+    const layer = new ExecutionLayer(registry, logger, { tempFileStore });
+
+    await layer.invoke('upload-attachment', {});
+
+    // writeTempFile should be injected as a callable closure — not the raw store
+    expect(typeof capturedCtx?.writeTempFile).toBe('function');
+
+    await tempFileStore.shutdown();
+  });
+
+  it('does NOT inject writeTempFile for skills without tempFileStore capability', async () => {
+    const registry = new SkillRegistry();
+    let capturedCtx: SkillContext | undefined;
+    const handler: SkillHandler = {
+      execute: vi.fn(async (ctx): Promise<SkillResult> => {
+        capturedCtx = ctx;
+        return { success: true, data: 'ok' };
+      }),
+    };
+    // Register with empty capabilities — no tempFileStore declared
+    registry.register(makeCapManifest('search-docs', []), handler);
+
+    // ExecutionLayer constructed WITHOUT tempFileStore wired
+    const layer = new ExecutionLayer(registry, logger);
+
+    await layer.invoke('search-docs', {});
+
+    // writeTempFile must be absent — undeclared capabilities must not leak into ctx
+    expect(capturedCtx?.writeTempFile).toBeUndefined();
   });
 });
 
