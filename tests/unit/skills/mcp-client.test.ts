@@ -1,17 +1,27 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EventEmitter } from 'node:events';
+import type { Logger } from '../../../src/logger.js';
 
 const mockConnect = vi.fn();
 const mockGetServerVersion = vi.fn().mockReturnValue({ name: 'mock-server', version: '1.0.0' });
 const mockClose = vi.fn().mockResolvedValue(undefined);
 
-const mockClientCtor = vi.fn().mockImplementation(() => ({
-  connect: mockConnect,
-  getServerVersion: mockGetServerVersion,
-  close: mockClose,
-}));
+const mockClientCtor = vi.fn(function () {
+  return {
+    connect: mockConnect,
+    getServerVersion: mockGetServerVersion,
+    close: mockClose,
+  };
+});
 
-let lastStdioOptions: any;
+// Captures the options passed to StdioClientTransport so tests can assert on them.
+type MockStdioOptions = {
+  command: string;
+  args?: string[];
+  env?: Record<string, string>;
+  stderr?: 'pipe' | 'ignore' | 'inherit';
+};
+let lastStdioOptions: MockStdioOptions | undefined;
 const stderrEmitter = new EventEmitter();
 
 vi.mock('@modelcontextprotocol/sdk/client/index.js', () => ({
@@ -19,7 +29,7 @@ vi.mock('@modelcontextprotocol/sdk/client/index.js', () => ({
 }));
 
 vi.mock('@modelcontextprotocol/sdk/client/stdio.js', () => ({
-  StdioClientTransport: vi.fn().mockImplementation((options) => {
+  StdioClientTransport: vi.fn(function (options: MockStdioOptions) {
     lastStdioOptions = options;
     return { stderr: stderrEmitter };
   }),
@@ -41,7 +51,7 @@ describe('connectStdio', () => {
       error: vi.fn(),
       fatal: vi.fn(),
       child: vi.fn(),
-    } as any;
+    } as unknown as Logger;
 
     const { connectStdio } = await import('../../../src/skills/mcp-client.js');
 
@@ -67,7 +77,7 @@ describe('connectStdio', () => {
       error: vi.fn(),
       fatal: vi.fn(),
       child: vi.fn(),
-    } as any;
+    } as unknown as Logger;
 
     const { connectStdio } = await import('../../../src/skills/mcp-client.js');
 
