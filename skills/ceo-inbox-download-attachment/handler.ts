@@ -11,8 +11,7 @@
 
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
 import { CeoNylasClient } from '../_shared/ceo-nylas-client.js';
-
-const MAX_DOWNLOAD_BYTES = 10 * 1024 * 1024; // 10 MB
+import { MAX_TEMP_FILE_BYTES } from '../../src/skills/temp-file-store.js';
 
 export class CeoInboxDownloadAttachmentHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {
@@ -52,7 +51,7 @@ export class CeoInboxDownloadAttachmentHandler implements SkillHandler {
       };
     }
 
-    if (attachment.size > MAX_DOWNLOAD_BYTES) {
+    if (attachment.size > MAX_TEMP_FILE_BYTES) {
       const sizeMB = (attachment.size / (1024 * 1024)).toFixed(1);
       return {
         success: false,
@@ -81,7 +80,7 @@ export class CeoInboxDownloadAttachmentHandler implements SkillHandler {
     }
 
     // Post-download size check — catches cases where the declared size was 0 (missing) or incorrect.
-    if (buffer.length > MAX_DOWNLOAD_BYTES) {
+    if (buffer.length > MAX_TEMP_FILE_BYTES) {
       const sizeMB = (buffer.length / (1024 * 1024)).toFixed(1);
       ctx.log.warn(
         { attachmentId, messageId, actualBytes: buffer.length, declaredSize: attachment.size },
@@ -93,10 +92,25 @@ export class CeoInboxDownloadAttachmentHandler implements SkillHandler {
       };
     }
 
+    // Write to temp storage so the agent can pass a file:// URL to Drive upload.
+    // The workspace-mcp create_drive_file tool reads raw bytes from disk via
+    // fileUrl, avoiding the base64 corruption that occurs via the content param.
+    let tempFileUrl: string | undefined;
+    if (ctx.writeTempFile) {
+      try {
+        tempFileUrl = await ctx.writeTempFile(buffer, attachment.filename);
+      } catch (err) {
+        // Non-fatal — the agent can still use content_base64 for parsing.
+        // Log the failure so operators know temp storage is degraded.
+        ctx.log.warn({ err, filename: attachment.filename }, 'ceo-inbox-download-attachment: writeTempFile failed');
+      }
+    }
+
     return {
       success: true,
       data: {
         content_base64: buffer.toString('base64'),
+        temp_file_url: tempFileUrl,
         filename: attachment.filename,
         content_type: attachment.contentType,
         size: buffer.length,
