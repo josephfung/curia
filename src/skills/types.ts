@@ -201,6 +201,11 @@ export interface SkillContext {
    *  Allows re-invocation of skills with humanApproved bypass. Only approve-action (#428)
    *  should declare this capability; it is sensitivity: "elevated" (CEO-only). */
   executionLayer?: import('./execution.js').ExecutionLayer;
+  /** Temp file store — available to skills declaring 'tempFileStore' in capabilities.
+   *  Writes binary buffers to a secure tmpfs mount and returns file:// URLs for
+   *  MCP tools that accept file paths. Used by email download skills to hand off
+   *  attachment bytes to Google Drive uploads without corruption. */
+  writeTempFile?(buffer: Buffer, filename: string): Promise<string>;
 }
 
 /**

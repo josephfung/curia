@@ -39,6 +39,7 @@ import { AutonomyService } from '../autonomy/autonomy-service.js';
 import type { AutonomyConfig } from '../autonomy/autonomy-service.js';
 import type { BrowserService } from '../browser/browser-service.js';
 import type { ApprovalTriggerService } from '../autonomy/approval-trigger.js';
+import { TempFileStore } from './temp-file-store.js';
 
 // Default max output length — used when no value is configured in default.yaml.
 // Skills returning more than this will have their output truncated before it
@@ -80,6 +81,7 @@ export class ExecutionLayer {
   private approvalTrigger?: ApprovalTriggerService;
   private actionLogRepo?: import('../autonomy/action-log-repo.js').ActionLogRepo;
   private confidencePipeline?: import('../contacts/confidence-pipeline.js').ConfidencePipeline;
+  private tempFileStore?: TempFileStore;
   /** The agent's own contactId — injected into ctx.agentContactId for entity_enrichment default='agent' */
   private agentContactId?: string;
   /** IANA timezone name used for normalizing offset-less timestamp inputs from the LLM. */
@@ -107,6 +109,7 @@ export class ExecutionLayer {
     approvalTrigger?: ApprovalTriggerService;
     actionLogRepo?: import('../autonomy/action-log-repo.js').ActionLogRepo;
     confidencePipeline?: import('../contacts/confidence-pipeline.js').ConfidencePipeline;
+    tempFileStore?: TempFileStore;
     agentContactId?: string;
     timezone?: string;
     selfEmail?: string;
@@ -131,6 +134,7 @@ export class ExecutionLayer {
     this.approvalTrigger = options?.approvalTrigger;
     this.actionLogRepo = options?.actionLogRepo;
     this.confidencePipeline = options?.confidencePipeline;
+    this.tempFileStore = options?.tempFileStore;
     this.agentContactId = options?.agentContactId;
     this.timezone = options?.timezone ?? 'UTC';
     this.selfEmail = options?.selfEmail;
@@ -504,6 +508,9 @@ export class ExecutionLayer {
       executiveProfileService: this.executiveProfileService,
       actionLogRepo: this.actionLogRepo,
       confidencePipeline: this.confidencePipeline,
+      // tempFileStore is handled as a special case in the injection loop (writeTempFile closure).
+      // Listed here so the missing-cap guard knows it's configured when this.tempFileStore is set.
+      tempFileStore: this.tempFileStore,
       // executionLayer injects `this` so approve-action can re-invoke blocked skills
       // with humanApproved: true (see ADR-018). Only approve-action should declare this.
       executionLayer: this,
@@ -568,6 +575,13 @@ export class ExecutionLayer {
           this.registry.search(query)
             .filter(s => s.manifest.name !== 'skill-registry')
             .map(s => ({ name: s.manifest.name, description: s.manifest.description }));
+      } else if (cap === 'tempFileStore') {
+        // Inject writeTempFile as a bound closure rather than the raw store.
+        // Skills get a focused write method, not full store access (no delete/sweep).
+        if (this.tempFileStore) {
+          ctx.writeTempFile = (buffer: Buffer, filename: string) =>
+            this.tempFileStore!.write(buffer, filename);
+        }
       } else {
         (ctx as unknown as Record<string, unknown>)[cap] = capabilityServices[cap];
       }
