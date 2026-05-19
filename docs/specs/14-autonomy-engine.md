@@ -212,6 +212,14 @@ Phase 2 enforces three hard gates:
 
 The `OutboundGateway` (see [15-outbound-safety.md](15-outbound-safety.md)) is already the natural choke point — adding an autonomy check there requires no architectural change.
 
+### Principal bypass
+
+When a task is **principal-originated** (initiated by a direct CEO message, as determined by `isPrincipalOriginated(taskMetadata)`), both Gate A and Gate B are skipped. The autonomy gate governs *autonomous* behavior; an explicit CEO instruction is its own authorization and must not be blocked by the score the CEO themselves set.
+
+Implementation: the execution layer calls `isPrincipalOriginated()` before evaluating autonomy gates. If the task traces back to a principal message, the gates are logged but not enforced. Bypasses are written to the audit log at `info` level for operator visibility.
+
+Scope: principal bypass applies to Gates A and B only. The elevated-skill gate (`sensitivity: 'elevated'`) is **not** bypassed — elevated skills have their own stricter access control that requires principal origination regardless of autonomy score.
+
 ---
 
 ## Implementation Status
@@ -226,6 +234,7 @@ The `OutboundGateway` (see [15-outbound-safety.md](15-outbound-safety.md)) is al
 | `action_risk` field required on all skill manifests, validated at startup | Done |
 | Phase 2: hard execution gates (block skill when score < `action_risk` floor) | Done |
 | Phase 2: `OutboundGateway` autonomy check (score < 70 → block direct send, drafts unaffected) | Done |
+| Phase 2: principal bypass — skip Gates A and B for CEO-originated tasks (`isPrincipalOriginated`) | Done |
 | Phase 3: automatic score adjustment (Competence/Commitment/Compatibility formula) | Done |
 
 ---
