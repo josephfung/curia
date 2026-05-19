@@ -69,6 +69,11 @@ servers:
     env:
       GOOGLE_OAUTH_CLIENT_ID: ""
       GOOGLE_OAUTH_CLIENT_SECRET: ""
+      # Allow the workspace-mcp subprocess to read files from the TempFileStore
+      # directory. Without this, create_drive_file rejects file:// URLs pointing
+      # to /run/curia-tempfiles/ because validate_file_path only allows reads
+      # from its own STORAGE_DIR by default.
+      ALLOWED_FILE_DIRS: "/run/curia-tempfiles"
     # Bind the Google Workspace user email at the tool layer so agents never see
     # or reason about it. Resolved from CURIA_GOOGLE_EMAIL env var at startup.
     # This replaces the system prompt injection approach (#387) which was fragile
