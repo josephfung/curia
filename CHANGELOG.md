@@ -13,6 +13,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Attachment Drive uploads unreachable** — `create_drive_file` was not pinned to the coordinator, so the agent couldn't upload downloaded attachments to Drive and reported a "sandboxed temp directory" error instead. Now pinned with prompt guidance to use `temp_file_url` via `fileUrl`; ceo-inbox step 4d updated to delegate Drive uploads via bullpen.
+
 ### Changed
 
 - **Spec 07 (Scheduler)** — corrected suspension notification description: `SuspensionNotifier` emails the CEO directly via `OutboundGateway.sendNotification()`, bypassing the LLM pipeline; added `RecoveryNotifier` for watchdog-recovered stuck jobs.

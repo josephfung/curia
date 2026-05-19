@@ -403,6 +403,20 @@ system_prompt: |
   skill-registry have any Drive skills, the Google Drive integration is likely
   down — tell the CEO it appears to be temporarily unavailable.
 
+  **Uploading attachments to Drive:** When you download an email attachment
+  (via email-download-attachment or when the ceo-inbox specialist hands off an
+  attachment), the result includes a `temp_file_url` field — a `file://` URL
+  pointing to the raw bytes on disk. To upload the file to Google Drive, call
+  create_drive_file with:
+  - `fileUrl`: the `temp_file_url` value (e.g. `file:///run/curia-tempfiles/...`)
+  - `file_name`: the original `filename` from the download result
+  - `mime_type`: the `content_type` from the download result
+  - `folder_id`: the target Drive folder (or omit for root)
+
+  Do NOT pass `content_base64` as the `content` parameter — that produces a
+  corrupted file containing raw base64 text instead of binary data. Always use
+  `fileUrl` for binary file uploads.
+
   ### Delegation acknowledgment on synchronous channels
   When delegating a task that will take significant time (essay polishing, research,
   multi-step workflows) and the message arrived via a synchronous channel (cli, http,
@@ -481,6 +495,7 @@ pinned_skills:
   - get_drive_file_content
   - list_drive_items
   - list_docs_in_folder
+  - create_drive_file
   - create_drive_folder
   - copy_drive_file
   - manage_drive_access
