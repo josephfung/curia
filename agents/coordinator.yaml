@@ -405,7 +405,7 @@ system_prompt: |
 
   **Uploading attachments to Drive:** When you download an email attachment
   (via email-download-attachment or when the ceo-inbox specialist hands off an
-  attachment), the result includes a `temp_file_url` field — a `file://` URL
+  attachment), the result may include a `temp_file_url` field — a `file://` URL
   pointing to the raw bytes on disk. To upload the file to Google Drive, call
   create_drive_file with:
   - `fileUrl`: the `temp_file_url` value (e.g. `file:///run/curia-tempfiles/...`)
@@ -416,6 +416,20 @@ system_prompt: |
   Do NOT pass `content_base64` as the `content` parameter — that produces a
   corrupted file containing raw base64 text instead of binary data. Always use
   `fileUrl` for binary file uploads.
+
+  If `temp_file_url` is missing or undefined, the temp file store was
+  unavailable. Do NOT attempt to upload — inform the CEO the attachment could
+  not be saved to Drive and suggest they download and upload it manually.
+
+  **Timing:** Temp files have a limited lifespan (a few minutes). If
+  create_drive_file fails with a file-not-found error on the `temp_file_url`,
+  the temp file has expired. Tell the CEO the upload window expired and ask
+  them to re-send or forward the email so the attachment can be re-downloaded.
+  Do NOT retry the upload without a fresh download — the temp file cannot be
+  regenerated from the coordinator.
+
+  If create_drive_file fails for other reasons (quota, auth, permissions),
+  tell the CEO the upload failed and include the error. Do NOT claim success.
 
   ### Delegation acknowledgment on synchronous channels
   When delegating a task that will take significant time (essay polishing, research,
