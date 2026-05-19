@@ -13,6 +13,11 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Changed
+
+- **Spec 07 (Scheduler)** — corrected suspension notification description: `SuspensionNotifier` emails the CEO directly via `OutboundGateway.sendNotification()`, bypassing the LLM pipeline; added `RecoveryNotifier` for watchdog-recovered stuck jobs.
+- **Spec 14 (Autonomy Engine)** — documented principal bypass: CEO-originated tasks skip Gates A and B; added to Phase 2 gates table and implementation status.
+
 ### Security
 
 - **Semgrep CE scanning** — adds pattern-based SAST on every PR and weekly schedule; covers TypeScript, Node.js OWASP Top 10, command injection, and secrets rulesets; SARIF results surface in the Security tab. (#562)

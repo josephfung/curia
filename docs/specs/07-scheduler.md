@@ -10,7 +10,9 @@ Built into the main process, backed by Postgres. Handles both user-defined recur
 
 **Shared service:** `SchedulerService` handles all job CRUD — consumed by scheduler loop, agent skills, and HTTP API routes.
 
-**Suspension notifications:** Routed through the coordinator as synthetic `agent.task` events — no dedicated notification subsystem.
+**Suspension notifications:** Sent via `SuspensionNotifier` — a system-layer bus subscriber that emails the CEO directly through `OutboundGateway.sendNotification()`. This path intentionally bypasses the LLM pipeline: the most common cause of job suspension is the Anthropic API being down, so any notification routed through the coordinator would fail in exactly that scenario.
+
+**Stuck-job recovery notifications:** Sent via `RecoveryNotifier` — same design as `SuspensionNotifier`, subscribes to `schedule.recovered`. Fires only for the reset-to-pending case (watchdog recovered a stuck job without suspending it); when a recovery leads to suspension, `SuspensionNotifier` handles the CEO email instead.
 
 ---
 
@@ -216,7 +218,8 @@ Four skills available to agents:
 
 - All job executions are audit-logged (start, success, failure, suspension)
 - The health endpoint does not yet include scheduler stats (active jobs, suspended jobs, next due time) — see Implementation Status below
-- Suspended jobs generate a user notification via the configured alert channel
+- Suspended jobs trigger a `SuspensionNotifier` direct email to the CEO (bypasses LLM — see Overview above)
+- Watchdog-recovered stuck jobs trigger a `RecoveryNotifier` direct email to the CEO
 
 ---
 
@@ -238,6 +241,7 @@ Four skills available to agents:
 | HTTP API routes (`POST/GET/PATCH/DELETE /api/jobs`) | Done |
 | Prior run context injection (structured system message prepended to task) | Done |
 | Timezone handling (per-job tz passed to `cron-parser`) | Done |
-| Suspension notifications (via Coordinator as synthetic `agent.task`) | Done |
-| Audit logging (`schedule.fired`, `schedule.suspended` events) | Done |
+| `SuspensionNotifier` — direct CEO email on suspension (bypasses LLM via `OutboundGateway.sendNotification`) | Done |
+| `RecoveryNotifier` — direct CEO email when watchdog resets a stuck job to pending | Done |
+| Audit logging (`schedule.fired`, `schedule.suspended`, `schedule.recovered` events) | Done |
 | Health endpoint: scheduler stats (active jobs, suspended jobs, next due) | Not Done |
