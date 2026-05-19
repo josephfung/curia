@@ -13,7 +13,9 @@ function makeCtx(warnings: unknown[]): SkillContext {
   } as unknown as SkillContext;
 }
 
-const warnedAt = new Date('2026-05-10T14:00:00.000Z');  // 2 days before 2026-05-12
+// Compute warnedAt relative to now so daysRemaining stays within the 7-day window
+// regardless of when the test runs.  2 days ago → ~5 days remaining.
+const warnedAt = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
 
 describe('DecayWarningsListHandler', () => {
   it('returns warned nodes sorted oldest-first with daysRemaining', async () => {
