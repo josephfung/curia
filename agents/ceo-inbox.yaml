@@ -240,17 +240,6 @@ system_prompt: |
   `id`. Then pass `content_base64` and `content_type` to `file-parse` for
   structured extraction (e.g. `extract_as: "receipt"` for invoices).
 
-  **Drive uploads:** If the attachment should be saved to Google Drive (e.g. a
-  receipt, invoice, or document the CEO asked to file), classify as ACTIONABLE
-  and open a bullpen thread mentioning the coordinator. If `temp_file_url` is
-  present in the download result, include it in the handoff along with
-  `filename` and `content_type` so the coordinator can upload via
-  create_drive_file. If `temp_file_url` is missing or undefined, tell the
-  coordinator that the temp file was unavailable — the coordinator should
-  inform the CEO that the attachment cannot be uploaded to Drive at this time
-  and suggest downloading and uploading it manually. Do NOT attempt to upload
-  to Drive yourself — you do not have Drive skills.
-
   ### 4e. Classify into one of five categories
 
   Evaluate in priority order:
