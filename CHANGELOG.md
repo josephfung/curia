@@ -13,51 +13,48 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
-### Changed
+## [0.29.0] — 2026-05-19 — "Naomi Nagata"
 
-- **Spec 07 (Scheduler)** — corrected suspension notification description: `SuspensionNotifier` emails the CEO directly via `OutboundGateway.sendNotification()`, bypassing the LLM pipeline; added `RecoveryNotifier` for watchdog-recovered stuck jobs.
-- **Spec 14 (Autonomy Engine)** — documented principal bypass: CEO-originated tasks skip Gates A and B; added to Phase 2 gates table and implementation status.
-
-### Security
-
-- **Semgrep CE scanning** — adds pattern-based SAST on every PR and weekly schedule; covers TypeScript, Node.js OWASP Top 10, command injection, and secrets rulesets; SARIF results surface in the Security tab. (#562)
-- **Semgrep initial triage** — 28 false-positive alerts suppressed with inline `nosemgrep:` comments (HTML-strip multi-char patterns and Fastify rate-limit config dismissed via API); one real finding tracked as a separate issue (Dockerfile runs as root).
-- **Per-route rate limiting** — all 24 CodeQL `js/missing-rate-limiting` alerts resolved; auth/authorization endpoints (identity, autonomy, executive) capped at 10 req/min per IP, KG explorer and health endpoints at 60 req/min. (#580)
-
-### Fixed
-
-- **Attachment download output truncation** — `content_base64` (~214KB for a 160KB image) was listed first in the skill result, causing the output sanitizer to truncate the JSON and destroy `temp_file_url`. Now omitted when `temp_file_url` is available; included only as a fallback when temp storage is down.
-- **Attachment Drive uploads blocked by file allowlist** — workspace-mcp's `validate_file_path` rejects `file://` URLs outside its own storage dir; `ALLOWED_FILE_DIRS=/run/curia-tempfiles` now passed to the subprocess so `create_drive_file` can read TempFileStore files.
-- **Attachment Drive uploads unreachable** — `create_drive_file` was not pinned to the coordinator, so the agent couldn't upload downloaded attachments to Drive and reported a "sandboxed temp directory" error instead. Now pinned with prompt guidance to use `temp_file_url` via `fileUrl`.
-- **Email attachment Drive uploads corrupted** — `create_drive_file` was receiving the base64 string via `content` and encoding it as UTF-8 text, producing Drive files containing ASCII base64 rather than decoded binary bytes. Downloads now write raw bytes to a secure noexec tmpfs store (`TempFileStore`) and return a `file://` URL; the agent passes this as `fileUrl` to upload binary-correctly. Both `ceo-inbox-download-attachment` and `email-download-attachment` return the new `temp_file_url` field alongside `content_base64`. (#622, #624)
-- **`held-messages-process`** — identify action with `existing_contact_id` now promotes the contact to `confirmed` before replaying; previously provisional contacts caused the replayed message to be re-held immediately by the dispatcher.
-- **`ceo-inbox-search`** — uses `search_query_native` instead of `q` (Nylas v3); suppresses incompatible filter params when a search query is active.
-- **`ceo-inbox` ACTIONABLE archive** — added step 4h action checklist so ACTIONABLE emails reliably get archived after specialist handoff; rewrote ambiguous classification note.
-- **Self-email loop filter hardened** — inbound poll now rejects self-sent messages via folder, sent-ID, and normalized-address checks to prevent reply loops. (#37)
+> **Naomi Nagata** *(The Expanse, 2011, James S.A. Corey)* — chief engineer of the Rocinante: she keeps disparate systems integrated, monitors ship health, and is always the first to notice when something is about to break. This release consolidates the CEO inbox into core, adds self-monitoring alerts for broken and stuck jobs, and hardens the engineering foundation with security scanning and proper binary file handling.
 
 ### Added
 
-- **`TempFileStore` platform capability** — new capability-gated service (`tempFileStore`) that writes binary buffers to a noexec RAM-only tmpfs mount and returns `file://` URLs; skills declare it in their manifest to receive `ctx.writeTempFile()`. TTL sweep (5 min) and startup purge ensure files never linger. (#624)
-- **`ceo-inbox` agent and 9 skills** — moved from `curia-deploy/custom/` into curia core; now covered by curia's CI and type-checked against real types. (#592)
-- **Email attachment support** — surface metadata in email skills, append human-readable summaries to message content, and download bytes as base64 for `file-parse`.
-- **Email folder management skills** — `email-label`, `email-list-folders`, `email-create-folder`, and `email-mark-read` expose Nylas folder and read-state operations as general-purpose skills.
-- **`SuspensionNotifier`** — emails CEO when a scheduled job suspends after consecutive failures, bypassing the LLM pipeline for reliability during Anthropic outages. (#538)
-- **`RecoveryNotifier`** — emails CEO when the watchdog auto-recovers a stuck job (timeout exceeded), including stuck duration, timeout threshold, and whether the job was reset or suspended. (#207)
+- **`ceo-inbox` agent and 9 skills** — migrated from `curia-deploy/custom/` into curia core; now covered by CI and type-checked against real types. (#592)
+- **`TempFileStore` platform capability** — capability-gated service that writes binary buffers to a noexec tmpfs mount and returns `file://` URLs; skills declare `tempFileStore` in their manifest to receive `ctx.writeTempFile()`. TTL sweep and startup purge ensure files never linger. (#624)
+- **Email attachment support** — metadata surfaced in email skills with human-readable summaries; download skills write raw bytes to TempFileStore for binary-correct Drive uploads. (#622, #624)
+- **Email folder management** — `email-label`, `email-list-folders`, `email-create-folder`, and `email-mark-read` skills.
+- **`SuspensionNotifier`** — emails CEO when a scheduled job suspends after consecutive failures, bypassing the LLM pipeline for reliability during outages. (#538)
+- **`RecoveryNotifier`** — emails CEO when the watchdog auto-recovers a stuck job, including stuck duration and timeout threshold. (#207)
+- **Alias-aware entity resolution** — `EntityMemory.search` checks aliases before vector search; `mergeEntities` unions aliases from both nodes; new atomic `addAlias` on `KnowledgeGraphBackend`. (#536)
+- **Principal bypass** — CEO-originated tasks skip autonomy Gates A and B. (spec 14)
 
 ### Changed
 
-- **Dispatcher email metadata refactor** — extracted email parsing and preamble builders into standalone `email-metadata.ts` module with 35 unit tests; no observable behaviour change. (#465)
-- **Coordinator inbox delegation** — CEO inbox queries now delegate seamlessly to the ceo-inbox specialist instead of explaining the multi-agent architecture.
+- **Dispatcher email metadata refactor** — extracted parsing and preamble builders into standalone `email-metadata.ts` module. (#465)
+- **Coordinator inbox delegation** — CEO inbox queries now delegate seamlessly to the ceo-inbox specialist.
 
 ### Fixed
 
-- **`calendar-create-event` / `calendar-update-event`** — confirmation timestamps now returned in the user's local timezone instead of UTC, matching the format used by the read-path handlers since #368. (#369)
+- **Attachment-to-Drive pipeline** — four compounding bugs that prevented downloaded email attachments from uploading correctly to Google Drive (base64 encoding corruption, file allowlist blocking, skill pinning, output truncation) resolved by routing through TempFileStore. (#622, #624)
+- **`held-messages-process`** — identify action now promotes contacts to `confirmed` before replaying; provisional contacts no longer re-held.
+- **`ceo-inbox-search`** — corrected Nylas v3 search parameter; suppresses incompatible filters during search.
+- **`ceo-inbox` ACTIONABLE archive** — emails now reliably archived after specialist handoff.
+- **Self-email loop filter** — inbound poll rejects self-sent messages via folder, sent-ID, and normalized-address checks. (#37)
+- **Calendar write timestamps** — `calendar-create-event` and `calendar-update-event` now return local timezone timestamps, matching the read-path handlers. (#369)
 
 ### Security
 
-- **Gitleaks secret scanning** — CI now runs Gitleaks on every PR and push to `main`, blocking merge if secrets are detected. (#560)
-- **CodeQL static analysis** — weekly scheduled code scanning for JS/TS security vulnerabilities. (#561)
-- **CodeQL Action v4 + Node.js 24** — bumped all three `codeql-action` steps to `@v4` and opted in to the Node.js 24 runner ahead of the June 2026 forced migration. (#582)
+- **Semgrep CE scanning** — pattern-based SAST on every PR and weekly schedule; SARIF results in the Security tab. Initial triage suppressed 28 false positives. (#562)
+- **Per-route rate limiting** — auth endpoints capped at 10 req/min per IP; KG and health endpoints at 60 req/min. (#580)
+- **HTML sanitization** — 15 CodeQL HTML-injection alerts resolved. (#581)
+- **Gitleaks secret scanning** — blocks merge if secrets are detected. (#560)
+- **CodeQL static analysis** — weekly JS/TS security scanning; upgraded to Action v4 + Node.js 24 runner. (#561, #582)
+
+---
+
+*the ship runs itself —*
+*alerts hum where silence hid;*
+*the engineer sleeps.*
 
 ---
 
@@ -747,7 +744,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Bootstrap orchestrator** — `src/index.ts` wires all layers in dependency order
 - Architecture specs 00–08, contributor docs (CONTRIBUTING.md, CODE_OF_CONDUCT.md, SECURITY.md)
 
-[Unreleased]: https://github.com/josephfung/curia/compare/v0.28.0...HEAD
+[Unreleased]: https://github.com/josephfung/curia/compare/v0.29.0...HEAD
+[0.29.0]: https://github.com/josephfung/curia/compare/v0.28.0...v0.29.0
 [0.28.0]: https://github.com/josephfung/curia/compare/v0.27.0...v0.28.0
 [0.27.0]: https://github.com/josephfung/curia/compare/v0.26.0...v0.27.0
 [0.26.0]: https://github.com/josephfung/curia/compare/v0.25.1...v0.26.0
