@@ -26,6 +26,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **Attachment download output truncation** — `content_base64` (~214KB for a 160KB image) was listed first in the skill result, causing the output sanitizer to truncate the JSON and destroy `temp_file_url`. Now omitted when `temp_file_url` is available; included only as a fallback when temp storage is down.
 - **Attachment Drive uploads blocked by file allowlist** — workspace-mcp's `validate_file_path` rejects `file://` URLs outside its own storage dir; `ALLOWED_FILE_DIRS=/run/curia-tempfiles` now passed to the subprocess so `create_drive_file` can read TempFileStore files.
 - **Attachment Drive uploads unreachable** — `create_drive_file` was not pinned to the coordinator, so the agent couldn't upload downloaded attachments to Drive and reported a "sandboxed temp directory" error instead. Now pinned with prompt guidance to use `temp_file_url` via `fileUrl`.
 - **Email attachment Drive uploads corrupted** — `create_drive_file` was receiving the base64 string via `content` and encoding it as UTF-8 text, producing Drive files containing ASCII base64 rather than decoded binary bytes. Downloads now write raw bytes to a secure noexec tmpfs store (`TempFileStore`) and return a `file://` URL; the agent passes this as `fileUrl` to upload binary-correctly. Both `ceo-inbox-download-attachment` and `email-download-attachment` return the new `temp_file_url` field alongside `content_base64`. (#622, #624)

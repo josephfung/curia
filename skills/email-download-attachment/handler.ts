@@ -113,14 +113,21 @@ export class EmailDownloadAttachmentHandler implements SkillHandler {
       }
     }
 
+    // When temp_file_url is available, omit content_base64 to avoid blowing the
+    // skill output size limit. A 160KB image produces ~214KB of base64 which
+    // exceeds the ~200K truncation threshold, destroying the JSON and hiding
+    // temp_file_url from the agent. The temp file has the raw bytes for both
+    // Drive uploads (via fileUrl) and file-parse (via content_base64 on a
+    // re-download if needed). When temp storage is unavailable, content_base64
+    // is the only way to access the file so it must be included.
     return {
       success: true,
       data: {
-        content_base64: buffer.toString('base64'),
         temp_file_url: tempFileUrl,
         filename: attachment.filename,
         content_type: attachment.contentType,
         size: buffer.length,
+        ...(tempFileUrl ? {} : { content_base64: buffer.toString('base64') }),
       },
     };
   }
