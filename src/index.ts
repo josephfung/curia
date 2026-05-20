@@ -282,11 +282,10 @@ async function main(): Promise<void> {
     process.exit(1);
   }
   const modelRegistry = new ModelRegistry(logger);
-  // estimateCostUsd is created here and passed to AgentRuntime in Task 7.
-  // The 'void' suppresses the noUnusedLocals error until that wiring lands.
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  // estimateCostUsd is a closure pre-wired with the model registry. Passed to
+  // AgentRuntime as config (dependency injection) so the runtime stays testable
+  // without importing pricing.ts directly.
   const estimateCostUsd = createEstimateCostUsd(modelRegistry);
-  void estimateCostUsd;
   const modelRouter = new ModelRouter(modelRoutingConfig, modelRegistry, logger);
   const providerRegistry = new Map<string, LLMProvider>([
     ['anthropic', llmProvider],
@@ -1172,6 +1171,9 @@ async function main(): Promise<void> {
       executionLayer,
       pinnedSkills: agentPinnedSkills,
       skillToolDefs: agentToolDefs,
+      // Registry-backed context window lookups and cost estimation (DI so runtime is testable).
+      modelRegistry,
+      estimateCostUsd,
       // Only the coordinator receives the autonomy service — it's the only agent
       // that needs per-task autonomy prompt injection and the autonomy skills.
       // Use role (same predicate as interpolateRuntimeContext above) so both
