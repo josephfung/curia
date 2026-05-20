@@ -941,8 +941,8 @@ async function main(): Promise<void> {
   // Build the drift detector if enabled in config. Requires the LLM provider
   // (already created above). If enabled but no provider is available, the config
   // is still valid — drift checks will simply never trigger.
-  //
-  // TODO: When multi-model support is added, make this provider independently configurable.
+  // The 'standard' tier is used for drift checks — they're concise JSON judgments
+  // that don't need the full flagship model.
   let driftDetector: DriftDetector | undefined;
   if (yamlConfig.intentDrift?.enabled !== false) {
     // Resolve effective drift config with defaults.
@@ -950,6 +950,7 @@ async function main(): Promise<void> {
       enabled: yamlConfig.intentDrift?.enabled ?? true,
       checkEveryNBursts: yamlConfig.intentDrift?.checkEveryNBursts ?? 1,
       minConfidenceToPause: yamlConfig.intentDrift?.minConfidenceToPause ?? 'high',
+      model: modelRouter.resolve('standard').model,
     };
     driftDetector = new DriftDetector(llmProvider, driftConfig, logger);
     logger.info({ driftConfig }, 'Intent drift detection enabled');
