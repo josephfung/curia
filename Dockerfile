@@ -72,6 +72,12 @@ RUN mkdir -p /run/curia-tempfiles \
  && chown curia:curia /run/curia-tempfiles \
  && chmod 0700 /run/curia-tempfiles
 
+# Pre-create the OAuth token directory for workspace-mcp. Without this,
+# Docker's copy-up creates the directory as root when the named volume is
+# first mounted, making it unwritable by the curia user at runtime.
+RUN mkdir -p /tmp/.google_workspace_mcp \
+ && chown curia:curia /tmp/.google_workspace_mcp
+
 EXPOSE 3000
 
 # Health check matches the Fastify /api/health route
