@@ -15,7 +15,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Security
 
-- **Non-root container** — production Docker image now runs as a dedicated `curia` system user instead of root, closing Semgrep alert #48 (`dockerfile.security.missing-user`). (#607)
+- **Non-root container** — production image runs as non-root `curia` user; resolves Semgrep alert #48 (`dockerfile.security.missing-user`). (#607)
 
 ### Changed
 
