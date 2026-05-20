@@ -39,8 +39,8 @@ Single source of truth for model metadata. Defines the following types and expor
 interface ModelPricing {
   inputPerMToken: number;
   outputPerMToken: number;
-  cacheCreationPerMToken: number;
-  cacheReadPerMToken: number;
+  cacheCreationPerMToken?: number;  // undefined = model doesn't support caching
+  cacheReadPerMToken?: number;      // undefined = model doesn't support caching
 }
 
 interface ModelMetadata {
@@ -96,8 +96,9 @@ model_routing:
 Changes from current config:
 - **`provider` field removed from tier config.** Provider is a property of the model in the
   registry, not declared per-tier. Eliminates the possibility of a provider/model mismatch.
-- **`autonomy_scoring.model` becomes `autonomy_scoring.tier: fast`.** Resolved through
-  `ModelRouter` like everything else.
+- **`autonomy_scoring.model` becomes `autonomy_scoring.model_tier: fast`.** Resolved through
+  `ModelRouter` like everything else. Named `model_tier` (not just `tier`) for clarity in
+  a config file that also defines tier mappings elsewhere.
 
 ### Consumer migration
 
@@ -125,13 +126,16 @@ validation TODO gets the data structure it needs but enforcement is deferred to 
 `providerRegistry.get('anthropic')` to
 `providerRegistry.get(modelRegistry.getProvider(resolvedModel))`.
 
-**Skill handlers (`extract-facts`, `extract-relationships`, `file-parse`)** — these currently
-construct their own raw `Anthropic` SDK clients via `ctx.secret('ANTHROPIC_API_KEY')` and
-hardcode model IDs. The migration uses Curia's existing SkillContext capability system:
+**Skill handlers (`extract-facts`, `extract-relationships`, `file-parse`)** — these three
+infrastructure skills currently construct their own raw `Anthropic` SDK clients via
+`ctx.secret('ANTHROPIC_API_KEY')` and hardcode model IDs. The migration uses Curia's existing
+SkillContext capability system:
 
 1. Add `llmProvider` and `modelRouter` as new capabilities in the `SkillContext` interface
    and the `capabilities` allowlist in the skill manifest schema.
-2. Each skill's `skill.json` declares `"capabilities": ["llmProvider", "modelRouter"]`.
+2. Only these three infrastructure skills' `skill.json` files declare
+   `"capabilities": ["llmProvider", "modelRouter"]`. No other skills need or should
+   request these capabilities.
 3. The execution layer injects the shared `LLMProvider` instance and `ModelRouter` into
    `SkillContext` at invocation time (same pattern as `bus`, `agentRegistry`, etc.).
 4. Handlers replace `new Anthropic()` + hardcoded model IDs with:
@@ -147,10 +151,16 @@ This brings all three skills' LLM calls into the telemetry/cost-tracking path (t
 bypass `llm.call` bus events entirely).
 
 Note: `llmProvider` and `modelRouter` are new additions to the SkillContext public API surface.
-This is a backwards-compatible addition (new optional properties).
+This is a backwards-compatible addition (new optional properties). However, exposing direct
+LLM access through the skill capability system is a pragmatic choice, not an ideal one —
+any skill author could declare these capabilities and get unsandboxed LLM access. A follow-up
+issue will explore redesigning these three infrastructure skills to eliminate the need for
+`llmProvider` and `modelRouter` on the SkillContext surface (e.g., promoting them out of the
+skill system, or providing a more constrained LLM access pattern). See the follow-up issue
+linked in the Out of Scope section.
 
-**`autonomy/scoring-pass.ts`** — stops accepting a model string. Receives a tier (from config)
-and resolves via `ModelRouter`.
+**`autonomy/scoring-pass.ts`** — stops accepting a model string. Receives a `model_tier`
+(from config) and resolves via `ModelRouter`.
 
 **`memory/working-memory.ts` and `scheduler/drift-detector.ts`** — currently call
 `provider.chat()` with no model override. They get an explicit tier config (defaulting to
@@ -198,6 +208,10 @@ model IDs (`claude-haiku-4-5-20251001`) to resolve without being listed explicit
   but no other changes to their logic.
 - **`maxOutputTokens` per-model tuning** — field exists in `ModelMetadata`, all models start
   at 4096. Per-model tuning is a future concern.
+- **Redesigning infrastructure skill LLM access (#637)** — the `llmProvider` and `modelRouter`
+  SkillContext capabilities are a pragmatic stopgap. #637 will explore better patterns
+  (e.g., promoting these skills out of the skill system, or a constrained LLM access layer)
+  to avoid exposing direct LLM access on the public skill API surface.
 
 ## Files affected
 
@@ -212,8 +226,8 @@ model IDs (`claude-haiku-4-5-20251001`) to resolve without being listed explicit
 - `src/agents/llm/anthropic.ts` — remove hardcoded model fallback, use registry for `maxOutputTokens`
 - `src/agents/runtime.ts` — switch to registry-backed lookups, provider resolution via registry
 - `src/index.ts` — new startup wiring, validation chain, autonomy scoring tier config
-- `src/config.ts` — update `YamlConfig` types (`TierConfig` without `provider`, `autonomy_scoring.tier` replacing `.model`)
-- `config/default.yaml` — simplify tier config, change `autonomy_scoring.model` to `.tier`
+- `src/config.ts` — update `YamlConfig` types (`TierConfig` without `provider`, `autonomy_scoring.model_tier` replacing `.model`)
+- `config/default.yaml` — simplify tier config, change `autonomy_scoring.model` to `.model_tier`
 - `src/skills/types.ts` — add `llmProvider` and `modelRouter` optional properties to `SkillContext`
 - `src/skills/execution-layer.ts` (or equivalent) — inject `llmProvider` and `modelRouter` into context for capable skills
 - `skills/extract-facts/handler.ts` — remove raw SDK client, use `ctx.llmProvider` + `ctx.modelRouter`
