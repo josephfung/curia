@@ -6,15 +6,13 @@
 //
 // Idempotent: calling it twice with the same triple confirms the existing
 // edge rather than inserting a duplicate, and may raise its confidence.
+//
+// LLM calls go through the shared LLMProvider + ModelRouter rather than a raw
+// Anthropic client so all calls are tracked by the telemetry / cost infrastructure.
 
-import Anthropic from '@anthropic-ai/sdk';
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
 import { EDGE_TYPES, NODE_TYPES } from '../../src/memory/types.js';
 import type { EdgeType, NodeType } from '../../src/memory/types.js';
-
-// Model constants — update here when model IDs rotate
-const CLASSIFIER_MODEL = 'claude-haiku-4-5-20251001';
-const EXTRACTION_MODEL = 'claude-sonnet-4-6';
 
 // Shape of each triple returned by the LLM extraction prompt.
 interface ExtractedTriple {
@@ -30,11 +28,6 @@ const EDGE_TYPES_LIST = EDGE_TYPES.join(', ');
 const NODE_TYPES_LIST = NODE_TYPES.join(', ');
 
 export class ExtractRelationshipsHandler implements SkillHandler {
-  // Optional Anthropic client injection for testing.
-  // In production the skill registry instantiates with no args and the
-  // handler creates its own client from ctx.secret('ANTHROPIC_API_KEY').
-  constructor(private readonly anthropicClient?: Anthropic) {}
-
   async execute(ctx: SkillContext): Promise<SkillResult> {
     const { text, source } = ctx.input as { text?: string; source?: string };
 
@@ -51,29 +44,38 @@ export class ExtractRelationshipsHandler implements SkillHandler {
       return { success: false, error: 'Entity memory not available — database not configured' };
     }
 
-    const client = this.anthropicClient ?? new Anthropic({ apiKey: ctx.secret('ANTHROPIC_API_KEY') });
+    // Guard: llmProvider and modelRouter are required capabilities declared in skill.json.
+    // If either is missing the execution layer mis-configured this invocation.
+    if (!ctx.llmProvider || !ctx.modelRouter) {
+      return { success: false, error: 'extract-relationships requires llmProvider and modelRouter capabilities' };
+    }
+
+    // Resolve tier names to concrete model strings at invocation time.
+    // Using the shared ModelRouter keeps model selection centralised — if the operator
+    // rotates a model, this skill picks up the new string automatically.
+    const classifierModel = ctx.modelRouter.resolve('fast').model;
+    const extractionModel = ctx.modelRouter.resolve('standard').model;
 
     try {
     // -- Step 1: Classifier gate --
-    // Cheap haiku call — exits early on the majority of messages (scheduling,
+    // Cheap fast-tier call — exits early on the majority of messages (scheduling,
     // email drafts, lookups) that contain no entity-to-entity relationships.
-    const classifierResponse = await client.messages.create({
-      model: CLASSIFIER_MODEL,
-      max_tokens: 10,
+    const classifierResponse = await ctx.llmProvider.chat({
+      model: classifierModel,
       messages: [{
         role: 'user',
         content: `Does the following text assert a relationship or connection between two or more people or organisations? Answer only 'yes' or 'no'.\n\n${text}`,
       }],
+      options: { max_tokens: 10 },
     });
 
-    const classifierTextBlock = classifierResponse.content.find(
-      (c): c is { type: 'text'; text: string } => c.type === 'text',
-    );
-    if (!classifierTextBlock) {
-      ctx.log.warn({ textPreview: text.slice(0, 80) }, 'extract-relationships: classifier returned no text block, skipping');
-      return { success: true, data: { extracted: 0, confirmed: 0, skipped: true } };
+    if (classifierResponse.type === 'error') {
+      ctx.log.error({ error: classifierResponse.error }, 'extract-relationships: classifier LLM call failed');
+      return { success: false, error: `LLM call failed: ${classifierResponse.error.message}` };
     }
-    const classifierAnswer = classifierTextBlock.text.toLowerCase().trim();
+
+    // LLMProvider.chat() returns content as a plain string (not content[0].text).
+    const classifierAnswer = classifierResponse.content.toLowerCase().trim();
 
     if (!classifierAnswer.startsWith('yes')) {
       ctx.log.debug({ textPreview: text.slice(0, 80) }, 'extract-relationships: classifier gate — no relationships, skipping');
@@ -81,10 +83,9 @@ export class ExtractRelationshipsHandler implements SkillHandler {
     }
 
     // -- Step 2: Extraction prompt --
-    // Sonnet call with the full EDGE_TYPES vocabulary. Returns JSON triples.
-    const extractionResponse = await client.messages.create({
-      model: EXTRACTION_MODEL,
-      max_tokens: 1000,
+    // Standard-tier call with the full EDGE_TYPES vocabulary. Returns JSON triples.
+    const extractionResponse = await ctx.llmProvider.chat({
+      model: extractionModel,
       messages: [{
         role: 'user',
         content: `Extract entity-to-entity relationships from the text below. Return a JSON array of relationship triples.
@@ -105,18 +106,17 @@ Format:
 Text:
 ${text}`,
       }],
+      options: { max_tokens: 1000 },
     });
 
-    const extractionTextBlock = extractionResponse.content.find(
-      (c): c is { type: 'text'; text: string } => c.type === 'text',
-    );
-    if (!extractionTextBlock) {
-      ctx.log.warn('extract-relationships: extraction returned no text block, treating as empty');
-      return { success: true, data: { extracted: 0, confirmed: 0, skipped: false } };
+    if (extractionResponse.type === 'error') {
+      ctx.log.error({ error: extractionResponse.error }, 'extract-relationships: extraction LLM call failed');
+      return { success: false, error: `LLM call failed: ${extractionResponse.error.message}` };
     }
+
     // Strip optional markdown code fences the model may include despite instructions.
     // Case-insensitive to handle ```JSON as well as ```json.
-    const rawText = extractionTextBlock.text.trim();
+    const rawText = extractionResponse.content.trim();
     const jsonText = rawText.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
 
     let triples: ExtractedTriple[];
@@ -237,7 +237,8 @@ ${text}`,
     ctx.log.info({ extracted, confirmed, failed }, 'extract-relationships: complete');
     return { success: true, data: { extracted, confirmed, failed, skipped: false } };
     } catch (err) {
-      // Top-level catch for Anthropic API errors (rate limits, auth, timeouts, 5xx).
+      // Top-level catch for unexpected errors (e.g. provider implementation bugs that
+      // throw instead of returning { type: 'error' }).
       // Skills must never throw — return a failure result so the execution layer
       // can audit and surface the error to the caller.
       ctx.log.error({ err }, 'extract-relationships: unexpected error');
