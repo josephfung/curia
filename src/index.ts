@@ -26,6 +26,7 @@ import { createPool } from './db/connection.js';
 import { EventBus } from './bus/bus.js';
 import { AuditLogger } from './audit/logger.js';
 import { AnthropicProvider } from './agents/llm/anthropic.js';
+import { OpenRouterProvider } from './agents/llm/openrouter.js';
 import { AgentRuntime } from './agents/runtime.js';
 import { Dispatcher } from './dispatch/dispatcher.js';
 import { CliAdapter } from './channels/cli/cli-adapter.js';
@@ -295,14 +296,27 @@ async function main(): Promise<void> {
     ['anthropic', llmProvider],
   ]);
 
-  // Validate that every provider referenced by a model in the registry has
-  // an entry in providerRegistry. Fail-fast if an operator adds a model
-  // requiring a provider that isn't instantiated.
-  for (const [modelId, meta] of Object.entries(modelRegistry.getAllModels())) {
-    if (!providerRegistry.has(meta.provider)) {
+  // OpenRouter — optional second provider for non-Claude models.
+  // Only instantiated when OPENROUTER_API_KEY is present. If absent, OpenRouter
+  // models stay in the registry but aren't routable — the validation below
+  // only checks models that are actually mapped to a tier.
+  if (config.openrouterApiKey) {
+    const openrouterProvider = new OpenRouterProvider(config.openrouterApiKey, logger, modelRegistry);
+    providerRegistry.set('openrouter', openrouterProvider);
+    logger.info('OpenRouter provider registered — non-Claude models available');
+  }
+
+  // Validate that every model mapped to a tier has a registered provider.
+  // Models in the registry that aren't mapped to any tier are fine to leave
+  // without a provider — they represent available models, not required ones.
+  for (const [tierName, tierConfig] of Object.entries(modelRoutingConfig.tiers)) {
+    const tierModel = (tierConfig as { model: string }).model;
+    const meta = modelRegistry.getModel(tierModel);
+    if (meta && !providerRegistry.has(meta.provider)) {
       logger.fatal(
-        { model: modelId, provider: meta.provider },
-        'Model in registry references a provider that is not registered — cannot start',
+        { tier: tierName, model: tierModel, provider: meta.provider },
+        'Tier-mapped model references a provider that is not registered — cannot start. '
+        + 'Set the provider API key or remap the tier to a model with a registered provider.',
       );
       process.exit(1);
     }
