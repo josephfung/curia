@@ -77,40 +77,5 @@ export function estimateMessagesTokens(messages: Message[]): number {
   return total;
 }
 
-// -- Context window map --
-// Maps model name prefixes to their advertised context window sizes (in tokens).
-// Sorted by descending key length so that more-specific prefixes match first
-// (e.g. "claude-haiku-4-5-20251001" matches "claude-haiku-4-5" before "claude").
-const CONTEXT_WINDOWS: Record<string, number> = {
-  'claude-opus-4-6': 200_000,
-  'claude-sonnet-4-6': 200_000,
-  'claude-haiku-4-5': 200_000,
-};
-
-const SORTED_WINDOW_ENTRIES = Object.entries(CONTEXT_WINDOWS)
-  .sort(([a], [b]) => b.length - a.length);
-
-const FALLBACK_WINDOW_MODEL = 'claude-sonnet-4-6';
-
-/**
- * Returns the context window size for the given model identifier.
- *
- * Matches by prefix so versioned model names (e.g. "claude-haiku-4-5-20251001")
- * resolve correctly. Falls back to the sonnet window for unrecognised models.
- */
-export function getContextWindow(model: string): number {
-  const entry = SORTED_WINDOW_ENTRIES.find(([prefix]) => model.startsWith(prefix));
-  return entry ? entry[1] : CONTEXT_WINDOWS[FALLBACK_WINDOW_MODEL]!;
-}
-
-/** Returns true if the model is in the known context window map (not using fallback). */
-export function isKnownContextWindowModel(model: string): boolean {
-  return SORTED_WINDOW_ENTRIES.some(([prefix]) => model.startsWith(prefix));
-}
-
 /** Safety margin (5%) subtracted from the context window before budgeting. */
 export const DEFAULT_SAFETY_MARGIN = 0.05;
-
-/** Default model used when agent YAML doesn't specify one. Kept alongside the
- *  context window map so the default and the lookup stay in lockstep. */
-export const DEFAULT_MODEL_NAME = 'claude-sonnet-4-6';
