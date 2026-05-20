@@ -29,9 +29,11 @@ COPY --from=ghcr.io/astral-sh/uv:0.6.3 /uv /uvx /usr/local/bin/
 RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
 
 # Create a non-root system user/group for the runtime process.
-# --system: no login shell, UID/GID in the system range.
-# --no-create-home: no home directory needed; /app is the working dir.
-RUN groupadd --system curia && useradd --system --gid curia --no-create-home curia
+# UIDs/GIDs are pinned (not dynamic) so docker-compose tmpfs uid= options
+# and any external tooling can reference a stable, known value.
+# --no-create-home: HOME=/tmp is set below; no home dir on disk is needed.
+RUN groupadd --system --gid 1001 curia \
+ && useradd --system --uid 1001 --gid 1001 --no-create-home curia
 
 WORKDIR /app
 
@@ -63,6 +65,13 @@ COPY src/ ./src/
 # /usr/local/bin/uvx, and /usr/bin/curl are world-executable (no chown needed).
 RUN chown -R curia:curia /app
 
+# Pre-create the tmpfs mount point so Docker's runtime tmpfs mount inherits
+# curia ownership. Without this, Docker mounts the tmpfs as root:root with
+# mode=0700, making it inaccessible to the curia user at runtime.
+RUN mkdir -p /run/curia-tempfiles \
+ && chown curia:curia /run/curia-tempfiles \
+ && chmod 0700 /run/curia-tempfiles
+
 EXPOSE 3000
 
 # Health check matches the Fastify /api/health route
@@ -70,9 +79,14 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
   CMD curl -f http://localhost:3000/api/health || exit 1
 
 # Drop to non-root before starting the process.
-# HOME=/tmp gives tools (e.g. tsx's disk cache) a writable location;
-# system users created with --no-create-home otherwise have HOME=/ (read-only).
-ENV HOME=/tmp
+# HOME=/tmp: --no-create-home leaves /etc/passwd pointing at /home/curia (which
+# does not exist on disk). Tools like tsx and uv write cache files to $HOME; with
+# a missing home they would get ENOENT. /tmp is world-writable and always exists.
+# USER and LOGNAME are not set automatically by Docker when using exec-form CMD
+# (no shell login), so we set them explicitly for MCP subprocess environments.
+ENV HOME=/tmp \
+    USER=curia \
+    LOGNAME=curia
 USER curia
 
 # tsx handles dynamic .ts skill imports with ESM .js→.ts extension resolution.

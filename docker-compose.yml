@@ -55,9 +55,13 @@ services:
       # Tokens are written here on first OAuth login and auto-refreshed thereafter.
       # Without this volume, re-authentication is required on every container restart.
       # See docs/dev/google-drive.md for first-time OAuth setup.
-      - google_workspace_tokens:/root/.google_workspace_mcp
+      # Path matches $HOME/.google_workspace_mcp; HOME=/tmp is set in the Dockerfile.
+      - google_workspace_tokens:/tmp/.google_workspace_mcp
     tmpfs:
-      - /run/curia-tempfiles:size=50M,noexec,nosuid,nodev,mode=0700
+      # uid/gid match the pinned curia UID/GID (1001) in the Dockerfile.
+      # Without these options the tmpfs is mounted root:root with mode=0700,
+      # which is inaccessible to the non-root curia runtime user.
+      - /run/curia-tempfiles:size=50M,noexec,nosuid,nodev,mode=0700,uid=1001,gid=1001
 
 volumes:
   pgdata:
