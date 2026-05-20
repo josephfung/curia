@@ -13,6 +13,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Security
+
+- **Non-root container** — production Docker image now runs as a dedicated `curia` system user instead of root, closing Semgrep alert #48 (`dockerfile.security.missing-user`). (#607)
+
 ### Changed
 
 - **Time context injection** — extended from coordinator-only to all agents; specialists now receive the `## Current Date & Time` block on every task turn, enabling reliable time-sensitive reasoning in scheduled agents.
