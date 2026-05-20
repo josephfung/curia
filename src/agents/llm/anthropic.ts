@@ -17,15 +17,18 @@ import type { MessageParam, ToolUseBlock, TextBlock, TextBlockParam, ToolResultB
 import type { LLMProvider, LLMResponse, LLMUsage, LLMCallProvenance, Message, ToolCall, ToolDefinition, ToolResult } from './provider.js';
 import type { Logger } from '../../logger.js';
 import { classifyError } from '../../errors/classify.js';
+import type { ModelRegistry } from './model-registry.js';
 
 export class AnthropicProvider implements LLMProvider {
   id = 'anthropic';
   private client: Anthropic;
   private logger: Logger;
+  private readonly modelRegistry: ModelRegistry;
 
-  constructor(apiKey: string, logger: Logger) {
+  constructor(apiKey: string, logger: Logger, modelRegistry: ModelRegistry) {
     this.client = new Anthropic({ apiKey });
     this.logger = logger;
+    this.modelRegistry = modelRegistry;
   }
 
   async chat({
@@ -103,15 +106,20 @@ export class AnthropicProvider implements LLMProvider {
       conversationMessages.push({ role: 'user', content: toolResultBlocks });
     }
 
-    // Prefer the explicit model param; fall back to options.model for backward
-    // compatibility; default to sonnet if neither is provided.
+    // Prefer the explicit model param; fall back to options.model for backward compatibility.
+    // No default: the runtime always provides model via resolvedModel, so a missing model
+    // indicates a bug at the call site. Fail loudly rather than silently using a stale default.
     const optionsModel = typeof options?.model === 'string' ? options.model : undefined;
-    const model = modelOverride ?? optionsModel ?? 'claude-sonnet-4-6';
+    const model = modelOverride ?? optionsModel;
+    if (!model) {
+      throw new Error('AnthropicProvider.chat() requires a model — no model was provided and no default is configured');
+    }
 
     try {
       const createParams: Anthropic.Messages.MessageCreateParamsNonStreaming = {
         model,
-        max_tokens: 4096,
+        // Use per-model maxOutputTokens from the registry; fall back to 4096 for unknown models.
+        max_tokens: this.modelRegistry.getModel(model)?.maxOutputTokens ?? 4096,
         // Wrap the concatenated system string in a TextBlockParam array with a
         // cache_control breakpoint. This tells Anthropic to cache everything up
         // to this block, saving ~5K tokens of system prompt cost on repeat calls.

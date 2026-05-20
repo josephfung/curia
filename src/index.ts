@@ -263,14 +263,6 @@ async function main(): Promise<void> {
     executiveProfileService = undefined;
   }
 
-  // 5. LLM provider — hard fail early rather than discovering the missing
-  // key only when the first user message arrives.
-  if (!config.anthropicApiKey) {
-    logger.fatal('ANTHROPIC_API_KEY is required');
-    process.exit(1);
-  }
-  const llmProvider = new AnthropicProvider(config.anthropicApiKey, logger);
-
   // Capability-tier model routing (ADR-014).
   // The ModelRouter resolves tier declarations from agent YAML to concrete
   // provider + model pairs. The provider registry maps provider names to
@@ -282,6 +274,16 @@ async function main(): Promise<void> {
     process.exit(1);
   }
   const modelRegistry = new ModelRegistry(logger);
+
+  // 5. LLM provider — hard fail early rather than discovering the missing
+  // key only when the first user message arrives.
+  // modelRegistry must be instantiated first (above) — the provider uses it
+  // to look up maxOutputTokens per model rather than using a hardcoded constant.
+  if (!config.anthropicApiKey) {
+    logger.fatal('ANTHROPIC_API_KEY is required');
+    process.exit(1);
+  }
+  const llmProvider = new AnthropicProvider(config.anthropicApiKey, logger, modelRegistry);
   // estimateCostUsd is a closure pre-wired with the model registry. Passed to
   // AgentRuntime as config (dependency injection) so the runtime stays testable
   // without importing pricing.ts directly.

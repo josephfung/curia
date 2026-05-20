@@ -6,6 +6,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { AnthropicProvider } from './anthropic.js';
+import { ModelRegistry } from './model-registry.js';
 import { createSilentLogger } from '../../logger.js';
 
 // vi.mock is hoisted above variable declarations, so mockCreate must be
@@ -37,7 +38,7 @@ describe('AnthropicProvider — provenance and cache tokens', () => {
   });
 
   it('returns provenance with requestedModel, actualModel, and providerRequestId on text response', async () => {
-    const provider = new AnthropicProvider('test-key', createSilentLogger());
+    const provider = new AnthropicProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
     const result = await provider.chat({
       messages: [{ role: 'user', content: 'Hello' }],
       options: { model: 'claude-opus-4-6' },
@@ -59,22 +60,23 @@ describe('AnthropicProvider — provenance and cache tokens', () => {
       stop_reason: 'tool_use',
     });
 
-    const provider = new AnthropicProvider('test-key', createSilentLogger());
+    const provider = new AnthropicProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
     const result = await provider.chat({
       messages: [{ role: 'user', content: 'Search something' }],
+      model: 'claude-sonnet-4-6',
       tools: [{ name: 'search', description: 'Search', input_schema: { type: 'object' as const, properties: {} } }],
     });
 
     expect(result.type).toBe('tool_use');
     if (result.type !== 'tool_use') return;
-    expect(result.provenance.requestedModel).toBe('claude-sonnet-4-6'); // default model
+    expect(result.provenance.requestedModel).toBe('claude-sonnet-4-6');
     expect(result.provenance.actualModel).toBe('claude-sonnet-4-6');
     expect(result.provenance.providerRequestId).toBe('msg_tool_456');
   });
 
   it('defaults cache token fields to 0 when API returns null', async () => {
-    const provider = new AnthropicProvider('test-key', createSilentLogger());
-    const result = await provider.chat({ messages: [{ role: 'user', content: 'Hi' }] });
+    const provider = new AnthropicProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
+    const result = await provider.chat({ messages: [{ role: 'user', content: 'Hi' }], model: 'claude-sonnet-4-6' });
 
     expect(result.type).toBe('text');
     if (result.type !== 'text') return;
@@ -91,8 +93,8 @@ describe('AnthropicProvider — provenance and cache tokens', () => {
       stop_reason: 'end_turn',
     });
 
-    const provider = new AnthropicProvider('test-key', createSilentLogger());
-    const result = await provider.chat({ messages: [{ role: 'user', content: 'Hi' }] });
+    const provider = new AnthropicProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
+    const result = await provider.chat({ messages: [{ role: 'user', content: 'Hi' }], model: 'claude-sonnet-4-6' });
 
     expect(result.type).toBe('text');
     if (result.type !== 'text') return;
@@ -101,7 +103,7 @@ describe('AnthropicProvider — provenance and cache tokens', () => {
   });
 
   it('uses explicit model param over options.model', async () => {
-    const provider = new AnthropicProvider('test-key', createSilentLogger());
+    const provider = new AnthropicProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
     await provider.chat({
       messages: [{ role: 'user', content: 'Hello' }],
       model: 'claude-haiku-4-5',
@@ -113,7 +115,7 @@ describe('AnthropicProvider — provenance and cache tokens', () => {
   });
 
   it('falls back to options.model when model param is not provided', async () => {
-    const provider = new AnthropicProvider('test-key', createSilentLogger());
+    const provider = new AnthropicProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
     await provider.chat({
       messages: [{ role: 'user', content: 'Hello' }],
       options: { model: 'claude-opus-4-6' },
@@ -123,14 +125,16 @@ describe('AnthropicProvider — provenance and cache tokens', () => {
     expect(params.model).toBe('claude-opus-4-6');
   });
 
-  it('defaults to claude-sonnet-4-6 when neither model param nor options.model provided', async () => {
-    const provider = new AnthropicProvider('test-key', createSilentLogger());
-    await provider.chat({
-      messages: [{ role: 'user', content: 'Hello' }],
-    });
-
-    const params = mockCreate.mock.calls[0]![0];
-    expect(params.model).toBe('claude-sonnet-4-6');
+  it('throws when neither model param nor options.model is provided', async () => {
+    // The runtime always provides model via resolvedModel — a missing model indicates
+    // a bug at the call site. AnthropicProvider should fail loudly rather than silently
+    // falling back to a hardcoded default.
+    const provider = new AnthropicProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
+    await expect(
+      provider.chat({
+        messages: [{ role: 'user', content: 'Hello' }],
+      }),
+    ).rejects.toThrow('AnthropicProvider.chat() requires a model');
   });
 });
 
@@ -141,8 +145,9 @@ describe('AnthropicProvider — prompt caching', () => {
   });
 
   it('passes system content as TextBlockParam[] with cache_control', async () => {
-    const provider = new AnthropicProvider('test-key', createSilentLogger());
+    const provider = new AnthropicProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
     await provider.chat({
+      model: 'claude-sonnet-4-6',
       messages: [
         { role: 'system', content: 'You are helpful.' },
         { role: 'user', content: 'Hello' },
@@ -156,8 +161,9 @@ describe('AnthropicProvider — prompt caching', () => {
   });
 
   it('omits system key entirely when no system messages', async () => {
-    const provider = new AnthropicProvider('test-key', createSilentLogger());
+    const provider = new AnthropicProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
     await provider.chat({
+      model: 'claude-sonnet-4-6',
       messages: [{ role: 'user', content: 'Hello' }],
     });
 
@@ -166,8 +172,9 @@ describe('AnthropicProvider — prompt caching', () => {
   });
 
   it('concatenates multiple system messages into one block with cache_control', async () => {
-    const provider = new AnthropicProvider('test-key', createSilentLogger());
+    const provider = new AnthropicProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
     await provider.chat({
+      model: 'claude-sonnet-4-6',
       messages: [
         { role: 'system', content: 'Part one.' },
         { role: 'system', content: 'Part two.' },
@@ -182,8 +189,9 @@ describe('AnthropicProvider — prompt caching', () => {
   });
 
   it('adds cache_control only to the last tool when multiple tools provided', async () => {
-    const provider = new AnthropicProvider('test-key', createSilentLogger());
+    const provider = new AnthropicProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
     await provider.chat({
+      model: 'claude-sonnet-4-6',
       messages: [{ role: 'user', content: 'Hello' }],
       tools: [
         { name: 'tool-a', description: 'First', input_schema: { type: 'object' as const, properties: {} } },
@@ -199,8 +207,9 @@ describe('AnthropicProvider — prompt caching', () => {
   });
 
   it('adds cache_control to the single tool when only one tool provided', async () => {
-    const provider = new AnthropicProvider('test-key', createSilentLogger());
+    const provider = new AnthropicProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
     await provider.chat({
+      model: 'claude-sonnet-4-6',
       messages: [{ role: 'user', content: 'Hello' }],
       tools: [
         { name: 'only-tool', description: 'The one', input_schema: { type: 'object' as const, properties: {} } },
@@ -212,8 +221,9 @@ describe('AnthropicProvider — prompt caching', () => {
   });
 
   it('omits tools key entirely when no tools provided', async () => {
-    const provider = new AnthropicProvider('test-key', createSilentLogger());
+    const provider = new AnthropicProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
     await provider.chat({
+      model: 'claude-sonnet-4-6',
       messages: [{ role: 'user', content: 'Hello' }],
     });
 
