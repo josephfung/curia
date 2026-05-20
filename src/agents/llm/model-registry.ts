@@ -33,8 +33,7 @@ export interface ModelMetadata {
   maxOutputTokens?: number;
 }
 
-// Keyed by model name prefix. When #379 lands, OpenRouter models are added here
-// with provider: 'openrouter'.
+// Keyed by model name prefix. OpenRouter models added by #379.
 //
 // Each entry and its nested pricing/capabilities objects are frozen at module
 // load time so getModel()/getAllModels() callers cannot mutate registry state.
@@ -71,6 +70,40 @@ const MODEL_REGISTRY: Record<string, ModelMetadata> = {
       cacheReadPerMToken: 0.08,
     },
     capabilities: ['vision', 'coding'],
+  },
+
+  // OpenRouter models — non-Claude models routed via OpenRouter's OpenAI-compatible API.
+  // Registry keys are the model IDs that OpenRouter's API expects.
+  // Pricing should be verified against OpenRouter's pricing page periodically.
+  'google/gemini-2.0-flash-001': {
+    provider: 'openrouter',
+    contextWindow: 1_000_000,
+    pricing: {
+      inputPerMToken: 0.10,
+      outputPerMToken: 0.40,
+    },
+    capabilities: ['vision', 'coding'],
+    maxOutputTokens: 8_192,
+  },
+  'deepseek/deepseek-chat-v3-0324': {
+    provider: 'openrouter',
+    contextWindow: 128_000,
+    pricing: {
+      inputPerMToken: 0.27,
+      outputPerMToken: 1.10,
+    },
+    capabilities: ['coding'],
+    maxOutputTokens: 8_192,
+  },
+  'openai/gpt-4o': {
+    provider: 'openrouter',
+    contextWindow: 128_000,
+    pricing: {
+      inputPerMToken: 2.50,
+      outputPerMToken: 10.00,
+    },
+    capabilities: ['vision', 'coding', 'reasoning'],
+    maxOutputTokens: 16_384,
   },
 };
 // Deep-freeze to prevent callers from mutating registry entries.

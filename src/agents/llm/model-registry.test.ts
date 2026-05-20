@@ -95,6 +95,44 @@ describe('ModelRegistry', () => {
     });
   });
 
+  describe('OpenRouter models', () => {
+    it('resolves google/gemini-2.0-flash-001 with provider openrouter', () => {
+      const meta = registry.getModel('google/gemini-2.0-flash-001');
+      expect(meta).toBeDefined();
+      expect(meta!.provider).toBe('openrouter');
+      expect(meta!.contextWindow).toBe(1_000_000);
+      expect(meta!.capabilities).toContain('vision');
+      expect(meta!.capabilities).toContain('coding');
+    });
+
+    it('resolves deepseek/deepseek-chat-v3-0324 with provider openrouter', () => {
+      const meta = registry.getModel('deepseek/deepseek-chat-v3-0324');
+      expect(meta).toBeDefined();
+      expect(meta!.provider).toBe('openrouter');
+      expect(meta!.contextWindow).toBe(128_000);
+      expect(meta!.capabilities).toContain('coding');
+    });
+
+    it('resolves openai/gpt-4o with provider openrouter', () => {
+      const meta = registry.getModel('openai/gpt-4o');
+      expect(meta).toBeDefined();
+      expect(meta!.provider).toBe('openrouter');
+      expect(meta!.contextWindow).toBe(128_000);
+      expect(meta!.capabilities).toContain('vision');
+      expect(meta!.capabilities).toContain('reasoning');
+    });
+
+    it('returns correct pricing for deepseek/deepseek-chat-v3-0324', () => {
+      const pricing = registry.getPricing('deepseek/deepseek-chat-v3-0324');
+      expect(pricing).toBeDefined();
+      expect(pricing!.inputPerMToken).toBe(0.27);
+      expect(pricing!.outputPerMToken).toBe(1.10);
+      // OpenRouter models don't support Anthropic-style prompt caching
+      expect(pricing!.cacheCreationPerMToken).toBeUndefined();
+      expect(pricing!.cacheReadPerMToken).toBeUndefined();
+    });
+  });
+
   describe('all three Anthropic models are registered', () => {
     it.each([
       'claude-opus-4-6',
