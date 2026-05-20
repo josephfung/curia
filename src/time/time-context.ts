@@ -1,8 +1,9 @@
 // time-context.ts — helpers for injecting current date/time into agent system prompts.
 //
 // Called once per task turn (not at bootstrap) so the date never goes stale.
-// The coordinator's runtime appends formatTimeContextBlock() to the system prompt
-// on every processTask() call — mirroring the autonomy block pattern.
+// All agent runtimes append formatTimeContextBlock() to the system prompt on every
+// processTask() call — mirroring the autonomy block pattern. Specialists need this
+// too: scheduled agents make time-sensitive decisions that require a reliable "now".
 
 import { DateTime } from 'luxon';
 

@@ -1137,10 +1137,11 @@ async function main(): Promise<void> {
       // Use role (same predicate as interpolateRuntimeContext above) so both
       // branches stay in sync if the coordinator YAML is ever reconfigured.
       autonomyService: agentConfig.role === 'coordinator' ? autonomyService : undefined,
-      // The coordinator gets per-turn time block injection so the date/timezone are
-      // always current. Specialist agents don't need this — they work with
-      // structured data, not user-facing time references.
-      timezone: agentConfig.role === 'coordinator' ? config.timezone : undefined,
+      // All agents receive per-turn time block injection so the current date/time
+      // and timezone are always accurate. Specialists need this too — scheduled
+      // agents in particular make time-sensitive decisions (backoff gates, date
+      // comparisons) that require a reliable "now".
+      timezone: config.timezone,
       // The coordinator gets per-turn identity block injection via officeIdentityService.
       // This replaces the ${office_identity_block} placeholder in the system prompt on
       // every task, so identity hot-reloads (file watcher or API PUT) take effect on the

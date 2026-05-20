@@ -13,6 +13,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Changed
+
+- **Time context injection** — extended from coordinator-only to all agents; specialists now receive the `## Current Date & Time` block on every task turn, enabling reliable time-sensitive reasoning in scheduled agents.
+
 ## [0.29.0] — 2026-05-19 — "Naomi Nagata"
 
 > **Naomi Nagata** *(The Expanse, 2011, James S.A. Corey)* — chief engineer of the Rocinante: she keeps disparate systems integrated, monitors ship health, and is always the first to notice when something is about to break. This release consolidates the CEO inbox into core, adds self-monitoring alerts for broken and stuck jobs, and hardens the engineering foundation with security scanning and proper binary file handling.
