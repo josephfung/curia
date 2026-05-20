@@ -55,13 +55,12 @@ export class ExtractFactsHandler implements SkillHandler {
       return { success: false, error: 'extract-facts requires llmProvider and modelRouter capabilities' };
     }
 
-    // Resolve tier names to concrete model strings at invocation time.
-    // Using the shared ModelRouter keeps model selection centralised — if the operator
-    // rotates a model, this skill picks up the new string automatically.
-    const classifierModel = ctx.modelRouter.resolve('fast').model;
-    const extractionModel = ctx.modelRouter.resolve('standard').model;
-
     try {
+      // Resolve tier names to concrete model strings at invocation time.
+      // Kept inside the try so a bad routing config (ModelRouter.resolve() throws)
+      // returns { success: false } instead of letting execute() throw.
+      const classifierModel = ctx.modelRouter.resolve('fast').model;
+      const extractionModel = ctx.modelRouter.resolve('standard').model;
       // -- Step 1: Classifier gate --
       // Cheap fast-tier call — exits early on messages that carry no facts about a
       // single entity (e.g. action requests, scheduling, relationship-only text).

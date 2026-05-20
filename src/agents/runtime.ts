@@ -1066,8 +1066,11 @@ export class AgentRuntime {
       }
     };
 
+    // Prefer the explicitly resolved model; fall back to modelName so callers that
+    // set only modelName (e.g. unit tests) still reach the provider without error.
+    const modelForCall = this.config.resolvedModel ?? this.config.modelName;
     const callStartMs = Date.now();
-    const response = await provider.chat({ ...params, ...(this.config.resolvedModel !== undefined ? { model: this.config.resolvedModel } : {}) });
+    const response = await provider.chat({ ...params, ...(modelForCall !== undefined ? { model: modelForCall } : {}) });
     const latencyMs = Date.now() - callStartMs;
     if (response.type !== 'error') {
       // LLM call succeeded — reset consecutive error counter and publish telemetry
@@ -1109,7 +1112,7 @@ export class AgentRuntime {
       await new Promise(resolve => setTimeout(resolve, backoffMs));
 
       const retryStartMs = Date.now();
-      const retryResponse = await provider.chat({ ...params, ...(this.config.resolvedModel !== undefined ? { model: this.config.resolvedModel } : {}) });
+      const retryResponse = await provider.chat({ ...params, ...(modelForCall !== undefined ? { model: modelForCall } : {}) });
       const retryLatencyMs = Date.now() - retryStartMs;
       if (retryResponse.type !== 'error') {
         // Retry succeeded — reset consecutive error counter and publish telemetry

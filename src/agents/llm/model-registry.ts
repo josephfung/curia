@@ -35,6 +35,9 @@ export interface ModelMetadata {
 
 // Keyed by model name prefix. When #379 lands, OpenRouter models are added here
 // with provider: 'openrouter'.
+//
+// Each entry and its nested pricing/capabilities objects are frozen at module
+// load time so getModel()/getAllModels() callers cannot mutate registry state.
 const MODEL_REGISTRY: Record<string, ModelMetadata> = {
   'claude-opus-4-6': {
     provider: 'anthropic',
@@ -70,6 +73,13 @@ const MODEL_REGISTRY: Record<string, ModelMetadata> = {
     capabilities: ['vision', 'coding'],
   },
 };
+// Deep-freeze to prevent callers from mutating registry entries.
+for (const entry of Object.values(MODEL_REGISTRY)) {
+  Object.freeze(entry.pricing);
+  Object.freeze(entry.capabilities);
+  Object.freeze(entry);
+}
+Object.freeze(MODEL_REGISTRY);
 
 // Pre-sorted entries for prefix matching — longest prefix wins.
 const SORTED_ENTRIES = Object.entries(MODEL_REGISTRY)

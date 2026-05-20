@@ -70,10 +70,12 @@ export class FileParseHandler implements SkillHandler {
       return { success: false, error: 'Invalid extract_as: value must be a non-empty string (e.g. receipt, bank_statement, invoice, raw, or a custom schema name)' };
     }
 
-    // Resolve the standard-tier model once for any LLM calls below.
-    const extractionModel = modelRouter.resolve('standard').model;
-
     try {
+      // Resolve the standard-tier model once for any LLM calls below.
+      // Kept inside the try so a bad routing config (ModelRouter.resolve() throws)
+      // returns { success: false } instead of letting execute() throw.
+      const extractionModel = modelRouter.resolve('standard').model;
+
       const buffer = Buffer.from(contentBase64, 'base64');
 
       switch (contentType) {
@@ -127,7 +129,10 @@ export class FileParseHandler implements SkillHandler {
     // Normalize the non-standard image/jpg alias to the IANA-registered image/jpeg.
     // The Anthropic API only accepts the canonical MIME types; passing image/jpg would
     // produce an API error at runtime despite the TypeScript cast.
-    const normalizedMimeType = (mimeType === 'image/jpg' ? 'image/jpeg' : mimeType) as ImageContent['source']['media_type'];
+    // Cast to the explicit base64 media_type union. After the discriminated union
+    // refactor on ImageContent.source, accessing ['media_type'] via a type path
+    // would require narrowing to the base64 variant first — the explicit union is cleaner.
+    const normalizedMimeType = (mimeType === 'image/jpg' ? 'image/jpeg' : mimeType) as 'image/jpeg' | 'image/png' | 'image/webp' | 'image/gif';
 
     const imageBlock: ImageContent = {
       type: 'image',

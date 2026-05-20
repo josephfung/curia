@@ -4,9 +4,10 @@ import { parseCsv } from './csv.js';
 import { FileParseHandler } from './handler.js';
 import type { SkillContext } from '../../src/skills/types.js';
 
-// Minimal modelRouter stub that always resolves to 'claude-sonnet-4-6'
+// Minimal modelRouter stub that always resolves to 'claude-sonnet-4-6'.
+// Returns the full ResolvedModel shape { model, tier } to match the runtime contract.
 const mockModelRouter = {
-  resolve: (_tier: string) => ({ model: 'claude-sonnet-4-6' }),
+  resolve: (_tier: string) => ({ model: 'claude-sonnet-4-6', tier: 'standard' as const }),
 };
 
 function makeCtx(

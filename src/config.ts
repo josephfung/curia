@@ -553,6 +553,11 @@ export function loadYamlConfig(configDir: string): YamlConfig {
       if (typeof autonomyScoring !== 'object' || autonomyScoring === null || Array.isArray(autonomyScoring)) {
         throw new Error('dreaming.autonomy_scoring must be a YAML mapping');
       }
+      // Reject the deprecated autonomy_scoring.model key so operators don't silently
+      // use a config key that is no longer read. The replacement is model_tier.
+      if ('model' in (autonomyScoring as object)) {
+        throw new Error('dreaming.autonomy_scoring.model is deprecated — use dreaming.autonomy_scoring.model_tier instead');
+      }
       if (autonomyScoring.intervalMs !== undefined && (!Number.isInteger(autonomyScoring.intervalMs) || autonomyScoring.intervalMs <= 0)) {
         throw new Error(`dreaming.autonomy_scoring.intervalMs must be a positive integer, got: ${autonomyScoring.intervalMs}`);
       }
