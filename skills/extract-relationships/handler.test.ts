@@ -1,7 +1,7 @@
 // handler.test.ts — unit tests for extract-relationships skill.
 //
-// Uses an in-memory KG backend (no Postgres) and a mock Anthropic client
-// injected via the handler constructor, so no real API calls are made.
+// Uses an in-memory KG backend (no Postgres) and a mock LLMProvider + ModelRouter
+// injected via the skill context, so no real API calls are made.
 
 import { describe, it, expect, vi } from 'vitest';
 import pino from 'pino';
@@ -22,27 +22,35 @@ function makeEntityMemory(): EntityMemory {
   return new EntityMemory(store, validator, embeddingService, createSilentLogger());
 }
 
-function makeCtx(entityMemory: EntityMemory, input: Record<string, unknown>): SkillContext {
+// Creates a mock ModelRouter that maps 'fast' → haiku and 'standard' → sonnet.
+const mockModelRouter = {
+  resolve: vi.fn().mockImplementation((tier: string) => ({
+    model: tier === 'fast' ? 'claude-haiku-4-5' : 'claude-sonnet-4-6',
+    tier,
+  })),
+};
+
+// Creates a mock LLMProvider that returns a scripted sequence of responses.
+// First call is the classifier gate; second call (if triggered) is extraction.
+function makeMockLlmProvider(responses: string[]) {
+  let callIndex = 0;
+  return {
+    chat: vi.fn().mockImplementation(() => {
+      const content = responses[callIndex++] ?? 'no';
+      return Promise.resolve({ type: 'text', content });
+    }),
+  };
+}
+
+function makeCtx(entityMemory: EntityMemory, input: Record<string, unknown>, llmProvider: ReturnType<typeof makeMockLlmProvider>): SkillContext {
   return {
     input,
     secret: () => 'test-api-key',
     log: pino({ level: 'silent' }),
     entityMemory,
+    llmProvider,
+    modelRouter: mockModelRouter,
   } as unknown as SkillContext;
-}
-
-// Creates a mock Anthropic client that returns a scripted sequence of responses.
-// First call is the classifier gate; second call (if triggered) is extraction.
-function makeMockAnthropicClient(responses: string[]) {
-  let callIndex = 0;
-  return {
-    messages: {
-      create: vi.fn().mockImplementation(() => {
-        const text = responses[callIndex++] ?? 'no';
-        return Promise.resolve({ content: [{ type: 'text', text }] });
-      }),
-    },
-  };
 }
 
 // -- Tests --
@@ -50,18 +58,18 @@ function makeMockAnthropicClient(responses: string[]) {
 describe('ExtractRelationshipsHandler', () => {
   it('returns skipped:true when classifier gate fires on unrelated text', async () => {
     const entityMemory = makeEntityMemory();
-    const anthropic = makeMockAnthropicClient(['no']);
-    const handler = new ExtractRelationshipsHandler(anthropic as never);
+    const llmProvider = makeMockLlmProvider(['no']);
+    const handler = new ExtractRelationshipsHandler();
     const ctx = makeCtx(entityMemory, {
       text: 'Please schedule a call with the engineering team for Thursday.',
       source: 'test',
-    });
+    }, llmProvider);
 
     const result = await handler.execute(ctx);
 
     expect(result).toEqual({ success: true, data: { extracted: 0, confirmed: 0, skipped: true } });
-    // Classifier was called; extraction was not (only 1 API call made)
-    expect(anthropic.messages.create).toHaveBeenCalledTimes(1);
+    // Classifier was called; extraction was not (only 1 LLM call made)
+    expect(llmProvider.chat).toHaveBeenCalledTimes(1);
   });
 
   it('extracts a single relationship and persists the edge', async () => {
@@ -69,12 +77,12 @@ describe('ExtractRelationshipsHandler', () => {
     const triple = JSON.stringify([
       { subject: 'Ada Lovelace', subjectType: 'person', predicate: 'manages', object: 'Project Orion', objectType: 'project', confidence: 0.9 },
     ]);
-    const anthropic = makeMockAnthropicClient(['yes', triple]);
-    const handler = new ExtractRelationshipsHandler(anthropic as never);
+    const llmProvider = makeMockLlmProvider(['yes', triple]);
+    const handler = new ExtractRelationshipsHandler();
     const ctx = makeCtx(entityMemory, {
       text: 'Ada Lovelace is the lead on Project Orion.',
       source: 'test',
-    });
+    }, llmProvider);
 
     const result = await handler.execute(ctx);
 
@@ -98,15 +106,15 @@ describe('ExtractRelationshipsHandler', () => {
     ]);
 
     // First invocation — creates the edge
-    const anthropic1 = makeMockAnthropicClient(['yes', triple]);
-    const handler1 = new ExtractRelationshipsHandler(anthropic1 as never);
-    const ctx1 = makeCtx(entityMemory, { text: 'John Smith is Bob\'s wife.', source: 'test' });
+    const llmProvider1 = makeMockLlmProvider(['yes', triple]);
+    const handler1 = new ExtractRelationshipsHandler();
+    const ctx1 = makeCtx(entityMemory, { text: 'John Smith is Bob\'s wife.', source: 'test' }, llmProvider1);
     await handler1.execute(ctx1);
 
     // Second invocation with same text — should confirm, not duplicate
-    const anthropic2 = makeMockAnthropicClient(['yes', triple]);
-    const handler2 = new ExtractRelationshipsHandler(anthropic2 as never);
-    const ctx2 = makeCtx(entityMemory, { text: 'John Smith is Bob\'s wife.', source: 'test' });
+    const llmProvider2 = makeMockLlmProvider(['yes', triple]);
+    const handler2 = new ExtractRelationshipsHandler();
+    const ctx2 = makeCtx(entityMemory, { text: 'John Smith is Bob\'s wife.', source: 'test' }, llmProvider2);
     const result = await handler2.execute(ctx2);
 
     expect(result).toEqual({ success: true, data: { extracted: 0, confirmed: 1, failed: 0, skipped: false } });
@@ -126,12 +134,12 @@ describe('ExtractRelationshipsHandler', () => {
     const triple = JSON.stringify([
       { subject: 'New Person A', subjectType: 'person', predicate: 'collaborates_with', object: 'New Person B', objectType: 'person', confidence: 0.8 },
     ]);
-    const anthropic = makeMockAnthropicClient(['yes', triple]);
-    const handler = new ExtractRelationshipsHandler(anthropic as never);
+    const llmProvider = makeMockLlmProvider(['yes', triple]);
+    const handler = new ExtractRelationshipsHandler();
     const ctx = makeCtx(entityMemory, {
       text: 'New Person A is collaborating with New Person B.',
       source: 'test',
-    });
+    }, llmProvider);
 
     await handler.execute(ctx);
 
@@ -150,12 +158,12 @@ describe('ExtractRelationshipsHandler', () => {
     const triple = JSON.stringify([
       { subject: 'John Smith', subjectType: 'person', predicate: 'spouse', object: 'Jane Doe', objectType: 'person', confidence: 0.95 },
     ]);
-    const anthropic = makeMockAnthropicClient(['yes', triple]);
-    const handler = new ExtractRelationshipsHandler(anthropic as never);
+    const llmProvider = makeMockLlmProvider(['yes', triple]);
+    const handler = new ExtractRelationshipsHandler();
     const ctx = makeCtx(entityMemory, {
       text: 'John Smith is Bob\'s wife.',
       source: 'test',
-    });
+    }, llmProvider);
 
     const result = await handler.execute(ctx);
 
@@ -178,9 +186,9 @@ describe('ExtractRelationshipsHandler', () => {
     const triple = JSON.stringify([
       { subject: 'Alice', subjectType: 'person', predicate: 'knows_well', object: 'Bob', objectType: 'person', confidence: 0.7 },
     ]);
-    const anthropic = makeMockAnthropicClient(['yes', triple]);
-    const handler = new ExtractRelationshipsHandler(anthropic as never);
-    const ctx = makeCtx(entityMemory, { text: 'Alice knows Bob well.', source: 'test' });
+    const llmProvider = makeMockLlmProvider(['yes', triple]);
+    const handler = new ExtractRelationshipsHandler();
+    const ctx = makeCtx(entityMemory, { text: 'Alice knows Bob well.', source: 'test' }, llmProvider);
 
     await handler.execute(ctx);
 
