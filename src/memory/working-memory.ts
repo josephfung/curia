@@ -19,6 +19,8 @@ export interface SummarizationConfig {
   keepWindow: number;
   /** LLM provider used for the condensation call — same provider the agent uses. */
   provider: LLMProvider;
+  /** Model identifier to pass explicitly to provider.chat() for the summarization call. */
+  model: string;
 }
 
 interface StorageBackend {
@@ -154,7 +156,7 @@ class PostgresBackend implements StorageBackend {
     agentId: string,
     config: SummarizationConfig,
   ): Promise<void> {
-    const { threshold, keepWindow, provider } = config;
+    const { threshold, keepWindow, provider, model } = config;
 
     // Count active (non-archived) turns for this conversation+agent
     const countResult = await this.pool.query<{ count: string }>(
@@ -229,6 +231,7 @@ class PostgresBackend implements StorageBackend {
 
     const response = await provider.chat({
       messages: [{ role: 'user', content: summaryPrompt }],
+      model,
     });
 
     if (response.type === 'error') {
