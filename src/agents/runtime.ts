@@ -1,10 +1,10 @@
-import type { LLMProvider, LLMResponse, Message, ToolDefinition, ContentBlock, ToolUseContent, ToolResultContent, TextContent } from './llm/provider.js';
+import type { LLMProvider, LLMResponse, LLMUsage, Message, ToolDefinition, ContentBlock, ToolUseContent, ToolResultContent, TextContent } from './llm/provider.js';
 import type { EventBus } from '../bus/bus.js';
 import { createAgentResponse, createAgentError, createSkillInvoke, createSkillResult, createLlmCall, createContextBudget, type AgentTaskEvent } from '../bus/events.js';
 import { ContextBudget } from './llm/context-budget.js';
-import { getContextWindow, DEFAULT_SAFETY_MARGIN, DEFAULT_MODEL_NAME, isKnownContextWindowModel } from './llm/token-estimator.js';
+import { DEFAULT_SAFETY_MARGIN } from './llm/token-estimator.js';
+import type { ModelRegistry } from './llm/model-registry.js';
 import { createHash } from 'node:crypto';
-import { estimateCostUsd } from './llm/pricing.js';
 import type { Logger } from '../logger.js';
 import type { WorkingMemory } from '../memory/working-memory.js';
 import type { EntityMemory } from '../memory/entity-memory.js';
@@ -90,6 +90,11 @@ export interface AgentConfig {
   bullpenService?: BullpenService;
   /** How far back to look for active threads, in minutes. Default: 60. */
   bullpenWindowMinutes?: number;
+  /** Model registry — used to look up context window sizes per model. */
+  modelRegistry: ModelRegistry;
+  /** Pre-wired cost estimation function — created at startup via createEstimateCostUsd()
+   *  and injected here so the runtime doesn't import pricing.ts directly. */
+  estimateCostUsd: (actualModel: string, usage: LLMUsage, logger?: Logger) => number;
   /** Compiled security context block — injected into the effective system prompt on every
    *  task. If the prompt contains ${security_context_block}, the placeholder is replaced at
    *  that position. If the placeholder is absent, the block is appended unconditionally as a
@@ -323,12 +328,15 @@ export class AgentRuntime {
     };
 
     // Create context budget for token-aware assembly.
-    const modelName = this.config.resolvedModel ?? this.config.modelName ?? DEFAULT_MODEL_NAME;
-    const contextWindow = getContextWindow(modelName);
-    if (!isKnownContextWindowModel(modelName)) {
+    const modelName = this.config.resolvedModel ?? this.config.modelName;
+    if (!modelName) {
+      throw new Error(`Agent ${agentId} has no resolvedModel or modelName — cannot create context budget`);
+    }
+    const contextWindow = this.config.modelRegistry.getContextWindow(modelName);
+    if (!this.config.modelRegistry.isKnownModel(modelName)) {
       logger.warn(
-        { agentId, modelName, fallbackWindow: contextWindow },
-        'Model not in context window map — using fallback; budget may be incorrect. Add this model to token-estimator.ts',
+        { agentId, modelName },
+        'Model not in model registry — context budget will use 0 window. Add this model to model-registry.ts',
       );
     }
     const ctxBudget = new ContextBudget({
@@ -1035,7 +1043,7 @@ export class AgentRuntime {
           outputTokens: response.usage.outputTokens,
           cacheCreationInputTokens: response.usage.cacheCreationInputTokens,
           cacheReadInputTokens: response.usage.cacheReadInputTokens,
-          estimatedCostUsd: estimateCostUsd(response.provenance.actualModel, response.usage, logger),
+          estimatedCostUsd: this.config.estimateCostUsd(response.provenance.actualModel, response.usage, logger),
           latencyMs: callLatencyMs,
           promptHash,
           responseHash,
