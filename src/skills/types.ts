@@ -206,6 +206,13 @@ export interface SkillContext {
    *  MCP tools that accept file paths. Used by email download skills to hand off
    *  attachment bytes to Google Drive uploads without corruption. */
   writeTempFile?(buffer: Buffer, filename: string): Promise<string>;
+  /** LLM provider — available to skills declaring 'llmProvider' in capabilities.
+   *  Grants direct LLM access — use only for infrastructure skills (extract-facts,
+   *  extract-relationships, file-parse). See #637 for planned redesign. */
+  llmProvider?: import('../agents/llm/provider.js').LLMProvider;
+  /** Model router — available to skills declaring 'modelRouter' in capabilities.
+   *  Resolves tier names to model strings. See #637 for planned redesign. */
+  modelRouter?: import('../agents/llm/model-router.js').ModelRouter;
 }
 
 /**

@@ -40,6 +40,8 @@ import type { AutonomyConfig } from '../autonomy/autonomy-service.js';
 import type { BrowserService } from '../browser/browser-service.js';
 import type { ApprovalTriggerService } from '../autonomy/approval-trigger.js';
 import { TempFileStore } from './temp-file-store.js';
+import type { LLMProvider } from '../agents/llm/provider.js';
+import type { ModelRouter } from '../agents/llm/model-router.js';
 
 // Default max output length — used when no value is configured in default.yaml.
 // Skills returning more than this will have their output truncated before it
@@ -82,6 +84,8 @@ export class ExecutionLayer {
   private actionLogRepo?: import('../autonomy/action-log-repo.js').ActionLogRepo;
   private confidencePipeline?: import('../contacts/confidence-pipeline.js').ConfidencePipeline;
   private tempFileStore?: TempFileStore;
+  private readonly llmProvider?: LLMProvider;
+  private readonly modelRouter?: ModelRouter;
   /** The agent's own contactId — injected into ctx.agentContactId for entity_enrichment default='agent' */
   private agentContactId?: string;
   /** IANA timezone name used for normalizing offset-less timestamp inputs from the LLM. */
@@ -110,6 +114,8 @@ export class ExecutionLayer {
     actionLogRepo?: import('../autonomy/action-log-repo.js').ActionLogRepo;
     confidencePipeline?: import('../contacts/confidence-pipeline.js').ConfidencePipeline;
     tempFileStore?: TempFileStore;
+    llmProvider?: LLMProvider;
+    modelRouter?: ModelRouter;
     agentContactId?: string;
     timezone?: string;
     selfEmail?: string;
@@ -135,6 +141,8 @@ export class ExecutionLayer {
     this.actionLogRepo = options?.actionLogRepo;
     this.confidencePipeline = options?.confidencePipeline;
     this.tempFileStore = options?.tempFileStore;
+    this.llmProvider = options?.llmProvider;
+    this.modelRouter = options?.modelRouter;
     this.agentContactId = options?.agentContactId;
     this.timezone = options?.timezone ?? 'UTC';
     this.selfEmail = options?.selfEmail;
@@ -514,6 +522,11 @@ export class ExecutionLayer {
       // executionLayer injects `this` so approve-action can re-invoke blocked skills
       // with humanApproved: true (see ADR-018). Only approve-action should declare this.
       executionLayer: this,
+      // llmProvider and modelRouter are infrastructure-only capabilities for skills
+      // that need direct LLM access (extract-facts, extract-relationships, file-parse).
+      // See #637 for planned redesign of infrastructure skill LLM access.
+      llmProvider: this.llmProvider,
+      modelRouter: this.modelRouter,
     };
 
     // Hard-restrict executionLayer to approve-action only.
