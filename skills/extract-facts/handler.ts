@@ -51,6 +51,7 @@ export class ExtractFactsHandler implements SkillHandler {
     // Guard: llmProvider and modelRouter are required capabilities declared in skill.json.
     // If either is missing the execution layer mis-configured this invocation.
     if (!ctx.llmProvider || !ctx.modelRouter) {
+      ctx.log.error('extract-facts: llmProvider or modelRouter capability missing — execution layer misconfigured');
       return { success: false, error: 'extract-facts requires llmProvider and modelRouter capabilities' };
     }
 

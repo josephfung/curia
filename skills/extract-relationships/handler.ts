@@ -47,6 +47,7 @@ export class ExtractRelationshipsHandler implements SkillHandler {
     // Guard: llmProvider and modelRouter are required capabilities declared in skill.json.
     // If either is missing the execution layer mis-configured this invocation.
     if (!ctx.llmProvider || !ctx.modelRouter) {
+      ctx.log.error('extract-relationships: llmProvider or modelRouter capability missing — execution layer misconfigured');
       return { success: false, error: 'extract-relationships requires llmProvider and modelRouter capabilities' };
     }
 
@@ -71,7 +72,7 @@ export class ExtractRelationshipsHandler implements SkillHandler {
 
     if (classifierResponse.type === 'error') {
       ctx.log.error({ error: classifierResponse.error }, 'extract-relationships: classifier LLM call failed');
-      return { success: false, error: `LLM call failed: ${classifierResponse.error.message}` };
+      return { success: false, error: `Classifier LLM call failed: ${classifierResponse.error.message}` };
     }
 
     // LLMProvider.chat() returns content as a plain string (not content[0].text).

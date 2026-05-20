@@ -298,10 +298,11 @@ async function main(): Promise<void> {
   // requiring a provider that isn't instantiated.
   for (const [modelId, meta] of Object.entries(modelRegistry.getAllModels())) {
     if (!providerRegistry.has(meta.provider)) {
-      logger.warn(
+      logger.fatal(
         { model: modelId, provider: meta.provider },
-        'Model in registry references a provider that is not registered — model will be unusable',
+        'Model in registry references a provider that is not registered — cannot start',
       );
+      process.exit(1);
     }
   }
 
@@ -979,7 +980,13 @@ async function main(): Promise<void> {
   // Resolve model tier from config (defaults to 'fast' — the scoring pass is non-interactive
   // and doesn't need a powerful model, so 'fast' is appropriate for cost efficiency).
   const scoringModelTier = yamlConfig.dreaming?.autonomy_scoring?.model_tier ?? 'fast';
-  const scoringModel = modelRouter.resolve(scoringModelTier).model;
+  let scoringModel: string;
+  try {
+    scoringModel = modelRouter.resolve(scoringModelTier).model;
+  } catch (err) {
+    logger.fatal({ scoringModelTier, err }, 'autonomy_scoring.model_tier references an unknown model tier — cannot start');
+    process.exit(1);
+  }
   const scoringPassConfig: ScoringPassConfig = {
     intervalMs: yamlConfig.dreaming?.autonomy_scoring?.intervalMs ?? 86_400_000,  // default: daily
     model: scoringModel,

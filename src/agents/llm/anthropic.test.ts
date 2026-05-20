@@ -125,16 +125,19 @@ describe('AnthropicProvider — provenance and cache tokens', () => {
     expect(params.model).toBe('claude-opus-4-6');
   });
 
-  it('throws when neither model param nor options.model is provided', async () => {
+  it('returns an error response when neither model param nor options.model is provided', async () => {
+    // The guard is inside the try block so the error is caught and returned as
+    // { type: 'error', ... } rather than thrown — preserving the LLMResponse contract.
     // The runtime always provides model via resolvedModel — a missing model indicates
-    // a bug at the call site. AnthropicProvider should fail loudly rather than silently
-    // falling back to a hardcoded default.
+    // a bug at the call site.
     const provider = new AnthropicProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
-    await expect(
-      provider.chat({
-        messages: [{ role: 'user', content: 'Hello' }],
-      }),
-    ).rejects.toThrow('AnthropicProvider.chat() requires a model');
+    const result = await provider.chat({
+      messages: [{ role: 'user', content: 'Hello' }],
+    });
+    expect(result.type).toBe('error');
+    if (result.type === 'error') {
+      expect(result.error.message).toMatch('AnthropicProvider.chat() requires a model');
+    }
   });
 });
 

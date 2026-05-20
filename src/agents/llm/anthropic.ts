@@ -91,7 +91,7 @@ export class AnthropicProvider implements LLMProvider {
             if (block.type === 'image') {
               // Pass image blocks through to the Anthropic SDK as-is — the shape
               // matches the SDK's ImageBlockParam structure directly.
-              return block as unknown as Parameters<typeof Object>[0];
+              return block as unknown as Anthropic.Messages.ImageBlockParam;
             }
             // TextContent
             return { type: 'text' as const, text: block.text };
@@ -116,11 +116,11 @@ export class AnthropicProvider implements LLMProvider {
     // indicates a bug at the call site. Fail loudly rather than silently using a stale default.
     const optionsModel = typeof options?.model === 'string' ? options.model : undefined;
     const model = modelOverride ?? optionsModel;
-    if (!model) {
-      throw new Error('AnthropicProvider.chat() requires a model — no model was provided and no default is configured');
-    }
 
     try {
+      if (!model) {
+        throw new Error('AnthropicProvider.chat() requires a model — no model was provided and no default is configured');
+      }
       const createParams: Anthropic.Messages.MessageCreateParamsNonStreaming = {
         model,
         // Use per-model maxOutputTokens from the registry; fall back to 4096 for unknown models.

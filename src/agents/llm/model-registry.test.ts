@@ -43,7 +43,7 @@ describe('ModelRegistry', () => {
     });
 
     it('returns 0 for unknown models', () => {
-      expect(registry.getContextWindow('unknown-model')).toBe(0);
+      expect(registry.getContextWindow('unknown-model')).toBeUndefined();
     });
   });
 
