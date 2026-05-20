@@ -8,8 +8,7 @@
 // Failure modes are all fail-open: any LLM error, timeout, or malformed response
 // is treated as "no drift" so the task continues. The failure is logged at warn.
 //
-// TODO: When multi-model support is added, make the LLM provider here independently
-// configurable from the coordinator's provider (cheaper/faster model for this check).
+// Model is resolved from the standard tier at startup via ModelRouter.
 
 import type { LLMProvider } from '../agents/llm/provider.js';
 import type { Logger } from '../logger.js';
@@ -28,6 +27,8 @@ export interface DriftConfig {
   checkEveryNBursts: number;
   /** Minimum LLM confidence required to trigger a pause. */
   minConfidenceToPause: DriftConfidence;
+  /** Model identifier passed explicitly to provider.chat() for each drift check call. */
+  model: string;
 }
 
 export interface DriftCheckParams {
@@ -88,6 +89,7 @@ export class DriftDetector {
           { role: 'system', content: systemPrompt },
           { role: 'user', content: userLines.join('\n') },
         ],
+        model: this.config.model,
         options: { max_tokens: 200, temperature: 0 },
       });
 
