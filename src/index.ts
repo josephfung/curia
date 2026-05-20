@@ -311,21 +311,19 @@ async function main(): Promise<void> {
   // llmProvider is already initialized above (step 5) so we can pass it directly.
   // If the config block is absent, summarization is disabled (no-op backend).
   const summarizationCfg = yamlConfig.workingMemory?.summarization;
-  // Resolve which model tier to use for summarization so the right model is passed
-  // when SummarizationConfig gains a model field (Task 14).
+  // Resolve which model tier to use for summarization. 'standard' is appropriate
+  // for summarization — it's a medium-complexity task that doesn't need the full
+  // flagship model but benefits from better instruction-following than a fast tier.
   const summarizationModel = modelRouter.resolve('standard').model;
   const memory = WorkingMemory.createWithPostgres(pool, logger, summarizationCfg
     ? {
         threshold: summarizationCfg.threshold ?? 20,
         keepWindow: summarizationCfg.keepWindow ?? 10,
         provider: llmProvider,
-        // TODO: model will be added in Task 14 once SummarizationConfig gains a model field.
-        // Use: model: summarizationModel
+        model: summarizationModel,
       }
     : undefined,
   );
-  // Suppress unused-variable warning until Task 14 wires it in.
-  void summarizationModel;
 
   // Entity memory — optional, requires OPENAI_API_KEY for embeddings.
   // If not configured, agents still work — they just don't have KG access.
