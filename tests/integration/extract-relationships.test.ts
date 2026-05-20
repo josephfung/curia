@@ -1,6 +1,6 @@
 // Integration test: extract-relationships full round-trip.
 //
-// Uses real Postgres (DATABASE_URL must be set) and a mock Anthropic client
+// Uses real Postgres (DATABASE_URL must be set) and a mock LLMProvider
 // so no real LLM API calls are made. Tests that:
 // 1. The skill persists edges to kg_edges via real SQL
 // 2. EntityContextAssembler reads those edges back on the next turn
@@ -18,31 +18,49 @@ import { createSilentLogger } from '../../src/logger.js';
 import { EntityContextAssembler } from '../../src/entity-context/assembler.js';
 import { ExtractRelationshipsHandler } from '../../skills/extract-relationships/handler.js';
 import type { SkillContext } from '../../src/skills/types.js';
+import type { LLMProvider, LLMResponse } from '../../src/agents/llm/provider.js';
+import type { ModelRouter } from '../../src/agents/llm/model-router.js';
 
 const { Pool } = pg;
 
 const DATABASE_URL = process.env.DATABASE_URL;
 const describeIf = DATABASE_URL ? describe : describe.skip;
 
-function makeCtx(entityMemory: EntityMemory, text: string): SkillContext {
+// Builds a mock LLMProvider that returns sequential text responses.
+// Mirrors the old makeMockAnthropicClient but speaks the LLMProvider interface.
+function makeMockLLMProvider(responses: string[]): LLMProvider {
+  let callIndex = 0;
+  const chat = vi.fn().mockImplementation((): Promise<LLMResponse> => {
+    const content = responses[callIndex++] ?? 'no';
+    return Promise.resolve({
+      type: 'text' as const,
+      content,
+      usage: { inputTokens: 10, outputTokens: 10, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+      provenance: { requestedModel: 'claude-haiku-4-5', actualModel: 'claude-haiku-4-5', providerRequestId: 'test-req' },
+    });
+  });
+  return { chat } as unknown as LLMProvider;
+}
+
+// Minimal ModelRouter stub — returns fixed models for fast/standard tiers.
+function makeMockModelRouter(): ModelRouter {
+  return {
+    resolve: vi.fn().mockImplementation((tier: string) => {
+      const model = tier === 'fast' ? 'claude-haiku-4-5' : 'claude-sonnet-4-6';
+      return { model, tier };
+    }),
+  } as unknown as ModelRouter;
+}
+
+function makeCtx(entityMemory: EntityMemory, text: string, llmProvider: LLMProvider): SkillContext {
   return {
     input: { text, source: 'integration-test' },
     secret: () => 'test-api-key',
     log: pino({ level: 'silent' }),
     entityMemory,
+    llmProvider,
+    modelRouter: makeMockModelRouter(),
   } as unknown as SkillContext;
-}
-
-function makeMockAnthropicClient(responses: string[]) {
-  let callIndex = 0;
-  return {
-    messages: {
-      create: vi.fn().mockImplementation(() => {
-        const text = responses[callIndex++] ?? 'no';
-        return Promise.resolve({ content: [{ type: 'text', text }] });
-      }),
-    },
-  };
 }
 
 describeIf('extract-relationships integration', () => {
@@ -93,9 +111,9 @@ describeIf('extract-relationships integration', () => {
         confidence: 0.95,
       },
     ]);
-    const anthropic = makeMockAnthropicClient(['yes', triple]);
-    const handler = new ExtractRelationshipsHandler(anthropic as never);
-    const ctx = makeCtx(entityMemory, 'John Smith is Bob\'s wife.');
+    const llmProvider = makeMockLLMProvider(['yes', triple]);
+    const handler = new ExtractRelationshipsHandler();
+    const ctx = makeCtx(entityMemory, 'John Smith is Bob\'s wife.', llmProvider);
 
     const result = await handler.execute(ctx);
 
@@ -136,13 +154,13 @@ describeIf('extract-relationships integration', () => {
       },
     ]);
 
-    const anthropic1 = makeMockAnthropicClient(['yes', triple]);
-    const handler1 = new ExtractRelationshipsHandler(anthropic1 as never);
-    await handler1.execute(makeCtx(entityMemory, 'Person A reports to Person B.'));
+    const llmProvider1 = makeMockLLMProvider(['yes', triple]);
+    const handler1 = new ExtractRelationshipsHandler();
+    await handler1.execute(makeCtx(entityMemory, 'Person A reports to Person B.', llmProvider1));
 
-    const anthropic2 = makeMockAnthropicClient(['yes', triple]);
-    const handler2 = new ExtractRelationshipsHandler(anthropic2 as never);
-    const result2 = await handler2.execute(makeCtx(entityMemory, 'Person A reports to Person B.'));
+    const llmProvider2 = makeMockLLMProvider(['yes', triple]);
+    const handler2 = new ExtractRelationshipsHandler();
+    const result2 = await handler2.execute(makeCtx(entityMemory, 'Person A reports to Person B.', llmProvider2));
 
     expect(result2).toMatchObject({ success: true, data: { extracted: 0, confirmed: 1, skipped: false } });
 
