@@ -14,11 +14,11 @@
     "failed": "number (facts that could not be persisted due to errors)"
   },
   "permissions": [],
-  "secrets": [
-    "ANTHROPIC_API_KEY"
-  ],
+  "secrets": [],
   "timeout": 15000,
   "capabilities": [
-    "entityMemory"
+    "entityMemory",
+    "llmProvider",
+    "modelRouter"
   ]
 }
