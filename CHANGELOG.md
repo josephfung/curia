@@ -16,6 +16,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Changed
 
 - **Time context injection** — extended from coordinator-only to all agents; specialists now receive the `## Current Date & Time` block on every task turn, enabling reliable time-sensitive reasoning in scheduled agents.
+- **`extract-facts`** — migrated from raw Anthropic SDK to shared `LLMProvider` + `ModelRouter`; LLM calls now go through telemetry/cost tracking infrastructure.
 
 ## [0.29.0] — 2026-05-19 — "Naomi Nagata"
 

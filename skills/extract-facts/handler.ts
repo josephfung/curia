@@ -6,15 +6,13 @@
 //
 // Idempotent: storeFact() handles deduplication — reasserting the same fact
 // merges into or confirms the existing fact node rather than creating a duplicate.
+//
+// LLM calls go through the shared LLMProvider + ModelRouter rather than a raw
+// Anthropic client so all calls are tracked by the telemetry / cost infrastructure.
 
-import Anthropic from '@anthropic-ai/sdk';
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
 import { DECAY_CLASSES, NODE_TYPES } from '../../src/memory/types.js';
 import type { DecayClass, NodeType } from '../../src/memory/types.js';
-
-// Model constants — update here when model IDs rotate
-const CLASSIFIER_MODEL = 'claude-haiku-4-5-20251001';
-const EXTRACTION_MODEL = 'claude-sonnet-4-6';
 
 // Shape of each fact returned by the LLM extraction prompt.
 interface ExtractedFact {
@@ -33,11 +31,6 @@ const NODE_TYPES_LIST = NODE_TYPES.filter(t => t !== 'fact').join(', ');
 const DECAY_CLASSES_LIST = DECAY_CLASSES.join(', ');
 
 export class ExtractFactsHandler implements SkillHandler {
-  // Optional Anthropic client injection for testing.
-  // In production the skill registry instantiates with no args and the
-  // handler creates its own client from ctx.secret('ANTHROPIC_API_KEY').
-  constructor(private readonly anthropicClient?: Anthropic) {}
-
   async execute(ctx: SkillContext): Promise<SkillResult> {
     const { text, source } = ctx.input as { text?: string; source?: string };
 
@@ -55,33 +48,38 @@ export class ExtractFactsHandler implements SkillHandler {
       return { success: false, error: 'Entity memory not available — database not configured' };
     }
 
+    // Guard: llmProvider and modelRouter are required capabilities declared in skill.json.
+    // If either is missing the execution layer mis-configured this invocation.
+    if (!ctx.llmProvider || !ctx.modelRouter) {
+      return { success: false, error: 'extract-facts requires llmProvider and modelRouter capabilities' };
+    }
+
+    // Resolve tier names to concrete model strings at invocation time.
+    // Using the shared ModelRouter keeps model selection centralised — if the operator
+    // rotates a model, this skill picks up the new string automatically.
+    const classifierModel = ctx.modelRouter.resolve('fast').model;
+    const extractionModel = ctx.modelRouter.resolve('standard').model;
+
     try {
-      // Construct client inside the try so a missing/invalid secret returns { success: false }
-      // rather than throwing — skills must never throw (CLAUDE.md: "Skills return... never throw").
-      const client = this.anthropicClient ?? new Anthropic({ apiKey: ctx.secret('ANTHROPIC_API_KEY') });
       // -- Step 1: Classifier gate --
-      // Cheap haiku call — exits early on messages that carry no facts about a
+      // Cheap fast-tier call — exits early on messages that carry no facts about a
       // single entity (e.g. action requests, scheduling, relationship-only text).
-      const classifierResponse = await client.messages.create({
-        model: CLASSIFIER_MODEL,
-        max_tokens: 10,
+      const classifyResponse = await ctx.llmProvider.chat({
+        model: classifierModel,
         messages: [{
           role: 'user',
           content: `Does the following text assert an attribute, fact, or characteristic about a single entity (for example: a person, organisation, project, event, or other entity — such as where they are located, their role, their status, or their preferences)? Answer only 'yes' or 'no'.\n\n${text}`,
         }],
+        options: { max_tokens: 10 },
       });
 
-      const classifierTextBlock = classifierResponse.content.find(
-        (c): c is { type: 'text'; text: string } => c.type === 'text',
-      );
-      if (!classifierTextBlock) {
-        // Unexpected: the model returned no text block at all. Treat as an infrastructure
-        // error so the checkpoint processor logs a warning rather than silently advancing
-        // the watermark as if extraction succeeded.
-        ctx.log.warn({ textPreview: text.slice(0, 80) }, 'extract-facts: classifier returned no text block');
-        return { success: false, error: 'Classifier returned no text block' };
+      if (classifyResponse.type === 'error') {
+        ctx.log.error({ error: classifyResponse.error }, 'extract-facts: classifier LLM call failed');
+        return { success: false, error: `Classifier LLM call failed: ${classifyResponse.error.message}` };
       }
-      const classifierAnswer = classifierTextBlock.text.toLowerCase().trim();
+
+      // LLMProvider.chat() returns content as a plain string (not content[0].text).
+      const classifierAnswer = classifyResponse.content.toLowerCase().trim();
 
       if (!classifierAnswer.startsWith('yes')) {
         ctx.log.debug({ textPreview: text.slice(0, 80) }, 'extract-facts: classifier gate — no facts, skipping');
@@ -89,10 +87,9 @@ export class ExtractFactsHandler implements SkillHandler {
       }
 
       // -- Step 2: Extraction prompt --
-      // Sonnet call with the full vocabulary. Returns JSON array of facts.
-      const extractionResponse = await client.messages.create({
-        model: EXTRACTION_MODEL,
-        max_tokens: 1000,
+      // Standard-tier call with the full vocabulary. Returns JSON array of facts.
+      const extractionResponse = await ctx.llmProvider.chat({
+        model: extractionModel,
         messages: [{
           role: 'user',
           content: `Extract single-entity attribute facts from the text below. Return a JSON array of fact objects.
@@ -119,19 +116,16 @@ Format:
 Text:
 ${text}`,
         }],
+        options: { max_tokens: 1000 },
       });
 
-      const extractionTextBlock = extractionResponse.content.find(
-        (c): c is { type: 'text'; text: string } => c.type === 'text',
-      );
-      if (!extractionTextBlock) {
-        // Unexpected: model returned no text block — surface as failure so this
-        // is distinguishable from a genuine "no facts found" outcome.
-        ctx.log.warn('extract-facts: extraction returned no text block');
-        return { success: false, error: 'Extraction returned no text block' };
+      if (extractionResponse.type === 'error') {
+        ctx.log.error({ error: extractionResponse.error }, 'extract-facts: extraction LLM call failed');
+        return { success: false, error: `Extraction LLM call failed: ${extractionResponse.error.message}` };
       }
+
       // Strip optional markdown code fences the model may include despite instructions.
-      const rawText = extractionTextBlock.text.trim();
+      const rawText = extractionResponse.content.trim();
       const jsonText = rawText.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
 
       let facts: ExtractedFact[];
@@ -296,8 +290,9 @@ ${text}`,
       return { success: true, data: { stored, skipped: false, failed } };
     } catch (err) {
       // Two categories of errors reach here:
-      // 1. Anthropic SDK errors (rate limits, auth, timeouts, 5xx) from the classifier
-      //    and extraction calls.
+      // 1. LLMProvider errors (rate limits, auth, timeouts, 5xx) — these are returned as
+      //    { type: 'error' } values above, not thrown, so this catch only fires for
+      //    unexpected cases (e.g. provider implementation bug that throws instead of returning).
       // 2. Programming errors (TypeError, ReferenceError, RangeError, EvalError, URIError)
       //    re-thrown from the per-fact loop — indicate bugs in this handler, not infra issues.
       ctx.log.error({ err }, 'extract-facts: unexpected error');
