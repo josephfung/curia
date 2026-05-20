@@ -1,6 +1,6 @@
 // Integration test: extract-facts full round-trip.
 //
-// Uses real Postgres (DATABASE_URL must be set) and a mock Anthropic client
+// Uses real Postgres (DATABASE_URL must be set) and a mock LLMProvider
 // so no real LLM API calls are made. Tests that:
 // 1. The skill persists fact nodes to kg_nodes via real SQL
 // 2. EntityMemory.getFacts() reads those facts back
@@ -17,31 +17,49 @@ import { MemoryValidator } from '../../src/memory/validation.js';
 import { createSilentLogger } from '../../src/logger.js';
 import { ExtractFactsHandler } from '../../skills/extract-facts/handler.js';
 import type { SkillContext } from '../../src/skills/types.js';
+import type { LLMProvider, LLMResponse } from '../../src/agents/llm/provider.js';
+import type { ModelRouter } from '../../src/agents/llm/model-router.js';
 
 const { Pool } = pg;
 
 const DATABASE_URL = process.env.DATABASE_URL;
 const describeIf = DATABASE_URL ? describe : describe.skip;
 
-function makeCtx(entityMemory: EntityMemory, text: string): SkillContext {
+// Builds a mock LLMProvider that returns sequential text responses.
+// Mirrors the old makeMockAnthropicClient but speaks the LLMProvider interface.
+function makeMockLLMProvider(responses: string[]): LLMProvider {
+  let callIndex = 0;
+  const chat = vi.fn().mockImplementation((): Promise<LLMResponse> => {
+    const content = responses[callIndex++] ?? 'no';
+    return Promise.resolve({
+      type: 'text' as const,
+      content,
+      usage: { inputTokens: 10, outputTokens: 10, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+      provenance: { requestedModel: 'claude-haiku-4-5', actualModel: 'claude-haiku-4-5', providerRequestId: 'test-req' },
+    });
+  });
+  return { chat } as unknown as LLMProvider;
+}
+
+// Minimal ModelRouter stub — returns fixed models for fast/standard tiers.
+function makeMockModelRouter(): ModelRouter {
+  return {
+    resolve: vi.fn().mockImplementation((tier: string) => {
+      const model = tier === 'fast' ? 'claude-haiku-4-5' : 'claude-sonnet-4-6';
+      return { model, tier };
+    }),
+  } as unknown as ModelRouter;
+}
+
+function makeCtx(entityMemory: EntityMemory, text: string, llmProvider: LLMProvider): SkillContext {
   return {
     input: { text, source: 'integration-test' },
     secret: () => 'test-api-key',
     log: pino({ level: 'silent' }),
     entityMemory,
+    llmProvider,
+    modelRouter: makeMockModelRouter(),
   } as unknown as SkillContext;
-}
-
-function makeMockAnthropicClient(responses: string[]) {
-  let callIndex = 0;
-  return {
-    messages: {
-      create: vi.fn().mockImplementation(() => {
-        const text = responses[callIndex++] ?? 'no';
-        return Promise.resolve({ content: [{ type: 'text', text }] });
-      }),
-    },
-  };
 }
 
 describeIf('extract-facts integration', () => {
@@ -79,9 +97,9 @@ describeIf('extract-facts integration', () => {
     const facts = JSON.stringify([
       { subject: 'Jane Doe', subjectType: 'person', attribute: 'home_city', value: 'Toronto', confidence: 0.9, decayClass: 'slow_decay' },
     ]);
-    const anthropic = makeMockAnthropicClient(['yes', facts]);
-    const handler = new ExtractFactsHandler(anthropic as never);
-    const ctx = makeCtx(entityMemory, 'Bob lives in Toronto.');
+    const llmProvider = makeMockLLMProvider(['yes', facts]);
+    const handler = new ExtractFactsHandler();
+    const ctx = makeCtx(entityMemory, 'Bob lives in Toronto.', llmProvider);
 
     const result = await handler.execute(ctx);
 
@@ -111,13 +129,13 @@ describeIf('extract-facts integration', () => {
       { subject: 'Idempotent Person', subjectType: 'person', attribute: 'role', value: 'engineer', confidence: 0.85, decayClass: 'slow_decay' },
     ]);
 
-    const anthropic1 = makeMockAnthropicClient(['yes', facts]);
-    const handler1 = new ExtractFactsHandler(anthropic1 as never);
-    await handler1.execute(makeCtx(entityMemory, 'Idempotent Person is an engineer.'));
+    const llmProvider1 = makeMockLLMProvider(['yes', facts]);
+    const handler1 = new ExtractFactsHandler();
+    await handler1.execute(makeCtx(entityMemory, 'Idempotent Person is an engineer.', llmProvider1));
 
-    const anthropic2 = makeMockAnthropicClient(['yes', facts]);
-    const handler2 = new ExtractFactsHandler(anthropic2 as never);
-    await handler2.execute(makeCtx(entityMemory, 'Idempotent Person is an engineer.'));
+    const llmProvider2 = makeMockLLMProvider(['yes', facts]);
+    const handler2 = new ExtractFactsHandler();
+    await handler2.execute(makeCtx(entityMemory, 'Idempotent Person is an engineer.', llmProvider2));
 
     const nodes = await entityMemory.findEntities('Idempotent Person');
     expect(nodes).toHaveLength(1);
