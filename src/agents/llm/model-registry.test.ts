@@ -86,6 +86,15 @@ describe('ModelRegistry', () => {
     });
   });
 
+  describe('getAllModels', () => {
+    it('returns all registered models', () => {
+      const all = registry.getAllModels();
+      expect(Object.keys(all)).toContain('claude-sonnet-4-6');
+      expect(Object.keys(all)).toContain('claude-haiku-4-5');
+      expect(Object.keys(all)).toContain('claude-opus-4-6');
+    });
+  });
+
   describe('all three Anthropic models are registered', () => {
     it.each([
       'claude-opus-4-6',
