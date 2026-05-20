@@ -13,6 +13,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Added
+
+- **OpenRouter provider** — multi-model support via OpenRouter's OpenAI-compatible API. Registers Gemini 2.0 Flash, DeepSeek V3, and GPT-4o with pricing and capabilities. Opt in by setting `OPENROUTER_API_KEY` and remapping a tier in `config/default.yaml`. (#379)
+
 ### Security
 
 - **Non-root container** — production image runs as non-root `curia` user; resolves Semgrep alert #48 (`dockerfile.security.missing-user`). (#607)
