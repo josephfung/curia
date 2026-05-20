@@ -27,9 +27,10 @@ export function createEstimateCostUsd(
       logger?.warn({ actualModel, fallback: FALLBACK_MODEL }, 'Unrecognised model — using fallback pricing for cost estimate');
       pricing = registry.getPricing(FALLBACK_MODEL);
       if (!pricing) {
-        // Registry doesn't even have the fallback — return 0 to avoid crashing.
-        logger?.warn({ actualModel, fallback: FALLBACK_MODEL }, 'Fallback model also missing from registry — returning $0 cost');
-        return 0;
+        // The fallback model is hardcoded to a known registry entry. If it's missing,
+        // the registry was modified incorrectly — throw rather than silently returning $0
+        // which would corrupt all cost dashboards.
+        throw new Error(`Fallback pricing model '${FALLBACK_MODEL}' is not in the model registry — add it or update FALLBACK_MODEL`);
       }
     }
 

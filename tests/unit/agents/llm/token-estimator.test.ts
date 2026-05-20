@@ -113,10 +113,10 @@ describe('ModelRegistry.getContextWindow', () => {
     expect(registry.getContextWindow('claude-haiku-4-5-20251001')).toBe(200_000);
   });
 
-  it('returns 0 for unknown models (no match in registry)', () => {
-    // ModelRegistry returns 0 for unknown models and logs a warning.
-    // Callers (runtime.ts) check isKnownModel() and warn accordingly.
-    expect(registry.getContextWindow('unknown-model-v1')).toBe(0);
+  it('returns undefined for unknown models (no match in registry)', () => {
+    // ModelRegistry returns undefined for unknown models; callers apply their own fallback.
+    // runtime.ts uses ?? 200_000 and warns separately via isKnownModel().
+    expect(registry.getContextWindow('unknown-model-v1')).toBeUndefined();
   });
 });
 

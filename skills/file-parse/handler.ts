@@ -11,7 +11,7 @@
 
 import { createRequire } from 'node:module';
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
-import type { Message, ImageContent } from '../../src/agents/llm/provider.js';
+import type { LLMProvider, Message, ImageContent } from '../../src/agents/llm/provider.js';
 
 // pdf-parse is CJS-only and doesn't provide a default ESM export.
 // Use createRequire to load it reliably under Node ESM + tsx.
@@ -39,8 +39,11 @@ const MIME_MAP: Record<string, 'csv' | 'pdf' | 'image' | 'html'> = {
 export class FileParseHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {
     if (!ctx.llmProvider || !ctx.modelRouter) {
+      ctx.log.error('file-parse: llmProvider or modelRouter capability missing — execution layer misconfigured');
       return { success: false, error: 'file-parse requires llmProvider and modelRouter capabilities' };
     }
+    // Destructure after guard so TypeScript narrows the types; avoids ! assertions below.
+    const { llmProvider, modelRouter } = ctx;
 
     // --- Input validation ---
     const contentBase64 = typeof ctx.input.content_base64 === 'string'
@@ -68,7 +71,7 @@ export class FileParseHandler implements SkillHandler {
     }
 
     // Resolve the standard-tier model once for any LLM calls below.
-    const extractionModel = ctx.modelRouter.resolve('standard').model;
+    const extractionModel = modelRouter.resolve('standard').model;
 
     try {
       const buffer = Buffer.from(contentBase64, 'base64');
@@ -77,11 +80,11 @@ export class FileParseHandler implements SkillHandler {
         case 'csv':
           return this.handleCsv(buffer);
         case 'image':
-          return await this.handleImage(ctx, extractionModel, contentBase64, mimeType, extractAs);
+          return await this.handleImage(ctx, llmProvider, extractionModel, contentBase64, mimeType, extractAs);
         case 'pdf':
-          return await this.handlePdf(ctx, extractionModel, buffer, extractAs);
+          return await this.handlePdf(ctx, llmProvider, extractionModel, buffer, extractAs);
         case 'html':
-          return await this.handleHtml(ctx, extractionModel, buffer, extractAs);
+          return await this.handleHtml(ctx, llmProvider, extractionModel, buffer, extractAs);
       }
     } catch (err) {
       ctx.log.error({ err, mimeType }, 'file-parse: unexpected error');
@@ -109,6 +112,7 @@ export class FileParseHandler implements SkillHandler {
 
   private async handleImage(
     ctx: SkillContext,
+    llmProvider: LLMProvider,
     extractionModel: string,
     contentBase64: string,
     mimeType: string,
@@ -138,7 +142,7 @@ export class FileParseHandler implements SkillHandler {
       content: [imageBlock, { type: 'text', text: textPrompt }],
     };
 
-    const response = await ctx.llmProvider!.chat({
+    const response = await llmProvider.chat({
       model: extractionModel,
       messages: [imageMessage],
       options: { max_tokens: 4000 },
@@ -161,6 +165,7 @@ export class FileParseHandler implements SkillHandler {
 
   private async handlePdf(
     ctx: SkillContext,
+    llmProvider: LLMProvider,
     extractionModel: string,
     buffer: Buffer,
     extractAs: ExtractAs,
@@ -192,13 +197,14 @@ export class FileParseHandler implements SkillHandler {
     }
 
     // Run LLM extraction on the text
-    return await this.extractStructured(ctx, extractionModel, 'pdf', rawText, extractAs);
+    return await this.extractStructured(ctx, llmProvider, extractionModel, 'pdf', rawText, extractAs);
   }
 
   // --- HTML: tag stripping + optional LLM structuring ---
 
   private async handleHtml(
     ctx: SkillContext,
+    llmProvider: LLMProvider,
     extractionModel: string,
     buffer: Buffer,
     extractAs: ExtractAs,
@@ -210,13 +216,14 @@ export class FileParseHandler implements SkillHandler {
       return { success: true, data: { type: 'html', raw_text: rawText, structured: null, confidence: 1.0 } };
     }
 
-    return await this.extractStructured(ctx, extractionModel, 'html', rawText, extractAs);
+    return await this.extractStructured(ctx, llmProvider, extractionModel, 'html', rawText, extractAs);
   }
 
   // --- Shared: LLM-based structured extraction from text ---
 
   private async extractStructured(
     ctx: SkillContext,
+    llmProvider: LLMProvider,
     extractionModel: string,
     type: 'pdf' | 'html',
     rawText: string,
@@ -228,7 +235,7 @@ export class FileParseHandler implements SkillHandler {
       return { success: true, data: { type, raw_text: rawText, structured: null, confidence: 1.0 } };
     }
 
-    const response = await ctx.llmProvider!.chat({
+    const response = await llmProvider.chat({
       model: extractionModel,
       messages: [{
         role: 'user',
@@ -281,10 +288,10 @@ export class FileParseHandler implements SkillHandler {
           confidence: 0.85,
         },
       };
-    } catch {
+    } catch (err) {
       // LLM returned non-JSON — return with low confidence so the caller can surface
-      // this to the user for manual review. Log at debug so repeated occurrences are visible.
-      ctx.log.debug({ type, extractAs }, 'file-parse: LLM response was not valid JSON; returning low-confidence result');
+      // this to the user for manual review.
+      ctx.log.warn({ err, type, extractAs }, 'file-parse: LLM response was not valid JSON; returning low-confidence result');
       return {
         success: true,
         data: {

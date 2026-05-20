@@ -99,9 +99,9 @@ export class ModelRegistry {
     return entry ? entry[1] : undefined;
   }
 
-  /** Returns context window size in tokens. Returns 0 for unknown models. */
-  getContextWindow(modelId: string): number {
-    return this.getModel(modelId)?.contextWindow ?? 0;
+  /** Returns context window size in tokens. Returns undefined for unknown models. */
+  getContextWindow(modelId: string): number | undefined {
+    return this.getModel(modelId)?.contextWindow;
   }
 
   /** Returns pricing for the model. Returns undefined for unknown models. */

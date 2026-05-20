@@ -344,7 +344,7 @@ export class AgentRuntime {
     if (modelName && this.config.modelRegistry && !this.config.modelRegistry.isKnownModel(modelName)) {
       logger.warn(
         { agentId, modelName },
-        'Model not in model registry — context budget will use 0 window. Add this model to model-registry.ts',
+        'Model not in model registry — context budget using fallback window of 200,000 tokens. Add this model to model-registry.ts',
       );
     }
     const ctxBudget = new ContextBudget({
