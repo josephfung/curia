@@ -2222,6 +2222,7 @@ describe('context budget', () => {
       agentId: 'coordinator',
       systemPrompt: 'You are a helpful assistant.',
       provider,
+      resolvedModel: 'mock-model',
       bus,
       logger,
       contextBudget: { responseReserve: 8192 },

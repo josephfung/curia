@@ -16,7 +16,9 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Changed
 
 - **Time context injection** — extended from coordinator-only to all agents; specialists now receive the `## Current Date & Time` block on every task turn, enabling reliable time-sensitive reasoning in scheduled agents.
-- **`extract-facts`** — migrated from raw Anthropic SDK to shared `LLMProvider` + `ModelRouter`; LLM calls now go through telemetry/cost tracking infrastructure.
+- **Model registry** — consolidated scattered model metadata (pricing, context windows, capabilities) into a single `ModelRegistry` in `src/agents/llm/model-registry.ts`. (#556)
+- **`model_routing` config** — tier definitions no longer include `provider` (resolved from registry); `autonomy_scoring.model` renamed to `.model_tier`.
+- **`extract-facts`, `extract-relationships`, `file-parse`** — migrated from raw Anthropic SDK to shared `LLMProvider` via SkillContext capabilities; LLM calls now appear in cost telemetry. (#556)
 
 ## [0.29.0] — 2026-05-19 — "Naomi Nagata"
 

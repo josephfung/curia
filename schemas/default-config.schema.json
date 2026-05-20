@@ -175,7 +175,7 @@
           "additionalProperties": false,
           "properties": {
             "intervalMs": { "type": "integer", "minimum": 1 },
-            "model": { "type": "string", "minLength": 1 },
+            "model_tier": { "type": "string", "enum": ["fast", "standard", "powerful"] },
             "batchSize": { "type": "integer", "minimum": 1 },
             "minScoredActions": { "type": "integer", "minimum": 1 },
             "halfLifeDays": { "type": "number", "minimum": 1 },
@@ -277,11 +277,10 @@
   "definitions": {
     "tierConfig": {
       "type": "object",
-      "required": ["provider", "model"],
+      "required": ["model"],
       "additionalProperties": false,
       "properties": {
-        "provider": { "type": "string", "minLength": 1 },
-        "model":    { "type": "string", "minLength": 1 }
+        "model": { "type": "string", "minLength": 1 }
       }
     }
   }
