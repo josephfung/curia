@@ -1,8 +1,18 @@
 import { describe, it, expect } from 'vitest';
 import { estimateTokens } from '../../../../src/agents/llm/token-estimator.js';
-import { estimateMessagesTokens, getContextWindow, DEFAULT_SAFETY_MARGIN } from '../../../../src/agents/llm/token-estimator.js';
+import { estimateMessagesTokens, DEFAULT_SAFETY_MARGIN } from '../../../../src/agents/llm/token-estimator.js';
+import { ModelRegistry } from '../../../../src/agents/llm/model-registry.js';
 import type { ContentBlock } from '../../../../src/agents/llm/provider.js';
 import type { Message } from '../../../../src/agents/llm/provider.js';
+import type { Logger } from '../../../../src/logger.js';
+
+// Minimal logger stub for ModelRegistry construction in tests.
+const stubLogger = {
+  debug: () => {},
+  info: () => {},
+  warn: () => {},
+  error: () => {},
+} as unknown as Logger;
 
 describe('estimateTokens', () => {
   it('estimates tokens for a plain string', () => {
@@ -81,25 +91,32 @@ describe('estimateMessagesTokens', () => {
   });
 });
 
-describe('getContextWindow', () => {
+// getContextWindow is now a method on ModelRegistry (moved from token-estimator.ts
+// as part of the model registry consolidation). Tests use a stub logger.
+describe('ModelRegistry.getContextWindow', () => {
+  const registry = new ModelRegistry(stubLogger);
+
   it('returns 200_000 for claude-sonnet-4-6', () => {
-    expect(getContextWindow('claude-sonnet-4-6')).toBe(200_000);
+    expect(registry.getContextWindow('claude-sonnet-4-6')).toBe(200_000);
   });
 
   it('returns 200_000 for claude-opus-4-6', () => {
-    expect(getContextWindow('claude-opus-4-6')).toBe(200_000);
+    expect(registry.getContextWindow('claude-opus-4-6')).toBe(200_000);
   });
 
   it('returns 200_000 for claude-haiku-4-5', () => {
-    expect(getContextWindow('claude-haiku-4-5')).toBe(200_000);
+    expect(registry.getContextWindow('claude-haiku-4-5')).toBe(200_000);
   });
 
   it('matches versioned model names via prefix', () => {
-    expect(getContextWindow('claude-haiku-4-5-20251001')).toBe(200_000);
+    // 'claude-haiku-4-5-20251001' prefix-matches the 'claude-haiku-4-5' registry entry.
+    expect(registry.getContextWindow('claude-haiku-4-5-20251001')).toBe(200_000);
   });
 
-  it('falls back to sonnet window for unknown models', () => {
-    expect(getContextWindow('unknown-model-v1')).toBe(200_000);
+  it('returns 0 for unknown models (no match in registry)', () => {
+    // ModelRegistry returns 0 for unknown models and logs a warning.
+    // Callers (runtime.ts) check isKnownModel() and warn accordingly.
+    expect(registry.getContextWindow('unknown-model-v1')).toBe(0);
   });
 });
 

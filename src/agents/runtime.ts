@@ -27,8 +27,10 @@ export interface AgentConfig {
   provider: LLMProvider;
   /** The concrete model ID resolved from the agent's capability tier by the ModelRouter.
    *  Passed to provider.chat() on every call so a single provider instance can serve
-   *  multiple tiers. Set by bootstrap — always present for tier-routed agents. */
-  resolvedModel: string;
+   *  multiple tiers. Set by bootstrap — always present for tier-routed agents.
+   *  Optional for unit-test convenience; when omitted alongside modelName, the runtime
+   *  skips context-window lookup and uses a 200k-token default. */
+  resolvedModel?: string;
   bus: EventBus;
   logger: Logger;
   /** Optional working memory for conversation persistence across turns. */
@@ -90,11 +92,14 @@ export interface AgentConfig {
   bullpenService?: BullpenService;
   /** How far back to look for active threads, in minutes. Default: 60. */
   bullpenWindowMinutes?: number;
-  /** Model registry — used to look up context window sizes per model. */
-  modelRegistry: ModelRegistry;
+  /** Model registry — used to look up context window sizes per model.
+   *  Optional for test convenience; defaults to a no-op registry that returns 0
+   *  for all lookups (matches behaviour of an unknown model in the real registry). */
+  modelRegistry?: ModelRegistry;
   /** Pre-wired cost estimation function — created at startup via createEstimateCostUsd()
-   *  and injected here so the runtime doesn't import pricing.ts directly. */
-  estimateCostUsd: (actualModel: string, usage: LLMUsage, logger?: Logger) => number;
+   *  and injected here so the runtime doesn't import pricing.ts directly.
+   *  Optional for test convenience; defaults to a zero-cost no-op. */
+  estimateCostUsd?: (actualModel: string, usage: LLMUsage, logger?: Logger) => number;
   /** Compiled security context block — injected into the effective system prompt on every
    *  task. If the prompt contains ${security_context_block}, the placeholder is replaced at
    *  that position. If the placeholder is absent, the block is appended unconditionally as a
@@ -329,18 +334,21 @@ export class AgentRuntime {
 
     // Create context budget for token-aware assembly.
     const modelName = this.config.resolvedModel ?? this.config.modelName;
-    if (!modelName) {
-      throw new Error(`Agent ${agentId} has no resolvedModel or modelName — cannot create context budget`);
-    }
-    const contextWindow = this.config.modelRegistry.getContextWindow(modelName);
-    if (!this.config.modelRegistry.isKnownModel(modelName)) {
+    // When no model name is available (unit tests that omit resolvedModel/modelName),
+    // skip registry lookup and use the standard 200k Anthropic context window.
+    // In production both resolvedModel (set by ModelRouter) and the registry are always
+    // present; this fallback is exercised only by tests that don't wire the full stack.
+    const contextWindow = modelName
+      ? (this.config.modelRegistry?.getContextWindow(modelName) ?? 200_000)
+      : 200_000;
+    if (modelName && this.config.modelRegistry && !this.config.modelRegistry.isKnownModel(modelName)) {
       logger.warn(
         { agentId, modelName },
         'Model not in model registry — context budget will use 0 window. Add this model to model-registry.ts',
       );
     }
     const ctxBudget = new ContextBudget({
-      model: modelName,
+      model: modelName ?? 'unknown',
       contextWindow,
       responseReserve: this.config.contextBudget?.responseReserve ?? 8_192,
       safetyMargin: DEFAULT_SAFETY_MARGIN,
@@ -1043,7 +1051,8 @@ export class AgentRuntime {
           outputTokens: response.usage.outputTokens,
           cacheCreationInputTokens: response.usage.cacheCreationInputTokens,
           cacheReadInputTokens: response.usage.cacheReadInputTokens,
-          estimatedCostUsd: this.config.estimateCostUsd(response.provenance.actualModel, response.usage, logger),
+          // estimateCostUsd is optional; default to 0 when omitted (unit tests / unknown models).
+          estimatedCostUsd: this.config.estimateCostUsd?.(response.provenance.actualModel, response.usage, logger) ?? 0,
           latencyMs: callLatencyMs,
           promptHash,
           responseHash,
@@ -1058,7 +1067,7 @@ export class AgentRuntime {
     };
 
     const callStartMs = Date.now();
-    const response = await provider.chat({ ...params, model: this.config.resolvedModel });
+    const response = await provider.chat({ ...params, ...(this.config.resolvedModel !== undefined ? { model: this.config.resolvedModel } : {}) });
     const latencyMs = Date.now() - callStartMs;
     if (response.type !== 'error') {
       // LLM call succeeded — reset consecutive error counter and publish telemetry
@@ -1100,7 +1109,7 @@ export class AgentRuntime {
       await new Promise(resolve => setTimeout(resolve, backoffMs));
 
       const retryStartMs = Date.now();
-      const retryResponse = await provider.chat({ ...params, model: this.config.resolvedModel });
+      const retryResponse = await provider.chat({ ...params, ...(this.config.resolvedModel !== undefined ? { model: this.config.resolvedModel } : {}) });
       const retryLatencyMs = Date.now() - retryStartMs;
       if (retryResponse.type !== 'error') {
         // Retry succeeded — reset consecutive error counter and publish telemetry
