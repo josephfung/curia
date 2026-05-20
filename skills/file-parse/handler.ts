@@ -2,13 +2,16 @@
 //
 // General-purpose document parser. Dispatches by content type:
 // - CSV: deterministic parser (no LLM)
-// - Image: Claude vision API
+// - Image: LLMProvider vision (passes base64 image blocks)
 // - PDF: pdf-parse text extraction, then optional LLM structuring
 // - HTML: tag stripping, then optional LLM structuring
+//
+// All LLM calls go through the shared LLMProvider + ModelRouter so costs and
+// latency are tracked by the telemetry infrastructure.
 
 import { createRequire } from 'node:module';
-import Anthropic from '@anthropic-ai/sdk';
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { Message } from '../../src/agents/llm/provider.js';
 
 // pdf-parse is CJS-only and doesn't provide a default ESM export.
 // Use createRequire to load it reliably under Node ESM + tsx.
@@ -16,8 +19,6 @@ const require = createRequire(import.meta.url);
 const pdfParse = require('pdf-parse') as typeof import('pdf-parse');
 import { parseCsv } from './csv.js';
 import { getExtractionPrompt, type ExtractAs } from './prompts.js';
-
-const EXTRACTION_MODEL = 'claude-sonnet-4-6';
 
 // MIME types we support, mapped to our internal content categories.
 const MIME_MAP: Record<string, 'csv' | 'pdf' | 'image' | 'html'> = {
@@ -35,10 +36,31 @@ const MIME_MAP: Record<string, 'csv' | 'pdf' | 'image' | 'html'> = {
 // 'raw' opts out of LLM extraction; any other non-empty string gets a generic prompt.
 // See prompts.ts — agents can define new document types without modifying this file.
 
-export class FileParseHandler implements SkillHandler {
-  constructor(private readonly anthropicClient?: Anthropic) {}
+/**
+ * Image content block for vision calls. The shared LLMProvider.Message interface
+ * uses ContentBlock for multi-content messages; image blocks are a superset used
+ * only in file-parse. We define it locally and cast as needed. The underlying
+ * Anthropic implementation accepts these shapes even though the interface doesn't
+ * formally declare them — tracked as a future provider.ts extension.
+ *
+ * @TODO Extend the ContentBlock union in src/agents/llm/provider.ts to include
+ * ImageContent natively so callers don't need local casts.
+ */
+interface ImageContent {
+  type: 'image';
+  source: {
+    type: 'base64';
+    media_type: 'image/jpeg' | 'image/png' | 'image/webp' | 'image/gif';
+    data: string;
+  };
+}
 
+export class FileParseHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {
+    if (!ctx.llmProvider || !ctx.modelRouter) {
+      return { success: false, error: 'file-parse requires llmProvider and modelRouter capabilities' };
+    }
+
     // --- Input validation ---
     const contentBase64 = typeof ctx.input.content_base64 === 'string'
       ? ctx.input.content_base64.trim() : '';
@@ -64,6 +86,9 @@ export class FileParseHandler implements SkillHandler {
       return { success: false, error: 'Invalid extract_as: value must be a non-empty string (e.g. receipt, bank_statement, invoice, raw, or a custom schema name)' };
     }
 
+    // Resolve the standard-tier model once for any LLM calls below.
+    const extractionModel = ctx.modelRouter.resolve('standard').model;
+
     try {
       const buffer = Buffer.from(contentBase64, 'base64');
 
@@ -71,11 +96,11 @@ export class FileParseHandler implements SkillHandler {
         case 'csv':
           return this.handleCsv(buffer);
         case 'image':
-          return await this.handleImage(ctx, contentBase64, mimeType, extractAs);
+          return await this.handleImage(ctx, extractionModel, contentBase64, mimeType, extractAs);
         case 'pdf':
-          return await this.handlePdf(ctx, buffer, extractAs);
+          return await this.handlePdf(ctx, extractionModel, buffer, extractAs);
         case 'html':
-          return await this.handleHtml(ctx, buffer, extractAs);
+          return await this.handleHtml(ctx, extractionModel, buffer, extractAs);
       }
     } catch (err) {
       ctx.log.error({ err, mimeType }, 'file-parse: unexpected error');
@@ -99,16 +124,16 @@ export class FileParseHandler implements SkillHandler {
     };
   }
 
-  // --- Image: Claude vision ---
+  // --- Image: LLMProvider vision ---
 
   private async handleImage(
     ctx: SkillContext,
+    extractionModel: string,
     contentBase64: string,
     mimeType: string,
     extractAs: ExtractAs,
   ): Promise<SkillResult> {
     const prompt = getExtractionPrompt(extractAs);
-    const client = this.anthropicClient ?? new Anthropic({ apiKey: ctx.secret('ANTHROPIC_API_KEY') });
 
     // For 'raw', ask for a plain text transcription of the image
     const textPrompt = prompt
@@ -117,47 +142,49 @@ export class FileParseHandler implements SkillHandler {
     // Normalize the non-standard image/jpg alias to the IANA-registered image/jpeg.
     // The Anthropic API only accepts the canonical MIME types; passing image/jpg would
     // produce an API error at runtime despite the TypeScript cast.
-    const normalizedMimeType = mimeType === 'image/jpg' ? 'image/jpeg' : mimeType;
+    const normalizedMimeType = (mimeType === 'image/jpg' ? 'image/jpeg' : mimeType) as ImageContent['source']['media_type'];
 
-    try {
-      const response = await client.messages.create({
-        model: EXTRACTION_MODEL,
-        max_tokens: 4000,
-        messages: [{
-          role: 'user',
-          content: [
-            {
-              type: 'image',
-              source: {
-                type: 'base64',
-                media_type: normalizedMimeType as 'image/jpeg' | 'image/png' | 'image/webp' | 'image/gif',
-                data: contentBase64,
-              },
-            },
-            { type: 'text', text: textPrompt },
-          ],
-        }],
-      });
+    // Image blocks are not yet in the shared ContentBlock union — cast via unknown.
+    // @TODO Remove this cast once ImageContent is added to provider.ts ContentBlock.
+    const imageMessage: Message = {
+      role: 'user',
+      content: [
+        {
+          type: 'image',
+          source: {
+            type: 'base64',
+            media_type: normalizedMimeType,
+            data: contentBase64,
+          },
+        } as unknown as ReturnType<typeof Object>,
+        { type: 'text', text: textPrompt },
+      ] as Message['content'],
+    };
 
-      const textBlock = response.content.find(
-        (c): c is { type: 'text'; text: string } => c.type === 'text',
-      );
-      if (!textBlock) {
-        ctx.log.warn('file-parse: vision API returned no text block');
-        return { success: true, data: { type: 'image', raw_text: '', structured: null, confidence: 0 } };
-      }
+    const response = await ctx.llmProvider!.chat({
+      model: extractionModel,
+      messages: [imageMessage],
+      options: { max_tokens: 4000 },
+    });
 
-      return this.buildResult(ctx, 'image', textBlock.text, extractAs, prompt !== null);
-    } catch (err) {
-      ctx.log.error({ err }, 'file-parse: Claude vision extraction failed');
+    if (response.type === 'error') {
+      ctx.log.error({ error: response.error }, 'file-parse: Claude vision extraction failed');
       return { success: false, error: 'Failed to extract content from image' };
     }
+
+    if (!response.content) {
+      ctx.log.warn('file-parse: vision API returned no text content');
+      return { success: true, data: { type: 'image', raw_text: '', structured: null, confidence: 0 } };
+    }
+
+    return this.buildResult(ctx, 'image', response.content, extractAs, prompt !== null);
   }
 
   // --- PDF: text extraction + optional LLM structuring ---
 
   private async handlePdf(
     ctx: SkillContext,
+    extractionModel: string,
     buffer: Buffer,
     extractAs: ExtractAs,
   ): Promise<SkillResult> {
@@ -188,13 +215,14 @@ export class FileParseHandler implements SkillHandler {
     }
 
     // Run LLM extraction on the text
-    return await this.extractStructured(ctx, 'pdf', rawText, extractAs);
+    return await this.extractStructured(ctx, extractionModel, 'pdf', rawText, extractAs);
   }
 
   // --- HTML: tag stripping + optional LLM structuring ---
 
   private async handleHtml(
     ctx: SkillContext,
+    extractionModel: string,
     buffer: Buffer,
     extractAs: ExtractAs,
   ): Promise<SkillResult> {
@@ -205,13 +233,14 @@ export class FileParseHandler implements SkillHandler {
       return { success: true, data: { type: 'html', raw_text: rawText, structured: null, confidence: 1.0 } };
     }
 
-    return await this.extractStructured(ctx, 'html', rawText, extractAs);
+    return await this.extractStructured(ctx, extractionModel, 'html', rawText, extractAs);
   }
 
   // --- Shared: LLM-based structured extraction from text ---
 
   private async extractStructured(
     ctx: SkillContext,
+    extractionModel: string,
     type: 'pdf' | 'html',
     rawText: string,
     extractAs: ExtractAs,
@@ -222,31 +251,26 @@ export class FileParseHandler implements SkillHandler {
       return { success: true, data: { type, raw_text: rawText, structured: null, confidence: 1.0 } };
     }
 
-    const client = this.anthropicClient ?? new Anthropic({ apiKey: ctx.secret('ANTHROPIC_API_KEY') });
+    const response = await ctx.llmProvider!.chat({
+      model: extractionModel,
+      messages: [{
+        role: 'user',
+        content: `${prompt}\n\nDocument text:\n${rawText}`,
+      }],
+      options: { max_tokens: 4000 },
+    });
 
-    try {
-      const response = await client.messages.create({
-        model: EXTRACTION_MODEL,
-        max_tokens: 4000,
-        messages: [{
-          role: 'user',
-          content: `${prompt}\n\nDocument text:\n${rawText}`,
-        }],
-      });
-
-      const textBlock = response.content.find(
-        (c): c is { type: 'text'; text: string } => c.type === 'text',
-      );
-      if (!textBlock) {
-        ctx.log.warn('file-parse: LLM extraction returned no text block');
-        return { success: true, data: { type, raw_text: rawText, structured: null, confidence: 0 } };
-      }
-
-      return this.buildResult(ctx, type, textBlock.text, extractAs, true, rawText);
-    } catch (err) {
-      ctx.log.error({ err, extractAs }, 'file-parse: LLM structured extraction failed');
+    if (response.type === 'error') {
+      ctx.log.error({ error: response.error, extractAs }, 'file-parse: LLM structured extraction failed');
       return { success: false, error: `Failed to extract structured data as ${extractAs}` };
     }
+
+    if (!response.content) {
+      ctx.log.warn('file-parse: LLM extraction returned no text content');
+      return { success: true, data: { type, raw_text: rawText, structured: null, confidence: 0 } };
+    }
+
+    return this.buildResult(ctx, type, response.content, extractAs, true, rawText);
   }
 
   // --- Result builder: parse LLM output into structured data ---

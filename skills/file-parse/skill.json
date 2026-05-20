@@ -16,7 +16,7 @@
     "confidence": "number (0–1 confidence in the extraction; 1.0 for deterministic CSV parsing)"
   },
   "permissions": [],
-  "secrets": ["ANTHROPIC_API_KEY"],
+  "secrets": [],
   "timeout": 30000,
-  "capabilities": []
+  "capabilities": ["llmProvider", "modelRouter"]
 }
