@@ -13,6 +13,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`T2125-expense-tracker` scheduler** — migration 042 cancels the stale `*/30 * * * *` declarative job row left behind when the enrichment cron was narrowed to the 6 am–6 pm window; without this, both expressions fire in parallel. (#623)
+
 ## [0.29.0] — 2026-05-19 — "Naomi Nagata"
 
 > **Naomi Nagata** *(The Expanse, 2011, James S.A. Corey)* — chief engineer of the Rocinante: she keeps disparate systems integrated, monitors ship health, and is always the first to notice when something is about to break. This release consolidates the CEO inbox into core, adds self-monitoring alerts for broken and stuck jobs, and hardens the engineering foundation with security scanning and proper binary file handling.
