@@ -9,9 +9,8 @@
 -- (e.g. on a fresh install), the UPDATE touches zero rows and succeeds.
 
 UPDATE scheduled_jobs
-   SET status     = 'cancelled',
-       updated_at = now()
- WHERE agent_id   = 'T2125-expense-tracker'
+   SET status = 'cancelled'
+ WHERE agent_id = 'T2125-expense-tracker'
    AND cron_expr  = '*/30 * * * *'
    AND created_by = 'system'
    AND status IN ('pending', 'failed');
