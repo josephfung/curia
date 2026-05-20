@@ -1,17 +1,14 @@
 # Capability-tier model routing (ADR-014).
 # Agents declare a tier (fast | standard | powerful) — this config maps each
-# tier to a concrete provider + model. Change these values to upgrade all
-# agents of a tier in one place, or route tiers through different providers.
+# tier to a concrete model. The provider is resolved from the model registry.
+# Change these values to upgrade all agents of a tier in one place.
 model_routing:
   tiers:
     fast:
-      provider: anthropic
       model: claude-haiku-4-5
     standard:
-      provider: anthropic
       model: claude-sonnet-4-6
     powerful:
-      provider: anthropic
       model: claude-opus-4-6
   default_tier: standard
 
@@ -270,7 +267,7 @@ dreaming:
   # autonomy score ±5 via a delta formula.
   autonomy_scoring:
     intervalMs: 86400000          # daily (same cadence as decay)
-    model: "claude-haiku-4-5"     # cheaper model for the LLM judge
+    model_tier: fast              # tier for the LLM judge (resolved via ModelRouter)
     batchSize: 50                 # max rows scored per pass
     minScoredActions: 30          # minimum before any adjustment fires
     halfLifeDays: 30              # time-decay half-life for weighting

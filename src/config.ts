@@ -221,7 +221,7 @@ export interface YamlConfig {
     };
     autonomy_scoring?: {
       intervalMs?: number;
-      model?: string;
+      model_tier?: string;
       batchSize?: number;
       minScoredActions?: number;
       halfLifeDays?: number;
@@ -237,13 +237,13 @@ export interface YamlConfig {
     max_per_hour?: number;
   };
   /** Capability-tier model routing (ADR-014).
-   *  Maps tier names to provider + model pairs. Agents declare a tier
-   *  in their YAML; the operator controls which model each tier resolves to. */
+   *  Maps tier names to model names. Provider is resolved from the ModelRegistry.
+   *  Agents declare a tier in their YAML; the operator controls which model each tier resolves to. */
   model_routing?: {
     tiers: {
-      fast: { provider: string; model: string };
-      standard: { provider: string; model: string };
-      powerful: { provider: string; model: string };
+      fast: { model: string };
+      standard: { model: string };
+      powerful: { model: string };
     };
     default_tier: 'fast' | 'standard' | 'powerful';
   };
@@ -556,8 +556,8 @@ export function loadYamlConfig(configDir: string): YamlConfig {
       if (autonomyScoring.intervalMs !== undefined && (!Number.isInteger(autonomyScoring.intervalMs) || autonomyScoring.intervalMs <= 0)) {
         throw new Error(`dreaming.autonomy_scoring.intervalMs must be a positive integer, got: ${autonomyScoring.intervalMs}`);
       }
-      if (autonomyScoring.model !== undefined && (typeof autonomyScoring.model !== 'string' || autonomyScoring.model.trim().length === 0)) {
-        throw new Error(`dreaming.autonomy_scoring.model must be a non-empty string, got: ${String(autonomyScoring.model)}`);
+      if (autonomyScoring.model_tier !== undefined && (typeof autonomyScoring.model_tier !== 'string' || autonomyScoring.model_tier.trim().length === 0)) {
+        throw new Error(`dreaming.autonomy_scoring.model_tier must be a non-empty string, got: ${String(autonomyScoring.model_tier)}`);
       }
       if (autonomyScoring.batchSize !== undefined && (!Number.isInteger(autonomyScoring.batchSize) || autonomyScoring.batchSize <= 0)) {
         throw new Error(`dreaming.autonomy_scoring.batchSize must be a positive integer, got: ${autonomyScoring.batchSize}`);
