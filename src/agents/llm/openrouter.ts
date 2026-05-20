@@ -123,12 +123,24 @@ export class OpenRouterProvider implements LLMProvider {
 
       // User messages — may contain text, image, or tool_result blocks.
       // tool_result blocks become separate tool-role messages in OpenAI format.
+      // They must precede any user-role content in the message sequence because
+      // the OpenAI protocol requires tool results to follow the assistant turn
+      // that requested them, before the next user turn.
       const toolResultBlocks = m.content.filter(
         (b): b is Extract<ContentBlock, { type: 'tool_result' }> => b.type === 'tool_result',
       );
       const otherBlocks = m.content.filter(b => b.type !== 'tool_result');
 
-      // Push non-tool-result content as a user message.
+      // Push tool_result blocks as tool-role messages first.
+      for (const tr of toolResultBlocks) {
+        conversationMessages.push({
+          role: 'tool',
+          tool_call_id: tr.tool_use_id,
+          content: tr.content,
+        });
+      }
+
+      // Then push non-tool-result content as a user message.
       if (otherBlocks.length > 0) {
         conversationMessages.push({
           role: 'user',
@@ -154,15 +166,6 @@ export class OpenRouterProvider implements LLMProvider {
             // Exhaustive guard — should never reach here
             return { type: 'text' as const, text: '' };
           }),
-        });
-      }
-
-      // Push tool_result blocks as separate tool-role messages.
-      for (const tr of toolResultBlocks) {
-        conversationMessages.push({
-          role: 'tool',
-          tool_call_id: tr.tool_use_id,
-          content: tr.content,
         });
       }
     }
@@ -252,13 +255,19 @@ export class OpenRouterProvider implements LLMProvider {
       // Check for tool calls in the response.
       const toolCalls = choice.message.tool_calls;
       if (toolCalls && toolCalls.length > 0) {
-        const mappedToolCalls: ToolCall[] = toolCalls.map((tc) => ({
-          id: tc.id,
-          name: tc.function.name,
+        const mappedToolCalls: ToolCall[] = toolCalls.map((tc) => {
           // Parse the JSON arguments string into a plain object.
           // The OpenAI SDK returns arguments as a JSON string.
-          input: JSON.parse(tc.function.arguments) as Record<string, unknown>,
-        }));
+          const parsed: unknown = JSON.parse(tc.function.arguments);
+          if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+            throw new Error(`Tool call "${tc.function.name}" returned non-object arguments: ${tc.function.arguments}`);
+          }
+          return {
+            id: tc.id,
+            name: tc.function.name,
+            input: parsed as Record<string, unknown>,
+          };
+        });
 
         return {
           type: 'tool_use',

@@ -307,4 +307,27 @@ describe('OpenRouterProvider', () => {
     expect(result.provenance.actualModel).toBe('google/gemini-2.0-flash-001:free');
     expect(result.provenance.providerRequestId).toBe('chatcmpl-alias-001');
   });
+
+  it('falls back to options.model when model param is not provided', async () => {
+    const provider = new OpenRouterProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
+    await provider.chat({
+      messages: [{ role: 'user', content: 'Hello' }],
+      options: { model: 'openai/gpt-4o' },
+    });
+
+    const params = mockCreate.mock.calls[0]![0];
+    expect(params.model).toBe('openai/gpt-4o');
+  });
+
+  it('uses explicit model param over options.model', async () => {
+    const provider = new OpenRouterProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
+    await provider.chat({
+      messages: [{ role: 'user', content: 'Hello' }],
+      model: 'deepseek/deepseek-chat-v3-0324',
+      options: { model: 'openai/gpt-4o' },
+    });
+
+    const params = mockCreate.mock.calls[0]![0];
+    expect(params.model).toBe('deepseek/deepseek-chat-v3-0324');
+  });
 });
