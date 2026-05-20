@@ -42,6 +42,15 @@ export function estimateTokens(content: string | ContentBlock[]): number {
       case 'tool_result':
         totalChars += block.content.length;
         break;
+      case 'image':
+        // Image blocks don't have a character representation; use a fixed
+        // estimate that accounts for base64 overhead without decoding the data.
+        // A base64 string's length ≈ 4/3 × raw bytes; we cap at a rough 500-token
+        // placeholder so context budgeting doesn't under-count large images.
+        totalChars += block.source.data
+          ? Math.ceil(block.source.data.length * 0.75) // revert base64 inflation
+          : block.source.url?.length ?? 50;
+        break;
       default: {
         // Exhaustiveness guard — if ContentBlock union is extended, this line
         // becomes a compile error, prompting the developer to handle the new type.

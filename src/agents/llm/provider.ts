@@ -33,7 +33,25 @@ export interface TextContent {
   text: string;
 }
 
-export type ContentBlock = TextContent | ToolUseContent | ToolResultContent;
+/**
+ * Image content block for vision calls (e.g. Anthropic's image input API).
+ * Supports both base64-encoded data and URL references; individual providers
+ * may only support a subset — pass only what the target model accepts.
+ */
+export interface ImageContent {
+  type: 'image';
+  source: {
+    type: 'base64' | 'url';
+    /** IANA media type for base64 sources (e.g. 'image/jpeg', 'image/png'). */
+    media_type?: 'image/jpeg' | 'image/png' | 'image/webp' | 'image/gif';
+    /** Base64-encoded image data. Required when source.type === 'base64'. */
+    data?: string;
+    /** Image URL. Required when source.type === 'url'. */
+    url?: string;
+  };
+}
+
+export type ContentBlock = TextContent | ToolUseContent | ToolResultContent | ImageContent;
 
 export interface Message {
   role: 'system' | 'user' | 'assistant';

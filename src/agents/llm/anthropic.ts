@@ -88,6 +88,11 @@ export class AnthropicProvider implements LLMProvider {
             if (block.type === 'tool_result') {
               return { type: 'tool_result' as const, tool_use_id: block.tool_use_id, content: block.content, is_error: block.is_error };
             }
+            if (block.type === 'image') {
+              // Pass image blocks through to the Anthropic SDK as-is — the shape
+              // matches the SDK's ImageBlockParam structure directly.
+              return block as unknown as Parameters<typeof Object>[0];
+            }
             // TextContent
             return { type: 'text' as const, text: block.text };
           }),
