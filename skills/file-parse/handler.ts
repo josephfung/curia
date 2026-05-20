@@ -11,7 +11,7 @@
 
 import { createRequire } from 'node:module';
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
-import type { Message } from '../../src/agents/llm/provider.js';
+import type { Message, ImageContent } from '../../src/agents/llm/provider.js';
 
 // pdf-parse is CJS-only and doesn't provide a default ESM export.
 // Use createRequire to load it reliably under Node ESM + tsx.
@@ -35,25 +35,6 @@ const MIME_MAP: Record<string, 'csv' | 'pdf' | 'image' | 'html'> = {
 // extract_as is open-ended: 'receipt', 'bank_statement', 'invoice' have tailored prompts;
 // 'raw' opts out of LLM extraction; any other non-empty string gets a generic prompt.
 // See prompts.ts — agents can define new document types without modifying this file.
-
-/**
- * Image content block for vision calls. The shared LLMProvider.Message interface
- * uses ContentBlock for multi-content messages; image blocks are a superset used
- * only in file-parse. We define it locally and cast as needed. The underlying
- * Anthropic implementation accepts these shapes even though the interface doesn't
- * formally declare them — tracked as a future provider.ts extension.
- *
- * @TODO Extend the ContentBlock union in src/agents/llm/provider.ts to include
- * ImageContent natively so callers don't need local casts.
- */
-interface ImageContent {
-  type: 'image';
-  source: {
-    type: 'base64';
-    media_type: 'image/jpeg' | 'image/png' | 'image/webp' | 'image/gif';
-    data: string;
-  };
-}
 
 export class FileParseHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {
@@ -144,21 +125,17 @@ export class FileParseHandler implements SkillHandler {
     // produce an API error at runtime despite the TypeScript cast.
     const normalizedMimeType = (mimeType === 'image/jpg' ? 'image/jpeg' : mimeType) as ImageContent['source']['media_type'];
 
-    // Image blocks are not yet in the shared ContentBlock union — cast via unknown.
-    // @TODO Remove this cast once ImageContent is added to provider.ts ContentBlock.
+    const imageBlock: ImageContent = {
+      type: 'image',
+      source: {
+        type: 'base64',
+        media_type: normalizedMimeType,
+        data: contentBase64,
+      },
+    };
     const imageMessage: Message = {
       role: 'user',
-      content: [
-        {
-          type: 'image',
-          source: {
-            type: 'base64',
-            media_type: normalizedMimeType,
-            data: contentBase64,
-          },
-        } as unknown as ReturnType<typeof Object>,
-        { type: 'text', text: textPrompt },
-      ] as Message['content'],
+      content: [imageBlock, { type: 'text', text: textPrompt }],
     };
 
     const response = await ctx.llmProvider!.chat({
