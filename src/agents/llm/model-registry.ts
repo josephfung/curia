@@ -83,7 +83,7 @@ const SORTED_ENTRIES = Object.entries(MODEL_REGISTRY)
  * so longer prefixes take priority.
  */
 export class ModelRegistry {
-  // Logger is stored for future debug/warn calls (e.g. unknown model warnings).
+  // Logger is used for debug/warn calls (e.g. unknown model warnings).
   private readonly logger: Logger;
 
   constructor(logger: Logger) {
@@ -93,6 +93,9 @@ export class ModelRegistry {
   /** Look up full metadata for a model. Returns undefined if no prefix matches. */
   getModel(modelId: string): ModelMetadata | undefined {
     const entry = SORTED_ENTRIES.find(([prefix]) => modelId.startsWith(prefix));
+    if (!entry) {
+      this.logger.debug({ modelId }, 'ModelRegistry: model not found in registry');
+    }
     return entry ? entry[1] : undefined;
   }
 
@@ -114,5 +117,10 @@ export class ModelRegistry {
   /** Returns true if the model is in the registry (prefix match). */
   isKnownModel(modelId: string): boolean {
     return this.getModel(modelId) !== undefined;
+  }
+
+  /** Returns all registered models. Used for startup validation only. */
+  getAllModels(): Readonly<Record<string, ModelMetadata>> {
+    return MODEL_REGISTRY;
   }
 }

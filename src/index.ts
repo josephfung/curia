@@ -31,6 +31,8 @@ import { Dispatcher } from './dispatch/dispatcher.js';
 import { CliAdapter } from './channels/cli/cli-adapter.js';
 import { loadAllAgentConfigs, interpolateRuntimeContext } from './agents/loader.js';
 import { ModelRouter } from './agents/llm/model-router.js';
+import { ModelRegistry } from './agents/llm/model-registry.js';
+import { createEstimateCostUsd } from './agents/llm/pricing.js';
 import type { LLMProvider } from './agents/llm/provider.js';
 import { AgentRegistry } from './agents/agent-registry.js';
 import { WorkingMemory } from './memory/working-memory.js';
@@ -279,10 +281,28 @@ async function main(): Promise<void> {
     logger.fatal('model_routing config section is required in config/default.yaml');
     process.exit(1);
   }
-  const modelRouter = new ModelRouter(modelRoutingConfig, logger);
+  const modelRegistry = new ModelRegistry(logger);
+  // estimateCostUsd is created here and passed to AgentRuntime in Task 7.
+  // The 'void' suppresses the noUnusedLocals error until that wiring lands.
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const estimateCostUsd = createEstimateCostUsd(modelRegistry);
+  void estimateCostUsd;
+  const modelRouter = new ModelRouter(modelRoutingConfig, modelRegistry, logger);
   const providerRegistry = new Map<string, LLMProvider>([
     ['anthropic', llmProvider],
   ]);
+
+  // Validate that every provider referenced by a model in the registry has
+  // an entry in providerRegistry. Fail-fast if an operator adds a model
+  // requiring a provider that isn't instantiated.
+  for (const [modelId, meta] of Object.entries(modelRegistry.getAllModels())) {
+    if (!providerRegistry.has(meta.provider)) {
+      logger.warn(
+        { model: modelId, provider: meta.provider },
+        'Model in registry references a provider that is not registered — model will be unusable',
+      );
+    }
+  }
 
   // Working memory — created after the pool is confirmed healthy so we know
   // the working_memory table is reachable before the first message arrives.
@@ -290,14 +310,21 @@ async function main(): Promise<void> {
   // llmProvider is already initialized above (step 5) so we can pass it directly.
   // If the config block is absent, summarization is disabled (no-op backend).
   const summarizationCfg = yamlConfig.workingMemory?.summarization;
+  // Resolve which model tier to use for summarization so the right model is passed
+  // when SummarizationConfig gains a model field (Task 14).
+  const summarizationModel = modelRouter.resolve('standard').model;
   const memory = WorkingMemory.createWithPostgres(pool, logger, summarizationCfg
     ? {
         threshold: summarizationCfg.threshold ?? 20,
         keepWindow: summarizationCfg.keepWindow ?? 10,
         provider: llmProvider,
+        // TODO: model will be added in Task 14 once SummarizationConfig gains a model field.
+        // Use: model: summarizationModel
       }
     : undefined,
   );
+  // Suppress unused-variable warning until Task 14 wires it in.
+  void summarizationModel;
 
   // Entity memory — optional, requires OPENAI_API_KEY for embeddings.
   // If not configured, agents still work — they just don't have KG access.
@@ -949,9 +976,13 @@ async function main(): Promise<void> {
   // Autonomy scoring pass — Phase 3 automatic score adjustment (issue #148).
   // Runs as a sibling DreamEngine pass alongside memory decay.
   // actionLogRepo is already instantiated above (before OutboundGateway) — reused here.
+  // Resolve model tier from config (defaults to 'fast' — the scoring pass is non-interactive
+  // and doesn't need a powerful model, so 'fast' is appropriate for cost efficiency).
+  const scoringModelTier = yamlConfig.dreaming?.autonomy_scoring?.model_tier ?? 'fast';
+  const scoringModel = modelRouter.resolve(scoringModelTier).model;
   const scoringPassConfig: ScoringPassConfig = {
     intervalMs: yamlConfig.dreaming?.autonomy_scoring?.intervalMs ?? 86_400_000,  // default: daily
-    model: yamlConfig.dreaming?.autonomy_scoring?.model ?? 'claude-haiku-4-5',
+    model: scoringModel,
     batchSize: yamlConfig.dreaming?.autonomy_scoring?.batchSize ?? 50,
     minScoredActions: yamlConfig.dreaming?.autonomy_scoring?.minScoredActions ?? 30,
     halfLifeDays: yamlConfig.dreaming?.autonomy_scoring?.halfLifeDays ?? 30,
@@ -1111,12 +1142,21 @@ async function main(): Promise<void> {
       }
     }
 
-    // Resolve this agent's capability tier to a concrete provider + model.
+    // Resolve this agent's capability tier to a concrete model, then look up
+    // the provider from the model registry. This decouples tier→model from
+    // model→provider: the registry is the single source of truth for which
+    // provider serves each model.
     const resolved = modelRouter.resolve(agentConfig.model.tier, agentConfig.model.needs);
-    const agentProvider = providerRegistry.get(resolved.provider);
+    const resolvedProvider = modelRegistry.getProvider(resolved.model);
+    if (!resolvedProvider) {
+      logger.fatal({ model: resolved.model, agent: agentConfig.name, tier: resolved.tier },
+        'Model not found in registry — cannot resolve provider');
+      process.exit(1);
+    }
+    const agentProvider = providerRegistry.get(resolvedProvider);
     if (!agentProvider) {
-      logger.fatal({ provider: resolved.provider, agent: agentConfig.name, tier: resolved.tier },
-        'No provider registered for tier-resolved provider name');
+      logger.fatal({ provider: resolvedProvider, agent: agentConfig.name, tier: resolved.tier },
+        `No provider registered for model's provider`);
       process.exit(1);
     }
 
