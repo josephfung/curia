@@ -29,6 +29,7 @@ export const VALID_CAPABILITIES: ReadonlySet<string> = new Set([
   'schedulerService', 'entityMemory', 'nylasCalendarClient',
   'autonomyService', 'executiveProfileService', 'browserService', 'bullpenService', 'skillSearch',
   'actionLogRepo', 'executionLayer', 'confidencePipeline', 'tempFileStore',
+  'llmProvider', 'modelRouter',
 ]);
 
 /**
