@@ -28,6 +28,11 @@ COPY --from=ghcr.io/astral-sh/uv:0.6.3 /uv /uvx /usr/local/bin/
 
 RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
 
+# Create a non-root system user/group for the runtime process.
+# --system: no login shell, UID/GID in the system range.
+# --no-create-home: no home directory needed; /app is the working dir.
+RUN groupadd --system curia && useradd --system --gid curia --no-create-home curia
+
 WORKDIR /app
 
 RUN corepack enable
@@ -53,11 +58,22 @@ COPY skills/ ./skills/
 COPY config/ ./config/
 COPY src/ ./src/
 
+# node_modules were installed as root above, so we chown the entire /app tree
+# to the non-root user before dropping privileges. /usr/local/bin/uv,
+# /usr/local/bin/uvx, and /usr/bin/curl are world-executable (no chown needed).
+RUN chown -R curia:curia /app
+
 EXPOSE 3000
 
 # Health check matches the Fastify /api/health route
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
   CMD curl -f http://localhost:3000/api/health || exit 1
+
+# Drop to non-root before starting the process.
+# HOME=/tmp gives tools (e.g. tsx's disk cache) a writable location;
+# system users created with --no-create-home otherwise have HOME=/ (read-only).
+ENV HOME=/tmp
+USER curia
 
 # tsx handles dynamic .ts skill imports with ESM .js→.ts extension resolution.
 # The compiled dist/index.js is the entrypoint, but it dynamically imports
