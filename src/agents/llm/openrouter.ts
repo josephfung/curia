@@ -163,7 +163,9 @@ export class OpenRouterProvider implements LLMProvider {
             if (block.type === 'tool_use') {
               return { type: 'text' as const, text: JSON.stringify(block) };
             }
-            // Exhaustive guard — should never reach here
+            // Exhaustive guard — log if a new ContentBlock variant is added
+            // but not handled here, so the gap is discoverable.
+            this.logger.warn({ blockType: (block as { type: string }).type }, 'Unknown content block type in user message — skipped');
             return { type: 'text' as const, text: '' };
           }),
         });
@@ -192,7 +194,11 @@ export class OpenRouterProvider implements LLMProvider {
       }
 
       // Per-model output cap from the registry. Fall back to 4096 for unknown models.
-      const modelMaxTokens = this.modelRegistry.getModel(model)?.maxOutputTokens ?? 4096;
+      const modelMeta = this.modelRegistry.getModel(model);
+      const modelMaxTokens = modelMeta?.maxOutputTokens ?? 4096;
+      if (!modelMeta) {
+        this.logger.warn({ model, fallbackMaxTokens: 4096 }, 'Model not in registry — using fallback maxOutputTokens');
+      }
       // Honor the caller's max_tokens request, but never exceed the model's cap.
       const callerMaxTokens = typeof options?.max_tokens === 'number' && Number.isFinite(options.max_tokens)
         ? Math.max(1, Math.floor(options.max_tokens as number))
@@ -257,8 +263,18 @@ export class OpenRouterProvider implements LLMProvider {
       if (toolCalls && toolCalls.length > 0) {
         const mappedToolCalls: ToolCall[] = toolCalls.map((tc) => {
           // Parse the JSON arguments string into a plain object.
-          // The OpenAI SDK returns arguments as a JSON string.
-          const parsed: unknown = JSON.parse(tc.function.arguments);
+          // The OpenAI SDK returns arguments as a JSON string. Non-Claude
+          // models (DeepSeek, Gemini) occasionally produce malformed JSON,
+          // so we catch parse errors separately to produce a specific message
+          // rather than the generic "OpenRouter API call failed".
+          let parsed: unknown;
+          try {
+            parsed = JSON.parse(tc.function.arguments);
+          } catch {
+            throw new Error(
+              `Tool call "${tc.function.name}" has malformed JSON arguments: ${tc.function.arguments.slice(0, 200)}`,
+            );
+          }
           if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
             throw new Error(`Tool call "${tc.function.name}" returned non-object arguments: ${tc.function.arguments}`);
           }
