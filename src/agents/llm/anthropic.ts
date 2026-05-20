@@ -121,10 +121,17 @@ export class AnthropicProvider implements LLMProvider {
       if (!model) {
         throw new Error('AnthropicProvider.chat() requires a model — no model was provided and no default is configured');
       }
+      // Per-model output cap from the registry. Fall back to 4096 for unknown models.
+      const modelMaxTokens = this.modelRegistry.getModel(model)?.maxOutputTokens ?? 4096;
+      // Honor the caller's max_tokens request, but never exceed the model's cap.
+      // Skills use low limits (e.g. 10 for a classifier gate) to stay cheap —
+      // silently ignoring those limits defeats the purpose of passing them.
+      const callerMaxTokens = typeof options?.max_tokens === 'number' && Number.isFinite(options.max_tokens)
+        ? Math.max(1, Math.floor(options.max_tokens as number))
+        : undefined;
       const createParams: Anthropic.Messages.MessageCreateParamsNonStreaming = {
         model,
-        // Use per-model maxOutputTokens from the registry; fall back to 4096 for unknown models.
-        max_tokens: this.modelRegistry.getModel(model)?.maxOutputTokens ?? 4096,
+        max_tokens: callerMaxTokens !== undefined ? Math.min(callerMaxTokens, modelMaxTokens) : modelMaxTokens,
         // Wrap the concatenated system string in a TextBlockParam array with a
         // cache_control breakpoint. This tells Anthropic to cache everything up
         // to this block, saving ~5K tokens of system prompt cost on repeat calls.

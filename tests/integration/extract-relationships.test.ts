@@ -39,7 +39,8 @@ function makeMockLLMProvider(responses: string[]): LLMProvider {
       provenance: { requestedModel: 'claude-haiku-4-5', actualModel: 'claude-haiku-4-5', providerRequestId: 'test-req' },
     });
   });
-  return { chat } as unknown as LLMProvider;
+  // Include the required id field from the LLMProvider interface.
+  return { id: 'mock-llm-provider', chat };
 }
 
 // Minimal ModelRouter stub — returns fixed models for fast/standard tiers.

@@ -287,7 +287,9 @@ async function main(): Promise<void> {
   // estimateCostUsd is a closure pre-wired with the model registry. Passed to
   // AgentRuntime as config (dependency injection) so the runtime stays testable
   // without importing pricing.ts directly.
-  const estimateCostUsd = createEstimateCostUsd(modelRegistry);
+  // Pass the configured standard tier model as the fallback so cost estimates
+  // for unrecognised models track operator routing rather than hardcoding Sonnet.
+  const estimateCostUsd = createEstimateCostUsd(modelRegistry, modelRoutingConfig.tiers.standard.model);
   const modelRouter = new ModelRouter(modelRoutingConfig, modelRegistry, logger);
   const providerRegistry = new Map<string, LLMProvider>([
     ['anthropic', llmProvider],

@@ -37,18 +37,26 @@ export interface TextContent {
  * Image content block for vision calls (e.g. Anthropic's image input API).
  * Supports both base64-encoded data and URL references; individual providers
  * may only support a subset — pass only what the target model accepts.
+ *
+ * source is a discriminated union so TypeScript enforces that base64 sources
+ * always include media_type and data, and URL sources always include url.
+ * Mixing optional fields (the old shape) allowed impossible states at compile time.
  */
 export interface ImageContent {
   type: 'image';
-  source: {
-    type: 'base64' | 'url';
-    /** IANA media type for base64 sources (e.g. 'image/jpeg', 'image/png'). */
-    media_type?: 'image/jpeg' | 'image/png' | 'image/webp' | 'image/gif';
-    /** Base64-encoded image data. Required when source.type === 'base64'. */
-    data?: string;
-    /** Image URL. Required when source.type === 'url'. */
-    url?: string;
-  };
+  source:
+    | {
+        type: 'base64';
+        /** IANA media type (e.g. 'image/jpeg', 'image/png'). */
+        media_type: 'image/jpeg' | 'image/png' | 'image/webp' | 'image/gif';
+        /** Base64-encoded image data. */
+        data: string;
+      }
+    | {
+        type: 'url';
+        /** Image URL. */
+        url: string;
+      };
 }
 
 export type ContentBlock = TextContent | ToolUseContent | ToolResultContent | ImageContent;

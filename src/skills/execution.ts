@@ -48,6 +48,16 @@ import type { ModelRouter } from '../agents/llm/model-router.js';
 // reaches the LLM context window.
 const DEFAULT_SKILL_OUTPUT_MAX_LENGTH = 200_000;
 
+// Skills permitted to receive direct LLM infrastructure (llmProvider + modelRouter).
+// These are batch/background skills that run outside the agent runtime telemetry path.
+// Any other skill declaring these capabilities is misconfigured and must be rejected.
+// See #637 for the planned redesign of infrastructure skill LLM access.
+const LLM_INFRA_SKILL_ALLOWLIST: ReadonlySet<string> = new Set([
+  'extract-facts',
+  'extract-relationships',
+  'file-parse',
+]);
+
 /** Options passed to ExecutionLayer.invoke() by the agent runtime. */
 export interface InvokeOptions {
   taskEventId?: string;
@@ -544,6 +554,26 @@ export class ExecutionLayer {
         success: false,
         error: this.wrapSkillError(
           `Skill '${skillName}' declares capability 'executionLayer' but only 'approve-action' is permitted to use it`,
+        ),
+      };
+    }
+
+    // Hard-restrict llmProvider/modelRouter to infrastructure skills only.
+    // These grant direct LLM access outside the agent runtime — a rogue skill with
+    // these capabilities could make unbounded LLM calls without telemetry or rate limits.
+    // Only the three background skills explicitly designed for it are allowed.
+    if (
+      (caps.includes('llmProvider') || caps.includes('modelRouter')) &&
+      !LLM_INFRA_SKILL_ALLOWLIST.has(manifest.name)
+    ) {
+      skillLogger.error(
+        { skillName, manifestName: manifest.name },
+        'SECURITY: llmProvider/modelRouter capabilities are restricted to infrastructure skills — refusing to run skill',
+      );
+      return {
+        success: false,
+        error: this.wrapSkillError(
+          `Skill '${skillName}' declares restricted LLM infrastructure capabilities (llmProvider/modelRouter) — only extract-facts, extract-relationships, and file-parse are permitted`,
         ),
       };
     }
