@@ -45,7 +45,7 @@ interface ContactServiceBackend {
   findContactByName(name: string): Promise<Contact[]>;
   findContactByRole(role: string): Promise<Contact[]>;
   findContactBySystemRole(systemRole: SystemRole): Promise<Contact | null>;
-  listContacts(): Promise<Contact[]>;
+  listContacts(filters?: { status?: ContactStatus; limit?: number }): Promise<Contact[]>;
   updateContact(contact: Contact): Promise<void>;
   createIdentity(identity: ChannelIdentity): Promise<void>;
   getIdentitiesForContact(contactId: string): Promise<ChannelIdentity[]>;
@@ -311,9 +311,9 @@ export class ContactService {
     return this.backend.findContactBySystemRole(systemRole);
   }
 
-  /** List all contacts. */
-  async listContacts(): Promise<Contact[]> {
-    return this.backend.listContacts();
+  /** List contacts, optionally filtered by status and/or capped by limit. */
+  async listContacts(filters?: { status?: ContactStatus; limit?: number }): Promise<Contact[]> {
+    return this.backend.listContacts(filters);
   }
 
   /**
@@ -949,7 +949,24 @@ class PostgresContactBackend implements ContactServiceBackend {
     return this.rowToContact(row);
   }
 
-  async listContacts(): Promise<Contact[]> {
+  async listContacts(filters?: { status?: ContactStatus; limit?: number }): Promise<Contact[]> {
+    const cols = 'id, kg_node_id, display_name, role, system_role, status, contact_confidence, trust_level, last_seen_at, inbound_message_count, outbound_message_count, notes, created_at, updated_at';
+    const conditions: string[] = [];
+    const params: unknown[] = [];
+
+    if (filters?.status) {
+      params.push(filters.status);
+      conditions.push(`status = $${params.length}`);
+    }
+
+    const where = conditions.length > 0 ? ` WHERE ${conditions.join(' AND ')}` : '';
+    let sql = `SELECT ${cols} FROM contacts${where} ORDER BY created_at ASC`;
+
+    if (filters?.limit != null) {
+      params.push(filters.limit);
+      sql += ` LIMIT $${params.length}`;
+    }
+
     const result = await this.pool.query<{
       id: string;
       kg_node_id: string | null;
@@ -960,15 +977,12 @@ class PostgresContactBackend implements ContactServiceBackend {
       contact_confidence: string;
       trust_level: string | null;
       last_seen_at: Date | null;
-      inbound_message_count: string;  // INT returned as string by node-pg
+      inbound_message_count: string;
       outbound_message_count: string;
       notes: string | null;
       created_at: Date;
       updated_at: Date;
-    }>(
-      `SELECT id, kg_node_id, display_name, role, system_role, status, contact_confidence, trust_level, last_seen_at, inbound_message_count, outbound_message_count, notes, created_at, updated_at
-       FROM contacts ORDER BY created_at ASC`,
-    );
+    }>(sql, params);
 
     return result.rows.map((row) => this.rowToContact(row));
   }
@@ -1483,8 +1497,21 @@ class InMemoryContactBackend implements ContactServiceBackend {
     return null;
   }
 
-  async listContacts(): Promise<Contact[]> {
-    return [...this.contacts.values()];
+  async listContacts(filters?: { status?: ContactStatus; limit?: number }): Promise<Contact[]> {
+    let results = [...this.contacts.values()];
+
+    if (filters?.status) {
+      results = results.filter((c) => c.status === filters.status);
+    }
+
+    // Sort by createdAt ascending to match Postgres ORDER BY created_at ASC
+    results.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+
+    if (filters?.limit != null) {
+      results = results.slice(0, filters.limit);
+    }
+
+    return results;
   }
 
   async updateContact(contact: Contact): Promise<void> {
