@@ -16,6 +16,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Added
 
 - **OpenRouter provider** — optional multi-model routing for Gemini Flash, DeepSeek V3, and GPT-4o via `OPENROUTER_API_KEY`. (#379)
+- **`contact-list`** — new `status` and `limit` filter parameters for direct DB-level filtering; eliminates entity-context timeout for status queries. (#644)
 
 ### Security
 
@@ -23,7 +24,6 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
-- **`contact-list`** — accepts optional `status` and `limit` parameters; contacts agent can now query provisional contacts directly instead of timing out on entity-context enumeration. (#644)
 - **`ceo-inbox-list`** — normalize `DRAFTS` folder alias to `DRAFT` for Gmail API compatibility; the digest agent was failing on every run with "Invalid label: DRAFTS".
 - **`NylasClient.listMessages`** — suppress conflicting filter params when `searchQueryNative` is set, matching the guard already in `CeoNylasClient`; fixes HTTP 400 errors in security-triage's email-list calls.
 - **Provider registry routing** — WorkingMemory, DriftDetector, AutonomyScoringPass, and ExecutionLayer now resolve their LLM provider from `providerRegistry`, not the hardwired Anthropic singleton. (#646)

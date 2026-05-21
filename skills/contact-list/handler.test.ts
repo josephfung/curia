@@ -184,6 +184,20 @@ describe('ContactListHandler', () => {
     expect(result.error).toContain('200 characters');
   });
 
+  it('rejects combining role with status', async () => {
+    const ctx = makeCtx({ role: 'CFO', status: 'provisional' });
+    const result = await handler.execute(ctx);
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Cannot combine role');
+  });
+
+  it('rejects combining role with limit', async () => {
+    const ctx = makeCtx({ role: 'CFO', limit: 5 });
+    const result = await handler.execute(ctx);
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Cannot combine role');
+  });
+
   // --- Output shape ---
 
   it('includes status field in each contact output', async () => {
