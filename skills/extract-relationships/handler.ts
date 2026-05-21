@@ -32,11 +32,12 @@ export class ExtractRelationshipsHandler implements SkillHandler {
     const { text, source } = ctx.input as { text?: string; source?: string };
 
     if (!text || typeof text !== 'string') {
-      ctx.log.error({ input: ctx.input }, 'extract-relationships: missing required input "text"');
+      // Log only safe metadata — never log ctx.input directly (contains full transcript)
+      ctx.log.error({ hasText: typeof text === 'string', hasSource: typeof source === 'string' }, 'extract-relationships: missing required input "text"');
       return { success: false, error: 'Missing required input: text (string)' };
     }
     if (!source || typeof source !== 'string') {
-      ctx.log.error({ input: ctx.input }, 'extract-relationships: missing required input "source"');
+      ctx.log.error({ hasText: typeof text === 'string', hasSource: typeof source === 'string' }, 'extract-relationships: missing required input "source"');
       return { success: false, error: 'Missing required input: source (string)' };
     }
     if (!ctx.entityMemory) {
@@ -107,12 +108,13 @@ ${text}`,
     try {
       const parsed = JSON.parse(jsonText) as unknown;
       if (!Array.isArray(parsed)) {
-        ctx.log.warn({ rawText }, 'extract-relationships: extraction returned non-array, treating as empty');
+        // Log length only — rawText may contain extracted entity names (PII).
+        ctx.log.warn({ responseLength: rawText.length }, 'extract-relationships: extraction returned non-array, treating as empty');
         return { success: true, data: { extracted: 0, confirmed: 0, skipped: false } };
       }
       triples = parsed as ExtractedTriple[];
     } catch (err) {
-      ctx.log.warn({ err, rawText }, 'extract-relationships: failed to parse extraction JSON, treating as empty');
+      ctx.log.warn({ err, responseLength: rawText.length }, 'extract-relationships: failed to parse extraction JSON, treating as empty');
       return { success: true, data: { extracted: 0, confirmed: 0, skipped: false } };
     }
 

@@ -329,8 +329,13 @@ export class ExecutionLayer {
     // create pointless approval requests for structurally forbidden callers.
     // 'system' is the fallback for system-layer invocations (checkpoint processor,
     // scheduler) where no agentId is present in InvokeOptions.
+    //
+    // Skipped when humanApproved is set: the CEO explicitly approved this action
+    // via approve-action, which re-invokes with humanApproved: true but no agentId.
+    // The CEO is the ultimate authority — blocking a CEO-approved re-execution on
+    // caller identity would be counterproductive.
     const allowedCallers = manifest.allowed_callers;
-    if (allowedCallers && allowedCallers.length > 0) {
+    if (allowedCallers && allowedCallers.length > 0 && !options?.humanApproved) {
       const callerId = options?.agentId ?? 'system';
       if (!allowedCallers.includes(callerId)) {
         skillLogger.warn(
