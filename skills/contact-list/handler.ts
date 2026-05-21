@@ -33,6 +33,12 @@ export class ContactListHandler implements SkillHandler {
       }
     }
 
+    // Role uses a separate query path that doesn't support status/limit — reject the combination
+    // rather than silently dropping filters.
+    if (role && typeof role === 'string' && (status != null || limit != null)) {
+      return { success: false, error: 'Cannot combine role filter with status or limit. Use role alone, or status/limit without role.' };
+    }
+
     // contactService is a universal service — always injected by ExecutionLayer
     if (!ctx.contactService) {
       return {
