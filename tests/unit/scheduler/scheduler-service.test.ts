@@ -799,6 +799,77 @@ describe('SchedulerService', () => {
     });
   });
 
+  describe('cancelStaleDeclarativeJobs', () => {
+    it('cancels stale system jobs not in the live set', async () => {
+      // The query returns two stale rows that were cancelled
+      pool.query.mockResolvedValueOnce({
+        rows: [
+          { id: 'stale-1', agent_id: 'coordinator', cron_expr: '*/30 * * * *', task_payload: '{"task":"old-cron"}' },
+          { id: 'stale-2', agent_id: 'scout', cron_expr: '0 9 * * 1', task_payload: '{"task":"removed-task"}' },
+        ],
+      });
+
+      const liveTuples = [
+        { agentId: 'coordinator', cronExpr: '*/30 6-17 * * *', taskPayload: '{"task":"old-cron"}' },
+      ];
+
+      const count = await svc.cancelStaleDeclarativeJobs(liveTuples);
+
+      expect(count).toBe(2);
+      const [sql, params] = pool.query.mock.calls[0] as [string, unknown[]];
+      // Must only target pending/failed system jobs
+      expect(sql).toContain("created_by = 'system'");
+      expect(sql).toContain("status IN ('pending', 'failed')");
+      expect(sql).toContain("'cancelled'");
+    });
+
+    it('returns 0 and still issues the query when liveTuples is empty (all system rows are stale)', async () => {
+      // When there are no declarative jobs at all, we still need to cancel any
+      // leftover system rows from a previous config that had schedules.
+      pool.query.mockResolvedValueOnce({ rows: [] });
+
+      const count = await svc.cancelStaleDeclarativeJobs([]);
+
+      expect(count).toBe(0);
+      // Query is still issued — an empty live set means ALL system rows are stale
+      expect(pool.query).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not touch running or suspended jobs', async () => {
+      pool.query.mockResolvedValueOnce({ rows: [] });
+
+      await svc.cancelStaleDeclarativeJobs([
+        { agentId: 'coordinator', cronExpr: '0 9 * * *', taskPayload: '{"task":"brief"}' },
+      ]);
+
+      const [sql] = pool.query.mock.calls[0] as [string];
+      // The WHERE clause must restrict to pending/failed only
+      expect(sql).toContain("status IN ('pending', 'failed')");
+      expect(sql).not.toContain("'running'");
+      expect(sql).not.toContain("'suspended'");
+    });
+
+    it('passes live tuples as parameterized exclusion values', async () => {
+      pool.query.mockResolvedValueOnce({ rows: [] });
+
+      const liveTuples = [
+        { agentId: 'agent-a', cronExpr: '0 8 * * *', taskPayload: '{"task":"t1"}' },
+        { agentId: 'agent-b', cronExpr: '0 9 * * 1', taskPayload: '{"task":"t2"}' },
+      ];
+
+      await svc.cancelStaleDeclarativeJobs(liveTuples);
+
+      const [_sql, params] = pool.query.mock.calls[0] as [string, unknown[]];
+      // All six values from the two tuples should appear in the params array
+      expect(params).toContain('agent-a');
+      expect(params).toContain('0 8 * * *');
+      expect(params).toContain('{"task":"t1"}');
+      expect(params).toContain('agent-b');
+      expect(params).toContain('0 9 * * 1');
+      expect(params).toContain('{"task":"t2"}');
+    });
+  });
+
   // -- updateJob --
 
   describe('updateJob', () => {
