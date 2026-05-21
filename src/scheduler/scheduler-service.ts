@@ -604,6 +604,11 @@ export class SchedulerService {
       );
     }
 
+    // TODO: if declarative schedules ever use intent_anchor, cancelling the scheduled_jobs row
+    // here leaves the linked agent_tasks row orphaned (scheduled_job_id becomes NULL). At that
+    // point this method should also cancel any agent_tasks rows whose scheduled_job_id was
+    // just cleared — mirror the cleanup in cancelJob(). No declarative schedules use
+    // intent_anchor today, so this is safe to defer.
     return rows.length;
   }
 
