@@ -954,7 +954,7 @@ class PostgresContactBackend implements ContactServiceBackend {
     const conditions: string[] = [];
     const params: unknown[] = [];
 
-    if (filters?.status) {
+    if (filters?.status != null) {
       params.push(filters.status);
       conditions.push(`status = $${params.length}`);
     }
@@ -1500,7 +1500,7 @@ class InMemoryContactBackend implements ContactServiceBackend {
   async listContacts(filters?: { status?: ContactStatus; limit?: number }): Promise<Contact[]> {
     let results = [...this.contacts.values()];
 
-    if (filters?.status) {
+    if (filters?.status != null) {
       results = results.filter((c) => c.status === filters.status);
     }
 
