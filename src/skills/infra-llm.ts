@@ -165,7 +165,7 @@ export class InfraLlmService {
       return { ok: false, error: errorMsg };
     }
 
-    await this.publishTelemetry(response.usage, response.provenance, latencyMs, prompt, response.content, scope);
+    await this.publishTelemetry(response.usage, response.provenance, latencyMs, prompt, response.content, scope, options?.image);
     return { ok: true, text: response.content };
   }
 
@@ -176,9 +176,18 @@ export class InfraLlmService {
     prompt: string,
     responseText: string,
     scope: InfraLlmScope,
+    image?: { base64: string; mediaType: string },
   ): Promise<void> {
     try {
-      const promptHash = createHash('sha256').update(prompt).digest('hex');
+      // Include image data in the hash when present — without this, two different
+      // images with the same text prompt would produce identical promptHash values,
+      // breaking audit traceability for vision calls.
+      const hasher = createHash('sha256').update(prompt);
+      if (image) {
+        hasher.update(image.mediaType);
+        hasher.update(image.base64);
+      }
+      const promptHash = hasher.digest('hex');
       const responseHash = createHash('sha256').update(responseText).digest('hex');
 
       const event = createLlmCall({
