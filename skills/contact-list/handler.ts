@@ -8,7 +8,7 @@
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
 import type { ContactStatus } from '../../src/contacts/types.js';
 
-const VALID_STATUSES: readonly string[] = ['confirmed', 'provisional', 'blocked'];
+const VALID_STATUSES: readonly ContactStatus[] = ['confirmed', 'provisional', 'blocked'];
 
 export class ContactListHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {
