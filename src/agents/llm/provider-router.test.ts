@@ -94,7 +94,11 @@ describe('LLMProviderRouter', () => {
       options: { model: 'claude-haiku-4-5', max_tokens: 100 },
     });
 
-    expect(anthropicProvider.chat).toHaveBeenCalledTimes(1);
+    // Verify the resolved model is forwarded to the provider at the top level,
+    // not just used for routing — this would have failed before the params spread fix.
+    expect(anthropicProvider.chat).toHaveBeenCalledWith(
+      expect.objectContaining({ model: 'claude-haiku-4-5' }),
+    );
   });
 
   // Error paths — the router returns { type: 'error' } rather than throwing,
