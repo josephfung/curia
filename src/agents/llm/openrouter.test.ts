@@ -183,8 +183,7 @@ describe('OpenRouterProvider', () => {
   });
 
   it('catches exceptions and returns classified error response', async () => {
-    const apiError = new Error('API request failed');
-    (apiError as Record<string, unknown>).status = 500;
+    const apiError = Object.assign(new Error('API request failed'), { status: 500 });
     mockCreate.mockRejectedValue(apiError);
 
     const provider = new OpenRouterProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
