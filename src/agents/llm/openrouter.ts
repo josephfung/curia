@@ -261,7 +261,13 @@ export class OpenRouterProvider implements LLMProvider {
       // Check for tool calls in the response.
       const toolCalls = choice.message.tool_calls;
       if (toolCalls && toolCalls.length > 0) {
-        const mappedToolCalls: ToolCall[] = toolCalls.map((tc) => {
+        // Filter to function-type tool calls only. The OpenAI SDK's
+        // ChatCompletionMessageToolCall is a union that includes a custom
+        // tool call variant without a `function` property — narrow first.
+        const functionCalls = toolCalls.filter(
+          (tc): tc is Extract<typeof tc, { type: 'function' }> => tc.type === 'function',
+        );
+        const mappedToolCalls: ToolCall[] = functionCalls.map((tc) => {
           // Parse the JSON arguments string into a plain object.
           // The OpenAI SDK returns arguments as a JSON string. Non-Claude
           // models (DeepSeek, Gemini) occasionally produce malformed JSON,
