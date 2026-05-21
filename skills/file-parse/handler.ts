@@ -312,25 +312,38 @@ export class FileParseHandler implements SkillHandler {
 
 /** Strip HTML tags and decode common entities. Lightweight, no dependency. */
 function stripHtmlTags(html: string): string {
-  // nosemgrep: js/incomplete-multi-character-sanitization — incomplete tags caught by /<[a-zA-Z][^>]{0,500}/g below
-  return html
-    // Strip <script> and <style> blocks including their content.
-    // \s* before the closing > handles whitespace-padded closing tags like </script >
-    // which the original pattern (</script>) did not match (js/bad-tag-filter).
-    // nosemgrep: js/bad-tag-filter — \s* handles whitespace before >; attribute-bearing closing tags like </script bar> are invalid HTML
-    .replace(/<script[^>]*>[\s\S]*?<\/script\s*>/gi, '')
-    .replace(/<style[^>]*>[\s\S]*?<\/style\s*>/gi, '')
-    // Strip all complete HTML tags (< ... >).
-    .replace(/<[^>]+>/g, ' ')
-    // Strip incomplete tags — bare <tagname without a closing > cannot be caught by
-    // <[^>]+> above (which requires >). This prevents <script fragments from leaking
-    // into the extracted text. {0,500} caps match length to prevent stripping large
-    // text bodies on inputs with a lone < far from any > (js/incomplete-multi-character-sanitization).
-    .replace(/<[a-zA-Z][^>]{0,500}/g, ' ')
-    // Decode HTML entities.
-    // Order matters: &amp; must be decoded LAST to prevent double-decoding.
-    // Decoding &amp; first turns &amp;lt; into &lt;, which then decodes to <,
-    // smuggling a literal < through (js/double-escaping).
+  let text = html;
+
+  // Strip <script> and <style> blocks including their content. Loop until the
+  // string stops changing to prevent nested-substitution bypass: a crafted
+  // input like <scri<script>X</script>pt>…<scri<script>Y</script>pt> causes the
+  // g-flag replace to strip both inner blocks simultaneously, leaving the outer
+  // fragments to merge into <script>…</script>. A second pass catches that.
+  // \s* before the closing > handles whitespace-padded tags like </script >.
+  for (let prev = ''; prev !== text; ) {
+    prev = text;
+    text = text.replace(/<script[^>]*>[\s\S]*?<\/script\s*>/gi, '');
+    text = text.replace(/<style[^>]*>[\s\S]*?<\/style\s*>/gi, '');
+  }
+
+  // Strip all complete HTML tags (< ... >).
+  text = text.replace(/<[^>]+>/g, ' ');
+
+  // Strip incomplete tags — bare <tagname without a closing > cannot be caught
+  // by <[^>]+> above (which requires >). Loop until stable: stripping a complete
+  // inner tag can expose a bare <script fragment from a nested pattern.
+  // {0,500} caps match length to prevent consuming large text bodies on inputs
+  // with a lone < far from any >.
+  for (let prev = ''; prev !== text; ) {
+    prev = text;
+    text = text.replace(/<[a-zA-Z][^>]{0,500}/g, ' ');
+  }
+
+  // Decode HTML entities.
+  // Order matters: &amp; must be decoded LAST to prevent double-decoding.
+  // Decoding &amp; first turns &amp;lt; into &lt;, which then decodes to <,
+  // smuggling a literal < through (js/double-escaping).
+  return text
     .replace(/&lt;/g, '<')
     .replace(/&gt;/g, '>')
     .replace(/&quot;/g, '"')

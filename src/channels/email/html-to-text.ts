@@ -8,13 +8,17 @@ export function htmlToText(html: string | undefined | null): string {
 
   let text = html;
 
-  // Remove <style> and <script> blocks entirely (content + tags).
-  // \s* before the closing > handles whitespace-padded closing tags like </script >
-  // which the original pattern (</script>) did not match (js/bad-tag-filter).
-  // nosemgrep: js/incomplete-multi-character-sanitization — incomplete tags (<tag without >) caught on line below
-  text = text.replace(/<style[^>]*>[\s\S]*?<\/style\s*>/gi, '');
-  // nosemgrep: js/incomplete-multi-character-sanitization, js/bad-tag-filter — \s* handles whitespace before >; incomplete tags caught below
-  text = text.replace(/<script[^>]*>[\s\S]*?<\/script\s*>/gi, '');
+  // Remove <style> and <script> blocks entirely (content + tags). Loop until
+  // the string stops changing to prevent nested-substitution bypass: a crafted
+  // input like <scri<script>X</script>pt>…<scri<script>Y</script>pt> causes the
+  // g-flag replace to strip both inner blocks simultaneously, leaving the outer
+  // fragments to merge into <script>…</script>. A second pass catches that.
+  // \s* before the closing > handles whitespace-padded tags like </script >.
+  for (let prev = ''; prev !== text; ) {
+    prev = text;
+    text = text.replace(/<style[^>]*>[\s\S]*?<\/style\s*>/gi, '');
+    text = text.replace(/<script[^>]*>[\s\S]*?<\/script\s*>/gi, '');
+  }
 
   // Convert <br> variants to newlines
   text = text.replace(/<br\s*\/?>/gi, '\n');
@@ -25,16 +29,18 @@ export function htmlToText(html: string | undefined | null): string {
   // Convert <hr> to a separator
   text = text.replace(/<hr\s*\/?>/gi, '\n---\n');
 
-  // Strip all remaining complete HTML tags
-  // nosemgrep: js/incomplete-multi-character-sanitization — incomplete tags (no closing >) caught by the strip on the next line
+  // Strip all remaining complete HTML tags.
   text = text.replace(/<[^>]+>/g, '');
 
-  // Strip incomplete tags — bare <tagname without a closing > is not caught by <[^>]+>
-  // above (which requires >). Entity decoding happens below, so any < remaining at this
-  // point must be from an incomplete tag in the original HTML source.
-  // {0,500} caps match length to prevent stripping large text bodies if the input
-  // happens to contain a lone < far from any > (js/incomplete-multi-character-sanitization).
-  text = text.replace(/<[a-zA-Z][^>]{0,500}/g, '');
+  // Strip incomplete tags — bare <tagname without a closing > is not caught by
+  // <[^>]+> above (which requires >). Loop until stable: stripping a complete
+  // inner tag (above) can expose a bare <script fragment from a nested pattern,
+  // so we re-run until no tag fragments remain. {0,500} caps match length to
+  // prevent consuming large text bodies on inputs with a lone < far from any >.
+  for (let prev = ''; prev !== text; ) {
+    prev = text;
+    text = text.replace(/<[a-zA-Z][^>]{0,500}/g, '');
+  }
 
   // Decode common HTML entities.
   // Order matters: &amp; must be decoded LAST to prevent double-decoding.

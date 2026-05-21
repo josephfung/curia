@@ -279,6 +279,50 @@ describe('FileParseHandler', () => {
       }
     });
 
+    // ── Security: js/incomplete-multi-character-sanitization ─────────────────
+    // A single-pass replace of <script…>…</script> can be bypassed: the g flag
+    // finds all non-overlapping matches left-to-right in the original string.
+    // Input <scri<script>X</script>pt>…<scri<script>Y</script>pt> has two
+    // matches (<script>X</script> and <script>Y</script>); removing both
+    // simultaneously leaves <scri + pt> = <script> and the content unstripped.
+    // The loop approach catches this by re-running until the string stabilizes.
+
+    it('strips <script> tags reconstructed by nested-substitution bypass', async () => {
+      const payload =
+        '<scri<script>X</script>pt>alert("xss")</scri<script>Y</script>pt>';
+      const content = Buffer.from(payload).toString('base64');
+      const handler = new FileParseHandler();
+      const result = await handler.execute(makeCtx({
+        content_base64: content,
+        mime_type: 'text/html',
+        extract_as: 'raw',
+      }, makeLlmProvider('{}')));
+      expect(result.success).toBe(true);
+      if (result.success) {
+        const data = result.data as { raw_text: string };
+        expect(data.raw_text).not.toContain('<script');
+        expect(data.raw_text).not.toContain('alert("xss")');
+      }
+    });
+
+    it('strips <style> tags reconstructed by nested-substitution bypass', async () => {
+      const payload =
+        '<sty<style>X</style>le>body{color:red}</sty<style>Y</style>le>';
+      const content = Buffer.from(payload).toString('base64');
+      const handler = new FileParseHandler();
+      const result = await handler.execute(makeCtx({
+        content_base64: content,
+        mime_type: 'text/html',
+        extract_as: 'raw',
+      }, makeLlmProvider('{}')));
+      expect(result.success).toBe(true);
+      if (result.success) {
+        const data = result.data as { raw_text: string };
+        expect(data.raw_text).not.toContain('<style');
+        expect(data.raw_text).not.toContain('body{color:red}');
+      }
+    });
+
     // ── Security: js/double-escaping ──────────────────────────────────────────
 
     it('does not double-decode &amp;lt; into a literal < in HTML text', async () => {

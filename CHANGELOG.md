@@ -17,6 +17,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 - **OpenRouter provider** — optional multi-model routing for Gemini Flash, DeepSeek V3, and GPT-4o via `OPENROUTER_API_KEY`. (#379)
 
+### Security
+
+- **HTML sanitizers** — replaced single-pass regex replacements with loop-based stripping in `html-to-text`, `file-parse`, and `held-messages-list` to prevent nested-substitution bypass (CodeQL `js/incomplete-multi-character-sanitization`, 6 alerts). (#591)
+
 ### Fixed
 
 - **`ceo-inbox-list`** — normalize `DRAFTS` folder alias to `DRAFT` for Gmail API compatibility; the digest agent was failing on every run with "Invalid label: DRAFTS".
