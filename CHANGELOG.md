@@ -17,6 +17,11 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 - **OpenRouter provider** — optional multi-model routing for Gemini Flash, DeepSeek V3, and GPT-4o via `OPENROUTER_API_KEY`. (#379)
 
+### Fixed
+
+- **`ceo-inbox-list`** — normalize `DRAFTS` folder alias to `DRAFT` for Gmail API compatibility; the digest agent was failing on every run with "Invalid label: DRAFTS".
+- **`NylasClient.listMessages`** — suppress conflicting filter params when `searchQueryNative` is set, matching the guard already in `CeoNylasClient`; fixes HTTP 400 errors in security-triage's email-list calls.
+
 ### Security
 
 - **Non-root container** — production image runs as non-root `curia` user; resolves Semgrep alert #48 (`dockerfile.security.missing-user`). (#607)
