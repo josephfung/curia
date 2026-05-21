@@ -56,7 +56,7 @@ export class ExtractRelationshipsHandler implements SkillHandler {
     // Cheap fast-tier call — exits early on the majority of messages (scheduling,
     // email drafts, lookups) that contain no entity-to-entity relationships.
     const classifyResult = await ctx.infraLlm.classify(
-      `Does the following text assert a relationship or connection between two or more people or organisations? Answer only 'yes' or 'no'.\n\n${text}`,
+      `Does the following text assert a relationship or connection between two or more entities (such as people, organisations, projects, events, or other named entities)? Answer only 'yes' or 'no'.\n\n${text}`,
     );
 
     if (!classifyResult.ok) {
