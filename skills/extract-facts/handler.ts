@@ -7,8 +7,8 @@
 // Idempotent: storeFact() handles deduplication — reasserting the same fact
 // merges into or confirms the existing fact node rather than creating a duplicate.
 //
-// LLM calls go through the shared LLMProvider + ModelRouter rather than a raw
-// Anthropic client so all calls are tracked by the telemetry / cost infrastructure.
+// LLM calls go through the constrained InfraLlm service (classify + extract only),
+// which routes through ModelRouter and publishes llm.call bus events for telemetry.
 
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
 import { DECAY_CLASSES, NODE_TYPES } from '../../src/memory/types.js';
@@ -48,38 +48,26 @@ export class ExtractFactsHandler implements SkillHandler {
       return { success: false, error: 'Entity memory not available — database not configured' };
     }
 
-    // Guard: llmProvider and modelRouter are required capabilities declared in skill.json.
-    // If either is missing the execution layer mis-configured this invocation.
-    if (!ctx.llmProvider || !ctx.modelRouter) {
-      ctx.log.error('extract-facts: llmProvider or modelRouter capability missing — execution layer misconfigured');
-      return { success: false, error: 'extract-facts requires llmProvider and modelRouter capabilities' };
+    // Guard: infraLlm is a required capability declared in skill.json.
+    if (!ctx.infraLlm) {
+      ctx.log.error('extract-facts: infraLlm capability missing — execution layer misconfigured');
+      return { success: false, error: 'extract-facts requires infraLlm capability' };
     }
 
     try {
-      // Resolve tier names to concrete model strings at invocation time.
-      // Kept inside the try so a bad routing config (ModelRouter.resolve() throws)
-      // returns { success: false } instead of letting execute() throw.
-      const classifierModel = ctx.modelRouter.resolve('fast').model;
-      const extractionModel = ctx.modelRouter.resolve('standard').model;
       // -- Step 1: Classifier gate --
       // Cheap fast-tier call — exits early on messages that carry no facts about a
       // single entity (e.g. action requests, scheduling, relationship-only text).
-      const classifyResponse = await ctx.llmProvider.chat({
-        model: classifierModel,
-        messages: [{
-          role: 'user',
-          content: `Does the following text assert an attribute, fact, or characteristic about a single entity (for example: a person, organisation, project, event, or other entity — such as where they are located, their role, their status, or their preferences)? Answer only 'yes' or 'no'.\n\n${text}`,
-        }],
-        options: { max_tokens: 10 },
-      });
+      const classifyResult = await ctx.infraLlm.classify(
+        `Does the following text assert an attribute, fact, or characteristic about a single entity (for example: a person, organisation, project, event, or other entity — such as where they are located, their role, their status, or their preferences)? Answer only 'yes' or 'no'.\n\n${text}`,
+      );
 
-      if (classifyResponse.type === 'error') {
-        ctx.log.error({ error: classifyResponse.error }, 'extract-facts: classifier LLM call failed');
-        return { success: false, error: `Classifier LLM call failed: ${classifyResponse.error.message}` };
+      if (!classifyResult.ok) {
+        ctx.log.error({ error: classifyResult.error }, 'extract-facts: classifier LLM call failed');
+        return { success: false, error: `Classifier LLM call failed: ${classifyResult.error}` };
       }
 
-      // LLMProvider.chat() returns content as a plain string (not content[0].text).
-      const classifierAnswer = classifyResponse.content.toLowerCase().trim();
+      const classifierAnswer = classifyResult.text.toLowerCase().trim();
 
       if (!classifierAnswer.startsWith('yes')) {
         ctx.log.debug({ textPreview: text.slice(0, 80) }, 'extract-facts: classifier gate — no facts, skipping');
@@ -88,11 +76,8 @@ export class ExtractFactsHandler implements SkillHandler {
 
       // -- Step 2: Extraction prompt --
       // Standard-tier call with the full vocabulary. Returns JSON array of facts.
-      const extractionResponse = await ctx.llmProvider.chat({
-        model: extractionModel,
-        messages: [{
-          role: 'user',
-          content: `Extract single-entity attribute facts from the text below. Return a JSON array of fact objects.
+      const extractionResult = await ctx.infraLlm.extract(
+        `Extract single-entity attribute facts from the text below. Return a JSON array of fact objects.
 
 Available subject types (for the entity the fact is about): ${NODE_TYPES_LIST}
 Available decay classes: ${DECAY_CLASSES_LIST}
@@ -115,17 +100,16 @@ Format:
 
 Text:
 ${text}`,
-        }],
-        options: { max_tokens: 1000 },
-      });
+        { maxTokens: 1000 },
+      );
 
-      if (extractionResponse.type === 'error') {
-        ctx.log.error({ error: extractionResponse.error }, 'extract-facts: extraction LLM call failed');
-        return { success: false, error: `Extraction LLM call failed: ${extractionResponse.error.message}` };
+      if (!extractionResult.ok) {
+        ctx.log.error({ error: extractionResult.error }, 'extract-facts: extraction LLM call failed');
+        return { success: false, error: `Extraction LLM call failed: ${extractionResult.error}` };
       }
 
       // Strip optional markdown code fences the model may include despite instructions.
-      const rawText = extractionResponse.content.trim();
+      const rawText = extractionResult.text.trim();
       const jsonText = rawText.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
 
       let facts: ExtractedFact[];

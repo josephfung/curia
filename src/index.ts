@@ -36,6 +36,8 @@ import { ModelRegistry } from './agents/llm/model-registry.js';
 import { createEstimateCostUsd } from './agents/llm/pricing.js';
 import type { LLMProvider } from './agents/llm/provider.js';
 import { LLMProviderRouter } from './agents/llm/provider-router.js';
+import { TelemetryLlmProvider } from './agents/llm/telemetry-provider.js';
+import { InfraLlmService } from './skills/infra-llm.js';
 import { AgentRegistry } from './agents/agent-registry.js';
 import { WorkingMemory } from './memory/working-memory.js';
 import { EmbeddingService } from './memory/embedding.js';
@@ -44,7 +46,7 @@ import { MemoryValidator } from './memory/validation.js';
 import { EntityMemory } from './memory/entity-memory.js';
 import { SkillRegistry } from './skills/registry.js';
 import { ExecutionLayer } from './skills/execution.js';
-import { loadSkillsFromDirectory } from './skills/loader.js';
+import { loadSkillsFromDirectory, validateAllowedCallers } from './skills/loader.js';
 import { loadMcpServers } from './skills/mcp-loader.js';
 import type { McpSession } from './skills/mcp-client.js';
 import { ContactService } from './contacts/contact-service.js';
@@ -1002,7 +1004,8 @@ async function main(): Promise<void> {
     };
     // Resolve the provider from the registry so remapping 'standard' to an
     // OpenRouter model routes drift checks through OpenRouterProvider. (#646)
-    driftDetector = new DriftDetector(resolveProviderForModel(driftConfig.model, 'DriftDetector'), driftConfig, logger);
+    const driftProvider = new TelemetryLlmProvider(resolveProviderForModel(driftConfig.model, 'DriftDetector'), bus, logger, 'drift-detector', modelRegistry);
+    driftDetector = new DriftDetector(driftProvider, driftConfig, logger);
     logger.info({ driftConfig }, 'Intent drift detection enabled');
   } else {
     logger.info('Intent drift detection disabled via config');
@@ -1048,7 +1051,8 @@ async function main(): Promise<void> {
   };
   // Resolve the provider from the registry so remapping the scoring tier to an
   // OpenRouter model routes LLM-judge calls through OpenRouterProvider. (#646)
-  const scoringPass = new AutonomyScoringPass(actionLogRepo, autonomyService, resolveProviderForModel(scoringModel, 'AutonomyScoringPass'), logger, scoringPassConfig);
+  const scoringProvider = new TelemetryLlmProvider(resolveProviderForModel(scoringModel, 'AutonomyScoringPass'), bus, logger, 'scoring-pass', modelRegistry);
+  const scoringPass = new AutonomyScoringPass(actionLogRepo, autonomyService, scoringProvider, logger, scoringPassConfig);
   logger.info({ scoringPassConfig }, 'AutonomyScoringPass configured');
 
   const dreamEngine = new DreamEngine(pool, bus, logger, decayConfig, scoringPass);
@@ -1116,19 +1120,13 @@ async function main(): Promise<void> {
     tempFileStore = undefined;
   }
 
-  // Execution layer — services wired here are injected per-skill based on their
-  // capability-gated declarations. outboundGateway gives email skills their send path.
-  // entityContextAssembler enables entity_enrichment pre-enrichment and the
-  // entity-context skill. agentContactId enables entity_enrichment default='agent'.
-  // Infra skills (extract-facts, extract-relationships, file-parse) resolve their model
-  // at call time via ctx.modelRouter — they cannot be given a pre-resolved concrete
-  // provider. LLMProviderRouter intercepts each chat() call and routes to the right
-  // provider based on the model string, so those skills work correctly even when
-  // tiers are remapped to OpenRouter models. (#646; see also #637 for planned redesign.)
+  // InfraLlmService — constrained LLM access for infrastructure skills (#637).
+  // Routes through ModelRouter + LLMProviderRouter for tier-aware model selection,
+  // and publishes llm.call bus events for full telemetry. Exposes only classify()
+  // and extract() — no raw chat(). The narrow API surface IS the security policy.
   //
-  // Validate at startup that the tiers infra skills actually use (fast and standard)
+  // Validate at startup that the tiers infra skills use (fast and standard)
   // are routable, giving the same fail-fast guarantee as the other three consumers.
-  // Without this, a bad config would only surface as a skill error at call time.
   for (const infraTier of ['fast', 'standard'] as const) {
     const infraModel = modelRouter.resolve(infraTier).model;
     const infraProviderName = modelRegistry.getProvider(infraModel);
@@ -1142,7 +1140,14 @@ async function main(): Promise<void> {
     }
   }
   const infraLlmRouter = new LLMProviderRouter(modelRegistry, providerRegistry);
-  const executionLayer = new ExecutionLayer(skillRegistry, logger, { bus, agentRegistry, contactService, outboundGateway, heldMessages, schedulerService, entityMemory, agentPersona, nylasCalendarClient, entityContextAssembler, agentContactId: agentIdentityContactId, autonomyService, executiveProfileService, browserService, bullpenService, approvalTrigger, actionLogRepo, confidencePipeline, tempFileStore, llmProvider: infraLlmRouter, modelRouter, timezone: config.timezone, selfEmail: resolvedEmailAccounts[0]?.selfEmail, skillOutputMaxLength: yamlConfig.skillOutput?.maxLength });
+  const infraLlmService = new InfraLlmService(infraLlmRouter, modelRouter, bus, logger, modelRegistry);
+
+  // Execution layer — services wired here are injected per-skill based on their
+  // capability-gated declarations. outboundGateway gives email skills their send path.
+  // entityContextAssembler enables entity_enrichment pre-enrichment and the
+  // entity-context skill. agentContactId enables entity_enrichment default='agent'.
+  // infraLlmService provides constrained LLM access (classify/extract) with telemetry.
+  const executionLayer = new ExecutionLayer(skillRegistry, logger, { bus, agentRegistry, contactService, outboundGateway, heldMessages, schedulerService, entityMemory, agentPersona, nylasCalendarClient, entityContextAssembler, agentContactId: agentIdentityContactId, autonomyService, executiveProfileService, browserService, bullpenService, approvalTrigger, actionLogRepo, confidencePipeline, tempFileStore, infraLlmService, timezone: config.timezone, selfEmail: resolvedEmailAccounts[0]?.selfEmail, skillOutputMaxLength: yamlConfig.skillOutput?.maxLength });
 
   // Two-pass agent registration:
   // Pass 1: Register all agents in the registry so specialistSummary() is complete
@@ -1162,6 +1167,16 @@ async function main(): Promise<void> {
     }
   } catch (err) {
     logger.fatal({ err }, 'Failed during agent registration');
+    process.exit(1);
+  }
+
+  // Cross-validate allowed_callers in skill manifests against known agent names.
+  // Must run after both skills and agents are loaded. Unknown names → hard fail.
+  try {
+    const knownAgentNames = new Set(agentConfigs.map(c => c.name));
+    validateAllowedCallers(skillRegistry, knownAgentNames);
+  } catch (err) {
+    logger.fatal({ err }, 'allowed_callers validation failed — fix skill manifests');
     process.exit(1);
   }
 

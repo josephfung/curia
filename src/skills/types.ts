@@ -57,7 +57,7 @@ export interface SkillManifest {
    *  Valid capabilities: bus, agentRegistry, outboundGateway, heldMessages,
    *  schedulerService, entityMemory, nylasCalendarClient, autonomyService,
    *  executiveProfileService, browserService, bullpenService, skillSearch,
-   *  actionLogRepo, executionLayer, confidencePipeline, tempFileStore.
+   *  actionLogRepo, executionLayer, confidencePipeline, tempFileStore, infraLlm.
    *
    *  Services NOT listed here (contactService, entityContextAssembler, agentPersona)
    *  are universal — available to every skill without declaration. */
@@ -75,6 +75,12 @@ export interface SkillManifest {
     param: string;
     default: 'caller' | 'agent';
   };
+  /** Optional list of agent names allowed to invoke this skill.
+   *  Omitted or empty = unrestricted (any agent or system layer may invoke).
+   *  'system' is a reserved name for system-layer invocations (checkpoint processor,
+   *  scheduler) where no agentId is present.
+   *  Validated at load time against known agent names — typos fail at startup. */
+  allowed_callers?: string[];
 }
 
 /**
@@ -206,13 +212,13 @@ export interface SkillContext {
    *  MCP tools that accept file paths. Used by email download skills to hand off
    *  attachment bytes to Google Drive uploads without corruption. */
   writeTempFile?(buffer: Buffer, filename: string): Promise<string>;
-  /** LLM provider — available to skills declaring 'llmProvider' in capabilities.
-   *  Grants direct LLM access — use only for infrastructure skills (extract-facts,
-   *  extract-relationships, file-parse). See #637 for planned redesign. */
-  llmProvider?: import('../agents/llm/provider.js').LLMProvider;
-  /** Model router — available to skills declaring 'modelRouter' in capabilities.
-   *  Resolves tier names to model strings. See #637 for planned redesign. */
-  modelRouter?: import('../agents/llm/model-router.js').ModelRouter;
+  /** Constrained LLM access — available to skills declaring 'infraLlm' in capabilities.
+   *  Provides classify() and extract() operations routed through the ModelRouter
+   *  with full telemetry (llm.call bus events). Does NOT expose raw chat().
+   *  The narrow API surface is the security policy: any skill can declare this
+   *  capability, but all it gets is classification and extraction, not arbitrary
+   *  LLM access. See #637. */
+  infraLlm?: import('./infra-llm.js').InfraLlm;
 }
 
 /**

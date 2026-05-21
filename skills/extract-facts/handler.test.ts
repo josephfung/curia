@@ -1,6 +1,6 @@
 // handler.test.ts — unit tests for extract-facts skill.
 //
-// Uses an in-memory KG backend (no Postgres) and mock llmProvider / modelRouter
+// Uses an in-memory KG backend (no Postgres) and mock infraLlm
 // injected via ctx, so no real API calls are made.
 
 import { describe, it, expect, vi } from 'vitest';
@@ -12,6 +12,7 @@ import { MemoryValidator } from '../../src/memory/validation.js';
 import { createSilentLogger } from '../../src/logger.js';
 import { ExtractFactsHandler } from './handler.js';
 import type { SkillContext } from '../../src/skills/types.js';
+import type { InfraLlm, InfraLlmResult } from '../../src/skills/infra-llm.js';
 
 // -- Test helpers --
 
@@ -22,41 +23,35 @@ function makeEntityMemory(): EntityMemory {
   return new EntityMemory(store, validator, embeddingService, createSilentLogger());
 }
 
-// Creates mock llmProvider + modelRouter objects for injection into ctx.
-// responses: scripted sequence of text responses — first call is the classifier
-// gate, second call (if triggered) is extraction.
-function makeMocks(responses: string[]) {
+// Creates a mock infraLlm for injection into ctx.
+// responses: scripted sequence of text responses — first call goes to classify()
+// (classifier gate), second call (if triggered) goes to extract().
+function makeMockInfraLlm(responses: string[]): InfraLlm {
   let callIndex = 0;
 
-  const mockModelRouter = {
-    resolve: vi.fn().mockImplementation((tier: string) => ({
-      model: tier === 'fast' ? 'claude-haiku-4-5' : 'claude-sonnet-4-6',
-      tier,
-    })),
-  };
-
-  const mockLlmProvider = {
-    chat: vi.fn().mockImplementation(() => {
-      const content = responses[callIndex++] ?? 'no';
-      return Promise.resolve({ type: 'text', content });
+  return {
+    classify: vi.fn().mockImplementation((): Promise<InfraLlmResult> => {
+      const text = responses[callIndex++] ?? 'no';
+      return Promise.resolve({ ok: true, text });
+    }),
+    extract: vi.fn().mockImplementation((): Promise<InfraLlmResult> => {
+      const text = responses[callIndex++] ?? '[]';
+      return Promise.resolve({ ok: true, text });
     }),
   };
-
-  return { mockLlmProvider, mockModelRouter };
 }
 
 function makeCtx(
   entityMemory: EntityMemory,
   input: Record<string, unknown>,
-  mocks: ReturnType<typeof makeMocks>,
+  infraLlm: InfraLlm,
 ): SkillContext {
   return {
     input,
     secret: () => 'test-api-key',
     log: pino({ level: 'silent' }),
     entityMemory,
-    llmProvider: mocks.mockLlmProvider,
-    modelRouter: mocks.mockModelRouter,
+    infraLlm,
   } as unknown as SkillContext;
 }
 
@@ -65,18 +60,19 @@ function makeCtx(
 describe('ExtractFactsHandler', () => {
   it('returns skipped:true when classifier gate fires on unrelated text', async () => {
     const entityMemory = makeEntityMemory();
-    const mocks = makeMocks(['no']);
+    const infraLlm = makeMockInfraLlm(['no']);
     const handler = new ExtractFactsHandler();
     const ctx = makeCtx(entityMemory, {
       text: 'Ada manages Project Orion and works closely with Bob.',
       source: 'test',
-    }, mocks);
+    }, infraLlm);
 
     const result = await handler.execute(ctx);
 
     expect(result).toEqual({ success: true, data: { stored: 0, skipped: true, failed: 0 } });
     // Classifier was called; extraction was not
-    expect(mocks.mockLlmProvider.chat).toHaveBeenCalledTimes(1);
+    expect(infraLlm.classify).toHaveBeenCalledTimes(1);
+    expect(infraLlm.extract).not.toHaveBeenCalled();
   });
 
   it('acceptance criterion: "Bob lives in Toronto" stores a location fact', async () => {
@@ -84,12 +80,12 @@ describe('ExtractFactsHandler', () => {
     const facts = JSON.stringify([
       { subject: 'Jane Doe', subjectType: 'person', attribute: 'home_city', value: 'Toronto', confidence: 0.9, decayClass: 'slow_decay' },
     ]);
-    const mocks = makeMocks(['yes', facts]);
+    const infraLlm = makeMockInfraLlm(['yes', facts]);
     const handler = new ExtractFactsHandler();
     const ctx = makeCtx(entityMemory, {
       text: 'Bob lives in Toronto.',
       source: 'test',
-    }, mocks);
+    }, infraLlm);
 
     const result = await handler.execute(ctx);
 
@@ -109,12 +105,12 @@ describe('ExtractFactsHandler', () => {
     const facts = JSON.stringify([
       { subject: 'Ada Lovelace', subjectType: 'person', attribute: 'current_location', value: 'London', confidence: 0.8, decayClass: 'fast_decay' },
     ]);
-    const mocks = makeMocks(['yes', facts]);
+    const infraLlm = makeMockInfraLlm(['yes', facts]);
     const handler = new ExtractFactsHandler();
     const ctx = makeCtx(entityMemory, {
       text: 'Ada is currently in London this week.',
       source: 'test',
-    }, mocks);
+    }, infraLlm);
 
     await handler.execute(ctx);
 
@@ -130,12 +126,12 @@ describe('ExtractFactsHandler', () => {
     const facts = JSON.stringify([
       { subject: 'Brand New Person', subjectType: 'person', attribute: 'role', value: 'engineer', confidence: 0.85, decayClass: 'slow_decay' },
     ]);
-    const mocks = makeMocks(['yes', facts]);
+    const infraLlm = makeMockInfraLlm(['yes', facts]);
     const handler = new ExtractFactsHandler();
     const ctx = makeCtx(entityMemory, {
       text: 'Brand New Person is an engineer.',
       source: 'test',
-    }, mocks);
+    }, infraLlm);
 
     await handler.execute(ctx);
 
@@ -151,12 +147,12 @@ describe('ExtractFactsHandler', () => {
     const facts = JSON.stringify([
       { subject: 'Jane Doe', subjectType: 'person', attribute: 'role', value: 'CEO', confidence: 0.9, decayClass: 'ultra_slow' },
     ]);
-    const mocks = makeMocks(['yes', facts]);
+    const infraLlm = makeMockInfraLlm(['yes', facts]);
     const handler = new ExtractFactsHandler();
     const ctx = makeCtx(entityMemory, {
       text: 'Bob is the CEO.',
       source: 'test',
-    }, mocks);
+    }, infraLlm);
 
     await handler.execute(ctx);
 
@@ -173,16 +169,16 @@ describe('ExtractFactsHandler', () => {
     ]);
 
     // First invocation — stores the fact
-    const mocks1 = makeMocks(['yes', facts]);
+    const infraLlm1 = makeMockInfraLlm(['yes', facts]);
     const handler1 = new ExtractFactsHandler();
-    const ctx1 = makeCtx(entityMemory, { text: 'Bob lives in Toronto.', source: 'test' }, mocks1);
+    const ctx1 = makeCtx(entityMemory, { text: 'Bob lives in Toronto.', source: 'test' }, infraLlm1);
     const result1 = await handler1.execute(ctx1);
     expect(result1).toEqual({ success: true, data: { stored: 1, skipped: false, failed: 0 } });
 
     // Second invocation with semantically identical fact — storeFact deduplicates internally
-    const mocks2 = makeMocks(['yes', facts]);
+    const infraLlm2 = makeMockInfraLlm(['yes', facts]);
     const handler2 = new ExtractFactsHandler();
-    const ctx2 = makeCtx(entityMemory, { text: 'Bob lives in Toronto.', source: 'test' }, mocks2);
+    const ctx2 = makeCtx(entityMemory, { text: 'Bob lives in Toronto.', source: 'test' }, infraLlm2);
     const result2 = await handler2.execute(ctx2);
     expect(result2).toEqual({ success: true, data: { stored: 1, skipped: false, failed: 0 } });
 
@@ -195,24 +191,24 @@ describe('ExtractFactsHandler', () => {
 
   it('returns error when text input is missing', async () => {
     const entityMemory = makeEntityMemory();
-    const mocks = makeMocks([]);
+    const infraLlm = makeMockInfraLlm([]);
     const handler = new ExtractFactsHandler();
-    const ctx = makeCtx(entityMemory, { source: 'test' }, mocks);
+    const ctx = makeCtx(entityMemory, { source: 'test' }, infraLlm);
 
     const result = await handler.execute(ctx);
 
     expect(result).toEqual({ success: false, error: 'Missing required input: text (string)' });
-    expect(mocks.mockLlmProvider.chat).not.toHaveBeenCalled();
+    expect(infraLlm.classify).not.toHaveBeenCalled();
   });
 
   it('returns failure when extraction returns non-array — distinguishable from legitimate no-facts run', async () => {
     const entityMemory = makeEntityMemory();
-    const mocks = makeMocks(['yes', 'null']);
+    const infraLlm = makeMockInfraLlm(['yes', 'null']);
     const handler = new ExtractFactsHandler();
     const ctx = makeCtx(entityMemory, {
       text: 'Bob lives in Toronto.',
       source: 'test',
-    }, mocks);
+    }, infraLlm);
 
     const result = await handler.execute(ctx);
 
@@ -224,7 +220,7 @@ describe('ExtractFactsHandler', () => {
     const facts = JSON.stringify([
       { subject: 'Jane Doe', subjectType: 'person', attribute: 'home_city', value: 'Toronto', confidence: 0.9, decayClass: 'slow_decay' },
     ]);
-    const mocks = makeMocks(['yes', facts]);
+    const infraLlm = makeMockInfraLlm(['yes', facts]);
     const handler = new ExtractFactsHandler();
 
     // Mock storeFact to return a conflict (contradicts an existing fact)
@@ -234,7 +230,7 @@ describe('ExtractFactsHandler', () => {
       conflict: 'contradicts existing value: London',
     });
 
-    const ctx = makeCtx(entityMemory, { text: 'Bob lives in Toronto.', source: 'test' }, mocks);
+    const ctx = makeCtx(entityMemory, { text: 'Bob lives in Toronto.', source: 'test' }, infraLlm);
     const result = await handler.execute(ctx);
 
     // conflict is a semantic outcome — not counted as failed
@@ -250,16 +246,14 @@ describe('ExtractFactsHandler', () => {
       { subject: 'Jane Doe', subjectType: 'person', attribute: 'job_title', value: 'CEO', confidence: 0.9, decayClass: 'slow_decay' },
       { subject: 'Jane Doe', subjectType: 'person', attribute: 'nationality', value: 'Canadian', confidence: 0.9, decayClass: 'permanent' },
     ]);
-    const mocks = makeMocks(['yes', facts]);
+    const infraLlm = makeMockInfraLlm(['yes', facts]);
     const handler = new ExtractFactsHandler();
 
     const storeFact = vi.spyOn(entityMemory, 'storeFact')
       .mockResolvedValueOnce({ stored: true, action: 'created' })
       .mockResolvedValueOnce({ stored: false, action: 'rate_limited', conflict: '50-write limit reached' });
-    // No third mock — if the loop doesn't break, storeFact will be called a third time and
-    // the test will fail because the spy has no more configured responses.
 
-    const ctx = makeCtx(entityMemory, { text: 'Jane Doe is the Canadian CEO based in Toronto.', source: 'test' }, mocks);
+    const ctx = makeCtx(entityMemory, { text: 'Jane Doe is the Canadian CEO based in Toronto.', source: 'test' }, infraLlm);
     const result = await handler.execute(ctx);
 
     // first fact stored, rate-limit counted as failed, loop stopped before fact 3
@@ -272,14 +266,12 @@ describe('ExtractFactsHandler', () => {
     const facts = JSON.stringify([
       { subject: 'Jane Doe', subjectType: 'person', attribute: 'home_city', value: 'Toronto', confidence: 0.9, decayClass: 'slow_decay' },
     ]);
-    const mocks = makeMocks(['yes', facts]);
+    const infraLlm = makeMockInfraLlm(['yes', facts]);
     const handler = new ExtractFactsHandler();
 
-    // TypeError signals a programming bug — should escape the per-fact catch and
-    // reach the outer catch, returning { success: false } instead of { failed: 1 }.
     vi.spyOn(entityMemory, 'storeFact').mockRejectedValueOnce(new TypeError("Cannot read properties of undefined (reading 'id')"));
 
-    const ctx = makeCtx(entityMemory, { text: 'Jane Doe lives in Toronto.', source: 'test' }, mocks);
+    const ctx = makeCtx(entityMemory, { text: 'Jane Doe lives in Toronto.', source: 'test' }, infraLlm);
     const result = await handler.execute(ctx);
 
     expect(result).toEqual({ success: false, error: "Cannot read properties of undefined (reading 'id')" });
@@ -287,36 +279,32 @@ describe('ExtractFactsHandler', () => {
 
   it('malformed-fact warn logs only structural metadata — not the raw fact object (PII guard)', async () => {
     const entityMemory = makeEntityMemory();
-    // fact.value is null — triggers the malformed guard on line 183
+    // fact.value is null — triggers the malformed guard
     const facts = JSON.stringify([
       { subject: 'Jane Doe', subjectType: 'person', attribute: 'home_city', value: null, confidence: 0.9, decayClass: 'slow_decay' },
     ]);
-    const mocks = makeMocks(['yes', facts]);
+    const infraLlm = makeMockInfraLlm(['yes', facts]);
     const handler = new ExtractFactsHandler();
 
-    // Build a real logger and spy on warn so we can inspect what was logged.
     const log = pino({ level: 'silent' });
     const warnSpy = vi.spyOn(log, 'warn');
-    const ctx = makeCtx(entityMemory, { text: 'Jane Doe lives in Toronto.', source: 'test' }, mocks);
+    const ctx = makeCtx(entityMemory, { text: 'Jane Doe lives in Toronto.', source: 'test' }, infraLlm);
     (ctx as Record<string, unknown>).log = log;
 
     const result = await handler.execute(ctx);
 
     expect(result).toEqual({ success: true, data: { stored: 0, skipped: false, failed: 1 } });
 
-    // Find the malformed-fact warn call by its message
     const malformedCall = warnSpy.mock.calls.find(
       (args) => typeof args[args.length - 1] === 'string' && (args[args.length - 1] as string).includes('skipping malformed fact'),
     );
     expect(malformedCall).toBeDefined();
 
     const loggedData = malformedCall![0] as Record<string, unknown>;
-    // Raw fact must not be present — it contains PII (subject name, value strings)
     expect(loggedData).not.toHaveProperty('fact');
-    // Structural metadata must be present instead
-    expect(loggedData).toHaveProperty('subjectType', 'string');   // typeof 'Jane Doe'
-    expect(loggedData).toHaveProperty('attributeType', 'string'); // typeof 'home_city'
-    expect(loggedData).toHaveProperty('valueType', 'object');     // typeof null
+    expect(loggedData).toHaveProperty('subjectType', 'string');
+    expect(loggedData).toHaveProperty('attributeType', 'string');
+    expect(loggedData).toHaveProperty('valueType', 'object');
   });
 
   it('catch block is safe when storeFact throws — failed incremented, no ReferenceError', async () => {
@@ -324,24 +312,19 @@ describe('ExtractFactsHandler', () => {
     const facts = JSON.stringify([
       { subject: 'Jane Doe', subjectType: 'person', attribute: 'home_city', value: 'Toronto', confidence: 0.9, decayClass: 'slow_decay' },
     ]);
-    const mocks = makeMocks(['yes', facts]);
+    const infraLlm = makeMockInfraLlm(['yes', facts]);
     const handler = new ExtractFactsHandler();
 
-    // Simulate a DB outage — storeFact throws instead of returning a failure result.
     const storeFact = vi.spyOn(entityMemory, 'storeFact').mockRejectedValueOnce(new Error('DB connection lost'));
 
-    const ctx = makeCtx(entityMemory, { text: 'Jane Doe lives in Toronto.', source: 'test' }, mocks);
+    const ctx = makeCtx(entityMemory, { text: 'Jane Doe lives in Toronto.', source: 'test' }, infraLlm);
     const result = await handler.execute(ctx);
 
-    // The per-fact catch block must handle the error and increment failed.
-    // If subject/attribute are not in scope, a ReferenceError escapes to the
-    // outer catch and the result is { success: false } — so this assertion
-    // distinguishes the two code paths.
     expect(result).toEqual({ success: true, data: { stored: 0, skipped: false, failed: 1 } });
     expect(storeFact).toHaveBeenCalledTimes(1);
   });
 
-  it('returns error when llmProvider capability is missing', async () => {
+  it('returns error when infraLlm capability is missing', async () => {
     const entityMemory = makeEntityMemory();
     const handler = new ExtractFactsHandler();
     const ctx = {
@@ -349,33 +332,22 @@ describe('ExtractFactsHandler', () => {
       secret: () => 'test-api-key',
       log: pino({ level: 'silent' }),
       entityMemory,
-      // llmProvider intentionally omitted
-      modelRouter: { resolve: vi.fn() },
+      // infraLlm intentionally omitted
     } as unknown as SkillContext;
 
     const result = await handler.execute(ctx);
 
-    expect(result).toEqual({ success: false, error: 'extract-facts requires llmProvider and modelRouter capabilities' });
+    expect(result).toEqual({ success: false, error: 'extract-facts requires infraLlm capability' });
   });
 
   it('returns error when classifier LLM call fails', async () => {
     const entityMemory = makeEntityMemory();
-    const { mockModelRouter } = makeMocks([]);
-    const mockLlmProvider = {
-      chat: vi.fn().mockResolvedValue({
-        type: 'error',
-        error: new Error('Rate limit exceeded'),
-      }),
+    const infraLlm: InfraLlm = {
+      classify: vi.fn().mockResolvedValue({ ok: false, error: 'Rate limit exceeded' }),
+      extract: vi.fn(),
     };
     const handler = new ExtractFactsHandler();
-    const ctx = {
-      input: { text: 'Bob lives in Toronto.', source: 'test' },
-      secret: () => 'test-api-key',
-      log: pino({ level: 'silent' }),
-      entityMemory,
-      llmProvider: mockLlmProvider,
-      modelRouter: mockModelRouter,
-    } as unknown as SkillContext;
+    const ctx = makeCtx(entityMemory, { text: 'Bob lives in Toronto.', source: 'test' }, infraLlm);
 
     const result = await handler.execute(ctx);
 
@@ -384,28 +356,12 @@ describe('ExtractFactsHandler', () => {
 
   it('returns error when extraction LLM call fails', async () => {
     const entityMemory = makeEntityMemory();
-    const { mockModelRouter } = makeMocks([]);
-    let callCount = 0;
-    const mockLlmProvider = {
-      chat: vi.fn().mockImplementation(() => {
-        callCount++;
-        if (callCount === 1) {
-          // Classifier succeeds with 'yes'
-          return Promise.resolve({ type: 'text', content: 'yes' });
-        }
-        // Extraction fails
-        return Promise.resolve({ type: 'error', error: new Error('Context window exceeded') });
-      }),
+    const infraLlm: InfraLlm = {
+      classify: vi.fn().mockResolvedValue({ ok: true, text: 'yes' }),
+      extract: vi.fn().mockResolvedValue({ ok: false, error: 'Context window exceeded' }),
     };
     const handler = new ExtractFactsHandler();
-    const ctx = {
-      input: { text: 'Bob lives in Toronto.', source: 'test' },
-      secret: () => 'test-api-key',
-      log: pino({ level: 'silent' }),
-      entityMemory,
-      llmProvider: mockLlmProvider,
-      modelRouter: mockModelRouter,
-    } as unknown as SkillContext;
+    const ctx = makeCtx(entityMemory, { text: 'Bob lives in Toronto.', source: 'test' }, infraLlm);
 
     const result = await handler.execute(ctx);
 
