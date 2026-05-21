@@ -550,6 +550,64 @@ export class SchedulerService {
   }
 
   /**
+   * Cancel stale declarative (system-created) jobs that are no longer declared in YAML.
+   *
+   * After all upsertDeclarativeJob() calls complete, the caller passes the full set of
+   * (agent_id, cron_expr, task_payload::text) tuples that were successfully upserted.
+   * Any system-created rows in 'pending' or 'failed' status whose triple is NOT in that
+   * set are stale — their cron changed, or the entry was removed from YAML entirely.
+   *
+   * Running and suspended jobs are left alone: running jobs are handled by the watchdog,
+   * and suspended jobs may have been paused intentionally by an operator.
+   *
+   * Returns the number of rows cancelled.
+   */
+  async cancelStaleDeclarativeJobs(
+    liveTuples: Array<{ agentId: string; cronExpr: string; taskPayload: string }>,
+  ): Promise<number> {
+    // Build a parameterized exclusion clause. Each live tuple becomes a
+    // (agent_id, cron_expr, task_payload::text) triple in a VALUES list so
+    // the NOT IN check is a single set operation — no per-tuple subqueries.
+    //
+    // When there are zero live tuples, every system row is stale (all schedules
+    // were removed). The empty exclusion clause correctly targets all system rows.
+    const valuePlaceholders: string[] = [];
+    const params: unknown[] = [];
+    let idx = 1;
+    for (const tuple of liveTuples) {
+      valuePlaceholders.push(`($${idx}, $${idx + 1}, $${idx + 2})`);
+      params.push(tuple.agentId, tuple.cronExpr, tuple.taskPayload);
+      idx += 3;
+    }
+
+    // When liveTuples is non-empty, exclude the live set. When empty, no exclusion
+    // is needed — the UPDATE targets all system rows with pending/failed status.
+    const exclusionClause = valuePlaceholders.length > 0
+      ? `AND (agent_id, cron_expr, task_payload::text) NOT IN (VALUES ${valuePlaceholders.join(', ')})`
+      : '';
+
+    const sql = `
+      UPDATE scheduled_jobs
+         SET status = 'cancelled'
+       WHERE created_by = 'system'
+         AND status IN ('pending', 'failed')
+         ${exclusionClause}
+      RETURNING id, agent_id, cron_expr, task_payload
+    `;
+
+    const { rows } = await this.pool.query(sql, params);
+
+    for (const row of rows as Array<{ id: string; agent_id: string; cron_expr: string; task_payload: unknown }>) {
+      this.logger.info(
+        { jobId: row.id, agentId: row.agent_id, cronExpr: row.cron_expr, action: 'cancelled' },
+        'Stale declarative job cancelled — schedule entry changed or removed from YAML',
+      );
+    }
+
+    return rows.length;
+  }
+
+  /**
    * Complete a job run.
    * - On success: if recurring (has cron_expr), advance next_run_at and reset failures;
    *   if one-shot, mark as completed.
