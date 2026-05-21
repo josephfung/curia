@@ -167,7 +167,8 @@ export interface ListMessagesOptions {
    */
   fields?: 'include_headers';
   /** Filter to messages in these folder IDs (maps to Nylas `in` param).
-   *  Standard values: INBOX, DRAFTS, SENT, TRASH. Providers may have custom labels. */
+   *  Standard Gmail values: INBOX, DRAFT, SENT, TRASH, SPAM, STARRED, IMPORTANT.
+   *  Note: Gmail uses DRAFT (singular), not DRAFTS. Providers may have custom labels. */
   folders?: string[];
   /** Filter to messages from this sender email address */
   from?: string;
@@ -203,12 +204,6 @@ export class NylasClient {
   async listMessages(options?: ListMessagesOptions): Promise<NylasMessage[]> {
     const queryParams: ListMessagesQueryParams = {};
 
-    if (options?.receivedAfter !== undefined) {
-      queryParams.receivedAfter = options.receivedAfter;
-    }
-    if (options?.unread !== undefined) {
-      queryParams.unread = options.unread;
-    }
     if (options?.limit !== undefined) {
       queryParams.limit = options.limit;
     }
@@ -220,19 +215,43 @@ export class NylasClient {
       // MessageFields enum type into the broader codebase.
       queryParams.fields = options.fields as MessageFields;
     }
-    if (options?.folders !== undefined) {
-      // Nylas uses `in` for folder filtering — maps to our `folders` option.
-      queryParams.in = options.folders;
-    }
-    if (options?.from !== undefined) {
-      // Nylas expects `from` as an array of email strings.
-      queryParams.from = [options.from];
-    }
-    if (options?.subject !== undefined) {
-      queryParams.subject = options.subject;
-    }
+
     if (options?.searchQueryNative !== undefined) {
+      // Nylas v3: search_query_native cannot be combined with any other filter
+      // param except limit and page_token — sending in/unread/received_after/from/
+      // subject alongside it returns HTTP 400. Suppress conflicting params and warn
+      // when the caller passed both. (Same guard as CeoNylasClient.)
+      const suppressed: Record<string, unknown> = {};
+      if (options.folders !== undefined) suppressed.folders = options.folders;
+      if (options.unread !== undefined) suppressed.unread = options.unread;
+      if (options.receivedAfter !== undefined) suppressed.receivedAfter = options.receivedAfter;
+      if (options.from !== undefined) suppressed.from = options.from;
+      if (options.subject !== undefined) suppressed.subject = options.subject;
+      if (Object.keys(suppressed).length > 0) {
+        this.log.warn(
+          { suppressed },
+          'nylas: listMessages — folders/unread/receivedAfter/from/subject ignored because searchQueryNative is set (Nylas v3 limitation)',
+        );
+      }
       queryParams.searchQueryNative = options.searchQueryNative;
+    } else {
+      if (options?.receivedAfter !== undefined) {
+        queryParams.receivedAfter = options.receivedAfter;
+      }
+      if (options?.unread !== undefined) {
+        queryParams.unread = options.unread;
+      }
+      if (options?.folders !== undefined) {
+        // Nylas uses `in` for folder filtering — maps to our `folders` option.
+        queryParams.in = options.folders;
+      }
+      if (options?.from !== undefined) {
+        // Nylas expects `from` as an array of email strings.
+        queryParams.from = [options.from];
+      }
+      if (options?.subject !== undefined) {
+        queryParams.subject = options.subject;
+      }
     }
 
     this.log.debug({ queryParams }, 'listing messages');
