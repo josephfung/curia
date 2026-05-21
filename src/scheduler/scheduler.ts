@@ -512,8 +512,11 @@ export class Scheduler {
    */
   async loadDeclarativeJobs(agentConfigs: AgentYamlConfig[]): Promise<void> {
     const knownAgents = new Set(agentConfigs.map(config => config.name));
-    // Collect all (source → target) schedule edges for cycle detection after upserts.
+    // Collect all (source -> target) schedule edges for cycle detection after upserts.
     const edges: Array<{ source: string; target: string }> = [];
+    // Collect the (agent_id, cron_expr, task_payload) tuples that were successfully upserted.
+    // Used after the loop to cancel stale system rows no longer in the YAML config.
+    const liveTuples: Array<{ agentId: string; cronExpr: string; taskPayload: string }> = [];
 
     for (const config of agentConfigs) {
       if (!config.schedule || config.schedule.length === 0) {
@@ -543,6 +546,13 @@ export class Scheduler {
           // Only record the edge after a successful upsert — a failed upsert means
           // the job doesn't exist in the DB, so it shouldn't influence cycle detection.
           edges.push({ source: config.name, target: targetAgentId });
+          // Only track successfully upserted tuples in the live set — a failed upsert
+          // means the job isn't reliably in the DB, so it must not shield a stale row.
+          liveTuples.push({
+            agentId: targetAgentId,
+            cronExpr: schedule.cron,
+            taskPayload: JSON.stringify({ task: schedule.task }),
+          });
           this.logger.info(
             { agentId: targetAgentId, sourceAgent: config.name, cron: schedule.cron, task: schedule.task, jobId },
             'Declarative job upserted',
@@ -576,6 +586,25 @@ export class Scheduler {
           'Declarative schedule cycle detected — agents target each other; this will cause infinite task loops',
         );
       }
+    }
+
+    // Cancel system-created rows whose (agent_id, cron_expr, task_payload) triple is no longer
+    // declared in any agent YAML. This handles both cron expression changes (old row becomes
+    // stale when the new cron conflicts on the unique index) and removed schedule entries
+    // (row has no corresponding YAML declaration at all).
+    try {
+      const cancelledCount = await this.schedulerService.cancelStaleDeclarativeJobs(liveTuples);
+      if (cancelledCount > 0) {
+        this.logger.info(
+          { cancelledCount },
+          'stale declarative jobs cancelled — schedule entries changed or removed from YAML',
+        );
+      }
+    } catch (err) {
+      this.logger.error(
+        { err },
+        'Failed to cancel stale declarative jobs — stale rows may continue firing until next restart',
+      );
     }
   }
 

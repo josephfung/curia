@@ -29,6 +29,7 @@ function mockSchedulerService() {
   return {
     completeJobRun: vi.fn(),
     upsertDeclarativeJob: vi.fn(),
+    cancelStaleDeclarativeJobs: vi.fn(),
     getJob: vi.fn(),
     nextRunFromCron: vi.fn(),
     recoverStuckJob: vi.fn(),
@@ -1017,6 +1018,189 @@ describe('Scheduler', () => {
           task: 'weekly digest',
           intent_anchor: 'Produce a weekly summary of key business metrics',
         },
+      );
+    });
+
+    it('calls cancelStaleDeclarativeJobs with the live tuple set after all upserts', async () => {
+      schedulerService.upsertDeclarativeJob.mockResolvedValue('job-1');
+      schedulerService.cancelStaleDeclarativeJobs.mockResolvedValue(0);
+
+      const configs: AgentYamlConfig[] = [
+        {
+          name: 'coordinator',
+          model: { provider: 'anthropic', model: 'claude-3' },
+          system_prompt: 'Coord.',
+          schedule: [
+            { cron: '0 9 * * 1', task: 'weekly-standup' },
+            { cron: '0 8 * * *', task: 'daily-brief' },
+          ],
+        },
+      ];
+
+      await scheduler.loadDeclarativeJobs(configs);
+
+      expect(schedulerService.cancelStaleDeclarativeJobs).toHaveBeenCalledTimes(1);
+      const [liveTuples] = schedulerService.cancelStaleDeclarativeJobs.mock.calls[0] as [
+        Array<{ agentId: string; cronExpr: string; taskPayload: string }>,
+      ];
+      expect(liveTuples).toHaveLength(2);
+      expect(liveTuples).toContainEqual({
+        agentId: 'coordinator',
+        cronExpr: '0 9 * * 1',
+        taskPayload: JSON.stringify({ task: 'weekly-standup' }),
+      });
+      expect(liveTuples).toContainEqual({
+        agentId: 'coordinator',
+        cronExpr: '0 8 * * *',
+        taskPayload: JSON.stringify({ task: 'daily-brief' }),
+      });
+    });
+
+    it('excludes failed upserts from the live tuple set', async () => {
+      schedulerService.upsertDeclarativeJob
+        .mockRejectedValueOnce(new Error('db error'))
+        .mockResolvedValueOnce('job-ok');
+      schedulerService.cancelStaleDeclarativeJobs.mockResolvedValue(0);
+
+      const configs: AgentYamlConfig[] = [
+        {
+          name: 'agent-x',
+          model: { provider: 'anthropic', model: 'claude-3' },
+          system_prompt: 'test',
+          schedule: [
+            { cron: '0 1 * * *', task: 'fail-task' },
+            { cron: '0 2 * * *', task: 'ok-task' },
+          ],
+        },
+      ];
+
+      await scheduler.loadDeclarativeJobs(configs);
+
+      const [liveTuples] = schedulerService.cancelStaleDeclarativeJobs.mock.calls[0] as [
+        Array<{ agentId: string; cronExpr: string; taskPayload: string }>,
+      ];
+      // Only the successful upsert should be in the live set
+      expect(liveTuples).toHaveLength(1);
+      expect(liveTuples[0]).toEqual({
+        agentId: 'agent-x',
+        cronExpr: '0 2 * * *',
+        taskPayload: JSON.stringify({ task: 'ok-task' }),
+      });
+    });
+
+    it('uses targetAgentId (not source config.name) in the live tuple', async () => {
+      schedulerService.upsertDeclarativeJob.mockResolvedValue('job-1');
+      schedulerService.cancelStaleDeclarativeJobs.mockResolvedValue(0);
+
+      const configs: AgentYamlConfig[] = [
+        {
+          name: 'writing-scout',
+          model: { provider: 'anthropic', model: 'claude-3' },
+          system_prompt: 'Scout.',
+          schedule: [
+            { cron: '30 8 * * 2', task: 'Run the writing scout', agent_id: 'coordinator' },
+          ],
+        },
+        {
+          name: 'coordinator',
+          model: { provider: 'anthropic', model: 'claude-3' },
+          system_prompt: 'Coord.',
+        },
+      ];
+
+      await scheduler.loadDeclarativeJobs(configs);
+
+      const [liveTuples] = schedulerService.cancelStaleDeclarativeJobs.mock.calls[0] as [
+        Array<{ agentId: string; cronExpr: string; taskPayload: string }>,
+      ];
+      // The live tuple must use 'coordinator' (the targetAgentId), not 'writing-scout'
+      expect(liveTuples).toEqual([
+        {
+          agentId: 'coordinator',
+          cronExpr: '30 8 * * 2',
+          taskPayload: JSON.stringify({ task: 'Run the writing scout' }),
+        },
+      ]);
+    });
+
+    it('calls cancelStaleDeclarativeJobs with empty array when no configs have schedules', async () => {
+      schedulerService.cancelStaleDeclarativeJobs.mockResolvedValue(0);
+
+      const configs: AgentYamlConfig[] = [
+        {
+          name: 'no-schedule',
+          model: { provider: 'anthropic', model: 'claude-3' },
+          system_prompt: 'No schedule.',
+        },
+      ];
+
+      await scheduler.loadDeclarativeJobs(configs);
+
+      expect(schedulerService.cancelStaleDeclarativeJobs).toHaveBeenCalledWith([]);
+    });
+
+    it('logs the count of cancelled stale jobs at info level', async () => {
+      schedulerService.upsertDeclarativeJob.mockResolvedValue('job-1');
+      schedulerService.cancelStaleDeclarativeJobs.mockResolvedValue(3);
+
+      const configs: AgentYamlConfig[] = [
+        {
+          name: 'coordinator',
+          model: { provider: 'anthropic', model: 'claude-3' },
+          system_prompt: 'Coord.',
+          schedule: [{ cron: '0 9 * * *', task: 'brief' }],
+        },
+      ];
+
+      await scheduler.loadDeclarativeJobs(configs);
+
+      expect(logger.info).toHaveBeenCalledWith(
+        expect.objectContaining({ cancelledCount: 3 }),
+        expect.stringContaining('stale declarative jobs cancelled'),
+      );
+    });
+
+    it('does not log cancellation message when count is 0 (fresh install / no stale rows)', async () => {
+      schedulerService.upsertDeclarativeJob.mockResolvedValue('job-1');
+      schedulerService.cancelStaleDeclarativeJobs.mockResolvedValue(0);
+
+      const configs: AgentYamlConfig[] = [
+        {
+          name: 'coordinator',
+          model: { provider: 'anthropic', model: 'claude-3' },
+          system_prompt: 'Coord.',
+          schedule: [{ cron: '0 9 * * *', task: 'brief' }],
+        },
+      ];
+
+      await scheduler.loadDeclarativeJobs(configs);
+
+      // The only info log should be the upsert confirmation, not a "0 stale jobs" message
+      const infoCalls = logger.info.mock.calls as Array<[Record<string, unknown>, string]>;
+      const staleLogs = infoCalls.filter(([, msg]) =>
+        typeof msg === 'string' && msg.includes('stale'),
+      );
+      expect(staleLogs).toHaveLength(0);
+    });
+
+    it('logs and continues if cancelStaleDeclarativeJobs throws', async () => {
+      schedulerService.upsertDeclarativeJob.mockResolvedValue('job-1');
+      schedulerService.cancelStaleDeclarativeJobs.mockRejectedValue(new Error('cleanup query failed'));
+
+      const configs: AgentYamlConfig[] = [
+        {
+          name: 'coordinator',
+          model: { provider: 'anthropic', model: 'claude-3' },
+          system_prompt: 'Coord.',
+          schedule: [{ cron: '0 9 * * *', task: 'brief' }],
+        },
+      ];
+
+      // Should not throw — startup must not abort for a cleanup failure
+      await expect(scheduler.loadDeclarativeJobs(configs)).resolves.toBeUndefined();
+      expect(logger.error).toHaveBeenCalledWith(
+        expect.objectContaining({ err: expect.any(Error) }),
+        expect.stringContaining('Failed to cancel stale declarative jobs'),
       );
     });
   });
