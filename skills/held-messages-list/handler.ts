@@ -4,9 +4,10 @@
 // Optionally filters by channel. Returns a summary with sender, subject,
 // plaintext preview (500 chars), totalLength, and timestamp for each message.
 //
-// preview is stripped of HTML tags before slicing — two regex passes (complete tags
-// then incomplete tag fragments), not a full DOM parser. Good enough for preview
-// extraction; the coordinator LLM reads this to infer the nature of the request.
+// preview is stripped of HTML tags before slicing — loop-based regex (complete tags
+// then incomplete tag fragments, repeated until stable), not a full DOM parser.
+// Good enough for preview extraction; the coordinator LLM reads this to infer the
+// nature of the request.
 //
 // totalLength is the character count of the full plaintext body. When preview
 // is short relative to totalLength, the coordinator qualifies its assessment
@@ -20,16 +21,18 @@ import { toLocalIso, formatDisplayTimezone } from '../../src/time/timestamp.js';
 // Strip HTML tags for plaintext extraction.
 // Not a full DOM parser — good enough for preview purposes.
 function stripHtml(content: string): string {
-  // nosemgrep: js/incomplete-multi-character-sanitization — incomplete tags caught by /<[a-zA-Z][^>]{0,500}/g below;
-  // output goes to LLM context, not rendered in a browser, so XSS injection is not the threat model
-  return content
-    // Strip complete tags (< ... >).
-    .replace(/<[^>]+>/g, '')
-    // Strip incomplete tags — bare <tagname without a closing > is not caught by <[^>]+>
-    // (which requires >). This prevents <script fragments from leaking into the preview
-    // and reaching the LLM context. {0,500} caps match length to prevent stripping large
-    // text bodies on inputs with a lone < far from any > (js/incomplete-multi-character-sanitization).
-    .replace(/<[a-zA-Z][^>]{0,500}/g, '');
+  // Loop until stable: stripping a complete inner tag (e.g. <a> from <sc<a>ript)
+  // can expose an incomplete <script fragment. Re-running catches what each pass
+  // reveals. {0,500} caps the incomplete-tag match to prevent consuming large
+  // bodies on inputs with a lone < far from any >.
+  let result = content;
+  for (let prev = ''; prev !== result; ) {
+    prev = result;
+    result = result
+      .replace(/<[^>]+>/g, '')               // complete tags
+      .replace(/<[a-zA-Z][^>]{0,500}/g, ''); // incomplete tags
+  }
+  return result;
 }
 
 export class HeldMessagesListHandler implements SkillHandler {

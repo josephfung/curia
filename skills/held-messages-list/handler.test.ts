@@ -58,6 +58,27 @@ describe('HeldMessagesListHandler', () => {
     expect(messages[0].preview).toContain('Hello');
   });
 
+  it('strips <script> fragments reconstructed by nested-substitution bypass', async () => {
+    // Removing the inner <a> complete tag from <sc<a>ript exposes an incomplete
+    // <script fragment. The loop re-runs until no tag fragments remain.
+    const svc = HeldMessageService.createInMemory();
+    await svc.hold({
+      channel: 'email',
+      senderId: 'attacker@example.com',
+      conversationId: 'conv-nested-tag',
+      content: 'Message <sc<a>ript body text',
+      subject: 'Nested tag test',
+      metadata: {},
+    });
+    const handler = new HeldMessagesListHandler();
+    const result = await handler.execute(makeCtx(svc));
+
+    expect(result.success).toBe(true);
+    const messages = (result as { success: true; data: { messages: Array<{ preview: string }> } }).data.messages;
+    expect(messages[0].preview).not.toContain('<');
+    expect(messages[0].preview).toContain('Message');
+  });
+
   it('strips HTML tags from the preview', async () => {
     const svc = HeldMessageService.createInMemory();
     await svc.hold({
