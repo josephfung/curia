@@ -602,8 +602,8 @@ export class Scheduler {
       }
     } catch (err) {
       this.logger.error(
-        { err },
-        'Failed to cancel stale declarative jobs — stale rows may continue firing until next restart',
+        { err, liveTupleCount: liveTuples.length },
+        'Failed to cancel stale declarative jobs — resolve the error above and restart to trigger cleanup',
       );
     }
   }

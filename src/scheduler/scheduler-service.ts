@@ -575,7 +575,14 @@ export class SchedulerService {
     const params: unknown[] = [];
     let idx = 1;
     for (const tuple of liveTuples) {
-      valuePlaceholders.push(`($${idx}, $${idx + 1}, $${idx + 2})`);
+      // Cast the payload parameter to ::jsonb::text so PostgreSQL normalizes it
+      // (sorts object keys, strips whitespace) before comparing. This ensures
+      // both sides of the NOT IN check go through the same JSONB serializer —
+      // matching how the unique index (task_payload::text) is computed. Without
+      // the cast, a multi-key payload could diverge between JS JSON.stringify
+      // key order and PostgreSQL's canonical key order, silently failing to
+      // shield a live job from cancellation.
+      valuePlaceholders.push(`($${idx}, $${idx + 1}, $${idx + 2}::jsonb::text)`);
       params.push(tuple.agentId, tuple.cronExpr, tuple.taskPayload);
       idx += 3;
     }
