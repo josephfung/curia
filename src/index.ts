@@ -332,12 +332,20 @@ async function main(): Promise<void> {
   function resolveProviderForModel(model: string, context: string): LLMProvider {
     const providerName = modelRegistry.getProvider(model);
     if (!providerName) {
-      logger.fatal({ model, context }, 'Cannot resolve provider: model not in registry');
+      logger.fatal(
+        { model, context },
+        'Cannot resolve provider: model not in model registry. '
+        + 'Add an entry for this model to ModelRegistry, or remap the tier to a registered model in config/default.yaml.',
+      );
       process.exit(1);
     }
     const provider = providerRegistry.get(providerName);
     if (!provider) {
-      logger.fatal({ model, providerName, context }, 'Cannot resolve provider: provider not registered');
+      logger.fatal(
+        { model, providerName, context },
+        `Cannot resolve provider: '${providerName}' is not registered. `
+        + 'Set the corresponding API key (e.g. OPENROUTER_API_KEY for openrouter) to enable this provider.',
+      );
       process.exit(1);
     }
     return provider;
@@ -1117,6 +1125,22 @@ async function main(): Promise<void> {
   // provider. LLMProviderRouter intercepts each chat() call and routes to the right
   // provider based on the model string, so those skills work correctly even when
   // tiers are remapped to OpenRouter models. (#646; see also #637 for planned redesign.)
+  //
+  // Validate at startup that the tiers infra skills actually use (fast and standard)
+  // are routable, giving the same fail-fast guarantee as the other three consumers.
+  // Without this, a bad config would only surface as a skill error at call time.
+  for (const infraTier of ['fast', 'standard'] as const) {
+    const infraModel = modelRouter.resolve(infraTier).model;
+    const infraProviderName = modelRegistry.getProvider(infraModel);
+    if (!infraProviderName || !providerRegistry.has(infraProviderName)) {
+      logger.fatal(
+        { tier: infraTier, model: infraModel, provider: infraProviderName },
+        `Infra skill tier '${infraTier}' maps to model '${infraModel}' whose provider is not registered — infra skills will fail at call time. `
+        + 'Set the corresponding API key or remap the tier to a model with a registered provider.',
+      );
+      process.exit(1);
+    }
+  }
   const infraLlmRouter = new LLMProviderRouter(modelRegistry, providerRegistry);
   const executionLayer = new ExecutionLayer(skillRegistry, logger, { bus, agentRegistry, contactService, outboundGateway, heldMessages, schedulerService, entityMemory, agentPersona, nylasCalendarClient, entityContextAssembler, agentContactId: agentIdentityContactId, autonomyService, executiveProfileService, browserService, bullpenService, approvalTrigger, actionLogRepo, confidencePipeline, tempFileStore, llmProvider: infraLlmRouter, modelRouter, timezone: config.timezone, selfEmail: resolvedEmailAccounts[0]?.selfEmail, skillOutputMaxLength: yamlConfig.skillOutput?.maxLength });
 

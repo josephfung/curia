@@ -12,9 +12,15 @@
 // DriftDetector, AutonomyScoringPass), prefer resolving the concrete provider
 // directly in index.ts — the router's routing step is redundant there, and the
 // concrete provider's id appears correctly in logs.
+//
+// Error contract: like all LLMProvider implementations, chat() never throws.
+// Routing failures (missing model, unregistered provider) are returned as
+// LLMResponse { type: 'error' } so callers never need try/catch. This is
+// especially important for AgentRuntime, which calls chat() without a wrapper.
 
 import type { LLMProvider, LLMResponse, Message, ToolDefinition, ToolResult } from './provider.js';
 import type { ModelRegistry } from './model-registry.js';
+import { classifyError } from '../../errors/classify.js';
 
 export class LLMProviderRouter implements LLMProvider {
   readonly id = 'router';
@@ -36,19 +42,35 @@ export class LLMProviderRouter implements LLMProvider {
     const model = params.model ?? (typeof params.options?.model === 'string' ? params.options.model : undefined);
 
     if (!model) {
-      // This is a programming error — all routed calls must carry an explicit
-      // model string so the router can pick the right provider.
-      throw new Error('LLMProviderRouter.chat() requires a model — no model was provided');
+      return {
+        type: 'error',
+        error: classifyError(
+          new Error('LLMProviderRouter.chat() requires a model — no model was provided'),
+          'router',
+        ),
+      };
     }
 
     const providerName = this.modelRegistry.getProvider(model);
     if (!providerName) {
-      throw new Error(`LLMProviderRouter: model '${model}' is not in the model registry — cannot route to a provider`);
+      return {
+        type: 'error',
+        error: classifyError(
+          new Error(`LLMProviderRouter: model '${model}' is not in the model registry — cannot route to a provider`),
+          'router',
+        ),
+      };
     }
 
     const provider = this.providerRegistry.get(providerName);
     if (!provider) {
-      throw new Error(`LLMProviderRouter: provider '${providerName}' is not registered (required for model '${model}')`);
+      return {
+        type: 'error',
+        error: classifyError(
+          new Error(`LLMProviderRouter: provider '${providerName}' is not registered (required for model '${model}')`),
+          'router',
+        ),
+      };
     }
 
     return provider.chat(params);

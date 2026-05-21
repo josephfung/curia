@@ -97,31 +97,43 @@ describe('LLMProviderRouter', () => {
     expect(anthropicProvider.chat).toHaveBeenCalledTimes(1);
   });
 
-  it('throws when no model is provided', async () => {
+  // Error paths — the router returns { type: 'error' } rather than throwing,
+  // honouring the LLMProvider no-throw contract that AgentRuntime relies on.
+
+  it('returns an error response when no model is provided', async () => {
     const modelRegistry = makeModelRegistry({});
     const router = new LLMProviderRouter(modelRegistry, providerRegistry);
 
-    await expect(router.chat({ messages: MESSAGES })).rejects.toThrow(
-      'LLMProviderRouter.chat() requires a model',
-    );
+    const result = await router.chat({ messages: MESSAGES });
+
+    expect(result.type).toBe('error');
+    if (result.type === 'error') {
+      expect(result.error.message).toMatch(/requires a model/);
+    }
   });
 
-  it('throws when the model is not in the registry', async () => {
+  it('returns an error response when the model is not in the registry', async () => {
     const modelRegistry = makeModelRegistry({});
     const router = new LLMProviderRouter(modelRegistry, providerRegistry);
 
-    await expect(
-      router.chat({ messages: MESSAGES, model: 'unknown-model-xyz' }),
-    ).rejects.toThrow("not in the model registry");
+    const result = await router.chat({ messages: MESSAGES, model: 'unknown-model-xyz' });
+
+    expect(result.type).toBe('error');
+    if (result.type === 'error') {
+      expect(result.error.message).toMatch(/not in the model registry/);
+    }
   });
 
-  it('throws when the provider is not registered', async () => {
+  it('returns an error response when the provider is not registered', async () => {
     const modelRegistry = makeModelRegistry({ 'some-model': 'missing-provider' });
     const router = new LLMProviderRouter(modelRegistry, providerRegistry);
 
-    await expect(
-      router.chat({ messages: MESSAGES, model: 'some-model' }),
-    ).rejects.toThrow("provider 'missing-provider' is not registered");
+    const result = await router.chat({ messages: MESSAGES, model: 'some-model' });
+
+    expect(result.type).toBe('error');
+    if (result.type === 'error') {
+      expect(result.error.message).toMatch(/provider 'missing-provider' is not registered/);
+    }
   });
 
   it('passes all params through to the resolved provider unchanged', async () => {
