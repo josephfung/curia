@@ -35,6 +35,7 @@ import { ModelRouter } from './agents/llm/model-router.js';
 import { ModelRegistry } from './agents/llm/model-registry.js';
 import { createEstimateCostUsd } from './agents/llm/pricing.js';
 import type { LLMProvider } from './agents/llm/provider.js';
+import { LLMProviderRouter } from './agents/llm/provider-router.js';
 import { AgentRegistry } from './agents/agent-registry.js';
 import { WorkingMemory } from './memory/working-memory.js';
 import { EmbeddingService } from './memory/embedding.js';
@@ -322,10 +323,29 @@ async function main(): Promise<void> {
     }
   }
 
+  // Resolve a concrete LLMProvider for a known model string by consulting the model
+  // and provider registries. Used by shared infrastructure consumers (WorkingMemory,
+  // DriftDetector, AutonomyScoringPass) whose model is fixed at startup. Fails fast
+  // if the model isn't registered or its provider isn't in the registry — the
+  // startup validation above (lines ~312-323) already guarantees tier-mapped models
+  // are valid, so this should only fail on programming errors or config drift.
+  function resolveProviderForModel(model: string, context: string): LLMProvider {
+    const providerName = modelRegistry.getProvider(model);
+    if (!providerName) {
+      logger.fatal({ model, context }, 'Cannot resolve provider: model not in registry');
+      process.exit(1);
+    }
+    const provider = providerRegistry.get(providerName);
+    if (!provider) {
+      logger.fatal({ model, providerName, context }, 'Cannot resolve provider: provider not registered');
+      process.exit(1);
+    }
+    return provider;
+  }
+
   // Working memory — created after the pool is confirmed healthy so we know
   // the working_memory table is reachable before the first message arrives.
   // Summarization config is read from default.yaml (workingMemory.summarization).
-  // llmProvider is already initialized above (step 5) so we can pass it directly.
   // If the config block is absent, summarization is disabled (no-op backend).
   const summarizationCfg = yamlConfig.workingMemory?.summarization;
   // Resolve which model tier to use for summarization. 'standard' is appropriate
@@ -336,7 +356,10 @@ async function main(): Promise<void> {
     ? {
         threshold: summarizationCfg.threshold ?? 20,
         keepWindow: summarizationCfg.keepWindow ?? 10,
-        provider: llmProvider,
+        // Resolve the provider from the registry so that remapping 'standard' to
+        // an OpenRouter model routes summarization through OpenRouterProvider, not
+        // the hardwired Anthropic singleton. (#646)
+        provider: resolveProviderForModel(summarizationModel, 'WorkingMemory summarization'),
         model: summarizationModel,
       }
     : undefined,
@@ -969,7 +992,9 @@ async function main(): Promise<void> {
       minConfidenceToPause: yamlConfig.intentDrift?.minConfidenceToPause ?? 'high',
       model: modelRouter.resolve('standard').model,
     };
-    driftDetector = new DriftDetector(llmProvider, driftConfig, logger);
+    // Resolve the provider from the registry so remapping 'standard' to an
+    // OpenRouter model routes drift checks through OpenRouterProvider. (#646)
+    driftDetector = new DriftDetector(resolveProviderForModel(driftConfig.model, 'DriftDetector'), driftConfig, logger);
     logger.info({ driftConfig }, 'Intent drift detection enabled');
   } else {
     logger.info('Intent drift detection disabled via config');
@@ -1013,7 +1038,9 @@ async function main(): Promise<void> {
     ceoCooldownDays: yamlConfig.dreaming?.autonomy_scoring?.ceoCooldownDays ?? 7,
     errorRateThreshold: yamlConfig.dreaming?.autonomy_scoring?.errorRateThreshold ?? 0.20,
   };
-  const scoringPass = new AutonomyScoringPass(actionLogRepo, autonomyService, llmProvider, logger, scoringPassConfig);
+  // Resolve the provider from the registry so remapping the scoring tier to an
+  // OpenRouter model routes LLM-judge calls through OpenRouterProvider. (#646)
+  const scoringPass = new AutonomyScoringPass(actionLogRepo, autonomyService, resolveProviderForModel(scoringModel, 'AutonomyScoringPass'), logger, scoringPassConfig);
   logger.info({ scoringPassConfig }, 'AutonomyScoringPass configured');
 
   const dreamEngine = new DreamEngine(pool, bus, logger, decayConfig, scoringPass);
@@ -1085,7 +1112,13 @@ async function main(): Promise<void> {
   // capability-gated declarations. outboundGateway gives email skills their send path.
   // entityContextAssembler enables entity_enrichment pre-enrichment and the
   // entity-context skill. agentContactId enables entity_enrichment default='agent'.
-  const executionLayer = new ExecutionLayer(skillRegistry, logger, { bus, agentRegistry, contactService, outboundGateway, heldMessages, schedulerService, entityMemory, agentPersona, nylasCalendarClient, entityContextAssembler, agentContactId: agentIdentityContactId, autonomyService, executiveProfileService, browserService, bullpenService, approvalTrigger, actionLogRepo, confidencePipeline, tempFileStore, llmProvider, modelRouter, timezone: config.timezone, selfEmail: resolvedEmailAccounts[0]?.selfEmail, skillOutputMaxLength: yamlConfig.skillOutput?.maxLength });
+  // Infra skills (extract-facts, extract-relationships, file-parse) resolve their model
+  // at call time via ctx.modelRouter — they cannot be given a pre-resolved concrete
+  // provider. LLMProviderRouter intercepts each chat() call and routes to the right
+  // provider based on the model string, so those skills work correctly even when
+  // tiers are remapped to OpenRouter models. (#646; see also #637 for planned redesign.)
+  const infraLlmRouter = new LLMProviderRouter(modelRegistry, providerRegistry);
+  const executionLayer = new ExecutionLayer(skillRegistry, logger, { bus, agentRegistry, contactService, outboundGateway, heldMessages, schedulerService, entityMemory, agentPersona, nylasCalendarClient, entityContextAssembler, agentContactId: agentIdentityContactId, autonomyService, executiveProfileService, browserService, bullpenService, approvalTrigger, actionLogRepo, confidencePipeline, tempFileStore, llmProvider: infraLlmRouter, modelRouter, timezone: config.timezone, selfEmail: resolvedEmailAccounts[0]?.selfEmail, skillOutputMaxLength: yamlConfig.skillOutput?.maxLength });
 
   // Two-pass agent registration:
   // Pass 1: Register all agents in the registry so specialistSummary() is complete
