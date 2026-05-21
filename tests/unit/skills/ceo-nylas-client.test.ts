@@ -13,7 +13,6 @@ let CeoNylasClient: typeof import('../../../skills/_shared/ceo-nylas-client.js')
 
 beforeEach(async () => {
   vi.restoreAllMocks();
-  // Re-import to ensure a clean module state
   const mod = await import('../../../skills/_shared/ceo-nylas-client.js');
   CeoNylasClient = mod.CeoNylasClient;
 });
