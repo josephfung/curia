@@ -73,6 +73,9 @@ export class LLMProviderRouter implements LLMProvider {
       };
     }
 
-    return provider.chat(params);
+    // Spread-in the resolved model so that callers using the options.model
+    // fallback path still forward a top-level model to the concrete provider.
+    // If params.model was already set, this is a no-op spread.
+    return provider.chat({ ...params, model });
   }
 }

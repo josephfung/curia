@@ -21,7 +21,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 - **`ceo-inbox-list`** — normalize `DRAFTS` folder alias to `DRAFT` for Gmail API compatibility; the digest agent was failing on every run with "Invalid label: DRAFTS".
 - **`NylasClient.listMessages`** — suppress conflicting filter params when `searchQueryNative` is set, matching the guard already in `CeoNylasClient`; fixes HTTP 400 errors in security-triage's email-list calls.
-- **Provider registry routing** — WorkingMemory, DriftDetector, AutonomyScoringPass, and ExecutionLayer infra skills now resolve their LLM provider from `providerRegistry` instead of using the hardwired Anthropic singleton; remapping any tier to an OpenRouter model now routes these consumers correctly. (#646)
+- **Provider registry routing** — WorkingMemory, DriftDetector, AutonomyScoringPass, and ExecutionLayer now resolve their LLM provider from `providerRegistry`, not the hardwired Anthropic singleton. (#646)
 
 ### Security
 
