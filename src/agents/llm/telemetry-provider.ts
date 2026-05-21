@@ -13,6 +13,7 @@ import type { EventBus } from '../../bus/bus.js';
 import type { ModelRegistry } from './model-registry.js';
 import { createLlmCall } from '../../bus/events.js';
 import { createEstimateCostUsd } from './pricing.js';
+import { classifyError } from '../../errors/classify.js';
 import type { Logger } from '../../logger.js';
 
 export class TelemetryLlmProvider implements LLMProvider {
@@ -39,7 +40,18 @@ export class TelemetryLlmProvider implements LLMProvider {
     options?: Record<string, unknown>;
   }): Promise<LLMResponse> {
     const start = Date.now();
-    const response = await this.inner.chat(params);
+    let response: LLMResponse;
+    try {
+      response = await this.inner.chat(params);
+    } catch (err) {
+      // LLMProvider contract says chat() never throws, but network-level exceptions
+      // can slip through. Normalise to an error response to honour the contract.
+      this.logger.error(
+        { err, serviceId: this.serviceId },
+        'TelemetryLlmProvider: inner.chat() threw unexpectedly',
+      );
+      return { type: 'error', error: classifyError(err, this.inner.id) };
+    }
     const latencyMs = Date.now() - start;
 
     // Only publish telemetry on successful responses — error responses carry no
@@ -47,7 +59,11 @@ export class TelemetryLlmProvider implements LLMProvider {
     if (response.type !== 'error') {
       try {
         const promptHash = createHash('sha256')
-          .update(JSON.stringify({ messages: params.messages, tools: params.tools ?? [] }))
+          .update(JSON.stringify({
+            messages: params.messages,
+            tools: params.tools ?? [],
+            toolResults: params.toolResults ?? [],
+          }))
           .digest('hex');
         const responseText = response.type === 'text'
           ? response.content

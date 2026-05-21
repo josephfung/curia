@@ -1022,8 +1022,10 @@ describe('skillSearch filters by allowed_callers', () => {
     // Open skill — no allowed_callers
     registry.register(makeManifest('public-skill'), makeHandler('ok'));
 
-    // Restricted skill — coordinator only
-    const restricted = { ...makeManifest('coordinator-only'), allowed_callers: ['coordinator'], capabilities: ['skillSearch'] };
+    // Restricted skill — coordinator only. Name must contain 'skill' so the
+    // search query matches it — otherwise the assertion passes trivially because
+    // the skill doesn't match the query, not because the filter excluded it.
+    const restricted = { ...makeManifest('restricted-skill'), allowed_callers: ['coordinator'] };
     registry.register(restricted, makeHandler('ok'));
 
     // Searcher skill — has skillSearch capability, called by research-analyst
@@ -1048,6 +1050,6 @@ describe('skillSearch filters by allowed_callers', () => {
     // research-analyst should see public-skill but NOT coordinator-only
     const names = searchResults.map(r => r.name);
     expect(names).toContain('public-skill');
-    expect(names).not.toContain('coordinator-only');
+    expect(names).not.toContain('restricted-skill');
   });
 });
