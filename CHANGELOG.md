@@ -15,7 +15,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
-- **OpenRouter provider** — multi-model support via OpenRouter's OpenAI-compatible API. Registers Gemini 2.0 Flash, DeepSeek V3, and GPT-4o with pricing and capabilities. Opt in by setting `OPENROUTER_API_KEY` and remapping a tier in `config/default.yaml`. (#379)
+- **OpenRouter provider** — optional multi-model routing for Gemini Flash, DeepSeek V3, and GPT-4o via `OPENROUTER_API_KEY`. (#379)
 
 ### Security
 
