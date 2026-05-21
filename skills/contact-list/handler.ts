@@ -1,21 +1,36 @@
 // handler.ts — contact-list skill implementation.
 //
-// Lists all contacts, optionally filtered by role.
+// Lists contacts, optionally filtered by role or status, with optional result limit.
 // Returns an array of contact summaries.
 //
 // This skill uses contactService, which is a universal service.
 
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ContactStatus } from '../../src/contacts/types.js';
+
+const VALID_STATUSES: readonly string[] = ['confirmed', 'provisional', 'blocked'];
 
 export class ContactListHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {
-    const { role } = ctx.input as {
+    const { role, status, limit } = ctx.input as {
       role?: string;
+      status?: string;
+      limit?: number;
     };
 
-    // Input length limit — prevent oversized payloads reaching the DB
+    // Input validation
     if (role && typeof role === 'string' && role.length > 200) {
       return { success: false, error: 'Role must be 200 characters or fewer' };
+    }
+
+    if (status != null && !VALID_STATUSES.includes(status)) {
+      return { success: false, error: `Invalid status: "${status}". Must be one of: ${VALID_STATUSES.join(', ')}` };
+    }
+
+    if (limit != null) {
+      if (typeof limit !== 'number' || !Number.isInteger(limit) || limit < 1) {
+        return { success: false, error: 'Limit must be a positive integer' };
+      }
     }
 
     // contactService is a universal service — always injected by ExecutionLayer
@@ -26,12 +41,16 @@ export class ContactListHandler implements SkillHandler {
       };
     }
 
-    ctx.log.info({ role: role ?? '(all)' }, 'Listing contacts');
+    ctx.log.info({ role: role ?? '(all)', status: status ?? '(all)', limit: limit ?? '(none)' }, 'Listing contacts');
 
     try {
+      // Role filter uses the dedicated findContactByRole path (no change from existing behavior)
       const contacts = role && typeof role === 'string'
         ? await ctx.contactService.findContactByRole(role)
-        : await ctx.contactService.listContacts();
+        : await ctx.contactService.listContacts({
+            status: status as ContactStatus | undefined,
+            limit,
+          });
 
       return {
         success: true,
@@ -40,6 +59,7 @@ export class ContactListHandler implements SkillHandler {
             contact_id: c.id,
             display_name: c.displayName,
             role: c.role,
+            status: c.status,
             kg_node_id: c.kgNodeId,
           })),
           count: contacts.length,
@@ -47,7 +67,7 @@ export class ContactListHandler implements SkillHandler {
       };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      ctx.log.error({ err, role }, 'Failed to list contacts');
+      ctx.log.error({ err, role, status, limit }, 'Failed to list contacts');
       return { success: false, error: `Failed to list contacts: ${message}` };
     }
   }
