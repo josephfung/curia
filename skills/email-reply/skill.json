@@ -20,6 +20,5 @@
   "timeout": 30000,
   "capabilities": [
     "outboundGateway"
-  ],
-  "allowed_callers": ["coordinator"]
+  ]
 }
