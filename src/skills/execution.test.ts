@@ -910,3 +910,144 @@ describe('approval trigger on gate block', () => {
     expect(trigger.request).not.toHaveBeenCalled();
   });
 });
+
+// ---------------------------------------------------------------------------
+// allowed_callers gate
+// ---------------------------------------------------------------------------
+
+describe('allowed_callers gate', () => {
+  it('blocks invocation when agentId is not in allowed_callers', async () => {
+    const registry = new SkillRegistry();
+    const manifest = { ...makeManifest('restricted-skill'), allowed_callers: ['coordinator'] };
+    registry.register(manifest, makeHandler('ok'));
+    const layer = new ExecutionLayer(registry, logger);
+
+    const result = await layer.invoke('restricted-skill', { query: 'test' }, undefined, {
+      agentId: 'research-analyst',
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error).toContain('restricted');
+      expect(result.error).toContain('coordinator');
+    }
+  });
+
+  it('allows invocation when agentId is in allowed_callers', async () => {
+    const registry = new SkillRegistry();
+    const manifest = { ...makeManifest('restricted-skill'), allowed_callers: ['coordinator'] };
+    registry.register(manifest, makeHandler('ok'));
+    const layer = new ExecutionLayer(registry, logger);
+
+    const result = await layer.invoke('restricted-skill', { query: 'test' }, undefined, {
+      agentId: 'coordinator',
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it('allows any agent when allowed_callers is undefined', async () => {
+    const registry = new SkillRegistry();
+    registry.register(makeManifest('open-skill'), makeHandler('ok'));
+    const layer = new ExecutionLayer(registry, logger);
+
+    const result = await layer.invoke('open-skill', { query: 'test' }, undefined, {
+      agentId: 'any-agent',
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it('allows any agent when allowed_callers is empty array', async () => {
+    const registry = new SkillRegistry();
+    const manifest = { ...makeManifest('open-skill'), allowed_callers: [] as string[] };
+    registry.register(manifest, makeHandler('ok'));
+    const layer = new ExecutionLayer(registry, logger);
+
+    const result = await layer.invoke('open-skill', { query: 'test' }, undefined, {
+      agentId: 'any-agent',
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it('falls back to "system" when agentId is undefined (checkpoint processor path)', async () => {
+    const registry = new SkillRegistry();
+    const manifest = { ...makeManifest('system-skill'), allowed_callers: ['system'] };
+    registry.register(manifest, makeHandler('ok'));
+    const layer = new ExecutionLayer(registry, logger);
+
+    // No options → agentId is undefined → falls back to 'system'
+    const result = await layer.invoke('system-skill', { query: 'test' });
+
+    expect(result.success).toBe(true);
+  });
+
+  it('skips allowed_callers check when humanApproved is set (CEO-authorized re-execution)', async () => {
+    const registry = new SkillRegistry();
+    const manifest = { ...makeManifest('restricted-skill'), allowed_callers: ['coordinator'] };
+    registry.register(manifest, makeHandler('ok'));
+    const layer = new ExecutionLayer(registry, logger);
+
+    // research-analyst is NOT in allowed_callers, but humanApproved bypasses the gate
+    const result = await layer.invoke('restricted-skill', { query: 'test' }, undefined, {
+      agentId: 'research-analyst',
+      humanApproved: true,
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it('blocks system invocation when "system" is not in allowed_callers', async () => {
+    const registry = new SkillRegistry();
+    const manifest = { ...makeManifest('agent-only'), allowed_callers: ['coordinator'] };
+    registry.register(manifest, makeHandler('ok'));
+    const layer = new ExecutionLayer(registry, logger);
+
+    // No options → falls back to 'system', which is not in the list
+    const result = await layer.invoke('agent-only', { query: 'test' });
+
+    expect(result.success).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// skillSearch filtering by allowed_callers
+// ---------------------------------------------------------------------------
+
+describe('skillSearch filters by allowed_callers', () => {
+  it('hides skills whose allowed_callers excludes the querying agent', async () => {
+    const registry = new SkillRegistry();
+
+    // Open skill — no allowed_callers
+    registry.register(makeManifest('public-skill'), makeHandler('ok'));
+
+    // Restricted skill — coordinator only
+    const restricted = { ...makeManifest('coordinator-only'), allowed_callers: ['coordinator'], capabilities: ['skillSearch'] };
+    registry.register(restricted, makeHandler('ok'));
+
+    // Searcher skill — has skillSearch capability, called by research-analyst
+    const searcher = {
+      ...makeManifest('searcher'),
+      capabilities: ['skillSearch'],
+    };
+    const searchResults: Array<{ name: string }> = [];
+    const searcherHandler: SkillHandler = {
+      execute: async (ctx: SkillContext) => {
+        const results = ctx.skillSearch!('skill');
+        searchResults.push(...results);
+        return { success: true, data: results };
+      },
+    };
+    registry.register(searcher, searcherHandler);
+
+    const layer = new ExecutionLayer(registry, logger);
+
+    await layer.invoke('searcher', {}, undefined, { agentId: 'research-analyst' });
+
+    // research-analyst should see public-skill but NOT coordinator-only
+    const names = searchResults.map(r => r.name);
+    expect(names).toContain('public-skill');
+    expect(names).not.toContain('coordinator-only');
+  });
+});

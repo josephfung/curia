@@ -87,11 +87,19 @@ export class InfraLlmService {
     const resolved = this.modelRouter.resolve('fast');
     const start = Date.now();
 
-    const response = await this.providerRouter.chat({
-      model: resolved.model,
-      messages: [{ role: 'user', content: prompt }],
-      options: { max_tokens: 10 },
-    });
+    let response;
+    try {
+      response = await this.providerRouter.chat({
+        model: resolved.model,
+        messages: [{ role: 'user', content: prompt }],
+        options: { max_tokens: 10 },
+      });
+    } catch (err) {
+      // LLMProvider contract says chat() never throws, but network-level exceptions
+      // can slip through. Catch here to honour our own errors-as-values contract.
+      this.logger.error({ err, skillName: scope.skillName }, 'infraLlm.classify: provider threw unexpectedly');
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
 
     const latencyMs = Date.now() - start;
 
@@ -134,11 +142,17 @@ export class InfraLlmService {
         }
       : { role: 'user' as const, content: prompt };
 
-    const response = await this.providerRouter.chat({
-      model: resolved.model,
-      messages: [message],
-      options: { max_tokens: options?.maxTokens ?? 4000 },
-    });
+    let response;
+    try {
+      response = await this.providerRouter.chat({
+        model: resolved.model,
+        messages: [message],
+        options: { max_tokens: options?.maxTokens ?? 4000 },
+      });
+    } catch (err) {
+      this.logger.error({ err, skillName: scope.skillName }, 'infraLlm.extract: provider threw unexpectedly');
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
 
     const latencyMs = Date.now() - start;
 
