@@ -1,6 +1,6 @@
 // handler.test.ts — unit tests for extract-relationships skill.
 //
-// Uses an in-memory KG backend (no Postgres) and a mock LLMProvider + ModelRouter
+// Uses an in-memory KG backend (no Postgres) and a mock infraLlm
 // injected via the skill context, so no real API calls are made.
 
 import { describe, it, expect, vi } from 'vitest';
@@ -12,6 +12,7 @@ import { MemoryValidator } from '../../src/memory/validation.js';
 import { createSilentLogger } from '../../src/logger.js';
 import { ExtractRelationshipsHandler } from './handler.js';
 import type { SkillContext } from '../../src/skills/types.js';
+import type { InfraLlm, InfraLlmResult } from '../../src/skills/infra-llm.js';
 
 // -- Test helpers --
 
@@ -22,34 +23,31 @@ function makeEntityMemory(): EntityMemory {
   return new EntityMemory(store, validator, embeddingService, createSilentLogger());
 }
 
-// Creates a mock ModelRouter that maps 'fast' → haiku and 'standard' → sonnet.
-const mockModelRouter = {
-  resolve: vi.fn().mockImplementation((tier: string) => ({
-    model: tier === 'fast' ? 'claude-haiku-4-5' : 'claude-sonnet-4-6',
-    tier,
-  })),
-};
-
-// Creates a mock LLMProvider that returns a scripted sequence of responses.
-// First call is the classifier gate; second call (if triggered) is extraction.
-function makeMockLlmProvider(responses: string[]) {
+// Creates a mock infraLlm for injection into ctx.
+// responses: scripted sequence of text responses — first call goes to classify()
+// (classifier gate), second call (if triggered) goes to extract().
+function makeMockInfraLlm(responses: string[]): InfraLlm {
   let callIndex = 0;
+
   return {
-    chat: vi.fn().mockImplementation(() => {
-      const content = responses[callIndex++] ?? 'no';
-      return Promise.resolve({ type: 'text', content });
+    classify: vi.fn().mockImplementation((): Promise<InfraLlmResult> => {
+      const text = responses[callIndex++] ?? 'no';
+      return Promise.resolve({ ok: true, text });
+    }),
+    extract: vi.fn().mockImplementation((): Promise<InfraLlmResult> => {
+      const text = responses[callIndex++] ?? '[]';
+      return Promise.resolve({ ok: true, text });
     }),
   };
 }
 
-function makeCtx(entityMemory: EntityMemory, input: Record<string, unknown>, llmProvider: ReturnType<typeof makeMockLlmProvider>): SkillContext {
+function makeCtx(entityMemory: EntityMemory, input: Record<string, unknown>, infraLlm: InfraLlm): SkillContext {
   return {
     input,
     secret: () => 'test-api-key',
     log: pino({ level: 'silent' }),
     entityMemory,
-    llmProvider,
-    modelRouter: mockModelRouter,
+    infraLlm,
   } as unknown as SkillContext;
 }
 
@@ -58,18 +56,19 @@ function makeCtx(entityMemory: EntityMemory, input: Record<string, unknown>, llm
 describe('ExtractRelationshipsHandler', () => {
   it('returns skipped:true when classifier gate fires on unrelated text', async () => {
     const entityMemory = makeEntityMemory();
-    const llmProvider = makeMockLlmProvider(['no']);
+    const infraLlm = makeMockInfraLlm(['no']);
     const handler = new ExtractRelationshipsHandler();
     const ctx = makeCtx(entityMemory, {
       text: 'Please schedule a call with the engineering team for Thursday.',
       source: 'test',
-    }, llmProvider);
+    }, infraLlm);
 
     const result = await handler.execute(ctx);
 
     expect(result).toEqual({ success: true, data: { extracted: 0, confirmed: 0, skipped: true } });
-    // Classifier was called; extraction was not (only 1 LLM call made)
-    expect(llmProvider.chat).toHaveBeenCalledTimes(1);
+    // Classifier was called; extraction was not
+    expect(infraLlm.classify).toHaveBeenCalledTimes(1);
+    expect(infraLlm.extract).not.toHaveBeenCalled();
   });
 
   it('extracts a single relationship and persists the edge', async () => {
@@ -77,12 +76,12 @@ describe('ExtractRelationshipsHandler', () => {
     const triple = JSON.stringify([
       { subject: 'Ada Lovelace', subjectType: 'person', predicate: 'manages', object: 'Project Orion', objectType: 'project', confidence: 0.9 },
     ]);
-    const llmProvider = makeMockLlmProvider(['yes', triple]);
+    const infraLlm = makeMockInfraLlm(['yes', triple]);
     const handler = new ExtractRelationshipsHandler();
     const ctx = makeCtx(entityMemory, {
       text: 'Ada Lovelace is the lead on Project Orion.',
       source: 'test',
-    }, llmProvider);
+    }, infraLlm);
 
     const result = await handler.execute(ctx);
 
@@ -106,15 +105,15 @@ describe('ExtractRelationshipsHandler', () => {
     ]);
 
     // First invocation — creates the edge
-    const llmProvider1 = makeMockLlmProvider(['yes', triple]);
+    const infraLlm1 = makeMockInfraLlm(['yes', triple]);
     const handler1 = new ExtractRelationshipsHandler();
-    const ctx1 = makeCtx(entityMemory, { text: 'John Smith is Bob\'s wife.', source: 'test' }, llmProvider1);
+    const ctx1 = makeCtx(entityMemory, { text: 'John Smith is Bob\'s wife.', source: 'test' }, infraLlm1);
     await handler1.execute(ctx1);
 
     // Second invocation with same text — should confirm, not duplicate
-    const llmProvider2 = makeMockLlmProvider(['yes', triple]);
+    const infraLlm2 = makeMockInfraLlm(['yes', triple]);
     const handler2 = new ExtractRelationshipsHandler();
-    const ctx2 = makeCtx(entityMemory, { text: 'John Smith is Bob\'s wife.', source: 'test' }, llmProvider2);
+    const ctx2 = makeCtx(entityMemory, { text: 'John Smith is Bob\'s wife.', source: 'test' }, infraLlm2);
     const result = await handler2.execute(ctx2);
 
     expect(result).toEqual({ success: true, data: { extracted: 0, confirmed: 1, failed: 0, skipped: false } });
@@ -134,12 +133,12 @@ describe('ExtractRelationshipsHandler', () => {
     const triple = JSON.stringify([
       { subject: 'New Person A', subjectType: 'person', predicate: 'collaborates_with', object: 'New Person B', objectType: 'person', confidence: 0.8 },
     ]);
-    const llmProvider = makeMockLlmProvider(['yes', triple]);
+    const infraLlm = makeMockInfraLlm(['yes', triple]);
     const handler = new ExtractRelationshipsHandler();
     const ctx = makeCtx(entityMemory, {
       text: 'New Person A is collaborating with New Person B.',
       source: 'test',
-    }, llmProvider);
+    }, infraLlm);
 
     await handler.execute(ctx);
 
@@ -158,12 +157,12 @@ describe('ExtractRelationshipsHandler', () => {
     const triple = JSON.stringify([
       { subject: 'John Smith', subjectType: 'person', predicate: 'spouse', object: 'Jane Doe', objectType: 'person', confidence: 0.95 },
     ]);
-    const llmProvider = makeMockLlmProvider(['yes', triple]);
+    const infraLlm = makeMockInfraLlm(['yes', triple]);
     const handler = new ExtractRelationshipsHandler();
     const ctx = makeCtx(entityMemory, {
       text: 'John Smith is Bob\'s wife.',
       source: 'test',
-    }, llmProvider);
+    }, infraLlm);
 
     const result = await handler.execute(ctx);
 
@@ -186,9 +185,9 @@ describe('ExtractRelationshipsHandler', () => {
     const triple = JSON.stringify([
       { subject: 'Alice', subjectType: 'person', predicate: 'knows_well', object: 'Bob', objectType: 'person', confidence: 0.7 },
     ]);
-    const llmProvider = makeMockLlmProvider(['yes', triple]);
+    const infraLlm = makeMockInfraLlm(['yes', triple]);
     const handler = new ExtractRelationshipsHandler();
-    const ctx = makeCtx(entityMemory, { text: 'Alice knows Bob well.', source: 'test' }, llmProvider);
+    const ctx = makeCtx(entityMemory, { text: 'Alice knows Bob well.', source: 'test' }, infraLlm);
 
     await handler.execute(ctx);
 

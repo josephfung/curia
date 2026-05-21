@@ -3,44 +3,38 @@ import pino from 'pino';
 import { parseCsv } from './csv.js';
 import { FileParseHandler } from './handler.js';
 import type { SkillContext } from '../../src/skills/types.js';
-
-// Minimal modelRouter stub that always resolves to 'claude-sonnet-4-6'.
-// Returns the full ResolvedModel shape { model, tier } to match the runtime contract.
-const mockModelRouter = {
-  resolve: (_tier: string) => ({ model: 'claude-sonnet-4-6', tier: 'standard' as const }),
-};
+import type { InfraLlm, InfraLlmResult } from '../../src/skills/infra-llm.js';
 
 function makeCtx(
   input: Record<string, unknown>,
-  llmProvider?: SkillContext['llmProvider'],
+  infraLlm?: InfraLlm,
 ): SkillContext {
   return {
     input,
     secret: () => 'test-api-key',
     log: pino({ level: 'silent' }),
-    llmProvider,
-    modelRouter: mockModelRouter,
+    infraLlm,
   } as unknown as SkillContext;
 }
 
 /**
- * Build a mock LLMProvider that returns a successful text response.
+ * Build a mock InfraLlm that returns a successful extract result.
  */
-function makeLlmProvider(responseText: string) {
-  const chat = vi.fn().mockResolvedValue({ type: 'text', content: responseText, usage: {}, provenance: {} });
-  return { id: 'mock', chat };
+function makeInfraLlm(responseText: string): InfraLlm {
+  return {
+    classify: vi.fn().mockResolvedValue({ ok: true, text: responseText } as InfraLlmResult),
+    extract: vi.fn().mockResolvedValue({ ok: true, text: responseText } as InfraLlmResult),
+  };
 }
 
 /**
- * Build a mock LLMProvider that rejects (simulates an API error returned as
- * a discriminated-union error value, not a thrown exception).
+ * Build a mock InfraLlm that returns an error from extract.
  */
-function makeLlmProviderError(message: string) {
-  const chat = vi.fn().mockResolvedValue({
-    type: 'error',
-    error: { message, code: 'LLM_ERROR' },
-  });
-  return { id: 'mock', chat };
+function makeInfraLlmError(message: string): InfraLlm {
+  return {
+    classify: vi.fn().mockResolvedValue({ ok: false, error: message } as InfraLlmResult),
+    extract: vi.fn().mockResolvedValue({ ok: false, error: message } as InfraLlmResult),
+  };
 }
 
 describe('parseCsv', () => {
@@ -84,33 +78,17 @@ describe('parseCsv', () => {
 
 describe('FileParseHandler', () => {
   describe('capability guard', () => {
-    it('returns error when llmProvider is missing', async () => {
-      const handler = new FileParseHandler();
-      // Pass no llmProvider so the guard fires
-      const ctx = {
-        input: { content_base64: Buffer.from('a,b\n1,2').toString('base64'), mime_type: 'text/csv' },
-        secret: () => 'test-api-key',
-        log: pino({ level: 'silent' }),
-        llmProvider: undefined,
-        modelRouter: mockModelRouter,
-      } as unknown as SkillContext;
-      const result = await handler.execute(ctx);
-      expect(result.success).toBe(false);
-      if (!result.success) expect(result.error).toMatch(/llmProvider/);
-    });
-
-    it('returns error when modelRouter is missing', async () => {
+    it('returns error when infraLlm is missing', async () => {
       const handler = new FileParseHandler();
       const ctx = {
         input: { content_base64: Buffer.from('a,b\n1,2').toString('base64'), mime_type: 'text/csv' },
         secret: () => 'test-api-key',
         log: pino({ level: 'silent' }),
-        llmProvider: makeLlmProvider('{}'),
-        modelRouter: undefined,
+        // infraLlm intentionally omitted
       } as unknown as SkillContext;
       const result = await handler.execute(ctx);
       expect(result.success).toBe(false);
-      if (!result.success) expect(result.error).toMatch(/modelRouter/);
+      if (!result.success) expect(result.error).toMatch(/infraLlm/);
     });
   });
 
@@ -118,13 +96,13 @@ describe('FileParseHandler', () => {
     const handler = new FileParseHandler();
 
     it('rejects missing content_base64', async () => {
-      const result = await handler.execute(makeCtx({ mime_type: 'text/csv' }, makeLlmProvider('{}')));
+      const result = await handler.execute(makeCtx({ mime_type: 'text/csv' }, makeInfraLlm('{}')));
       expect(result.success).toBe(false);
       if (!result.success) expect(result.error).toMatch(/content_base64/);
     });
 
     it('rejects missing mime_type', async () => {
-      const result = await handler.execute(makeCtx({ content_base64: 'abc' }, makeLlmProvider('{}')));
+      const result = await handler.execute(makeCtx({ content_base64: 'abc' }, makeInfraLlm('{}')));
       expect(result.success).toBe(false);
       if (!result.success) expect(result.error).toMatch(/mime_type/);
     });
@@ -134,34 +112,30 @@ describe('FileParseHandler', () => {
       const result = await handler.execute(makeCtx({
         content_base64: content,
         mime_type: 'application/octet-stream',
-      }, makeLlmProvider('{}')));
+      }, makeInfraLlm('{}')));
       expect(result.success).toBe(false);
       if (!result.success) expect(result.error).toMatch(/unsupported/i);
     });
 
     it('rejects empty extract_as value', async () => {
-      // Empty string is the only invalid value — any non-empty string is accepted
-      // (unknown schemas get a generic extraction prompt). Use '' to test the guard.
       const content = Buffer.from('a,b\n1,2').toString('base64');
       const result = await handler.execute(makeCtx({
         content_base64: content,
         mime_type: 'text/csv',
         extract_as: '',
-      }, makeLlmProvider('{}')));
+      }, makeInfraLlm('{}')));
       expect(result.success).toBe(false);
       if (!result.success) expect(result.error).toMatch(/extract_as/);
     });
 
     it('accepts an unknown extract_as schema (e.g. purchase_order)', async () => {
-      // Non-standard schemas should succeed with CSV — CSV is deterministic and
-      // doesn't use the extract_as hint for structured extraction.
       const csv = 'vendor,amount\nAcme,500';
       const content = Buffer.from(csv).toString('base64');
       const result = await handler.execute(makeCtx({
         content_base64: content,
         mime_type: 'text/csv',
         extract_as: 'purchase_order',
-      }, makeLlmProvider('{}')));
+      }, makeInfraLlm('{}')));
       expect(result.success).toBe(true);
     });
   });
@@ -170,16 +144,17 @@ describe('FileParseHandler', () => {
     const handler = new FileParseHandler();
 
     it('parses CSV content without LLM call', async () => {
-      const llmProvider = makeLlmProvider('{}');
+      const infraLlm = makeInfraLlm('{}');
       const csv = 'date,vendor,amount\n2026-01-15,OpenAI,20.00';
       const content = Buffer.from(csv).toString('base64');
       const result = await handler.execute(makeCtx({
         content_base64: content,
         mime_type: 'text/csv',
-      }, llmProvider));
+      }, infraLlm));
       expect(result.success).toBe(true);
-      // CSV is deterministic — LLM should not be called
-      expect(llmProvider.chat).not.toHaveBeenCalled();
+      // CSV is deterministic — infraLlm should not be called
+      expect(infraLlm.extract).not.toHaveBeenCalled();
+      expect(infraLlm.classify).not.toHaveBeenCalled();
       if (result.success) {
         const data = result.data as { type: string; raw_text: string; structured: unknown; confidence: number };
         expect(data.type).toBe('csv');
@@ -196,7 +171,7 @@ describe('FileParseHandler', () => {
       const result = await handler.execute(makeCtx({
         content_base64: content,
         mime_type: 'text/csv',
-      }, makeLlmProvider('{}')));
+      }, makeInfraLlm('{}')));
       expect(result.success).toBe(true);
       if (result.success) {
         const data = result.data as { raw_text: string };
@@ -206,9 +181,9 @@ describe('FileParseHandler', () => {
   });
 
   describe('image handling (vision)', () => {
-    it('calls LLMProvider.chat for image/jpeg with vision content', async () => {
+    it('calls infraLlm.extract for image/jpeg with vision content', async () => {
       const jsonText = '{"vendor":"Starbucks","amount":5.75,"currency":"CAD","date":"2026-03-10","tax":0.75,"line_items":[]}';
-      const llmProvider = makeLlmProvider(jsonText);
+      const infraLlm = makeInfraLlm(jsonText);
 
       const handler = new FileParseHandler();
       const content = Buffer.from('fake-image-bytes').toString('base64');
@@ -216,19 +191,16 @@ describe('FileParseHandler', () => {
         content_base64: content,
         mime_type: 'image/jpeg',
         extract_as: 'receipt',
-      }, llmProvider));
+      }, infraLlm));
 
       expect(result.success).toBe(true);
-      expect(llmProvider.chat).toHaveBeenCalledOnce();
+      expect(infraLlm.extract).toHaveBeenCalledOnce();
 
-      // Verify the message structure includes an image block
-      const callArgs = llmProvider.chat.mock.calls[0][0];
-      const userMessage = callArgs.messages[0];
-      expect(userMessage.content).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ type: 'image', source: expect.objectContaining({ type: 'base64' }) }),
-        ]),
-      );
+      // Verify the extract call includes image data
+      const callArgs = (infraLlm.extract as ReturnType<typeof vi.fn>).mock.calls[0];
+      expect(callArgs[1]).toEqual(expect.objectContaining({
+        image: expect.objectContaining({ base64: content, mediaType: 'image/jpeg' }),
+      }));
 
       if (result.success) {
         const data = result.data as { structured: { vendor: string } };
@@ -237,10 +209,8 @@ describe('FileParseHandler', () => {
     });
 
     it('normalizes image/jpg to image/jpeg in the vision call', async () => {
-      // The Anthropic API only accepts image/jpeg, not the non-standard image/jpg alias.
-      // Verify the normalization happens before the LLMProvider call.
       const jsonText = '{"vendor":"Test","amount":1,"currency":"CAD","date":"2026-01-01","tax":null,"line_items":[]}';
-      const llmProvider = makeLlmProvider(jsonText);
+      const infraLlm = makeInfraLlm(jsonText);
       const handler = new FileParseHandler();
 
       const content = Buffer.from('fake-image-bytes').toString('base64');
@@ -248,20 +218,15 @@ describe('FileParseHandler', () => {
         content_base64: content,
         mime_type: 'image/jpg',
         extract_as: 'receipt',
-      }, llmProvider));
+      }, infraLlm));
 
-      expect(llmProvider.chat).toHaveBeenCalledOnce();
-      const callArgs = llmProvider.chat.mock.calls[0][0];
-      const imageBlock = callArgs.messages[0].content.find(
-        (c: { type: string }) => c.type === 'image',
-      );
-      expect(imageBlock.source.media_type).toBe('image/jpeg');
+      expect(infraLlm.extract).toHaveBeenCalledOnce();
+      const callArgs = (infraLlm.extract as ReturnType<typeof vi.fn>).mock.calls[0];
+      expect(callArgs[1].image.mediaType).toBe('image/jpeg');
     });
   });
 
   describe('HTML handling — security', () => {
-    // ── Security: js/bad-tag-filter ───────────────────────────────────────────
-
     it('strips <script> blocks whose closing tag has trailing whitespace (</script >)', async () => {
       const html = '<p>Safe</p><script>evil()</script > trailing';
       const content = Buffer.from(html).toString('base64');
@@ -270,7 +235,7 @@ describe('FileParseHandler', () => {
         content_base64: content,
         mime_type: 'text/html',
         extract_as: 'raw',
-      }, makeLlmProvider('{}')));
+      }, makeInfraLlm('{}')));
       expect(result.success).toBe(true);
       if (result.success) {
         const data = result.data as { raw_text: string };
@@ -278,14 +243,6 @@ describe('FileParseHandler', () => {
         expect(data.raw_text).toContain('Safe');
       }
     });
-
-    // ── Security: js/incomplete-multi-character-sanitization ─────────────────
-    // A single-pass replace of <script…>…</script> can be bypassed: the g flag
-    // finds all non-overlapping matches left-to-right in the original string.
-    // Input <scri<script>X</script>pt>…<scri<script>Y</script>pt> has two
-    // matches (<script>X</script> and <script>Y</script>); removing both
-    // simultaneously leaves <scri + pt> = <script> and the content unstripped.
-    // The loop approach catches this by re-running until the string stabilizes.
 
     it('strips <script> tags reconstructed by nested-substitution bypass', async () => {
       const payload =
@@ -296,7 +253,7 @@ describe('FileParseHandler', () => {
         content_base64: content,
         mime_type: 'text/html',
         extract_as: 'raw',
-      }, makeLlmProvider('{}')));
+      }, makeInfraLlm('{}')));
       expect(result.success).toBe(true);
       if (result.success) {
         const data = result.data as { raw_text: string };
@@ -314,7 +271,7 @@ describe('FileParseHandler', () => {
         content_base64: content,
         mime_type: 'text/html',
         extract_as: 'raw',
-      }, makeLlmProvider('{}')));
+      }, makeInfraLlm('{}')));
       expect(result.success).toBe(true);
       if (result.success) {
         const data = result.data as { raw_text: string };
@@ -323,10 +280,7 @@ describe('FileParseHandler', () => {
       }
     });
 
-    // ── Security: js/double-escaping ──────────────────────────────────────────
-
     it('does not double-decode &amp;lt; into a literal < in HTML text', async () => {
-      // Original entity order decoded &amp; first, then &lt;, so &amp;lt; → &lt; → <
       const html = '<p>Entity: &amp;lt;</p>';
       const content = Buffer.from(html).toString('base64');
       const handler = new FileParseHandler();
@@ -334,7 +288,7 @@ describe('FileParseHandler', () => {
         content_base64: content,
         mime_type: 'text/html',
         extract_as: 'raw',
-      }, makeLlmProvider('{}')));
+      }, makeInfraLlm('{}')));
       expect(result.success).toBe(true);
       if (result.success) {
         const data = result.data as { raw_text: string };
@@ -346,7 +300,7 @@ describe('FileParseHandler', () => {
 
   describe('HTML handling', () => {
     it('extracts text from HTML and returns raw_text (no LLM call for raw)', async () => {
-      const llmProvider = makeLlmProvider('{}');
+      const infraLlm = makeInfraLlm('{}');
       const html = '<html><body><h1>Invoice</h1><p>Amount: $50.00</p></body></html>';
       const content = Buffer.from(html).toString('base64');
       const handler = new FileParseHandler();
@@ -354,10 +308,10 @@ describe('FileParseHandler', () => {
         content_base64: content,
         mime_type: 'text/html',
         extract_as: 'raw',
-      }, llmProvider));
+      }, infraLlm));
       expect(result.success).toBe(true);
       // extract_as: raw → no LLM call
-      expect(llmProvider.chat).not.toHaveBeenCalled();
+      expect(infraLlm.extract).not.toHaveBeenCalled();
       if (result.success) {
         const data = result.data as { type: string; raw_text: string };
         expect(data.type).toBe('html');
@@ -366,9 +320,9 @@ describe('FileParseHandler', () => {
       }
     });
 
-    it('uses LLMProvider.chat for structured extraction from HTML', async () => {
+    it('uses infraLlm.extract for structured extraction from HTML', async () => {
       const jsonText = '{"vendor":"Acme","amount":50,"currency":"USD","date":"2026-01-01","tax":null,"line_items":[]}';
-      const llmProvider = makeLlmProvider(jsonText);
+      const infraLlm = makeInfraLlm(jsonText);
       const handler = new FileParseHandler();
 
       const html = '<html><body><p>Receipt from Acme: $50 USD</p></body></html>';
@@ -377,10 +331,10 @@ describe('FileParseHandler', () => {
         content_base64: content,
         mime_type: 'text/html',
         extract_as: 'receipt',
-      }, llmProvider));
+      }, infraLlm));
 
       expect(result.success).toBe(true);
-      expect(llmProvider.chat).toHaveBeenCalledOnce();
+      expect(infraLlm.extract).toHaveBeenCalledOnce();
     });
   });
 
@@ -391,7 +345,7 @@ describe('FileParseHandler', () => {
       const result = await handler.execute(makeCtx({
         content_base64: content,
         mime_type: 'application/pdf',
-      }, makeLlmProvider('{}')));
+      }, makeInfraLlm('{}')));
       expect(result.success).toBe(false);
       if (!result.success) expect(result.error).toMatch(/pdf/i);
     });
@@ -399,7 +353,7 @@ describe('FileParseHandler', () => {
 
   describe('LLM error handling', () => {
     it('returns success: false when LLM call returns an error response', async () => {
-      const llmProvider = makeLlmProviderError('API rate limited');
+      const infraLlm = makeInfraLlmError('API rate limited');
       const handler = new FileParseHandler();
 
       const html = '<p>receipt</p>';
@@ -408,14 +362,14 @@ describe('FileParseHandler', () => {
         content_base64: content,
         mime_type: 'text/html',
         extract_as: 'receipt',
-      }, llmProvider));
+      }, infraLlm));
 
       expect(result.success).toBe(false);
       if (!result.success) expect(result.error).toMatch(/extract/i);
     });
 
     it('returns low confidence when LLM returns unparseable JSON', async () => {
-      const llmProvider = makeLlmProvider('I cannot parse this document.');
+      const infraLlm = makeInfraLlm('I cannot parse this document.');
       const handler = new FileParseHandler();
 
       const html = '<p>receipt</p>';
@@ -424,7 +378,7 @@ describe('FileParseHandler', () => {
         content_base64: content,
         mime_type: 'text/html',
         extract_as: 'receipt',
-      }, llmProvider));
+      }, infraLlm));
 
       expect(result.success).toBe(true);
       if (result.success) {

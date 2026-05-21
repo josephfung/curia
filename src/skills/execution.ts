@@ -40,23 +40,12 @@ import type { AutonomyConfig } from '../autonomy/autonomy-service.js';
 import type { BrowserService } from '../browser/browser-service.js';
 import type { ApprovalTriggerService } from '../autonomy/approval-trigger.js';
 import { TempFileStore } from './temp-file-store.js';
-import type { LLMProvider } from '../agents/llm/provider.js';
-import type { ModelRouter } from '../agents/llm/model-router.js';
+import type { InfraLlmService } from './infra-llm.js';
 
 // Default max output length — used when no value is configured in default.yaml.
 // Skills returning more than this will have their output truncated before it
 // reaches the LLM context window.
 const DEFAULT_SKILL_OUTPUT_MAX_LENGTH = 200_000;
-
-// Skills permitted to receive direct LLM infrastructure (llmProvider + modelRouter).
-// These are batch/background skills that run outside the agent runtime telemetry path.
-// Any other skill declaring these capabilities is misconfigured and must be rejected.
-// See #637 for the planned redesign of infrastructure skill LLM access.
-const LLM_INFRA_SKILL_ALLOWLIST: ReadonlySet<string> = new Set([
-  'extract-facts',
-  'extract-relationships',
-  'file-parse',
-]);
 
 /** Options passed to ExecutionLayer.invoke() by the agent runtime. */
 export interface InvokeOptions {
@@ -94,8 +83,7 @@ export class ExecutionLayer {
   private actionLogRepo?: import('../autonomy/action-log-repo.js').ActionLogRepo;
   private confidencePipeline?: import('../contacts/confidence-pipeline.js').ConfidencePipeline;
   private tempFileStore?: TempFileStore;
-  private readonly llmProvider?: LLMProvider;
-  private readonly modelRouter?: ModelRouter;
+  private readonly infraLlmService?: InfraLlmService;
   /** The agent's own contactId — injected into ctx.agentContactId for entity_enrichment default='agent' */
   private agentContactId?: string;
   /** IANA timezone name used for normalizing offset-less timestamp inputs from the LLM. */
@@ -124,8 +112,7 @@ export class ExecutionLayer {
     actionLogRepo?: import('../autonomy/action-log-repo.js').ActionLogRepo;
     confidencePipeline?: import('../contacts/confidence-pipeline.js').ConfidencePipeline;
     tempFileStore?: TempFileStore;
-    llmProvider?: LLMProvider;
-    modelRouter?: ModelRouter;
+    infraLlmService?: InfraLlmService;
     agentContactId?: string;
     timezone?: string;
     selfEmail?: string;
@@ -151,8 +138,7 @@ export class ExecutionLayer {
     this.actionLogRepo = options?.actionLogRepo;
     this.confidencePipeline = options?.confidencePipeline;
     this.tempFileStore = options?.tempFileStore;
-    this.llmProvider = options?.llmProvider;
-    this.modelRouter = options?.modelRouter;
+    this.infraLlmService = options?.infraLlmService;
     this.agentContactId = options?.agentContactId;
     this.timezone = options?.timezone ?? 'UTC';
     this.selfEmail = options?.selfEmail;
@@ -334,6 +320,28 @@ export class ExecutionLayer {
         return {
           success: false,
           error: this.wrapSkillError(`Skill '${skillName}' requires elevated privileges — task was not originated by the principal`),
+        };
+      }
+    }
+
+    // Caller gate: enforce allowed_callers manifest field.
+    // Identity-based — checked before score-based autonomy gates so we don't
+    // create pointless approval requests for structurally forbidden callers.
+    // 'system' is the fallback for system-layer invocations (checkpoint processor,
+    // scheduler) where no agentId is present in InvokeOptions.
+    const allowedCallers = manifest.allowed_callers;
+    if (allowedCallers && allowedCallers.length > 0) {
+      const callerId = options?.agentId ?? 'system';
+      if (!allowedCallers.includes(callerId)) {
+        skillLogger.warn(
+          { skillName, callerId, allowedCallers },
+          'Skill blocked: caller not in allowed_callers',
+        );
+        return {
+          success: false,
+          error: this.wrapSkillError(
+            `Skill '${skillName}' is restricted to agents: ${allowedCallers.join(', ')}`,
+          ),
         };
       }
     }
@@ -532,11 +540,11 @@ export class ExecutionLayer {
       // executionLayer injects `this` so approve-action can re-invoke blocked skills
       // with humanApproved: true (see ADR-018). Only approve-action should declare this.
       executionLayer: this,
-      // llmProvider and modelRouter are infrastructure-only capabilities for skills
-      // that need direct LLM access (extract-facts, extract-relationships, file-parse).
-      // See #637 for planned redesign of infrastructure skill LLM access.
-      llmProvider: this.llmProvider,
-      modelRouter: this.modelRouter,
+      // infraLlm is a constrained LLM service (classify/extract only, no raw chat)
+      // with full telemetry (llm.call bus events). The narrow API surface IS the
+      // security policy — any skill can declare this capability. See #637.
+      // Listed here so the missing-cap guard knows it's configured when infraLlmService is set.
+      infraLlm: this.infraLlmService,
     };
 
     // Hard-restrict executionLayer to approve-action only.
@@ -554,26 +562,6 @@ export class ExecutionLayer {
         success: false,
         error: this.wrapSkillError(
           `Skill '${skillName}' declares capability 'executionLayer' but only 'approve-action' is permitted to use it`,
-        ),
-      };
-    }
-
-    // Hard-restrict llmProvider/modelRouter to infrastructure skills only.
-    // These grant direct LLM access outside the agent runtime — a rogue skill with
-    // these capabilities could make unbounded LLM calls without telemetry or rate limits.
-    // Only the three background skills explicitly designed for it are allowed.
-    if (
-      (caps.includes('llmProvider') || caps.includes('modelRouter')) &&
-      !LLM_INFRA_SKILL_ALLOWLIST.has(manifest.name)
-    ) {
-      skillLogger.error(
-        { skillName, manifestName: manifest.name },
-        'SECURITY: llmProvider/modelRouter capabilities are restricted to infrastructure skills — refusing to run skill',
-      );
-      return {
-        success: false,
-        error: this.wrapSkillError(
-          `Skill '${skillName}' declares restricted LLM infrastructure capabilities (llmProvider/modelRouter) — only extract-facts, extract-relationships, and file-parse are permitted`,
         ),
       };
     }
@@ -613,11 +601,29 @@ export class ExecutionLayer {
           : this.entityMemory;
       } else if (cap === 'skillSearch') {
         // Special case: skillSearch is a closure over the registry, not a service field.
-        // Filters out skill-registry itself to avoid circular self-discovery results.
+        // Filters out skill-registry itself (circular self-discovery) and skills whose
+        // allowed_callers list does not include the calling agent (defense-in-depth —
+        // prevents LLM from discovering skills it cannot invoke).
         ctx.skillSearch = (query: string) =>
           this.registry.search(query)
             .filter(s => s.manifest.name !== 'skill-registry')
+            .filter(s => {
+              const allowed = s.manifest.allowed_callers;
+              if (!allowed || allowed.length === 0) return true;
+              return allowed.includes(options?.agentId ?? 'system');
+            })
             .map(s => ({ name: s.manifest.name, description: s.manifest.description }));
+      } else if (cap === 'infraLlm') {
+        // Special case: infraLlm creates a scoped instance per invocation that
+        // carries telemetry context (agentId, taskEventId, conversationId, skillName).
+        if (this.infraLlmService) {
+          ctx.infraLlm = this.infraLlmService.scoped({
+            agentId: options?.agentId,
+            taskEventId: options?.taskEventId,
+            conversationId: options?.conversationId,
+            skillName,
+          });
+        }
       } else if (cap === 'tempFileStore') {
         // Inject writeTempFile as a bound closure rather than the raw store.
         // Skills get a focused write method, not full store access (no delete/sweep).

@@ -29,7 +29,7 @@ export const VALID_CAPABILITIES: ReadonlySet<string> = new Set([
   'schedulerService', 'entityMemory', 'nylasCalendarClient',
   'autonomyService', 'executiveProfileService', 'browserService', 'bullpenService', 'skillSearch',
   'actionLogRepo', 'executionLayer', 'confidencePipeline', 'tempFileStore',
-  'llmProvider', 'modelRouter',
+  'infraLlm',
 ]);
 
 /**
@@ -125,9 +125,10 @@ export async function loadSkillsFromDirectory(
 
       // Freeze the manifest to prevent runtime mutation — a handler cannot
       // escalate its own privileges by pushing to capabilities[] or reassigning
-      // any manifest field. Object.freeze is shallow, so we freeze the capabilities
-      // array separately before freezing the manifest itself.
+      // any manifest field. Object.freeze is shallow, so we freeze array fields
+      // separately before freezing the manifest itself.
       if (manifest.capabilities !== undefined) Object.freeze(manifest.capabilities);
+      if (manifest.allowed_callers !== undefined) Object.freeze(manifest.allowed_callers);
       Object.freeze(manifest);
 
       registry.register(manifest, handler);
@@ -140,4 +141,28 @@ export async function loadSkillsFromDirectory(
   }
 
   return loaded;
+}
+
+/**
+ * Cross-validate allowed_callers in all skill manifests against known agent names.
+ * Call after both skills and agent configs are loaded. Fails on the first stale
+ * or unknown reference — typos must surface at startup, not silently at runtime.
+ *
+ * 'system' is always a valid caller (checkpoint processor, scheduler).
+ */
+export function validateAllowedCallers(
+  registry: SkillRegistry,
+  knownAgentNames: Set<string>,
+): void {
+  for (const skill of registry.list()) {
+    for (const caller of skill.manifest.allowed_callers ?? []) {
+      if (caller === 'system') continue;
+      if (!knownAgentNames.has(caller)) {
+        throw new Error(
+          `Skill '${skill.manifest.name}' declares unknown allowed_caller '${caller}'. ` +
+          `Known agents: ${[...knownAgentNames].join(', ')}`,
+        );
+      }
+    }
+  }
 }

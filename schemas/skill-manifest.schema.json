@@ -54,6 +54,11 @@
         "param": { "type": "string", "minLength": 1 },
         "default": { "type": "string", "enum": ["caller", "agent"] }
       }
+    },
+    "allowed_callers": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "description": "Agent names allowed to invoke this skill. Omit for unrestricted access. 'system' is a reserved name for system-layer invocations."
     }
   }
 }

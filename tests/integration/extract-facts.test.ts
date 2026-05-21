@@ -17,49 +17,36 @@ import { MemoryValidator } from '../../src/memory/validation.js';
 import { createSilentLogger } from '../../src/logger.js';
 import { ExtractFactsHandler } from '../../skills/extract-facts/handler.js';
 import type { SkillContext } from '../../src/skills/types.js';
-import type { LLMProvider, LLMResponse } from '../../src/agents/llm/provider.js';
-import type { ModelRouter } from '../../src/agents/llm/model-router.js';
+import type { InfraLlm, InfraLlmResult } from '../../src/skills/infra-llm.js';
 
 const { Pool } = pg;
 
 const DATABASE_URL = process.env.DATABASE_URL;
 const describeIf = DATABASE_URL ? describe : describe.skip;
 
-// Builds a mock LLMProvider that returns sequential text responses.
-// Mirrors the old makeMockAnthropicClient but speaks the LLMProvider interface.
-function makeMockLLMProvider(responses: string[]): LLMProvider {
+// Builds a mock InfraLlm that returns sequential text responses.
+// First call goes to classify() (classifier gate), second to extract().
+function makeMockInfraLlm(responses: string[]): InfraLlm {
   let callIndex = 0;
-  const chat = vi.fn().mockImplementation((): Promise<LLMResponse> => {
-    const content = responses[callIndex++] ?? 'no';
-    return Promise.resolve({
-      type: 'text' as const,
-      content,
-      usage: { inputTokens: 10, outputTokens: 10, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
-      provenance: { requestedModel: 'claude-haiku-4-5', actualModel: 'claude-haiku-4-5', providerRequestId: 'test-req' },
-    });
-  });
-  // Include the required id field from the LLMProvider interface.
-  return { id: 'mock-llm-provider', chat };
-}
-
-// Minimal ModelRouter stub — returns fixed models for fast/standard tiers.
-function makeMockModelRouter(): ModelRouter {
   return {
-    resolve: vi.fn().mockImplementation((tier: string) => {
-      const model = tier === 'fast' ? 'claude-haiku-4-5' : 'claude-sonnet-4-6';
-      return { model, tier };
+    classify: vi.fn().mockImplementation((): Promise<InfraLlmResult> => {
+      const text = responses[callIndex++] ?? 'no';
+      return Promise.resolve({ ok: true, text });
     }),
-  } as unknown as ModelRouter;
+    extract: vi.fn().mockImplementation((): Promise<InfraLlmResult> => {
+      const text = responses[callIndex++] ?? '[]';
+      return Promise.resolve({ ok: true, text });
+    }),
+  };
 }
 
-function makeCtx(entityMemory: EntityMemory, text: string, llmProvider: LLMProvider): SkillContext {
+function makeCtx(entityMemory: EntityMemory, text: string, infraLlm: InfraLlm): SkillContext {
   return {
     input: { text, source: 'integration-test' },
     secret: () => 'test-api-key',
     log: pino({ level: 'silent' }),
     entityMemory,
-    llmProvider,
-    modelRouter: makeMockModelRouter(),
+    infraLlm,
   } as unknown as SkillContext;
 }
 
@@ -98,9 +85,9 @@ describeIf('extract-facts integration', () => {
     const facts = JSON.stringify([
       { subject: 'Jane Doe', subjectType: 'person', attribute: 'home_city', value: 'Toronto', confidence: 0.9, decayClass: 'slow_decay' },
     ]);
-    const llmProvider = makeMockLLMProvider(['yes', facts]);
+    const infraLlm = makeMockInfraLlm(['yes', facts]);
     const handler = new ExtractFactsHandler();
-    const ctx = makeCtx(entityMemory, 'Bob lives in Toronto.', llmProvider);
+    const ctx = makeCtx(entityMemory, 'Bob lives in Toronto.', infraLlm);
 
     const result = await handler.execute(ctx);
 
@@ -130,13 +117,13 @@ describeIf('extract-facts integration', () => {
       { subject: 'Idempotent Person', subjectType: 'person', attribute: 'role', value: 'engineer', confidence: 0.85, decayClass: 'slow_decay' },
     ]);
 
-    const llmProvider1 = makeMockLLMProvider(['yes', facts]);
+    const infraLlm1 = makeMockInfraLlm(['yes', facts]);
     const handler1 = new ExtractFactsHandler();
-    await handler1.execute(makeCtx(entityMemory, 'Idempotent Person is an engineer.', llmProvider1));
+    await handler1.execute(makeCtx(entityMemory, 'Idempotent Person is an engineer.', infraLlm1));
 
-    const llmProvider2 = makeMockLLMProvider(['yes', facts]);
+    const infraLlm2 = makeMockInfraLlm(['yes', facts]);
     const handler2 = new ExtractFactsHandler();
-    await handler2.execute(makeCtx(entityMemory, 'Idempotent Person is an engineer.', llmProvider2));
+    await handler2.execute(makeCtx(entityMemory, 'Idempotent Person is an engineer.', infraLlm2));
 
     const nodes = await entityMemory.findEntities('Idempotent Person');
     expect(nodes).toHaveLength(1);
