@@ -67,4 +67,34 @@ describe('NylasClient.listMessages — folder/search filters', () => {
     expect(callArg.queryParams).not.toHaveProperty('subject');
     expect(callArg.queryParams).not.toHaveProperty('searchQueryNative');
   });
+
+  it('suppresses unread when searchQueryNative is set', async () => {
+    await client.listMessages({ searchQueryNative: 'to:security@example.com', unread: true });
+    const callArg = mockMessages.list.mock.calls[0]![0] as { queryParams: Record<string, unknown> };
+    expect(callArg.queryParams).toHaveProperty('searchQueryNative', 'to:security@example.com');
+    expect(callArg.queryParams).not.toHaveProperty('unread');
+  });
+
+  it('suppresses folders when searchQueryNative is set', async () => {
+    await client.listMessages({ searchQueryNative: 'from:boss@example.com', folders: ['INBOX'] });
+    const callArg = mockMessages.list.mock.calls[0]![0] as { queryParams: Record<string, unknown> };
+    expect(callArg.queryParams).toHaveProperty('searchQueryNative', 'from:boss@example.com');
+    expect(callArg.queryParams).not.toHaveProperty('in');
+  });
+
+  it('suppresses from and subject when searchQueryNative is set', async () => {
+    await client.listMessages({ searchQueryNative: 'is:unread', from: 'a@b.com', subject: 'Hi' });
+    const callArg = mockMessages.list.mock.calls[0]![0] as { queryParams: Record<string, unknown> };
+    expect(callArg.queryParams).toHaveProperty('searchQueryNative', 'is:unread');
+    expect(callArg.queryParams).not.toHaveProperty('from');
+    expect(callArg.queryParams).not.toHaveProperty('subject');
+  });
+
+  it('preserves limit and threadId when searchQueryNative is set', async () => {
+    await client.listMessages({ searchQueryNative: 'test', limit: 10, threadId: 'th-1' });
+    const callArg = mockMessages.list.mock.calls[0]![0] as { queryParams: Record<string, unknown> };
+    expect(callArg.queryParams).toHaveProperty('searchQueryNative', 'test');
+    expect(callArg.queryParams).toHaveProperty('limit', 10);
+    expect(callArg.queryParams).toHaveProperty('threadId', 'th-1');
+  });
 });
