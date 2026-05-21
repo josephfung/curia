@@ -66,6 +66,15 @@ export interface ListMessagesOptions {
   receivedAfter?: number;
 }
 
+// Gmail system labels use specific IDs that don't always match the display
+// name shown in the Gmail UI.  LLMs (and humans) commonly use the display
+// name or a plausible variation.  This map normalizes the most frequent
+// mismatches so callers don't need to know the exact Gmail label ID.
+const GMAIL_FOLDER_ALIASES: Record<string, string> = {
+  DRAFTS: 'DRAFT',     // Gmail UI: "Drafts" → API label: DRAFT
+  STARRED: 'STARRED',  // No-op — already correct, listed for completeness
+};
+
 // ── Logger interface (matches pino's signature) ─────────────────────────────
 
 interface Logger {
@@ -122,7 +131,16 @@ export class CeoNylasClient {
       }
       params.set('search_query_native', options.query);
     } else {
-      if (options.folder) params.set('in', options.folder);
+      if (options.folder) {
+        const normalized = GMAIL_FOLDER_ALIASES[options.folder] ?? options.folder;
+        if (normalized !== options.folder) {
+          this.log.info(
+            { original: options.folder, normalized },
+            'nylas: listMessages — normalized folder alias to Gmail label ID',
+          );
+        }
+        params.set('in', normalized);
+      }
       if (options.unread !== undefined) params.set('unread', String(options.unread));
       if (options.receivedAfter !== undefined) params.set('received_after', String(options.receivedAfter));
     }
