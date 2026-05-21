@@ -90,6 +90,13 @@ describe('NylasClient.listMessages — folder/search filters', () => {
     expect(callArg.queryParams).not.toHaveProperty('subject');
   });
 
+  it('suppresses receivedAfter when searchQueryNative is set', async () => {
+    await client.listMessages({ searchQueryNative: 'test', receivedAfter: 1700000000 });
+    const callArg = mockMessages.list.mock.calls[0]![0] as { queryParams: Record<string, unknown> };
+    expect(callArg.queryParams).toHaveProperty('searchQueryNative', 'test');
+    expect(callArg.queryParams).not.toHaveProperty('receivedAfter');
+  });
+
   it('preserves limit and threadId when searchQueryNative is set', async () => {
     await client.listMessages({ searchQueryNative: 'test', limit: 10, threadId: 'th-1' });
     const callArg = mockMessages.list.mock.calls[0]![0] as { queryParams: Record<string, unknown> };
