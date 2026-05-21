@@ -20,6 +20,9 @@ import { toLocalIso, formatDisplayTimezone } from '../../src/time/timestamp.js';
 
 // Strip HTML tags for plaintext extraction.
 // Not a full DOM parser — good enough for preview purposes.
+// Note: this function strips tags but not block content, so <script>payload</script>
+// will leave "payload" in the output. The threat model here is LLM context
+// injection, not XSS rendering; a separate issue tracks adding block stripping.
 function stripHtml(content: string): string {
   // Loop until stable: stripping a complete inner tag (e.g. <a> from <sc<a>ript)
   // can expose an incomplete <script fragment. Re-running catches what each pass
