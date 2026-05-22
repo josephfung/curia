@@ -26,6 +26,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **`ceo-inbox` model tier** — reverted from `fast` (Haiku) to `standard` (Sonnet); Haiku produced incorrect Unix timestamps in Step 6 high-water-mark saves, causing `last_processed_at` to drift ~40 days into the future and blinding inbox triage.
 - **`email-list` unread filter with search** — when both `search` and `unread_only: true` are passed, `is:unread` is now embedded into the search string so the filter is preserved. Previously the Nylas v3 API silently dropped `unread_only` whenever `search` was also set, causing all messages (including already-processed ones) to be returned.
 - **`config-store` retrieve fallback** — `retrieve` falls back to `properties.key` when the node label mismatches. (#660)
 - **`config-store` rejection visibility** — `store` returns `stored: false` with `action` when `storeFact` rejects the write. (#661)

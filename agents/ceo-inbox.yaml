@@ -8,7 +8,7 @@ description: >
   escalates urgent items via Signal and the bullpen.
 
 model:
-  tier: fast  # trial: rule-based triage; CEO reviews reply drafts before send — watch draft quality
+  tier: standard  # reverted from fast — Haiku botched Unix timestamp arithmetic, causing last_processed_at to drift ~40 days into the future and blinding inbox triage
 
 inject_specialists: true
 
