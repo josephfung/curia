@@ -1021,7 +1021,7 @@ describe('Scheduler', () => {
       );
     });
 
-    it('calls cancelStaleDeclarativeJobs with the live tuple set after all upserts', async () => {
+    it('calls cancelStaleDeclarativeJobs with all declared tuples after upserts', async () => {
       schedulerService.upsertDeclarativeJob.mockResolvedValue('job-1');
       schedulerService.cancelStaleDeclarativeJobs.mockResolvedValue(0);
 
@@ -1040,23 +1040,26 @@ describe('Scheduler', () => {
       await scheduler.loadDeclarativeJobs(configs);
 
       expect(schedulerService.cancelStaleDeclarativeJobs).toHaveBeenCalledTimes(1);
-      const [liveTuples] = schedulerService.cancelStaleDeclarativeJobs.mock.calls[0] as [
+      const [declaredTuples] = schedulerService.cancelStaleDeclarativeJobs.mock.calls[0] as [
         Array<{ agentId: string; cronExpr: string; taskPayload: string }>,
       ];
-      expect(liveTuples).toHaveLength(2);
-      expect(liveTuples).toContainEqual({
+      expect(declaredTuples).toHaveLength(2);
+      expect(declaredTuples).toContainEqual({
         agentId: 'coordinator',
         cronExpr: '0 9 * * 1',
         taskPayload: JSON.stringify({ task: 'weekly-standup' }),
       });
-      expect(liveTuples).toContainEqual({
+      expect(declaredTuples).toContainEqual({
         agentId: 'coordinator',
         cronExpr: '0 8 * * *',
         taskPayload: JSON.stringify({ task: 'daily-brief' }),
       });
     });
 
-    it('excludes failed upserts from the live tuple set', async () => {
+    it('includes declared tuples in cleanup set even when upsert fails', async () => {
+      // A transient upsert failure must not cause a still-declared job's existing
+      // DB row to be cancelled. Tuples are tracked before the upsert attempt, so
+      // a failure leaves the tuple in the declared set to shield the existing row.
       schedulerService.upsertDeclarativeJob
         .mockRejectedValueOnce(new Error('db error'))
         .mockResolvedValueOnce('job-ok');
@@ -1076,19 +1079,24 @@ describe('Scheduler', () => {
 
       await scheduler.loadDeclarativeJobs(configs);
 
-      const [liveTuples] = schedulerService.cancelStaleDeclarativeJobs.mock.calls[0] as [
+      const [declaredTuples] = schedulerService.cancelStaleDeclarativeJobs.mock.calls[0] as [
         Array<{ agentId: string; cronExpr: string; taskPayload: string }>,
       ];
-      // Only the successful upsert should be in the live set
-      expect(liveTuples).toHaveLength(1);
-      expect(liveTuples[0]).toEqual({
+      // Both tuples — including the one whose upsert failed — must be in the declared set
+      expect(declaredTuples).toHaveLength(2);
+      expect(declaredTuples).toContainEqual({
+        agentId: 'agent-x',
+        cronExpr: '0 1 * * *',
+        taskPayload: JSON.stringify({ task: 'fail-task' }),
+      });
+      expect(declaredTuples).toContainEqual({
         agentId: 'agent-x',
         cronExpr: '0 2 * * *',
         taskPayload: JSON.stringify({ task: 'ok-task' }),
       });
     });
 
-    it('uses targetAgentId (not source config.name) in the live tuple', async () => {
+    it('uses targetAgentId (not source config.name) in the declared tuple', async () => {
       schedulerService.upsertDeclarativeJob.mockResolvedValue('job-1');
       schedulerService.cancelStaleDeclarativeJobs.mockResolvedValue(0);
 
@@ -1110,11 +1118,11 @@ describe('Scheduler', () => {
 
       await scheduler.loadDeclarativeJobs(configs);
 
-      const [liveTuples] = schedulerService.cancelStaleDeclarativeJobs.mock.calls[0] as [
+      const [declaredTuples] = schedulerService.cancelStaleDeclarativeJobs.mock.calls[0] as [
         Array<{ agentId: string; cronExpr: string; taskPayload: string }>,
       ];
-      // The live tuple must use 'coordinator' (the targetAgentId), not 'writing-scout'
-      expect(liveTuples).toEqual([
+      // The declared tuple must use 'coordinator' (the targetAgentId), not 'writing-scout'
+      expect(declaredTuples).toEqual([
         {
           agentId: 'coordinator',
           cronExpr: '30 8 * * 2',

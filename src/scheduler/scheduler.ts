@@ -514,9 +514,11 @@ export class Scheduler {
     const knownAgents = new Set(agentConfigs.map(config => config.name));
     // Collect all (source -> target) schedule edges for cycle detection after upserts.
     const edges: Array<{ source: string; target: string }> = [];
-    // Collect the (agent_id, cron_expr, task_payload) tuples that were successfully upserted.
-    // Used after the loop to cancel stale system rows no longer in the YAML config.
-    const liveTuples: Array<{ agentId: string; cronExpr: string; taskPayload: string }> = [];
+    // Collect (agent_id, cron_expr, task_payload) tuples for every YAML-declared schedule that
+    // passes the knownAgents guard. Used to shield existing DB rows from stale-job cleanup.
+    // Populated BEFORE the upsert attempt so that a transient upsert failure cannot cause a
+    // still-declared job's existing DB row to be misclassified as stale and cancelled.
+    const declaredTuples: Array<{ agentId: string; cronExpr: string; taskPayload: string }> = [];
 
     for (const config of agentConfigs) {
       if (!config.schedule || config.schedule.length === 0) {
@@ -538,6 +540,16 @@ export class Scheduler {
           continue;
         }
 
+        // Track this declaration before attempting the upsert — a YAML declaration
+        // protects its DB row from stale-job cleanup regardless of upsert outcome.
+        // (A transient DB error during the upsert must not cause a still-declared
+        // job's existing pending row to be cancelled on this startup pass.)
+        declaredTuples.push({
+          agentId: targetAgentId,
+          cronExpr: schedule.cron,
+          taskPayload: JSON.stringify({ task: schedule.task }),
+        });
+
         try {
           const jobId = await this.schedulerService.upsertDeclarativeJob(
             targetAgentId,
@@ -546,13 +558,6 @@ export class Scheduler {
           // Only record the edge after a successful upsert — a failed upsert means
           // the job doesn't exist in the DB, so it shouldn't influence cycle detection.
           edges.push({ source: config.name, target: targetAgentId });
-          // Only track successfully upserted tuples in the live set — a failed upsert
-          // means the job isn't reliably in the DB, so it must not shield a stale row.
-          liveTuples.push({
-            agentId: targetAgentId,
-            cronExpr: schedule.cron,
-            taskPayload: JSON.stringify({ task: schedule.task }),
-          });
           this.logger.info(
             { agentId: targetAgentId, sourceAgent: config.name, cron: schedule.cron, task: schedule.task, jobId },
             'Declarative job upserted',
@@ -593,7 +598,7 @@ export class Scheduler {
     // stale when the new cron conflicts on the unique index) and removed schedule entries
     // (row has no corresponding YAML declaration at all).
     try {
-      const cancelledCount = await this.schedulerService.cancelStaleDeclarativeJobs(liveTuples);
+      const cancelledCount = await this.schedulerService.cancelStaleDeclarativeJobs(declaredTuples);
       if (cancelledCount > 0) {
         this.logger.info(
           { cancelledCount },
@@ -602,7 +607,7 @@ export class Scheduler {
       }
     } catch (err) {
       this.logger.error(
-        { err, liveTupleCount: liveTuples.length },
+        { err, declaredTupleCount: declaredTuples.length },
         'Failed to cancel stale declarative jobs — resolve the error above and restart to trigger cleanup',
       );
     }

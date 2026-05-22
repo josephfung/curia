@@ -816,7 +816,7 @@ describe('SchedulerService', () => {
       const count = await svc.cancelStaleDeclarativeJobs(liveTuples);
 
       expect(count).toBe(2);
-      const [sql, params] = pool.query.mock.calls[0] as [string, unknown[]];
+      const [sql] = pool.query.mock.calls[0] as [string, unknown[]];
       // Must only target pending/failed system jobs
       expect(sql).toContain("created_by = 'system'");
       expect(sql).toContain("status IN ('pending', 'failed')");
@@ -859,7 +859,7 @@ describe('SchedulerService', () => {
 
       await svc.cancelStaleDeclarativeJobs(liveTuples);
 
-      const [_sql, params] = pool.query.mock.calls[0] as [string, unknown[]];
+      const [, params] = pool.query.mock.calls[0] as [string, unknown[]];
       // All six values from the two tuples should appear in the params array
       expect(params).toContain('agent-a');
       expect(params).toContain('0 8 * * *');
