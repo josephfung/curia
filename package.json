@@ -19,7 +19,8 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint src/ tests/",
     "migrate": "tsx --env-file=.env node_modules/node-pg-migrate/bin/node-pg-migrate.js up --migrations-dir src/db/migrations --migration-file-language sql",
-    "smoke": "tsx --env-file=.env tests/smoke/cli.ts"
+    "smoke": "tsx --env-file=.env tests/smoke/cli.ts",
+    "inspect-prompts": "tsx --env-file=.env scripts/inspect-prompts.ts"
   },
   "license": "MIT",
   "dependencies": {
