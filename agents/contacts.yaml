@@ -224,8 +224,49 @@ pinned_skills:
   # Calendar — read-only, used for meeting history enrichment in briefings only.
   # Calendar specialist owns the domain; contacts keeps this read-only pin for briefing enrichment.
   - calendar-list-events
+  # Promotion sweep — access to CEO Sent folder and contact-register for daily sweep.
+  # ceo-inbox-list is intentionally scoped here: contacts only uses it read-only (folder: SENT)
+  # to collect recipient email addresses; it never reads inbox triage state or writes messages.
+  - ceo-inbox-list
+  - contact-register
 
 schedule:
   - cron: "0 9 * * 1"   # Mondays at 9 AM
     task: "Run your weekly contacts dedup scan — find probable and certain duplicate contact pairs, present them to the CEO for review one pair at a time, and merge confirmed pairs."
     expectedDurationSeconds: 300
+
+  - cron: "0 8 * * *"   # Daily at 8 AM
+    task: >
+      Run the provisional contact promotion sweep. Your goal is to auto-promote provisional
+      contacts to confirmed based on engagement signals from the CEO's Sent folder and calendar.
+      The curia_outbound signal (Curia itself has emailed this contact) fires automatically
+      inside contact-register — no explicit check needed for it.
+
+      Steps:
+
+      1. Call contact-list with status: "provisional" to get all provisional contacts.
+         If the count is zero, exit and report that no provisional contacts need promotion.
+
+      2. Call ceo-inbox-list with folder: "SENT", unread_only: false,
+         received_after_hours: 2160 (90 days). Collect all email addresses from the
+         "to" and "cc" arrays across all returned messages. Deduplicate into a set.
+
+      3. Call calendar-list-events with a wide date range: timeMin 90 days ago,
+         timeMax 90 days from now. Collect all attendee email addresses from
+         non-cancelled events. Deduplicate into a set.
+
+      4. For each provisional contact from step 1:
+         - Use contact-lookup (by: "name") to get their channel identities (email addresses).
+         - If a contact has no email identity, skip them.
+         - Check whether their email appears in the Sent folder set (step 2) or
+           the calendar attendee set (step 3).
+         - If found in Sent folder: call contact-register with channel: "email",
+           identifier: their email, displayName: their display name,
+           messageTimestamp: the current ISO 8601 time, ceo_has_sent: true.
+         - If found in calendar only: call contact-register with calendar_accepted: true.
+         - contact-register automatically checks the curia_outbound signal for every call.
+
+      5. Report a clear summary: how many provisional contacts were checked, how many
+         were promoted, which signal triggered each promotion (curia_outbound,
+         ceo_has_sent, or calendar_accepted), and how many provisional contacts remain.
+    expectedDurationSeconds: 180

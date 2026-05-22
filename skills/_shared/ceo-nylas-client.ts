@@ -17,6 +17,11 @@ export interface NylasMessageSummary {
   threadId: string;
   subject: string;
   from: NylasParticipant[];
+  // to and cc are included in list responses by the Nylas v3 API. Needed by
+  // the Sent folder sweep (issue #633) so the contacts agent can collect recipient
+  // addresses without a separate getMessage() call per message.
+  to: NylasParticipant[];
+  cc: NylasParticipant[];
   snippet: string;
   date: number;
   unread: boolean;
@@ -25,8 +30,7 @@ export interface NylasMessageSummary {
 }
 
 export interface NylasMessageFull extends NylasMessageSummary {
-  to: NylasParticipant[];
-  cc: NylasParticipant[];
+  // to and cc are inherited from NylasMessageSummary
   bcc: NylasParticipant[];
   body: string;
   labels: string[];
@@ -381,6 +385,10 @@ function normalizeMessageSummary(msg: NylasApiMessage): NylasMessageSummary {
     threadId: msg.thread_id ?? '',
     subject: msg.subject ?? '',
     from: (msg.from ?? []).map(normParticipant),
+    // Nylas v3 list responses include to and cc. Expose them in the summary so
+    // Sent-folder sweeps can collect recipient addresses without per-message reads.
+    to: (msg.to ?? []).map(normParticipant),
+    cc: (msg.cc ?? []).map(normParticipant),
     snippet: msg.snippet ?? '',
     date: msg.date ?? 0,
     unread: msg.unread ?? false,
@@ -392,8 +400,7 @@ function normalizeMessageSummary(msg: NylasApiMessage): NylasMessageSummary {
 function normalizeMessageFull(msg: NylasApiMessage): NylasMessageFull {
   return {
     ...normalizeMessageSummary(msg),
-    to: (msg.to ?? []).map(normParticipant),
-    cc: (msg.cc ?? []).map(normParticipant),
+    // to and cc come from normalizeMessageSummary; only bcc is full-message-only.
     bcc: (msg.bcc ?? []).map(normParticipant),
     body: msg.body ?? '',
     labels: msg.labels ?? msg.folders ?? [],
