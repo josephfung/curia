@@ -13,7 +13,7 @@ function makeEntityMemory(overrides: Record<string, unknown> = {}) {
   return {
     findEntities: vi.fn().mockResolvedValue([]),
     createEntity: vi.fn().mockResolvedValue({ entity: { id: 'node-1' }, created: true }),
-    storeFact: vi.fn().mockResolvedValue({ stored: true, nodeId: 'fact-1' }),
+    storeFact: vi.fn().mockResolvedValue({ stored: true, action: 'created', nodeId: 'fact-1' }),
     getFacts: vi.fn().mockResolvedValue([]),
     ...overrides,
   };
@@ -115,8 +115,9 @@ describe('ConfigStoreHandler', () => {
 
     expect(result.success).toBe(true);
     if (result.success) {
-      const data = result.data as { stored: boolean; namespace: string; key: string };
+      const data = result.data as { stored: boolean; action: string; namespace: string; key: string };
       expect(data.stored).toBe(true);
+      expect(data.action).toBe('created');
       expect(data.namespace).toBe('writing_config');
       expect(data.key).toBe('writing_guide_url');
     }
