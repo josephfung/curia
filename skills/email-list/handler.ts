@@ -40,8 +40,15 @@ export class EmailListHandler implements SkillHandler {
     if (rawSearch !== undefined) {
       // Nylas v3: search_query_native cannot be combined with unread, folders, receivedAfter,
       // from, or subject — they are silently dropped (see NylasClient.listMessages). For the
-      // unread filter specifically, embed Gmail's `is:unread` operator directly into the search
-      // string so it is preserved despite the Nylas limitation.
+      // unread filter specifically, embed the provider-native unread operator directly into
+      // the search string so it is preserved despite the Nylas limitation.
+      //
+      // NOTE: `is:unread` is Gmail-specific syntax. Curia currently operates Gmail-only
+      // accounts, so this is correct. If a non-Gmail provider is ever configured (e.g.
+      // Outlook KQL uses `isRead:false`), the embedding here will need to be gated on
+      // account provider type — which will require threading provider metadata through
+      // OutboundGateway into the skill context.
+      // TODO: make unread embedding provider-aware when multi-provider support is added.
       const effectiveSearch = unread_only === true ? `${rawSearch} is:unread` : rawSearch;
       options.searchQueryNative = effectiveSearch;
     } else {
