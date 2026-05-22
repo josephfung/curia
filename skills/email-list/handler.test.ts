@@ -120,6 +120,45 @@ describe('EmailListHandler — standard message fields', () => {
   });
 });
 
+describe('EmailListHandler — unread_only with search', () => {
+  it('embeds is:unread into the search string when both search and unread_only are provided', async () => {
+    const gateway = makeMockGateway();
+    const handler = new EmailListHandler();
+    await handler.execute(makeCtx({
+      outboundGateway: gateway,
+      input: { search: 'to:security@example.com', unread_only: true },
+    }));
+    const opts = (gateway!.listEmailMessages as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    // unread_only should be embedded in the search string, not passed as a separate filter
+    expect(opts.searchQueryNative).toBe('to:security@example.com is:unread');
+    expect(opts.unread).toBeUndefined();
+  });
+
+  it('does not add is:unread when unread_only is false', async () => {
+    const gateway = makeMockGateway();
+    const handler = new EmailListHandler();
+    await handler.execute(makeCtx({
+      outboundGateway: gateway,
+      input: { search: 'to:security@example.com', unread_only: false },
+    }));
+    const opts = (gateway!.listEmailMessages as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(opts.searchQueryNative).toBe('to:security@example.com');
+    expect(opts.unread).toBeUndefined();
+  });
+
+  it('uses native unread filter (not search string) when search is not set', async () => {
+    const gateway = makeMockGateway();
+    const handler = new EmailListHandler();
+    await handler.execute(makeCtx({
+      outboundGateway: gateway,
+      input: { unread_only: true },
+    }));
+    const opts = (gateway!.listEmailMessages as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(opts.unread).toBe(true);
+    expect(opts.searchQueryNative).toBeUndefined();
+  });
+});
+
 describe('EmailListHandler — error handling', () => {
   it('returns error when gateway throws', async () => {
     const gateway = {

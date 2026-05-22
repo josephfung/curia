@@ -33,10 +33,20 @@ export class EmailListHandler implements SkillHandler {
 
     const options: ListMessagesOptions = {};
     if (typeof folder === 'string' && folder.trim()) options.folders = [folder.trim()];
-    if (unread_only === true) options.unread = true;
     if (typeof from === 'string' && from.trim()) options.from = from.trim();
     if (typeof subject === 'string' && subject.trim()) options.subject = subject.trim();
-    if (typeof search === 'string' && search.trim()) options.searchQueryNative = search.trim();
+
+    const rawSearch = typeof search === 'string' && search.trim() ? search.trim() : undefined;
+    if (rawSearch !== undefined) {
+      // Nylas v3: search_query_native cannot be combined with unread, folders, receivedAfter,
+      // from, or subject — they are silently dropped (see NylasClient.listMessages). For the
+      // unread filter specifically, embed Gmail's `is:unread` operator directly into the search
+      // string so it is preserved despite the Nylas limitation.
+      const effectiveSearch = unread_only === true ? `${rawSearch} is:unread` : rawSearch;
+      options.searchQueryNative = effectiveSearch;
+    } else {
+      if (unread_only === true) options.unread = true;
+    }
     // Coerce to a positive integer before forwarding — LLMs occasionally emit floats
     // (e.g. 12.7) and Nylas expects an int. Non-finite or non-positive values fall back
     // to DEFAULT_LIMIT.
