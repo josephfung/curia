@@ -402,3 +402,226 @@ describe('ContactRegisterHandler — bus event emission', () => {
     expect(result.success).toBe(true);
   });
 });
+
+describe('ContactRegisterHandler — auto-promotion signals', () => {
+  let handler: ContactRegisterHandler;
+  let contactService: ContactService;
+  let provisionalId: string;
+
+  beforeEach(async () => {
+    handler = new ContactRegisterHandler();
+    contactService = ContactService.createInMemory();
+
+    // Seed a provisional contact — the subject of all promotion tests
+    const contact = await contactService.createContact({
+      displayName: 'Eve Provisional',
+      status: 'provisional',
+      source: 'agent_called',
+    });
+    provisionalId = contact.id;
+    await contactService.linkIdentity({
+      contactId: contact.id,
+      channel: 'email',
+      channelIdentifier: 'eve@example.com',
+      source: 'agent_called',
+    });
+  });
+
+  it('promotes a provisional contact when curia_outbound signal fires (outboundMessageCount > 0)', async () => {
+    // Simulate Curia having sent an outbound message to this contact
+    await contactService.updateScoringFields(provisionalId, {
+      outboundMessageCountDelta: 1,
+      contactConfidence: 0.5,
+    });
+
+    const ctx = makeCtx({
+      contactService,
+      input: {
+        channel: 'email',
+        identifier: 'eve@example.com',
+        displayName: 'Eve',
+        messageTimestamp: TIMESTAMP_A,
+        // No agent-asserted signals — curia_outbound fires from DB alone
+      },
+    });
+
+    const result = await handler.execute(ctx);
+
+    expect(result.success).toBe(true);
+    const data = (result as { success: true; data: Record<string, unknown> }).data;
+    expect(data.status).toBe('confirmed');
+    expect(data.promoted).toBe(true);
+    expect(data.promotion_signal).toBe('curia_outbound');
+  });
+
+  it('promotes a provisional contact when ceo_has_sent is true', async () => {
+    const ctx = makeCtx({
+      contactService,
+      input: {
+        channel: 'email',
+        identifier: 'eve@example.com',
+        displayName: 'Eve',
+        messageTimestamp: TIMESTAMP_A,
+        ceo_has_sent: true,
+      },
+    });
+
+    const result = await handler.execute(ctx);
+
+    expect(result.success).toBe(true);
+    const data = (result as { success: true; data: Record<string, unknown> }).data;
+    expect(data.status).toBe('confirmed');
+    expect(data.promoted).toBe(true);
+    expect(data.promotion_signal).toBe('ceo_has_sent');
+  });
+
+  it('promotes a provisional contact when calendar_accepted is true', async () => {
+    const ctx = makeCtx({
+      contactService,
+      input: {
+        channel: 'email',
+        identifier: 'eve@example.com',
+        displayName: 'Eve',
+        messageTimestamp: TIMESTAMP_A,
+        calendar_accepted: true,
+      },
+    });
+
+    const result = await handler.execute(ctx);
+
+    expect(result.success).toBe(true);
+    const data = (result as { success: true; data: Record<string, unknown> }).data;
+    expect(data.status).toBe('confirmed');
+    expect(data.promoted).toBe(true);
+    expect(data.promotion_signal).toBe('calendar_accepted');
+  });
+
+  it('prefers curia_outbound over ceo_has_sent when both signals are present', async () => {
+    await contactService.updateScoringFields(provisionalId, {
+      outboundMessageCountDelta: 2,
+      contactConfidence: 0.6,
+    });
+
+    const ctx = makeCtx({
+      contactService,
+      input: {
+        channel: 'email',
+        identifier: 'eve@example.com',
+        displayName: 'Eve',
+        messageTimestamp: TIMESTAMP_A,
+        ceo_has_sent: true,
+      },
+    });
+
+    const result = await handler.execute(ctx);
+
+    expect(result.success).toBe(true);
+    const data = (result as { success: true; data: Record<string, unknown> }).data;
+    expect(data.promoted).toBe(true);
+    // curia_outbound takes priority (checked first)
+    expect(data.promotion_signal).toBe('curia_outbound');
+  });
+
+  it('does not promote a blocked contact regardless of signals', async () => {
+    // Block the contact
+    await contactService.setStatus(provisionalId, 'blocked');
+
+    const ctx = makeCtx({
+      contactService,
+      input: {
+        channel: 'email',
+        identifier: 'eve@example.com',
+        displayName: 'Eve',
+        messageTimestamp: TIMESTAMP_A,
+        ceo_has_sent: true,
+        calendar_accepted: true,
+      },
+    });
+
+    const result = await handler.execute(ctx);
+
+    expect(result.success).toBe(true);
+    const data = (result as { success: true; data: Record<string, unknown> }).data;
+    expect(data.status).toBe('blocked');
+    expect(data.promoted).toBe(false);
+    expect(data.promotion_signal).toBeUndefined();
+  });
+
+  it('is a no-op for already-confirmed contacts (no status change, no error)', async () => {
+    // Seed a separate confirmed contact
+    const confirmed = await contactService.createContact({
+      displayName: 'Frank Confirmed',
+      status: 'confirmed',
+      source: 'ceo_stated',
+    });
+    await contactService.linkIdentity({
+      contactId: confirmed.id,
+      channel: 'email',
+      channelIdentifier: 'frank@example.com',
+      source: 'ceo_stated',
+    });
+
+    const ctx = makeCtx({
+      contactService,
+      input: {
+        channel: 'email',
+        identifier: 'frank@example.com',
+        displayName: 'Frank',
+        messageTimestamp: TIMESTAMP_A,
+        ceo_has_sent: true,
+      },
+    });
+
+    const result = await handler.execute(ctx);
+
+    expect(result.success).toBe(true);
+    const data = (result as { success: true; data: Record<string, unknown> }).data;
+    expect(data.status).toBe('confirmed');
+    expect(data.promoted).toBe(false);
+    expect(data.promotion_signal).toBeUndefined();
+  });
+
+  it('returns promoted: false when no signal fires for a provisional contact', async () => {
+    // No outbound count, no ceo_has_sent, no calendar_accepted
+    const ctx = makeCtx({
+      contactService,
+      input: {
+        channel: 'email',
+        identifier: 'eve@example.com',
+        displayName: 'Eve',
+        messageTimestamp: TIMESTAMP_A,
+      },
+    });
+
+    const result = await handler.execute(ctx);
+
+    expect(result.success).toBe(true);
+    const data = (result as { success: true; data: Record<string, unknown> }).data;
+    expect(data.status).toBe('provisional');
+    expect(data.promoted).toBe(false);
+    expect(data.promotion_signal).toBeUndefined();
+  });
+
+  it('promotes a newly-created provisional contact when ceo_has_sent fires on first registration', async () => {
+    // The contact does not exist yet — contact-register creates and immediately promotes it
+    const ctx = makeCtx({
+      contactService,
+      input: {
+        channel: 'email',
+        identifier: 'newceo@example.com',
+        displayName: 'New CEO Contact',
+        messageTimestamp: TIMESTAMP_A,
+        ceo_has_sent: true,
+      },
+    });
+
+    const result = await handler.execute(ctx);
+
+    expect(result.success).toBe(true);
+    const data = (result as { success: true; data: Record<string, unknown> }).data;
+    expect(data.created).toBe(true);
+    expect(data.status).toBe('confirmed');
+    expect(data.promoted).toBe(true);
+    expect(data.promotion_signal).toBe('ceo_has_sent');
+  });
+});
