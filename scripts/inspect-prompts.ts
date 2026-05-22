@@ -16,11 +16,16 @@
 //   - After changing security.trust_thresholds in config/default.yaml
 //   - After adding or removing specialist agents (agents/*.yaml)
 //
+// Requires: DATABASE_URL in .env (or environment) pointing at a bootstrapped Curia instance.
+// "Bootstrapped" means Curia has been started at least once (office_identity_current and
+// executive_profile_current are populated). On a fresh empty DB the services would seed those
+// tables from YAML — the same thing Curia startup does — so the output would still be correct,
+// but running inspect-prompts before any Curia startup is not the intended use case.
+//
 // This script connects to the database directly — it does NOT require Curia to be running.
 // It initializes only the services it needs, so it is safe to run alongside a live instance.
 
-import { resolve, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { resolve } from 'node:path';
 import pg from 'pg';
 import { loadConfig } from '../src/config.js';
 import { loadAllAgentConfigs } from '../src/agents/loader.js';
@@ -31,22 +36,32 @@ import { compileSecurityContextBlock } from '../src/security/security-context.js
 import { EventBus } from '../src/bus/bus.js';
 import { createSilentLogger } from '../src/logger.js';
 
-const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const REPO_ROOT = resolve(import.meta.dirname, '..');
 const AGENTS_DIR = resolve(REPO_ROOT, 'agents');
 const CONFIG_DIR = resolve(REPO_ROOT, 'config');
 
 async function main(): Promise<void> {
+  const databaseUrl = process.env.DATABASE_URL;
+  if (!databaseUrl) {
+    throw new Error('DATABASE_URL is required. Add it to .env or set it in the environment.');
+  }
+
   const logger = createSilentLogger();
   // No-op bus — this script only reads; the services use the bus only when writing
   // (update/reload paths), which never happen here.
   const bus = new EventBus(logger);
 
   const config = loadConfig();
-  const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
+  const pool = new pg.Pool({ connectionString: databaseUrl });
+
+  // Declared outside try so the finally block can call stop() on each service.
+  // initialize() starts chokidar file watchers; without stop() the process hangs.
+  let identityService: OfficeIdentityService | null = null;
+  let profileService: ExecutiveProfileService | null = null;
 
   try {
     // ── Identity block ─────────────────────────────────────────────────────────
-    const identityService = new OfficeIdentityService(
+    identityService = new OfficeIdentityService(
       pool,
       logger,
       bus,
@@ -55,7 +70,7 @@ async function main(): Promise<void> {
     await identityService.initialize();
 
     // ── Executive voice block ──────────────────────────────────────────────────
-    const profileService = new ExecutiveProfileService(
+    profileService = new ExecutiveProfileService(
       pool,
       logger,
       bus,
@@ -85,15 +100,16 @@ async function main(): Promise<void> {
     // as that would create the record if absent and produce unwanted side effects
     // in a read-only inspection script.
     const agentResult = await pool.query<{ id: string }>(
-      `SELECT id FROM contacts WHERE system_role = 'agent' LIMIT 1`,
+      // ORDER BY id ASC ensures a deterministic result if multiple rows exist.
+      `SELECT id FROM contacts WHERE system_role = 'agent' ORDER BY id ASC LIMIT 1`,
     );
     const agentContactId = agentResult.rows[0]?.id ?? '';
     if (!agentContactId) {
       // Non-fatal: Curia may not have been bootstrapped yet. The eval harness
-      // doesn't use ${agent_contact_id} for routing tests; leave it empty.
+      // doesn't use agent_contact_id for routing tests; leave it empty.
       process.stderr.write(
         'Warning: no agent contact found (system_role=agent). Has Curia been started at least once?\n' +
-        '         ${agent_contact_id} will be empty in the output.\n',
+        '         agent_contact_id will be empty in the output.\n',
       );
     }
 
@@ -147,6 +163,10 @@ async function main(): Promise<void> {
     // which can confuse downstream JSON parsers when appended to.
     process.stdout.write(JSON.stringify(output, null, 2) + '\n');
   } finally {
+    // Stop file watchers before closing the pool — initialize() starts chokidar
+    // watchers and without stop() the Node event loop stays alive indefinitely.
+    await identityService?.stop();
+    await profileService?.stop();
     await pool.end();
   }
 }
