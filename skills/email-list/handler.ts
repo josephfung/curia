@@ -48,7 +48,7 @@ export class EmailListHandler implements SkillHandler {
       // Outlook KQL uses `isRead:false`), the embedding here will need to be gated on
       // account provider type — which will require threading provider metadata through
       // OutboundGateway into the skill context.
-      // TODO: make unread embedding provider-aware when multi-provider support is added.
+      // TODO(#662): make unread embedding provider-aware when multi-provider support is added.
       const effectiveSearch = unread_only === true ? `${rawSearch} is:unread` : rawSearch;
       options.searchQueryNative = effectiveSearch;
     } else {
