@@ -208,31 +208,55 @@ export class ContactRegisterHandler implements SkillHandler {
       //      no caller input required.
       //   2. ceo_has_sent — caller asserts the CEO personally emailed this address.
       //   3. calendar_accepted — caller asserts the CEO attended an event with them.
+      //
+      // Important: resolvedSender.status is a snapshot from Step 1. Fetch the contact
+      // fresh from the DB so a concurrent call that blocked/confirmed the contact between
+      // Step 1 and now is respected — this prevents undoing a deliberate block.
 
       let promoted = false;
       let promotionSignal: string | null = null;
 
       if (resolvedSender.status === 'provisional') {
-        // Fetch the full contact record to read outbound_message_count.
-        // This fetch is needed even when the pipeline is present, because the pipeline
-        // does not update outbound_message_count for inbound registrations.
+        // Fetch the full contact record to read outbound_message_count and get the
+        // authoritative current status. This guards against TOCTOU: if a concurrent
+        // call changed the status to blocked/confirmed since Step 1, we bail out.
         const contactForPromotion = await ctx.contactService.getContact(contactId);
 
-        if (contactForPromotion) {
+        if (!contactForPromotion) {
+          // Contact was resolved moments ago but is no longer retrievable — possible
+          // concurrent deletion (e.g. admin operation). Log and skip promotion safely.
+          ctx.log.warn(
+            { contactId, channel },
+            'contact-register: getContact returned undefined during promotion check — skipping promotion',
+          );
+        } else if (contactForPromotion.status !== 'provisional') {
+          // Status changed since Step 1 (concurrent block or promotion). Respect
+          // the current DB state and skip our own promotion attempt.
+          ctx.log.info(
+            { contactId, currentStatus: contactForPromotion.status },
+            'contact-register: contact status changed since Step 1 — skipping promotion',
+          );
+        } else {
+          // Contact is still provisional — evaluate signals.
+          let decidedSignal: string | null = null;
+
           if (contactForPromotion.outboundMessageCount > 0) {
             // Curia has previously sent a message to this contact — strong signal.
-            promotionSignal = 'curia_outbound';
+            decidedSignal = 'curia_outbound';
           } else if (ceo_has_sent === true) {
             // Calling agent asserts the CEO sent from their personal inbox.
-            promotionSignal = 'ceo_has_sent';
+            decidedSignal = 'ceo_has_sent';
           } else if (calendar_accepted === true) {
             // Calling agent asserts the CEO has a shared accepted calendar event.
-            promotionSignal = 'calendar_accepted';
+            decidedSignal = 'calendar_accepted';
           }
 
-          if (promotionSignal) {
+          if (decidedSignal) {
+            // Assign promotionSignal only after the DB write succeeds so the two
+            // fields remain consistent: promotionSignal !== null ↔ promoted === true.
             await ctx.contactService.setStatus(contactId, 'confirmed');
             promoted = true;
+            promotionSignal = decidedSignal;
             ctx.log.info(
               { contactId, promotionSignal },
               'contact-register: auto-promoted provisional contact to confirmed',
@@ -267,7 +291,15 @@ export class ContactRegisterHandler implements SkillHandler {
 
       // Refetch after scoring update and any promotion so status/confidence reflect
       // the latest values. Falls back to the pre-update snapshot if the fetch fails.
+      // Log a warning when the refetch fails after a promotion so callers can
+      // detect the stale-status edge case (promoted: true but status: 'provisional').
       const updatedContact = await ctx.contactService.getContact(contactId);
+      if (!updatedContact && promoted) {
+        ctx.log.warn(
+          { contactId, promotionSignal, channel },
+          'contact-register: getContact returned undefined after promotion — status in response reflects pre-promotion snapshot',
+        );
+      }
 
       ctx.log.info({ contactId, created, promoted, channel }, 'contact-register: interaction registered');
 

@@ -248,8 +248,8 @@ schedule:
          If the count is zero, exit and report that no provisional contacts need promotion.
 
       2. Call ceo-inbox-list with folder: "SENT", unread_only: false,
-         received_after_hours: 2160 (90 days). Collect all email addresses from the
-         "to" and "cc" arrays across all returned messages. Deduplicate into a set.
+         received_after_hours: 2160 (90 days), limit: 50. Collect all email addresses
+         from the "to" and "cc" arrays across all returned messages. Deduplicate into a set.
 
       3. Call calendar-list-events with a wide date range: timeMin 90 days ago,
          timeMax 90 days from now. Collect all attendee email addresses from
@@ -261,9 +261,11 @@ schedule:
          - Check whether their email appears in the Sent folder set (step 2) or
            the calendar attendee set (step 3).
          - If found in Sent folder: call contact-register with channel: "email",
-           identifier: their email, displayName: their display name,
+           identifier: their email address, displayName: their display name,
            messageTimestamp: the current ISO 8601 time, ceo_has_sent: true.
-         - If found in calendar only: call contact-register with calendar_accepted: true.
+         - If found in calendar only (not in Sent folder): call contact-register with
+           channel: "email", identifier: their email address, displayName: their display
+           name, messageTimestamp: the current ISO 8601 time, calendar_accepted: true.
          - contact-register automatically checks the curia_outbound signal for every call.
 
       5. Report a clear summary: how many provisional contacts were checked, how many
