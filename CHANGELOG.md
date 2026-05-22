@@ -20,7 +20,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Fixed
 
 - **`email-list` unread filter with search** — when both `search` and `unread_only: true` are passed, `is:unread` is now embedded into the search string so the filter is preserved. Previously the Nylas v3 API silently dropped `unread_only` whenever `search` was also set, causing all messages (including already-processed ones) to be returned.
-
+- **`config-store` retrieve label/key fallback** — `retrieve` now finds facts by `properties.key` when the node label doesn't match, making it resilient to label/key drift (e.g. year-rollover mismatch). (#660)
+- **`config-store` store surfaces rejection** — `store` now returns `stored: false` and an `action` field when `storeFact` rejects or rate-limits the write, instead of unconditionally reporting `stored: true`. (#661)
 - **OpenRouter truncation warning** — `OpenRouterProvider` now logs at `warn` level when `finish_reason === 'length'` so truncated responses are visible in production logs instead of silently passing as complete.
 
 ### Added
