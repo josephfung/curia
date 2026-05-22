@@ -194,7 +194,7 @@ This ensures Docker stop and process managers don't lose in-flight work.
 
 Automated security scanning runs on every pull request and on a weekly schedule:
 
-- **Trivy** — scans npm dependencies, the Docker image, and the repo for leaked secrets. Results are uploaded as SARIF to GitHub's Security tab.
+- **Trivy** — filesystem scan (npm dependencies and leaked secrets) runs on every PR and push to main. Docker image scan runs on a weekly schedule only (building the image on every PR is too slow). Results are uploaded as SARIF to GitHub's Security tab.
 - **Semgrep CE** — pattern-based SAST for JavaScript/TypeScript. Initial triage suppressed 28 false positives; ongoing results appear in the Security tab.
 - **CodeQL** — weekly JS/TS semantic analysis.
 - **Gitleaks** — blocks merge if hardcoded secrets are detected in the diff.
@@ -328,6 +328,6 @@ curia/
 | Project directory structure — matches spec layout | Done |
 | Config validation against JSON Schema at startup | Done |
 | Non-root container — production image runs as `curia` user | Done |
-| Trivy scanning — npm deps, Docker image, and secrets on every PR + weekly | Done |
+| Trivy scanning — filesystem (npm deps + secrets) on every PR; Docker image scan weekly | Done |
 | Branch protection on `main` — required PR review + passing status checks | Done |
 | `curia setup` CLI — guided onboarding wizard for credentials and channel setup | Not Done |
