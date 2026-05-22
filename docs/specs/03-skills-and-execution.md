@@ -41,7 +41,7 @@ skills/
 
 **Privilege access** — skills declare which privileged services they need via `"capabilities": [...]` in `skill.json`. The loader validates names against a fixed allowlist (`VALID_CAPABILITIES` in `src/skills/loader.ts`) at startup and rejects unknown names. The manifest is frozen after loading. The execution layer injects only declared services into `SkillContext` — skills cannot self-escalate at runtime. Universal services (`contactService`, `entityContextAssembler`, `agentPersona`) are available to all skills without declaration. See the `capabilities` section in `docs/dev/adding-a-skill.md` for the full capability reference.
 
-**Caller restrictions** — skills can declare `"allowed_callers": ["agent-name", ...]` in `skill.json` to restrict which agents may invoke them. The execution layer checks the calling agent's name against this list before any other gate (autonomy, elevation). If the caller is not in the list, the invocation is rejected with a structured failure. The special value `"system"` matches system-layer invocations (checkpoint processor, etc.). CEO-approved re-executions (`humanApproved: true`) bypass the caller gate. Names in `allowed_callers` are validated against known agent names at startup — unknown names cause a hard startup failure.
+**Caller restrictions** — skills can declare `"allowed_callers": ["agent-name", ...]` in `skill.json` to restrict which agents may invoke them. The execution layer checks the calling agent's name against this list after the elevated-skill gate but before score-based autonomy gates — this avoids creating pointless approval requests for structurally forbidden callers. If the caller is not in the list, the invocation is rejected with a structured failure. The special value `"system"` matches system-layer invocations (checkpoint processor, etc.). CEO-approved re-executions (`humanApproved: true`) bypass the caller gate. Names in `allowed_callers` are validated against known agent names at startup — unknown names cause a hard startup failure.
 
 ### Skill Handler Interface
 
@@ -129,8 +129,8 @@ Invocation flow:
 
 1. **Resolve** — look up skill in registry by name (local or MCP)
 2. **Normalize inputs** — convert timestamp inputs to UTC-offset ISO strings using the configured local timezone
-3. **Validate caller** — if `allowed_callers` is set on the manifest, reject unless the calling agent is in the list (CEO-approved re-executions bypass this gate)
-4. **Validate elevation** — if `sensitivity: elevated`, reject if caller is missing or role is not `ceo`
+3. **Validate elevation** — if `sensitivity: elevated`, reject if the task was not principal-originated
+4. **Validate caller** — if `allowed_callers` is set on the manifest, reject unless the calling agent is in the list (CEO-approved re-executions bypass this gate)
 5. **Build context** — assemble `SkillContext` with scoped secrets, logger, and per-skill service grants
 6. **Execute** — call `handler.execute(ctx)` with a timeout wrapper (local), or `tools/call` (MCP)
 7. **Sanitize output** — strip injection vectors, redact secrets, truncate, wrap errors

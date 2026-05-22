@@ -111,7 +111,7 @@ A raw integer (0–100) may be used for precision when the named levels are too 
 
 #### `allowed_callers` (optional)
 
-Restricts which agents may invoke this skill. When set, only the named agents (and system-layer callers via `"system"`) can invoke the skill — all others are rejected with a structured failure before any other gate (autonomy, elevation) is evaluated.
+Restricts which agents may invoke this skill. When set, only the named agents (and system-layer callers via `"system"`) can invoke the skill — all others are rejected with a structured failure. The caller gate runs after the elevated-skill gate but before score-based autonomy gates, so structurally forbidden callers are rejected without creating pointless approval requests.
 
 ```json
 "allowed_callers": ["contacts", "coordinator"]
