@@ -17,6 +17,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 - **Agent tier downgrades** — contacts, calendar, research-analyst, and ceo-inbox moved from `standard` to `fast` tier. (#648)
 
+### Fixed
+
+- **OpenRouter truncation warning** — `OpenRouterProvider` now logs at `warn` level when `finish_reason === 'length'` so truncated responses are visible in production logs instead of silently passing as complete.
+
 ### Added
 
 - **OpenRouter provider** — optional multi-model routing for Gemini Flash, DeepSeek V3, and GPT-4o via `OPENROUTER_API_KEY`. (#379)

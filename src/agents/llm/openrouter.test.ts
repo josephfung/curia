@@ -329,4 +329,57 @@ describe('OpenRouterProvider', () => {
     const params = mockCreate.mock.calls[0]![0];
     expect(params.model).toBe('deepseek/deepseek-chat-v3-0324');
   });
+
+  it('logs warn when finish_reason is "length" (response truncated by max_tokens cap)', async () => {
+    mockCreate.mockResolvedValue({
+      ...makeTextResponse(),
+      choices: [
+        {
+          index: 0,
+          finish_reason: 'length',  // model hit the output token cap
+          message: {
+            role: 'assistant' as const,
+            content: 'This response was cut off mid-',
+            tool_calls: undefined,
+            refusal: null,
+          },
+          logprobs: null,
+        },
+      ],
+    });
+
+    const logger = createSilentLogger();
+    const warnSpy = vi.spyOn(logger, 'warn');
+
+    const provider = new OpenRouterProvider('test-key', logger, new ModelRegistry(createSilentLogger()));
+    const result = await provider.chat({
+      messages: [{ role: 'user', content: 'Write a long essay' }],
+      model: 'google/gemini-2.0-flash-001',
+    });
+
+    // Response should still be returned as text — truncation doesn't cause an error
+    expect(result.type).toBe('text');
+    if (result.type !== 'text') return;
+    expect(result.content).toBe('This response was cut off mid-');
+
+    // Warn must fire with finish_reason and model in the log bindings
+    expect(warnSpy).toHaveBeenCalledOnce();
+    const [bindings, message] = warnSpy.mock.calls[0]! as [Record<string, unknown>, string];
+    expect(bindings).toMatchObject({ model: 'google/gemini-2.0-flash-001', finishReason: 'length' });
+    expect(message).toMatch(/truncated/);
+  });
+
+  it('does not log warn for normal stop finish_reason', async () => {
+    const logger = createSilentLogger();
+    const warnSpy = vi.spyOn(logger, 'warn');
+
+    const provider = new OpenRouterProvider('test-key', logger, new ModelRegistry(createSilentLogger()));
+    await provider.chat({
+      messages: [{ role: 'user', content: 'Hello' }],
+      model: 'google/gemini-2.0-flash-001',
+    });
+
+    // No warn should fire for a clean stop
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
 });

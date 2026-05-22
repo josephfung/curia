@@ -241,6 +241,20 @@ export class OpenRouterProvider implements LLMProvider {
         'OpenRouter API call completed',
       );
 
+      // Warn loudly when the model hit the max_tokens cap — the output is
+      // incomplete. Callers get back a partial response with no error flag, so
+      // without this warning there is no signal that truncation occurred.
+      if (choice.finish_reason === 'length') {
+        this.logger.warn(
+          {
+            model,
+            outputTokens: response.usage?.completion_tokens ?? 0,
+            finishReason: 'length',
+          },
+          'OpenRouter response truncated by max_tokens cap — output is incomplete. Consider increasing responseReserve or reducing input context.',
+        );
+      }
+
       // OpenRouter doesn't support Anthropic-style prompt caching.
       // Cache token fields are always 0.
       const usage: LLMUsage = {
