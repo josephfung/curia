@@ -142,9 +142,14 @@ Valid capability names and what they grant:
 | `entityMemory` | `EntityMemory` | Reading and writing the knowledge graph |
 | `nylasCalendarClient` | `NylasCalendarClient` | Calendar CRUD operations |
 | `autonomyService` | `AutonomyService` | Reading or setting the autonomy score |
-| `browserService` | `BrowserService` | Controlling a real web browser |
+| `executiveProfileService` | `ExecutiveProfileService` | Managing the CEO's writing voice profile |
+| `browserService` | `BrowserService` | Controlling a real web browser (Playwright) |
 | `bullpenService` | `BullpenService` | Managing agent conversation threads |
 | `skillSearch` | `skillSearch` closure | Searching the skill registry by keyword |
+| `actionLogRepo` | `ActionLogRepo` | Read/write access to `autonomy_action_log` for approval lifecycle (approve, deny, dismiss, list pending) |
+| `executionLayer` | `ExecutionLayer` | Re-invoking skills with `humanApproved` bypass. Only `approve-action` should declare this — it is `sensitivity: "elevated"` (CEO-only). |
+| `confidencePipeline` | `ConfidencePipeline` | Contact confidence scoring. Skills that modify trust-related data (trust level, identity pairings) should declare this and fire scoring signals through it. |
+| `tempFileStore` | `TempFileStore` | Writing binary buffers to a secure tmpfs mount; returns `file://` URLs for MCP tools that accept file paths. Used by email download skills for binary-correct attachment handoff. |
 | `infraLlm` | `InfraLlm` | Constrained LLM access — `classify()` and `extract()` only, no raw `chat()`. Routed through `ModelRouter` with full telemetry. For infrastructure skills that need LLM reasoning without unbounded access. |
 
 Services NOT in this list (`contactService`, `entityContextAssembler`, `agentPersona`) are **universal** — available to every skill without declaration. Omit `capabilities` entirely if your skill only uses universal services.
@@ -292,6 +297,25 @@ interface SkillContext {
 
   /** Browser service — declare "browserService" in capabilities */
   browserService?: BrowserService;
+
+  /** Executive profile service — declare "executiveProfileService" in capabilities */
+  executiveProfileService?: ExecutiveProfileService;
+
+  /** Action log repo — declare "actionLogRepo" in capabilities.
+   *  Approval lifecycle management (approve, deny, dismiss, list pending). */
+  actionLogRepo?: ActionLogRepo;
+
+  /** Execution layer — declare "executionLayer" in capabilities.
+   *  Re-invoke skills with humanApproved bypass. CEO-only (approve-action). */
+  executionLayer?: ExecutionLayer;
+
+  /** Confidence pipeline — declare "confidencePipeline" in capabilities.
+   *  Fire scoring signals when modifying trust-related contact data. */
+  confidencePipeline?: ConfidencePipeline;
+
+  /** Temp file store — declare "tempFileStore" in capabilities.
+   *  Write binary buffers to tmpfs; returns file:// URLs for MCP tools. */
+  writeTempFile?(buffer: Buffer, filename: string): Promise<string>;
 
   /** Constrained LLM access — declare "infraLlm" in capabilities.
    *  Provides classify() and extract() only — no raw chat(). */
