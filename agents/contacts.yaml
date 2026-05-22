@@ -250,6 +250,9 @@ schedule:
       2. Call ceo-inbox-list with folder: "SENT", unread_only: false,
          received_after_hours: 2160 (90 days), limit: 50. Collect all email addresses
          from the "to" and "cc" arrays across all returned messages. Deduplicate into a set.
+         Note: ceo-inbox-list is capped at 50 messages per call by the skill definition.
+         For high-volume inboxes this may miss older provisional contacts.
+         @TODO: add pagination support to ceo-inbox-list to scan beyond 50 messages.
 
       3. Call calendar-list-events with a wide date range: timeMin 90 days ago,
          timeMax 90 days from now. Collect all attendee email addresses from

@@ -252,15 +252,25 @@ export class ContactRegisterHandler implements SkillHandler {
           }
 
           if (decidedSignal) {
-            // Assign promotionSignal only after the DB write succeeds so the two
-            // fields remain consistent: promotionSignal !== null ↔ promoted === true.
-            await ctx.contactService.setStatus(contactId, 'confirmed');
-            promoted = true;
-            promotionSignal = decidedSignal;
-            ctx.log.info(
-              { contactId, promotionSignal },
-              'contact-register: auto-promoted provisional contact to confirmed',
-            );
+            // promoteToConfirmed is a conditional UPDATE (WHERE status = 'provisional').
+            // If a concurrent admin block landed between our getContact check above and
+            // this write, the row won't match and wasPromoted returns false — so we
+            // never undo a deliberate block. promotionSignal is set only on success
+            // so that promotionSignal !== null ↔ promoted === true always holds.
+            const wasPromoted = await ctx.contactService.promoteToConfirmed(contactId);
+            if (wasPromoted) {
+              promoted = true;
+              promotionSignal = decidedSignal;
+              ctx.log.info(
+                { contactId, promotionSignal },
+                'contact-register: auto-promoted provisional contact to confirmed',
+              );
+            } else {
+              ctx.log.info(
+                { contactId },
+                'contact-register: promotion aborted — contact status changed concurrently',
+              );
+            }
           }
         }
       }

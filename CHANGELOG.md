@@ -15,15 +15,13 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
-- **`contact-register` auto-promotion** — provisional contacts are now promoted to confirmed automatically when any of three engagement signals fire: Curia has sent them email (`curia_outbound`, self-contained DB check), the CEO emailed them from their personal inbox (`ceo_has_sent` input), or the CEO attended a calendar event with them (`calendar_accepted` input). Blocked contacts are never promoted; confirmed contacts are a no-op. Returns `promoted` and `promotion_signal` in the response. (#633)
-- **Contacts agent daily sweep** — new 8 AM cron scans provisional contacts against the CEO's Sent folder and calendar; promotes matching contacts via `contact-register`. `ceo-inbox-list` and `contact-register` added to contacts agent pinned skills. (#633)
+- **`contact-register` auto-promotion** — provisional contacts promoted to confirmed on Curia outbound, CEO email, or calendar signals; returns `promoted` and `promotion_signal`. (#633)
+- **Contacts agent daily sweep** — 8 AM cron reconciles provisional contacts against CEO Sent folder and calendar. (#633)
+- **Contacts agent pinned skills** — `ceo-inbox-list` and `contact-register` added. (#633)
 
 ### Changed
 
-- **`ceo-inbox-list` message shape** — messages now include `to` and `cc` participant arrays; previously only `from` was exposed. Sent folder sweeps no longer require per-message `getMessage` calls. (#633)
-
-### Changed
-
+- **`ceo-inbox-list` message shape** — messages now include `to` and `cc` recipient arrays. (#633)
 - **Agent tier downgrades** — contacts, calendar, research-analyst, and ceo-inbox moved from `standard` to `fast` tier. (#648)
 
 ### Fixed

@@ -52,6 +52,15 @@ interface ContactServiceBackend {
   resolveByChannelIdentity(channel: string, channelIdentifier: string): Promise<ResolvedSender | null>;
   unlinkIdentity(identityId: string): Promise<boolean>;
   setIdentityStatus(identityId: string, status: IdentityStatus): Promise<ChannelIdentity>;
+
+  /**
+   * Atomically promote a contact from provisional → confirmed only if the contact's
+   * current status is still 'provisional' at write time. Returns true if the row was
+   * updated, false if the contact was not provisional (concurrent block or already
+   * confirmed) — callers should treat false as "promotion did not happen".
+   */
+  promoteToConfirmed(contactId: string): Promise<boolean>;
+
   getAuthOverrides(contactId: string): Promise<Array<{ permission: string; granted: boolean }>>;
   createAuthOverride(override: AuthOverride): Promise<void>;
   revokeAuthOverride(contactId: string, permission: string): Promise<boolean>;
@@ -540,6 +549,17 @@ export class ContactService {
     };
 
     return this.updateStoredContact(updated);
+  }
+
+  /**
+   * Atomically promote a contact from provisional → confirmed.
+   * Returns true if the promotion happened, false if the contact was not provisional
+   * at write time (concurrent block or already confirmed). This is the preferred
+   * method for auto-promotion: it prevents TOCTOU races where a concurrent admin
+   * block could be silently overwritten by an unconditional setStatus call.
+   */
+  async promoteToConfirmed(contactId: string): Promise<boolean> {
+    return this.backend.promoteToConfirmed(contactId);
   }
 
   /** Remove a channel identity by its ID. Returns true if found and removed, false if not found. */
@@ -1132,6 +1152,17 @@ class PostgresContactBackend implements ContactServiceBackend {
     return (result.rowCount ?? 0) > 0;
   }
 
+  async promoteToConfirmed(contactId: string): Promise<boolean> {
+    // Atomic conditional update — only flips to confirmed when status is STILL
+    // 'provisional' at DB write time. Guards against concurrent blocks between
+    // the caller's last getContact check and this write (TOCTOU mitigation).
+    const result = await this.pool.query(
+      `UPDATE contacts SET status = 'confirmed', updated_at = now() WHERE id = $1 AND status = 'provisional'`,
+      [contactId],
+    );
+    return (result.rowCount ?? 0) > 0;
+  }
+
   async setIdentityStatus(identityId: string, status: IdentityStatus): Promise<ChannelIdentity> {
     this.logger.debug({ identityId, status }, 'contacts: updating identity status');
     const result = await this.pool.query<{
@@ -1550,6 +1581,15 @@ class InMemoryContactBackend implements ContactServiceBackend {
       lastSeenAt: updates.lastSeenAt ?? contact.lastSeenAt,
       updatedAt: new Date(),
     });
+  }
+
+  async promoteToConfirmed(contactId: string): Promise<boolean> {
+    // JS is single-threaded, so check-and-set here is effectively atomic for tests.
+    // The same conditional-update semantics as the Postgres implementation apply.
+    const contact = this.contacts.get(contactId);
+    if (!contact || contact.status !== 'provisional') return false;
+    this.contacts.set(contactId, { ...contact, status: 'confirmed', updatedAt: new Date() });
+    return true;
   }
 
   async createIdentity(identity: ChannelIdentity): Promise<void> {
