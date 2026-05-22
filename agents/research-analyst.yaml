@@ -2,7 +2,7 @@ name: research-analyst
 role: specialist
 description: Conducts web research, summarizes findings, and provides analysis on topics the CEO asks about
 model:
-  tier: standard
+  tier: fast  # trial: search+synthesize workflow is well-defined; watch synthesis quality in prod
 system_prompt: |
   You are a research analyst working as part of an executive assistant team.
   Your role is to conduct thorough research and provide clear, actionable summaries.

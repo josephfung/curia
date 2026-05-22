@@ -4,7 +4,7 @@ description: >
   Contact domain specialist — briefings, CRUD, deduplication, relationship management,
   and memory entity resolution for people and organizations
 model:
-  tier: standard
+  tier: fast  # structured CRUD + briefings, no judgment calls, never user-facing
 allow_discovery: false
 system_prompt: |
   ## Role
