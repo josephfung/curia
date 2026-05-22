@@ -13,6 +13,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Changed
+
+- **Agent tier downgrades** — contacts, calendar, research-analyst, and ceo-inbox moved from `standard` to `fast` tier. (#648)
+
 ### Added
 
 - **OpenRouter provider** — optional multi-model routing for Gemini Flash, DeepSeek V3, and GPT-4o via `OPENROUTER_API_KEY`. (#379)

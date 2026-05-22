@@ -5,7 +5,7 @@ description: >
   event CRUD, and scheduling-related email composition for meeting requests,
   reschedules, and cancellations
 model:
-  tier: standard
+  tier: fast  # procedural scheduling + rule-based conflict resolution, no judgment calls
 allow_discovery: false
 system_prompt: |
   ## Role

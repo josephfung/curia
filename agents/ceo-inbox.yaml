@@ -8,7 +8,7 @@ description: >
   escalates urgent items via Signal and the bullpen.
 
 model:
-  tier: standard
+  tier: fast  # trial: rule-based triage; CEO reviews reply drafts before send — watch draft quality
 
 inject_specialists: true
 
