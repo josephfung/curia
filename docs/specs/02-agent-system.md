@@ -55,7 +55,7 @@ Agents declare a capability tier rather than a specific model (see [ADR-014](../
 | `standard` | General-purpose task execution |
 | `powerful` | Complex multi-step reasoning, synthesis |
 
-The operator maps tiers to models in `config/default.yaml` → `model_routing`. The `ModelRouter` service resolves each agent's tier to a concrete model at startup; the provider is inferred automatically from the `ModelRegistry` based on the model name (e.g., `claude-*` → Anthropic, `gpt-*` → OpenRouter).
+The operator maps tiers to models in `config/default.yaml` → `model_routing`. The `ModelRouter` service resolves each agent's tier to a concrete model at startup; the provider is inferred automatically from the `ModelRegistry` based on the model name prefix (e.g., `claude-*` → Anthropic, `google/gemini-*` or `openai/gpt-*` → OpenRouter).
 
 Optional `needs` flags (`vision`, `large_context`, `reasoning`, `coding`, `audio`, `image_generation`) are documentary — they inform future routing decisions but are not validated in this version.
 
@@ -203,7 +203,7 @@ src/agents/llm/
   anthropic.ts     # Claude API (Anthropic)
   openrouter.ts    # OpenRouter API (Gemini Flash, DeepSeek V3, GPT-4o, etc.)
   ollama.ts        # local models
-  registry.ts      # ModelRegistry — centralized model metadata
+  model-registry.ts # ModelRegistry — centralized model metadata
 ```
 
 Each provider implements:

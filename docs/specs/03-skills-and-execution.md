@@ -132,9 +132,9 @@ Invocation flow:
 3. **Validate caller** — if `allowed_callers` is set on the manifest, reject unless the calling agent is in the list (CEO-approved re-executions bypass this gate)
 4. **Validate elevation** — if `sensitivity: elevated`, reject if caller is missing or role is not `ceo`
 5. **Build context** — assemble `SkillContext` with scoped secrets, logger, and per-skill service grants
-5. **Execute** — call `handler.execute(ctx)` with a timeout wrapper (local), or `tools/call` (MCP)
-6. **Sanitize output** — strip injection vectors, redact secrets, truncate, wrap errors
-7. **Return `SkillResult`** to the agent runtime for inclusion in the LLM's next turn
+6. **Execute** — call `handler.execute(ctx)` with a timeout wrapper (local), or `tools/call` (MCP)
+7. **Sanitize output** — strip injection vectors, redact secrets, truncate, wrap errors
+8. **Return `SkillResult`** to the agent runtime for inclusion in the LLM's next turn
 
 ### Output Sanitization
 

@@ -270,7 +270,7 @@ curia/
 │   │       ├── provider.ts     # common interface
 │   │       ├── anthropic.ts
 │   │       ├── openrouter.ts   # OpenRouter API (Gemini Flash, DeepSeek, GPT-4o)
-│   │       ├── registry.ts     # ModelRegistry — centralized model metadata
+│   │       ├── model-registry.ts # ModelRegistry — centralized model metadata
 │   │       └── ollama.ts
 │   ├── execution/              # Skill invocation, MCP client, permission validation
 │   │   ├── executor.ts
