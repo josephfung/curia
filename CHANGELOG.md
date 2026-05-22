@@ -13,51 +13,50 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
-### Added
+## [0.30.0] — 2026-05-22 — "Kaylee Frye"
 
-- **`contact-register` auto-promotion** — provisional contacts promoted to confirmed on Curia outbound, CEO email, or calendar signals; returns `promoted` and `promotion_signal`. (#633)
-- **Contacts agent daily sweep** — 8 AM cron reconciles provisional contacts against CEO Sent folder and calendar. (#633)
-- **Contacts agent pinned skills** — `ceo-inbox-list` and `contact-register` added. (#633)
-
-### Changed
-
-- **`ceo-inbox-list` message shape** — messages now include `to` and `cc` recipient arrays. (#633)
-- **Agent tier downgrades** — contacts, calendar, research-analyst, and ceo-inbox moved from `standard` to `fast` tier. (#648)
-
-### Fixed
-
-- **`ceo-inbox` model tier** — reverted from `fast` (Haiku) to `standard` (Sonnet); Haiku produced incorrect Unix timestamps in Step 6 high-water-mark saves, causing `last_processed_at` to drift ~40 days into the future and blinding inbox triage.
-- **`email-list` unread filter with search** — when both `search` and `unread_only: true` are passed, `is:unread` is now embedded into the search string so the filter is preserved. Previously the Nylas v3 API silently dropped `unread_only` whenever `search` was also set, causing all messages (including already-processed ones) to be returned.
-- **`config-store` retrieve fallback** — `retrieve` falls back to `properties.key` when the node label mismatches. (#660)
-- **`config-store` rejection visibility** — `store` returns `stored: false` with `action` when `storeFact` rejects the write. (#661)
-- **OpenRouter truncation warning** — `OpenRouterProvider` now logs at `warn` level when `finish_reason === 'length'` so truncated responses are visible in production logs instead of silently passing as complete.
+> **Kaylee Frye** *(Firefly, 2002, Joss Whedon)* — Serenity's mechanic, who keeps a ship flying on spare parts, intuition, and a refusal to waste anything. She routes around problems, trusts the parts she knows, and gets more out of less than anyone thought possible. This release adds multi-model routing to stretch every dollar, downgrades agents to cheaper tiers where they don't need the power, and tightens security without adding overhead.
 
 ### Added
 
 - **OpenRouter provider** — optional multi-model routing for Gemini Flash, DeepSeek V3, and GPT-4o via `OPENROUTER_API_KEY`. (#379)
-- **`contact-list`** — new `status` and `limit` filter parameters for direct DB-level filtering; eliminates entity-context timeout for status queries. (#644)
-
-### Security
-
-- **HTML sanitizers** — replaced single-pass regex replacements with loop-based stripping in `html-to-text`, `file-parse`, and `held-messages-list` to prevent nested-substitution bypass (CodeQL `js/incomplete-multi-character-sanitization`, 6 alerts). (#591)
-
-### Fixed
-
-- **Declarative job cleanup** — auto-cancels stale YAML schedules after cron changes or removals. (#640)
-- **`ceo-inbox-list`** — normalize `DRAFTS` folder alias to `DRAFT` for Gmail API compatibility; the digest agent was failing on every run with "Invalid label: DRAFTS".
-- **`NylasClient.listMessages`** — suppress conflicting filter params when `searchQueryNative` is set, matching the guard already in `CeoNylasClient`; fixes HTTP 400 errors in security-triage's email-list calls.
-- **Provider registry routing** — WorkingMemory, DriftDetector, AutonomyScoringPass, and ExecutionLayer now resolve their LLM provider from `providerRegistry`, not the hardwired Anthropic singleton. (#646)
-
-### Security
-
-- **Non-root container** — production image runs as non-root `curia` user; resolves Semgrep alert #48 (`dockerfile.security.missing-user`). (#607)
+- **Model registry** — centralised pricing, context windows, and capabilities in `ModelRegistry`; cost estimation and token tracking delegate to registry data instead of hardcoded values. (#556)
+- **Contact auto-promotion** — provisional contacts promoted to confirmed automatically when Curia sends them a message, the CEO has emailed them, or the CEO accepted a calendar event with them; daily 8 AM sweep reconciles. (#633)
+- **`contact-list` filters** — new `status` and `limit` parameters for direct DB-level filtering; eliminates entity-context timeout on status queries. (#644)
+- **`allowed_callers` enforcement** — skills can restrict invocation to named agents via `allowed_callers` in `skill.json`; validated at startup, enforced before autonomy gates. (#618)
+- **`infraLlm` capability** — constrained LLM access (`classify` and `extract` only) for infrastructure skills, replacing raw SDK usage with telemetry-emitting `LLMProvider` calls. (#637)
+- **Trivy scanning** — filesystem scan (npm deps + secrets) on every PR; Docker image scan weekly. (#563)
 
 ### Changed
 
-- **Time context injection** — extended from coordinator-only to all agents; specialists now receive the `## Current Date & Time` block on every task turn, enabling reliable time-sensitive reasoning in scheduled agents.
-- **Model registry** — centralised pricing, context windows, and capabilities in `ModelRegistry`. (#556)
-- **`model_routing` config** — removed tier `provider`; renamed `autonomy_scoring.model` to `model_tier`.
-- **Skill LLM abstraction** — migrated `extract-facts`, `extract-relationships`, `file-parse` to `LLMProvider` via SkillContext; LLM calls now emit telemetry. (#556)
+- **`model_routing` config** — removed tier `provider` field; renamed `autonomy_scoring.model` to `model_tier`. Provider is now inferred from the model registry. *(Public API surface change.)*
+- **Agent tier downgrades** — contacts, calendar, and research-analyst moved from `standard` to `fast` tier for cost savings. (#648)
+- **Time context injection** — extended from coordinator-only to all agents; specialists now receive date and time on every task turn. (#55)
+- **Skill LLM abstraction** — `extract-facts`, `extract-relationships`, `file-parse` migrated from raw Anthropic SDK to `LLMProvider` via SkillContext. (#556)
+
+### Fixed
+
+- **`ceo-inbox` model tier** — reverted from `fast` to `standard`; Haiku produced incorrect Unix timestamps that blinded inbox triage.
+- **`email-list` unread filter** — `is:unread` now embedded in search string when both `search` and `unread_only` are set; Nylas v3 was silently dropping the filter.
+- **`config-store`** — `retrieve` falls back to `properties.key` on label mismatch (#660); `store` surfaces rejection status instead of reporting success (#661).
+- **Declarative job cleanup** — `loadDeclarativeJobs` auto-cancels stale YAML schedules after cron changes or removals. (#640)
+- **`ceo-inbox-list`** — normalize `DRAFTS` folder alias to `DRAFT` for Gmail API compatibility.
+- **`NylasClient.listMessages`** — suppress conflicting params when `searchQueryNative` is set; fixes HTTP 400 errors. (#646)
+- **Provider registry routing** — shared LLM consumers (WorkingMemory, DriftDetector, AutonomyScoringPass, ExecutionLayer) now resolve from `providerRegistry`, not the Anthropic singleton. (#646)
+
+### Security
+
+- **HTML sanitizers** — loop-based stripping replaces single-pass regex in `html-to-text`, `file-parse`, and `held-messages-list`; resolves 6 CodeQL alerts. (#591)
+- **Non-root container** — production image runs as `curia` user. (#607)
+- **Branch protection** — `main` requires PR review and passing status checks. (#567)
+
+---
+
+*spare parts, new roads —*
+*the engine hums on less now;*
+*trust what you can see.*
+
+---
 
 ## [0.29.0] — 2026-05-19 — "Naomi Nagata"
 
@@ -790,7 +789,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Bootstrap orchestrator** — `src/index.ts` wires all layers in dependency order
 - Architecture specs 00–08, contributor docs (CONTRIBUTING.md, CODE_OF_CONDUCT.md, SECURITY.md)
 
-[Unreleased]: https://github.com/josephfung/curia/compare/v0.29.0...HEAD
+[Unreleased]: https://github.com/josephfung/curia/compare/v0.30.0...HEAD
+[0.30.0]: https://github.com/josephfung/curia/compare/v0.29.0...v0.30.0
 [0.29.0]: https://github.com/josephfung/curia/compare/v0.28.0...v0.29.0
 [0.28.0]: https://github.com/josephfung/curia/compare/v0.27.0...v0.28.0
 [0.27.0]: https://github.com/josephfung/curia/compare/v0.26.0...v0.27.0
