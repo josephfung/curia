@@ -185,6 +185,10 @@ describe('ConfigStoreHandler', () => {
       expect(data.namespace).toBe('travel');
       expect(data.key).toBe('aeroplan');
     }
+    // storeFact called only once (the value write) — namespace registration must be
+    // skipped when the value write was rejected, otherwise list_namespaces would
+    // advertise a namespace with no stored config values (phantom namespace).
+    expect(mem.storeFact).toHaveBeenCalledTimes(1);
   });
 
   it('skips namespace registration when namespace is already in the meta-index', async () => {
