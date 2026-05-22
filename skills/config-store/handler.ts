@@ -69,11 +69,14 @@ export class ConfigStoreHandler implements SkillHandler {
     }
 
     // Phase 1: write the value fact. If this fails, nothing was stored — return error.
+    // Declared before try so the return at the end of the method can reference them
+    // even though they are assigned inside the try block.
     let anchor: { id: string };
+    let storeResult: { stored: boolean; action: string };
     try {
       anchor = await this.findOrCreateAnchor(ctx, namespace);
 
-      await ctx.entityMemory!.storeFact({
+      storeResult = await ctx.entityMemory!.storeFact({
         entityNodeId: anchor.id,
         label: key,
         properties: { key, value, namespace },
@@ -83,7 +86,17 @@ export class ConfigStoreHandler implements SkillHandler {
         source: 'skill:config-store',
       });
 
-      ctx.log.info({ namespace, key }, 'Stored config value');
+      if (!storeResult.stored) {
+        // The entity-memory validator rejected or rate-limited this write (e.g. an existing
+        // fact with equal or higher confidence blocked the update). The agent must know the
+        // write did not land so it can react — previously this was silently swallowed.
+        ctx.log.warn(
+          { namespace, key, action: storeResult.action },
+          'Config value not written — storeFact rejected the write',
+        );
+      } else {
+        ctx.log.info({ namespace, key, action: storeResult.action }, 'Stored config value');
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       ctx.log.error({ err, namespace, key }, 'Failed to store config value');
@@ -103,7 +116,7 @@ export class ConfigStoreHandler implements SkillHandler {
       // Still return success: the value IS stored. The meta-index is a projection.
     }
 
-    return { success: true, data: { stored: true, namespace, key } };
+    return { success: true, data: { stored: storeResult.stored, action: storeResult.action, namespace, key } };
   }
 
   private async retrieve(ctx: SkillContext): Promise<SkillResult> {
@@ -142,7 +155,12 @@ export class ConfigStoreHandler implements SkillHandler {
       const facts = allFacts.flat();
 
       if (key) {
-        const fact = facts.find((f) => f.label === key);
+        // Primary match: label. Fallback: properties.key, which may differ from the label
+        // if a fact was stored with a mismatched label (e.g. a year-rollover bug that wrote
+        // label="sheet_id.2025" but properties.key="sheet_id.2026"). The fallback makes
+        // retrieve resilient to that class of data corruption.
+        const fact = facts.find((f) => f.label === key)
+          ?? facts.find((f) => (f.properties.key as string | undefined) === key);
         if (!fact) {
           return { success: true, data: { found: false, key } };
         }

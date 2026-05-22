@@ -162,6 +162,30 @@ describe('ConfigStoreHandler', () => {
     expect(mem.storeFact.mock.calls[0][0].entityNodeId).toBe('anchor-existing');
   });
 
+  it('surfaces stored:false and action when storeFact rejects the write', async () => {
+    // Regression: storeFact previously returned stored:true unconditionally, masking
+    // cases where the entity-memory validator silently rejected or rate-limited the write.
+    const handler = new ConfigStoreHandler();
+    const mem = makeEntityMemory({
+      findEntities: vi.fn()
+        .mockResolvedValueOnce([{ id: 'anchor-existing' }])
+        .mockResolvedValueOnce([{ id: 'index-existing' }]),
+      storeFact: vi.fn().mockResolvedValue({ stored: false, action: 'auto_rejected' }),
+    });
+    const ctx = makeCtx(mem, { action: 'store', namespace: 'travel', key: 'aeroplan', value: 'AC123456' });
+
+    const result = await handler.execute(ctx);
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const data = result.data as { stored: boolean; action: string; namespace: string; key: string };
+      expect(data.stored).toBe(false);
+      expect(data.action).toBe('auto_rejected');
+      expect(data.namespace).toBe('travel');
+      expect(data.key).toBe('aeroplan');
+    }
+  });
+
   it('skips namespace registration when namespace is already in the meta-index', async () => {
     const handler = new ConfigStoreHandler();
     const mem = makeEntityMemory({
@@ -213,6 +237,33 @@ describe('ConfigStoreHandler', () => {
       expect(data.found).toBe(true);
       expect(data.key).toBe('writing_guide_url');
       expect(data.value).toBe('https://docs.example.com');
+    }
+  });
+
+  it('returns found:true via properties.key fallback when label does not match (label/key mismatch)', async () => {
+    // Regression: a fact stored with label "sheet_id.2025" but properties.key "sheet_id.2026"
+    // must be discoverable when retrieve("sheet_id.2026") is called.
+    const handler = new ConfigStoreHandler();
+    const mem = makeEntityMemory({
+      findEntities: vi.fn().mockResolvedValue([{ id: 'anchor-1' }]),
+      getFacts: vi.fn().mockResolvedValue([
+        {
+          id: 'f1',
+          label: 'sheet_id.2025',  // wrong label from year-rollover bug
+          properties: { key: 'sheet_id.2026', value: 'real-sheet-id', namespace: 't2125' },
+        },
+      ]),
+    });
+    const ctx = makeCtx(mem, { action: 'retrieve', namespace: 't2125', key: 'sheet_id.2026' });
+
+    const result = await handler.execute(ctx);
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const data = result.data as { found: boolean; key: string; value: string };
+      expect(data.found).toBe(true);
+      expect(data.key).toBe('sheet_id.2026');
+      expect(data.value).toBe('real-sheet-id');
     }
   });
 
