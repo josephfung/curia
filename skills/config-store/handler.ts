@@ -142,7 +142,8 @@ export class ConfigStoreHandler implements SkillHandler {
       const facts = allFacts.flat();
 
       if (key) {
-        const fact = facts.find((f) => f.label === key);
+        const fact = facts.find((f) => f.label === key)
+                  ?? facts.find((f) => (f.properties.key as string | undefined) === key);
         if (!fact) {
           return { success: true, data: { found: false, key } };
         }

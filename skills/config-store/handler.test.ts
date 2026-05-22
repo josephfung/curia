@@ -236,6 +236,28 @@ describe('ConfigStoreHandler', () => {
     }
   });
 
+  it('retrieves fact by properties.key when label does not match (label/key mismatch)', async () => {
+    // Regression test for #660: fact stored with label='sheet_id.2025' but properties.key='sheet_id.2026'
+    const handler = new ConfigStoreHandler();
+    const mem = makeEntityMemory({
+      findEntities: vi.fn().mockResolvedValue([{ id: 'anchor-1' }]),
+      getFacts: vi.fn().mockResolvedValue([
+        { id: 'f1', label: 'sheet_id.2025', properties: { key: 'sheet_id.2026', value: 'abc123', namespace: 'expense_tracker' } },
+      ]),
+    });
+    const ctx = makeCtx(mem, { action: 'retrieve', namespace: 'expense_tracker', key: 'sheet_id.2026' });
+
+    const result = await handler.execute(ctx);
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const data = result.data as { found: boolean; key: string; value: string };
+      expect(data.found).toBe(true);
+      expect(data.key).toBe('sheet_id.2026');
+      expect(data.value).toBe('abc123');
+    }
+  });
+
   it('returns found:false when namespace does not exist (single-key retrieve)', async () => {
     // findEntities returns [] — namespace anchor doesn't exist yet
     const handler = new ConfigStoreHandler();

@@ -1,3 +1,5 @@
+allowBuilds:
+  esbuild: set this to true or false
 # Explicitly declare pnpm v11 default: prevent transitive (indirect) dependencies
 # from being resolved via exotic sources (git repos, direct tarball URLs).
 # Note: this does NOT restrict direct dependencies listed in package.json,
