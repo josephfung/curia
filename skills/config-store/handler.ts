@@ -103,17 +103,24 @@ export class ConfigStoreHandler implements SkillHandler {
       return { success: false, error: `Failed to store: ${message}` };
     }
 
-    // Phase 2: register the namespace in the meta-index (best-effort).
-    // The value fact is already committed. A failure here leaves list_namespaces
-    // stale but does not affect retrieve — data is accessible by namespace anchor label.
-    try {
-      await this.registerNamespace(ctx, namespace);
-    } catch (err) {
-      ctx.log.error(
-        { err, namespace, key },
-        'Config value stored but meta-index registration failed — list_namespaces may not include this namespace',
+    // Phase 2: register the namespace in the meta-index (best-effort), but only
+    // when the value write was actually accepted. Registering on rejection would
+    // leave list_namespaces advertising a namespace with no stored config values.
+    if (storeResult.stored) {
+      try {
+        await this.registerNamespace(ctx, namespace);
+      } catch (err) {
+        ctx.log.error(
+          { err, namespace, key },
+          'Config value stored but meta-index registration failed — list_namespaces may not include this namespace',
+        );
+        // Still return success: the value IS stored. The meta-index is a projection.
+      }
+    } else {
+      ctx.log.debug(
+        { namespace, key, action: storeResult.action },
+        'Skipping namespace registration — value write was not accepted',
       );
-      // Still return success: the value IS stored. The meta-index is a projection.
     }
 
     return { success: true, data: { stored: storeResult.stored, action: storeResult.action, namespace, key } };
