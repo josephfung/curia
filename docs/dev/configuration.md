@@ -232,6 +232,7 @@ Environment variables control secrets and deployment-specific values that must n
 | `TIMEZONE` | Yes | IANA timezone (e.g. `America/Toronto`) |
 | `CEO_PRIMARY_EMAIL` | Recommended | Prevents first CEO email from being held |
 | `OPENAI_API_KEY` | Tier 2 | Enables entity memory and semantic search |
+| `OPENROUTER_API_KEY` | Optional | Enables multi-model routing via OpenRouter (Gemini Flash, DeepSeek V3, GPT-4o). When set, tiers can map to OpenRouter-hosted models. |
 | `NYLAS_API_KEY` | Tier 2 | Email channel |
 | `NYLAS_GRANT_ID` | Tier 2 | Email grant (connected account) |
 | `NYLAS_SELF_EMAIL` | Tier 2 | Address Curia reads and sends from |

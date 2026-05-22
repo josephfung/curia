@@ -95,3 +95,20 @@ model_routing:
 - Agents lose direct control over which model executes their prompts. Agents that have been carefully tuned for a specific model's behavior may need re-evaluation when the operator changes the tier mapping.
 - The `needs` system covers the main modality and capability classes (`vision`, `large_context`, `reasoning`, `coding`, `audio`, `image_generation`), but agents with requirements outside this set (e.g., a specific fine-tune) must use a named alias approach rather than declaring a raw model ID.
 - The transition period (supporting both old and new schema) adds short-term complexity to the validation layer.
+
+## Amendment (2026-05-20)
+
+The `provider` field was removed from the tier config as part of the model registry consolidation (#556). The `ModelRegistry` now infers the provider from the model name using prefix matching (e.g., `claude-*` → Anthropic, `google/gemini-*` → OpenRouter). The tier config is simplified:
+
+```yaml
+model_routing:
+  tiers:
+    fast:
+      model: claude-haiku-4-5
+    standard:
+      model: claude-sonnet-4-6
+    powerful:
+      model: claude-sonnet-4-6
+```
+
+Additionally, the OpenRouter provider (#379) was added, enabling routing to non-Anthropic models (Gemini Flash, DeepSeek V3, GPT-4o) via `OPENROUTER_API_KEY`. This fulfills the multi-provider aspiration described in the original decision without requiring per-tier `provider` declarations.

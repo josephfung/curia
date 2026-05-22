@@ -41,6 +41,8 @@ skills/
 
 **Privilege access** — skills declare which privileged services they need via `"capabilities": [...]` in `skill.json`. The loader validates names against a fixed allowlist (`VALID_CAPABILITIES` in `src/skills/loader.ts`) at startup and rejects unknown names. The manifest is frozen after loading. The execution layer injects only declared services into `SkillContext` — skills cannot self-escalate at runtime. Universal services (`contactService`, `entityContextAssembler`, `agentPersona`) are available to all skills without declaration. See the `capabilities` section in `docs/dev/adding-a-skill.md` for the full capability reference.
 
+**Caller restrictions** — skills can declare `"allowed_callers": ["agent-name", ...]` in `skill.json` to restrict which agents may invoke them. The execution layer checks the calling agent's name against this list before any other gate (autonomy, elevation). If the caller is not in the list, the invocation is rejected with a structured failure. The special value `"system"` matches system-layer invocations (checkpoint processor, etc.). CEO-approved re-executions (`humanApproved: true`) bypass the caller gate. Names in `allowed_callers` are validated against known agent names at startup — unknown names cause a hard startup failure.
+
 ### Skill Handler Interface
 
 ```typescript
@@ -55,6 +57,7 @@ interface SkillContext {
   agentPersona?: AgentPersona;     // display name, title, email signature — available to all skills
   caller?: CallerContext;          // caller identity (guaranteed for elevated skills)
   contactService?: ContactService; // read-only contact lookups — available to all skills
+  infraLlm?: InfraLlm;            // constrained LLM access (classify/extract only, no raw chat)
   // ...plus service-specific fields injected per-skill by name (bus, entityMemory, etc.)
 }
 
@@ -126,8 +129,9 @@ Invocation flow:
 
 1. **Resolve** — look up skill in registry by name (local or MCP)
 2. **Normalize inputs** — convert timestamp inputs to UTC-offset ISO strings using the configured local timezone
-3. **Validate elevation** — if `sensitivity: elevated`, reject if caller is missing or role is not `ceo`
-4. **Build context** — assemble `SkillContext` with scoped secrets, logger, and per-skill service grants
+3. **Validate caller** — if `allowed_callers` is set on the manifest, reject unless the calling agent is in the list (CEO-approved re-executions bypass this gate)
+4. **Validate elevation** — if `sensitivity: elevated`, reject if caller is missing or role is not `ceo`
+5. **Build context** — assemble `SkillContext` with scoped secrets, logger, and per-skill service grants
 5. **Execute** — call `handler.execute(ctx)` with a timeout wrapper (local), or `tools/call` (MCP)
 6. **Sanitize output** — strip injection vectors, redact secrets, truncate, wrap errors
 7. **Return `SkillResult`** to the agent runtime for inclusion in the LLM's next turn
@@ -221,6 +225,8 @@ These are not bundled but documented as recommended integrations:
 | Skill discovery — dynamic tool-list expansion for discovered skills | Done |
 | Safety gate for first-time elevated skill use — per-agent-skill `skill_approvals` table | Partial — role-based elevation gate exists; persist-once-ask-once flow not yet built |
 | Privilege scoping — per-skill `capabilities` array, load-time validation, frozen manifest | Done |
+| `allowed_callers` enforcement — restrict skill invocation to named agents, validated at startup | Done |
+| `infraLlm` capability — constrained LLM access (classify/extract) for infrastructure skills | Done |
 | Resource boundaries — max 5 concurrent skill invocations per agent task | Not Done |
 | Resource boundaries — 1MB buffer cap on streaming skill responses | Not Done |
 | Built-in skill: `config-store` (generic namespaced agent config store) | Done |

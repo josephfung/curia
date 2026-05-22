@@ -55,7 +55,7 @@ Agents declare a capability tier rather than a specific model (see [ADR-014](../
 | `standard` | General-purpose task execution |
 | `powerful` | Complex multi-step reasoning, synthesis |
 
-The operator maps tiers to models in `config/default.yaml` → `model_routing`. The `ModelRouter` service resolves each agent's tier to a `{ provider, model }` pair at startup.
+The operator maps tiers to models in `config/default.yaml` → `model_routing`. The `ModelRouter` service resolves each agent's tier to a concrete model at startup; the provider is inferred automatically from the `ModelRegistry` based on the model name (e.g., `claude-*` → Anthropic, `gpt-*` → OpenRouter).
 
 Optional `needs` flags (`vision`, `large_context`, `reasoning`, `coding`, `audio`, `image_generation`) are documentary — they inform future routing decisions but are not validated in this version.
 
@@ -199,10 +199,11 @@ Multi-provider from day one:
 
 ```
 src/agents/llm/
-  provider.ts     # common interface
-  anthropic.ts    # Claude API
-  openai.ts       # OpenAI API
-  ollama.ts       # local models
+  provider.ts      # common interface
+  anthropic.ts     # Claude API (Anthropic)
+  openrouter.ts    # OpenRouter API (Gemini Flash, DeepSeek V3, GPT-4o, etc.)
+  ollama.ts        # local models
+  registry.ts      # ModelRegistry — centralized model metadata
 ```
 
 Each provider implements:
@@ -220,7 +221,20 @@ interface LLMProvider {
 
 ### Provider Configuration
 
-Agents declare a capability tier, and the system resolves it to a `{ provider, model }` pair via `ModelRouter`. Fallback logic is configured at the tier level in `config/default.yaml`:
+Agents declare a capability tier, and the system resolves it to a concrete model via `ModelRouter`. The provider is inferred from the `ModelRegistry` — a centralized registry of all known models with their pricing, context windows, and capabilities. Tier-to-model mapping is configured in `config/default.yaml`:
+
+```yaml
+model_routing:
+  tiers:
+    fast:
+      model: claude-haiku-4-5
+    standard:
+      model: claude-sonnet-4-6
+    powerful:
+      model: claude-sonnet-4-6
+```
+
+Agent YAML declares only the tier:
 
 ```yaml
 model:
@@ -228,16 +242,22 @@ model:
   needs: [vision, large_context]  # optional hints for routing decisions
 ```
 
+The `ModelRegistry` holds static metadata (pricing, context window, provider prefix) for all supported models. `ModelRouter` validates that each tier's configured model exists in the registry at startup. Cost estimation and token tracking delegate to registry data rather than hardcoded values.
+
 ### Response Normalization
 
 All providers normalize their responses into a common `LLMResponse` type (discriminated union: `TextResponse | ToolCallResponse | ErrorResponse`). No `any` types in the response path — provider-specific quirks are handled inside the provider implementation, never leaked to the agent runtime.
 
 ### Token & Cost Tracking
 
-Every LLM call records: provider, model, input tokens, output tokens, estimated cost, latency. This data feeds into:
+Every LLM call records: provider, model, input tokens, output tokens, estimated cost, latency. Cost estimation delegates to the `ModelRegistry` — pricing data lives there, not in provider implementations. This data feeds into:
 - Error budget enforcement (per-task cost caps)
 - Audit log (for billing visibility)
 - Health endpoint (for monitoring)
+
+### Time Context Injection
+
+All agents receive a `## Current Date & Time` block in their system prompt on every task turn. This enables reliable time-sensitive reasoning in scheduled agents — specialists now have the same temporal context that was previously available only to the Coordinator.
 
 ---
 
@@ -271,7 +291,8 @@ Every LLM call records: provider, model, input tokens, output tokens, estimated 
 | Execution mode: persistent tasks (burst execution, `intent_anchor`, `progress` JSONB) | Done |
 | LLM provider abstraction (`LLMProvider` interface, `provider.ts`) | Done |
 | Anthropic provider | Done |
-| OpenAI provider | Not Done |
+| OpenRouter provider (Gemini Flash, DeepSeek V3, GPT-4o via `OPENROUTER_API_KEY`) | Done |
+| Model registry — centralized pricing, context windows, capabilities for all models | Done |
 | Ollama (local model) provider | Not Done |
 | Fallback provider (`model.fallback` in agent config) | Not Done |
 | Token tracking per LLM call (input/output tokens via `llm.call` event) | Done |

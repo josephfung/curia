@@ -9,13 +9,13 @@
 |---|----------|-------|--------|
 | 00 | This file | Architecture, layers, bus, message flow, design principles | ✅ Implemented |
 | 01 | [Memory System](01-memory-system.md) | Knowledge graph, entity memory, working memory, Bullpen, embeddings | ✅ 12 of 12 Done |
-| 02 | [Agent System](02-agent-system.md) | Agent definition, lifecycle, state, execution modes, LLM providers | 16 of 22 Done |
-| 03 | [Skills & Execution](03-skills-and-execution.md) | Local skills, MCP, discovery, secrets, permissions | 17 of 20 Done |
+| 02 | [Agent System](02-agent-system.md) | Agent definition, lifecycle, state, execution modes, LLM providers | 17 of 22 Done |
+| 03 | [Skills & Execution](03-skills-and-execution.md) | Local skills, MCP, discovery, secrets, permissions, allowed_callers | 19 of 22 Done |
 | 04 | [Channels](04-channels.md) | Adapter interface, CLI, HTTP, Signal, Email channels, message normalization | 8 of 15 Done |
 | 05 | [Error Recovery](05-error-recovery.md) | Error budgets, state continuity, pattern detection, failure model | 10 of 18 Done |
 | 06 | [Audit & Security](06-audit-and-security.md) | Audit log, redaction, tool sanitization, intent drift, security | 20 of 22 Done |
-| 07 | [Scheduler](07-scheduler.md) | Job model, cron, one-shot, persistent tasks, burst execution | 17 of 18 Done |
-| 08 | [Operations](08-operations.md) | Config, deployment, health checks, logging, project structure | 10 of 11 Done |
+| 07 | [Scheduler](07-scheduler.md) | Job model, cron, one-shot, persistent tasks, burst execution, stale-job cleanup | 18 of 19 Done |
+| 08 | [Operations](08-operations.md) | Config, deployment, health checks, logging, project structure, container security | 13 of 14 Done |
 | 09 | [Contacts & Identity](09-contacts-and-identity.md) | Contact resolution, identity verification, unknown sender policy, authorization, channel identity linking | 10 of 15 Done |
 | 10 | [Audit Log Hardening](10-audit-log-hardening.md) | Structured audit fields, LLM provenance, tamper evidence, source attribution, HITL records | 2 of 17 Done |
 | 11 | [Entity Context Enrichment](11-entity-context-enrichment.md) | Entity model, KG-backed sender/entity profiles, context assembly, agent self-identity, skill convention for entity-scoped operations | 11 of 18 Done |
@@ -88,7 +88,7 @@ All event types are defined as a TypeScript discriminated union — no `any` pay
 
 - **Runtime:** Node.js 22+ with TypeScript (ESM)
 - **Database:** PostgreSQL 16+ with pgvector extension
-- **LLM SDKs:** @anthropic-ai/sdk, openai, ollama
+- **LLM SDKs:** @anthropic-ai/sdk, openai (embeddings + OpenRouter provider), ollama
 - **MCP:** @modelcontextprotocol/sdk (client)
 - **HTTP:** Fastify (for HTTP API channel + dashboard endpoints)
 - **Testing:** Vitest
