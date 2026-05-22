@@ -173,7 +173,7 @@ schedule:
     task: "Check inbox for new receipts"
 ```
 
-These are created at startup from the agent's YAML config.
+These are created at startup from the agent's YAML config. `loadDeclarativeJobs` is **idempotent** — on each startup it reconciles the declared schedules against existing jobs and auto-cancels stale entries (jobs whose cron expression has changed or whose YAML entry has been removed). This prevents orphaned jobs from accumulating when agent configs are updated between restarts.
 
 #### `intent_anchor` (optional)
 
@@ -244,4 +244,5 @@ Four skills available to agents:
 | `SuspensionNotifier` — direct CEO email on suspension (bypasses LLM via `OutboundGateway.sendNotification`) | Done |
 | `RecoveryNotifier` — direct CEO email when watchdog resets a stuck job to pending | Done |
 | Audit logging (`schedule.fired`, `schedule.suspended`, `schedule.recovered` events) | Done |
+| Declarative job cleanup — auto-cancel stale YAML schedules on cron changes or removals | Done |
 | Health endpoint: scheduler stats (active jobs, suspended jobs, next due) | Not Done |

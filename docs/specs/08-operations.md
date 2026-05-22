@@ -86,6 +86,7 @@ Starts Postgres (with pgvector) + the framework. Config from `default.yaml` + `l
 Docker container deployed via the existing `ceo-deploy` repo:
 - Config from `default.yaml` + `production.yaml` + env vars from `.env`
 - Single Docker image containing the framework + built-in skills
+- **Non-root execution** — the production image runs as a dedicated `curia` user, not root. The Dockerfile creates the user in the build stage and pre-creates any directories the process needs at runtime (e.g., `/tmp/.google_workspace_mcp`).
 - MCP servers as separate containers if needed
 - Caddy reverse proxy for HTTPS (already configured in ceo-deploy)
 
@@ -189,6 +190,23 @@ This ensures Docker stop and process managers don't lose in-flight work.
 
 ---
 
+## CI Security Scanning
+
+Automated security scanning runs on every pull request and on a weekly schedule:
+
+- **Trivy** — scans npm dependencies, the Docker image, and the repo for leaked secrets. Results are uploaded as SARIF to GitHub's Security tab.
+- **Semgrep CE** — pattern-based SAST for JavaScript/TypeScript. Initial triage suppressed 28 false positives; ongoing results appear in the Security tab.
+- **CodeQL** — weekly JS/TS semantic analysis.
+- **Gitleaks** — blocks merge if hardcoded secrets are detected in the diff.
+
+### Branch Protection
+
+The `main` branch requires:
+- Pull request review before merge
+- Status checks to pass (CI, security scans)
+
+---
+
 ## Data Retention
 
 A single-user CEO assistant generates ~425 audit log events/day (~850 KB). At this rate, the audit log reaches ~310 MB/year and ~1.5 GB after 5 years. All other tables combined add ~50 MB/year. On a 40 GB VPS disk, this is negligible.
@@ -251,7 +269,8 @@ curia/
 │   │   └── llm/
 │   │       ├── provider.ts     # common interface
 │   │       ├── anthropic.ts
-│   │       ├── openai.ts
+│   │       ├── openrouter.ts   # OpenRouter API (Gemini Flash, DeepSeek, GPT-4o)
+│   │       ├── registry.ts     # ModelRegistry — centralized model metadata
 │   │       └── ollama.ts
 │   ├── execution/              # Skill invocation, MCP client, permission validation
 │   │   ├── executor.ts
@@ -308,4 +327,7 @@ curia/
 | DB migrations via `node-pg-migrate` — auto-run on startup | Done |
 | Project directory structure — matches spec layout | Done |
 | Config validation against JSON Schema at startup | Done |
+| Non-root container — production image runs as `curia` user | Done |
+| Trivy scanning — npm deps, Docker image, and secrets on every PR + weekly | Done |
+| Branch protection on `main` — required PR review + passing status checks | Done |
 | `curia setup` CLI — guided onboarding wizard for credentials and channel setup | Not Done |

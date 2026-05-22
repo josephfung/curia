@@ -109,6 +109,19 @@ A raw integer (0–100) may be used for precision when the named levels are too 
 
 **How gating works:** When an agent calls a skill, the execution layer compares the skill's minimum required autonomy score against the live global score from `autonomy_config`. If the score is too low, the invocation returns an advisory failure (no throw, same `{ success: false, error }` shape as any other failure) and an `autonomy.skill_blocked` audit event is emitted. The autonomy score is CEO-controlled via the `set-autonomy` skill. See `docs/specs/14-autonomy-engine.md` for the full spec.
 
+#### `allowed_callers` (optional)
+
+Restricts which agents may invoke this skill. When set, only the named agents (and system-layer callers via `"system"`) can invoke the skill — all others are rejected with a structured failure before any other gate (autonomy, elevation) is evaluated.
+
+```json
+"allowed_callers": ["contacts", "coordinator"]
+```
+
+- Agent names are validated against the loaded agent registry at startup — unknown names cause a hard startup failure.
+- CEO-approved re-executions (`humanApproved: true`) bypass the caller gate.
+- Omit `allowed_callers` entirely (or set to `[]`) to allow any agent to invoke the skill — this is the default behavior.
+- The `skillSearch` closure also respects `allowed_callers`: skills whose caller list excludes the searching agent are filtered from discovery results (defense-in-depth).
+
 #### `capabilities` (optional)
 
 Declares which privileged `SkillContext` services this skill needs. The loader validates declared names against a fixed allowlist at startup and rejects unknown names. The manifest is frozen after loading — capabilities cannot be changed at runtime.
@@ -132,6 +145,7 @@ Valid capability names and what they grant:
 | `browserService` | `BrowserService` | Controlling a real web browser |
 | `bullpenService` | `BullpenService` | Managing agent conversation threads |
 | `skillSearch` | `skillSearch` closure | Searching the skill registry by keyword |
+| `infraLlm` | `InfraLlm` | Constrained LLM access — `classify()` and `extract()` only, no raw `chat()`. Routed through `ModelRouter` with full telemetry. For infrastructure skills that need LLM reasoning without unbounded access. |
 
 Services NOT in this list (`contactService`, `entityContextAssembler`, `agentPersona`) are **universal** — available to every skill without declaration. Omit `capabilities` entirely if your skill only uses universal services.
 
@@ -278,6 +292,10 @@ interface SkillContext {
 
   /** Browser service — declare "browserService" in capabilities */
   browserService?: BrowserService;
+
+  /** Constrained LLM access — declare "infraLlm" in capabilities.
+   *  Provides classify() and extract() only — no raw chat(). */
+  infraLlm?: InfraLlm;
 
   // --- Universal fields (available to all skills) ---
 
@@ -460,6 +478,7 @@ See [Adding an Agent — Using config-store](adding-an-agent.md#using-config-sto
 - [ ] `action_risk` is declared in `skill.json`
 - [ ] `sensitivity` matches whether the skill has external effects (remember: `"elevated"` = CEO-or-CLI-only gate)
 - [ ] `capabilities` declares only the privileged services actually used — omit if using only universal services
+- [ ] `allowed_callers` is set if the skill should only be invocable by specific agents (validated at startup)
 - [ ] All optional inputs are suffixed with `?` in the manifest
 - [ ] Handler exports a **class** implementing `SkillHandler`, not a bare function
 - [ ] Handler never throws — all errors returned as `{ success: false, error }`

@@ -414,7 +414,7 @@ Contact CRUD operations are exposed as skills, invoked by the Coordinator during
 | `contact.grant-permission` | Add a permission override (grant or deny) |
 | `contact.revoke-permission` | Remove a permission override |
 | `contact.lookup` | Look up a contact by name, role, or channel identifier |
-| `contact.list` | List all contacts, optionally filtered by role |
+| `contact.list` | List contacts filtered by role, status (`confirmed`, `provisional`, `blocked`), or limit. Filtering is DB-level for performance. |
 | `contact.merge` | Merge two contacts into one (consolidates channel identities and overrides) |
 
 All contact mutations are audit-logged. The Coordinator confirms changes with the CEO before writing:
@@ -487,6 +487,7 @@ The migration depends on `kg_nodes` existing (for the foreign key), so it must r
 - **No PII in logs** — contact display names and channel identifiers are audit-logged (they're operational data), but raw message content from unknown senders is redacted per [06-audit-and-security.md](06-audit-and-security.md#redaction).
 - **Spoofing defense** — a spoofed email From header might match a known contact's email, but the email channel's low trust level prevents consequential actions. The Coordinator will ask for Signal/CLI confirmation before acting on sensitive requests from email.
 - **Impersonation on new channels** — someone claiming to be a known contact on a new channel identity is `self_claimed` (unverified) until the CEO confirms. The Coordinator never auto-promotes self-claimed identities.
+- **Automatic promotion of provisional contacts** — provisional contacts are automatically promoted to `confirmed` when any of three signals is detected: (1) Curia has sent an outbound message to the contact, (2) the CEO has sent them an email (detected via Sent folder scan), or (3) the CEO accepted a calendar event with the contact as an attendee. A daily 8 AM contacts agent sweep reconciles provisional contacts against these signals. The `contact-register` skill returns `promoted: true` and `promotion_signal` when a promotion occurs. This is distinct from self-claimed identities — auto-promotion only applies to provisional contacts whose email was established via a trusted source (email headers, calendar), never to self-claimed channel identities.
 - **Contact deletion** — removing a contact also cascades to channel identities and auth overrides (ON DELETE CASCADE). The KG person node is not deleted — it retains historical facts even if the contact record is removed.
 - **Allowlist supersession** — once the contact system is deployed, it fully replaces the per-channel sender allowlist from [04-channels.md](04-channels.md#sender-allowlists). All channels use the contact resolver pipeline. Unknown senders follow the unknown sender policy defined in this spec. The old allowlist configuration is ignored. Specs 04 and 06 should be updated to mark the allowlist as deprecated.
 
