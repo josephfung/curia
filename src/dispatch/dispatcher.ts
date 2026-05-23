@@ -12,7 +12,7 @@ import type { DbPool } from '../db/connection.js';
 import { computeTrustScore, DEFAULT_TRUST_WEIGHTS } from './trust-scorer.js';
 import type { TrustScorerWeights } from './trust-scorer.js';
 import type { WorkingMemory } from '../memory/working-memory.js';
-import { formatOutboundMemo, extractRecentMemos, buildContextPreamble } from './context-memo.js';
+import { formatOutboundMemo } from './context-memo.js';
 import { parseEmailMetadata, sanitizeNylasMessageId, buildCcPreamble, buildThreadParticipantsBlock } from './email-metadata.js';
 
 /** Redact a channel identifier (email address or phone number) for safe log output. */
@@ -81,9 +81,6 @@ export interface DispatcherConfig {
    *  and read them back for inbound context injection. When omitted, context
    *  bridging is disabled (e.g. in unit tests that don't exercise it). */
   workingMemory?: WorkingMemory;
-  /** TTL for outbound context memos in milliseconds. Memos older than this are
-   *  excluded from inbound injection. Default: 86400000 (24 hours). */
-  contextMemoTtlMs?: number;
   /** Curia's own email address — used to substitute "you" for Curia's address
    *  in thread-participants blocks (PR1-D). */
   selfEmail?: string;
@@ -137,11 +134,9 @@ export class Dispatcher {
   private maxMessageBytes: number;
   private confidencePipeline?: import('../contacts/confidence-pipeline.js').ConfidencePipeline;
   private workingMemory?: WorkingMemory;
-  private contextMemoTtlMs: number;
   /** Curia's own email address — used in thread-participants substitution (PR1-D). */
   private selfEmail?: string;
-  /** Outbound context service — v2 context bridging (replaces working-memory memos).
-   *  @TODO(Task 9): Wire into inbound context injection to replace context-memo.ts path. */
+  /** Outbound context service — v2 context bridging (replaces working-memory memo read path). */
   private _outboundContextService?: import('./outbound-context.js').OutboundContextService;
 
   constructor(config: DispatcherConfig) {
@@ -160,10 +155,7 @@ export class Dispatcher {
     this.maxMessageBytes = config.maxMessageBytes ?? 102_400;
     this.confidencePipeline = config.confidencePipeline;
     this.workingMemory = config.workingMemory;
-    this.contextMemoTtlMs = config.contextMemoTtlMs ?? 86_400_000;
     this.selfEmail = config.selfEmail;
-    // @TODO(Task 9): Use outboundContextService for context injection on inbound messages
-    // (replaces working-memory-based context memo injection). Stored now; used in Task 9.
     this._outboundContextService = config.outboundContextService;
 
     // Warn if the trust floor is active but no held-message service was provided — the floor
@@ -609,29 +601,27 @@ export class Dispatcher {
       }
     }
 
-    // Inbound context injection for non-threaded channels.
+    // Context bridging v2: inject active outbound context entries.
+    // Unlike v1 (which only applied to non-threaded channels), v2 injects for all
+    // inbound messages — the LLM judges relevance across channels.
     // Placed AFTER the injection scanner so the preamble (system-generated content)
     // wraps the already-sanitized user content and is not itself scanned or overwritten.
     // Best-effort: failure is logged but does not block message routing.
-    const inboundPolicy = this.channelPolicies?.[payload.channelId];
-    if (this.workingMemory && inboundPolicy && !inboundPolicy.threaded) {
+    if (this._outboundContextService) {
       try {
-        const history = await this.workingMemory.getHistory(
-          payload.conversationId, 'coordinator',
-        );
-        const recentMemos = extractRecentMemos(history, this.contextMemoTtlMs);
-        const preamble = buildContextPreamble(recentMemos, taskContent);
+        const activeEntries = await this._outboundContextService.getActive();
+        const preamble = this._outboundContextService.formatInjectionBlock(activeEntries, taskContent);
         if (preamble !== null) {
           taskContent = preamble;
           this.logger.debug(
-            { channelId: payload.channelId, conversationId: payload.conversationId, memoCount: recentMemos.length },
-            'Injected outbound context preamble into task content',
+            { channelId: payload.channelId, conversationId: payload.conversationId, entryCount: activeEntries.length },
+            'Injected active outbound context into task content',
           );
         }
       } catch (err) {
         this.logger.warn(
           { err, channelId: payload.channelId, conversationId: payload.conversationId },
-          'Failed to read outbound context memos — proceeding without context injection',
+          'Failed to read outbound context entries — proceeding without context injection',
         );
       }
     }
