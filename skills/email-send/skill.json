@@ -1,14 +1,15 @@
 {
   "name": "email-send",
   "description": "Send a new email. Provide comma-separated recipient email addresses, subject, and body. Emails are sent from the agent's configured email address.",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "sensitivity": "normal",
   "action_risk": "medium",
   "inputs": {
     "to": "string",
     "cc": "string?",
     "subject": "string",
-    "body": "string"
+    "body": "string",
+    "context_bridge": "string?"
   },
   "outputs": {
     "message_id": "string",
@@ -19,6 +20,7 @@
   "secrets": [],
   "timeout": 30000,
   "capabilities": [
-    "outboundGateway"
+    "outboundGateway",
+    "outboundContext"
   ]
 }
