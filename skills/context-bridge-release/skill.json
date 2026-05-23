@@ -3,7 +3,7 @@
   "description": "Mark an outbound context bridge entry as released — stop expecting replies for this outbound message. Use this when a delegated conversation is complete or when you want to clear stale context. The entry_id is shown in the [ACTIVE OUTBOUND CONTEXT] block.",
   "version": "1.0.0",
   "sensitivity": "normal",
-  "action_risk": "none",
+  "action_risk": "low",
   "inputs": {
     "entry_id": "string"
   },

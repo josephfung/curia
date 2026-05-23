@@ -15,6 +15,7 @@ CREATE TABLE outbound_context (
 );
 
 CREATE INDEX idx_outbound_context_active
-  ON outbound_context (expires_at) WHERE released = false;
+  ON outbound_context (expires_at, created_at DESC)
+  WHERE released = false;
 
 -- Rollback: DROP TABLE outbound_context;

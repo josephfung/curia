@@ -15,7 +15,7 @@ function makeCtx(input: Record<string, unknown>): SkillContext {
 
   return {
     input,
-    secret: () => '',
+    secret: (name: string) => { throw new Error(`Missing secret: ${name}`); },
     log: makeLogger(),
     outboundGateway: gateway,
   } as unknown as SkillContext;
