@@ -1,0 +1,22 @@
+{
+  "name": "context-bridge-release",
+  "description": "Mark an outbound context bridge entry as released — stop expecting replies for this outbound message. Use this when a delegated conversation is complete or when you want to clear stale context. The entry_id is shown in the [ACTIVE OUTBOUND CONTEXT] block.",
+  "version": "1.0.0",
+  "sensitivity": "normal",
+  "action_risk": "none",
+  "inputs": {
+    "entry_id": "string"
+  },
+  "outputs": {
+    "released": "string"
+  },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 10000,
+  "capabilities": [
+    "outboundContext"
+  ],
+  "allowed_callers": [
+    "coordinator"
+  ]
+}
