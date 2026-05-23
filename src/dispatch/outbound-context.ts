@@ -129,6 +129,7 @@ export class OutboundContextService {
       ],
     );
 
+    this.logger.debug({ id: result.rows[0].id, channelId: entry.channelId, agentId: entry.agentId }, 'Outbound context entry registered');
     return result.rows[0].id;
   }
 
@@ -147,10 +148,13 @@ export class OutboundContextService {
 
   /** Mark an entry as released — stop expecting replies. */
   async release(entryId: string): Promise<void> {
-    await this.pool.query(
+    const result = await this.pool.query(
       `UPDATE outbound_context SET released = true WHERE id = $1`,
       [entryId],
     );
+    if ((result.rowCount ?? 0) === 0) {
+      this.logger.debug({ entryId }, 'release() matched no rows — entry may have been cleaned up or already released');
+    }
   }
 
   /** Delete expired or released entries. Returns the count of rows deleted. */

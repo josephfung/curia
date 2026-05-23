@@ -644,6 +644,11 @@ export class ExecutionLayer {
             this.outboundContextService,
             options.conversationId,
           );
+        } else if (this.outboundContextService && !options?.conversationId) {
+          skillLogger.debug(
+            { skillName },
+            'outboundContext capability declared but conversationId not available — bridge registration disabled for this invocation',
+          );
         }
       } else if (cap === 'tempFileStore') {
         // Inject writeTempFile as a bound closure rather than the raw store.
