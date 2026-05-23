@@ -38,7 +38,7 @@ describe('OutboundContextService', () => {
       });
 
       expect(id).toBe(fakeId);
-      const call = (pool.query as ReturnType<typeof vi.fn>).mock.calls[0];
+      const call = (pool.query as ReturnType<typeof vi.fn>).mock.calls[0]!;
       expect(call[0]).toContain('INSERT INTO outbound_context');
       expect(call[1]).toHaveLength(8);
       expect(call[1][0]).toBe('conv-1');
@@ -59,7 +59,7 @@ describe('OutboundContextService', () => {
         content: longContent,
       });
 
-      const call = (pool.query as ReturnType<typeof vi.fn>).mock.calls[0];
+      const call = (pool.query as ReturnType<typeof vi.fn>).mock.calls[0]!;
       const preview = call[1][3] as string;
       expect(preview.length).toBeLessThanOrEqual(301);
       expect(preview.endsWith('…')).toBe(true);
@@ -77,7 +77,7 @@ describe('OutboundContextService', () => {
         content: 'Short message',
       });
 
-      const call = (pool.query as ReturnType<typeof vi.fn>).mock.calls[0];
+      const call = (pool.query as ReturnType<typeof vi.fn>).mock.calls[0]!;
       const expiresAt = call[1][7] as Date;
       const expectedMs = Date.now() + 24 * 60 * 60 * 1000;
       expect(Math.abs(expiresAt.getTime() - expectedMs)).toBeLessThan(5000);
@@ -100,10 +100,10 @@ describe('OutboundContextService', () => {
       const result = await service.getActive();
 
       expect(result).toHaveLength(1);
-      expect(result[0].id).toBe('id-1');
-      expect(result[0].conversationId).toBe('conv-1');
-      expect(result[0].agentId).toBe('meeting-debrief');
-      const call = (pool.query as ReturnType<typeof vi.fn>).mock.calls[0];
+      expect(result[0]!.id).toBe('id-1');
+      expect(result[0]!.conversationId).toBe('conv-1');
+      expect(result[0]!.agentId).toBe('meeting-debrief');
+      const call = (pool.query as ReturnType<typeof vi.fn>).mock.calls[0]!;
       expect(call[0]).toContain('released = false');
       expect(call[0]).toContain('expires_at > now()');
     });
@@ -111,14 +111,14 @@ describe('OutboundContextService', () => {
     it('respects the limit parameter', async () => {
       (pool.query as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ rows: [] });
       await service.getActive(5);
-      const call = (pool.query as ReturnType<typeof vi.fn>).mock.calls[0];
+      const call = (pool.query as ReturnType<typeof vi.fn>).mock.calls[0]!;
       expect(call[1][0]).toBe(5);
     });
 
     it('defaults limit to 10', async () => {
       (pool.query as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ rows: [] });
       await service.getActive();
-      const call = (pool.query as ReturnType<typeof vi.fn>).mock.calls[0];
+      const call = (pool.query as ReturnType<typeof vi.fn>).mock.calls[0]!;
       expect(call[1][0]).toBe(10);
     });
   });
@@ -127,7 +127,7 @@ describe('OutboundContextService', () => {
     it('sets released = true for the given entry ID', async () => {
       (pool.query as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ rowCount: 1 });
       await service.release('entry-id-1');
-      const call = (pool.query as ReturnType<typeof vi.fn>).mock.calls[0];
+      const call = (pool.query as ReturnType<typeof vi.fn>).mock.calls[0]!;
       expect(call[0]).toContain('UPDATE outbound_context');
       expect(call[0]).toContain('released = true');
       expect(call[1][0]).toBe('entry-id-1');
@@ -136,7 +136,7 @@ describe('OutboundContextService', () => {
     it('scopes release to conversation when conversationId provided', async () => {
       (pool.query as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ rowCount: 1 });
       await service.release('entry-id-1', 'conv-42');
-      const call = (pool.query as ReturnType<typeof vi.fn>).mock.calls[0];
+      const call = (pool.query as ReturnType<typeof vi.fn>).mock.calls[0]!;
       expect(call[0]).toContain('conversation_id = $2');
       expect(call[1][0]).toBe('entry-id-1');
       expect(call[1][1]).toBe('conv-42');
@@ -148,7 +148,7 @@ describe('OutboundContextService', () => {
       (pool.query as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ rowCount: 3 });
       const count = await service.cleanupExpired();
       expect(count).toBe(3);
-      const call = (pool.query as ReturnType<typeof vi.fn>).mock.calls[0];
+      const call = (pool.query as ReturnType<typeof vi.fn>).mock.calls[0]!;
       expect(call[0]).toContain('DELETE FROM outbound_context');
     });
   });
