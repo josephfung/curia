@@ -39,11 +39,9 @@ function makeCtx(overrides?: Partial<SkillContext>): SkillContext {
       originator: {
         contactId: 'ceo-1',
         systemRole: 'principal' as const,
-        channel: 'cli',
+        channel: 'email',
         initiatedAt: new Date().toISOString(),
       },
-      senderId: 'ceo-1',
-      channelId: 'cli',
     },
     taskEventId: 'task-1',
     ...overrides,
@@ -96,6 +94,28 @@ describe('DenyActionHandler', () => {
     const event = (bus.publish as ReturnType<typeof vi.fn>).mock.calls[0]![1];
     expect(event.type).toBe('human.decision');
     expect(event.payload.decision).toBe('deny');
+    expect(event.payload.deciderId).toBe('ceo-1');
+    expect(event.payload.deciderChannel).toBe('email');
+  });
+
+  it('skips human.decision and logs error when originator contact/channel is absent', async () => {
+    const repo = makeMockRepo();
+    const bus = makeMockBus();
+    const mockLog = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
+    const handler = new DenyActionHandler();
+
+    const result = await handler.execute(makeCtx({
+      log: mockLog,
+      taskMetadata: {
+        originator: { systemRole: 'principal' as const, initiatedAt: new Date().toISOString() },
+      },
+      actionLogRepo: repo,
+      bus,
+    }));
+
+    expect(result.success).toBe(true);
+    expect(bus.publish).not.toHaveBeenCalled();
+    expect(mockLog.error).toHaveBeenCalled();
   });
 
   it('returns error when resolveRow returns false (concurrent resolve)', async () => {

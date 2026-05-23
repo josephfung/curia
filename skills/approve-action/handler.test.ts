@@ -40,11 +40,9 @@ function makeCtx(overrides?: Partial<SkillContext>): SkillContext {
       originator: {
         contactId: 'ceo-1',
         systemRole: 'principal' as const,
-        channel: 'cli',
+        channel: 'email',
         initiatedAt: new Date().toISOString(),
       },
-      senderId: 'ceo-1',
-      channelId: 'cli',
     },
     taskEventId: 'task-1',
     caller: { contactId: 'ceo-1', role: 'ceo', channel: 'cli' },
@@ -119,11 +117,13 @@ describe('ApproveActionHandler', () => {
     expect(childRow.parentActionId).toBe(10);
     expect(childRow.outcome).toBe('success');
 
-    // Verify audit event
+    // Verify audit event — deciderId and deciderChannel must come from originator, not 'unknown'
     expect(bus.publish).toHaveBeenCalledOnce();
     const event = (bus.publish as ReturnType<typeof vi.fn>).mock.calls[0]![1];
     expect(event.type).toBe('human.decision');
     expect(event.payload.decision).toBe('approve');
+    expect(event.payload.deciderId).toBe('ceo-1');
+    expect(event.payload.deciderChannel).toBe('email');
 
     // Verify return
     expect(result.success).toBe(true);
@@ -187,6 +187,34 @@ describe('ApproveActionHandler', () => {
     // No child row or audit event either
     expect(repo.insert).not.toHaveBeenCalled();
     expect(bus.publish).not.toHaveBeenCalled();
+  });
+
+  it('skips human.decision and logs error when originator contact/channel is absent', async () => {
+    // Originator passes isPrincipalOriginated but lacks contactId/channel — dispatch-layer bug.
+    // The skill should still succeed (approval happened) but must not publish a counterfeit
+    // audit row with deciderId: 'unknown'. Instead it logs an error and skips the event.
+    const repo = makeMockRepo();
+    const bus = makeMockBus();
+    const execLayer = makeMockExecutionLayer();
+    const mockLog = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
+    const handler = new ApproveActionHandler();
+
+    const result = await handler.execute(makeCtx({
+      log: mockLog,
+      taskMetadata: {
+        // systemRole = 'principal' passes isPrincipalOriginated but contactId/channel are absent
+        originator: { systemRole: 'principal' as const, initiatedAt: new Date().toISOString() },
+      },
+      actionLogRepo: repo,
+      bus,
+      executionLayer: execLayer,
+    }));
+
+    expect(result.success).toBe(true);
+    // No audit row published — fake IDs are worse than a missing row
+    expect(bus.publish).not.toHaveBeenCalled();
+    // Error is surfaced so the dispatch-layer bug is visible in alerting
+    expect(mockLog.error).toHaveBeenCalled();
   });
 
   it('returns error when row has null payload', async () => {
