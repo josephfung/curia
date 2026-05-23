@@ -87,6 +87,9 @@ export interface DispatcherConfig {
   /** Curia's own email address — used to substitute "you" for Curia's address
    *  in thread-participants blocks (PR1-D). */
   selfEmail?: string;
+  /** Outbound context service — v2 context bridging. When present, replaces
+   *  the working-memory-based context memo injection. */
+  outboundContextService?: import('./outbound-context.js').OutboundContextService;
 }
 
 /**
@@ -137,6 +140,9 @@ export class Dispatcher {
   private contextMemoTtlMs: number;
   /** Curia's own email address — used in thread-participants substitution (PR1-D). */
   private selfEmail?: string;
+  /** Outbound context service — v2 context bridging (replaces working-memory memos).
+   *  @TODO(Task 9): Wire into inbound context injection to replace context-memo.ts path. */
+  private _outboundContextService?: import('./outbound-context.js').OutboundContextService;
 
   constructor(config: DispatcherConfig) {
     this.bus = config.bus;
@@ -156,6 +162,9 @@ export class Dispatcher {
     this.workingMemory = config.workingMemory;
     this.contextMemoTtlMs = config.contextMemoTtlMs ?? 86_400_000;
     this.selfEmail = config.selfEmail;
+    // @TODO(Task 9): Use outboundContextService for context injection on inbound messages
+    // (replaces working-memory-based context memo injection). Stored now; used in Task 9.
+    this._outboundContextService = config.outboundContextService;
 
     // Warn if the trust floor is active but no held-message service was provided — the floor
     // silently becomes a no-op in that case, which is a security-relevant degradation.
@@ -191,7 +200,10 @@ export class Dispatcher {
       await this.handleAgentError(event as AgentErrorEvent);
     });
 
-    this.logger.info('Dispatcher registered');
+    this.logger.info(
+      { outboundContextBridge: this._outboundContextService != null },
+      'Dispatcher registered',
+    );
   }
 
   private async handleInbound(event: InboundMessageEvent): Promise<void> {
