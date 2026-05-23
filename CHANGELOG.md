@@ -16,6 +16,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Fixed
 
 - **`ceo-inbox-update-folders`** — added empty-folders guard matching `ceo-inbox-label`: falls back to the computed folder list when Nylas omits `folders` from the PUT response. (#596)
+- **`ceo-inbox-draft-reply`** — empty `from` now returns `{ success: false }` with an error log instead of silently creating a draft addressed to `unknown`. (#598)
 
 ## [0.30.0] — 2026-05-22 — "Kaylee Frye"
 

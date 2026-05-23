@@ -342,4 +342,39 @@ describe('CeoInboxDraftReplyHandler', () => {
     // Confirm fetch was never called
     expect(mockFetch).not.toHaveBeenCalled();
   });
+
+  it('Case 8: Empty from — returns { success: false } with error-level log', async () => {
+    // Message exists but has no sender (from: [])
+    const messageResponse = buildNylasMessage({
+      from: [],
+      to: [{ email: 'ceo@example.com' }],
+      cc: [],
+    });
+
+    mockFetch.mockImplementation(async (url) => {
+      const urlStr = String(url);
+      if (urlStr.includes('/messages/msg-001')) {
+        return new Response(JSON.stringify(messageResponse), { status: 200 });
+      }
+      // Draft creation must NOT be called — throw if it is
+      throw new Error(`Unexpected fetch (draft must not be created): ${urlStr}`);
+    });
+
+    const ctx = buildCtx();
+    const result = await handler.execute(ctx);
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error).toContain('no sender address');
+    }
+
+    // An error-level log must have been emitted
+    expect(ctx.log.error).toHaveBeenCalled();
+
+    // The drafts endpoint must NOT have been called
+    const draftCall = mockFetch.mock.calls.find(
+      (call) => String(call[0]).includes('/drafts'),
+    );
+    expect(draftCall).toBeUndefined();
+  });
 });
