@@ -1,6 +1,10 @@
 # Dependencies
 node_modules/
 
+# This project uses pnpm; npm must not generate a competing lockfile
+package-lock.json
+yarn.lock
+
 # Build output
 dist/
 
