@@ -25,6 +25,25 @@ Cross-cutting: Audit Logger, Memory Engine, Scheduler.
 - All event types defined as discriminated unions in `src/bus/events.ts`
 - All errors normalized to `AgentError` type (see `docs/specs/05-error-recovery.md`)
 
+### Type Checking
+
+Always run `pnpm --prefix <worktree> run typecheck` (not raw `tsc --noEmit`) —
+CI uses `pnpm run typecheck` which may resolve a different tsconfig chain than
+a bare `tsc` invocation. Run this before every commit that touches `.ts` files.
+
+### Strict TypeScript Patterns
+
+Two patterns that pass local checks but fail CI regularly:
+
+- **Array element access** — `array[0]` on `mock.calls`, `result.rows`, etc.
+  is `T | undefined` under strict null checks. Use non-null assertion (`array[0]!`)
+  when the element is guaranteed to exist, or destructure with a guard.
+
+- **Narrowing from `Record<string, unknown>`** — after runtime validation, casting
+  `Record<string, unknown>` directly to a typed interface fails if the interface
+  has required properties. Cast through `unknown` first:
+  `obj as unknown as MyInterface` (with a comment noting the runtime check above).
+
 ### Database
 - PostgreSQL 16+ with pgvector
 - Parameterized queries only — never interpolate variables into SQL strings
