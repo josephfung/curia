@@ -21,12 +21,22 @@ export interface ContextBridgeInput {
 export function parseContextBridge(raw: unknown, log: Logger): ContextBridgeInput | null {
   if (!raw || typeof raw !== 'string') return null;
   try {
-    const parsed = JSON.parse(raw) as ContextBridgeInput;
-    if (!parsed.agent_id || typeof parsed.agent_id !== 'string') {
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      log.warn({ rawLength: raw.length }, 'context_bridge: payload must be a JSON object — skipping registration');
+      return null;
+    }
+    const obj = parsed as Record<string, unknown>;
+    if (typeof obj.agent_id !== 'string' || obj.agent_id.trim().length === 0) {
       log.warn({ rawLength: raw.length }, 'context_bridge: missing or invalid agent_id — skipping registration');
       return null;
     }
-    return parsed;
+    // Validate optional field types — reject silently malformed payloads.
+    if (obj.expected_reply != null && typeof obj.expected_reply !== 'string') return null;
+    if (obj.delegation_hint != null && typeof obj.delegation_hint !== 'string') return null;
+    if (obj.metadata != null && (typeof obj.metadata !== 'object' || Array.isArray(obj.metadata))) return null;
+    if (obj.expires_in_hours != null && (typeof obj.expires_in_hours !== 'number' || !Number.isFinite(obj.expires_in_hours) || obj.expires_in_hours <= 0)) return null;
+    return obj as ContextBridgeInput;
   } catch {
     log.warn({ rawLength: raw.length }, 'context_bridge: failed to parse JSON — skipping registration');
     return null;

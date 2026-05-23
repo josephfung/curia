@@ -6,9 +6,10 @@ import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/t
 
 export class ContextBridgeReleaseHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {
-    const { entry_id: entryId } = ctx.input as { entry_id?: string };
+    const { entry_id: rawEntryId } = ctx.input as { entry_id?: string };
+    const entryId = typeof rawEntryId === 'string' ? rawEntryId.trim() : '';
 
-    if (!entryId || typeof entryId !== 'string') {
+    if (!entryId) {
       return { success: false, error: 'Missing required input: entry_id (string)' };
     }
 

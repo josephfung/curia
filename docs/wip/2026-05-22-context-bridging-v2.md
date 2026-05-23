@@ -596,7 +596,7 @@ In `src/skills/types.ts`, add after the `infraLlm?` field (around line 221):
 
 Also update the capability docstring in `SkillManifest` (around line 59) to include `outboundContext` in the valid capabilities list:
 
-```
+```text
    *  Valid capabilities: bus, agentRegistry, outboundGateway, heldMessages,
    *  schedulerService, entityMemory, nylasCalendarClient, autonomyService,
    *  executiveProfileService, browserService, bullpenService, skillSearch,
@@ -1829,7 +1829,7 @@ Verify the commit history is clean and all commits reference #615.
 Tasks 5, 6, and 7 (the three send skill updates) are independent and can be dispatched as parallel subagents. All other tasks must be sequential.
 
 **Dependency graph:**
-```
+```text
 1 (migration) → 2 (service) → 3 (capability wiring) → 4 (bootstrap)
                                                           ↓
                                               ┌──── 5 (signal-send)
