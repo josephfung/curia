@@ -55,7 +55,8 @@
     "overrides": {
       "hono": ">=4.12.18",
       "fast-uri": ">=3.1.2",
-      "vite": ">=8.0.5"
+      "vite": ">=8.0.5",
+      "qs": ">=6.15.2"
     }
   },
   "devDependencies": {
