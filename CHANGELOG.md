@@ -15,17 +15,14 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
-- **`workspace-mcp` tool tier** — upgraded from `extended` to `complete` in `config/skills.yaml`; `create_sheet` and `append_table_rows` are both in the `complete` tier and were silently absent from the skill registry at `extended`, causing startup warnings and breaking the T2125 expense-tracker setup and ingestion flows. (curia-deploy#65)
+- **`workspace-mcp` tool tier** — upgraded to `complete`; `create_sheet` and `append_table_rows` require this tier, fixing T2125 expense-tracker setup and ingestion flows. (curia-deploy#65)
+- **`ceo-inbox-update-folders`** — added empty-folders guard matching `ceo-inbox-label`: falls back to the computed folder list when Nylas omits `folders` from the PUT response. (#596)
+- **`ceo-inbox-draft-reply`** — empty `from` now returns `{ success: false }` with an error log instead of silently creating a draft addressed to `unknown`. (#598)
 
 ### Security
 
 - **`qs`** — pinned transitive dependency to `>=6.15.2` via pnpm override, closing CVE-2026-8723 (DoS via crash in `qs.stringify` with null/undefined in comma-format arrays).
 - **`package-lock.json`** — deleted stale npm lockfile and added it to `.gitignore`; the project uses pnpm exclusively and the file was generating spurious Dependabot alerts (#30, #32, #33).
-
-### Fixed
-
-- **`ceo-inbox-update-folders`** — added empty-folders guard matching `ceo-inbox-label`: falls back to the computed folder list when Nylas omits `folders` from the PUT response. (#596)
-- **`ceo-inbox-draft-reply`** — empty `from` now returns `{ success: false }` with an error log instead of silently creating a draft addressed to `unknown`. (#598)
 
 ## [0.30.0] — 2026-05-22 — "Kaylee Frye"
 
