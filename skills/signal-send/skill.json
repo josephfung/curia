@@ -1,13 +1,14 @@
 {
   "name": "signal-send",
   "description": "Send a Signal message to a person (by their E.164 phone number) or a group (by group ID). For 1:1 sends, use the contact's verified Signal phone number from contact-lookup — display names are not trusted for Signal identity. For group sends, all group members must be verified contacts; unverified groups are refused with a list of which members need verification.",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "sensitivity": "normal",
   "action_risk": "medium",
   "inputs": {
     "recipient": "string?",
     "group_id": "string?",
-    "message": "string"
+    "message": "string",
+    "context_bridge": "string? (JSON — optional context bridge registration: {agent_id, expected_reply?, delegation_hint?, metadata?, expires_in_hours?})"
   },
   "outputs": {
     "delivered_to": "string",
@@ -17,6 +18,7 @@
   "secrets": [],
   "timeout": 30000,
   "capabilities": [
-    "outboundGateway"
+    "outboundGateway",
+    "outboundContext"
   ]
 }
