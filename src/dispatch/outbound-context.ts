@@ -138,8 +138,9 @@ export class OutboundContextService {
       ],
     );
 
-    this.logger.debug({ id: result.rows[0].id, channelId: entry.channelId, agentId: entry.agentId }, 'Outbound context entry registered');
-    return result.rows[0].id;
+    const id = result.rows[0]!.id;
+    this.logger.debug({ id, channelId: entry.channelId, agentId: entry.agentId }, 'Outbound context entry registered');
+    return id;
   }
 
   /** Query all active (non-released, non-expired) entries. */
