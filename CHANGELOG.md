@@ -24,6 +24,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **`qs`** — pinned transitive dependency to `>=6.15.2` via pnpm override, closing CVE-2026-8723 (DoS via crash in `qs.stringify` with null/undefined in comma-format arrays).
 - **`package-lock.json`** — deleted stale npm lockfile and added it to `.gitignore`; the project uses pnpm exclusively and the file was generating spurious Dependabot alerts (#30, #32, #33).
 
+### Removed
+
+- **`context-memo.ts`** — deleted v1 outbound context memo write path from the dispatcher and removed the `context-memo` module entirely; context bridging now runs exclusively through `OutboundContextService`. (#615)
+
 ## [0.30.0] — 2026-05-22 — "Kaylee Frye"
 
 > **Kaylee Frye** *(Firefly, 2002, Joss Whedon)* — Serenity's mechanic, who keeps a ship flying on spare parts, intuition, and a refusal to waste anything. She routes around problems, trusts the parts she knows, and gets more out of less than anyone thought possible. This release adds multi-model routing to stretch every dollar, downgrades agents to cheaper tiers where they don't need the power, and tightens security without adding overhead.

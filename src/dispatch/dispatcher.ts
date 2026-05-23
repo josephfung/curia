@@ -11,8 +11,6 @@ import type { RateLimiter } from './rate-limiter.js';
 import type { DbPool } from '../db/connection.js';
 import { computeTrustScore, DEFAULT_TRUST_WEIGHTS } from './trust-scorer.js';
 import type { TrustScorerWeights } from './trust-scorer.js';
-import type { WorkingMemory } from '../memory/working-memory.js';
-import { formatOutboundMemo } from './context-memo.js';
 import { parseEmailMetadata, sanitizeNylasMessageId, buildCcPreamble, buildThreadParticipantsBlock } from './email-metadata.js';
 
 /** Redact a channel identifier (email address or phone number) for safe log output. */
@@ -77,10 +75,6 @@ export interface DispatcherConfig {
   /** Contact confidence scoring pipeline. When provided, fires message_seen on
    *  every resolved inbound sender. When absent, scoring is disabled. */
   confidencePipeline?: import('../contacts/confidence-pipeline.js').ConfidencePipeline;
-  /** Working memory — used to write outbound context memos on non-threaded channels
-   *  and read them back for inbound context injection. When omitted, context
-   *  bridging is disabled (e.g. in unit tests that don't exercise it). */
-  workingMemory?: WorkingMemory;
   /** Curia's own email address — used to substitute "you" for Curia's address
    *  in thread-participants blocks (PR1-D). */
   selfEmail?: string;
@@ -133,7 +127,6 @@ export class Dispatcher {
   private conversationCheckpointDebounceMs: number;
   private maxMessageBytes: number;
   private confidencePipeline?: import('../contacts/confidence-pipeline.js').ConfidencePipeline;
-  private workingMemory?: WorkingMemory;
   /** Curia's own email address — used in thread-participants substitution (PR1-D). */
   private selfEmail?: string;
   /** Outbound context service — v2 context bridging (replaces working-memory memo read path). */
@@ -154,7 +147,6 @@ export class Dispatcher {
     this.trustScoreFloor = config.trustScoreFloor ?? 0.2;
     this.maxMessageBytes = config.maxMessageBytes ?? 102_400;
     this.confidencePipeline = config.confidencePipeline;
-    this.workingMemory = config.workingMemory;
     this.selfEmail = config.selfEmail;
     this._outboundContextService = config.outboundContextService;
 
@@ -878,34 +870,6 @@ export class Dispatcher {
       taskEventId: event.parentEventId ?? undefined,
     });
     await this.bus.publish('dispatch', outbound);
-
-    // Write an outbound context memo to working memory for non-threaded channels.
-    // When the user replies, the inbound handler reads these memos and prepends
-    // them to the coordinator's task content so it knows what it last said.
-    // Best-effort: failure is logged but does not block outbound delivery.
-    const channelPolicy = this.channelPolicies?.[routing.channelId];
-    if (this.workingMemory && channelPolicy && !channelPolicy.threaded) {
-      try {
-        const memo = formatOutboundMemo({
-          conversationId: routing.conversationId,
-          content: event.payload.content,
-          taskEventId: event.parentEventId ?? undefined,
-        });
-        await this.workingMemory.addTurn(routing.conversationId, 'coordinator', {
-          role: 'system',
-          content: memo,
-        });
-        this.logger.debug(
-          { channelId: routing.channelId, conversationId: routing.conversationId },
-          'Outbound context memo written to working memory',
-        );
-      } catch (err) {
-        this.logger.warn(
-          { err, channelId: routing.channelId, conversationId: routing.conversationId },
-          'Failed to write outbound context memo — context bridging degraded for this message',
-        );
-      }
-    }
 
     // Schedule a checkpoint for this conversation — resets the debounce timer if
     // already running, so only fires after a full window of inactivity.
