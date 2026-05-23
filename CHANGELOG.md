@@ -13,6 +13,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`workspace-mcp` tool tier** — upgraded from `extended` to `complete` in `config/skills.yaml`; `create_sheet` and `append_table_rows` are both in the `complete` tier and were silently absent from the skill registry at `extended`, causing startup warnings and breaking the T2125 expense-tracker setup and ingestion flows. (curia-deploy#65)
+
 ### Security
 
 - **`qs`** — pinned transitive dependency to `>=6.15.2` via pnpm override, closing CVE-2026-8723 (DoS via crash in `qs.stringify` with null/undefined in comma-format arrays).
