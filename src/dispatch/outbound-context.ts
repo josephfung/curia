@@ -66,6 +66,15 @@ function truncateField(value: string | null | undefined, maxLength: number): str
   return value.slice(0, maxLength) + '…';
 }
 
+/** Serialize metadata as JSON, dropping it entirely if oversized.
+ *  Unlike text fields, JSONB cannot be truncated — a sliced JSON string is invalid. */
+function serializeMetadata(metadata: Record<string, unknown> | undefined): string | null {
+  if (!metadata) return null;
+  const json = JSON.stringify(metadata);
+  if (json.length > MAX_METADATA_LENGTH) return null;
+  return json;
+}
+
 /** Format a relative time-ago string for the injection block. */
 function timeAgo(date: Date): string {
   const diffMs = Date.now() - date.getTime();
@@ -133,7 +142,7 @@ export class OutboundContextService {
         preview,
         truncateField(entry.expectedReply, MAX_FIELD_LENGTH),
         truncateField(entry.delegationHint, MAX_FIELD_LENGTH),
-        truncateField(entry.metadata ? JSON.stringify(entry.metadata) : null, MAX_METADATA_LENGTH),
+        serializeMetadata(entry.metadata),
         expiresAt,
       ],
     );
