@@ -52,8 +52,10 @@ export class CeoInboxUpdateFoldersHandler implements SkillHandler {
 
       // Nylas sometimes omits the folders field from the PUT response (implementation-defined).
       // Fall back to the folder list we computed locally to avoid returning [] to the agent.
+      // @TODO: A 200 with empty folders could also be a silent no-op write, which is
+      // indistinguishable from the "field omitted from echo" case without a read-after-write.
       if (result.folders.length === 0) {
-        ctx.log.warn({ messageId }, 'ceo-inbox-update-folders: Nylas returned empty folders on write — using computed folder list');
+        ctx.log.warn({ messageId, nylasResult: result }, 'ceo-inbox-update-folders: Nylas returned empty folders on write — using computed folder list');
       }
       const finalFolders = result.folders.length > 0 ? result.folders : updatedFolders;
 
