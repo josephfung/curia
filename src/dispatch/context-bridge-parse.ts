@@ -36,7 +36,7 @@ export function parseContextBridge(raw: unknown, log: Logger): ContextBridgeInpu
     if (obj.delegation_hint != null && typeof obj.delegation_hint !== 'string') return null;
     if (obj.metadata != null && (typeof obj.metadata !== 'object' || Array.isArray(obj.metadata))) return null;
     if (obj.expires_in_hours != null && (typeof obj.expires_in_hours !== 'number' || !Number.isFinite(obj.expires_in_hours) || obj.expires_in_hours <= 0)) return null;
-    return obj as ContextBridgeInput;
+    return obj as unknown as ContextBridgeInput;
   } catch {
     log.warn({ rawLength: raw.length }, 'context_bridge: failed to parse JSON — skipping registration');
     return null;
