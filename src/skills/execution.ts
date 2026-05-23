@@ -41,6 +41,7 @@ import type { BrowserService } from '../browser/browser-service.js';
 import type { ApprovalTriggerService } from '../autonomy/approval-trigger.js';
 import { TempFileStore } from './temp-file-store.js';
 import type { InfraLlmService } from './infra-llm.js';
+import { OutboundContextService, ScopedOutboundContext } from '../dispatch/outbound-context.js';
 
 // Default max output length — used when no value is configured in default.yaml.
 // Skills returning more than this will have their output truncated before it
@@ -84,6 +85,7 @@ export class ExecutionLayer {
   private confidencePipeline?: import('../contacts/confidence-pipeline.js').ConfidencePipeline;
   private tempFileStore?: TempFileStore;
   private readonly infraLlmService?: InfraLlmService;
+  private outboundContextService?: OutboundContextService;
   /** The agent's own contactId — injected into ctx.agentContactId for entity_enrichment default='agent' */
   private agentContactId?: string;
   /** IANA timezone name used for normalizing offset-less timestamp inputs from the LLM. */
@@ -113,6 +115,7 @@ export class ExecutionLayer {
     confidencePipeline?: import('../contacts/confidence-pipeline.js').ConfidencePipeline;
     tempFileStore?: TempFileStore;
     infraLlmService?: InfraLlmService;
+    outboundContextService?: OutboundContextService;
     agentContactId?: string;
     timezone?: string;
     selfEmail?: string;
@@ -139,6 +142,7 @@ export class ExecutionLayer {
     this.confidencePipeline = options?.confidencePipeline;
     this.tempFileStore = options?.tempFileStore;
     this.infraLlmService = options?.infraLlmService;
+    this.outboundContextService = options?.outboundContextService;
     this.agentContactId = options?.agentContactId;
     this.timezone = options?.timezone ?? 'UTC';
     this.selfEmail = options?.selfEmail;
@@ -550,6 +554,10 @@ export class ExecutionLayer {
       // security policy — any skill can declare this capability. See #637.
       // Listed here so the missing-cap guard knows it's configured when infraLlmService is set.
       infraLlm: this.infraLlmService,
+      // outboundContext bridges outbound message context into skills. The ScopedOutboundContext
+      // instance is created per-invocation (pre-scoped with conversationId) in the injection loop.
+      // Listed here so the missing-cap guard knows it's configured when outboundContextService is set.
+      outboundContext: this.outboundContextService,
     };
 
     // Hard-restrict executionLayer to approve-action only.
@@ -628,6 +636,14 @@ export class ExecutionLayer {
             conversationId: options?.conversationId,
             skillName,
           });
+        }
+      } else if (cap === 'outboundContext') {
+        // Scoped instance: pre-fills conversationId so skills don't need it.
+        if (this.outboundContextService && options?.conversationId) {
+          ctx.outboundContext = new ScopedOutboundContext(
+            this.outboundContextService,
+            options.conversationId,
+          );
         }
       } else if (cap === 'tempFileStore') {
         // Inject writeTempFile as a bound closure rather than the raw store.
