@@ -45,8 +45,9 @@
 servers:
   # Community Google Workspace MCP server (taylorwilsdon/google_workspace_mcp).
   # Covers Drive, Sheets, Docs, Gmail, Calendar, and more via OAuth 2.0 as Curia's
-  # Gmail user. The "extended" tier exposes the full productivity surface without
-  # the long tail of rarely-needed tools — upgrade to "complete" if needed later.
+  # Gmail user. The "complete" tier is required for load-bearing Sheets tools:
+  # create_sheet (new tab) and append_table_rows are both in the complete tier —
+  # they were not promoted to extended in workspace-mcp's tool_tiers.yaml.
   #
   # Prerequisites (one-time human setup — see docs/dev/google-drive.md):
   #   1. Create a Google Cloud Project, enable Drive/Sheets/Docs/Gmail/Calendar APIs
@@ -65,7 +66,7 @@ servers:
     args:
       - workspace-mcp
       - --tool-tier
-      - extended
+      - complete
     env:
       GOOGLE_OAUTH_CLIENT_ID: ""
       GOOGLE_OAUTH_CLIENT_SECRET: ""
