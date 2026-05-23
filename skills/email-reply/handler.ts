@@ -14,29 +14,7 @@
 // sensitivity: "elevated" — enforced by the gateway's security pipeline.
 
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
-
-// Shape of the optional context_bridge JSON input.
-// All fields except agent_id are optional — the register() call omits absent ones
-// rather than passing undefined, so the bridge service can distinguish "not set"
-// from "explicitly undefined".
-interface ContextBridgeInput {
-  agent_id: string;
-  expected_reply?: string;
-  delegation_hint?: string;
-  metadata?: Record<string, unknown>;
-  expires_in_hours?: number;
-}
-
-// Parses the raw context_bridge JSON string from skill input.
-// Returns null on any parse failure so callers can treat it as "no bridge requested".
-function parseContextBridge(raw: unknown): ContextBridgeInput | null {
-  if (!raw || typeof raw !== 'string') return null;
-  try {
-    return JSON.parse(raw) as ContextBridgeInput;
-  } catch {
-    return null;
-  }
-}
+import { parseContextBridge, registerContextBridge } from '../../src/dispatch/context-bridge-parse.js';
 
 const MAX_BODY_LENGTH = 50000;
 
@@ -146,21 +124,9 @@ export class EmailReplyHandler implements SkillHandler {
       }
 
       // Register context bridge entry if requested (best-effort).
-      const bridge = parseContextBridge(contextBridgeRaw);
-      if (bridge && ctx.outboundContext) {
-        try {
-          await ctx.outboundContext.register({
-            channelId: 'email',
-            agentId: bridge.agent_id,
-            content: body,
-            ...(bridge.expected_reply != null ? { expectedReply: bridge.expected_reply } : {}),
-            ...(bridge.delegation_hint != null ? { delegationHint: bridge.delegation_hint } : {}),
-            ...(bridge.metadata != null ? { metadata: bridge.metadata } : {}),
-            ...(bridge.expires_in_hours != null ? { expiresInHours: bridge.expires_in_hours } : {}),
-          });
-        } catch (err) {
-          ctx.log.warn({ err }, 'email-reply: failed to register context bridge entry — reply succeeded');
-        }
+      const bridge = parseContextBridge(contextBridgeRaw, ctx.log);
+      if (bridge) {
+        await registerContextBridge(ctx.outboundContext, bridge, 'email', body, ctx.log);
       }
 
       ctx.log.info(

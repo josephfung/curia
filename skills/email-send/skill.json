@@ -9,7 +9,7 @@
     "cc": "string?",
     "subject": "string",
     "body": "string",
-    "context_bridge": "string?"
+    "context_bridge": "string? (JSON — optional context bridge registration: {agent_id, expected_reply?, delegation_hint?, metadata?, expires_in_hours?})"
   },
   "outputs": {
     "message_id": "string",

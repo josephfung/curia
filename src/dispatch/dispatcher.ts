@@ -611,7 +611,7 @@ export class Dispatcher {
           );
         }
       } catch (err) {
-        this.logger.warn(
+        this.logger.error(
           { err, channelId: payload.channelId, conversationId: payload.conversationId },
           'Failed to read outbound context entries — proceeding without context injection',
         );
