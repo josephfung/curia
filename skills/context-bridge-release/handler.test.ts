@@ -8,7 +8,7 @@ const handler = new ContextBridgeReleaseHandler();
 function makeCtx(input: Record<string, unknown>): SkillContext {
   return {
     input,
-    secret: vi.fn(),
+    secret: vi.fn((name: string) => { throw new Error(`Missing secret: ${name}`); }),
     log: pino({ level: 'silent' }),
     outboundContext: {
       register: vi.fn(),

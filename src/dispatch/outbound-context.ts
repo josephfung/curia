@@ -12,6 +12,8 @@ import type { Logger } from '../logger.js';
 
 const MAX_PREVIEW_LENGTH = 300;
 const DEFAULT_EXPIRY_HOURS = 24;
+const MAX_METADATA_LENGTH = 2000;
+const MAX_FIELD_LENGTH = 500;
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -55,6 +57,13 @@ export interface OutboundContextCapability {
 function truncatePreview(content: string): string {
   if (content.length <= MAX_PREVIEW_LENGTH) return content;
   return content.slice(0, MAX_PREVIEW_LENGTH) + '…';
+}
+
+/** Truncate optional text fields to avoid storing unexpectedly large values. */
+function truncateField(value: string | null | undefined, maxLength: number): string | null {
+  if (!value) return null;
+  if (value.length <= maxLength) return value;
+  return value.slice(0, maxLength) + '…';
 }
 
 /** Format a relative time-ago string for the injection block. */
@@ -122,9 +131,9 @@ export class OutboundContextService {
         entry.channelId,
         entry.agentId,
         preview,
-        entry.expectedReply ?? null,
-        entry.delegationHint ?? null,
-        entry.metadata ? JSON.stringify(entry.metadata) : null,
+        truncateField(entry.expectedReply, MAX_FIELD_LENGTH),
+        truncateField(entry.delegationHint, MAX_FIELD_LENGTH),
+        truncateField(entry.metadata ? JSON.stringify(entry.metadata) : null, MAX_METADATA_LENGTH),
         expiresAt,
       ],
     );
@@ -147,13 +156,18 @@ export class OutboundContextService {
   }
 
   /** Mark an entry as released — stop expecting replies. */
-  async release(entryId: string): Promise<void> {
-    const result = await this.pool.query(
-      `UPDATE outbound_context SET released = true WHERE id = $1`,
-      [entryId],
-    );
+  async release(entryId: string, conversationId?: string): Promise<void> {
+    const result = conversationId
+      ? await this.pool.query(
+          `UPDATE outbound_context SET released = true WHERE id = $1 AND conversation_id = $2`,
+          [entryId, conversationId],
+        )
+      : await this.pool.query(
+          `UPDATE outbound_context SET released = true WHERE id = $1`,
+          [entryId],
+        );
     if ((result.rowCount ?? 0) === 0) {
-      this.logger.debug({ entryId }, 'release() matched no rows — entry may have been cleaned up or already released');
+      this.logger.debug({ entryId, conversationId }, 'release() matched no rows — entry may have been cleaned up, already released, or belong to a different conversation');
     }
   }
 
@@ -216,6 +230,6 @@ export class ScopedOutboundContext implements OutboundContextCapability {
   }
 
   async release(entryId: string): Promise<void> {
-    return this.service.release(entryId);
+    return this.service.release(entryId, this.conversationId);
   }
 }

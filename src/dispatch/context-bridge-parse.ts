@@ -23,12 +23,12 @@ export function parseContextBridge(raw: unknown, log: Logger): ContextBridgeInpu
   try {
     const parsed = JSON.parse(raw) as ContextBridgeInput;
     if (!parsed.agent_id || typeof parsed.agent_id !== 'string') {
-      log.warn({ raw: raw.slice(0, 200) }, 'context_bridge: missing or invalid agent_id — skipping registration');
+      log.warn({ rawLength: raw.length }, 'context_bridge: missing or invalid agent_id — skipping registration');
       return null;
     }
     return parsed;
   } catch {
-    log.warn({ raw: raw.slice(0, 200) }, 'context_bridge: failed to parse JSON — skipping registration');
+    log.warn({ rawLength: raw.length }, 'context_bridge: failed to parse JSON — skipping registration');
     return null;
   }
 }

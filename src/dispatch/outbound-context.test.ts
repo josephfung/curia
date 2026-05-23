@@ -132,6 +132,15 @@ describe('OutboundContextService', () => {
       expect(call[0]).toContain('released = true');
       expect(call[1][0]).toBe('entry-id-1');
     });
+
+    it('scopes release to conversation when conversationId provided', async () => {
+      (pool.query as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ rowCount: 1 });
+      await service.release('entry-id-1', 'conv-42');
+      const call = (pool.query as ReturnType<typeof vi.fn>).mock.calls[0];
+      expect(call[0]).toContain('conversation_id = $2');
+      expect(call[1][0]).toBe('entry-id-1');
+      expect(call[1][1]).toBe('conv-42');
+    });
   });
 
   describe('cleanupExpired', () => {
@@ -225,7 +234,7 @@ describe('ScopedOutboundContext', () => {
     });
   });
 
-  it('delegates release() to the service', async () => {
+  it('delegates release() with conversationId to the service', async () => {
     const pool = makePool();
     const service = new OutboundContextService(pool, logger);
     const releaseSpy = vi.spyOn(service, 'release').mockResolvedValue(undefined);
@@ -233,6 +242,6 @@ describe('ScopedOutboundContext', () => {
     const scoped = new ScopedOutboundContext(service, 'conv-42');
     await scoped.release('entry-1');
 
-    expect(releaseSpy).toHaveBeenCalledWith('entry-1');
+    expect(releaseSpy).toHaveBeenCalledWith('entry-1', 'conv-42');
   });
 });
