@@ -69,11 +69,38 @@ When the coordinator calls an outbound send skill (`signal-send`, `email-send`, 
 
 The skill handler:
 1. Sends the message via OutboundGateway (existing flow, unchanged)
-2. If `context_bridge` is present AND the send succeeds, writes a row to `outbound_context`
-3. `conversation_id` and `channel_id` come from the send context (OutboundGateway already resolves these)
+2. If `context_bridge` is present AND the send succeeds, calls `ctx.outboundContext.register(...)` to write a row to `outbound_context`
+3. `conversation_id` is pre-scoped into the capability by the execution layer (from `InvokeOptions`); `channel_id` is derived from the send request channel type (`'signal'` or `'email'`)
 4. If the write fails, log a warning but don't fail the send (best-effort, same as today)
 
 **No context_bridge param?** Behaves exactly as today — no record written. This maintains backward compatibility for routine coordinator replies where context bridging isn't needed (e.g., answering a direct question).
+
+### 2a. OutboundContextService & Capability Surface
+
+The `OutboundContextService` class owns all outbound context lifecycle operations. It is the single source of truth for CRUD on the `outbound_context` table.
+
+**Full service API** (class in `src/dispatch/outbound-context.ts`):
+
+```typescript
+class OutboundContextService {
+  register(entry: OutboundContextEntry): Promise<string>;  // returns entry ID
+  release(entryId: string): Promise<void>;
+  getActive(limit?: number): Promise<OutboundContextRow[]>;
+  formatInjectionBlock(entries: OutboundContextRow[], originalContent: string): string | null;
+  cleanupExpired(): Promise<number>;  // returns count of rows cleaned
+}
+```
+
+**Skill-facing capability surface (narrow):** Skills declare `"outboundContext"` in their manifest's `capabilities` array. The execution layer injects a scoped instance that exposes only two methods:
+
+- `register(entry)` — write a context bridge entry (used by send skills after successful send)
+- `release(entryId)` — mark an entry as released (used by `context-bridge-release`)
+
+The scoped instance is pre-loaded with `conversationId` from `InvokeOptions` at injection time — same pattern as `infraLlm` scoping in the execution layer. Skills don't need to know or pass `conversationId` themselves.
+
+**Dispatcher-facing (direct injection, not capability):** The dispatcher receives the full `OutboundContextService` instance via its config. It uses `getActive()` and `formatInjectionBlock()` for inbound context injection. This replaces the current `extractRecentMemos()` + `buildContextPreamble()` flow.
+
+**Why two surfaces?** Send skills should be able to register entries but not query or tamper with entries they didn't create. The narrow capability surface enforces this. The dispatcher needs full read access for injection — it gets the service directly, not through the capability gate.
 
 ### 3. Read Path: Dispatcher Injection
 
@@ -95,6 +122,7 @@ LIMIT 10;
 ```
 [ACTIVE OUTBOUND CONTEXT — messages you've sent that may receive replies]
 ---
+entry_id: a1b2c3d4-...
 [sent 5 minutes ago via signal, on behalf of meeting-debrief, expires in 48h]
 preview: "You just wrapped up with Sarah Chen from Meridian. Any takeaways?"
 expected reply: Meeting takeaways or follow-up action items
@@ -111,7 +139,7 @@ If no active entries exist, no block is injected (same as today).
 
 When a specialist finishes handling a conversation (e.g., debrief is complete), the coordinator marks the context entry as released. This happens naturally when the coordinator decides the conversation is done — it calls a skill to release the entry.
 
-**New skill: `context-bridge-release`** (pinned to coordinator):
+**New skill: `context-bridge-release`** (pinned to coordinator, coordinator-only):
 
 ```json
 {
@@ -120,7 +148,8 @@ When a specialist finishes handling a conversation (e.g., debrief is complete), 
   "inputs": {
     "entry_id": "string"
   },
-  "action_risk": "none"
+  "action_risk": "none",
+  "allowed_callers": ["coordinator"]
 }
 ```
 
@@ -195,7 +224,7 @@ The existing context bridging code (`context-memo.ts` + dispatcher integration) 
 1. **New migration** creates `outbound_context` table
 2. **Dispatcher read path** (`handleInbound`) queries `outbound_context` instead of working memory
 3. **Dispatcher write path** (`handleAgentResponse`) is removed — writes now happen in send skill handlers
-4. **`context-memo.ts`** is refactored: `formatOutboundMemo` and `extractRecentMemos` are replaced with SQL-backed equivalents; `buildContextPreamble` stays (formatting the injection block)
+4. **`context-memo.ts`** is deleted — `formatOutboundMemo` and `extractRecentMemos` are no longer needed (SQL-backed service replaces them); `buildContextPreamble` is replaced by `OutboundContextService.formatInjectionBlock()`
 5. **Working memory** continues to serve its actual purpose (conversation history for agents) without context memos mixed in
 6. **Coordinator prompt** updated: `[PRIOR OUTBOUND CONTEXT]` section replaced with `[ACTIVE OUTBOUND CONTEXT]` section and delegation guidance
 
@@ -219,14 +248,16 @@ Backward compatibility: during migration, any active memos in working memory can
 | File | Purpose |
 |------|---------|
 | `src/db/migrations/NNN_create_outbound_context.sql` | Dedicated table for context bridge entries |
-| `src/dispatch/outbound-context.ts` | Service class: write, query active, release, cleanup expired |
+| `src/dispatch/outbound-context.ts` | Service class: write, query active, release, cleanup expired; scoped wrapper for capability injection |
 | `src/dispatch/outbound-context.test.ts` | Unit tests |
+| Update: `src/skills/types.ts` | Add `outboundContext?` to `SkillContext` (scoped: `register` + `release` only) |
+| Update: `src/skills/execution.ts` | Inject scoped `OutboundContextService` for skills declaring `outboundContext` capability |
 | Update: `skills/signal-send/handler.ts` | Accept optional `context_bridge` param, write entry on send |
 | Update: `skills/email-send/handler.ts` | Same |
 | Update: `skills/email-reply/handler.ts` | Same |
 | New: `skills/context-bridge-release/` | Coordinator skill to release entries |
 | Update: `src/dispatch/dispatcher.ts` | Read path queries new table; remove old working memory write path |
-| Update: `src/dispatch/context-memo.ts` | Refactor formatting functions for new data model |
+| Delete: `src/dispatch/context-memo.ts` | Replaced entirely by `OutboundContextService`; old tests (`tests/unit/dispatch/context-memo.test.ts`) also deleted |
 | Update: `agents/coordinator.yaml` | New prompt section for delegation guidance |
 
 ---
