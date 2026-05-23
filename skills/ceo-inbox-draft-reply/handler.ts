@@ -41,10 +41,18 @@ export class CeoInboxDraftReplyHandler implements SkillHandler {
       // Reply-all: original sender → to, original to + cc (minus self) → cc.
       const original = await client.getMessage(replyToMessageId);
 
+      // Guard: without a sender we have no valid To address — fail rather than
+      // silently creating a draft addressed to the placeholder 'unknown'.
+      if (original.from.length === 0) {
+        ctx.log.error(
+          { replyToMessageId },
+          'ceo-inbox-draft-reply: original message has no sender address; cannot create reply draft',
+        );
+        return { success: false, error: 'Original message has no sender address; cannot create a reply draft' };
+      }
+
       // To: the original sender
-      const to: NylasParticipant[] = original.from.length > 0
-        ? original.from
-        : [{ email: 'unknown' }];
+      const to: NylasParticipant[] = original.from;
 
       // CC: everyone from original to + cc, minus the CEO's own address
       // and minus the original sender (already in "to")
