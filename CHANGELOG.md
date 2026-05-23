@@ -13,6 +13,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`ceo-inbox-update-folders`** — added empty-folders guard matching `ceo-inbox-label`: falls back to the computed folder list when Nylas omits `folders` from the PUT response. (#596)
+
 ## [0.30.0] — 2026-05-22 — "Kaylee Frye"
 
 > **Kaylee Frye** *(Firefly, 2002, Joss Whedon)* — Serenity's mechanic, who keeps a ship flying on spare parts, intuition, and a refusal to waste anything. She routes around problems, trusts the parts she knows, and gets more out of less than anyone thought possible. This release adds multi-model routing to stretch every dollar, downgrades agents to cheaper tiers where they don't need the power, and tightens security without adding overhead.

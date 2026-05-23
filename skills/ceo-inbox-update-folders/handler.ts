@@ -50,8 +50,15 @@ export class CeoInboxUpdateFoldersHandler implements SkillHandler {
 
       const result = await client.updateMessageFolders(messageId, updatedFolders);
 
+      // Nylas sometimes omits the folders field from the PUT response (implementation-defined).
+      // Fall back to the folder list we computed locally to avoid returning [] to the agent.
+      if (result.folders.length === 0) {
+        ctx.log.warn({ messageId }, 'ceo-inbox-update-folders: Nylas returned empty folders on write — using computed folder list');
+      }
+      const finalFolders = result.folders.length > 0 ? result.folders : updatedFolders;
+
       ctx.log.info(
-        { messageId, folders: result.folders },
+        { messageId, folders: finalFolders },
         'ceo-inbox-update-folders: updated successfully',
       );
 
@@ -59,7 +66,7 @@ export class CeoInboxUpdateFoldersHandler implements SkillHandler {
         success: true,
         data: {
           message_id: messageId,
-          folders: result.folders,
+          folders: finalFolders,
         },
       };
     } catch (err) {
