@@ -11,6 +11,7 @@
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
 import { createHumanDecision } from '../../src/bus/events.js';
 import { isPrincipalOriginated } from '../../src/contacts/principal.js';
+import type { TaskOriginator } from '../../src/contacts/types.js';
 
 export class ApproveActionHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {
@@ -92,10 +93,22 @@ export class ApproveActionHandler implements SkillHandler {
       }
 
       // Step 4: Publish human.decision audit event (best-effort).
-      // Skip if taskEventId is absent — an empty parentEventId breaks event lineage.
-      if (ctx.taskEventId) {
-        const senderId = typeof ctx.taskMetadata?.senderId === 'string' ? ctx.taskMetadata.senderId : 'unknown';
-        const channelId = typeof ctx.taskMetadata?.channelId === 'string' ? ctx.taskMetadata.channelId : 'unknown';
+      //
+      // originator is stamped by the dispatcher on every task and carries the contactId
+      // and channel of whoever initiated the task chain. Must be present if we passed the
+      // principal-origin check above — if missing, that indicates a dispatch-layer bug.
+      // Log loudly but don't publish a fake audit row with placeholder IDs, as a
+      // counterfeit audit trail is worse than a missing one. See ADR-017.
+      const originator = ctx.taskMetadata?.originator as TaskOriginator | undefined;
+      const senderId = originator?.contactId;
+      const channelId = originator?.channel;
+
+      if (!senderId || !channelId || !ctx.taskEventId) {
+        ctx.log.error(
+          { senderId, channelId, taskEventId: ctx.taskEventId },
+          'approve-action: audit metadata incomplete — originator/taskEventId should always be present when task is principal-originated. This indicates a dispatch-layer bug.',
+        );
+      } else {
         try {
           await ctx.bus.publish(
             'dispatch',
@@ -115,8 +128,6 @@ export class ApproveActionHandler implements SkillHandler {
         } catch (err) {
           ctx.log.error({ err, rowId: row.id }, 'approve-action: failed to publish human.decision event');
         }
-      } else {
-        ctx.log.warn({ rowId: row.id }, 'approve-action: no taskEventId — skipping human.decision audit event');
       }
 
       ctx.log.info(
