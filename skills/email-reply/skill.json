@@ -1,13 +1,14 @@
 {
   "name": "email-reply",
   "description": "Reply to an existing email thread. By default, replies to all participants (reply-all). Pass cc as empty string to reply to sender only, or as a comma-separated list to explicitly set recipients. Provide the Nylas message ID to reply to and the reply body.",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "sensitivity": "normal",
   "action_risk": "medium",
   "inputs": {
     "reply_to_message_id": "string",
     "body": "string",
-    "cc": "string? (comma-separated — omit for reply-all default, empty string to reply to sender only)"
+    "cc": "string? (comma-separated — omit for reply-all default, empty string to reply to sender only)",
+    "context_bridge": "string?"
   },
   "outputs": {
     "message_id": "string",
@@ -19,6 +20,7 @@
   "secrets": [],
   "timeout": 30000,
   "capabilities": [
-    "outboundGateway"
+    "outboundGateway",
+    "outboundContext"
   ]
 }
