@@ -57,7 +57,7 @@ export interface SkillManifest {
    *  Valid capabilities: bus, agentRegistry, outboundGateway, heldMessages,
    *  schedulerService, entityMemory, nylasCalendarClient, autonomyService,
    *  executiveProfileService, browserService, bullpenService, skillSearch,
-   *  actionLogRepo, executionLayer, confidencePipeline, tempFileStore, infraLlm.
+   *  actionLogRepo, executionLayer, confidencePipeline, tempFileStore, infraLlm, outboundContext.
    *
    *  Services NOT listed here (contactService, entityContextAssembler, agentPersona)
    *  are universal — available to every skill without declaration. */
@@ -219,6 +219,10 @@ export interface SkillContext {
    *  capability, but all it gets is classification and extraction, not arbitrary
    *  LLM access. See #637. */
   infraLlm?: import('./infra-llm.js').InfraLlm;
+  /** Outbound context bridge — available to skills declaring 'outboundContext' in capabilities.
+   *  Provides a narrow surface (register + release) for managing outbound context bridge entries.
+   *  Pre-scoped with conversationId by the execution layer. */
+  outboundContext?: import('../dispatch/outbound-context.js').OutboundContextCapability;
 }
 
 /**
