@@ -13,6 +13,17 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Added
+
+- **`context-bridge-release`** — new coordinator skill to release outbound context entries when conversations complete. (#615)
+- **`outbound_context` table** — dedicated Postgres table replaces working-memory memos for outbound context tracking. (#615)
+
+### Changed
+
+- **Context bridging v2** — outbound context registry replaces working-memory memos; send skills gain optional `context_bridge` param for delegation-aware reply routing. (#615)
+- **Coordinator prompt** — `[PRIOR OUTBOUND CONTEXT]` replaced with `[ACTIVE OUTBOUND CONTEXT]` block including delegation guidance and entry IDs for release. (#615)
+- **`signal-send`**, **`email-send`**, **`email-reply`** — accept optional `context_bridge` JSON param; declare `outboundContext` capability. (#615)
+
 ### Fixed
 
 - **`workspace-mcp` tool tier** — upgraded to `complete`; `create_sheet` and `append_table_rows` require this tier, fixing T2125 expense-tracker setup and ingestion flows. (curia-deploy#65)
