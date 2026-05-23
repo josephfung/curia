@@ -530,6 +530,7 @@ pinned_skills:
   - email-mark-read
   - send-draft
   - signal-send
+  - context-bridge-release
   - held-messages-list
   - held-messages-process
   - decay-warnings-list
