@@ -15,16 +15,40 @@ import { checkGroupMemberTrust } from '../../src/channels/signal/group-trust.js'
 
 const MAX_MESSAGE_LENGTH = 10_000;
 
+// Shape of the optional context_bridge JSON input.
+// All fields except agent_id are optional — the register() call omits absent ones
+// rather than passing undefined, so the bridge service can distinguish "not set"
+// from "explicitly undefined".
+interface ContextBridgeInput {
+  agent_id: string;
+  expected_reply?: string;
+  delegation_hint?: string;
+  metadata?: Record<string, unknown>;
+  expires_in_hours?: number;
+}
+
+// Parses the raw context_bridge JSON string from skill input.
+// Returns null on any parse failure so callers can treat it as "no bridge requested".
+function parseContextBridge(raw: unknown): ContextBridgeInput | null {
+  if (!raw || typeof raw !== 'string') return null;
+  try {
+    return JSON.parse(raw) as ContextBridgeInput;
+  } catch {
+    return null;
+  }
+}
+
 // E.164 format: optional +, country code, up to 15 digits total.
 // We require the leading + to be strict — signal-cli expects fully qualified numbers.
 const E164_REGEX = /^\+[1-9]\d{6,14}$/;
 
 export class SignalSendHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {
-    const { recipient, group_id, message } = ctx.input as {
+    const { recipient, group_id, message, context_bridge: contextBridgeRaw } = ctx.input as {
       recipient?: string;
       group_id?: string;
       message?: string;
+      context_bridge?: string;
     };
 
     // --- Input validation ---
@@ -137,6 +161,24 @@ export class SignalSendHandler implements SkillHandler {
           return { success: false, error: result.blockedReason ?? 'Signal send failed' };
         }
 
+        // Register context bridge entry if requested (best-effort).
+        const bridge = parseContextBridge(contextBridgeRaw);
+        if (bridge && ctx.outboundContext) {
+          try {
+            await ctx.outboundContext.register({
+              channelId: 'signal',
+              agentId: bridge.agent_id,
+              content: message,
+              ...(bridge.expected_reply != null ? { expectedReply: bridge.expected_reply } : {}),
+              ...(bridge.delegation_hint != null ? { delegationHint: bridge.delegation_hint } : {}),
+              ...(bridge.metadata != null ? { metadata: bridge.metadata } : {}),
+              ...(bridge.expires_in_hours != null ? { expiresInHours: bridge.expires_in_hours } : {}),
+            });
+          } catch (err) {
+            ctx.log.warn({ err }, 'signal-send: failed to register context bridge entry — send succeeded');
+          }
+        }
+
         return { success: true, data: { delivered_to: group_id, channel: 'signal' } };
       } catch (err) {
         const errMessage = err instanceof Error ? err.message : String(err);
@@ -161,6 +203,24 @@ export class SignalSendHandler implements SkillHandler {
           success: false,
           error: result.blockedReason ?? 'Signal send failed',
         };
+      }
+
+      // Register context bridge entry if requested (best-effort).
+      const bridge = parseContextBridge(contextBridgeRaw);
+      if (bridge && ctx.outboundContext) {
+        try {
+          await ctx.outboundContext.register({
+            channelId: 'signal',
+            agentId: bridge.agent_id,
+            content: message,
+            ...(bridge.expected_reply != null ? { expectedReply: bridge.expected_reply } : {}),
+            ...(bridge.delegation_hint != null ? { delegationHint: bridge.delegation_hint } : {}),
+            ...(bridge.metadata != null ? { metadata: bridge.metadata } : {}),
+            ...(bridge.expires_in_hours != null ? { expiresInHours: bridge.expires_in_hours } : {}),
+          });
+        } catch (err) {
+          ctx.log.warn({ err }, 'signal-send: failed to register context bridge entry — send succeeded');
+        }
       }
 
       return {

@@ -182,4 +182,97 @@ describe('SignalSendHandler', () => {
     if (!result.success) expect(result.error).toMatch(/group/i);
     expect(gateway.send).not.toHaveBeenCalled();
   });
+
+  describe('context_bridge', () => {
+    it('registers a context bridge entry after successful 1:1 send', async () => {
+      const ctx = makeCtx({
+        input: {
+          recipient: '+14155551234',
+          message: 'Any takeaways?',
+          context_bridge: JSON.stringify({
+            agent_id: 'meeting-debrief',
+            expected_reply: 'Meeting notes',
+            delegation_hint: 'Delegate to meeting-debrief',
+            metadata: { meeting: 'sync' },
+            expires_in_hours: 48,
+          }),
+        },
+      });
+      (ctx.outboundGateway!.send as ReturnType<typeof vi.fn>).mockResolvedValue({
+        success: true, messageId: 'msg-1',
+      });
+      const mockRegister = vi.fn().mockResolvedValue('entry-1');
+      (ctx as Record<string, unknown>).outboundContext = { register: mockRegister, release: vi.fn() };
+
+      const result = await handler.execute(ctx);
+
+      expect(result.success).toBe(true);
+      expect(mockRegister).toHaveBeenCalledWith({
+        channelId: 'signal',
+        agentId: 'meeting-debrief',
+        content: 'Any takeaways?',
+        expectedReply: 'Meeting notes',
+        delegationHint: 'Delegate to meeting-debrief',
+        metadata: { meeting: 'sync' },
+        expiresInHours: 48,
+      });
+    });
+
+    it('does not register when context_bridge is absent', async () => {
+      const ctx = makeCtx({
+        input: {
+          recipient: '+14155551234',
+          message: 'Hello',
+        },
+      });
+      (ctx.outboundGateway!.send as ReturnType<typeof vi.fn>).mockResolvedValue({
+        success: true, messageId: 'msg-1',
+      });
+      const mockRegister = vi.fn();
+      (ctx as Record<string, unknown>).outboundContext = { register: mockRegister, release: vi.fn() };
+
+      const result = await handler.execute(ctx);
+
+      expect(result.success).toBe(true);
+      expect(mockRegister).not.toHaveBeenCalled();
+    });
+
+    it('does not register when send fails', async () => {
+      const ctx = makeCtx({
+        input: {
+          recipient: '+14155551234',
+          message: 'Hello',
+          context_bridge: JSON.stringify({ agent_id: 'coordinator' }),
+        },
+      });
+      (ctx.outboundGateway!.send as ReturnType<typeof vi.fn>).mockResolvedValue({
+        success: false, blockedReason: 'Blocked',
+      });
+      const mockRegister = vi.fn();
+      (ctx as Record<string, unknown>).outboundContext = { register: mockRegister, release: vi.fn() };
+
+      const result = await handler.execute(ctx);
+
+      expect(result.success).toBe(false);
+      expect(mockRegister).not.toHaveBeenCalled();
+    });
+
+    it('logs a warning but succeeds when context bridge registration fails', async () => {
+      const ctx = makeCtx({
+        input: {
+          recipient: '+14155551234',
+          message: 'Hello',
+          context_bridge: JSON.stringify({ agent_id: 'coordinator' }),
+        },
+      });
+      (ctx.outboundGateway!.send as ReturnType<typeof vi.fn>).mockResolvedValue({
+        success: true, messageId: 'msg-1',
+      });
+      const mockRegister = vi.fn().mockRejectedValue(new Error('DB down'));
+      (ctx as Record<string, unknown>).outboundContext = { register: mockRegister, release: vi.fn() };
+
+      const result = await handler.execute(ctx);
+      expect(result.success).toBe(true);
+    });
+  });
 });
