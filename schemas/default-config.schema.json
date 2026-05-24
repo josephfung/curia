@@ -272,6 +272,14 @@
         "max_per_message": { "type": "integer", "minimum": 1 },
         "max_per_hour": { "type": "integer", "minimum": 1 }
       }
+    },
+    "contextBridge": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "defaultExpiryHours": { "type": "integer", "minimum": 1 },
+        "explicitExpiryHours": { "type": "integer", "minimum": 1 }
+      }
     }
   },
   "definitions": {

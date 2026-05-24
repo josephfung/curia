@@ -248,6 +248,13 @@ export interface YamlConfig {
     };
     default_tier: 'fast' | 'standard' | 'powerful';
   };
+
+  contextBridge?: {
+    /** TTL in hours for auto-registered entries (no explicit context_bridge param). Default: 6. */
+    defaultExpiryHours?: number;
+    /** TTL in hours for entries with explicit context_bridge metadata. Default: 24. */
+    explicitExpiryHours?: number;
+  };
 }
 
 /**
@@ -583,6 +590,17 @@ export function loadYamlConfig(configDir: string): YamlConfig {
       if (autonomyScoring.errorRateThreshold !== undefined && (typeof autonomyScoring.errorRateThreshold !== 'number' || autonomyScoring.errorRateThreshold < 0 || autonomyScoring.errorRateThreshold > 1)) {
         throw new Error(`dreaming.autonomy_scoring.errorRateThreshold must be a number between 0 and 1, got: ${autonomyScoring.errorRateThreshold}`);
       }
+    }
+  }
+
+  // Validate contextBridge if present
+  if (config.contextBridge !== undefined) {
+    const { defaultExpiryHours, explicitExpiryHours } = config.contextBridge;
+    if (defaultExpiryHours !== undefined && (!Number.isInteger(defaultExpiryHours) || defaultExpiryHours < 1)) {
+      throw new Error(`contextBridge.defaultExpiryHours must be a positive integer, got: ${defaultExpiryHours}`);
+    }
+    if (explicitExpiryHours !== undefined && (!Number.isInteger(explicitExpiryHours) || explicitExpiryHours < 1)) {
+      throw new Error(`contextBridge.explicitExpiryHours must be a positive integer, got: ${explicitExpiryHours}`);
     }
   }
 
