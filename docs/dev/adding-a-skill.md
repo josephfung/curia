@@ -114,13 +114,22 @@ A raw integer (0–100) may be used for precision when the named levels are too 
 Restricts which agents may invoke this skill. When set, only the named agents (and system-layer callers via `"system"`) can invoke the skill — all others are rejected with a structured failure. The caller gate runs after the elevated-skill gate but before score-based autonomy gates, so structurally forbidden callers are rejected without creating pointless approval requests.
 
 ```json
-"allowed_callers": ["contacts", "coordinator"]
+"allowed_callers": ["coordinator"]
 ```
 
 - Agent names are validated against the loaded agent registry at startup — unknown names cause a hard startup failure.
 - CEO-approved re-executions (`humanApproved: true`) bypass the caller gate.
 - Omit `allowed_callers` entirely (or set to `[]`) to allow any agent to invoke the skill — this is the default behavior.
 - The `skillSearch` closure also respects `allowed_callers`: skills whose caller list excludes the searching agent are filtered from discovery results (defense-in-depth).
+
+**When to use `allowed_callers`:**
+
+The right choice depends on whether the skill lives in the core repo or a deployment repo:
+
+- **Core skills** (`skills/` in curia): use `allowed_callers` only for **structural invariants** — restrictions that must hold across every deployment regardless of what custom agents exist. Examples: `["system"]` for infrastructure-only skills (extract-facts, extract-relationships), `["coordinator"]` for governance primitives (set-autonomy, approve-action, delegate). **Never reference deployment-specific agent names** in core skill manifests — the startup validator hard-fails on unknown names, and coupling core to a specific deployment's agents breaks other deployments.
+- **Custom/deploy skills** (`custom/skills/` in a deploy repo): **default to restricting** to the intended agent(s) unless the skill is designed for general use. Since the skill and its agents live in the same repo, referencing each other is safe. Restricting reduces discovery noise in the skill registry and documents the skill's intended consumer.
+
+For deployment-level access control of core skills, rely on the existing mechanisms instead: `pinned_skills` (agents only see skills they pin), `allow_discovery: false` (specialists can't discover unpinned skills), autonomy score gates, and sensitivity levels.
 
 #### `capabilities` (optional)
 
@@ -502,7 +511,7 @@ See [Adding an Agent — Using config-store](adding-an-agent.md#using-config-sto
 - [ ] `action_risk` is declared in `skill.json`
 - [ ] `sensitivity` matches whether the skill has external effects (remember: `"elevated"` = CEO-or-CLI-only gate)
 - [ ] `capabilities` declares only the privileged services actually used — omit if using only universal services
-- [ ] `allowed_callers` is set if the skill should only be invocable by specific agents (validated at startup)
+- [ ] `allowed_callers` is set appropriately: for core skills, only for structural invariants (coordinator-only governance, system-only infrastructure); for custom/deploy skills, default to restricting to the intended agent(s)
 - [ ] All optional inputs are suffixed with `?` in the manifest
 - [ ] Handler exports a **class** implementing `SkillHandler`, not a bare function
 - [ ] Handler never throws — all errors returned as `{ success: false, error }`

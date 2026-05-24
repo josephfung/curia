@@ -150,6 +150,8 @@ Browse the `skills/` directory for available skills. As a heuristic:
 - Don't pin skills that are rarely needed — use `allow_discovery: true` instead so they're available on demand without cluttering the tool list
 - The Coordinator should pin a broad set since it handles all inbound routing
 
+**`allowed_callers` and custom skills:** If a custom skill in your deploy repo has `allowed_callers` set and your new agent needs to use it, add your agent's name to that skill's `allowed_callers` list. This only applies to custom skills in the same deploy repo — core skills should never restrict by deployment-specific agent name. See [Adding a Skill — `allowed_callers`](adding-a-skill.md#allowed_callers-optional) for the full pattern.
+
 Current built-in skills include (see `skills/` for the full list):
 
 | Category | Skills |
