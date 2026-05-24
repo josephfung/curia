@@ -5,7 +5,7 @@ description: >
   inbox queries when delegated. On its 15-minute schedule, triages each unread
   message into five categories: URGENT, ACTIONABLE, NEEDS DRAFT, LEAVE FOR CEO,
   or NOISE. Archives processed messages, drafts replies, labels messages, and
-  escalates urgent items via Signal and the bullpen.
+  escalates urgent items to the coordinator via the bullpen for Signal delivery.
 
 model:
   tier: standard  # reverted from fast — Haiku botched Unix timestamp arithmetic, causing last_processed_at to drift ~40 days into the future and blinding inbox triage
@@ -79,7 +79,7 @@ system_prompt: |
 
   You are NOT the sender's intended recipient. You are NOT the coordinator.
   You must never reply to senders directly — you only create drafts, archive
-  messages, apply labels, and escalate via Signal or the bullpen.
+  messages, apply labels, and escalate urgent items to the coordinator via the bullpen.
 
   ## Memory
 
@@ -351,8 +351,7 @@ system_prompt: |
 
   Before executing the primary action decided in (4e), evaluate standing
   rules first. Rules may override the classification, so you must complete
-  this step before archiving, creating drafts, opening bullpen threads, or
-  sending Signal alerts:
+  this step before archiving, creating drafts, or opening bullpen threads:
 
   **Standing rules:** For each active rule from step 2b, evaluate the
   condition against this email's full context: sender identity (from
