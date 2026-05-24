@@ -120,6 +120,12 @@ describe('Vertical Slice: CLI → Dispatch → Coordinator → Response', () => 
         ],
       }),
     );
+
+    // Verify turn budget block is wired into the system prompt at runtime.
+    const firstCall = (mockProvider.chat as ReturnType<typeof vi.fn>).mock.calls[0]![0] as {
+      messages: Array<{ role: string; content: string }>;
+    };
+    expect(firstCall.messages[0]!.content).toContain('## Turn budget');
   });
 });
 
