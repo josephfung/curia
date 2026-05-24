@@ -210,13 +210,19 @@ export class Scheduler {
   /**
    * Delete expired and released outbound context rows and log the result.
    * Called at startup and then on the daily interval via cleanupHandle.
+   *
+   * The explicit guard prevents a synchronous throw from escaping the Promise
+   * chain in case the method is ever called outside its guarded call sites.
    */
   private runOutboundContextCleanup(): void {
-    this.outboundContextService!.cleanupExpired().then((deletedCount) => {
-      this.logger.info({ deletedCount }, 'Outbound context cleanup complete');
-    }).catch((err) => {
-      this.logger.error({ err }, 'Unhandled error in outbound context cleanup');
-    });
+    if (!this.outboundContextService) return;
+    this.outboundContextService.cleanupExpired()
+      .then((deletedCount) => {
+        this.logger.info({ deletedCount }, 'Outbound context cleanup complete');
+      })
+      .catch((err: unknown) => {
+        this.logger.error({ err }, 'Outbound context cleanup failed');
+      });
   }
 
   /**
