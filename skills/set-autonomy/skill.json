@@ -18,6 +18,5 @@
   "action_risk": "high",
   "capabilities": [
     "autonomyService"
-  ],
-  "allowed_callers": ["coordinator"]
+  ]
 }

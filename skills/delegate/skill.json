@@ -20,6 +20,5 @@
   "capabilities": [
     "bus",
     "agentRegistry"
-  ],
-  "allowed_callers": ["coordinator"]
+  ]
 }
