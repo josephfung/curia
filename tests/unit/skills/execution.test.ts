@@ -628,10 +628,12 @@ describe('ExecutionLayer', () => {
       reg.register(makeManifest({ name: 'source-skill-3' }), handler);
       const exec = new ExecutionLayer(reg, logger);
 
-      // No agentId — simulates system-invoked skills or test contexts
+      // No agentId — simulates human-approved re-invokes or system-invoked skills.
+      // memoryWriteSource is still set (scoped per task) using the 'human-approved' fallback
+      // so writes don't fall back to the global 'skill:config-store' accumulation key.
       await exec.invoke('source-skill-3', {}, undefined, { taskEventId: 'task-only' });
 
-      expect(capturedSource).toBeUndefined();
+      expect(capturedSource).toBe('agent:human-approved/task:task-only/channel:unknown');
     });
   });
 

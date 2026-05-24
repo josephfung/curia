@@ -530,8 +530,11 @@ export class ExecutionLayer {
       // per agent+task and cleaned up after each task completes.
       // buildRateLimitSourceKey() is the single definition of this format — both
       // the write path (here) and the reset path (AgentRuntime) use it.
-      memoryWriteSource: options?.agentId && options?.taskEventId
-        ? buildRateLimitSourceKey(options.agentId, options.taskEventId, options.channelId)
+      // When agentId is absent (e.g. human-approved re-invokes), use a stable fallback
+      // identifier so the key is still scoped per task rather than falling back to the
+      // global 'skill:config-store' key that accumulates across all conversations.
+      memoryWriteSource: options?.taskEventId
+        ? buildRateLimitSourceKey(options.agentId ?? 'human-approved', options.taskEventId, options.channelId)
         : undefined,
       // Forward task-level metadata so skills can inspect task-wide signals.
       taskMetadata: options?.taskMetadata,

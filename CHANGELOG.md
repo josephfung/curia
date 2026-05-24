@@ -22,10 +22,6 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 - **Turn budget injection** — all agents now receive their exact turn limit in the system prompt at runtime, framed as a planning constraint so models can pace their tool use from turn 1 rather than hitting the ceiling silently. (#689)
 
-### Fixed
-
-- **Memory write rate limit** — `storeFact` source keys now match the format that `AgentRuntime.resetRateLimit()` clears, so the per-task write counter is properly scoped and cleaned up instead of accumulating globally until process restart. Affected skills: `config-store`, `memory-store`, `extract-facts`, `template-doc-request`.
-
 ### Changed
 
 - **Context bridging v2** — outbound context registry replaces working-memory memos; send skills gain optional `context_bridge` param for delegation-aware reply routing. (#615)
@@ -36,6 +32,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **Memory write rate limit** — `storeFact` source keys now match the format that `AgentRuntime.resetRateLimit()` clears, so the per-task write counter is properly scoped and cleaned up instead of accumulating globally until process restart. Affected skills: `config-store`, `memory-store`, `extract-facts`, `template-doc-request`.
 - **`workspace-mcp` tool tier** — upgraded to `complete`; `create_sheet` and `append_table_rows` require this tier, fixing T2125 expense-tracker setup and ingestion flows. (curia-deploy#65)
 - **`ceo-inbox-update-folders`** — added empty-folders guard matching `ceo-inbox-label`: falls back to the computed folder list when Nylas omits `folders` from the PUT response. (#596)
 - **`ceo-inbox-draft-reply`** — empty `from` now returns `{ success: false }` with an error log instead of silently creating a draft addressed to `unknown`. (#598)
