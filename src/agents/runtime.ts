@@ -16,6 +16,7 @@ import { DEFAULT_ERROR_BUDGET, type AgentError, type ErrorBudget } from '../erro
 // Value import (not type-only) — we call AutonomyService.formatPromptBlock() as a static method.
 import { AutonomyService } from '../autonomy/autonomy-service.js';
 import { formatTimeContextBlock } from '../time/time-context.js';
+import { formatTurnBudgetBlock } from './turn-budget.js';
 import type { OfficeIdentityService } from '../identity/service.js';
 import { compileWritingVoiceBlock, type ExecutiveProfileService } from '../executive/service.js';
 import { formatBullpenContext, type BullpenService } from '../memory/bullpen.js';
@@ -331,6 +332,12 @@ export class AgentRuntime {
       turnsUsed: 0,
       consecutiveErrors: 0,
     };
+
+    // Append turn budget block — tells the model the exact number of turns it has
+    // so it can plan tool use from turn 1 rather than treating the budget as unlimited.
+    // Uses budget.maxTurns (post-resolution) so per-agent YAML overrides are reflected.
+    // Injected for ALL agents, same as the date/time and contact details blocks.
+    effectiveSystemPrompt += '\n\n' + formatTurnBudgetBlock(budget.maxTurns);
 
     // Create context budget for token-aware assembly.
     const modelName = this.config.resolvedModel ?? this.config.modelName;

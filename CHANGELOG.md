@@ -20,6 +20,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Outbound context cleanup** — scheduler now purges expired and released `outbound_context` rows at startup and daily; count is logged at info level. (#679)
 - **Declarative job originator** — YAML-defined scheduled jobs now stamped with `systemRole: 'system'` originator at startup, distinguishing operator-configured work from principal-initiated and agent-decided tasks. (#558)
 
+- **Turn budget injection** — all agents now receive their exact turn limit in the system prompt at runtime, framed as a planning constraint so models can pace their tool use from turn 1 rather than hitting the ceiling silently. (#689)
+
 ### Changed
 
 - **Context bridging v2** — outbound context registry replaces working-memory memos; send skills gain optional `context_bridge` param for delegation-aware reply routing. (#615)
