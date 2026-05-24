@@ -11,9 +11,18 @@ import type { DbPool } from '../db/connection.js';
 import type { Logger } from '../logger.js';
 
 const MAX_PREVIEW_LENGTH = 300;
-const DEFAULT_EXPIRY_HOURS = 24;
 const MAX_METADATA_LENGTH = 2000;
 const MAX_FIELD_LENGTH = 500;
+
+// ── Config ───────────────────────────────────────────────────────────────
+
+/** Optional configuration for OutboundContextService TTL defaults. */
+export interface OutboundContextConfig {
+  /** Hours until auto-registered entries expire. Default: 6. */
+  defaultExpiryHours?: number;
+  /** Hours until entries with explicit context_bridge metadata expire. Default: 24. */
+  explicitExpiryHours?: number;
+}
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -27,7 +36,7 @@ export interface OutboundContextEntry {
   expectedReply?: string;
   delegationHint?: string;
   metadata?: Record<string, unknown>;
-  /** Hours until automatic expiry. Default: 24. */
+  /** Hours until automatic expiry. Default: service's defaultExpiryHours (6). */
   expiresInHours?: number;
 }
 
@@ -48,6 +57,8 @@ export interface OutboundContextRow {
 
 /** Narrow interface exposed to skills via the outboundContext capability. */
 export interface OutboundContextCapability {
+  readonly defaultExpiryHours: number;
+  readonly explicitExpiryHours: number;
   register(entry: Omit<OutboundContextEntry, 'conversationId'>): Promise<string>;
   release(entryId: string): Promise<void>;
 }
@@ -117,16 +128,31 @@ function mapRow(row: Record<string, unknown>): OutboundContextRow {
 // ── Service ────────────────────────────────────────────────────────────────
 
 export class OutboundContextService {
+  private readonly _defaultExpiryHours: number;
+  private readonly _explicitExpiryHours: number;
+
   constructor(
     private pool: DbPool,
     private logger: Logger,
-  ) {}
+    config?: OutboundContextConfig,
+  ) {
+    this._defaultExpiryHours = config?.defaultExpiryHours ?? 6;
+    this._explicitExpiryHours = config?.explicitExpiryHours ?? 24;
+  }
+
+  get defaultExpiryHours(): number {
+    return this._defaultExpiryHours;
+  }
+
+  get explicitExpiryHours(): number {
+    return this._explicitExpiryHours;
+  }
 
   /** Write a new outbound context entry. Returns the generated UUID. */
   async register(entry: OutboundContextEntry): Promise<string> {
     const preview = truncatePreview(entry.content);
     const expiresAt = new Date(
-      Date.now() + (entry.expiresInHours ?? DEFAULT_EXPIRY_HOURS) * 3_600_000,
+      Date.now() + (entry.expiresInHours ?? this._defaultExpiryHours) * 3_600_000,
     );
 
     const result = await this.pool.query<{ id: string }>(
@@ -234,6 +260,14 @@ export class ScopedOutboundContext implements OutboundContextCapability {
     private service: OutboundContextService,
     private conversationId: string,
   ) {}
+
+  get defaultExpiryHours(): number {
+    return this.service.defaultExpiryHours;
+  }
+
+  get explicitExpiryHours(): number {
+    return this.service.explicitExpiryHours;
+  }
 
   async register(entry: Omit<OutboundContextEntry, 'conversationId'>): Promise<string> {
     return this.service.register({ ...entry, conversationId: this.conversationId });
