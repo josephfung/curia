@@ -398,7 +398,12 @@ async function main(): Promise<void> {
       process.exit(1);
     }
 
-    const embeddingService = EmbeddingService.createWithOpenAI(config.openaiApiKey, logger);
+    const embeddingService = EmbeddingService.createWithOpenAI(
+      config.openaiApiKey,
+      logger,
+      bus,           // EventBus — wired at line 234
+      modelRegistry, // ModelRegistry — wired at line 281
+    );
     const kgStore = KnowledgeGraphStore.createWithPostgres(pool, embeddingService, logger);
     const validator = new MemoryValidator(kgStore, embeddingService);
     entityMemory = new EntityMemory(kgStore, validator, embeddingService, logger, sensitivityClassifier);
