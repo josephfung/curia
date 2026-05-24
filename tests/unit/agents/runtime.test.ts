@@ -72,7 +72,7 @@ describe('AgentRuntime', () => {
     expect(provider.chat).toHaveBeenCalledWith(
       expect.objectContaining({
         messages: [
-          { role: 'system', content: 'You are a helpful assistant.' },
+          { role: 'system', content: expect.stringContaining('You are a helpful assistant.') },
           { role: 'user', content: 'Hello' },
         ],
       }),
@@ -223,10 +223,12 @@ describe('AgentRuntime', () => {
     await bus.publish('dispatch', task);
 
     // LLM should receive system + history + new message
+    // System content includes the appended turn budget block; use stringContaining
+    // since this test cares about conversation history, not system prompt assembly.
     expect(provider.chat).toHaveBeenCalledWith(
       expect.objectContaining({
         messages: [
-          { role: 'system', content: 'You are helpful.' },
+          { role: 'system', content: expect.stringContaining('You are helpful.') },
           { role: 'user', content: 'First message' },
           { role: 'assistant', content: 'First response' },
           { role: 'user', content: 'Second message' },
@@ -415,7 +417,10 @@ describe('AgentRuntime', () => {
 
     const callArgs = provider.chat.mock.calls[0]?.[0] as { messages: Array<{ role: string; content: string }> };
     const systemMsg = callArgs?.messages?.[0];
-    expect(systemMsg?.content).toBe('Base prompt.');
+    // When autonomyService returns null, the autonomy block must NOT be appended.
+    // The turn budget block is unconditionally appended (expected behavior).
+    expect(systemMsg?.content).toContain('Base prompt.');
+    expect(systemMsg?.content).not.toContain('Autonomy Level');
   });
 
   it('appends intent anchor to system prompt when intentAnchor is present', async () => {
