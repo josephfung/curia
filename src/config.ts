@@ -594,7 +594,7 @@ export function loadYamlConfig(configDir: string): YamlConfig {
   }
 
   // Validate contextBridge if present
-  if (config.contextBridge !== undefined) {
+  if (config.contextBridge != null && typeof config.contextBridge === 'object') {
     const { defaultExpiryHours, explicitExpiryHours } = config.contextBridge;
     if (defaultExpiryHours !== undefined && (!Number.isInteger(defaultExpiryHours) || defaultExpiryHours < 1)) {
       throw new Error(`contextBridge.defaultExpiryHours must be a positive integer, got: ${defaultExpiryHours}`);

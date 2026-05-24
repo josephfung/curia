@@ -111,6 +111,26 @@ describe('registerOutboundContext', () => {
     });
   });
 
+  it('preserves valid agent_id and drops malformed optional fields', async () => {
+    const cap = makeCap();
+    const bridge = JSON.stringify({
+      agent_id: 'sales-agent',
+      expected_reply: 123, // wrong type — should be string
+      delegation_hint: 'delegate to sales',
+    });
+
+    await registerOutboundContext(cap, bridge, baseOpts);
+
+    expect(cap.register).toHaveBeenCalledOnce();
+    expect(cap.register).toHaveBeenCalledWith({
+      channelId: 'signal',
+      agentId: 'sales-agent', // preserved from bridge, not fallback
+      content: 'Hello world',
+      delegationHint: 'delegate to sales', // valid field kept
+      expiresInHours: 24, // explicit path TTL
+    });
+  });
+
   it('does not throw when register() rejects (best-effort)', async () => {
     const cap = makeCap({
       register: vi.fn().mockRejectedValue(new Error('DB down')),

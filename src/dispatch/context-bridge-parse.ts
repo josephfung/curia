@@ -31,24 +31,35 @@ export function parseContextBridge(raw: unknown, log: Logger): ContextBridgeInpu
       log.warn({ rawLength: raw.length }, 'context_bridge: missing or invalid agent_id — skipping registration');
       return null;
     }
-    // Validate optional field types — malformed payloads fall through to auto-registration.
-    if (obj.expected_reply != null && typeof obj.expected_reply !== 'string') {
-      log.warn({ field: 'expected_reply', type: typeof obj.expected_reply }, 'context_bridge: optional field has wrong type — falling back to auto-registration');
-      return null;
+    // Validate optional fields — strip invalid ones but preserve valid agent_id.
+    // Returning null here would discard the agent_id and misroute reply correlation.
+    const result: ContextBridgeInput = { agent_id: obj.agent_id as string };
+
+    if (typeof obj.expected_reply === 'string') {
+      result.expected_reply = obj.expected_reply;
+    } else if (obj.expected_reply != null) {
+      log.warn({ field: 'expected_reply', type: typeof obj.expected_reply }, 'context_bridge: optional field has wrong type — dropping field');
     }
-    if (obj.delegation_hint != null && typeof obj.delegation_hint !== 'string') {
-      log.warn({ field: 'delegation_hint', type: typeof obj.delegation_hint }, 'context_bridge: optional field has wrong type — falling back to auto-registration');
-      return null;
+
+    if (typeof obj.delegation_hint === 'string') {
+      result.delegation_hint = obj.delegation_hint;
+    } else if (obj.delegation_hint != null) {
+      log.warn({ field: 'delegation_hint', type: typeof obj.delegation_hint }, 'context_bridge: optional field has wrong type — dropping field');
     }
-    if (obj.metadata != null && (typeof obj.metadata !== 'object' || Array.isArray(obj.metadata))) {
-      log.warn({ field: 'metadata' }, 'context_bridge: metadata must be a plain object — falling back to auto-registration');
-      return null;
+
+    if (obj.metadata != null && typeof obj.metadata === 'object' && !Array.isArray(obj.metadata)) {
+      result.metadata = obj.metadata as Record<string, unknown>;
+    } else if (obj.metadata != null) {
+      log.warn({ field: 'metadata' }, 'context_bridge: metadata must be a plain object — dropping field');
     }
-    if (obj.expires_in_hours != null && (typeof obj.expires_in_hours !== 'number' || !Number.isFinite(obj.expires_in_hours) || obj.expires_in_hours <= 0)) {
-      log.warn({ field: 'expires_in_hours', value: obj.expires_in_hours }, 'context_bridge: expires_in_hours must be a positive finite number — falling back to auto-registration');
-      return null;
+
+    if (typeof obj.expires_in_hours === 'number' && Number.isFinite(obj.expires_in_hours) && obj.expires_in_hours > 0) {
+      result.expires_in_hours = obj.expires_in_hours;
+    } else if (obj.expires_in_hours != null) {
+      log.warn({ field: 'expires_in_hours', value: obj.expires_in_hours }, 'context_bridge: expires_in_hours must be a positive finite number — dropping field');
     }
-    return obj as unknown as ContextBridgeInput;
+
+    return result;
   } catch {
     log.warn({ rawLength: raw.length }, 'context_bridge: failed to parse JSON — skipping registration');
     return null;
