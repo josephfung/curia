@@ -360,8 +360,17 @@ export class ExecutionLayer {
     // when this flag is set — emit a single entry that names both bypasses so
     // the audit log is complete even when governance skills are re-executed.
     if (options?.humanApproved) {
+      // agentId is intentionally absent on the approve-action re-execution path.
+      // Log taskEventId (correlates to the original action log entry) and
+      // originator (the CEO who triggered the task chain) for forensic attribution.
       skillLogger.info(
-        { skillName, agentId: options.agentId, allowedCallers: manifest.allowed_callers },
+        {
+          skillName,
+          agentId: options.agentId,
+          taskEventId: options.taskEventId,
+          originator: options.taskMetadata?.['originator'],
+          allowedCallers: manifest.allowed_callers,
+        },
         'caller gate and autonomy gates skipped — humanApproved flag set (CEO-authorized re-execution, see ADR-018)',
       );
     }
