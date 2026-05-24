@@ -315,16 +315,10 @@ export class AgentRuntime {
       effectiveSystemPrompt += '\n\n' + lines.join('\n');
     }
 
-    // Append intent anchor — present only for persistent scheduler tasks that have a
-    // linked agent_task record. Injected last so it sits closest to the conversation,
-    // making it maximally salient. It is non-negotiable: the agent may evolve its
-    // approach across bursts, but cannot abandon the original mandate.
-    if (taskEvent.payload.intentAnchor) {
-      effectiveSystemPrompt += '\n\n## Original Task Intent\n' + taskEvent.payload.intentAnchor;
-    }
-
     // Initialize the error budget for this task.
     // Config values override defaults; budget tracks runtime counters.
+    // Initialized here (before the intent anchor) so budget.maxTurns can be
+    // embedded in the turn budget block below while the intent anchor remains last.
     const budgetConfig = this.config.errorBudget;
     const budget: ErrorBudget = {
       maxTurns: budgetConfig?.maxTurns ?? DEFAULT_ERROR_BUDGET.maxTurns,
@@ -337,7 +331,16 @@ export class AgentRuntime {
     // so it can plan tool use from turn 1 rather than treating the budget as unlimited.
     // Uses budget.maxTurns (post-resolution) so per-agent YAML overrides are reflected.
     // Injected for ALL agents, same as the date/time and contact details blocks.
+    // Must come before the intent anchor so the anchor stays the final (most salient) section.
     effectiveSystemPrompt += '\n\n' + formatTurnBudgetBlock(budget.maxTurns);
+
+    // Append intent anchor — present only for persistent scheduler tasks that have a
+    // linked agent_task record. Injected last so it sits closest to the conversation,
+    // making it maximally salient. It is non-negotiable: the agent may evolve its
+    // approach across bursts, but cannot abandon the original mandate.
+    if (taskEvent.payload.intentAnchor) {
+      effectiveSystemPrompt += '\n\n## Original Task Intent\n' + taskEvent.payload.intentAnchor;
+    }
 
     // Create context budget for token-aware assembly.
     const modelName = this.config.resolvedModel ?? this.config.modelName;
