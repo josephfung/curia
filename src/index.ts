@@ -1063,7 +1063,10 @@ async function main(): Promise<void> {
   // specialist-initiated outbound. Requires pool (Postgres).
   // Constructed here (before Scheduler) so the scheduler can run startup + daily cleanup.
   const outboundContextService = pool
-    ? new OutboundContextService(pool, logger)
+    ? new OutboundContextService(pool, logger, {
+        defaultExpiryHours: yamlConfig.contextBridge?.defaultExpiryHours,
+        explicitExpiryHours: yamlConfig.contextBridge?.explicitExpiryHours,
+      })
     : undefined;
 
   const scheduler = new Scheduler({ pool, bus, logger, schedulerService, driftDetector, dreamEngine, outboundContextService });
