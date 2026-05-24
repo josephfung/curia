@@ -281,4 +281,29 @@ describe('validateAllowedCallers', () => {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
   });
+
+  it('passes when allowed_callers is an explicit empty array', async () => {
+    const tmpDir = path.join(import.meta.dirname, '__test_ac_empty__');
+    fs.mkdirSync(tmpDir, { recursive: true });
+    try {
+      // An explicit [] means "unrestricted" (same as omitted) — not "no one can call it".
+      // The ?? operator in validateAllowedCallers does not replace [] since it is not nullish.
+      setupSkillDir(tmpDir, 'open-skill', {
+        name: 'open-skill',
+        description: 'test skill',
+        version: '1.0.0',
+        action_risk: 'none',
+        inputs: {},
+        outputs: {},
+        allowed_callers: [],
+      });
+      const registry = new SkillRegistry();
+      await loadSkillsFromDirectory(tmpDir, registry, logger);
+
+      const knownAgents = new Set(['coordinator']);
+      expect(() => validateAllowedCallers(registry, knownAgents)).not.toThrow();
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
 });

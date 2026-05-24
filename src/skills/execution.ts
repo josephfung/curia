@@ -356,11 +356,13 @@ export class ExecutionLayer {
     }
 
     // Log every humanApproved invocation for operator traceability.
-    // The gate logic below is skipped when this flag is set.
+    // Both the caller gate (above) and the autonomy gates (below) are skipped
+    // when this flag is set — emit a single entry that names both bypasses so
+    // the audit log is complete even when governance skills are re-executed.
     if (options?.humanApproved) {
       skillLogger.info(
-        { skillName, agentId: options.agentId },
-        'autonomy gates skipped — humanApproved flag set (CEO-authorized re-execution, see ADR-018)',
+        { skillName, agentId: options.agentId, allowedCallers: manifest.allowed_callers },
+        'caller gate and autonomy gates skipped — humanApproved flag set (CEO-authorized re-execution, see ADR-018)',
       );
     }
 
