@@ -46,7 +46,8 @@ export function isSystemOriginated(
   metadata: Record<string, unknown> | undefined,
 ): boolean {
   if (!metadata) return false;
-  const originator = metadata.originator as TaskOriginator | undefined;
+  // Runtime-validated in callers; cast through unknown per repo policy.
+  const originator = metadata.originator as unknown as TaskOriginator | undefined;
   return originator?.systemRole === 'system';
 }
 
