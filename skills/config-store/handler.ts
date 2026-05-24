@@ -73,6 +73,19 @@ export class ConfigStoreHandler implements SkillHandler {
     // even though they are assigned inside the try block.
     let anchor: { id: string };
     let storeResult: { stored: boolean; action: string };
+
+    // Use the context-aware source key so the rate limit counter matches what
+    // AgentRuntime.resetRateLimit() clears. Without this, the counter accumulates
+    // globally under 'skill:config-store' and is never reset.
+    // Declared before the try block so Phase 2 (registerNamespace) can reuse it.
+    const writeSource = ctx.memoryWriteSource ?? 'skill:config-store';
+    if (!ctx.memoryWriteSource) {
+      // memoryWriteSource is only absent in test/CLI contexts where no agentId or
+      // taskEventId is available. If this fires in production, it means channelId
+      // or agentId wasn't threaded through InvokeOptions — check the caller.
+      ctx.log.debug({ namespace, key }, 'config-store: memoryWriteSource not set — using skill:config-store fallback');
+    }
+
     try {
       anchor = await this.findOrCreateAnchor(ctx, namespace);
 
@@ -83,7 +96,7 @@ export class ConfigStoreHandler implements SkillHandler {
         confidence: 1.0,
         // Config values are permanent — stable URLs / IDs the CEO provides once
         decayClass: 'permanent',
-        source: 'skill:config-store',
+        source: writeSource,
       });
 
       if (!storeResult.stored) {
@@ -108,7 +121,7 @@ export class ConfigStoreHandler implements SkillHandler {
     // leave list_namespaces advertising a namespace with no stored config values.
     if (storeResult.stored) {
       try {
-        await this.registerNamespace(ctx, namespace);
+        await this.registerNamespace(ctx, namespace, writeSource);
       } catch (err) {
         ctx.log.error(
           { err, namespace, key },
@@ -241,7 +254,7 @@ export class ConfigStoreHandler implements SkillHandler {
     return entity;
   }
 
-  private async registerNamespace(ctx: SkillContext, namespace: string): Promise<void> {
+  private async registerNamespace(ctx: SkillContext, namespace: string, writeSource: string): Promise<void> {
     const indexNodes = await ctx.entityMemory!.findEntities(INDEX_LABEL);
 
     let indexNodeId: string;
@@ -273,7 +286,7 @@ export class ConfigStoreHandler implements SkillHandler {
       properties: { namespace },
       confidence: 1.0,
       decayClass: 'permanent',
-      source: 'skill:config-store',
+      source: writeSource,
     });
   }
 }

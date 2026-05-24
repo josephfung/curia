@@ -285,6 +285,44 @@ describe('MemoryStoreHandler', () => {
     });
   });
 
+  describe('memoryWriteSource', () => {
+    it('uses memoryWriteSource as the storeFact source when available on context', async () => {
+      const mockMem = makeMockEntityMemory({ stored: true, action: 'created', nodeId: 'fact-1' });
+      const memoryWriteSource = 'agent:ceo-inbox/task:task-abc/channel:internal';
+      const ctx = {
+        input: VALID_INPUT,
+        secret: () => 'test-key',
+        log: pino({ level: 'silent' }),
+        entityMemory: mockMem,
+        memoryWriteSource,
+      } as unknown as SkillContext;
+
+      const result = await handler.execute(ctx);
+
+      expect(result.success).toBe(true);
+      // storeFact should have been called with the context-aware source, not the LLM-provided one
+      expect(mockMem.storeFact).toHaveBeenCalledTimes(1);
+      expect(mockMem.storeFact.mock.calls[0]![0].source).toBe(memoryWriteSource);
+    });
+
+    it('falls back to LLM-provided source when memoryWriteSource is not set', async () => {
+      const mockMem = makeMockEntityMemory({ stored: true, action: 'created', nodeId: 'fact-1' });
+      const ctx = {
+        input: VALID_INPUT,
+        secret: () => 'test-key',
+        log: pino({ level: 'silent' }),
+        entityMemory: mockMem,
+        // No memoryWriteSource — simulates test / CLI invocations
+      } as unknown as SkillContext;
+
+      const result = await handler.execute(ctx);
+
+      expect(result.success).toBe(true);
+      // Should fall back to the LLM-provided source from VALID_INPUT
+      expect(mockMem.storeFact.mock.calls[0]![0].source).toBe(VALID_INPUT.source);
+    });
+  });
+
   describe('action: rate_limited', () => {
     it('returns rate_limited with reason when storeFact hits the write limit', async () => {
       const ctx = {

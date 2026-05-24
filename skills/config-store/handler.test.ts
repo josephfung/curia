@@ -22,11 +22,13 @@ function makeEntityMemory(overrides: Record<string, unknown> = {}) {
 function makeCtx(
   entityMemory: ReturnType<typeof makeEntityMemory> | null | undefined,
   input: Record<string, unknown>,
+  overrides: Partial<SkillContext> = {},
 ): SkillContext {
   return {
     input,
     entityMemory: entityMemory === null ? undefined : (entityMemory ?? makeEntityMemory()),
     log: pino({ level: 'silent' }),
+    ...overrides,
   } as unknown as SkillContext;
 }
 
@@ -189,6 +191,44 @@ describe('ConfigStoreHandler', () => {
     // skipped when the value write was rejected, otherwise list_namespaces would
     // advertise a namespace with no stored config values (phantom namespace).
     expect(mem.storeFact).toHaveBeenCalledTimes(1);
+  });
+
+  it('uses memoryWriteSource as the storeFact source when available', async () => {
+    const handler = new ConfigStoreHandler();
+    const mem = makeEntityMemory({
+      findEntities: vi.fn()
+        .mockResolvedValueOnce([{ id: 'anchor-existing' }]) // anchor lookup
+        .mockResolvedValueOnce([{ id: 'index-existing' }]), // index lookup
+    });
+    const memoryWriteSource = 'agent:ceo-inbox/task:task-123/channel:http';
+    const ctx = makeCtx(
+      mem,
+      { action: 'store', namespace: 'ceo_inbox', key: 'rules', value: '[]' },
+      { memoryWriteSource },
+    );
+
+    const result = await handler.execute(ctx);
+
+    expect(result.success).toBe(true);
+    // Both storeFact calls (value + namespace registration) should use memoryWriteSource
+    expect(mem.storeFact).toHaveBeenCalledTimes(2);
+    expect(mem.storeFact.mock.calls[0]![0].source).toBe(memoryWriteSource);
+    expect(mem.storeFact.mock.calls[1]![0].source).toBe(memoryWriteSource);
+  });
+
+  it('falls back to skill:config-store when memoryWriteSource is not set', async () => {
+    const handler = new ConfigStoreHandler();
+    const mem = makeEntityMemory({
+      findEntities: vi.fn()
+        .mockResolvedValueOnce([{ id: 'anchor-existing' }])
+        .mockResolvedValueOnce([{ id: 'index-existing' }]),
+    });
+    // No memoryWriteSource on context — simulates test / CLI invocations
+    const ctx = makeCtx(mem, { action: 'store', namespace: 'ns', key: 'k', value: 'v' });
+
+    await handler.execute(ctx);
+
+    expect(mem.storeFact.mock.calls[0]![0].source).toBe('skill:config-store');
   });
 
   it('skips namespace registration when namespace is already in the meta-index', async () => {

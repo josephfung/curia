@@ -221,7 +221,9 @@ ${text}`,
             properties: { attribute, value },
             confidence,
             decayClass,
-            source,
+            // Use the context-aware source key so the rate limit counter matches
+            // what AgentRuntime.resetRateLimit() clears after each task.
+            source: ctx.memoryWriteSource ?? source,
           });
 
           if (result.stored) {

@@ -22,6 +22,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 - **Turn budget injection** — all agents now receive their exact turn limit in the system prompt at runtime, framed as a planning constraint so models can pace their tool use from turn 1 rather than hitting the ceiling silently. (#689)
 
+### Fixed
+
+- **Memory write rate limit** — `storeFact` source keys now match the format that `AgentRuntime.resetRateLimit()` clears, so the per-task write counter is properly scoped and cleaned up instead of accumulating globally until process restart. Affected skills: `config-store`, `memory-store`, `extract-facts`, `template-doc-request`.
+
 ### Changed
 
 - **Context bridging v2** — outbound context registry replaces working-memory memos; send skills gain optional `context_bridge` param for delegation-aware reply routing. (#615)

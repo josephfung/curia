@@ -20,6 +20,7 @@ import { formatTurnBudgetBlock } from './turn-budget.js';
 import type { OfficeIdentityService } from '../identity/service.js';
 import { compileWritingVoiceBlock, type ExecutiveProfileService } from '../executive/service.js';
 import { formatBullpenContext, type BullpenService } from '../memory/bullpen.js';
+import { buildRateLimitSourceKey } from '../memory/rate-limit-key.js';
 import type { AgentRegistry } from './agent-registry.js';
 
 export interface AgentConfig {
@@ -181,7 +182,7 @@ export class AgentRuntime {
       if (this.config.entityMemory) {
         const { agentId } = this.config;
         const { channelId } = taskEvent.payload;
-        const sourceKey = `agent:${agentId}/task:${taskEvent.id}/channel:${channelId}`;
+        const sourceKey = buildRateLimitSourceKey(agentId, taskEvent.id, channelId);
         // Guard against cleanup errors suppressing original exceptions.
         // resetRateLimit() is synchronous and currently cannot throw, but wrapping
         // defensively ensures future changes don't cause silent error replacement.
@@ -752,6 +753,7 @@ export class AgentRuntime {
         const result = await executionLayer.invoke(toolCall.name, skillInput, caller, {
           taskEventId: taskEvent.id,
           agentId,
+          channelId: taskEvent.payload.channelId,
           conversationId,
           parentEventId: invokeEvent.id,
           // Pass task-level metadata so skill handlers can inspect task-wide signals

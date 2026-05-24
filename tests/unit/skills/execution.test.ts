@@ -573,6 +573,66 @@ describe('ExecutionLayer', () => {
 
       delete process.env.TRACED_SECRET;
     });
+
+    it('constructs memoryWriteSource from agentId, taskEventId, and channelId', async () => {
+      let capturedSource: string | undefined;
+      const handler: SkillHandler = {
+        execute: async (ctx: SkillContext) => {
+          capturedSource = ctx.memoryWriteSource;
+          return { success: true, data: 'ok' };
+        },
+      };
+      const reg = new SkillRegistry();
+      reg.register(makeManifest({ name: 'source-skill' }), handler);
+      const exec = new ExecutionLayer(reg, logger);
+
+      await exec.invoke('source-skill', {}, undefined, {
+        agentId: 'ceo-inbox',
+        taskEventId: 'task-abc',
+        channelId: 'http',
+      });
+
+      expect(capturedSource).toBe('agent:ceo-inbox/task:task-abc/channel:http');
+    });
+
+    it('sets memoryWriteSource channel to unknown when channelId is omitted', async () => {
+      let capturedSource: string | undefined;
+      const handler: SkillHandler = {
+        execute: async (ctx: SkillContext) => {
+          capturedSource = ctx.memoryWriteSource;
+          return { success: true, data: 'ok' };
+        },
+      };
+      const reg = new SkillRegistry();
+      reg.register(makeManifest({ name: 'source-skill-2' }), handler);
+      const exec = new ExecutionLayer(reg, logger);
+
+      await exec.invoke('source-skill-2', {}, undefined, {
+        agentId: 'coordinator',
+        taskEventId: 'task-xyz',
+        // no channelId
+      });
+
+      expect(capturedSource).toBe('agent:coordinator/task:task-xyz/channel:unknown');
+    });
+
+    it('leaves memoryWriteSource undefined when agentId is absent', async () => {
+      let capturedSource: string | undefined;
+      const handler: SkillHandler = {
+        execute: async (ctx: SkillContext) => {
+          capturedSource = ctx.memoryWriteSource;
+          return { success: true, data: 'ok' };
+        },
+      };
+      const reg = new SkillRegistry();
+      reg.register(makeManifest({ name: 'source-skill-3' }), handler);
+      const exec = new ExecutionLayer(reg, logger);
+
+      // No agentId — simulates system-invoked skills or test contexts
+      await exec.invoke('source-skill-3', {}, undefined, { taskEventId: 'task-only' });
+
+      expect(capturedSource).toBeUndefined();
+    });
   });
 
   describe('integration: large and malicious payloads', () => {

@@ -162,6 +162,14 @@ export interface SkillContext {
   agentId?: string;
   /** ID of the originating agent.task event — for causal chain tracing in event payloads */
   taskEventId?: string;
+  /** Channel ID from the originating task event (e.g. "http", "internal", "signal").
+   *  Used with agentId and taskEventId to construct the memory write source key. */
+  channelId?: string;
+  /** Pre-constructed source key for entityMemory.storeFact() calls, matching the
+   *  format that AgentRuntime.resetRateLimit() uses: `agent:{id}/task:{id}/channel:{id}`.
+   *  Skills writing to entity memory should use this as the `source` parameter so the
+   *  per-task rate limit counter is correctly scoped and reset after each task. */
+  memoryWriteSource?: string;
   /** Caller identity — populated from the task event's sender context.
    *  Guaranteed to be defined for elevated skills (execution layer rejects without it).
    *  Available but optional for normal skills. */
