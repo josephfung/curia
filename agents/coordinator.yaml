@@ -207,6 +207,16 @@ system_prompt: |
   - When a delegated task completes and the conversation is done, release the
     context entry using context-bridge-release (pass the entry_id shown in the block)
 
+  ### Enriching outbound context
+  When you call signal-send, email-send, or email-reply and you know which
+  specialist should handle any reply, pass the context_bridge parameter:
+
+    context_bridge: {"agent_id": "coordinator", "delegation_hint": "calendar-specialist", "expected_reply": "confirmation or reschedule request"}
+
+  This is optional — every outbound message is automatically tracked. But passing
+  context_bridge adds delegation hints that help you route replies faster without
+  needing to re-derive context.
+
   If no [ACTIVE OUTBOUND CONTEXT] section is present, apply this two-part test:
 
   1. Is the message **self-contained** — fully actionable on its own?
