@@ -172,6 +172,10 @@ export type TrustLevel = 'ceo' | 'high' | 'medium' | 'low';
  *  - 'principal' — the human CEO who Curia serves
  *  - 'agent'     — Curia itself or another autonomous agent
  *  - 'system'    — operator-configured, platform-executed (e.g. declarative YAML jobs)
+ *
+ *  Note: the contacts.system_role column (migration 035) has a CHECK constraint
+ *  allowing only 'principal' and 'agent'. The 'system' value is valid for
+ *  TaskOriginator.systemRole (stored in JSONB) but NOT for the contacts table.
  */
 export type SystemRole = 'principal' | 'agent' | 'system';
 
