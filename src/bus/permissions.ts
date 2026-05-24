@@ -24,6 +24,8 @@ import type { Layer, EventType } from './events.js';
 // contact-register skill (#485): execution layer publishes contact.resolved when an agent registers
 //          a contact interaction outside the dispatcher pipeline (e.g. ceo-inbox reading Nylas directly).
 //          The sourceLayer on the event is 'execution'; the publish permission here is what puts it on the wire.
+// #654 (embedding telemetry): system layer publishes and subscribes embedding.call for cost audit
+//          logging — EmbeddingService fires from infrastructure paths with no agent-layer context.
 const publishAllowlist: Record<Layer, Set<EventType>> = {
   channel: new Set(['inbound.message']),
   dispatch: new Set(['agent.task', 'outbound.message', 'outbound.blocked', 'outbound.pii-redacted', 'outbound.notification', 'contact.resolved', 'contact.unknown', 'message.held', 'message.rejected', 'contact.duplicate_detected', 'contact.merged', 'conversation.checkpoint', 'human.decision', 'autonomy.send_blocked']),
