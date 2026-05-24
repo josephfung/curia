@@ -715,7 +715,7 @@ describe('SchedulerService', () => {
       // Column is always present so DO UPDATE can clear a stale value
       expect(sql).toContain('expected_duration_seconds');
       // NULL (not a number) is written — second-to-last param (last is originator)
-      expect(params[params.length - 2]).toBeNull();
+      expect(params[params.length - 2]!).toBeNull();
     });
 
     it('writes NULL for invalid expectedDurationSeconds values (0, negative, NaN, non-integer)', async () => {
@@ -730,11 +730,11 @@ describe('SchedulerService', () => {
           expectedDurationSeconds: invalid,
         });
 
-        const [sql, params] = pool.query.mock.calls[pool.query.mock.calls.length - 1] as [string, unknown[]];
+        const [sql, params] = pool.query.mock.calls[pool.query.mock.calls.length - 1]! as [string, unknown[]];
         // Column is always included — invalid value falls back to NULL
         expect(sql).toContain('expected_duration_seconds');
         // Second-to-last param (last is originator)
-        expect(params[params.length - 2]).toBeNull();
+        expect(params[params.length - 2]!).toBeNull();
       }
     });
 
@@ -811,7 +811,7 @@ describe('SchedulerService', () => {
       expect(sql).toContain('originator');
 
       // The originator is the last parameter, serialized as JSON.
-      const originatorJson = params[params.length - 1] as string;
+      const originatorJson = params[params.length - 1]! as string;
       const originator = JSON.parse(originatorJson) as Record<string, unknown>;
       expect(originator.contactId).toBe('system');
       expect(originator.systemRole).toBe('system');

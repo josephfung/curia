@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { isPrincipalOriginated, isAgentOriginated, isSystemOriginated, makeSystemOriginator } from '../../../src/contacts/principal.js';
 import type { TaskOriginator } from '../../../src/contacts/types.js';
 
@@ -154,10 +154,14 @@ describe('makeSystemOriginator', () => {
   });
 
   it('generates a fresh initiatedAt timestamp on each call', () => {
+    vi.useFakeTimers({ now: new Date('2026-01-01T00:00:00Z') });
     const a = makeSystemOriginator();
+    vi.advanceTimersByTime(1000);
     const b = makeSystemOriginator();
-    // Both should be valid ISO timestamps (may or may not differ depending on timing)
+    vi.useRealTimers();
+
     expect(new Date(a.initiatedAt).getTime()).not.toBeNaN();
     expect(new Date(b.initiatedAt).getTime()).not.toBeNaN();
+    expect(a.initiatedAt).not.toBe(b.initiatedAt);
   });
 });
