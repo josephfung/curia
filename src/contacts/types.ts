@@ -5,7 +5,7 @@ export interface Contact {
   kgNodeId: string | null;
   displayName: string;
   role: string | null;
-  systemRole: ContactSystemRole | null;
+  systemRole: SystemRole | null;
   status: ContactStatus;
   // Trust scoring fields (migration 020)
   contactConfidence: number;         // 0.0–1.0; accumulated over time
@@ -101,7 +101,7 @@ export interface ResolvedSender {
   contactId: string;
   displayName: string;
   role: string | null;
-  systemRole: ContactSystemRole | null;
+  systemRole: SystemRole | null;
   status: ContactStatus;
   kgNodeId: string | null;
   verified: boolean;
@@ -115,7 +115,7 @@ export interface SenderContext {
   contactId: string;
   displayName: string;
   role: string | null;
-  systemRole: ContactSystemRole | null;
+  systemRole: SystemRole | null;
   status: ContactStatus;
   verified: boolean;
   kgNodeId: string | null;
@@ -168,18 +168,14 @@ export interface PermissionDef {
 
 export type TrustLevel = 'ceo' | 'high' | 'medium' | 'low';
 
-/** DB-safe subset — matches the CHECK constraint on contacts.system_role (migration 035).
- *  Use this for Contact, ResolvedSender, SenderContext, and findContactBySystemRole(). */
-export type ContactSystemRole = 'principal' | 'agent';
-
-/** Full system designation — includes 'system' for operator-configured, platform-executed
- *  work (e.g. declarative YAML jobs). Used by TaskOriginator.systemRole (stored as JSONB,
- *  not in the contacts table).
+/** System designation — drives authorization. Separate from the free-text `role` field.
  *  - 'principal' — the human CEO who Curia serves
  *  - 'agent'     — Curia itself or another autonomous agent
  *  - 'system'    — operator-configured, platform-executed (e.g. declarative YAML jobs)
+ *
+ *  DB CHECK constraint widened in migration 048 to include 'system'.
  */
-export type SystemRole = ContactSystemRole | 'system';
+export type SystemRole = 'principal' | 'agent' | 'system';
 
 // Ordinal ranking for trust level comparison. Higher rank = more trusted.
 // Used by meetsMinimumTrust() so callers don't need to enumerate every level.
