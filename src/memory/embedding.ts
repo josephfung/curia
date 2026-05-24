@@ -1,5 +1,8 @@
 import { EMBEDDING_DIMENSIONS } from './types.js';
 import type { Logger } from '../logger.js';
+import type { EventBus } from '../bus/bus.js';
+import type { ModelRegistry } from '../agents/llm/model-registry.js';
+import { createEmbeddingCall } from '../bus/events.js';
 
 // Internal interface separating the transport/mock concern from the service API.
 // Lets us swap OpenAI for a deterministic fake in tests without touching callers.
@@ -15,8 +18,16 @@ export class EmbeddingService {
   }
 
   // Production factory — requires a live OpenAI API key.
-  static createWithOpenAI(apiKey: string, logger: Logger): EmbeddingService {
-    return new EmbeddingService(new OpenAIBackend(apiKey, logger));
+  // Pass bus and modelRegistry to enable embedding.call telemetry.
+  // Both are optional so the service still works without them, but in production
+  // both should always be provided so costs appear in the audit log.
+  static createWithOpenAI(
+    apiKey: string,
+    logger: Logger,
+    bus?: EventBus,
+    modelRegistry?: ModelRegistry,
+  ): EmbeddingService {
+    return new EmbeddingService(new OpenAIBackend(apiKey, logger, bus, modelRegistry));
   }
 
   // Test factory — produces deterministic vectors without any network calls.
@@ -60,9 +71,15 @@ export class EmbeddingService {
 // -- Production backend: calls OpenAI text-embedding-3-small --
 
 class OpenAIBackend implements EmbeddingBackend {
-  constructor(private apiKey: string, private logger: Logger) {}
+  constructor(
+    private apiKey: string,
+    private logger: Logger,
+    private bus?: EventBus,
+    private modelRegistry?: ModelRegistry,
+  ) {}
 
   async embed(text: string): Promise<number[]> {
+    const start = Date.now();
     // Wrap the fetch so network errors surface with context (text length helps
     // diagnose truncation or oversized input issues).
     let response: Response;
@@ -95,9 +112,9 @@ class OpenAIBackend implements EmbeddingBackend {
 
     // Wrap JSON parse so a malformed response surfaces as a distinct error
     // rather than an unhandled rejection with no context.
-    let json: { data: Array<{ embedding: number[] }> };
+    let json: { data: Array<{ embedding: number[] }>; usage: { prompt_tokens: number } };
     try {
-      json = await response.json() as { data: Array<{ embedding: number[] }> };
+      json = await response.json() as { data: Array<{ embedding: number[] }>; usage: { prompt_tokens: number } };
     } catch (err) {
       this.logger.error({ err }, 'OpenAI embedding response JSON parse failed');
       throw new Error(`OpenAI embedding response parse error: ${(err as Error).message}`);
@@ -111,7 +128,42 @@ class OpenAIBackend implements EmbeddingBackend {
       );
       throw new Error(`Unexpected embedding dimensions: ${embedding?.length}`);
     }
+    // Telemetry — non-fatal; failure must not break the caller.
+    const latencyMs = Date.now() - start;
+    await this.publishTelemetry(json.usage.prompt_tokens, latencyMs, text);
     return embedding;
+  }
+
+  // Publishes an embedding.call telemetry event. Non-fatal — any failure is
+  // logged and swallowed so it never breaks the embed() call chain.
+  // Only runs when both bus and modelRegistry are wired (production path).
+  private async publishTelemetry(
+    inputTokens: number,
+    latencyMs: number,
+    inputText: string,
+  ): Promise<void> {
+    if (!this.bus || !this.modelRegistry) return;
+    try {
+      const pricing = this.modelRegistry.getPricing('text-embedding-3-small');
+      // pricing will always be defined after Task 1 adds the registry entry,
+      // but guard defensively so a misconfigured registry doesn't break embed().
+      const estimatedCostUsd = pricing
+        ? (inputTokens * pricing.inputPerMToken) / 1_000_000
+        : 0;
+
+      const event = createEmbeddingCall({
+        model: 'text-embedding-3-small',
+        inputTokens,
+        estimatedCostUsd,
+        latencyMs,
+        inputTextLength: inputText.length,
+      });
+      await this.bus.publish('system', event);
+    } catch (err) {
+      // Telemetry failures must never propagate — log at warn so they're visible
+      // in dashboards without impacting the caller.
+      this.logger.warn({ err }, 'OpenAIBackend: failed to publish embedding.call telemetry event — cost tracking gap');
+    }
   }
 }
 
