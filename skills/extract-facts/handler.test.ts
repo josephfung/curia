@@ -238,6 +238,33 @@ describe('ExtractFactsHandler', () => {
     expect(storeFact).toHaveBeenCalledOnce();
   });
 
+  it('uses memoryWriteSource as storeFact source, overriding the LLM-provided source', async () => {
+    const entityMemory = makeEntityMemory();
+    const facts = JSON.stringify([
+      { subject: 'Jane Doe', subjectType: 'person', attribute: 'home_city', value: 'Toronto', confidence: 0.9, decayClass: 'slow_decay' },
+    ]);
+    const infraLlm = makeMockInfraLlm(['yes', facts]);
+    const handler = new ExtractFactsHandler();
+
+    const storeFact = vi.spyOn(entityMemory, 'storeFact').mockResolvedValueOnce({ stored: true, action: 'created' });
+
+    const memoryWriteSource = 'agent:ceo-inbox/task:task-abc/channel:http';
+    const ctx = {
+      input: { text: 'Jane Doe lives in Toronto.', source: 'agent:ceo-inbox' },
+      secret: () => 'test-api-key',
+      log: pino({ level: 'silent' }),
+      entityMemory,
+      infraLlm,
+      memoryWriteSource,
+    } as unknown as SkillContext;
+
+    const result = await handler.execute(ctx);
+
+    expect(result).toEqual({ success: true, data: { stored: 1, skipped: false, failed: 0 } });
+    // storeFact should use memoryWriteSource (task-scoped), not the LLM-provided 'agent:ceo-inbox'
+    expect(storeFact.mock.calls[0]![0].source).toBe(memoryWriteSource);
+  });
+
   it('breaks immediately on rate_limited mid-batch — increments failed, skips remaining facts', async () => {
     const entityMemory = makeEntityMemory();
     // Three facts — first stored successfully, second hits rate limit, third should never be attempted.

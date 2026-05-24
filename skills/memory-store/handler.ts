@@ -179,13 +179,27 @@ export class MemoryStoreHandler implements SkillHandler {
       // validateContradiction() can detect same-field conflicts.
       const label = `${field}: ${value}`;
 
+      // Use the context-aware source key for storeFact so the rate limit counter
+      // matches what AgentRuntime.resetRateLimit() clears after each task. The
+      // LLM-provided `source` is a fallback for test contexts where memoryWriteSource
+      // isn't set.
+      const effectiveSource = ctx.memoryWriteSource ?? source;
+      if (!ctx.memoryWriteSource) {
+        // memoryWriteSource is only absent in test/CLI contexts where no agentId or
+        // taskEventId is available. If this fires in production, it means channelId
+        // or agentId wasn't threaded through InvokeOptions — check the caller.
+        ctx.log.debug(
+          { entity, field, fallbackSource: source },
+          'memory-store: memoryWriteSource not set — using LLM-provided source fallback',
+        );
+      }
       const result = await ctx.entityMemory.storeFact({
         entityNodeId: entityNode.id,
         label,
         properties: { attribute: field, value },
         confidence: confidence ?? 0.8,
         decayClass: (decay_class as DecayClass | undefined) ?? 'slow_decay',
-        source,
+        source: effectiveSource,
         sensitivity: sensitivity as Sensitivity | undefined,
         sensitivityCategory: sensitivity_category,
       });

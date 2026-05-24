@@ -50,7 +50,7 @@ export async function savePolicy(
       properties: { policy: custom_policy },
       confidence: 1.0,
       decayClass: 'permanent',
-      source: skillSource,
+      source: ctx.memoryWriteSource ?? skillSource,
     });
     ctx.log.info('Saved custom email policy to knowledge graph');
     return { success: true, data: { saved: true } };
@@ -96,7 +96,7 @@ export async function updatePolicy(
       properties: { refinement, addedAt: timestamp },
       confidence: 1.0,
       decayClass: 'permanent',
-      source: skillSource,
+      source: ctx.memoryWriteSource ?? skillSource,
     });
 
     ctx.log.info({ refinement }, 'Stored policy refinement');
@@ -131,7 +131,7 @@ export async function resetPolicy(
           properties: { policy: '', cleared: true },
           confidence: 1.0,
           decayClass: 'permanent',
-          source: skillSource,
+          source: ctx.memoryWriteSource ?? skillSource,
         });
         // Mark all existing refinements as cleared — resolvePolicy will
         // ignore refinements with addedAt before this timestamp.
@@ -141,7 +141,7 @@ export async function resetPolicy(
           properties: { clearedAt: new Date().toISOString() },
           confidence: 1.0,
           decayClass: 'permanent',
-          source: skillSource,
+          source: ctx.memoryWriteSource ?? skillSource,
         });
       }
     }

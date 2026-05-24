@@ -42,6 +42,7 @@ import type { ApprovalTriggerService } from '../autonomy/approval-trigger.js';
 import { TempFileStore } from './temp-file-store.js';
 import type { InfraLlmService } from './infra-llm.js';
 import { OutboundContextService, ScopedOutboundContext } from '../dispatch/outbound-context.js';
+import { buildRateLimitSourceKey } from '../memory/rate-limit-key.js';
 
 // Default max output length — used when no value is configured in default.yaml.
 // Skills returning more than this will have their output truncated before it
@@ -52,6 +53,7 @@ const DEFAULT_SKILL_OUTPUT_MAX_LENGTH = 200_000;
 export interface InvokeOptions {
   taskEventId?: string;
   agentId?: string;
+  channelId?: string;
   conversationId?: string;
   parentEventId?: string;
   /** Task-level metadata forwarded from the agent.task event payload. */
@@ -517,10 +519,20 @@ export class ExecutionLayer {
       // contactService is available to all skills — read-only contact lookups
       // (calendars, display names, etc.) are not a privilege escalation.
       contactService: this.contactService,
-      // Thread agentId and taskEventId into context unconditionally — capability-gated
-      // skills (bullpen) need these for event publishing; harmless for others.
+      // Thread agentId, taskEventId, and channelId into context unconditionally —
+      // capability-gated skills (bullpen) need these for event publishing; harmless for others.
       agentId: options?.agentId,
       taskEventId: options?.taskEventId,
+      channelId: options?.channelId,
+      // Pre-construct the memory write source key so skills pass a rate-limit-compatible
+      // source to entityMemory.storeFact(). This key matches the format that
+      // AgentRuntime.resetRateLimit() uses, ensuring the counter is properly scoped
+      // per agent+task and cleaned up after each task completes.
+      // buildRateLimitSourceKey() is the single definition of this format — both
+      // the write path (here) and the reset path (AgentRuntime) use it.
+      memoryWriteSource: options?.agentId && options?.taskEventId
+        ? buildRateLimitSourceKey(options.agentId, options.taskEventId, options.channelId)
+        : undefined,
       // Forward task-level metadata so skills can inspect task-wide signals.
       taskMetadata: options?.taskMetadata,
       // Expose the configured timezone so skills can format output timestamps
