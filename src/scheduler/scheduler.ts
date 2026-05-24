@@ -221,7 +221,7 @@ export class Scheduler {
         this.logger.info({ deletedCount }, 'Outbound context cleanup complete');
       })
       .catch((err: unknown) => {
-        this.logger.error({ err }, 'Outbound context cleanup failed');
+        this.logger.error({ err, service: 'outboundContext' }, 'Outbound context cleanup failed');
       });
   }
 
