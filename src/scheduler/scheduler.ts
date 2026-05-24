@@ -16,6 +16,7 @@ import type { DriftDetector } from './drift-detector.js';
 import type { DreamEngine } from '../memory/dream-engine.js';
 import type { JobRow } from './scheduler-service.js';
 import type { OutboundContextService } from '../dispatch/outbound-context.js';
+import { classifyError } from '../errors/classify.js';
 
 // Poll every 30 seconds for due jobs.
 export const POLL_INTERVAL_MS = 30_000;
@@ -221,7 +222,8 @@ export class Scheduler {
         this.logger.info({ deletedCount }, 'Outbound context cleanup complete');
       })
       .catch((err: unknown) => {
-        this.logger.error({ err, service: 'outboundContext' }, 'Outbound context cleanup failed');
+        const agentErr = classifyError(err, 'outbound-context-cleanup');
+        this.logger.error({ err: agentErr, service: 'outboundContext' }, 'Outbound context cleanup failed');
       });
   }
 
