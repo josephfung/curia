@@ -13,5 +13,6 @@
   "permissions": [],
   "secrets": [],
   "timeout": 15000,
-  "capabilities": ["bus", "actionLogRepo"]
+  "capabilities": ["bus", "actionLogRepo"],
+  "allowed_callers": ["coordinator"]
 }
