@@ -5,7 +5,7 @@ export interface Contact {
   kgNodeId: string | null;
   displayName: string;
   role: string | null;
-  systemRole: SystemRole | null;
+  systemRole: ContactSystemRole | null;
   status: ContactStatus;
   // Trust scoring fields (migration 020)
   contactConfidence: number;         // 0.0–1.0; accumulated over time
@@ -101,7 +101,7 @@ export interface ResolvedSender {
   contactId: string;
   displayName: string;
   role: string | null;
-  systemRole: SystemRole | null;
+  systemRole: ContactSystemRole | null;
   status: ContactStatus;
   kgNodeId: string | null;
   verified: boolean;
@@ -115,7 +115,7 @@ export interface SenderContext {
   contactId: string;
   displayName: string;
   role: string | null;
-  systemRole: SystemRole | null;
+  systemRole: ContactSystemRole | null;
   status: ContactStatus;
   verified: boolean;
   kgNodeId: string | null;
@@ -168,16 +168,18 @@ export interface PermissionDef {
 
 export type TrustLevel = 'ceo' | 'high' | 'medium' | 'low';
 
-/** System designation — drives authorization. Separate from the free-text `role` field.
+/** DB-safe subset — matches the CHECK constraint on contacts.system_role (migration 035).
+ *  Use this for Contact, ResolvedSender, SenderContext, and findContactBySystemRole(). */
+export type ContactSystemRole = 'principal' | 'agent';
+
+/** Full system designation — includes 'system' for operator-configured, platform-executed
+ *  work (e.g. declarative YAML jobs). Used by TaskOriginator.systemRole (stored as JSONB,
+ *  not in the contacts table).
  *  - 'principal' — the human CEO who Curia serves
  *  - 'agent'     — Curia itself or another autonomous agent
  *  - 'system'    — operator-configured, platform-executed (e.g. declarative YAML jobs)
- *
- *  Note: the contacts.system_role column (migration 035) has a CHECK constraint
- *  allowing only 'principal' and 'agent'. The 'system' value is valid for
- *  TaskOriginator.systemRole (stored in JSONB) but NOT for the contacts table.
  */
-export type SystemRole = 'principal' | 'agent' | 'system';
+export type SystemRole = ContactSystemRole | 'system';
 
 // Ordinal ranking for trust level comparison. Higher rank = more trusted.
 // Used by meetsMinimumTrust() so callers don't need to enumerate every level.
