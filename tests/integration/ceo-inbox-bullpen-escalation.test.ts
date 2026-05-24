@@ -21,12 +21,12 @@ describeIf('ceo-inbox bullpen-through-coordinator escalation', () => {
   let bullpen: BullpenService;
   let outboundContext: OutboundContextService;
   let runId: string;
-  // Track the registered context entry ID for cleanup and cross-test assertions.
-  let registeredEntryId: string;
 
   beforeAll(async () => {
     runId = randomUUID();
     pool = new Pool({ connectionString: DATABASE_URL });
+    await pool.query('SELECT 1 FROM bullpen_threads LIMIT 0');
+    await pool.query('SELECT 1 FROM outbound_context LIMIT 0');
     const logger = createLogger('error');
     bullpen = BullpenService.createWithPostgres(pool, logger);
     outboundContext = new OutboundContextService(pool, logger);
@@ -74,7 +74,7 @@ describeIf('ceo-inbox bullpen-through-coordinator escalation', () => {
     //
     // register() returns only the UUID; fetch the full row via pool.query to
     // verify the persisted field values.
-    registeredEntryId = await outboundContext.register({
+    const registeredEntryId = await outboundContext.register({
       conversationId: `conv-${runId}`,
       channelId: 'signal',
       agentId: 'ceo-inbox',
@@ -109,21 +109,24 @@ describeIf('ceo-inbox bullpen-through-coordinator escalation', () => {
     const active = await outboundContext.getActive();
     const found = active.find(e => e.id === registeredEntryId);
     expect(found).toBeDefined();
-    expect(found!.expectedReply).toBe('Decision or follow-up instruction');
+    expect(found?.expectedReply).toBe('Decision or follow-up instruction');
   });
 
   it('active context entry enables delegation back to ceo-inbox', async () => {
     // Simulate: CEO replies on Signal. Dispatcher queries active entries.
-    const active = await outboundContext.getActive();
-    // Filter to entries belonging to the ceo-inbox agent (getActive returns all
-    // channels; channel-scoping happens at the dispatcher layer, not here).
-    const ceoInboxEntries = active.filter(e => e.agentId === 'ceo-inbox');
+    // We verify the entry we registered in test 2 is still present and has the
+    // correct delegation hint. Use the conversation_id scoped to this run to
+    // avoid depending on getActive()'s limit or parallel test state.
+    const result = await pool.query<{ agent_id: string; delegation_hint: string }>(
+      `SELECT agent_id, delegation_hint FROM outbound_context
+       WHERE conversation_id = $1 AND released = false`,
+      [`conv-${runId}`],
+    );
 
-    // At least one entry should point back to ceo-inbox
-    expect(ceoInboxEntries.length).toBeGreaterThan(0);
-
-    const entry = ceoInboxEntries[0]!;
-    expect(entry.delegationHint).toContain('ceo-inbox');
+    expect(result.rows.length).toBeGreaterThan(0);
+    const row = result.rows[0]!;
+    expect(row.agent_id).toBe('ceo-inbox');
+    expect(row.delegation_hint).toContain('ceo-inbox');
 
     // Coordinator uses this hint to delegate the reply back to ceo-inbox
     // (actual delegation is tested in dispatcher-context-bridging.test.ts)
