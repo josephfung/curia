@@ -101,6 +101,29 @@ Skills that return large payloads (web search results, long calendar lists, craw
 
 ---
 
+### `contextBridge`
+
+Controls TTL (time-to-live) for outbound context entries — the records that let the coordinator link incoming replies to messages it previously sent.
+
+```yaml
+contextBridge:
+  defaultExpiryHours: 6     # TTL for auto-registered entries (no explicit context_bridge param). Default: 6.
+  explicitExpiryHours: 24   # TTL for entries with explicit context_bridge delegation metadata. Default: 24.
+```
+
+Every outbound message (Signal, email) automatically registers a context entry so that if the recipient replies, the coordinator knows what they're replying to. Entries registered without explicit `context_bridge` metadata get the shorter `defaultExpiryHours` TTL. Entries with delegation hints and expected-reply metadata get the longer `explicitExpiryHours` TTL.
+
+When a caller passes `expires_in_hours` inside the `context_bridge` JSON param, it overrides `explicitExpiryHours` for that individual entry.
+
+Expired entries are cleaned up automatically by the background scheduler. The coordinator can also release entries manually via the `context-bridge-release` skill.
+
+**Tuning guidance:**
+- Raise `defaultExpiryHours` if users commonly reply to proactive notifications after more than 6 hours.
+- Lower it if the `[ACTIVE OUTBOUND CONTEXT]` block is accumulating too many stale entries and causing noise.
+- `explicitExpiryHours` should be higher because explicit entries carry delegation metadata that's expensive to re-derive.
+
+---
+
 ### `security`
 
 Extra prompt injection detection patterns applied to every inbound message, in addition to the built-in defaults.
