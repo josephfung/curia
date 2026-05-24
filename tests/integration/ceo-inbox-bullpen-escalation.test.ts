@@ -21,8 +21,8 @@ describeIf('ceo-inbox bullpen-through-coordinator escalation', () => {
   let bullpen: BullpenService;
   let outboundContext: OutboundContextService;
   let runId: string;
-  // Suite-level so test 3 can guard against test 2 not having run/succeeded.
-  let registeredEntryId: string | undefined;
+  // Registered in beforeAll so all tests are independent of each other's execution order.
+  let registeredEntryId: string;
 
   beforeAll(async () => {
     runId = randomUUID();
@@ -32,6 +32,17 @@ describeIf('ceo-inbox bullpen-through-coordinator escalation', () => {
     const logger = createSilentLogger();
     bullpen = BullpenService.createWithPostgres(pool, logger);
     outboundContext = new OutboundContextService(pool, logger);
+    // Register the outbound context entry once so tests 2 and 3 are self-contained.
+    registeredEntryId = await outboundContext.register({
+      conversationId: `conv-${runId}`,
+      channelId: 'signal',
+      agentId: 'ceo-inbox',
+      content: 'Alice Chen — Merger deadline: Decision needed on terms by Friday EOD',
+      expectedReply: 'Decision or follow-up instruction',
+      delegationHint: 'Delegate replies to ceo-inbox',
+      metadata: { source: 'urgent-email-escalation' },
+      expiresInHours: 24,
+    });
   });
 
   afterAll(async () => {
@@ -76,25 +87,9 @@ describeIf('ceo-inbox bullpen-through-coordinator escalation', () => {
   });
 
   it('coordinator registers context bridge entry after sending', async () => {
-    // Simulate: coordinator processes the bullpen request and calls signal-send
-    // with context_bridge params. The send skill registers the entry.
-    //
-    // register() returns only the UUID; fetch the full row via pool.query to
-    // verify the persisted field values.
-    registeredEntryId = await outboundContext.register({
-      conversationId: `conv-${runId}`,
-      channelId: 'signal',
-      agentId: 'ceo-inbox',
-      content: 'Alice Chen — Merger deadline: Decision needed on terms by Friday EOD',
-      expectedReply: 'Decision or follow-up instruction',
-      delegationHint: 'Delegate replies to ceo-inbox',
-      metadata: { source: 'urgent-email-escalation' },
-      expiresInHours: 24,
-    });
-
-    expect(registeredEntryId).toBeDefined();
-
-    // Fetch the persisted row to verify field values were stored correctly.
+    // Verify the entry registered in beforeAll was persisted with the correct field values.
+    // Query directly by id rather than via getActive() to avoid the default LIMIT 10 window,
+    // which can exclude our row in a shared DB with many active entries.
     const result = await pool.query<{
       id: string;
       agent_id: string;
@@ -110,25 +105,13 @@ describeIf('ceo-inbox bullpen-through-coordinator escalation', () => {
     const row = result.rows[0]!;
     expect(row.agent_id).toBe('ceo-inbox');
     expect(row.delegation_hint).toBe('Delegate replies to ceo-inbox');
-
-    // Verify the entry appears in active entries (no channel filter — getActive
-    // returns all active entries; filter by agentId client-side).
-    const active = await outboundContext.getActive();
-    const found = active.find(e => e.id === registeredEntryId);
-    expect(found).toBeDefined();
-    expect(found?.expectedReply).toBe('Decision or follow-up instruction');
+    expect(row.expected_reply).toBe('Decision or follow-up instruction');
   });
 
   it('active context entry enables delegation back to ceo-inbox', async () => {
-    // Guard: this test depends on test 2 having registered the outbound context entry.
-    if (!registeredEntryId) {
-      throw new Error('Precondition failed: registeredEntryId not set — did test 2 fail?');
-    }
-
     // Simulate: CEO replies on Signal. Dispatcher queries active entries.
-    // We verify the entry we registered in test 2 is still present and has the
-    // correct delegation hint. Use the conversation_id scoped to this run to
-    // avoid depending on getActive()'s limit or parallel test state.
+    // Query by conversation_id scoped to this run — avoids getActive()'s LIMIT 10 window
+    // and parallel test state interference.
     const result = await pool.query<{ agent_id: string; delegation_hint: string }>(
       `SELECT agent_id, delegation_hint FROM outbound_context
        WHERE conversation_id = $1 AND released = false`,
