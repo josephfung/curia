@@ -274,7 +274,7 @@ export class Scheduler {
           lastRunOutcome: row.last_run_outcome ?? null,
           lastRunSummary: row.last_run_summary ?? null,
           lastRunContext: row.last_run_context ?? null,
-          // pg returns JSONB as a plain object; null for pre-040 rows and declarative jobs.
+          // pg returns JSONB as a plain object; null for pre-040 rows only.
           originator: row.originator ?? null,
         };
         try {
@@ -380,7 +380,7 @@ export class Scheduler {
       // Pass the duration hint so the runtime can widen the delegate timeout for
       // long-running scheduled tasks. null (no explicit duration) becomes undefined.
       expectedDurationSeconds: job.expectedDurationSeconds ?? undefined,
-      // Thread the stored originator through — null (declarative / pre-040 jobs) becomes undefined.
+      // Thread the stored originator through — null (pre-040 jobs) becomes undefined.
       metadata: job.originator ? { originator: job.originator } : undefined,
       parentEventId: firedEvent.id,
     });
