@@ -41,6 +41,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Removed
 
 - **`context-memo.ts`** — deleted v1 outbound context memo write path from the dispatcher and removed the `context-memo` module entirely; context bridging now runs exclusively through `OutboundContextService`. (#615)
+- **`docs/superpowers/`** — deleted completed WIP planning docs (alias propagation gaps, principal bypass, Trivy scanning); all three features are merged. Two stale doc references in `agents/contacts.yaml` and `skills/contact-merge/handler.ts` updated to point to `docs/specs/14-autonomy-engine.md`.
 
 ## [0.30.0] — 2026-05-22 — "Kaylee Frye"
 

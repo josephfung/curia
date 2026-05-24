@@ -10,7 +10,7 @@
 // lowering the confirmation requirement for `certain`-confidence merges. At "full" autonomy,
 // the Coordinator should execute merges from batch scan without CEO interruption. The
 // `dry_run` flag is the gate — at higher autonomy levels, `dry_run: false` is sent directly
-// for high-confidence pairs. See docs/superpowers/specs/2026-04-03-autonomy-engine-design.md.
+// for high-confidence pairs. See docs/specs/14-autonomy-engine.md.
 
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
 

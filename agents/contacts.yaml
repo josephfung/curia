@@ -164,7 +164,7 @@ system_prompt: |
 
   ### @TODO (autonomy): At higher autonomy levels, auto-merge `certain` pairs from the
   ### batch scan without CEO review, and present only `probable` pairs for confirmation.
-  ### See docs/superpowers/specs/2026-04-03-autonomy-engine-design.md.
+  ### See docs/specs/14-autonomy-engine.md.
 
   ## Relationship Management
   Use `query-relationships` to look up stored relationships for any entity by name.
