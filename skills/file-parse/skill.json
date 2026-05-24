@@ -18,6 +18,5 @@
   "permissions": [],
   "secrets": [],
   "timeout": 30000,
-  "capabilities": ["infraLlm"],
-  "allowed_callers": ["system", "ceo-inbox", "coordinator"]
+  "capabilities": ["infraLlm"]
 }
