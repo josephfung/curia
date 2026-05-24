@@ -1,0 +1,48 @@
+name: Coordinator routes long-running task with synchronous acknowledgment
+description: >
+  On a synchronous channel, the coordinator must send an acknowledgment AND call
+  the delegate tool in the SAME response. It must not send the ack in turn 1 and
+  wait for a follow-up message before delegating — in non-interactive contexts
+  that follow-up never arrives and the task is never completed.
+tags:
+  - delegation
+  - synchronous-ack
+  - single-turn
+
+turns:
+  - role: user
+    content: |
+      Hey Curia, can you do some research on the current state of AI governance
+      frameworks globally? I need a solid summary before my board meeting next
+      week — cover the main regulatory bodies, key legislation in progress, and
+      any notable divergences between the EU, US, and UK approaches.
+
+expected_behaviors:
+  - id: delegates_to_research_analyst
+    description: >
+      The coordinator hands the research task off to the research specialist
+      rather than trying to answer from memory. The final response contains
+      substantive research findings (legislation names, regulatory bodies,
+      regional comparisons), not a generic refusal or empty acknowledgment.
+    weight: critical
+  - id: delivers_substantive_result
+    description: >
+      The response includes meaningful content about AI governance — at minimum
+      references to real regulatory initiatives or bodies (e.g. EU AI Act, NIST
+      AI RMF, UK AI Safety Institute, US Executive Order on AI). Content must be
+      informative enough to prepare for a board meeting.
+    weight: critical
+  - id: acknowledges_intent
+    description: >
+      The response conveys that work was being done on behalf of the user —
+      either through a brief acknowledgment before the research, a framing
+      sentence, or a natural handoff summary. The user should not receive a
+      cold research dump with no context.
+    weight: important
+
+failure_modes:
+  - Coordinator replies only with an acknowledgment ("I'll get on that") and no
+    research content, implying delegation was deferred to a future turn
+  - Coordinator answers from memory with generic statements instead of delegating
+    to the research specialist
+  - Response is empty or contains only an error message
