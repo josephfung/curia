@@ -105,6 +105,19 @@ const MODEL_REGISTRY: Record<string, ModelMetadata> = {
     capabilities: ['vision', 'coding', 'reasoning'],
     maxOutputTokens: 16_384,
   },
+
+  // OpenAI embedding model — used by EmbeddingService for semantic search and entity resolution.
+  // inputPerMToken matches current OpenAI pricing for text-embedding-3-small.
+  // outputPerMToken is 0: embeddings produce no billed output tokens.
+  'text-embedding-3-small': {
+    provider: 'openai',
+    contextWindow: 8191,
+    pricing: {
+      inputPerMToken: 0.02,
+      outputPerMToken: 0,
+    },
+    capabilities: ['embedding'],
+  },
 };
 // Deep-freeze to prevent callers from mutating registry entries.
 for (const entry of Object.values(MODEL_REGISTRY)) {
