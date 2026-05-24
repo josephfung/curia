@@ -7,7 +7,7 @@
 // sensitivity: "elevated" — enforced by the gateway's security pipeline.
 
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
-import { parseContextBridge, registerContextBridge } from '../../src/dispatch/context-bridge-parse.js';
+import { registerOutboundContext } from '../../src/dispatch/context-bridge-parse.js';
 
 const MAX_TO_LENGTH = 1000;
 const MAX_SUBJECT_LENGTH = 500;
@@ -109,11 +109,13 @@ export class EmailSendHandler implements SkillHandler {
         return { success: false, error: result.blockedReason ?? 'Email send failed' };
       }
 
-      // Register context bridge entry if requested (best-effort).
-      const bridge = parseContextBridge(contextBridgeRaw, ctx.log);
-      if (bridge) {
-        await registerContextBridge(ctx.outboundContext, bridge, 'email', body, ctx.log);
-      }
+      // Register outbound context entry (best-effort, always fires).
+      await registerOutboundContext(ctx.outboundContext, contextBridgeRaw, {
+        channelId: 'email',
+        content: body,
+        agentId: ctx.agentId ?? 'coordinator',
+        log: ctx.log,
+      });
 
       return {
         success: true,
