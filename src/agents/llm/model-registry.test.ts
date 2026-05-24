@@ -148,4 +148,23 @@ describe('ModelRegistry', () => {
       expect(meta!.capabilities).toContain('vision');
     });
   });
+
+  describe('Embedding models', () => {
+    it('text-embedding-3-small is registered with provider openai', () => {
+      const meta = registry.getModel('text-embedding-3-small');
+      expect(meta).toBeDefined();
+      expect(meta!.provider).toBe('openai');
+      expect(meta!.contextWindow).toBe(8191);
+      expect(meta!.capabilities).toContain('embedding');
+    });
+
+    it('text-embedding-3-small has correct pricing ($0.02/MTok input, $0 output)', () => {
+      const pricing = registry.getPricing('text-embedding-3-small');
+      expect(pricing).toBeDefined();
+      expect(pricing!.inputPerMToken).toBe(0.02);
+      expect(pricing!.outputPerMToken).toBe(0);
+      expect(pricing!.cacheCreationPerMToken).toBeUndefined();
+      expect(pricing!.cacheReadPerMToken).toBeUndefined();
+    });
+  });
 });
