@@ -15,12 +15,16 @@ import type { AgentResponseEvent, AgentErrorEvent } from '../bus/events.js';
 import type { DriftDetector } from './drift-detector.js';
 import type { DreamEngine } from '../memory/dream-engine.js';
 import type { JobRow } from './scheduler-service.js';
+import type { OutboundContextService } from '../dispatch/outbound-context.js';
 
 // Poll every 30 seconds for due jobs.
 export const POLL_INTERVAL_MS = 30_000;
 
 // Watchdog runs every 5 minutes to detect jobs stuck mid-run.
 export const WATCHDOG_INTERVAL_MS = 5 * 60 * 1000;
+
+// Outbound context cleanup runs daily to purge expired and released rows.
+export const OUTBOUND_CONTEXT_CLEANUP_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
 // Default assumed duration for a job with no explicit expectedDurationSeconds.
 const DEFAULT_EXPECTED_DURATION_SECONDS = 600; // 10 minutes
@@ -83,6 +87,8 @@ export interface SchedulerConfig {
   driftDetector?: DriftDetector;
   /** Dream engine for background KG maintenance. When absent, no background decay runs. */
   dreamEngine?: DreamEngine;
+  /** Outbound context service — when present, expired/released rows are purged daily and at startup. */
+  outboundContextService?: OutboundContextService;
 }
 
 export class Scheduler {
@@ -92,8 +98,10 @@ export class Scheduler {
   private schedulerService: SchedulerService;
   private driftDetector?: DriftDetector;
   private dreamEngine?: DreamEngine;
+  private outboundContextService?: OutboundContextService;
   private intervalHandle: ReturnType<typeof setInterval> | null = null;
   private watchdogHandle: ReturnType<typeof setInterval> | null = null;
+  private cleanupHandle: ReturnType<typeof setInterval> | null = null;
 
   // Maps the agent.task event ID back to the job ID so we can match
   // agent.response / agent.error events to the originating scheduled job.
@@ -110,6 +118,7 @@ export class Scheduler {
     this.schedulerService = config.schedulerService;
     this.driftDetector = config.driftDetector;
     this.dreamEngine = config.dreamEngine;
+    this.outboundContextService = config.outboundContextService;
   }
 
   /**
@@ -163,6 +172,16 @@ export class Scheduler {
       this.dreamEngine.start();
     }
 
+    // Outbound context cleanup — purge expired and released rows.
+    // Run once at startup to clear any rows that expired while the service was down,
+    // then schedule the interval for ongoing daily maintenance.
+    if (this.outboundContextService) {
+      this.runOutboundContextCleanup();
+      this.cleanupHandle = setInterval(() => {
+        this.runOutboundContextCleanup();
+      }, OUTBOUND_CONTEXT_CLEANUP_INTERVAL_MS);
+    }
+
     this.logger.info({ intervalMs: POLL_INTERVAL_MS }, 'Scheduler started');
   }
 
@@ -178,10 +197,26 @@ export class Scheduler {
       clearInterval(this.watchdogHandle);
       this.watchdogHandle = null;
     }
+    if (this.cleanupHandle) {
+      clearInterval(this.cleanupHandle);
+      this.cleanupHandle = null;
+    }
     if (this.dreamEngine) {
       this.dreamEngine.stop();
     }
     this.logger.info('Scheduler stopped');
+  }
+
+  /**
+   * Delete expired and released outbound context rows and log the result.
+   * Called at startup and then on the daily interval via cleanupHandle.
+   */
+  private runOutboundContextCleanup(): void {
+    this.outboundContextService!.cleanupExpired().then((deletedCount) => {
+      this.logger.info({ deletedCount }, 'Outbound context cleanup complete');
+    }).catch((err) => {
+      this.logger.error({ err }, 'Unhandled error in outbound context cleanup');
+    });
   }
 
   /**

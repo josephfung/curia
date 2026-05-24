@@ -1059,7 +1059,14 @@ async function main(): Promise<void> {
   const dreamEngine = new DreamEngine(pool, bus, logger, decayConfig, scoringPass);
   logger.info({ decayConfig }, 'DreamEngine configured');
 
-  const scheduler = new Scheduler({ pool, bus, logger, schedulerService, driftDetector, dreamEngine });
+  // Outbound context bridge — delegation-aware context registry for
+  // specialist-initiated outbound. Requires pool (Postgres).
+  // Constructed here (before Scheduler) so the scheduler can run startup + daily cleanup.
+  const outboundContextService = pool
+    ? new OutboundContextService(pool, logger)
+    : undefined;
+
+  const scheduler = new Scheduler({ pool, bus, logger, schedulerService, driftDetector, dreamEngine, outboundContextService });
 
   // SuspensionNotifier — emails the CEO when a scheduled job is auto-suspended.
   // Bypasses the LLM pipeline: notifies even when Anthropic is the thing that's down.
@@ -1142,12 +1149,6 @@ async function main(): Promise<void> {
   }
   const infraLlmRouter = new LLMProviderRouter(modelRegistry, providerRegistry);
   const infraLlmService = new InfraLlmService(infraLlmRouter, modelRouter, bus, logger, modelRegistry);
-
-  // Outbound context bridge — delegation-aware context registry for
-  // specialist-initiated outbound. Requires pool (Postgres).
-  const outboundContextService = pool
-    ? new OutboundContextService(pool, logger)
-    : undefined;
 
   // Execution layer — services wired here are injected per-skill based on their
   // capability-gated declarations. outboundGateway gives email skills their send path.
