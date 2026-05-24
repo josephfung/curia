@@ -28,6 +28,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Coordinator prompt** — `[PRIOR OUTBOUND CONTEXT]` replaced with `[ACTIVE OUTBOUND CONTEXT]` block including delegation guidance and entry IDs for release. (#615)
 - **`signal-send`**, **`email-send`**, **`email-reply`** — accept optional `context_bridge` JSON param; declare `outboundContext` capability. (#615)
 - **`file-parse` access relaxed** — `allowed_callers` restriction removed; skill is now invocable by any agent (previously restricted to `system`, `ceo-inbox`, `coordinator`). Custom agents that parse files (e.g., expense trackers processing receipt attachments) were previously blocked at runtime despite having the skill pinned. (#681)
+- **`ceo-inbox`** — urgent email alerts now route through the coordinator via Bullpen instead of calling `signal-send` directly; enables context bridge delegation for CEO replies. (#616)
 
 ### Fixed
 
