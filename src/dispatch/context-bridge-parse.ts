@@ -31,11 +31,23 @@ export function parseContextBridge(raw: unknown, log: Logger): ContextBridgeInpu
       log.warn({ rawLength: raw.length }, 'context_bridge: missing or invalid agent_id — skipping registration');
       return null;
     }
-    // Validate optional field types — reject silently malformed payloads.
-    if (obj.expected_reply != null && typeof obj.expected_reply !== 'string') return null;
-    if (obj.delegation_hint != null && typeof obj.delegation_hint !== 'string') return null;
-    if (obj.metadata != null && (typeof obj.metadata !== 'object' || Array.isArray(obj.metadata))) return null;
-    if (obj.expires_in_hours != null && (typeof obj.expires_in_hours !== 'number' || !Number.isFinite(obj.expires_in_hours) || obj.expires_in_hours <= 0)) return null;
+    // Validate optional field types — malformed payloads fall through to auto-registration.
+    if (obj.expected_reply != null && typeof obj.expected_reply !== 'string') {
+      log.warn({ field: 'expected_reply', type: typeof obj.expected_reply }, 'context_bridge: optional field has wrong type — falling back to auto-registration');
+      return null;
+    }
+    if (obj.delegation_hint != null && typeof obj.delegation_hint !== 'string') {
+      log.warn({ field: 'delegation_hint', type: typeof obj.delegation_hint }, 'context_bridge: optional field has wrong type — falling back to auto-registration');
+      return null;
+    }
+    if (obj.metadata != null && (typeof obj.metadata !== 'object' || Array.isArray(obj.metadata))) {
+      log.warn({ field: 'metadata' }, 'context_bridge: metadata must be a plain object — falling back to auto-registration');
+      return null;
+    }
+    if (obj.expires_in_hours != null && (typeof obj.expires_in_hours !== 'number' || !Number.isFinite(obj.expires_in_hours) || obj.expires_in_hours <= 0)) {
+      log.warn({ field: 'expires_in_hours', value: obj.expires_in_hours }, 'context_bridge: expires_in_hours must be a positive finite number — falling back to auto-registration');
+      return null;
+    }
     return obj as unknown as ContextBridgeInput;
   } catch {
     log.warn({ rawLength: raw.length }, 'context_bridge: failed to parse JSON — skipping registration');
@@ -43,32 +55,6 @@ export function parseContextBridge(raw: unknown, log: Logger): ContextBridgeInpu
   }
 }
 
-/**
- * Best-effort context bridge registration. Call after a successful send.
- * Logs warnings on failure but never throws.
- */
-export async function registerContextBridge(
-  outboundContext: OutboundContextCapability | undefined,
-  bridge: ContextBridgeInput,
-  channelId: string,
-  content: string,
-  log: Logger,
-): Promise<void> {
-  if (!outboundContext) return;
-  try {
-    await outboundContext.register({
-      channelId,
-      agentId: bridge.agent_id,
-      content,
-      ...(bridge.expected_reply != null ? { expectedReply: bridge.expected_reply } : {}),
-      ...(bridge.delegation_hint != null ? { delegationHint: bridge.delegation_hint } : {}),
-      ...(bridge.metadata != null ? { metadata: bridge.metadata } : {}),
-      ...(bridge.expires_in_hours != null ? { expiresInHours: bridge.expires_in_hours } : {}),
-    });
-  } catch (err) {
-    log.warn({ err, channelId }, 'Failed to register context bridge entry — send succeeded');
-  }
-}
 
 /**
  * Single-call outbound context registration that replaces the two-step
