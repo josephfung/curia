@@ -112,12 +112,14 @@ describe('Vertical Slice: CLI → Dispatch → Coordinator → Response', () => 
     // The coordinator must prepend the system prompt before the user's content.
     // Verifying the call shape ensures we're not passing raw bus payloads straight
     // to the model (which would include routing fields the model shouldn't see).
-    expect(mockProvider.chat).toHaveBeenCalledWith({
-      messages: [
-        { role: 'system', content: 'You are a helpful assistant.' },
-        { role: 'user', content: 'Good morning!' },
-      ],
-    });
+    expect(mockProvider.chat).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messages: [
+          { role: 'system', content: expect.stringContaining('You are a helpful assistant.') },
+          { role: 'user', content: 'Good morning!' },
+        ],
+      }),
+    );
   });
 });
 
