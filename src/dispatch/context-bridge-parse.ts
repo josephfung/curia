@@ -69,3 +69,59 @@ export async function registerContextBridge(
     log.warn({ err, channelId }, 'Failed to register context bridge entry — send succeeded');
   }
 }
+
+/**
+ * Single-call outbound context registration that replaces the two-step
+ * parse+conditional-register pattern in send skills.
+ *
+ * - If `outboundContext` is undefined → no-op (graceful when capability unavailable)
+ * - If `contextBridgeRaw` parses successfully → registers with explicit metadata;
+ *   TTL = bridge.expires_in_hours ?? outboundContext.explicitExpiryHours
+ * - If absent/null/malformed → registers minimal entry (agentId + channelId + content);
+ *   TTL = outboundContext.defaultExpiryHours
+ * - Never throws — logs warnings on failure
+ */
+export async function registerOutboundContext(
+  outboundContext: OutboundContextCapability | undefined,
+  contextBridgeRaw: unknown,
+  opts: {
+    channelId: string;
+    content: string;
+    agentId: string;
+    log: Logger;
+  },
+): Promise<void> {
+  if (!outboundContext) return;
+
+  const { channelId, content, agentId, log } = opts;
+
+  try {
+    const bridge = parseContextBridge(contextBridgeRaw, log);
+
+    if (bridge) {
+      // Explicit registration — skill provided structured context_bridge metadata.
+      // TTL: use the caller-specified expires_in_hours, falling back to the
+      // capability's explicitExpiryHours (longer TTL for well-structured entries).
+      await outboundContext.register({
+        channelId,
+        agentId: bridge.agent_id,
+        content,
+        ...(bridge.expected_reply != null ? { expectedReply: bridge.expected_reply } : {}),
+        ...(bridge.delegation_hint != null ? { delegationHint: bridge.delegation_hint } : {}),
+        ...(bridge.metadata != null ? { metadata: bridge.metadata } : {}),
+        expiresInHours: bridge.expires_in_hours ?? outboundContext.explicitExpiryHours,
+      });
+    } else {
+      // Auto-registration — context_bridge was absent, null, or malformed.
+      // Register a minimal entry so inbound replies can still be correlated.
+      await outboundContext.register({
+        channelId,
+        agentId,
+        content,
+        expiresInHours: outboundContext.defaultExpiryHours,
+      });
+    }
+  } catch (err) {
+    log.warn({ err, channelId }, 'Failed to register outbound context — send succeeded');
+  }
+}
