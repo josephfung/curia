@@ -202,7 +202,13 @@ describe('SignalSendHandler', () => {
         success: true, messageId: 'msg-1',
       });
       const mockRegister = vi.fn().mockResolvedValue('entry-1');
-      (ctx as Record<string, unknown>).outboundContext = { register: mockRegister, release: vi.fn() };
+      (ctx as Record<string, unknown>).outboundContext = {
+        register: mockRegister,
+        release: vi.fn(),
+        defaultExpiryHours: 6,
+        explicitExpiryHours: 24,
+      };
+      (ctx as Record<string, unknown>).agentId = 'coordinator';
 
       const result = await handler.execute(ctx);
 
@@ -218,23 +224,31 @@ describe('SignalSendHandler', () => {
       });
     });
 
-    it('does not register when context_bridge is absent', async () => {
+    it('registers a minimal entry when context_bridge is absent', async () => {
       const ctx = makeCtx({
-        input: {
-          recipient: '+14155551234',
-          message: 'Hello',
-        },
+        input: { recipient: '+14155551234', message: 'Hello' },
       });
       (ctx.outboundGateway!.send as ReturnType<typeof vi.fn>).mockResolvedValue({
         success: true, messageId: 'msg-1',
       });
-      const mockRegister = vi.fn();
-      (ctx as Record<string, unknown>).outboundContext = { register: mockRegister, release: vi.fn() };
+      const mockRegister = vi.fn().mockResolvedValue('entry-1');
+      (ctx as Record<string, unknown>).outboundContext = {
+        register: mockRegister,
+        release: vi.fn(),
+        defaultExpiryHours: 6,
+        explicitExpiryHours: 24,
+      };
+      (ctx as Record<string, unknown>).agentId = 'coordinator';
 
       const result = await handler.execute(ctx);
 
       expect(result.success).toBe(true);
-      expect(mockRegister).not.toHaveBeenCalled();
+      expect(mockRegister).toHaveBeenCalledWith({
+        channelId: 'signal',
+        agentId: 'coordinator',
+        content: 'Hello',
+        expiresInHours: 6,
+      });
     });
 
     it('does not register when send fails', async () => {
@@ -249,7 +263,12 @@ describe('SignalSendHandler', () => {
         success: false, blockedReason: 'Blocked',
       });
       const mockRegister = vi.fn();
-      (ctx as Record<string, unknown>).outboundContext = { register: mockRegister, release: vi.fn() };
+      (ctx as Record<string, unknown>).outboundContext = {
+        register: mockRegister,
+        release: vi.fn(),
+        defaultExpiryHours: 6,
+        explicitExpiryHours: 24,
+      };
 
       const result = await handler.execute(ctx);
 
@@ -269,7 +288,13 @@ describe('SignalSendHandler', () => {
         success: true, messageId: 'msg-1',
       });
       const mockRegister = vi.fn().mockRejectedValue(new Error('DB down'));
-      (ctx as Record<string, unknown>).outboundContext = { register: mockRegister, release: vi.fn() };
+      (ctx as Record<string, unknown>).outboundContext = {
+        register: mockRegister,
+        release: vi.fn(),
+        defaultExpiryHours: 6,
+        explicitExpiryHours: 24,
+      };
+      (ctx as Record<string, unknown>).agentId = 'coordinator';
 
       const result = await handler.execute(ctx);
       expect(result.success).toBe(true);
