@@ -1009,6 +1009,25 @@ describe('allowed_callers gate', () => {
 
     expect(result.success).toBe(false);
   });
+
+  it('allows CEO-approved re-execution with no agentId (approve-action path)', async () => {
+    const registry = new SkillRegistry();
+    // Mirrors a governance skill restricted to coordinator only
+    const manifest = { ...makeManifest('governance-skill'), allowed_callers: ['coordinator'] };
+    registry.register(manifest, makeHandler('ok'));
+    const layer = new ExecutionLayer(registry, logger);
+
+    // approve-action re-invokes with humanApproved: true but no agentId — this is
+    // the real code path used when a CEO approves a held governance action.
+    // Without humanApproved, no-agentId falls back to 'system' which is not in
+    // allowed_callers and would be blocked. With humanApproved, the gate is bypassed.
+    const result = await layer.invoke('governance-skill', { query: 'test' }, undefined, {
+      humanApproved: true,
+      // agentId deliberately omitted — matches approve-action handler behaviour
+    });
+
+    expect(result.success).toBe(true);
+  });
 });
 
 // ---------------------------------------------------------------------------

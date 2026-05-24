@@ -24,6 +24,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Context bridging v2** — outbound context registry replaces working-memory memos; send skills gain optional `context_bridge` param for delegation-aware reply routing. (#615)
 - **Coordinator prompt** — `[PRIOR OUTBOUND CONTEXT]` replaced with `[ACTIVE OUTBOUND CONTEXT]` block including delegation guidance and entry IDs for release. (#615)
 - **`signal-send`**, **`email-send`**, **`email-reply`** — accept optional `context_bridge` JSON param; declare `outboundContext` capability. (#615)
+- **`file-parse` access relaxed** — `allowed_callers` restriction removed; skill is now invocable by any agent (previously restricted to `system`, `ceo-inbox`, `coordinator`). Custom agents that parse files (e.g., expense trackers processing receipt attachments) were previously blocked at runtime despite having the skill pinned. (#681)
 
 ### Fixed
 
@@ -35,6 +36,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 - **`qs`** — pinned transitive dependency to `>=6.15.2` via pnpm override, closing CVE-2026-8723 (DoS via crash in `qs.stringify` with null/undefined in comma-format arrays).
 - **`package-lock.json`** — deleted stale npm lockfile and added it to `.gitignore`; the project uses pnpm exclusively and the file was generating spurious Dependabot alerts (#30, #32, #33).
+- **Governance skill caller restrictions** — `set-autonomy`, `approve-action`, `deny-action`, `dismiss-action`, and `delegate` now declare `"allowed_callers": ["coordinator"]`; prevents privilege escalation (rogue autonomy raise, self-approval) and rogue delegation chains from specialist agents. (#681)
 
 ### Removed
 
