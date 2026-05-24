@@ -215,22 +215,31 @@ ${text}`,
           // The validator uses semantic similarity on this label for near-duplicate detection.
           const label = `${attribute}: ${value}`;
 
+          // Use the context-aware source key so the rate limit counter matches
+          // what AgentRuntime.resetRateLimit() clears after each task. The
+          // LLM-provided `source` is a fallback for test/CLI contexts.
+          const effectiveSource = ctx.memoryWriteSource ?? source;
+          if (!ctx.memoryWriteSource) {
+            ctx.log.debug(
+              { fallbackSource: source },
+              'extract-facts: memoryWriteSource not set — using input source fallback',
+            );
+          }
+
           const result = await ctx.entityMemory.storeFact({
             entityNodeId: entityNode.id,
             label,
             properties: { attribute, value },
             confidence,
             decayClass,
-            // Use the context-aware source key so the rate limit counter matches
-            // what AgentRuntime.resetRateLimit() clears after each task.
-            source: ctx.memoryWriteSource ?? source,
+            source: effectiveSource,
           });
 
           if (result.stored) {
             if (result.action === 'auto_resolved') {
               // Incoming fact superseded a lower-confidence existing fact — audit trail preserved.
               ctx.log.info(
-                { subject, attribute, source, nodeId: result.nodeId },
+                { subject, attribute, source: effectiveSource, nodeId: result.nodeId },
                 'extract-facts: fact auto-resolved — existing superseded by higher-confidence incoming',
               );
             }
@@ -240,14 +249,14 @@ ${text}`,
             // in this batch will also fail, so break immediately rather than burning
             // through the rest of the loop and mis-reporting them as conflicts.
             ctx.log.error(
-              { subject, attribute, source, reason: result.conflict },
+              { subject, attribute, source: effectiveSource, reason: result.conflict },
               'extract-facts: write rate limit exceeded — aborting remaining facts in batch',
             );
             failed++;
             break;
           } else {
             // conflict, auto_rejected, or entity_not_found — expected semantic outcomes, not infra failures.
-            ctx.log.warn({ subject, attribute, conflict: result.conflict, action: result.action, source }, 'extract-facts: fact not stored');
+            ctx.log.warn({ subject, attribute, conflict: result.conflict, action: result.action, source: effectiveSource }, 'extract-facts: fact not stored');
           }
         } catch (err) {
           // Re-throw programming errors — these indicate bugs in this handler (wrong
