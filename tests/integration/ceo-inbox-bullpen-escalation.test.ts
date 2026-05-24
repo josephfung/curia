@@ -10,7 +10,7 @@ import { randomUUID } from 'node:crypto';
 import pg from 'pg';
 import { BullpenService } from '../../src/memory/bullpen.js';
 import { OutboundContextService } from '../../src/dispatch/outbound-context.js';
-import { createLogger } from '../../src/logger.js';
+import { createSilentLogger } from '../../src/logger.js';
 
 const { Pool } = pg;
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -21,29 +21,36 @@ describeIf('ceo-inbox bullpen-through-coordinator escalation', () => {
   let bullpen: BullpenService;
   let outboundContext: OutboundContextService;
   let runId: string;
+  // Suite-level so test 3 can guard against test 2 not having run/succeeded.
+  let registeredEntryId: string | undefined;
 
   beforeAll(async () => {
     runId = randomUUID();
     pool = new Pool({ connectionString: DATABASE_URL });
     await pool.query('SELECT 1 FROM bullpen_threads LIMIT 0');
     await pool.query('SELECT 1 FROM outbound_context LIMIT 0');
-    const logger = createLogger('error');
+    const logger = createSilentLogger();
     bullpen = BullpenService.createWithPostgres(pool, logger);
     outboundContext = new OutboundContextService(pool, logger);
   });
 
   afterAll(async () => {
-    await pool.query(
-      `DELETE FROM bullpen_threads WHERE topic LIKE $1`,
-      [`${runId}%`],
-    );
-    // Remove only the specific entry created by this test run, identified by
-    // conversation_id scoped to runId, to avoid colliding with other test runs.
-    await pool.query(
-      `DELETE FROM outbound_context WHERE conversation_id = $1`,
-      [`conv-${runId}`],
-    );
-    await pool.end();
+    // Wrap cleanup in try/finally so pool.end() always runs, and cleanup errors
+    // don't produce confusing secondary failures that obscure the root cause.
+    try {
+      await pool.query(
+        `DELETE FROM bullpen_threads WHERE topic LIKE $1`,
+        [`${runId}%`],
+      );
+      // Remove only the specific entry created by this test run, identified by
+      // conversation_id scoped to runId, to avoid colliding with other test runs.
+      await pool.query(
+        `DELETE FROM outbound_context WHERE conversation_id = $1`,
+        [`conv-${runId}`],
+      );
+    } finally {
+      await pool.end();
+    }
   });
 
   it('ceo-inbox opens a bullpen thread mentioning coordinator for urgent email', async () => {
@@ -74,7 +81,7 @@ describeIf('ceo-inbox bullpen-through-coordinator escalation', () => {
     //
     // register() returns only the UUID; fetch the full row via pool.query to
     // verify the persisted field values.
-    const registeredEntryId = await outboundContext.register({
+    registeredEntryId = await outboundContext.register({
       conversationId: `conv-${runId}`,
       channelId: 'signal',
       agentId: 'ceo-inbox',
@@ -113,6 +120,11 @@ describeIf('ceo-inbox bullpen-through-coordinator escalation', () => {
   });
 
   it('active context entry enables delegation back to ceo-inbox', async () => {
+    // Guard: this test depends on test 2 having registered the outbound context entry.
+    if (!registeredEntryId) {
+      throw new Error('Precondition failed: registeredEntryId not set — did test 2 fail?');
+    }
+
     // Simulate: CEO replies on Signal. Dispatcher queries active entries.
     // We verify the entry we registered in test 2 is still present and has the
     // correct delegation hint. Use the conversation_id scoped to this run to
