@@ -65,7 +65,26 @@ describe('OutboundContextService', () => {
       expect(preview.endsWith('…')).toBe(true);
     });
 
-    it('defaults expiresInHours to 24 when not provided', async () => {
+    it('defaults expiresInHours to the configured defaultExpiryHours when entry omits expiresInHours', async () => {
+      const customService = new OutboundContextService(pool, logger, { defaultExpiryHours: 8 });
+      (pool.query as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+        rows: [{ id: 'some-id' }],
+      });
+
+      await customService.register({
+        conversationId: 'conv-1',
+        channelId: 'signal',
+        agentId: 'coordinator',
+        content: 'Short message',
+      });
+
+      const call = (pool.query as ReturnType<typeof vi.fn>).mock.calls[0]!;
+      const expiresAt = call[1][7] as Date;
+      const expectedMs = Date.now() + 8 * 60 * 60 * 1000;
+      expect(Math.abs(expiresAt.getTime() - expectedMs)).toBeLessThan(5000);
+    });
+
+    it('falls back to 6 hours when no config is provided and entry omits expiresInHours', async () => {
       (pool.query as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
         rows: [{ id: 'some-id' }],
       });
@@ -79,7 +98,7 @@ describe('OutboundContextService', () => {
 
       const call = (pool.query as ReturnType<typeof vi.fn>).mock.calls[0]!;
       const expiresAt = call[1][7] as Date;
-      const expectedMs = Date.now() + 24 * 60 * 60 * 1000;
+      const expectedMs = Date.now() + 6 * 60 * 60 * 1000;
       expect(Math.abs(expiresAt.getTime() - expectedMs)).toBeLessThan(5000);
     });
   });
@@ -209,6 +228,48 @@ describe('OutboundContextService', () => {
       expect(result).not.toContain('delegation:');
       expect(result).not.toContain('context:');
     });
+  });
+});
+
+describe('OutboundContextService TTL config', () => {
+  it('exposes defaultExpiryHours = 6 when no config provided', () => {
+    const pool = makePool();
+    const service = new OutboundContextService(pool, logger);
+    expect(service.defaultExpiryHours).toBe(6);
+  });
+
+  it('exposes explicitExpiryHours = 24 when no config provided', () => {
+    const pool = makePool();
+    const service = new OutboundContextService(pool, logger);
+    expect(service.explicitExpiryHours).toBe(24);
+  });
+
+  it('respects configured defaultExpiryHours', () => {
+    const pool = makePool();
+    const service = new OutboundContextService(pool, logger, { defaultExpiryHours: 12 });
+    expect(service.defaultExpiryHours).toBe(12);
+  });
+
+  it('respects configured explicitExpiryHours', () => {
+    const pool = makePool();
+    const service = new OutboundContextService(pool, logger, { explicitExpiryHours: 48 });
+    expect(service.explicitExpiryHours).toBe(48);
+  });
+});
+
+describe('ScopedOutboundContext TTL delegation', () => {
+  it('exposes defaultExpiryHours from the underlying service', () => {
+    const pool = makePool();
+    const service = new OutboundContextService(pool, logger, { defaultExpiryHours: 10 });
+    const scoped = new ScopedOutboundContext(service, 'conv-1');
+    expect(scoped.defaultExpiryHours).toBe(10);
+  });
+
+  it('exposes explicitExpiryHours from the underlying service', () => {
+    const pool = makePool();
+    const service = new OutboundContextService(pool, logger, { explicitExpiryHours: 36 });
+    const scoped = new ScopedOutboundContext(service, 'conv-1');
+    expect(scoped.explicitExpiryHours).toBe(36);
   });
 });
 
