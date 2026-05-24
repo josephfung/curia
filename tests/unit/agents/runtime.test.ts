@@ -77,6 +77,12 @@ describe('AgentRuntime', () => {
         ],
       }),
     );
+
+    // Verify turn budget block is wired into the system prompt.
+    const firstCall = provider.chat.mock.calls[0]![0] as {
+      messages: Array<{ role: string; content: string }>;
+    };
+    expect(firstCall.messages[0]!.content).toContain('## Turn budget');
   });
 
   it('publishes error response when LLM fails', async () => {
@@ -421,6 +427,7 @@ describe('AgentRuntime', () => {
     // The turn budget block is unconditionally appended (expected behavior).
     expect(systemMsg?.content).toContain('Base prompt.');
     expect(systemMsg?.content).not.toContain('Autonomy Level');
+    expect(systemMsg?.content).toContain('## Turn budget');
   });
 
   it('appends intent anchor to system prompt when intentAnchor is present', async () => {
