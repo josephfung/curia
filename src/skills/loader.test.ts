@@ -9,7 +9,7 @@ import { describe, it, expect } from 'vitest';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import pino from 'pino';
-import { loadSkillsFromDirectory } from './loader.js';
+import { loadSkillsFromDirectory, validateAllowedCallers } from './loader.js';
 import { SkillRegistry } from './registry.js';
 
 // Silent logger — these tests do not assert on log output
@@ -150,6 +150,133 @@ describe('loader: capability validation', () => {
       expect(() => {
         skill!.manifest.capabilities!.push('bus');
       }).toThrow(TypeError);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// allowed_callers: freeze and startup validation
+// ---------------------------------------------------------------------------
+
+describe('loader: allowed_callers', () => {
+  it('freezes allowed_callers array after loading', async () => {
+    const tmpDir = path.join(import.meta.dirname, '__test_ac_freeze__');
+    fs.mkdirSync(tmpDir, { recursive: true });
+    try {
+      setupSkillDir(tmpDir, 'restricted-skill', {
+        name: 'restricted-skill',
+        description: 'test skill',
+        version: '1.0.0',
+        action_risk: 'none',
+        inputs: {},
+        outputs: {},
+        allowed_callers: ['coordinator'],
+      });
+      const registry = new SkillRegistry();
+      await loadSkillsFromDirectory(tmpDir, registry, logger);
+
+      const skill = registry.get('restricted-skill');
+      expect(Object.isFrozen(skill?.manifest.allowed_callers)).toBe(true);
+      // A handler cannot escalate by adding itself to the caller list
+      expect(() => {
+        skill!.manifest.allowed_callers!.push('rogue-agent');
+      }).toThrow(TypeError);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('validateAllowedCallers', () => {
+  it('passes when all callers are known agents', async () => {
+    const tmpDir = path.join(import.meta.dirname, '__test_ac_valid__');
+    fs.mkdirSync(tmpDir, { recursive: true });
+    try {
+      setupSkillDir(tmpDir, 'governed-skill', {
+        name: 'governed-skill',
+        description: 'test skill',
+        version: '1.0.0',
+        action_risk: 'none',
+        inputs: {},
+        outputs: {},
+        allowed_callers: ['coordinator'],
+      });
+      const registry = new SkillRegistry();
+      await loadSkillsFromDirectory(tmpDir, registry, logger);
+
+      const knownAgents = new Set(['coordinator', 'calendar', 'ceo-inbox']);
+      expect(() => validateAllowedCallers(registry, knownAgents)).not.toThrow();
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('always accepts "system" as a valid caller without it being a known agent', async () => {
+    const tmpDir = path.join(import.meta.dirname, '__test_ac_system__');
+    fs.mkdirSync(tmpDir, { recursive: true });
+    try {
+      setupSkillDir(tmpDir, 'infra-skill', {
+        name: 'infra-skill',
+        description: 'test skill',
+        version: '1.0.0',
+        action_risk: 'none',
+        inputs: {},
+        outputs: {},
+        allowed_callers: ['system'],
+      });
+      const registry = new SkillRegistry();
+      await loadSkillsFromDirectory(tmpDir, registry, logger);
+
+      // 'system' is not in the known agents set — but it's always valid
+      const knownAgents = new Set(['coordinator']);
+      expect(() => validateAllowedCallers(registry, knownAgents)).not.toThrow();
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('throws on unknown agent name (catches typos at startup)', async () => {
+    const tmpDir = path.join(import.meta.dirname, '__test_ac_typo__');
+    fs.mkdirSync(tmpDir, { recursive: true });
+    try {
+      setupSkillDir(tmpDir, 'typo-skill', {
+        name: 'typo-skill',
+        description: 'test skill',
+        version: '1.0.0',
+        action_risk: 'none',
+        inputs: {},
+        outputs: {},
+        allowed_callers: ['coordinatorrr'],
+      });
+      const registry = new SkillRegistry();
+      await loadSkillsFromDirectory(tmpDir, registry, logger);
+
+      const knownAgents = new Set(['coordinator', 'calendar']);
+      expect(() => validateAllowedCallers(registry, knownAgents)).toThrow('coordinatorrr');
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('passes when allowed_callers is omitted', async () => {
+    const tmpDir = path.join(import.meta.dirname, '__test_ac_omit__');
+    fs.mkdirSync(tmpDir, { recursive: true });
+    try {
+      setupSkillDir(tmpDir, 'open-skill', {
+        name: 'open-skill',
+        description: 'test skill',
+        version: '1.0.0',
+        action_risk: 'none',
+        inputs: {},
+        outputs: {},
+      });
+      const registry = new SkillRegistry();
+      await loadSkillsFromDirectory(tmpDir, registry, logger);
+
+      const knownAgents = new Set(['coordinator']);
+      expect(() => validateAllowedCallers(registry, knownAgents)).not.toThrow();
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
