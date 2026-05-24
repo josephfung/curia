@@ -24,7 +24,6 @@ pinned_skills:
   - ceo-inbox-label
   - ceo-inbox-mark-read
   - config-store
-  - signal-send
   - bullpen
   - entity-context
   - executive-profile-get
