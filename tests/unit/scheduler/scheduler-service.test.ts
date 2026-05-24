@@ -714,8 +714,8 @@ describe('SchedulerService', () => {
       const [sql, params] = pool.query.mock.calls[0] as [string, unknown[]];
       // Column is always present so DO UPDATE can clear a stale value
       expect(sql).toContain('expected_duration_seconds');
-      // NULL (not a number) is written
-      expect(params[params.length - 1]).toBeNull();
+      // NULL (not a number) is written — second-to-last param (last is originator)
+      expect(params[params.length - 2]).toBeNull();
     });
 
     it('writes NULL for invalid expectedDurationSeconds values (0, negative, NaN, non-integer)', async () => {
@@ -733,7 +733,8 @@ describe('SchedulerService', () => {
         const [sql, params] = pool.query.mock.calls[pool.query.mock.calls.length - 1] as [string, unknown[]];
         // Column is always included — invalid value falls back to NULL
         expect(sql).toContain('expected_duration_seconds');
-        expect(params[params.length - 1]).toBeNull();
+        // Second-to-last param (last is originator)
+        expect(params[params.length - 2]).toBeNull();
       }
     });
 
@@ -796,6 +797,26 @@ describe('SchedulerService', () => {
 
       // Only the scheduled_jobs upsert — no second query.
       expect(pool.query).toHaveBeenCalledTimes(1);
+    });
+
+    it('stamps a system originator with systemRole system and channel declarative', async () => {
+      pool.query.mockResolvedValueOnce({ rows: [{ id: 'job-orig' }] });
+
+      await svc.upsertDeclarativeJob('coordinator', {
+        cron: '*/15 * * * *',
+        task: 'Check inbox',
+      });
+
+      const [sql, params] = pool.query.mock.calls[0]! as [string, unknown[]];
+      expect(sql).toContain('originator');
+
+      // The originator is the last parameter, serialized as JSON.
+      const originatorJson = params[params.length - 1] as string;
+      const originator = JSON.parse(originatorJson) as Record<string, unknown>;
+      expect(originator.contactId).toBe('system');
+      expect(originator.systemRole).toBe('system');
+      expect(originator.channel).toBe('declarative');
+      expect(originator.initiatedAt).toBeTruthy();
     });
   });
 

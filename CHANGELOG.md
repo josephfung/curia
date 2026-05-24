@@ -18,6 +18,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **`context-bridge-release`** — new coordinator skill to release outbound context entries when conversations complete. (#615)
 - **`outbound_context` table** — dedicated Postgres table replaces working-memory memos for outbound context tracking. (#615)
 - **Outbound context cleanup** — scheduler now purges expired and released `outbound_context` rows at startup and daily; count is logged at info level. (#679)
+- **Declarative job originator** — YAML-defined scheduled jobs now stamped with `systemRole: 'system'` originator at startup, distinguishing operator-configured work from principal-initiated and agent-decided tasks. (#558)
 
 ### Changed
 

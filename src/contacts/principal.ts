@@ -35,3 +35,31 @@ export function isAgentOriginated(
   const originator = metadata.originator as TaskOriginator | undefined;
   return originator?.systemRole === 'agent';
 }
+
+/**
+ * Check whether a task was originated by the system (operator-configured,
+ * platform-executed — e.g. declarative YAML jobs loaded at startup).
+ *
+ * @param metadata  Task metadata (from ctx.taskMetadata or agent.task payload)
+ */
+export function isSystemOriginated(
+  metadata: Record<string, unknown> | undefined,
+): boolean {
+  if (!metadata) return false;
+  const originator = metadata.originator as TaskOriginator | undefined;
+  return originator?.systemRole === 'system';
+}
+
+/**
+ * Create a TaskOriginator representing operator-configured, platform-executed work.
+ * Used by upsertDeclarativeJob() to stamp YAML-defined scheduled jobs.
+ * A factory (not a constant) so `initiatedAt` reflects the actual upsert time.
+ */
+export function makeSystemOriginator(): TaskOriginator {
+  return {
+    contactId: 'system',
+    systemRole: 'system',
+    channel: 'declarative',
+    initiatedAt: new Date().toISOString(),
+  };
+}

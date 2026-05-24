@@ -168,8 +168,12 @@ export interface PermissionDef {
 
 export type TrustLevel = 'ceo' | 'high' | 'medium' | 'low';
 
-/** System designation — drives authorization. Separate from the free-text `role` field. */
-export type SystemRole = 'principal' | 'agent';
+/** System designation — drives authorization. Separate from the free-text `role` field.
+ *  - 'principal' — the human CEO who Curia serves
+ *  - 'agent'     — Curia itself or another autonomous agent
+ *  - 'system'    — operator-configured, platform-executed (e.g. declarative YAML jobs)
+ */
+export type SystemRole = 'principal' | 'agent' | 'system';
 
 // Ordinal ranking for trust level comparison. Higher rank = more trusted.
 // Used by meetsMinimumTrust() so callers don't need to enumerate every level.
