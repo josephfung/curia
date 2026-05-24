@@ -12,7 +12,7 @@
 
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
 import { checkGroupMemberTrust } from '../../src/channels/signal/group-trust.js';
-import { parseContextBridge, registerContextBridge } from '../../src/dispatch/context-bridge-parse.js';
+import { registerOutboundContext } from '../../src/dispatch/context-bridge-parse.js';
 
 const MAX_MESSAGE_LENGTH = 10_000;
 
@@ -139,11 +139,13 @@ export class SignalSendHandler implements SkillHandler {
           return { success: false, error: result.blockedReason ?? 'Signal send failed' };
         }
 
-        // Register context bridge entry if requested (best-effort).
-        const bridge = parseContextBridge(contextBridgeRaw, ctx.log);
-        if (bridge) {
-          await registerContextBridge(ctx.outboundContext, bridge, 'signal', message, ctx.log);
-        }
+        // Register outbound context entry (best-effort, always fires).
+        await registerOutboundContext(ctx.outboundContext, contextBridgeRaw, {
+          channelId: 'signal',
+          content: message,
+          agentId: ctx.agentId ?? 'coordinator',
+          log: ctx.log,
+        });
 
         return { success: true, data: { delivered_to: group_id, channel: 'signal' } };
       } catch (err) {
@@ -171,11 +173,13 @@ export class SignalSendHandler implements SkillHandler {
         };
       }
 
-      // Register context bridge entry if requested (best-effort).
-      const bridge = parseContextBridge(contextBridgeRaw, ctx.log);
-      if (bridge) {
-        await registerContextBridge(ctx.outboundContext, bridge, 'signal', message, ctx.log);
-      }
+      // Register outbound context entry (best-effort, always fires).
+      await registerOutboundContext(ctx.outboundContext, contextBridgeRaw, {
+        channelId: 'signal',
+        content: message,
+        agentId: ctx.agentId ?? 'coordinator',
+        log: ctx.log,
+      });
 
       return {
         success: true,
