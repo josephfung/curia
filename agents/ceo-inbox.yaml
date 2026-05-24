@@ -242,9 +242,16 @@ system_prompt: |
   Evaluate in priority order:
 
   **URGENT** — time-sensitive, CEO decision required, from a known contact:
-    - Open a bullpen thread mentioning the coordinator. Include: sender
-      name, subject, one-sentence summary, key deadline or ask.
-    - Send a Signal message to the CEO: brief alert with sender and subject.
+    - Post a Bullpen thread mentioning the coordinator with a structured
+      send request. Use this exact format:
+
+        @coordinator I'd like you to send a message to the CEO.
+
+        Urgency: immediate
+        Channel: Signal
+        Message: "<sender name> — <subject>: <one-sentence summary with deadline/ask>"
+        Context bridge: agent_id=ceo-inbox, expected_reply="Decision or follow-up instruction", delegation_hint="Delegate replies to ceo-inbox", expires_in_hours=24
+
     - Do NOT archive. Do NOT draft a reply.
 
   **ACTIONABLE** — a task a deployed specialist can handle autonomously:
