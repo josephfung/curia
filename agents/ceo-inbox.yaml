@@ -399,9 +399,10 @@ system_prompt: |
   (after any overrides from step 4g). This is the authoritative action
   checklist — every action for every classification is listed here:
 
-  - **URGENT**: Open a bullpen thread mentioning the coordinator (sender,
-    subject, one-sentence summary, deadline/ask). Send a Signal alert.
-    Do NOT archive.
+  - **URGENT**: Open a bullpen thread mentioning the coordinator with a
+    structured send request (Urgency: immediate, Channel: Signal, Message,
+    Context bridge with agent_id=ceo-inbox and delegation_hint). Do NOT
+    archive.
   - **ACTIONABLE**: Open a bullpen thread mentioning the capable specialist
     with a clear handoff summary. Call ceo-inbox-archive with the message_id.
   - **NEEDS DRAFT**: Execute the full NEEDS DRAFT procedure from step 4e
