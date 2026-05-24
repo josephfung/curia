@@ -674,6 +674,31 @@ export interface LlmCallEvent extends BaseEvent {
   payload: LlmCallPayload;
 }
 
+// EmbeddingCallPayload — emitted by EmbeddingService (OpenAI backend) after each
+// successful embedding API call. Tracks model, token consumption, estimated cost,
+// and latency. Allows embedding costs to appear in the same audit log as llm.call.
+// sourceLayer 'system' because embeddings fire from infrastructure, not agent tasks.
+// parentEventId is optional — embedding calls fire from KG/validator paths that
+// don't always have a task event ID in scope.
+interface EmbeddingCallPayload {
+  /** Embedding model used — e.g. 'text-embedding-3-small'. */
+  model: string;
+  /** Token count from OpenAI API response usage.prompt_tokens. */
+  inputTokens: number;
+  /** Estimated cost in USD, computed at call time from model registry pricing. */
+  estimatedCostUsd: number;
+  /** Wall-clock latency for the API call in milliseconds. */
+  latencyMs: number;
+  /** Character count of the input text — diagnostic for oversized inputs. */
+  inputTextLength: number;
+}
+
+export interface EmbeddingCallEvent extends BaseEvent {
+  type: 'embedding.call';
+  sourceLayer: 'system';
+  payload: EmbeddingCallPayload;
+}
+
 // ContextBudgetEvent — published by the agent layer after assembling context for each LLM call.
 // parentEventId references the agent.task that triggered it.
 export interface ContextBudgetEvent extends BaseEvent {
@@ -768,7 +793,8 @@ export type BusEvent =
   | HumanDecisionEvent       // Spec 10: human-in-the-loop decision record (approve/deny/etc.)
   | SecretAccessedEvent      // Spec 06: secrets isolation audit trail (name only, never value)
   | AutonomySkillBlockedEvent  // Autonomy Phase 2: skill blocked by action_risk gate
-  | AutonomySendBlockedEvent;  // Autonomy Phase 2: outbound send blocked by score < 70 gate
+  | AutonomySendBlockedEvent   // Autonomy Phase 2: outbound send blocked by score < 70 gate
+  | EmbeddingCallEvent;        // #654: embedding API call cost telemetry
 
 // Convenience alias for use in handler maps / switch statements.
 export type EventType = BusEvent['type'];
@@ -1254,6 +1280,22 @@ export function createAutonomySendBlocked(
     type: 'autonomy.send_blocked',
     sourceLayer: 'dispatch',
     payload,
+    parentEventId,
+  };
+}
+
+export function createEmbeddingCall(
+  // parentEventId is optional — embedding calls fire from KG/validator paths that
+  // don't always have an agent.task event ID in scope.
+  payload: EmbeddingCallPayload & { parentEventId?: string },
+): EmbeddingCallEvent {
+  const { parentEventId, ...rest } = payload;
+  return {
+    id: randomUUID(),
+    timestamp: new Date(),
+    type: 'embedding.call',
+    sourceLayer: 'system',
+    payload: rest,
     parentEventId,
   };
 }
