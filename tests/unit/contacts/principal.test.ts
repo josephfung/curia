@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { isPrincipalOriginated, isAgentOriginated, isSystemOriginated, makeSystemOriginator } from '../../../src/contacts/principal.js';
 import type { TaskOriginator } from '../../../src/contacts/types.js';
 
