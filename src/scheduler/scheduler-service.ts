@@ -5,6 +5,7 @@ import type { EventBus } from '../bus/bus.js';
 import type { Logger } from '../logger.js';
 import { createScheduleCreated } from '../bus/events.js';
 import type { TaskOriginator } from '../contacts/types.js';
+import { makeSystemOriginator } from '../contacts/principal.js';
 
 // -- Public types --
 
@@ -484,13 +485,19 @@ export class SchedulerService {
     // expected_duration_seconds is always included (as $8) so the DO UPDATE can clear it to NULL
     // when the field is removed from the YAML — the conditional-column pattern would leave a
     // stale value in place.
+    // Stamp a system originator so declarative jobs have non-null originator in the DB.
+    // systemRole: 'system' distinguishes operator-configured work from principal-initiated
+    // ('principal') and agent-decided ('agent') tasks. See issue #558.
+    const originator = makeSystemOriginator();
+
     const sql = `
-      INSERT INTO scheduled_jobs (agent_id, cron_expr, task_payload, status, next_run_at, created_by, timezone, expected_duration_seconds)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      INSERT INTO scheduled_jobs (agent_id, cron_expr, task_payload, status, next_run_at, created_by, timezone, expected_duration_seconds, originator)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
       ON CONFLICT (agent_id, cron_expr, (task_payload::text)) WHERE created_by = 'system'
       DO UPDATE SET next_run_at = $5,
                     timezone = $7,
-                    expected_duration_seconds = $8
+                    expected_duration_seconds = $8,
+                    originator = COALESCE(scheduled_jobs.originator, $9)
       RETURNING id
     `;
     const params: unknown[] = [
@@ -502,6 +509,7 @@ export class SchedulerService {
       'system',
       this.timezone,
       durationToWrite,
+      JSON.stringify(originator),
     ];
 
     const { rows } = await this.pool.query(sql, params);
