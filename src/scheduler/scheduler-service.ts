@@ -26,7 +26,7 @@ export interface CreateJobParams {
   /** Who originally initiated the task chain that created this schedule entry.
    *  Preserved in the DB so fireJob() can stamp it on the resulting agent.task,
    *  allowing isPrincipalOriginated() to return true for principal-authorized scheduled work.
-   *  Null for declarative (YAML-defined) jobs and jobs created before migration 040. */
+   *  Null for jobs created before migration 040. Declarative jobs use systemRole: 'system'. */
   originator?: TaskOriginator;
 }
 
@@ -60,8 +60,9 @@ export interface JobRow {
   lastRunOutcome: 'completed' | 'failed' | 'timed_out' | null;
   lastRunSummary: string | null;
   lastRunContext: Record<string, unknown> | null;
-  /** TaskOriginator stored at schedule-creation time. Null for declarative jobs and
-   *  jobs created before migration 040. Stamped on the resulting agent.task by fireJob(). */
+  /** TaskOriginator stored at schedule-creation time. Null for jobs created before
+   *  migration 040. Declarative jobs use systemRole: 'system'. Stamped on the resulting
+   *  agent.task by fireJob(). */
   originator: TaskOriginator | null;
 }
 
