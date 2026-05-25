@@ -60,20 +60,29 @@ export class FileParseHandler implements SkillHandler {
     // disk. This bridges the gap with ceo-inbox-download-attachment which omits
     // content_base64 when temp storage is available (to avoid output size limits).
     if (!contentBase64 && tempFileUrl) {
-      const resolved = this.resolveTempFileUrl(tempFileUrl);
+      const resolved = await this.resolveTempFileUrl(tempFileUrl);
       if (!resolved) {
+        ctx.log.warn({ tempFileUrl }, 'file-parse: rejected temp_file_url — must be file:// under allowed prefix');
         return { success: false, error: 'Invalid temp_file_url: must be a file:// URL under the temp store directory' };
       }
       try {
         const fileBuffer = await fs.readFile(resolved);
+        if (fileBuffer.length === 0) {
+          ctx.log.error({ tempFileUrl }, 'file-parse: temp file exists but is empty (0 bytes)');
+          return { success: false, error: 'Temp file at temp_file_url is empty (0 bytes) — file may have been corrupted or partially written' };
+        }
         contentBase64 = fileBuffer.toString('base64');
         ctx.log.info(
           { tempFileUrl, bytes: fileBuffer.length },
           'file-parse: read content from temp_file_url (content_base64 was empty)',
         );
       } catch (err) {
-        ctx.log.error({ err, tempFileUrl }, 'file-parse: failed to read temp file');
-        return { success: false, error: 'Failed to read file from temp_file_url — file may have expired' };
+        const code = (err as NodeJS.ErrnoException).code;
+        ctx.log.error({ err, tempFileUrl, errCode: code }, 'file-parse: failed to read temp file');
+        if (code === 'ENOENT') {
+          return { success: false, error: 'Failed to read file from temp_file_url — temp file has expired or been cleaned up. Re-download the attachment to get a fresh temp_file_url.' };
+        }
+        return { success: false, error: `Failed to read file from temp_file_url — filesystem error (${code ?? 'unknown'})` };
       }
     }
 
@@ -305,20 +314,49 @@ export class FileParseHandler implements SkillHandler {
   /**
    * Validate and resolve a file:// URL to an absolute filesystem path.
    * Only allows paths under known temp store directories to prevent path traversal.
+   * Resolves symlinks to prevent symlink-based escape from the allowed directory.
    * Returns null if the URL is invalid or points outside the allowed directories.
    */
-  private resolveTempFileUrl(url: string): string | null {
+  private async resolveTempFileUrl(url: string): Promise<string | null> {
     if (!url.startsWith('file://')) return null;
 
     const filePath = path.resolve(url.slice('file://'.length));
 
     // Allow paths under the production tmpfs mount or the /tmp fallback (local dev).
     // Both are restricted directories where only TempFileStore writes.
+    // TODO: read CURIA_TEMPFILE_DIR env var to stay in sync with TempFileStore config
     const allowedPrefixes = ['/run/curia-tempfiles/', '/tmp/curia-tempfiles/'];
-    const allowed = allowedPrefixes.some((prefix) => filePath.startsWith(prefix));
-    if (!allowed) return null;
+    const logicallyAllowed = allowedPrefixes.some((prefix) => filePath.startsWith(prefix));
+    if (!logicallyAllowed) return null;
 
-    return filePath;
+    // Resolve symlinks to prevent a symlink inside the allowed directory from
+    // pointing to files outside it (e.g. ln -s /etc/shadow /tmp/curia-tempfiles/x).
+    let realPath: string;
+    try {
+      realPath = await fs.realpath(filePath);
+    } catch {
+      // File doesn't exist (ENOENT) — return the logical path and let the
+      // caller's fs.readFile produce the "expired" error message.
+      return filePath;
+    }
+
+    // Resolve the prefix directories too — on macOS /tmp is a symlink to
+    // /private/tmp, so both sides of the comparison must be resolved.
+    const resolvedPrefixes = await Promise.all(
+      allowedPrefixes.map(async (prefix) => {
+        try {
+          // realpath the directory (without trailing slash), then re-add it
+          return await fs.realpath(prefix.slice(0, -1)) + '/';
+        } catch {
+          return prefix; // directory doesn't exist, keep the original
+        }
+      }),
+    );
+    const allPrefixes = [...new Set([...allowedPrefixes, ...resolvedPrefixes])];
+    const reallyAllowed = allPrefixes.some((prefix) => realPath.startsWith(prefix));
+    if (!reallyAllowed) return null;
+
+    return realPath;
   }
 }
 

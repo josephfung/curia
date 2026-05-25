@@ -1,7 +1,7 @@
 {
   "name": "file-parse",
   "description": "Parse a document (CSV, PDF, HTML, or image) and extract structured data. Accepts base64-encoded content OR a temp_file_url (file:// URL from ceo-inbox-download-attachment), plus a MIME type. Optionally provide extract_as to get structured fields (receipt, bank_statement, invoice) instead of raw text. For CSV files, parsing is direct and deterministic. For images, PDFs, and HTML, uses Claude for text extraction and structuring. Returns a confidence score (0–1) for LLM-extracted results.",
-  "version": "1.1.0",
+  "version": "1.0.1",
   "sensitivity": "normal",
   "action_risk": "medium",
   "inputs": {
