@@ -1127,7 +1127,9 @@ class PostgresContactBackend implements ContactServiceBackend {
               c.contact_confidence, c.trust_level
        FROM contact_channel_identities cci
        JOIN contacts c ON c.id = cci.contact_id
-       WHERE cci.channel = $1 AND LOWER(cci.channel_identifier) = $2`,
+       WHERE cci.channel = $1
+         AND CASE WHEN $1 = 'email' THEN LOWER(cci.channel_identifier) = $2
+                  ELSE cci.channel_identifier = $2 END`,
       [channel, normalizedId],
     );
 
