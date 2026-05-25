@@ -21,19 +21,19 @@
  *     retry the same tool with different parameters — note the failure in your final output
  *   - After completing your tool calls, produce your final structured response immediately.
  *     Do not make additional tool calls unless genuinely necessary for the task
- *   - When you have fewer than 6 turns remaining, your next response MUST include your
+ *   - When you have fewer than 5 turns remaining, your next response MUST include your
  *     final output, even if the task is incomplete. A partial result with noted gaps is
  *     always better than silence
  *
- * The proximity threshold (the "fewer than N turns remaining" number) scales with
- * maxTurns so low-budget agents aren't told to finalize from turn 1. Formula:
- * max(2, floor(maxTurns / 3)) — roughly the last third of the budget.
+ * The proximity threshold (the "fewer than N turns remaining" number) defaults to 5
+ * but is clamped to at most half the budget so low-budget agents (maxTurns 3–4) aren't
+ * told to finalize from turn 1. Formula: max(2, min(5, floor(maxTurns / 2))).
  */
 export function formatTurnBudgetBlock(maxTurns: number): string {
-  // Scale the proximity threshold so low-budget agents still get usable tool turns.
-  // floor(maxTurns / 3) gives ~33% of budget; clamped to min 2 so the guidance
-  // is always present, even for very small budgets.
-  const proximityThreshold = Math.max(2, Math.floor(maxTurns / 3));
+  // Default threshold of 5 turns, but never more than half the budget so
+  // low-turn agents still get usable tool turns. Min 2 so the guidance is
+  // always present.
+  const proximityThreshold = Math.max(2, Math.min(5, Math.floor(maxTurns / 2)));
 
   return [
     '## Turn budget',
