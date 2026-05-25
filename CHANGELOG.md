@@ -19,7 +19,12 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **`request-clarification` skill** — any specialist can call this skill to pause mid-task and request CEO direction; the runtime short-circuits the tool-use loop and the DelegateHandler returns a typed result with a resume_token for seamless re-delegation.
 - **Multi-turn research conversations** — research-analyst can pause mid-research to ask a clarifying question; coordinator routes it to the CEO and re-delegates automatically when the CEO replies. (#611)
+
+### Changed
+
+- **Multi-turn clarification protocol** — moved from hand-written prompt conventions (~145 lines across coordinator + research-analyst YAML) to a code-backed `request-clarification` skill with runtime short-circuit and DelegateHandler resume_token support. Coordinator prompt reduced by ~50 lines, research-analyst by ~55 lines.
 
 - **`embedding.call` bus event** — `EmbeddingService` now publishes cost telemetry after each OpenAI embedding API call; token counts and estimated costs appear in `audit_log` alongside `llm.call` entries. (#654)
 

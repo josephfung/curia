@@ -620,6 +620,13 @@ export class AgentRuntime {
     // on the agent.response event for audit and monitoring.
     const skillsCalled: string[] = [];
 
+    // Clarification short-circuit state. When a specialist calls request-clarification,
+    // the runtime detects the protocol marker in the skill result and short-circuits the
+    // tool-use loop — emitting a deterministic JSON response instead of asking the LLM
+    // for another round. This moves the clarification format contract from LLM prompts
+    // into code: the runtime produces it, the DelegateHandler parses it.
+    let pendingClarification: { question: string; partial_findings: string } | null = null;
+
     while (response.type === 'tool_use' && executionLayer) {
       // Check turn budget before processing this round of tool calls
       budget.turnsUsed++;
@@ -810,6 +817,37 @@ export class AgentRuntime {
             }
           }
 
+          // Clarification protocol detection: when request-clarification returns
+          // successfully, capture the question and findings for the short-circuit exit.
+          // Follows the same pattern as the skill-registry check above — inspect by
+          // skill name, parse the structured result, take runtime-level action.
+          if (toolCall.name === 'request-clarification') {
+            try {
+              const clarData = typeof result.data === 'string'
+                ? JSON.parse(result.data) as unknown
+                : result.data;
+              const typed = clarData as { _curia_protocol?: string; question?: string; partial_findings?: string };
+              if (typed?._curia_protocol === 'clarification_request' && typed.question && typed.partial_findings) {
+                if (pendingClarification) {
+                  logger.warn(
+                    { agentId },
+                    'Multiple request-clarification calls in one turn — using the first',
+                  );
+                } else {
+                  pendingClarification = {
+                    question: typed.question,
+                    partial_findings: typed.partial_findings,
+                  };
+                }
+              }
+            } catch (err) {
+              // Non-fatal: if we can't parse the result, the clarification simply isn't
+              // detected and the loop continues normally. The specialist will produce a
+              // regular text response.
+              logger.warn({ err, agentId }, 'Failed to parse request-clarification result — skipping short-circuit');
+            }
+          }
+
           const resultContent = typeof result.data === 'string' ? result.data : JSON.stringify(result.data);
           toolResultBlocks.push({
             type: 'tool_result',
@@ -849,6 +887,50 @@ export class AgentRuntime {
       // This is the format the Anthropic API expects — each tool_result references
       // a tool_use_id from the preceding assistant turn.
       messages.push({ role: 'user', content: toolResultBlocks });
+
+      // Clarification short-circuit: if request-clarification was called successfully
+      // in this batch, bypass further LLM rounds and emit a deterministic protocol
+      // response. The DelegateHandler parses this JSON to return a typed result to
+      // the coordinator — no LLM text parsing involved.
+      if (pendingClarification) {
+        // Construct resume_token: carries the context needed to resume this task
+        // after the CEO responds. Base64-encoded so it survives JSON round-trips
+        // through context_bridge metadata. Versioned (v: 1) for forward compatibility.
+        const resumePayload = {
+          v: 1,
+          agent: agentId,
+          original_task: taskEvent.payload.content,
+          partial_findings: pendingClarification.partial_findings,
+        };
+        const resumeToken = Buffer.from(JSON.stringify(resumePayload)).toString('base64');
+
+        const clarificationContent = JSON.stringify({
+          _curia_protocol: 'clarification_request',
+          question: pendingClarification.question,
+          partial_findings: pendingClarification.partial_findings,
+          resume_token: resumeToken,
+        });
+
+        // Persist the protocol response as the assistant turn
+        if (memory) {
+          await memory.addTurn(conversationId, agentId, { role: 'assistant', content: clarificationContent });
+        }
+
+        const clarificationResponse = createAgentResponse({
+          agentId,
+          conversationId,
+          content: clarificationContent,
+          skillsCalled,
+          parentEventId: taskEvent.id,
+        });
+        await bus.publish('agent', clarificationResponse);
+
+        logger.info(
+          { agentId, conversationId, question: pendingClarification.question.slice(0, 100) },
+          'Task paused for clarification — specialist requested CEO direction',
+        );
+        return;
+      }
 
       // Refresh Bullpen context before the next LLM round so the model sees
       // any new replies or closures that occurred during skill execution (#213).
