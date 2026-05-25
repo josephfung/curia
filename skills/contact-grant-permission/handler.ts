@@ -1,4 +1,5 @@
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { TaskOriginator } from '../../src/contacts/types.js';
 
 export class ContactGrantPermissionHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {
@@ -30,15 +31,18 @@ export class ContactGrantPermissionHandler implements SkillHandler {
       return { success: false, error: 'contact-grant-permission: contactService not available — this is a universal service, check ExecutionLayer configuration.' };
     }
 
-    // Defensive guard — the execution layer guarantees caller is defined for
-    // elevated skills, but guard explicitly so a broken invariant produces a
-    // clear error instead of a cryptic TypeError.
-    if (!ctx.caller) {
-      return { success: false, error: 'Caller context is required for this skill but was not provided' };
+    // Derive actor identity for the audit trail. Prefer caller (set when the
+    // agent runtime has senderContext), fall back to originator (always forwarded
+    // through delegation). Delegated specialists don't receive senderContext, so
+    // caller is undefined — but originator carries the principal's contactId.
+    const originator = ctx.taskMetadata?.originator as TaskOriginator | undefined;
+    const actorContactId = ctx.caller?.contactId ?? originator?.contactId;
+    if (!actorContactId) {
+      return { success: false, error: 'Cannot determine actor identity for audit trail — neither caller nor originator available' };
     }
 
     try {
-      await ctx.contactService.grantPermission(contact_id, permission, granted, ctx.caller.contactId);
+      await ctx.contactService.grantPermission(contact_id, permission, granted, actorContactId);
       const action = granted ? 'granted' : 'denied';
       ctx.log.info({ contactId: contact_id, permission, granted }, `Permission ${action}`);
       return { success: true, data: { contact_id, permission, granted } };

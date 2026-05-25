@@ -5,8 +5,8 @@
   "sensitivity": "normal",
   "action_risk": "none",
   "inputs": {
-    "query": "string",
-    "by": "string"
+    "query": "string (for name: a name or partial name; for channel: format as 'channel:identifier' e.g. 'email:jenna@acme.com')",
+    "by": "string (name | role | channel)"
   },
   "outputs": {
     "contacts": "array",

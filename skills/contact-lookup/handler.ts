@@ -100,18 +100,20 @@ export class ContactLookupHandler implements SkillHandler {
         };
       }
 
+      // Use enrichContact (same as name/role paths) so the response includes
+      // status and channel identities — previously omitted, which prevented
+      // the LLM from determining whether a contact was provisional.
+      const contact = {
+        id: resolved.contactId,
+        displayName: resolved.displayName,
+        role: resolved.role,
+        status: resolved.status,
+        kgNodeId: resolved.kgNodeId,
+      };
+      const enriched = await enrichContact(ctx, contact);
       return {
         success: true,
-        data: {
-          contacts: [{
-            contact_id: resolved.contactId,
-            display_name: resolved.displayName,
-            role: resolved.role,
-            kg_node_id: resolved.kgNodeId,
-            verified: resolved.verified,
-          }],
-          count: 1,
-        },
+        data: { contacts: [enriched], count: 1 },
       };
     } catch (err) {
       ctx.log.error({ err, query, by }, 'Contact lookup failed');
