@@ -19,6 +19,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **Multi-turn research conversations** — research-analyst can pause mid-research to ask a clarifying question; coordinator routes it to the CEO and re-delegates automatically when the CEO replies. (#611)
+
 - **`embedding.call` bus event** — `EmbeddingService` now publishes cost telemetry after each OpenAI embedding API call; token counts and estimated costs appear in `audit_log` alongside `llm.call` entries. (#654)
 
 - **`context-bridge-release`** — new coordinator skill to release outbound context entries when conversations complete. (#615)
