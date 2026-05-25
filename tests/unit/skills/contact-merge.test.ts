@@ -62,16 +62,28 @@ describe('ContactMergeHandler', () => {
     if (!result.success) expect(result.error).toContain('contactService');
   });
 
-  it('returns failure when caller context is missing', async () => {
+  it('proceeds without caller context (elevated gate enforced by execution layer)', async () => {
+    // The handler no longer guards on ctx.caller — principal origination is
+    // enforced by the execution layer's elevated-skill gate. Delegated specialists
+    // don't receive senderContext, so caller is undefined in that path.
+    const goldenRecord = {
+      displayName: 'Jenna Torres', role: 'CFO', notes: null,
+      status: 'confirmed', identities: [], authOverrides: [],
+    };
     const contactService = {
-      mergeContacts: vi.fn().mockResolvedValue({ dryRun: true }),
+      mergeContacts: vi.fn().mockResolvedValue({
+        primaryContactId: VALID_UUID_A,
+        secondaryContactId: VALID_UUID_B,
+        goldenRecord,
+        dryRun: true,
+      }),
     };
     const result = await handler.execute(makeCtx(
       { primary_contact_id: VALID_UUID_A, secondary_contact_id: VALID_UUID_B },
       { contactService: contactService as never, caller: undefined },
     ));
-    expect(result.success).toBe(false);
-    if (!result.success) expect(result.error).toContain('caller');
+    expect(result.success).toBe(true);
+    expect(contactService.mergeContacts).toHaveBeenCalledWith(VALID_UUID_A, VALID_UUID_B, true);
   });
 
   it('calls mergeContacts with dry_run: true by default', async () => {

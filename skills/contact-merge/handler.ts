@@ -4,7 +4,9 @@
 // before committing. The Coordinator MUST present the preview to the CEO and
 // get confirmation before calling with dry_run: false.
 //
-// Elevated skill — requires caller context (same pattern as contact-grant-permission).
+// Elevated skill — principal origination enforced by the execution layer's
+// elevated-skill gate (isPrincipalOriginated). No handler-level caller guard
+// needed; caller may be undefined for delegated specialists.
 //
 // @TODO (autonomy): When the autonomy engine reaches "supervised" or higher, consider
 // lowering the confirmation requirement for `certain`-confidence merges. At "full" autonomy,
@@ -41,11 +43,6 @@ export class ContactMergeHandler implements SkillHandler {
     }
     if (!ctx.contactService) {
       return { success: false, error: 'contact-merge: contactService not available — this is a universal service, check ExecutionLayer configuration.' };
-    }
-    // Elevated skill — execution layer guarantees caller is set, but guard explicitly
-    // so a broken invariant produces a clear error instead of a cryptic TypeError.
-    if (!ctx.caller) {
-      return { success: false, error: 'caller context is required for this elevated skill.' };
     }
 
     // Default dry_run: true — safe default, prevents accidental merges without CEO confirmation

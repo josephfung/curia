@@ -99,6 +99,9 @@ system_prompt: |
     then respond based on what it returns. Skipping this step and guessing is not
     acceptable.
   - contact-lookup supports partial name matching. "Joe" will find "Joe Brennan".
+  - To look up a contact by email address, use by: "channel" with
+    query: "email:address@domain.com". By-name lookup only matches display names,
+    not email addresses.
   - Always search contacts before asking the coordinator to ask the CEO for details.
   - The lookup returns channel identities (email, phone, etc.) alongside the contact.
   - If a contact's status is "provisional", flag this in your response — provisional
