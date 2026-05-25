@@ -101,17 +101,29 @@ export class EmailSendHandler implements SkillHandler {
     }
 
     // When replying, fetch the original message and append a quoted copy below
-    // the reply body. If the fetch fails, proceed without the quote (non-fatal).
+    // the reply body. Both the fetch and the formatting are non-fatal — if either
+    // fails, proceed with the unquoted body and log a warning at the correct step.
+    // Note: email-send has no account routing, so getEmailMessage uses the primary account.
     let quotedBody = body;
     if (replyToMessageId) {
+      let original: Awaited<ReturnType<typeof ctx.outboundGateway.getEmailMessage>> | undefined;
       try {
-        const original = await ctx.outboundGateway.getEmailMessage(replyToMessageId);
-        quotedBody = body + buildReplyQuote(original, ctx.timezone);
+        original = await ctx.outboundGateway.getEmailMessage(replyToMessageId);
       } catch (err) {
         ctx.log.warn(
           { err, replyToMessageId },
           'email-send: failed to fetch original message for quote — proceeding without quote',
         );
+      }
+      if (original !== undefined) {
+        try {
+          quotedBody = body + buildReplyQuote(original, ctx.timezone);
+        } catch (err) {
+          ctx.log.warn(
+            { err, replyToMessageId },
+            'email-send: failed to build reply quote — proceeding without quote',
+          );
+        }
       }
     }
 
