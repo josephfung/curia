@@ -9,6 +9,8 @@
 // All LLM calls go through the constrained InfraLlm service (classify + extract
 // only) so costs and latency are tracked by the telemetry infrastructure.
 
+import fs from 'node:fs/promises';
+import path from 'node:path';
 import { createRequire } from 'node:module';
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
 import type { InfraLlm } from '../../src/skills/infra-llm.js';
@@ -45,15 +47,38 @@ export class FileParseHandler implements SkillHandler {
     const infraLlm = ctx.infraLlm;
 
     // --- Input validation ---
-    const contentBase64 = typeof ctx.input.content_base64 === 'string'
+    let contentBase64 = typeof ctx.input.content_base64 === 'string'
       ? ctx.input.content_base64.trim() : '';
+    const tempFileUrl = typeof ctx.input.temp_file_url === 'string'
+      ? ctx.input.temp_file_url.trim() : '';
     const mimeType = typeof ctx.input.mime_type === 'string'
       ? ctx.input.mime_type.trim().toLowerCase() : '';
     const extractAs = typeof ctx.input.extract_as === 'string'
       ? ctx.input.extract_as.trim().toLowerCase() as ExtractAs : 'raw';
 
+    // When temp_file_url is provided but content_base64 is not, read the file from
+    // disk. This bridges the gap with ceo-inbox-download-attachment which omits
+    // content_base64 when temp storage is available (to avoid output size limits).
+    if (!contentBase64 && tempFileUrl) {
+      const resolved = this.resolveTempFileUrl(tempFileUrl);
+      if (!resolved) {
+        return { success: false, error: 'Invalid temp_file_url: must be a file:// URL under the temp store directory' };
+      }
+      try {
+        const fileBuffer = await fs.readFile(resolved);
+        contentBase64 = fileBuffer.toString('base64');
+        ctx.log.info(
+          { tempFileUrl, bytes: fileBuffer.length },
+          'file-parse: read content from temp_file_url (content_base64 was empty)',
+        );
+      } catch (err) {
+        ctx.log.error({ err, tempFileUrl }, 'file-parse: failed to read temp file');
+        return { success: false, error: 'Failed to read file from temp_file_url — file may have expired' };
+      }
+    }
+
     if (!contentBase64) {
-      return { success: false, error: 'Missing required input: content_base64' };
+      return { success: false, error: 'Missing required input: content_base64 (or provide temp_file_url)' };
     }
     if (!mimeType) {
       return { success: false, error: 'Missing required input: mime_type' };
@@ -275,6 +300,25 @@ export class FileParseHandler implements SkillHandler {
         },
       };
     }
+  }
+
+  /**
+   * Validate and resolve a file:// URL to an absolute filesystem path.
+   * Only allows paths under known temp store directories to prevent path traversal.
+   * Returns null if the URL is invalid or points outside the allowed directories.
+   */
+  private resolveTempFileUrl(url: string): string | null {
+    if (!url.startsWith('file://')) return null;
+
+    const filePath = path.resolve(url.slice('file://'.length));
+
+    // Allow paths under the production tmpfs mount or the /tmp fallback (local dev).
+    // Both are restricted directories where only TempFileStore writes.
+    const allowedPrefixes = ['/run/curia-tempfiles/', '/tmp/curia-tempfiles/'];
+    const allowed = allowedPrefixes.some((prefix) => filePath.startsWith(prefix));
+    if (!allowed) return null;
+
+    return filePath;
   }
 }
 
