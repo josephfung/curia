@@ -83,8 +83,17 @@ export class CeoInboxDraftReplyHandler implements SkillHandler {
         'ceo-inbox-draft-reply: computed reply-all recipients',
       );
 
-      // Append the quoted original message below the reply body
-      const quotedBody = body + buildReplyQuote(original, ctx.timezone);
+      // Append the quoted original message below the reply body. Formatting is
+      // non-fatal — a malformed message body should not block draft creation.
+      let quotedBody = body;
+      try {
+        quotedBody = body + buildReplyQuote(original, ctx.timezone);
+      } catch (err) {
+        ctx.log.warn(
+          { err, replyToMessageId },
+          'ceo-inbox-draft-reply: failed to build reply quote — proceeding without quote',
+        );
+      }
 
       const draft = await client.createDraftReply({
         replyToMessageId,
