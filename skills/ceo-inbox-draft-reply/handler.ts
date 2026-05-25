@@ -1,5 +1,6 @@
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
 import { CeoNylasClient, type NylasParticipant } from '../_shared/ceo-nylas-client.js';
+import { buildReplyQuote } from '../_shared/reply-quote.js';
 
 export class CeoInboxDraftReplyHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {
@@ -82,10 +83,13 @@ export class CeoInboxDraftReplyHandler implements SkillHandler {
         'ceo-inbox-draft-reply: computed reply-all recipients',
       );
 
+      // Append the quoted original message below the reply body
+      const quotedBody = body + buildReplyQuote(original, ctx.timezone);
+
       const draft = await client.createDraftReply({
         replyToMessageId,
         subject: replySubject,
-        body,
+        body: quotedBody,
         to,
         cc,
       });

@@ -13,6 +13,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Changed
+
+- **`ceo-inbox-draft-reply` / `email-draft-save` / `email-send`** — reply drafts and sends now include the quoted original message body below the reply text, matching standard email client behaviour. (#673)
+
 ### Added
 
 - **`embedding.call` bus event** — `EmbeddingService` now publishes cost telemetry after each OpenAI embedding API call; token counts and estimated costs appear in `audit_log` alongside `llm.call` entries. (#654)

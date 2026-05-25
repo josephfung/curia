@@ -8,6 +8,7 @@
 
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
 import { registerOutboundContext } from '../../src/dispatch/context-bridge-parse.js';
+import { buildReplyQuote } from '../_shared/reply-quote.js';
 
 const MAX_TO_LENGTH = 1000;
 const MAX_SUBJECT_LENGTH = 500;
@@ -30,11 +31,12 @@ function parseRecipients(raw: string): string[] {
 
 export class EmailSendHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {
-    const { to, cc, subject, body, context_bridge: contextBridgeRaw } = ctx.input as {
+    const { to, cc, subject, body, reply_to_message_id: replyToMessageIdRaw, context_bridge: contextBridgeRaw } = ctx.input as {
       to?: string;
       cc?: string;
       subject?: string;
       body?: string;
+      reply_to_message_id?: string;
       context_bridge?: string;
     };
 
@@ -87,11 +89,30 @@ export class EmailSendHandler implements SkillHandler {
       return { success: false, error: message };
     }
 
+    const replyToMessageId = typeof replyToMessageIdRaw === 'string' && replyToMessageIdRaw.trim()
+      ? replyToMessageIdRaw.trim()
+      : undefined;
+
     if (!ctx.outboundGateway) {
       return {
         success: false,
         error: 'email-send skill requires outboundGateway access. Declare "outboundGateway" in capabilities.',
       };
+    }
+
+    // When replying, fetch the original message and append a quoted copy below
+    // the reply body. If the fetch fails, proceed without the quote (non-fatal).
+    let quotedBody = body;
+    if (replyToMessageId) {
+      try {
+        const original = await ctx.outboundGateway.getEmailMessage(replyToMessageId);
+        quotedBody = body + buildReplyQuote(original, ctx.timezone);
+      } catch (err) {
+        ctx.log.warn(
+          { err, replyToMessageId },
+          'email-send: failed to fetch original message for quote — proceeding without quote',
+        );
+      }
     }
 
     ctx.log.info({ to: toAddresses, subject }, 'Sending email via gateway');
@@ -101,8 +122,9 @@ export class EmailSendHandler implements SkillHandler {
         channel: 'email',
         to: toAddresses[0]!,
         subject,
-        body,
+        body: quotedBody,
         cc: ccAddresses,
+        replyToMessageId,
       });
 
       if (!result.success) {

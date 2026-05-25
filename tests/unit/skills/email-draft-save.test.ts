@@ -7,14 +7,16 @@ const logger = pino({ level: 'silent' });
 
 function makeCtx(input: Record<string, unknown>, gateway?: Partial<{
   createEmailDraft: (...args: unknown[]) => unknown;
-}>, taskMetadata?: Record<string, unknown>): SkillContext {
+  getEmailMessage: (...args: unknown[]) => unknown;
+}>, taskMetadata?: Record<string, unknown>, opts?: { timezone?: string }): SkillContext {
   return {
     input,
     secret: () => { throw new Error('no secrets'); },
     log: logger,
     outboundGateway: gateway as never,
     taskMetadata,
-  };
+    timezone: opts?.timezone,
+  } as SkillContext;
 }
 
 describe('EmailDraftSaveHandler', () => {
@@ -64,7 +66,16 @@ describe('EmailDraftSaveHandler', () => {
   });
 
   it('passes reply_to_message_id as replyToMessageId', async () => {
-    const gateway = { createEmailDraft: vi.fn().mockResolvedValue({ success: true, draftId: 'd-1' }) };
+    const gateway = {
+      createEmailDraft: vi.fn().mockResolvedValue({ success: true, draftId: 'd-1' }),
+      getEmailMessage: vi.fn().mockResolvedValue({
+        from: [{ email: 'sender@example.com' }],
+        to: [{ email: 'r@example.com' }],
+        date: 1700000000,
+        subject: 'Hi',
+        body: '<p>Original</p>',
+      }),
+    };
     await handler.execute(makeCtx(
       { to: 'r@example.com', subject: 'Re: Hi', body: 'Hello', reply_to_message_id: 'msg-orig' },
       gateway,
@@ -126,5 +137,84 @@ describe('EmailDraftSaveHandler', () => {
       expect(warnSpy).not.toHaveBeenCalled();
     });
 
+  });
+
+  describe('reply quote', () => {
+    const originalMessage = {
+      from: [{ name: 'Alice', email: 'alice@example.com' }],
+      to: [{ email: 'ceo@example.com' }],
+      date: 1700000000,
+      subject: 'Q2 planning',
+      body: '<p>Let me know your thoughts.</p>',
+    };
+
+    it('appends quote when reply_to_message_id is present', async () => {
+      const gateway = {
+        createEmailDraft: vi.fn().mockResolvedValue({ success: true, draftId: 'd-q1' }),
+        getEmailMessage: vi.fn().mockResolvedValue(originalMessage),
+      };
+      await handler.execute(makeCtx(
+        { to: 'alice@example.com', subject: 'Re: Q2 planning', body: 'Sounds good!', reply_to_message_id: 'msg-orig' },
+        gateway,
+        {},
+        { timezone: 'America/Toronto' },
+      ));
+      expect(gateway.getEmailMessage).toHaveBeenCalledWith('msg-orig', undefined);
+      const callBody = (gateway.createEmailDraft.mock.calls[0]! as [{ body: string }])[0].body;
+      expect(callBody).toContain('Sounds good!');
+      expect(callBody).toContain('---------- Original Message ----------');
+      expect(callBody).toContain('Alice <alice@example.com>');
+      expect(callBody).toContain('Let me know your thoughts.');
+    });
+
+    it('does not fetch original or append quote when reply_to_message_id is absent', async () => {
+      const gateway = {
+        createEmailDraft: vi.fn().mockResolvedValue({ success: true, draftId: 'd-q2' }),
+        getEmailMessage: vi.fn(),
+      };
+      await handler.execute(makeCtx(
+        { to: 'r@example.com', subject: 'Hi', body: 'Hello' },
+        gateway,
+      ));
+      expect(gateway.getEmailMessage).not.toHaveBeenCalled();
+      const callBody = (gateway.createEmailDraft.mock.calls[0]! as [{ body: string }])[0].body;
+      expect(callBody).toBe('Hello');
+    });
+
+    it('proceeds without quote when getEmailMessage fails', async () => {
+      const gateway = {
+        createEmailDraft: vi.fn().mockResolvedValue({ success: true, draftId: 'd-q3' }),
+        getEmailMessage: vi.fn().mockRejectedValue(new Error('Not found')),
+      };
+      const warnSpy = vi.fn();
+      const ctx = makeCtx(
+        { to: 'r@example.com', subject: 'Re: Hi', body: 'Got it', reply_to_message_id: 'msg-missing' },
+        gateway,
+      );
+      ctx.log = { ...logger, warn: warnSpy, info: vi.fn(), error: vi.fn(), debug: vi.fn() } as never;
+      const result = await handler.execute(ctx);
+      expect(result.success).toBe(true);
+      // Body should be unquoted
+      const callBody = (gateway.createEmailDraft.mock.calls[0]! as [{ body: string }])[0].body;
+      expect(callBody).toBe('Got it');
+      expect(callBody).not.toContain('---------- Original Message ----------');
+      // Warning was logged
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ replyToMessageId: 'msg-missing' }),
+        expect.stringContaining('failed to fetch original message'),
+      );
+    });
+
+    it('passes accountId to getEmailMessage', async () => {
+      const gateway = {
+        createEmailDraft: vi.fn().mockResolvedValue({ success: true, draftId: 'd-q4' }),
+        getEmailMessage: vi.fn().mockResolvedValue(originalMessage),
+      };
+      await handler.execute(makeCtx(
+        { to: 'alice@example.com', subject: 'Re: Q2', body: 'OK', reply_to_message_id: 'msg-acct', account: 'ceo-acct' },
+        gateway,
+      ));
+      expect(gateway.getEmailMessage).toHaveBeenCalledWith('msg-acct', 'ceo-acct');
+    });
   });
 });
