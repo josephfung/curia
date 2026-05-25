@@ -20,6 +20,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Authorization trust fallback** — when a contact's free-text role has no config match, the system now falls back to `trust_level_defaults` (new section in `role-defaults.yaml`) before reaching `unknown`. Family members and other free-text-role contacts with an explicit trust grant now get appropriate permissions.
 - **Authorization boundary hardening** — unknown `trustLevel` values from the DB now throw (caught safely by contact-resolver, degrades to `authorization=null`) instead of silently collapsing to low trust; permissions with unrecognized sensitivity values escalate to the CEO instead of silently landing in `trustBlocked`; config loader validates that `trust_level_defaults` is a YAML mapping at startup.
 - **`file-parse`** — accepts `temp_file_url` as alternative to `content_base64`, bridging the gap with `ceo-inbox-download-attachment` which omits base64 content when temp storage is available.
+- **`contact-lookup`** — channel/email lookups now return status and identities (previously omitted); skill manifest documents input format so the LLM knows to use `by: "channel"` with `email:addr` syntax.
+- **`contact-merge`** — removed stale `ctx.caller` guard that blocked all delegated specialists; principal origination is already enforced by the execution layer's elevated-skill gate.
+- **`contact-grant-permission`** — falls back to originator contactId when caller context is unavailable (delegated specialist path).
+- **Email case sensitivity** — `linkIdentity` now normalizes email addresses to lowercase; `resolveByChannelIdentity` uses case-insensitive matching so mixed-case emails are found.
 
 ### Added
 
