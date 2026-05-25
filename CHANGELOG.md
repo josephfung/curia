@@ -13,10 +13,6 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
-### Changed
-
-- **`turn-budget`** — added anti-retry, error acceptance, and structured output guidance; proximity threshold widened from 3 to 5 turns remaining. (#689)
-
 ### Added
 
 - **`request-clarification` skill** — any specialist can call this skill to pause mid-task and request CEO direction; the runtime short-circuits the tool-use loop and the DelegateHandler returns a typed result with a resume_token for seamless re-delegation.
@@ -34,7 +30,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Changed
 
 - **Multi-turn clarification protocol** — moved from hand-written prompt conventions (~145 lines across coordinator + research-analyst YAML) to a code-backed `request-clarification` skill with runtime short-circuit and DelegateHandler resume_token support. Coordinator prompt reduced by ~50 lines, research-analyst by ~55 lines.
-
+- **`turn-budget`** — added anti-retry, error acceptance, and structured output guidance; proximity threshold widened from 3 to 5 turns remaining. (#689)
 - **`ceo-inbox-draft-reply` / `email-draft-save` / `email-send` / `email-reply`** — reply drafts and sends now include the quoted original message body below the reply text, matching standard email client behaviour. (#673)
 - **Context bridging v2** — outbound context registry replaces working-memory memos; send skills gain optional `context_bridge` param for delegation-aware reply routing. (#615)
 - **Coordinator prompt** — `[PRIOR OUTBOUND CONTEXT]` replaced with `[ACTIVE OUTBOUND CONTEXT]` block including delegation guidance and entry IDs for release. (#615)
