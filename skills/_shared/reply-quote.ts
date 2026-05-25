@@ -1,6 +1,6 @@
 // reply-quote.ts — shared utility for building a quoted original message block
 // appended to reply emails. Used by ceo-inbox-draft-reply, email-draft-save,
-// and email-send skill handlers.
+// email-reply, and email-send skill handlers.
 
 import { DateTime } from 'luxon';
 import { htmlToPlainText } from './ceo-nylas-client.js';
@@ -51,7 +51,11 @@ export function buildReplyQuote(message: QuoteableMessage, timezone?: string): s
 
   const zone = timezone ?? 'UTC';
   const dt = DateTime.fromSeconds(message.date, { zone });
-  const dateLine = dt.toFormat('yyyy-MM-dd, h:mm a ZZZZ');
+  // Guard against undefined/NaN date from Nylas — Luxon returns Invalid DateTime
+  // rather than throwing, so we must check validity explicitly before formatting.
+  const dateLine = dt.isValid
+    ? dt.toFormat('yyyy-MM-dd, h:mm a ZZZZ')
+    : 'Unknown date';
 
   const plainBody = htmlToPlainText(message.body);
 
