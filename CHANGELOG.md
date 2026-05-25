@@ -13,6 +13,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Changed
+
+- **`turn-budget`** — added anti-retry, error acceptance, and structured output guidance; proximity threshold widened from 3 to 5 turns remaining. (#689)
+
 ### Added
 
 - **`embedding.call` bus event** — `EmbeddingService` now publishes cost telemetry after each OpenAI embedding API call; token counts and estimated costs appear in `audit_log` alongside `llm.call` entries. (#654)

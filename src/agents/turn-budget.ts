@@ -17,8 +17,13 @@
  *   of tool calls followed by your response. Plan your tool use accordingly:
  *   - Do not issue exploratory or speculative tool calls when you can act on what you know
  *   - If a search returns no results, try one alternative then move on — do not retry repeatedly
- *   - If you are within 3 turns of the limit and the task is incomplete, stop and produce
- *     a partial result or summary rather than continuing to tool-call into silence
+ *   - If a tool call returns an error or unexpected result, accept it and move on. Do not
+ *     retry the same tool with different parameters — note the failure in your final output
+ *   - After completing your tool calls, produce your final structured response immediately.
+ *     Do not make additional tool calls unless genuinely necessary for the task
+ *   - When you have fewer than 5 turns remaining, your next response MUST include your
+ *     final output, even if the task is incomplete. A partial result with noted gaps is
+ *     always better than silence
  */
 export function formatTurnBudgetBlock(maxTurns: number): string {
   return [
@@ -27,7 +32,12 @@ export function formatTurnBudgetBlock(maxTurns: number): string {
     'of tool calls followed by your response. Plan your tool use accordingly:',
     '- Do not issue exploratory or speculative tool calls when you can act on what you know',
     '- If a search returns no results, try one alternative then move on — do not retry repeatedly',
-    '- If you are within 3 turns of the limit and the task is incomplete, stop and produce',
-    '  a partial result or summary rather than continuing to tool-call into silence',
+    '- If a tool call returns an error or unexpected result, accept it and move on. Do not',
+    '  retry the same tool with different parameters — note the failure in your final output',
+    '- After completing your tool calls, produce your final structured response immediately.',
+    '  Do not make additional tool calls unless genuinely necessary for the task',
+    '- When you have fewer than 5 turns remaining, your next response MUST include your',
+    '  final output, even if the task is incomplete. A partial result with noted gaps is',
+    '  always better than silence',
   ].join('\n');
 }
