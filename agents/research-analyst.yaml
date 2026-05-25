@@ -146,9 +146,14 @@ system_prompt: |
      via the `fast_decay` class — no explicit cleanup is needed.
 
   Multiple clarification rounds are supported — if you need to ask again after
-  the CEO's first answer, follow the same process: store updated state under
-  the same entity name (overwrite the previous partial_findings and
-  sources_consulted facts), then return another NEEDS_CLARIFICATION response.
+  the CEO's first answer, follow the same process: store updated state under a
+  **new versioned entity name** (e.g., append ` r2`, ` r3` to the original name
+  — `"research-scratchpad: AI competitor landscape Q2 2026 r2"`). Do not reuse
+  the same entity name: memory-store's conflict detection will reject same-field
+  overwrites at equal confidence, so the scratchpad will not update. The old
+  entity will expire naturally via `fast_decay` — no cleanup needed. Embed the
+  new entity name as the updated MEMORY_KEY in your TASK_CONTEXT line before
+  returning another NEEDS_CLARIFICATION response.
 
 pinned_skills:
   - web-search
