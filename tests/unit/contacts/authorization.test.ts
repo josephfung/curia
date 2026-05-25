@@ -329,7 +329,8 @@ describe('AuthorizationService', () => {
     // Exercises the final hardcoded-deny sentinel in the fallback chain:
     //   role → trustLevelDefaults → unknown → { defaultDeny: ['*'] }
     // When both unknown and trustLevelDefaults are absent, the hard-deny object applies.
-    const { unknown: _dropped, ...rolesWithoutUnknown } = testConfig.roles;
+    const { unknown: _, ...rolesWithoutUnknown } = testConfig.roles;
+    void _;
     const minimalConfig: AuthConfig = {
       roles: rolesWithoutUnknown,
       // No trustLevelDefaults

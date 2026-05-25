@@ -37,7 +37,9 @@ export function loadAuthConfig(configDir: string): AuthConfig {
 
   const roles: Record<string, RolePermissions> = {};
   for (const [roleName, entry] of Object.entries(rolesTyped.roles)) {
-    roles[roleName] = {
+    // Normalize keys to lowercase so authorization lookup (which lowercases the input
+    // role) always matches, even if role-defaults.yaml has mixed-case keys.
+    roles[roleName.toLowerCase()] = {
       description: entry.description ?? roleName,
       defaultPermissions: entry.default_permissions ?? [],
       defaultDeny: entry.default_deny ?? [],
@@ -59,9 +61,10 @@ export function loadAuthConfig(configDir: string): AuthConfig {
           }
           const validTiers = ['ceo', 'high', 'medium', 'low'];
           const result: Record<string, RolePermissions> = {};
-          // Cast is safe: the type guard above confirmed raw is a non-null object.
-          // Individual entries use ?? defaults so missing fields degrade gracefully.
-          for (const [tier, entry] of Object.entries(raw as Record<string, RawRoleEntry>)) {
+          // Iterate with unknown entry type — each entry must be validated individually.
+          // A malformed YAML value like `high: null` or `high: "oops"` would silently
+          // coerce to empty permission lists via `??` without this guard.
+          for (const [tier, entry] of Object.entries(raw as Record<string, unknown>)) {
             // Fail hard on typos — a miskeyed tier silently makes all contacts at
             // that trust level fall through to unknown (deny-all) at runtime.
             if (!validTiers.includes(tier)) {
@@ -69,10 +72,16 @@ export function loadAuthConfig(configDir: string): AuthConfig {
                 `Invalid trust_level_defaults key '${tier}' in role-defaults.yaml — must be one of: ${validTiers.join(', ')}`,
               );
             }
+            if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+              throw new Error(
+                `trust_level_defaults entry '${tier}' in role-defaults.yaml must be a YAML mapping, got ${entry === null ? 'null' : typeof entry}`,
+              );
+            }
+            const typedEntry = entry as RawRoleEntry;
             result[tier] = {
-              description: entry.description ?? tier,
-              defaultPermissions: entry.default_permissions ?? [],
-              defaultDeny: entry.default_deny ?? [],
+              description: typedEntry.description ?? tier,
+              defaultPermissions: typedEntry.default_permissions ?? [],
+              defaultDeny: typedEntry.default_deny ?? [],
             };
           }
           return result;
