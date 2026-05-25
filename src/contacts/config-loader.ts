@@ -49,11 +49,19 @@ export function loadAuthConfig(configDir: string): AuthConfig {
   const trustLevelDefaults: Record<string, RolePermissions> | undefined =
     'trust_level_defaults' in rolesRaw
       ? (() => {
-          const raw = (rolesRaw as { trust_level_defaults: Record<string, RawRoleEntry> })
-            .trust_level_defaults;
+          const raw = (rolesRaw as Record<string, unknown>).trust_level_defaults;
+          // Guard: the section must be a non-null object (YAML mapping), not a scalar or list.
+          // Object.entries(null) throws a confusing TypeError; this gives a clear startup error.
+          if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+            throw new Error(
+              "'trust_level_defaults' in role-defaults.yaml must be a YAML mapping (object), not a scalar or list",
+            );
+          }
           const validTiers = ['ceo', 'high', 'medium', 'low'];
           const result: Record<string, RolePermissions> = {};
-          for (const [tier, entry] of Object.entries(raw)) {
+          // Cast is safe: the type guard above confirmed raw is a non-null object.
+          // Individual entries use ?? defaults so missing fields degrade gracefully.
+          for (const [tier, entry] of Object.entries(raw as Record<string, RawRoleEntry>)) {
             // Fail hard on typos — a miskeyed tier silently makes all contacts at
             // that trust level fall through to unknown (deny-all) at runtime.
             if (!validTiers.includes(tier)) {

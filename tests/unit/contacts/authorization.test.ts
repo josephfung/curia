@@ -322,4 +322,102 @@ describe('AuthorizationService', () => {
     // CEO role allows '*' so everything should be in allowed (wildcarded), not trustBlocked
     expect(result.allowed).toContain('*');
   });
+
+  // --- Issue 6a/6b: fallback chain edge cases ---
+
+  it('hard-deny fallback when config has no unknown role and no trustLevelDefaults', () => {
+    // Exercises the final hardcoded-deny sentinel in the fallback chain:
+    //   role → trustLevelDefaults → unknown → { defaultDeny: ['*'] }
+    // When both unknown and trustLevelDefaults are absent, the hard-deny object applies.
+    const { unknown: _dropped, ...rolesWithoutUnknown } = testConfig.roles;
+    const minimalConfig: AuthConfig = {
+      roles: rolesWithoutUnknown,
+      // No trustLevelDefaults
+      permissions: testConfig.permissions,
+      channelTrust: testConfig.channelTrust,
+      channelPolicies: {},
+    };
+    const service = new AuthorizationService(minimalConfig);
+    const result = service.evaluate({
+      role: 'some_unrecognized_role',
+      trustLevel: null,
+      status: 'confirmed',
+      channel: 'cli',
+      overrides: [],
+    });
+    // Hard-deny fallback: defaultPermissions: [], defaultDeny: ['*']
+    expect(result.denied).toContain('*');
+    expect(result.allowed).toEqual([]);
+  });
+
+  it('falls to unknown role when trustLevelDefaults has no entry for the contact trust level', () => {
+    // A contact with trust_level='high' and an unrecognized role falls through to
+    // trustLevelDefaults['high']. If that tier is absent from trustLevelDefaults,
+    // it falls further to the unknown role.
+    const configWithPartialDefaults: AuthConfig = {
+      ...testConfig,
+      trustLevelDefaults: {
+        ceo: testConfig.trustLevelDefaults!.ceo!,
+        // Deliberately no 'high', 'medium', or 'low' entries
+      },
+    };
+    const service = new AuthorizationService(configWithPartialDefaults);
+    const result = service.evaluate({
+      role: 'Sister',       // No 'sister' in roles → tries trustLevelDefaults
+      trustLevel: 'high',   // 'high' not in partial trustLevelDefaults → falls to unknown
+      status: 'confirmed',
+      channel: 'cli',
+      overrides: [],
+    });
+    // Falls through to unknown role → denied: ['*']
+    expect(result.denied).toContain('*');
+    expect(result.allowed).toEqual([]);
+  });
+
+  // --- Issue 1: throw on unknown trustLevel value (not a valid TrustLevel enum) ---
+
+  it('throws when trustLevel is not a recognized enum value (e.g. legacy DB value or migration gap)', () => {
+    // A corrupt DB row or a new enum value deployed to DB before code catches up
+    // must throw rather than silently collapsing to rank 0 (= low trust).
+    // The contact-resolver.ts catch block will handle this with authorization=null.
+    expect(() =>
+      authService.evaluate({
+        role: 'cfo',
+        trustLevel: 'verified' as unknown as TrustLevel,
+        status: 'confirmed',
+        channel: 'email',
+        overrides: [],
+      }),
+    ).toThrow(/Unknown trustLevel/);
+  });
+
+  // --- Issue 3: escalate when permission sensitivity has no TRUST_RANK entry ---
+
+  it('escalates a permission when its sensitivity value has no TRUST_RANK entry', () => {
+    // Protects against a future sensitivity value (e.g. 'critical') added to permissions.yaml
+    // before a corresponding TRUST_RANK entry is added to types.ts.
+    // Without guard: effectiveTrustRank >= undefined → false → trustBlocked (wrong, silent).
+    // With guard: escalate (safe, explicit — needs CEO decision).
+    const serviceWithBadSensitivity = new AuthorizationService({
+      ...testConfig,
+      permissions: {
+        ...testConfig.permissions,
+        // Override schedule_meetings to have an unrecognized sensitivity value.
+        // CFO role grants schedule_meetings → hits the sensitivity guard.
+        schedule_meetings: {
+          description: 'Schedule meetings',
+          sensitivity: 'critical' as unknown as 'low' | 'medium' | 'high',
+        },
+      },
+    });
+    const result = serviceWithBadSensitivity.evaluate({
+      role: 'cfo',
+      trustLevel: null,
+      status: 'confirmed',
+      channel: 'cli',
+      overrides: [],
+    });
+    expect(result.escalate).toContain('schedule_meetings');
+    expect(result.trustBlocked).not.toContain('schedule_meetings');
+  });
 });
