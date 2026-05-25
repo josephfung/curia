@@ -238,7 +238,7 @@ describe('Research-analyst multi-turn clarification (issue #611)', () => {
                 name: 'delegate',
                 input: {
                   agent: 'research-analyst',
-                  task: `You are resuming a research task. The CEO has provided the direction you needed.\n\n${TASK_CONTEXT}\n\nCEO's direction: Focus on technology fit — we need AI capabilities we can integrate into our platform.\n\nContinue the research from where you left off.`,
+                  task: `You are resuming a research task. The CEO has provided the direction you needed.\n\nTASK_CONTEXT: ${TASK_CONTEXT}\n\nCEO's direction: Focus on technology fit — we need AI capabilities we can integrate into our platform.\n\nContinue the research from where you left off.`,
                   conversation_id: 'research-conv-001',
                 },
               }],
