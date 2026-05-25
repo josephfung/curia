@@ -130,11 +130,12 @@ class OpenAIBackend implements EmbeddingBackend {
       );
       throw new Error(`Unexpected embedding dimensions: ${embedding?.length}`);
     }
-    // Telemetry — non-fatal; failure must not break the caller.
+    // Telemetry — fire-and-forget; must not block or break the caller.
+    // void: don't await so embed() latency isn't coupled to bus/audit throughput.
     // ?? 0: usage is optional in the type — a missing field means 0 tokens recorded
     // (cost tracking gap), which is safer than throwing a TypeError.
     const latencyMs = Date.now() - start;
-    await this.publishTelemetry(json.usage?.prompt_tokens ?? 0, latencyMs, text);
+    void this.publishTelemetry(json.usage?.prompt_tokens ?? 0, latencyMs, text);
     return embedding;
   }
 
