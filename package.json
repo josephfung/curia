@@ -41,7 +41,7 @@
     "layout-base": "^2.0.1",
     "luxon": "^3.7.2",
     "node-pg-migrate": "^8.0.4",
-    "nylas": "^8.1.1",
+    "nylas": "^8.1.2",
     "openai": "^6.39.0",
     "openredaction": "^1.1.2",
     "pdf-parse": "^2.4.5",

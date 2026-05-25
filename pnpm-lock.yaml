@@ -60,8 +60,8 @@ importers:
         specifier: ^8.0.4
         version: 8.0.4(@types/pg@8.20.0)(pg@8.20.0)
       nylas:
-        specifier: ^8.1.1
-        version: 8.1.1
+        specifier: ^8.1.2
+        version: 8.1.2
       openai:
         specifier: ^6.39.0
         version: 6.39.0(zod@4.3.6)
@@ -1899,8 +1899,8 @@ packages:
       '@types/pg':
         optional: true
 
-  nylas@8.1.1:
-    resolution: {integrity: sha512-cWK/GOQyUFY6V9VdM1z3BkMX+MTPnboRx55Ysm7IT9bdLAqn7ALvE4eroJskRArqSU6/Rm5DHIY6FWC4uj6WYw==}
+  nylas@8.1.2:
+    resolution: {integrity: sha512-RME7RuO3XAYiDwxtBtuQOa6pOugWEOVlW174G/kF+L0vK2QwvhWNbgcoV517mtYYNi8ZJLmXPogNNrb2z16LUw==}
     engines: {node: '>=18'}
 
   object-assign@4.1.1:
@@ -4170,7 +4170,7 @@ snapshots:
     optionalDependencies:
       '@types/pg': 8.20.0
 
-  nylas@8.1.1:
+  nylas@8.1.2:
     dependencies:
       change-case: 4.1.2
       form-data-encoder: 4.1.0
