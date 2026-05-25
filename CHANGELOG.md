@@ -26,7 +26,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
-- **`ceo-inbox-draft-reply` / `email-draft-save` / `email-send`** — reply drafts and sends now include the quoted original message body below the reply text, matching standard email client behaviour. (#673)
+- **`ceo-inbox-draft-reply` / `email-draft-save` / `email-send` / `email-reply`** — reply drafts and sends now include the quoted original message body below the reply text, matching standard email client behaviour. (#673)
 - **Context bridging v2** — outbound context registry replaces working-memory memos; send skills gain optional `context_bridge` param for delegation-aware reply routing. (#615)
 - **Coordinator prompt** — `[PRIOR OUTBOUND CONTEXT]` replaced with `[ACTIVE OUTBOUND CONTEXT]` block including delegation guidance and entry IDs for release. (#615)
 - **`signal-send`**, **`email-send`**, **`email-reply`** — accept optional `context_bridge` JSON param; declare `outboundContext` capability. (#615)
