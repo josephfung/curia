@@ -617,12 +617,24 @@ export class AgentRuntime {
     // Truly unknown senders (no senderContext AND no originator) remain undefined, which
     // triggers the execution layer's fail-closed gate on elevated skills.
     const callerSenderCtx = taskEvent.payload.senderContext;
-    const originator = taskEvent.payload.metadata?.originator as TaskOriginator | undefined;
-    const caller: CallerContext | undefined = (callerSenderCtx && callerSenderCtx.resolved)
-      ? { contactId: callerSenderCtx.contactId, role: callerSenderCtx.role, channel: taskEvent.payload.channelId }
-      : originator
-        ? { contactId: originator.contactId, role: null, channel: originator.channel }
+    const rawOriginator = taskEvent.payload.metadata?.originator;
+    // Validate the originator shape before using it — metadata is Record<string, unknown>
+    // so a malformed originator must not silently produce wrong audit fields downstream.
+    const originator: TaskOriginator | undefined =
+      typeof (rawOriginator as Record<string, unknown> | undefined)?.contactId === 'string' &&
+      typeof (rawOriginator as Record<string, unknown> | undefined)?.channel === 'string'
+        ? rawOriginator as unknown as TaskOriginator
         : undefined;
+    let caller: CallerContext | undefined;
+    if (callerSenderCtx && callerSenderCtx.resolved) {
+      caller = { contactId: callerSenderCtx.contactId, role: callerSenderCtx.role, channel: taskEvent.payload.channelId };
+    } else if (originator) {
+      // Delegated task path: synthesize caller from originator so elevated skills can
+      // read ctx.caller (e.g. for grantedBy audit fields). role is null because originator
+      // does not carry the contact's role — only the systemRole used by the elevated gate.
+      logger.debug({ agentId, taskEventId: taskEvent.id, originatorContactId: originator.contactId }, 'Synthesizing CallerContext from originator (delegated task path)');
+      caller = { contactId: originator.contactId, role: null, channel: originator.channel };
+    }
 
     // Accumulate skill names across all tool-use turns so we can report them
     // on the agent.response event for audit and monitoring.
