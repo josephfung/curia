@@ -625,7 +625,7 @@ export class AgentRuntime {
     // tool-use loop — emitting a deterministic JSON response instead of asking the LLM
     // for another round. This moves the clarification format contract from LLM prompts
     // into code: the runtime produces it, the DelegateHandler parses it.
-    let pendingClarification: { question: string; partial_findings: string } | null = null;
+    let pendingClarification: { question: string; context: string } | null = null;
 
     while (response.type === 'tool_use' && executionLayer) {
       // Check turn budget before processing this round of tool calls
@@ -826,14 +826,14 @@ export class AgentRuntime {
               const clarData = typeof result.data === 'string'
                 ? JSON.parse(result.data) as unknown
                 : result.data;
-              const typed = clarData as { _curia_protocol?: string; question?: string; partial_findings?: string };
+              const typed = clarData as { _curia_protocol?: string; question?: string; context?: string };
               if (typed?._curia_protocol === 'clarification_request') {
-                if (!typed.question || !typed.partial_findings) {
+                if (!typed.question || !typed.context) {
                   // Protocol marker is present but required fields are missing — the
                   // handler should prevent this, but a modified or third-party skill
                   // could emit an incomplete marker. Log so it's visible in audit.
                   logger.warn(
-                    { agentId, hasQuestion: !!typed.question, hasPartialFindings: !!typed.partial_findings },
+                    { agentId, hasQuestion: !!typed.question, hasContext: !!typed.context },
                     'request-clarification result has protocol marker but missing required fields — cannot short-circuit',
                   );
                 } else if (pendingClarification) {
@@ -844,7 +844,7 @@ export class AgentRuntime {
                 } else {
                   pendingClarification = {
                     question: typed.question,
-                    partial_findings: typed.partial_findings,
+                    context: typed.context,
                   };
                 }
               }
@@ -914,14 +914,14 @@ export class AgentRuntime {
           v: 1,
           agent: agentId,
           original_task: taskEvent.payload.content,
-          partial_findings: pendingClarification.partial_findings,
+          context: pendingClarification.context,
         };
         const resumeToken = Buffer.from(JSON.stringify(resumePayload)).toString('base64');
 
         const clarificationContent = JSON.stringify({
           _curia_protocol: 'clarification_request',
           question: pendingClarification.question,
-          partial_findings: pendingClarification.partial_findings,
+          context: pendingClarification.context,
           resume_token: resumeToken,
         });
 

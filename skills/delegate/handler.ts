@@ -30,7 +30,7 @@ interface ResumeTokenPayload {
   v: number;
   agent: string;
   original_task: string;
-  partial_findings: string;
+  context: string;
 }
 
 // Default wait for the specialist to respond — appropriate for interactive tasks.
@@ -123,13 +123,13 @@ export class DelegateHandler implements SkillHandler {
         // Runtime validation: the token is opaque to the LLM, so a corrupted
         // token must not silently produce a broken task brief.
         const payload = decoded as unknown as ResumeTokenPayload;
-        if (!payload.original_task || !payload.partial_findings) {
+        if (!payload.original_task || !payload.context) {
           const versionNote = decoded.v !== RESUME_TOKEN_VERSION
             ? ` Token version ${String(decoded.v)} does not match expected version ${RESUME_TOKEN_VERSION} — this may be the cause.`
             : '';
           return {
             success: false,
-            error: `resume_token is missing required fields (original_task, partial_findings).${versionNote} The token may be corrupted — ask the CEO to repeat their request.`,
+            error: `resume_token is missing required fields (original_task, context).${versionNote} The token may be corrupted — ask the CEO to repeat their request.`,
           };
         }
 
@@ -153,8 +153,8 @@ export class DelegateHandler implements SkillHandler {
           '## Original Task',
           payload.original_task,
           '',
-          '## Your Previous Findings',
-          payload.partial_findings,
+          '## Your Progress So Far',
+          payload.context,
           '',
           '## CEO\'s Direction',
           task,
@@ -272,7 +272,7 @@ export class DelegateHandler implements SkillHandler {
       // with _curia_protocol: "clarification_request" when a specialist calls
       // request-clarification. Detect this and return a typed result so the
       // coordinator gets structured fields (needs_clarification, question,
-      // partial_findings, resume_token) instead of raw text to parse.
+      // context, resume_token) instead of raw text to parse.
       try {
         const parsed = JSON.parse(response) as Record<string, unknown>;
         if (parsed._curia_protocol === 'clarification_request') {
@@ -280,11 +280,11 @@ export class DelegateHandler implements SkillHandler {
           // The runtime produces these deterministically, but defensive validation
           // prevents a malformed response from reaching the coordinator as typed data.
           const question = parsed.question;
-          const partialFindings = parsed.partial_findings;
+          const ctxValue = parsed.context;
           const resumeToken = parsed.resume_token;
           if (
             typeof question !== 'string' || question.trim() === '' ||
-            typeof partialFindings !== 'string' || partialFindings.trim() === '' ||
+            typeof ctxValue !== 'string' || ctxValue.trim() === '' ||
             typeof resumeToken !== 'string' || resumeToken.trim() === ''
           ) {
             ctx.log.warn(
@@ -302,7 +302,7 @@ export class DelegateHandler implements SkillHandler {
                 agent,
                 needs_clarification: true,
                 question,
-                partial_findings: partialFindings,
+                context: ctxValue,
                 resume_token: resumeToken,
               },
             };

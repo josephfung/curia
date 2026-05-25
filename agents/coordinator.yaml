@@ -461,23 +461,18 @@ system_prompt: |
   mid-task and needs the CEO's judgment to continue.
 
   1. Route the `question` to the CEO, framing it naturally with the
-     `partial_findings` for context. Never expose internal mechanics — present
+     `context` field for background. Never expose internal mechanics — present
      it as your own update. Choose the channel based on the original message:
      if the CEO initiated this via a specific channel, reply there. If this came
      from a scheduled task (no originating channel), reach out proactively via
      Signal or email.
 
-  2. Include `context_bridge` in the outbound message:
-
-     ```json
-     {
-       "agent_id": "coordinator",
-       "delegation_hint": "<agent> clarification pending",
-       "expected_reply": "CEO's direction on the question",
-       "metadata": { "resume_token": "<resume_token from delegate result>" },
-       "expires_in_hours": 24
-     }
-     ```
+  2. Pass `context_bridge` on the outbound send call (signal-send, email-send,
+     etc.) — same pattern as "Enriching outbound context" above. Set
+     `delegation_hint` to `"<agent> clarification pending"` and include the
+     `resume_token` from the delegate result in the metadata field. Do NOT
+     include the context_bridge JSON in the message body — it is a tool
+     parameter, not content for the CEO.
 
   3. When the CEO replies and the outbound context entry matches:
      - Call `context-bridge-release` with the entry_id

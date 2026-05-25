@@ -16,7 +16,7 @@
     "agent": "string",
     "needs_clarification": "boolean?",
     "question": "string?",
-    "partial_findings": "string?",
+    "context": "string?",
     "resume_token": "string?"
   },
   "permissions": [],

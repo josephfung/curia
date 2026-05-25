@@ -18,9 +18,9 @@ export const CLARIFICATION_PROTOCOL = 'clarification_request' as const;
 
 export class RequestClarificationHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {
-    const { question, partial_findings } = ctx.input as {
+    const { question, context } = ctx.input as {
       question?: string;
-      partial_findings?: string;
+      context?: string;
     };
 
     if (!question || typeof question !== 'string') {
@@ -30,11 +30,11 @@ export class RequestClarificationHandler implements SkillHandler {
       return { success: false, error: 'question must not be empty' };
     }
 
-    if (!partial_findings || typeof partial_findings !== 'string') {
-      return { success: false, error: 'Missing required input: partial_findings (string)' };
+    if (!context || typeof context !== 'string') {
+      return { success: false, error: 'Missing required input: context (string)' };
     }
-    if (partial_findings.trim() === '') {
-      return { success: false, error: 'partial_findings must not be empty' };
+    if (context.trim() === '') {
+      return { success: false, error: 'context must not be empty' };
     }
 
     ctx.log.info('request-clarification: specialist requesting CEO clarification');
@@ -44,7 +44,7 @@ export class RequestClarificationHandler implements SkillHandler {
       data: {
         _curia_protocol: CLARIFICATION_PROTOCOL,
         question: question.trim(),
-        partial_findings: partial_findings.trim(),
+        context: context.trim(),
       },
     };
   }

@@ -6,12 +6,12 @@
   "action_risk": "none",
   "inputs": {
     "question": "string",
-    "partial_findings": "string"
+    "context": "string"
   },
   "outputs": {
     "_curia_protocol": "string",
     "question": "string",
-    "partial_findings": "string"
+    "context": "string"
   },
   "permissions": [],
   "secrets": [],
