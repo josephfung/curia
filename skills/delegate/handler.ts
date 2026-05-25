@@ -124,9 +124,26 @@ export class DelegateHandler implements SkillHandler {
         // token must not silently produce a broken task brief.
         const payload = decoded as unknown as ResumeTokenPayload;
         if (!payload.original_task || !payload.partial_findings) {
+          const versionNote = decoded.v !== RESUME_TOKEN_VERSION
+            ? ` Token version ${String(decoded.v)} does not match expected version ${RESUME_TOKEN_VERSION} — this may be the cause.`
+            : '';
           return {
             success: false,
-            error: 'resume_token is missing required fields (original_task, partial_findings). The token may be corrupted — ask the CEO to repeat their request.',
+            error: `resume_token is missing required fields (original_task, partial_findings).${versionNote} The token may be corrupted — ask the CEO to repeat their request.`,
+          };
+        }
+
+        // Guard against cross-agent token misuse: if the coordinator passes a
+        // resume_token generated for one specialist but targets a different one,
+        // the task brief would contain another agent's context. Reject early.
+        if (payload.agent && payload.agent !== agent) {
+          ctx.log.warn(
+            { targetAgent: agent, tokenAgent: payload.agent },
+            'resume_token was generated for a different agent — possible cross-agent token misuse',
+          );
+          return {
+            success: false,
+            error: `resume_token was generated for agent '${payload.agent}' but is being used to delegate to '${agent}'. Re-delegate to the correct specialist or ask the CEO to repeat their request.`,
           };
         }
 
@@ -274,9 +291,15 @@ export class DelegateHandler implements SkillHandler {
             },
           };
         }
-      } catch {
-        // Not JSON — normal text response from the specialist. Fall through
-        // to the standard return path.
+      } catch (err) {
+        // SyntaxError is expected for normal text responses — suppress silently.
+        // Any other error is unexpected and should be logged for debugging.
+        if (!(err instanceof SyntaxError)) {
+          ctx.log.warn(
+            { err, targetAgent: agent },
+            'Unexpected error parsing specialist response for clarification protocol — treating as normal text response',
+          );
+        }
       }
 
       return {

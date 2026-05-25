@@ -827,8 +827,16 @@ export class AgentRuntime {
                 ? JSON.parse(result.data) as unknown
                 : result.data;
               const typed = clarData as { _curia_protocol?: string; question?: string; partial_findings?: string };
-              if (typed?._curia_protocol === 'clarification_request' && typed.question && typed.partial_findings) {
-                if (pendingClarification) {
+              if (typed?._curia_protocol === 'clarification_request') {
+                if (!typed.question || !typed.partial_findings) {
+                  // Protocol marker is present but required fields are missing — the
+                  // handler should prevent this, but a modified or third-party skill
+                  // could emit an incomplete marker. Log so it's visible in audit.
+                  logger.warn(
+                    { agentId, hasQuestion: !!typed.question, hasPartialFindings: !!typed.partial_findings },
+                    'request-clarification result has protocol marker but missing required fields — cannot short-circuit',
+                  );
+                } else if (pendingClarification) {
                   logger.warn(
                     { agentId },
                     'Multiple request-clarification calls in one turn — using the first',
@@ -877,6 +885,12 @@ export class AgentRuntime {
 
       // Check consecutive error budget after processing all tool calls in this turn
       if (budget.consecutiveErrors >= budget.maxConsecutiveErrors) {
+        if (pendingClarification) {
+          logger.warn(
+            { agentId, question: pendingClarification.question.slice(0, 100) },
+            'Discarding pending clarification due to error budget exhaustion — specialist question will not reach the CEO',
+          );
+        }
         // Still append results so the LLM history is consistent, then bail
         messages.push({ role: 'user', content: toolResultBlocks });
         await this.handleBudgetExceeded(budget, taskEvent, 'maxConsecutiveErrors');

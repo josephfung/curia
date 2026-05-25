@@ -22,10 +22,6 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **`request-clarification` skill** — any specialist can call this skill to pause mid-task and request CEO direction; the runtime short-circuits the tool-use loop and the DelegateHandler returns a typed result with a resume_token for seamless re-delegation.
 - **Multi-turn research conversations** — research-analyst can pause mid-research to ask a clarifying question; coordinator routes it to the CEO and re-delegates automatically when the CEO replies. (#611)
 
-### Changed
-
-- **Multi-turn clarification protocol** — moved from hand-written prompt conventions (~145 lines across coordinator + research-analyst YAML) to a code-backed `request-clarification` skill with runtime short-circuit and DelegateHandler resume_token support. Coordinator prompt reduced by ~50 lines, research-analyst by ~55 lines.
-
 - **`embedding.call` bus event** — `EmbeddingService` now publishes cost telemetry after each OpenAI embedding API call; token counts and estimated costs appear in `audit_log` alongside `llm.call` entries. (#654)
 
 - **`context-bridge-release`** — new coordinator skill to release outbound context entries when conversations complete. (#615)
@@ -36,6 +32,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Turn budget injection** — all agents now receive their exact turn limit in the system prompt at runtime, framed as a planning constraint so models can pace their tool use from turn 1 rather than hitting the ceiling silently. (#689)
 
 ### Changed
+
+- **Multi-turn clarification protocol** — moved from hand-written prompt conventions (~145 lines across coordinator + research-analyst YAML) to a code-backed `request-clarification` skill with runtime short-circuit and DelegateHandler resume_token support. Coordinator prompt reduced by ~50 lines, research-analyst by ~55 lines.
 
 - **`ceo-inbox-draft-reply` / `email-draft-save` / `email-send` / `email-reply`** — reply drafts and sends now include the quoted original message body below the reply text, matching standard email client behaviour. (#673)
 - **Context bridging v2** — outbound context registry replaces working-memory memos; send skills gain optional `context_bridge` param for delegation-aware reply routing. (#615)
