@@ -255,6 +255,16 @@ export interface YamlConfig {
     /** TTL in hours for entries with explicit context_bridge metadata. Default: 24. */
     explicitExpiryHours?: number;
   };
+
+  /** Meeting debrief agent configuration (spec §17-meeting-debrief.md). */
+  debrief?: {
+    /** Channel for debrief prompts. Default: 'signal'. */
+    channel?: 'signal' | 'email';
+    /** Minutes before a reminder is sent for unanswered debriefs. Default: 120. */
+    reminderDelayMinutes?: number;
+    /** TTL in hours for context bridge entries linking replies to the debrief agent. Default: 48. */
+    contextBridgeTtlHours?: number;
+  };
 }
 
 /**
@@ -617,6 +627,23 @@ export function loadYamlConfig(configDir: string): YamlConfig {
     const maxPerHour = contactLimits.max_per_hour;
     if (maxPerHour !== undefined && (!Number.isInteger(maxPerHour) || maxPerHour <= 0)) {
       throw new Error(`contact_creation_limits.max_per_hour must be a positive integer, got: ${maxPerHour}`);
+    }
+  }
+
+  // Validate debrief config if present
+  const debrief = config.debrief;
+  if (debrief !== undefined) {
+    if (typeof debrief !== 'object' || debrief === null || Array.isArray(debrief)) {
+      throw new Error('debrief must be a YAML mapping');
+    }
+    if (debrief.channel !== undefined && debrief.channel !== 'signal' && debrief.channel !== 'email') {
+      throw new Error(`debrief.channel must be 'signal' or 'email', got: "${String(debrief.channel)}"`);
+    }
+    if (debrief.reminderDelayMinutes !== undefined && (!Number.isInteger(debrief.reminderDelayMinutes) || debrief.reminderDelayMinutes < 1)) {
+      throw new Error(`debrief.reminderDelayMinutes must be a positive integer, got: ${debrief.reminderDelayMinutes}`);
+    }
+    if (debrief.contextBridgeTtlHours !== undefined && (!Number.isInteger(debrief.contextBridgeTtlHours) || debrief.contextBridgeTtlHours < 1)) {
+      throw new Error(`debrief.contextBridgeTtlHours must be a positive integer, got: ${debrief.contextBridgeTtlHours}`);
     }
   }
 

@@ -119,6 +119,14 @@ contextBridge:
   defaultExpiryHours: 6      # auto-registered entries (proactive sends without metadata)
   explicitExpiryHours: 24    # entries with explicit context_bridge JSON
 
+# Meeting debrief agent configuration (spec §17-meeting-debrief.md).
+# Controls the proactive debrief prompt sent after external meetings end.
+# The agent itself is defined in agents/meeting-debrief.yaml.
+debrief:
+  channel: signal                # channel for debrief prompts (signal | email)
+  reminderDelayMinutes: 120      # minutes before a reminder is sent for unanswered debriefs
+  contextBridgeTtlHours: 48      # TTL for context bridge entries linking replies to the debrief agent
+
 security:
   # Layer 1 prompt injection detection (spec §06-audit-and-security.md).
   #

@@ -280,6 +280,15 @@
         "defaultExpiryHours": { "type": "integer", "minimum": 1 },
         "explicitExpiryHours": { "type": "integer", "minimum": 1 }
       }
+    },
+    "debrief": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "channel": { "type": "string", "enum": ["signal", "email"] },
+        "reminderDelayMinutes": { "type": "integer", "minimum": 1 },
+        "contextBridgeTtlHours": { "type": "integer", "minimum": 1 }
+      }
     }
   },
   "definitions": {

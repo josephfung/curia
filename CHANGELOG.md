@@ -28,6 +28,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **Meeting debrief agent** — proactive specialist that scans the CEO's calendar for recently-ended external meetings, prompts for takeaways via Signal (Bullpen-through-coordinator), and executes follow-up actions from the CEO's notes (spec 17, #384).
 - **`request-clarification` skill** — any specialist can call this skill to pause mid-task and request CEO direction; the runtime short-circuits the tool-use loop and the DelegateHandler returns a typed result with a resume_token for seamless re-delegation.
 - **Multi-turn research conversations** — research-analyst can pause mid-research to ask a clarifying question; coordinator routes it to the CEO and re-delegates automatically when the CEO replies. (#611)
 

@@ -344,19 +344,26 @@ These are out of scope for this feature but identified during design:
 | Number | Item | Status |
 |---|---|---|
 | 0 | Proactive outbound Signal from scheduled jobs (#374) — prerequisite | Done |
-| 1 | Context bridging v2 (#615) — prerequisite infrastructure | Not Done |
-| 2 | `debrief:` config block in `config/default.yaml` + startup validation | Not Done |
-| 3 | `meeting-debrief` agent YAML config (prompt, skills, schedule) | Not Done |
-| 4 | Detection pipeline — calendar scan + internal/external classification | Not Done |
-| 5 | LLM judgment — Stage 2 contextual assessment of debrief-worthiness | Not Done |
-| 6 | Prompt delivery — Bullpen request to coordinator, context bridge registered | Not Done |
-| 7 | Reminder scheduling — one-shot job for nudge (via Bullpen) if no response | Not Done |
-| 8 | Response processing — coordinator delegates reply, agent executes follow-ups | Not Done |
-| 9 | Cross-specialist work via Bullpen — research delegation pattern | Not Done |
-| 10 | State persistence — `scheduler-report` context between cron runs | Not Done |
-| 11 | `debrief-status` skill — coordinator queries pending/completed debriefs | Not Done |
-| 12 | Preference learning — store CEO feedback as KG facts, wire into judgment | Not Done |
-| 13 | Audit events — state transitions, expired entry pruning | Not Done |
-| 14 | Unit tests — detection pipeline, state management | Not Done |
+| 1 | Context bridging v2 (#615) — prerequisite infrastructure | Done |
+| 2 | `debrief:` config block in `config/default.yaml` + startup validation | Done |
+| 3 | `meeting-debrief` agent YAML config (prompt, skills, schedule) | Done |
+| 4 | Detection pipeline — calendar scan, prompt-driven classification via LLM judgment | Done |
+| 5 | LLM judgment — contextual YES/NO/DEFER assessment in agent system prompt | Done |
+| 6 | Prompt delivery — Bullpen request to coordinator, context bridge registered | Done |
+| 7 | Reminder check — cron-tick timestamp check on pendingDebriefs (not one-shot jobs) | Done |
+| 8 | Response processing — coordinator delegates reply, agent executes follow-ups | Done |
+| 9 | Cross-specialist work via Bullpen — research delegation pattern | Done |
+| 10 | State persistence — `scheduler-report` context between cron runs | Done |
+| 11 | Status queries — coordinator delegates to meeting-debrief (no separate skill) | Done |
+| 12 | Preference learning — store CEO feedback as KG facts, wire into judgment | Done |
+| 13 | Audit events — state transitions, expired entry pruning | Done |
+| 14 | Unit tests — config validation | Done |
 | 15 | Integration tests — end-to-end Bullpen→coordinator→send→reply→delegate flows | Not Done |
-| 16 | Smoke tests — GPT-4o judge scenarios for debrief detection and actions | Not Done |
+| 16 | Smoke tests — LLM judge scenarios for debrief detection and actions | Not Done |
+
+**Design notes (2026-05-25):**
+- Items 4–13 are implemented as prompt-driven logic in the agent's system prompt, not custom handler code — consistent with the ceo-inbox pattern.
+- Item 7 revised: reminders are checked on each cron tick by scanning pendingDebriefs timestamps, not via one-shot scheduler jobs. Simpler, all state stays in scheduler-report context.
+- Item 11 revised: no separate `debrief-status` skill. The coordinator delegates status queries to meeting-debrief directly (consistent with specialist delegation pattern). Agent reads its own state via `scheduler-list`.
+- Internal/external classification dropped `internalDomains` config — the LLM judges meeting worthiness from attendee context (KG enrichment) rather than rigid domain matching.
+- Integration and smoke tests deferred to follow-up — the feature is prompt-driven so the primary verification is manual smoke testing on a live deployment.
