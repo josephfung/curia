@@ -1,4 +1,7 @@
-import { describe, it, expect, vi } from 'vitest';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import os from 'node:os';
+import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
 import pino from 'pino';
 import { parseCsv } from './csv.js';
 import { FileParseHandler } from './handler.js';
@@ -386,6 +389,109 @@ describe('FileParseHandler', () => {
         expect(data.confidence).toBeLessThan(0.5);
         expect(data.structured).toBeNull();
       }
+    });
+  });
+
+  describe('temp_file_url support', () => {
+    const handler = new FileParseHandler();
+    // Use /tmp/curia-tempfiles/ which is in the allowed prefix list
+    const tempDir = '/tmp/curia-tempfiles';
+    let testFilePath: string;
+
+    beforeAll(async () => {
+      await fs.mkdir(tempDir, { recursive: true });
+      testFilePath = path.join(tempDir, 'test-file.csv');
+      await fs.writeFile(testFilePath, 'vendor,amount\nAcme,50.00');
+    });
+
+    afterAll(async () => {
+      try { await fs.unlink(testFilePath); } catch { /* cleanup best-effort */ }
+    });
+
+    it('reads file from temp_file_url when content_base64 is empty', async () => {
+      const result = await handler.execute(makeCtx({
+        content_base64: '',
+        temp_file_url: `file://${testFilePath}`,
+        mime_type: 'text/csv',
+      }, makeInfraLlm('{}')));
+      expect(result.success).toBe(true);
+      if (result.success) {
+        const data = result.data as { type: string; structured: Array<Record<string, string>> };
+        expect(data.type).toBe('csv');
+        expect(data.structured).toEqual([{ vendor: 'Acme', amount: '50.00' }]);
+      }
+    });
+
+    it('reads file from temp_file_url when content_base64 is absent', async () => {
+      const result = await handler.execute(makeCtx({
+        temp_file_url: `file://${testFilePath}`,
+        mime_type: 'text/csv',
+      }, makeInfraLlm('{}')));
+      expect(result.success).toBe(true);
+      if (result.success) {
+        const data = result.data as { type: string; structured: Array<Record<string, string>> };
+        expect(data.type).toBe('csv');
+        expect(data.structured).toEqual([{ vendor: 'Acme', amount: '50.00' }]);
+      }
+    });
+
+    it('prefers content_base64 over temp_file_url when both are provided', async () => {
+      const directCsv = 'name,value\nDirect,100';
+      const result = await handler.execute(makeCtx({
+        content_base64: Buffer.from(directCsv).toString('base64'),
+        temp_file_url: `file://${testFilePath}`,
+        mime_type: 'text/csv',
+      }, makeInfraLlm('{}')));
+      expect(result.success).toBe(true);
+      if (result.success) {
+        const data = result.data as { structured: Array<Record<string, string>> };
+        // Should use content_base64, not the temp file
+        expect(data.structured).toEqual([{ name: 'Direct', value: '100' }]);
+      }
+    });
+
+    it('rejects temp_file_url outside allowed directories', async () => {
+      const result = await handler.execute(makeCtx({
+        temp_file_url: 'file:///etc/passwd',
+        mime_type: 'text/csv',
+      }, makeInfraLlm('{}')));
+      expect(result.success).toBe(false);
+      if (!result.success) expect(result.error).toMatch(/invalid temp_file_url/i);
+    });
+
+    it('rejects temp_file_url with path traversal', async () => {
+      const result = await handler.execute(makeCtx({
+        temp_file_url: 'file:///tmp/curia-tempfiles/../../etc/passwd',
+        mime_type: 'text/csv',
+      }, makeInfraLlm('{}')));
+      expect(result.success).toBe(false);
+      if (!result.success) expect(result.error).toMatch(/invalid temp_file_url/i);
+    });
+
+    it('rejects non-file:// URLs', async () => {
+      const result = await handler.execute(makeCtx({
+        temp_file_url: 'https://example.com/file.csv',
+        mime_type: 'text/csv',
+      }, makeInfraLlm('{}')));
+      expect(result.success).toBe(false);
+      if (!result.success) expect(result.error).toMatch(/invalid temp_file_url/i);
+    });
+
+    it('returns error when temp file has been cleaned up', async () => {
+      const result = await handler.execute(makeCtx({
+        temp_file_url: 'file:///tmp/curia-tempfiles/nonexistent-file.csv',
+        mime_type: 'text/csv',
+      }, makeInfraLlm('{}')));
+      expect(result.success).toBe(false);
+      if (!result.success) expect(result.error).toMatch(/expired/i);
+    });
+
+    it('error message mentions temp_file_url as alternative when both inputs are missing', async () => {
+      const result = await handler.execute(makeCtx({
+        mime_type: 'text/csv',
+      }, makeInfraLlm('{}')));
+      expect(result.success).toBe(false);
+      if (!result.success) expect(result.error).toMatch(/temp_file_url/);
     });
   });
 });

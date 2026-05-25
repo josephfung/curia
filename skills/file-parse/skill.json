@@ -1,11 +1,12 @@
 {
   "name": "file-parse",
-  "description": "Parse a document (CSV, PDF, HTML, or image) and extract structured data. Accepts base64-encoded content and a MIME type. Optionally provide extract_as to get structured fields (receipt, bank_statement, invoice) instead of raw text. For CSV files, parsing is direct and deterministic. For images, PDFs, and HTML, uses Claude for text extraction and structuring. Returns a confidence score (0–1) for LLM-extracted results.",
-  "version": "1.0.0",
+  "description": "Parse a document (CSV, PDF, HTML, or image) and extract structured data. Accepts base64-encoded content OR a temp_file_url (file:// URL from ceo-inbox-download-attachment), plus a MIME type. Optionally provide extract_as to get structured fields (receipt, bank_statement, invoice) instead of raw text. For CSV files, parsing is direct and deterministic. For images, PDFs, and HTML, uses Claude for text extraction and structuring. Returns a confidence score (0–1) for LLM-extracted results.",
+  "version": "1.1.0",
   "sensitivity": "normal",
   "action_risk": "medium",
   "inputs": {
-    "content_base64": "string (base64-encoded file content)",
+    "content_base64": "string? (base64-encoded file content — required unless temp_file_url is provided)",
+    "temp_file_url": "string? (file:// URL pointing to a temp file on disk — alternative to content_base64; use the temp_file_url returned by ceo-inbox-download-attachment or email-download-attachment)",
     "mime_type": "string (MIME type, e.g. 'text/csv', 'application/pdf', 'image/jpeg', 'text/html')",
     "extract_as": "string? (optional extraction schema hint; defaults to 'raw'. Known schemas with tailored prompts: 'receipt', 'bank_statement', 'invoice'. Use 'raw' to skip LLM structuring. Any other non-empty string (e.g. 'purchase_order', 'business_card') triggers a generic extraction prompt using the schema name as a hint.)"
   },
