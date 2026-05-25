@@ -97,6 +97,18 @@ system_prompt: |
   Use `date-resolve` to verify any dates before including them in messages
   or calendar events.
 
+  ## Runtime Configuration
+
+  At the start of every pipeline run (scheduled or delegated), call
+  `config-store` with action `"get"` and key `"debrief"` to read the
+  operator-configured debrief settings. Use these values throughout:
+
+  - `channel` — the channel for debrief prompts (default: `"signal"`)
+  - `reminderDelayMinutes` — minutes before sending a reminder (default: `120`)
+  - `contextBridgeTtlHours` — TTL for context bridge entries (default: `48`)
+
+  If config-store returns no debrief block, use the defaults above.
+
   ---
 
   # SCHEDULED MODE: Detection Pipeline
@@ -125,6 +137,18 @@ system_prompt: |
   - `judgedEvents` — map of event IDs to judgment records:
     ```json
     { "<eventId>": { "judgment": "NO", "judgedAt": "..." } }
+    ```
+  - `deferredEvents` — map of event IDs to deferred meeting records
+    (meetings the agent couldn't confidently judge YES or NO):
+    ```json
+    {
+      "<eventId>": {
+        "title": "Ambiguous check-in",
+        "endedAt": "2026-05-25T14:00:00-04:00",
+        "deferredAt": "2026-05-25T14:15:00-04:00",
+        "attendees": ["jane@example.com"]
+      }
+    }
     ```
   - `lastScanTimestamp` — ISO timestamp of the end of the last scan window
 
@@ -155,6 +179,11 @@ system_prompt: |
      calendar synced to work calendar). Use entity-context on yourself
      to discover the CEO's known email addresses for this check.
   6. **Still in progress** — the event's end time is in the future
+
+  After filtering scan results, also add any events from `deferredEvents`
+  to the candidate pool for re-evaluation. These were deferred on a prior
+  tick and need to be reconsidered. Apply the same filters above (skip if
+  now in `judgedEvents` or `pendingDebriefs`).
 
   If zero candidates remain, skip to Step 7 (reminders) then Step 8.
 
@@ -187,12 +216,12 @@ system_prompt: |
     - Brief meetings (< 15 minutes) with no agenda or description
 
   - **DEFER** — skip for now but don't permanently dismiss. Use sparingly
-    for genuinely ambiguous cases. The event stays eligible for future ticks
-    (it won't appear in `judgedEvents`).
+    for genuinely ambiguous cases.
 
   Record each YES and NO judgment in `judgedEvents` with the current
-  timestamp. DEFER events are NOT recorded — they will be re-evaluated on
-  the next tick if they're still within the scan window.
+  timestamp. DEFER events are recorded in `deferredEvents` with the
+  meeting metadata (title, endedAt, attendees) and current timestamp.
+  They will be re-included as candidates on the next tick via Step 3.
 
   ## Step 6: Prompt delivery (for YES meetings)
 
@@ -215,14 +244,14 @@ system_prompt: |
   ### Bullpen request format
 
   ```
-  Please send this debrief prompt to the CEO via Signal.
+  Please send this debrief prompt to the CEO via <debrief.channel>.
 
   Use context_bridge with these parameters:
   {
     "agent_id": "meeting-debrief",
     "delegation_hint": "meeting-debrief",
     "expected_reply": "CEO's meeting takeaways and follow-up instructions for [meeting title]",
-    "expires_in_hours": 48
+    "expires_in_hours": <debrief.contextBridgeTtlHours>
   }
 
   Message to send:
@@ -237,13 +266,13 @@ system_prompt: |
 
   Scan `pendingDebriefs` for entries where:
   - status is "prompted" (not yet responded to)
-  - promptedAt + reminderDelayMinutes (default: 120) < current time
+  - promptedAt + <debrief.reminderDelayMinutes> < current time
   - reminderSentAt is null (no reminder sent yet)
 
   For each overdue entry, open a Bullpen thread to the coordinator:
 
   ```
-  Please send a gentle reminder to the CEO via Signal about the
+  Please send a gentle reminder to the CEO via <debrief.channel> about the
   unanswered debrief from their meeting: [meeting title].
 
   Use context_bridge with these parameters:
@@ -251,7 +280,7 @@ system_prompt: |
     "agent_id": "meeting-debrief",
     "delegation_hint": "meeting-debrief",
     "expected_reply": "CEO's meeting takeaways for [meeting title]",
-    "expires_in_hours": 24
+    "expires_in_hours": <debrief.contextBridgeTtlHours>
   }
 
   Message to send:
@@ -274,6 +303,7 @@ system_prompt: |
     {
       "pendingDebriefs": { ... },
       "judgedEvents": { ... },
+      "deferredEvents": { ... },
       "lastScanTimestamp": "<end of this scan window — i.e. current time>"
     }
     ```
@@ -283,9 +313,13 @@ system_prompt: |
   Before writing the context:
   - Remove `judgedEvents` entries older than 60 minutes — this exceeds
     the maximum possible scan window even if a cron tick is delayed.
-  - Remove `pendingDebriefs` entries older than 48 hours — these debriefs
-    are stale and the CEO has implicitly declined. Set their status to
-    "expired" briefly for the summary, then remove them.
+  - Remove `deferredEvents` entries older than 2 hours — if a meeting
+    hasn't been judged YES or NO within 2 hours, it's too late for a
+    meaningful debrief prompt. Drop it silently.
+  - Remove `pendingDebriefs` entries older than
+    <debrief.contextBridgeTtlHours> hours — these debriefs are stale and
+    the CEO has implicitly declined. Set their status to "expired" briefly
+    for the summary, then remove them.
 
   ---
 
