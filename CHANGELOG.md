@@ -13,6 +13,12 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Authorization role lookup** — role name is now normalized to lowercase before config lookup, so LLM-assigned roles like `'Spouse'` correctly match the `spouse` key in `role-defaults.yaml` instead of falling through to `unknown` (denied: \*).
+- **Authorization trust gating** — effective trust is now `max(channelTrust, contactTrustLevel)`, so confirmed contacts with an explicit `trust_level` grant (e.g. `high`, `ceo`) are no longer downgraded by the email channel's inherent low-trust floor. Fixes the CEO being unable to request their own calendar via email.
+- **Authorization trust fallback** — when a contact's free-text role has no config match, the system now falls back to `trust_level_defaults` (new section in `role-defaults.yaml`) before reaching `unknown`. Family members and other free-text-role contacts with an explicit trust grant now get appropriate permissions.
+
 ### Added
 
 - **`request-clarification` skill** — any specialist can call this skill to pause mid-task and request CEO direction; the runtime short-circuits the tool-use loop and the DelegateHandler returns a typed result with a resume_token for seamless re-delegation.
