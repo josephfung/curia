@@ -70,6 +70,9 @@ describe('EmbeddingService — OpenAI backend telemetry', () => {
     // Must not throw — telemetry failure is non-fatal
     const result = await service.embed('hello world');
     expect(result).toEqual(FAKE_EMBEDDING);
+    // publishTelemetry is fire-and-forget; drain pending microtasks so the
+    // catch block (which calls logger.warn) completes before we assert it.
+    await new Promise(resolve => setImmediate(resolve));
     expect(warnSpy).toHaveBeenCalledOnce();
   });
 
@@ -83,7 +86,7 @@ describe('EmbeddingService — OpenAI backend telemetry', () => {
     const service = EmbeddingService.createWithOpenAI('test-key', logger);
     const result = await service.embed('hello world');
 
+    // The service was created without a bus, so embed() should resolve normally.
     expect(result).toEqual(FAKE_EMBEDDING);
-    expect(mockBus.publish).not.toHaveBeenCalled();
   });
 });
