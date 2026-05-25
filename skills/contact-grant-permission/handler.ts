@@ -1,6 +1,8 @@
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
 import type { TaskOriginator } from '../../src/contacts/types.js';
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export class ContactGrantPermissionHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {
     const { contact_id, permission, granted } = ctx.input as {
@@ -35,10 +37,14 @@ export class ContactGrantPermissionHandler implements SkillHandler {
     // agent runtime has senderContext), fall back to originator (always forwarded
     // through delegation). Delegated specialists don't receive senderContext, so
     // caller is undefined — but originator carries the principal's contactId.
+    // The execution layer's elevated-skill gate ensures the originator has
+    // systemRole === 'principal' before we reach here, which implies the
+    // originator object has the correct shape. The explicit UUID check below
+    // guards the audit trail against malformed metadata.
     const originator = ctx.taskMetadata?.originator as TaskOriginator | undefined;
     const actorContactId = ctx.caller?.contactId ?? originator?.contactId;
-    if (!actorContactId) {
-      return { success: false, error: 'Cannot determine actor identity for audit trail — neither caller nor originator available' };
+    if (!actorContactId || !UUID_RE.test(actorContactId)) {
+      return { success: false, error: 'Cannot determine valid actor identity for audit trail — neither caller nor originator provides a valid UUID contactId' };
     }
 
     try {

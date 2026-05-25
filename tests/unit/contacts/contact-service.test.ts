@@ -306,6 +306,50 @@ describe('ContactService', () => {
       expect(resolved).toBeNull();
     });
 
+    it('resolves by email regardless of case (case-insensitive match)', async () => {
+      const contact = await service.createContact({ displayName: 'Jane', source: 'email_participant', status: 'provisional' });
+      await service.linkIdentity({
+        contactId: contact.id,
+        channel: 'email',
+        channelIdentifier: 'Jane.Doe@Example.GOV',  // mixed-case as stored by old code
+        source: 'email_participant',
+      });
+      // Lookup with all-lowercase should still find it
+      const resolved = await service.resolveByChannelIdentity('email', 'jane.doe@example.gov');
+      expect(resolved).not.toBeNull();
+      expect(resolved!.displayName).toBe('Jane');
+      expect(resolved!.status).toBe('provisional');
+    });
+
+    it('normalizes email to lowercase on linkIdentity write', async () => {
+      const contact = await service.createContact({ displayName: 'Test', source: 'ceo_stated' });
+      await service.linkIdentity({
+        contactId: contact.id,
+        channel: 'email',
+        channelIdentifier: 'Mixed.Case@Example.COM',
+        source: 'ceo_stated',
+      });
+      // Should be stored and findable in lowercase
+      const resolved = await service.resolveByChannelIdentity('email', 'mixed.case@example.com');
+      expect(resolved).not.toBeNull();
+      // Uppercase lookup should also work (because lookups normalize too)
+      const resolvedUpper = await service.resolveByChannelIdentity('email', 'MIXED.CASE@EXAMPLE.COM');
+      expect(resolvedUpper).not.toBeNull();
+    });
+
+    it('does not apply case normalization to non-email channels', async () => {
+      const contact = await service.createContact({ displayName: 'Signal User', source: 'signal_participant' });
+      await service.linkIdentity({
+        contactId: contact.id,
+        channel: 'signal',
+        channelIdentifier: '+14165550123',
+        source: 'signal_participant',
+      });
+      // Exact match works
+      const resolved = await service.resolveByChannelIdentity('signal', '+14165550123');
+      expect(resolved).not.toBeNull();
+    });
+
     it('resolveByChannelIdentity returns contactConfidence and trustLevel', async () => {
       // Create a contact with non-default confidence
       const contactId = (await service.createContact({

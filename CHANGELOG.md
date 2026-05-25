@@ -23,7 +23,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **`contact-lookup`** — channel/email lookups now return status and identities (previously omitted); skill manifest documents input format so the LLM knows to use `by: "channel"` with `email:addr` syntax.
 - **`contact-merge`** — removed stale `ctx.caller` guard that blocked all delegated specialists; principal origination is already enforced by the execution layer's elevated-skill gate.
 - **`contact-grant-permission`** — falls back to originator contactId when caller context is unavailable (delegated specialist path).
-- **Email case sensitivity** — `linkIdentity` now normalizes email addresses to lowercase; `resolveByChannelIdentity` uses case-insensitive matching so mixed-case emails are found.
+- **Email case sensitivity** — `linkIdentity` now normalizes email addresses to lowercase; `resolveByChannelIdentity` uses case-insensitive matching so mixed-case emails are found. Migration 044 adds a functional unique index on `LOWER(channel_identifier)` for the email channel.
 
 ### Added
 
