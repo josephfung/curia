@@ -10,6 +10,7 @@ import type { WorkingMemory } from '../memory/working-memory.js';
 import type { EntityMemory } from '../memory/entity-memory.js';
 import type { ExecutionLayer } from '../skills/execution.js';
 import type { CallerContext } from '../skills/types.js';
+import type { TaskOriginator } from '../contacts/types.js';
 import { sanitizeOutput } from '../skills/sanitize.js';
 import { classifySkillError, formatTaskError } from '../errors/classify.js';
 import { DEFAULT_ERROR_BUDGET, type AgentError, type ErrorBudget } from '../errors/types.js';
@@ -609,12 +610,19 @@ export class AgentRuntime {
     if (!response) return; // chatWithRetry already published error events
 
     // Extract caller context once — it doesn't change between tool-use rounds.
-    // Unresolved senders produce undefined, which triggers the execution layer's
-    // fail-closed gate on elevated skills — unknown senders can't modify permissions.
+    // Primary source: senderContext from the inbound message (set by the dispatcher).
+    // Fallback: taskMetadata.originator, which the delegate skill forwards when it creates
+    // a specialist task. Without this fallback, ctx.caller is always undefined for delegated
+    // specialists even when the original task was principal-originated (#710).
+    // Truly unknown senders (no senderContext AND no originator) remain undefined, which
+    // triggers the execution layer's fail-closed gate on elevated skills.
     const callerSenderCtx = taskEvent.payload.senderContext;
+    const originator = taskEvent.payload.metadata?.originator as TaskOriginator | undefined;
     const caller: CallerContext | undefined = (callerSenderCtx && callerSenderCtx.resolved)
       ? { contactId: callerSenderCtx.contactId, role: callerSenderCtx.role, channel: taskEvent.payload.channelId }
-      : undefined;
+      : originator
+        ? { contactId: originator.contactId, role: null, channel: originator.channel }
+        : undefined;
 
     // Accumulate skill names across all tool-use turns so we can report them
     // on the agent.response event for audit and monitoring.

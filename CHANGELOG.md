@@ -15,6 +15,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **Delegated specialist `ctx.caller`** — the agent runtime now synthesizes `CallerContext` from `taskMetadata.originator` when `senderContext` is absent, so specialists invoked by `delegate` always have `ctx.caller` populated. (#710)
+
 - **Authorization role lookup** — role name is now normalized to lowercase before config lookup, so LLM-assigned roles like `'Spouse'` correctly match the `spouse` key in `role-defaults.yaml` instead of falling through to `unknown` (denied: \*).
 - **Authorization trust gating** — effective trust is now `max(channelTrust, contactTrustLevel)`, so confirmed contacts with an explicit `trust_level` grant (e.g. `high`, `ceo`) are no longer downgraded by the email channel's inherent low-trust floor. Fixes the CEO being unable to request their own calendar via email.
 - **Authorization trust fallback** — when a contact's free-text role has no config match, the system now falls back to `trust_level_defaults` (new section in `role-defaults.yaml`) before reaching `unknown`. Family members and other free-text-role contacts with an explicit trust grant now get appropriate permissions.
