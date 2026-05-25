@@ -341,6 +341,11 @@ These are out of scope for this feature but identified during design:
 
 ## Implementation Status
 
+> **Note:** Sections 1–10 above describe the original design intent. The
+> implementation made several revisions documented in the design notes below.
+> When sections above conflict with the design notes, the design notes and
+> the implementation (agent YAML, config, tests) are authoritative.
+
 | Number | Item | Status |
 |---|---|---|
 | 0 | Proactive outbound Signal from scheduled jobs (#374) — prerequisite | Done |
