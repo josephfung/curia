@@ -113,6 +113,15 @@ describe('buildReplyQuote', () => {
     expect(result).toContain('Date: 2025-05-21, 7:42 PM UTC');
   });
 
+  it('falls back to UTC when timezone is invalid (unsupported IANA zone)', () => {
+    // Luxon creates an invalid DateTime for unrecognised IANA zone strings.
+    // The two-step guard should retry with UTC so the date still renders correctly.
+    const result = buildReplyQuote(makeMessage(), 'Mars/OlympusMons');
+
+    expect(result).toContain('Date: 2025-05-21, 7:42 PM UTC');
+    expect(result).not.toContain('Invalid DateTime');
+  });
+
   it('uses "Unknown date" when date is NaN (e.g. Nylas returns a non-numeric field)', () => {
     // Luxon 3.x throws for non-number types (undefined), but accepts NaN (typeof 'number')
     // and returns an Invalid DateTime — the dt.isValid guard prevents 'Invalid DateTime'

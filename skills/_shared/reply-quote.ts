@@ -49,10 +49,15 @@ export function buildReplyQuote(message: QuoteableMessage, timezone?: string): s
   const fromLine = message.from.map(formatParticipant).join(', ');
   const toLine = message.to.map(formatParticipant).join(', ');
 
-  const zone = timezone ?? 'UTC';
-  const dt = DateTime.fromSeconds(message.date, { zone });
-  // Guard against undefined/NaN date from Nylas — Luxon returns Invalid DateTime
-  // rather than throwing, so we must check validity explicitly before formatting.
+  const preferredZone = timezone ?? 'UTC';
+  const dtPreferred = DateTime.fromSeconds(message.date, { zone: preferredZone });
+  // If the timezone string is invalid/unsupported, Luxon creates an invalid DateTime
+  // without throwing. Fall back to UTC so the date is still rendered correctly.
+  // If the date itself is invalid (e.g. NaN from Nylas), the UTC DateTime will also
+  // be invalid — the isValid check below then produces the 'Unknown date' sentinel.
+  const dt = dtPreferred.isValid
+    ? dtPreferred
+    : DateTime.fromSeconds(message.date, { zone: 'UTC' });
   const dateLine = dt.isValid
     ? dt.toFormat('yyyy-MM-dd, h:mm a ZZZZ')
     : 'Unknown date';
