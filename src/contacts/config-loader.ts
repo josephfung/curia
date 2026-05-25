@@ -51,8 +51,16 @@ export function loadAuthConfig(configDir: string): AuthConfig {
       ? (() => {
           const raw = (rolesRaw as { trust_level_defaults: Record<string, RawRoleEntry> })
             .trust_level_defaults;
+          const validTiers = ['ceo', 'high', 'medium', 'low'];
           const result: Record<string, RolePermissions> = {};
           for (const [tier, entry] of Object.entries(raw)) {
+            // Fail hard on typos — a miskeyed tier silently makes all contacts at
+            // that trust level fall through to unknown (deny-all) at runtime.
+            if (!validTiers.includes(tier)) {
+              throw new Error(
+                `Invalid trust_level_defaults key '${tier}' in role-defaults.yaml — must be one of: ${validTiers.join(', ')}`,
+              );
+            }
             result[tier] = {
               description: entry.description ?? tier,
               defaultPermissions: entry.default_permissions ?? [],
