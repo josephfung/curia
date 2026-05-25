@@ -1,6 +1,5 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import os from 'node:os';
 import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
 import pino from 'pino';
 import { parseCsv } from './csv.js';
@@ -483,7 +482,26 @@ describe('FileParseHandler', () => {
         mime_type: 'text/csv',
       }, makeInfraLlm('{}')));
       expect(result.success).toBe(false);
-      if (!result.success) expect(result.error).toMatch(/expired/i);
+      if (!result.success) {
+        expect(result.error).toMatch(/expired|cleaned up/i);
+        // Error should include remediation guidance for the calling agent
+        expect(result.error).toMatch(/re-download/i);
+      }
+    });
+
+    it('returns specific error for empty (0-byte) temp files', async () => {
+      const emptyFilePath = path.join(tempDir, 'empty-file.csv');
+      await fs.writeFile(emptyFilePath, '');
+      try {
+        const result = await handler.execute(makeCtx({
+          temp_file_url: `file://${emptyFilePath}`,
+          mime_type: 'text/csv',
+        }, makeInfraLlm('{}')));
+        expect(result.success).toBe(false);
+        if (!result.success) expect(result.error).toMatch(/empty.*0 bytes/i);
+      } finally {
+        await fs.unlink(emptyFilePath).catch(() => {});
+      }
     });
 
     it('error message mentions temp_file_url as alternative when both inputs are missing', async () => {
