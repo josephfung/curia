@@ -665,6 +665,60 @@ describe('AgentRuntime tool-use loop', () => {
     expect(responseContent).toContain('Call count: 2');
   });
 
+  it('synthesizes caller from originator when senderContext is absent (delegated task path)', async () => {
+    // Regression test for #710: when the delegate skill creates a specialist task it omits
+    // senderContext. The runtime must fall back to taskMetadata.originator so ctx.caller
+    // is populated for elevated skills that need an audit contactId.
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+    const provider = createToolUseProvider('some-skill', {});
+
+    let capturedCaller: unknown;
+    const mockExecution = {
+      invoke: vi.fn().mockImplementation((_name: string, _input: unknown, caller: unknown) => {
+        capturedCaller = caller;
+        return Promise.resolve({ success: true, data: 'ok' });
+      }),
+    } as unknown as ExecutionLayer;
+
+    const agent = new AgentRuntime({
+      agentId: 'research-analyst',
+      systemPrompt: 'You are a specialist.',
+      provider,
+      resolvedModel: 'mock-model',
+      bus,
+      logger,
+      executionLayer: mockExecution,
+      skillToolDefs: [{ name: 'some-skill', description: 'A skill', input_schema: { type: 'object' as const, properties: {}, required: [] } }],
+    });
+    agent.register();
+
+    const originator = {
+      contactId: 'ceo-contact-id',
+      systemRole: 'principal' as const,
+      channel: 'email',
+      initiatedAt: '2026-05-01T10:00:00.000Z',
+    };
+
+    // No senderContext — simulates what delegate skill produces
+    const task = createAgentTask({
+      agentId: 'research-analyst',
+      conversationId: 'conv-delegate-1',
+      channelId: 'internal',
+      senderId: 'coordinator',
+      content: 'Do some research',
+      metadata: { originator },
+      parentEventId: 'delegate-parent-1',
+    });
+    await bus.publish('dispatch', task);
+
+    expect(capturedCaller).toEqual({
+      contactId: 'ceo-contact-id',
+      role: null,
+      channel: 'email',
+    });
+  });
+
   it('handles skill failure gracefully in the tool loop', async () => {
     const logger = createLogger('error');
     const bus = new EventBus(logger);
