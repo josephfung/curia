@@ -910,11 +910,24 @@ export class AgentRuntime {
         // Construct resume_token: carries the context needed to resume this task
         // after the CEO responds. Base64-encoded so it survives JSON round-trips
         // through context_bridge metadata. Versioned (v: 1) for forward compatibility.
+        //
+        // The token is stored in context_bridge metadata (MAX_METADATA_LENGTH = 16 KB).
+        // Cap variable-length fields so the base64-encoded token fits comfortably.
+        // Budget: 8 KB raw JSON → ~10.7 KB base64 → well within 16 KB with wrapper.
+        const MAX_RESUME_CONTEXT_LENGTH = 4000;
+        const MAX_RESUME_TASK_LENGTH = 2000;
+        const originalTask = taskEvent.payload.content.length > MAX_RESUME_TASK_LENGTH
+          ? taskEvent.payload.content.slice(0, MAX_RESUME_TASK_LENGTH) + '…'
+          : taskEvent.payload.content;
+        const context = pendingClarification.context.length > MAX_RESUME_CONTEXT_LENGTH
+          ? pendingClarification.context.slice(0, MAX_RESUME_CONTEXT_LENGTH) + '…'
+          : pendingClarification.context;
+
         const resumePayload = {
           v: 1,
           agent: agentId,
-          original_task: taskEvent.payload.content,
-          context: pendingClarification.context,
+          original_task: originalTask,
+          context,
         };
         const resumeToken = Buffer.from(JSON.stringify(resumePayload)).toString('base64');
 

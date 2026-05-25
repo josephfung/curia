@@ -11,7 +11,12 @@ import type { DbPool } from '../db/connection.js';
 import type { Logger } from '../logger.js';
 
 const MAX_PREVIEW_LENGTH = 300;
-const MAX_METADATA_LENGTH = 2000;
+// Metadata carries structured delegation context (e.g. resume_tokens for
+// multi-turn clarification). Postgres JSONB has no practical size limit;
+// this cap is an application-level guard against unbounded LLM-generated
+// metadata. 16 KB accommodates base64-encoded resume tokens with generous
+// context fields while still preventing runaway payloads.
+const MAX_METADATA_LENGTH = 16_000;
 const MAX_FIELD_LENGTH = 500;
 
 // ── Config ───────────────────────────────────────────────────────────────
