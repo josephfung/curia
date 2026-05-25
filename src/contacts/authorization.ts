@@ -72,7 +72,19 @@ export class AuthorizationService {
     // should not have their CEO-granted trust overridden by the channel floor.
     // Contacts with no explicit trust_level (null) use only the channel floor.
     const channelTrustRank = TRUST_RANK[channelTrust] ?? 0;
-    const contactTrustRank = input.trustLevel != null ? (TRUST_RANK[input.trustLevel] ?? 0) : 0;
+    const contactTrustRank = (() => {
+      if (input.trustLevel == null) return 0;
+      const rank = TRUST_RANK[input.trustLevel];
+      // Throw on unknown values: a corrupt DB row or a new enum value deployed before
+      // TRUST_RANK is updated must fail loudly. The contact-resolver.ts catch block
+      // will set authorization=null — a safe degradation that is logged and observable.
+      if (rank === undefined) {
+        throw new Error(
+          `Unknown trustLevel value '${input.trustLevel}' — not a recognized TrustLevel enum. Check migration history or DB integrity.`,
+        );
+      }
+      return rank;
+    })();
     const effectiveTrustRank = Math.max(channelTrustRank, contactTrustRank);
 
     // Role lookup: case-insensitive so LLM-assigned 'Spouse' matches config key 'spouse'.
@@ -103,10 +115,17 @@ export class AuthorizationService {
     const roleDeniesAll = roleDefaults.defaultDeny.includes('*');
 
     for (const [permName, permDef] of Object.entries(this.config.permissions)) {
+      // Resolve sensitivity rank once per permission. If undefined (e.g. a future
+      // 'critical' sensitivity added to permissions.yaml before TRUST_RANK is updated),
+      // escalate so the CEO makes the call rather than silently denying or allowing.
+      const sensitivityRank = TRUST_RANK[permDef.sensitivity as TrustLevel];
+
       // Layer 1: Check overrides first (highest precedence)
       if (overrideMap.has(permName)) {
         if (overrideMap.get(permName)) {
-          if (effectiveTrustRank >= TRUST_RANK[permDef.sensitivity]) {
+          if (sensitivityRank === undefined) {
+            escalate.push(permName);
+          } else if (effectiveTrustRank >= sensitivityRank) {
             allowed.push(permName);
           } else {
             trustBlocked.push(permName);
@@ -119,7 +138,11 @@ export class AuthorizationService {
 
       // Layer 2: Check role defaults
       if (roleAllowsAll || roleDefaults.defaultPermissions.includes(permName)) {
-        if (effectiveTrustRank >= TRUST_RANK[permDef.sensitivity]) {
+        if (sensitivityRank === undefined) {
+          // Sensitivity value not in TRUST_RANK — programming/config error caught at runtime.
+          // Escalate rather than silently trust-blocking a granted permission.
+          escalate.push(permName);
+        } else if (effectiveTrustRank >= sensitivityRank) {
           allowed.push(permName);
         } else {
           trustBlocked.push(permName);
