@@ -33,13 +33,18 @@ describe('formatTurnBudgetBlock', () => {
     expect(block).toContain('retry');
   });
 
+  it('instructs the model to accept errors and move on', () => {
+    const block = formatTurnBudgetBlock(20);
+    expect(block).toContain('accept it and move on');
+  });
+
   it('instructs the model to produce a partial result near the limit', () => {
     const block = formatTurnBudgetBlock(20);
     expect(block).toContain('partial');
   });
 
-  it('specifies the 3-turn proximity threshold for early summary', () => {
+  it('specifies the 5-turn proximity threshold for final output', () => {
     const block = formatTurnBudgetBlock(20);
-    expect(block).toContain('3 turns');
+    expect(block).toContain('fewer than 5 turns remaining');
   });
 });
