@@ -473,11 +473,19 @@ export class ContactService {
       throw new Error('Cannot force-verify a self_claimed identity — CEO confirmation required');
     }
 
+    // Normalize email addresses to lowercase for case-insensitive matching.
+    // RFC 5321 allows case-sensitive local-parts, but in practice no major
+    // provider enforces this — storing mixed-case causes lookup misses when
+    // the LLM or inbound adapter uses a different casing.
+    const normalizedIdentifier = options.channel === 'email'
+      ? options.channelIdentifier.toLowerCase()
+      : options.channelIdentifier;
+
     const identity: ChannelIdentity = {
       id: randomUUID(),
       contactId: options.contactId,
       channel: options.channel,
-      channelIdentifier: options.channelIdentifier,
+      channelIdentifier: normalizedIdentifier,
       label: options.label ?? null,
       verified,
       verifiedAt: verified ? now : null,
@@ -1098,6 +1106,12 @@ class PostgresContactBackend implements ContactServiceBackend {
     channel: string,
     channelIdentifier: string,
   ): Promise<ResolvedSender | null> {
+    // Normalize email lookups to lowercase so mixed-case entries (stored before
+    // write-time normalization was added) are still matched.
+    const normalizedId = channel === 'email'
+      ? channelIdentifier.toLowerCase()
+      : channelIdentifier;
+
     const result = await this.pool.query<{
       id: string;
       display_name: string;
@@ -1113,8 +1127,8 @@ class PostgresContactBackend implements ContactServiceBackend {
               c.contact_confidence, c.trust_level
        FROM contact_channel_identities cci
        JOIN contacts c ON c.id = cci.contact_id
-       WHERE cci.channel = $1 AND cci.channel_identifier = $2`,
-      [channel, channelIdentifier],
+       WHERE cci.channel = $1 AND LOWER(cci.channel_identifier) = $2`,
+      [channel, normalizedId],
     );
 
     const row = result.rows[0];
@@ -1623,9 +1637,17 @@ class InMemoryContactBackend implements ContactServiceBackend {
     channel: string,
     channelIdentifier: string,
   ): Promise<ResolvedSender | null> {
+    // Normalize email lookups to lowercase (mirrors Postgres backend).
+    const normalizedId = channel === 'email'
+      ? channelIdentifier.toLowerCase()
+      : channelIdentifier;
+
     // Find the matching identity, then look up the contact
     for (const identity of this.identities.values()) {
-      if (identity.channel === channel && identity.channelIdentifier === channelIdentifier) {
+      const storedId = channel === 'email'
+        ? identity.channelIdentifier.toLowerCase()
+        : identity.channelIdentifier;
+      if (identity.channel === channel && storedId === normalizedId) {
         const contact = this.contacts.get(identity.contactId);
         if (contact) {
           return {
