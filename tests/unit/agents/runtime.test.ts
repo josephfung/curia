@@ -671,6 +671,7 @@ describe('AgentRuntime tool-use loop', () => {
     // is populated for elevated skills that need an audit contactId.
     const logger = createLogger('error');
     const bus = new EventBus(logger);
+    bus.subscribe('agent.response', 'dispatch', () => {});
     const provider = createToolUseProvider('some-skill', {});
 
     let capturedCaller: unknown;
