@@ -15,6 +15,7 @@
 
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
 import { registerOutboundContext } from '../../src/dispatch/context-bridge-parse.js';
+import { buildReplyQuote } from '../_shared/reply-quote.js';
 
 const MAX_BODY_LENGTH = 50000;
 
@@ -110,11 +111,23 @@ export class EmailReplyHandler implements SkillHandler {
         if (ccAddresses.length === 0) ccAddresses = undefined;
       }
 
+      // Append the quoted original message below the reply body. Formatting is
+      // non-fatal — a quote failure must not block the reply from being sent.
+      let quotedBody = body;
+      try {
+        quotedBody = body + buildReplyQuote(original, ctx.timezone);
+      } catch (err) {
+        ctx.log.warn(
+          { err, replyToMessageId },
+          'email-reply: failed to build reply quote — proceeding without quote',
+        );
+      }
+
       const result = await ctx.outboundGateway.send({
         channel: 'email',
         to: originalFrom,
         subject: replySubject,
-        body,
+        body: quotedBody,
         replyToMessageId,
         ...(ccAddresses ? { cc: ccAddresses } : {}),
       });
