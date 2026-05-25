@@ -117,7 +117,11 @@ export class EmailSendHandler implements SkillHandler {
       }
       if (original !== undefined) {
         try {
-          quotedBody = body + buildReplyQuote(original, ctx.timezone);
+          const candidate = body + buildReplyQuote(original, ctx.timezone);
+          // Skip the quote silently if it would push the body past the size limit
+          // (the agent-authored body already passed the guard above; the quote block
+          // itself could tip a long thread over). The send still goes out unquoted.
+          quotedBody = candidate.length <= MAX_BODY_LENGTH ? candidate : body;
         } catch (err) {
           ctx.log.warn(
             { err, replyToMessageId },

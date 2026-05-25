@@ -115,7 +115,11 @@ export class EmailReplyHandler implements SkillHandler {
       // non-fatal — a quote failure must not block the reply from being sent.
       let quotedBody = body;
       try {
-        quotedBody = body + buildReplyQuote(original, ctx.timezone);
+        const candidate = body + buildReplyQuote(original, ctx.timezone);
+        // Skip the quote silently if it would push the body past the size limit
+        // (the agent-authored body already passed the guard above; a long thread
+        // could tip the combined total over). The reply still goes out unquoted.
+        quotedBody = candidate.length <= MAX_BODY_LENGTH ? candidate : body;
       } catch (err) {
         ctx.log.warn(
           { err, replyToMessageId },
