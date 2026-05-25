@@ -7,6 +7,7 @@
 // the CEO reviews and sends it from their email client.
 
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import { buildReplyQuote } from '../_shared/reply-quote.js';
 
 export class EmailDraftSaveHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {
@@ -48,13 +49,28 @@ export class EmailDraftSaveHandler implements SkillHandler {
 
     ctx.log.info({ to, subject, accountId, replyToMessageId }, 'email-draft-save: saving draft');
 
+    // When replying, fetch the original message and append a quoted copy below
+    // the reply body. If the fetch fails, proceed without the quote (non-fatal).
+    let quotedBody = body;
+    if (replyToMessageId) {
+      try {
+        const original = await ctx.outboundGateway.getEmailMessage(replyToMessageId, accountId);
+        quotedBody = body + buildReplyQuote(original, ctx.timezone);
+      } catch (err) {
+        ctx.log.warn(
+          { err, replyToMessageId },
+          'email-draft-save: failed to fetch original message for quote — proceeding without quote',
+        );
+      }
+    }
+
     let result: Awaited<ReturnType<typeof ctx.outboundGateway.createEmailDraft>>;
     try {
       result = await ctx.outboundGateway.createEmailDraft({
         channel: 'email',
         to,
         subject,
-        body,
+        body: quotedBody,
         accountId,
         replyToMessageId,
       });

@@ -14,6 +14,7 @@ function buildCtx(overrides: Partial<{
 
   return {
     input,
+    timezone: 'America/Toronto',
     secret(key: string): string {
       switch (key) {
         case 'nylas_api_key': return 'test-api-key';
@@ -121,6 +122,11 @@ describe('CeoInboxDraftReplyHandler', () => {
     expect(ccEmails).toContain('bob@example.com');
     expect(ccEmails).toContain('charlie@example.com');
     expect(ccEmails).not.toContain('ceo@example.com');
+
+    // Body should include the reply text followed by the quoted original
+    expect(draftBody.body).toContain('Thanks for reaching out.');
+    expect(draftBody.body).toContain('---------- Original Message ----------');
+    expect(draftBody.body).toContain('alice@external.com');
   });
 
   it('Case 2: CEO in To of original — filtered from reply CC', async () => {
@@ -343,7 +349,48 @@ describe('CeoInboxDraftReplyHandler', () => {
     expect(mockFetch).not.toHaveBeenCalled();
   });
 
-  it('Case 8: Empty from — returns { success: false } with error-level log', async () => {
+  it('Case 8: Quote includes HTML-stripped original body', async () => {
+    const messageResponse = buildNylasMessage({
+      from: [{ email: 'alice@external.com', name: 'Alice' }],
+      to: [{ email: 'ceo@example.com' }],
+      cc: [],
+    });
+    // Override body with rich HTML
+    messageResponse.data.body = '<p>Hello <b>world</b></p>';
+
+    mockFetch.mockImplementation(async (url) => {
+      const urlStr = String(url);
+      if (urlStr.includes('/messages/msg-001')) {
+        return new Response(JSON.stringify(messageResponse), { status: 200 });
+      }
+      if (urlStr.includes('/drafts')) {
+        return new Response(JSON.stringify(DRAFT_RESPONSE), { status: 200 });
+      }
+      throw new Error(`Unexpected fetch: ${urlStr}`);
+    });
+
+    const ctx = buildCtx();
+    const result = await handler.execute(ctx);
+    expect(result.success).toBe(true);
+
+    const draftCall = mockFetch.mock.calls.find(
+      (call) => String(call[0]).includes('/drafts'),
+    );
+    expect(draftCall).toBeDefined();
+
+    const draftBody = JSON.parse(draftCall![1]!.body as string);
+
+    // Quote should contain stripped plain text, not HTML
+    expect(draftBody.body).toContain('Hello world');
+    expect(draftBody.body).not.toContain('<p>');
+    expect(draftBody.body).not.toContain('<b>');
+    // Reply text should precede the quote
+    expect(draftBody.body.indexOf('Thanks for reaching out.')).toBeLessThan(
+      draftBody.body.indexOf('---------- Original Message ----------'),
+    );
+  });
+
+  it('Case 9: Empty from — returns { success: false } with error-level log', async () => {
     // Message exists but has no sender (from: [])
     const messageResponse = buildNylasMessage({
       from: [],

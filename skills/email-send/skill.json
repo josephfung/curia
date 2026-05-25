@@ -9,6 +9,7 @@
     "cc": "string?",
     "subject": "string",
     "body": "string",
+    "reply_to_message_id": "string? (Nylas message ID — when set, the original message is quoted below the reply and the send is threaded)",
     "context_bridge": "string? (JSON — optional context bridge registration: {agent_id, expected_reply?, delegation_hint?, metadata?, expires_in_hours?})"
   },
   "outputs": {
