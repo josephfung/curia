@@ -110,6 +110,23 @@ skillOutput:
   # to reduce LLM context pressure on installations with many concurrent agents.
   maxLength: 200000  # 200k characters (~50k tokens at 4 chars/token)
 
+# Delegate skill configuration.
+# Controls the default timeout for specialist agent delegations when no explicit
+# timeout_ms is provided by the caller or runtime. Deployment-specific model
+# latency (e.g. switching the standard tier to a higher-latency model) can be
+# accommodated here without a code change or release.
+# Override in config/local.yaml to match your deployment's model latency.
+delegate:
+  default_timeout_ms: 90000   # 90s — appropriate for interactive delegations with Sonnet-class models
+
+# Scheduler configuration.
+# Controls runtime defaults for the scheduler watchdog and recovery logic.
+scheduler:
+  # Assumed task duration for scheduled jobs that declare no expectedDurationSeconds.
+  # Used by the watchdog to compute the recovery timeout (LEAST(expected × 7.5, expected + 3600)).
+  # Raise this if you run long-running scheduled jobs without explicit duration hints.
+  default_expected_duration_seconds: 600  # 10 minutes
+
 # Context bridge TTL configuration.
 # Controls how long outbound context entries remain active before automatic expiry.
 # Auto-registered entries (when the caller doesn't pass explicit context_bridge metadata)

@@ -90,6 +90,9 @@ export interface SchedulerConfig {
   dreamEngine?: DreamEngine;
   /** Outbound context service — when present, expired/released rows are purged daily and at startup. */
   outboundContextService?: OutboundContextService;
+  /** Assumed task duration for jobs with no explicit expectedDurationSeconds.
+   *  Sourced from config.scheduler.default_expected_duration_seconds. Default: 600. */
+  defaultExpectedDurationSeconds?: number;
 }
 
 export class Scheduler {
@@ -100,6 +103,7 @@ export class Scheduler {
   private driftDetector?: DriftDetector;
   private dreamEngine?: DreamEngine;
   private outboundContextService?: OutboundContextService;
+  private defaultExpectedDurationSeconds: number;
   private intervalHandle: ReturnType<typeof setInterval> | null = null;
   private watchdogHandle: ReturnType<typeof setInterval> | null = null;
   private cleanupHandle: ReturnType<typeof setInterval> | null = null;
@@ -120,6 +124,7 @@ export class Scheduler {
     this.driftDetector = config.driftDetector;
     this.dreamEngine = config.dreamEngine;
     this.outboundContextService = config.outboundContextService;
+    this.defaultExpectedDurationSeconds = config.defaultExpectedDurationSeconds ?? DEFAULT_EXPECTED_DURATION_SECONDS;
   }
 
   /**
@@ -693,7 +698,7 @@ export class Scheduler {
       FOR UPDATE SKIP LOCKED
     `;
     const { rows } = await this.pool.query(sql, [
-      DEFAULT_EXPECTED_DURATION_SECONDS,
+      this.defaultExpectedDurationSeconds,
       RECOVERY_TIMEOUT_MULTIPLIER,
       RECOVERY_TIMEOUT_CAP_SECONDS,
     ]);

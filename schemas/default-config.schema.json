@@ -289,6 +289,20 @@
         "reminderDelayMinutes": { "type": "integer", "minimum": 1 },
         "contextBridgeTtlHours": { "type": "integer", "minimum": 1 }
       }
+    },
+    "delegate": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "default_timeout_ms": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "scheduler": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "default_expected_duration_seconds": { "type": "integer", "minimum": 1 }
+      }
     }
   },
   "definitions": {

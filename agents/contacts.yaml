@@ -236,7 +236,7 @@ pinned_skills:
 schedule:
   - cron: "0 9 * * 1"   # Mondays at 9 AM
     task: "Run your weekly contacts dedup scan — find probable and certain duplicate contact pairs, present them to the CEO for review one pair at a time, and merge confirmed pairs."
-    expectedDurationSeconds: 300
+    expectedDurationSeconds: 900
 
   - cron: "0 8 * * *"   # Daily at 8 AM
     task: >
@@ -277,4 +277,4 @@ schedule:
       5. Report a clear summary: how many provisional contacts were checked, how many
          were promoted, which signal triggered each promotion (curia_outbound,
          ceo_has_sent, or calendar_accepted), and how many provisional contacts remain.
-    expectedDurationSeconds: 180
+    expectedDurationSeconds: 540

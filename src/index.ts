@@ -1074,7 +1074,7 @@ async function main(): Promise<void> {
       })
     : undefined;
 
-  const scheduler = new Scheduler({ pool, bus, logger, schedulerService, driftDetector, dreamEngine, outboundContextService });
+  const scheduler = new Scheduler({ pool, bus, logger, schedulerService, driftDetector, dreamEngine, outboundContextService, defaultExpectedDurationSeconds: yamlConfig.scheduler?.default_expected_duration_seconds });
 
   // SuspensionNotifier — emails the CEO when a scheduled job is auto-suspended.
   // Bypasses the LLM pipeline: notifies even when Anthropic is the thing that's down.
@@ -1163,7 +1163,7 @@ async function main(): Promise<void> {
   // entityContextAssembler enables entity_enrichment pre-enrichment and the
   // entity-context skill. agentContactId enables entity_enrichment default='agent'.
   // infraLlmService provides constrained LLM access (classify/extract) with telemetry.
-  const executionLayer = new ExecutionLayer(skillRegistry, logger, { bus, agentRegistry, contactService, outboundGateway, heldMessages, schedulerService, entityMemory, agentPersona, nylasCalendarClient, entityContextAssembler, agentContactId: agentIdentityContactId, autonomyService, executiveProfileService, browserService, bullpenService, approvalTrigger, actionLogRepo, confidencePipeline, tempFileStore, infraLlmService, outboundContextService, timezone: config.timezone, selfEmail: resolvedEmailAccounts[0]?.selfEmail, skillOutputMaxLength: yamlConfig.skillOutput?.maxLength });
+  const executionLayer = new ExecutionLayer(skillRegistry, logger, { bus, agentRegistry, contactService, outboundGateway, heldMessages, schedulerService, entityMemory, agentPersona, nylasCalendarClient, entityContextAssembler, agentContactId: agentIdentityContactId, autonomyService, executiveProfileService, browserService, bullpenService, approvalTrigger, actionLogRepo, confidencePipeline, tempFileStore, infraLlmService, outboundContextService, timezone: config.timezone, selfEmail: resolvedEmailAccounts[0]?.selfEmail, skillOutputMaxLength: yamlConfig.skillOutput?.maxLength, defaultDelegateTimeoutMs: yamlConfig.delegate?.default_timeout_ms });
 
   // Two-pass agent registration:
   // Pass 1: Register all agents in the registry so specialistSummary() is complete

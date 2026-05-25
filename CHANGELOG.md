@@ -13,6 +13,13 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Changed
+
+- **Delegate timeout** — `DEFAULT_SPECIALIST_TIMEOUT_MS` moved from a hardcoded constant to `config.delegate.default_timeout_ms` (default 90s); deployments can override in `local.yaml` to match their standard-tier model latency without a code change. (#713)
+- **Scheduler recovery timeout** — `DEFAULT_EXPECTED_DURATION_SECONDS` moved to `config.scheduler.default_expected_duration_seconds` (default 600s); deployments can adjust the watchdog fallback without patching the runtime. (#713)
+- **Scheduled task durations** — `expectedDurationSeconds` bumped across coordinator (120→360s) and contacts (dedup 300→900s, daily promotion 180→540s) scheduled tasks to reflect higher-latency standard-tier model. (#713)
+- **`SkillContext`** — added `defaultDelegateTimeoutMs?: number` field (sourced from config, read by the delegate skill). (#713)
+
 ### Fixed
 
 - **Delegated specialist `ctx.caller`** — the agent runtime now synthesizes `CallerContext` from `taskMetadata.originator` when `senderContext` is absent, so specialists invoked by `delegate` always have `ctx.caller` populated. (#710)

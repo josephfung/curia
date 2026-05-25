@@ -96,6 +96,8 @@ export class ExecutionLayer {
   private selfEmail?: string;
   /** Max character length for sanitized skill output before truncation. */
   private skillOutputMaxLength: number;
+  /** Configurable fallback timeout for the delegate skill when no timeout_ms is supplied. */
+  private defaultDelegateTimeoutMs?: number;
 
   constructor(registry: SkillRegistry, logger: Logger, options?: {
     bus?: EventBus;
@@ -122,6 +124,7 @@ export class ExecutionLayer {
     timezone?: string;
     selfEmail?: string;
     skillOutputMaxLength?: number;
+    defaultDelegateTimeoutMs?: number;
   }) {
     this.registry = registry;
     this.logger = logger;
@@ -149,6 +152,7 @@ export class ExecutionLayer {
     this.timezone = options?.timezone ?? 'UTC';
     this.selfEmail = options?.selfEmail;
     this.skillOutputMaxLength = options?.skillOutputMaxLength ?? DEFAULT_SKILL_OUTPUT_MAX_LENGTH;
+    this.defaultDelegateTimeoutMs = options?.defaultDelegateTimeoutMs;
   }
 
   /**
@@ -543,6 +547,8 @@ export class ExecutionLayer {
       timezone: this.timezone,
       // Expose Curia's own email address so email skills can filter self from CC lists.
       selfEmail: this.selfEmail,
+      // Configurable fallback timeout for the delegate skill (sourced from config.delegate.default_timeout_ms).
+      defaultDelegateTimeoutMs: this.defaultDelegateTimeoutMs,
     };
 
     // Capability-gated service injection.
