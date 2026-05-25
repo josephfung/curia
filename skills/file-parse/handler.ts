@@ -324,8 +324,13 @@ export class FileParseHandler implements SkillHandler {
 
     // Allow paths under the production tmpfs mount or the /tmp fallback (local dev).
     // Both are restricted directories where only TempFileStore writes.
-    // TODO: read CURIA_TEMPFILE_DIR env var to stay in sync with TempFileStore config
+    // Include CURIA_TEMPFILE_DIR if set, so this stays in sync with TempFileStore config.
     const allowedPrefixes = ['/run/curia-tempfiles/', '/tmp/curia-tempfiles/'];
+    const customDir = process.env.CURIA_TEMPFILE_DIR;
+    if (customDir) {
+      const normalized = path.resolve(customDir);
+      allowedPrefixes.push(normalized.endsWith('/') ? normalized : normalized + '/');
+    }
     const logicallyAllowed = allowedPrefixes.some((prefix) => filePath.startsWith(prefix));
     if (!logicallyAllowed) return null;
 
