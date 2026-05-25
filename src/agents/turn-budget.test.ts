@@ -43,8 +43,18 @@ describe('formatTurnBudgetBlock', () => {
     expect(block).toContain('partial');
   });
 
-  it('specifies the 5-turn proximity threshold for final output', () => {
+  it('scales the proximity threshold with maxTurns (default 20 → 6)', () => {
     const block = formatTurnBudgetBlock(20);
+    expect(block).toContain('fewer than 6 turns remaining');
+  });
+
+  it('scales the proximity threshold for 15 turns → 5', () => {
+    const block = formatTurnBudgetBlock(15);
     expect(block).toContain('fewer than 5 turns remaining');
+  });
+
+  it('clamps the proximity threshold to minimum 2 for low budgets', () => {
+    const block = formatTurnBudgetBlock(3);
+    expect(block).toContain('fewer than 2 turns remaining');
   });
 });
