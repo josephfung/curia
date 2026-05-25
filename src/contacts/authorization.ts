@@ -6,11 +6,18 @@
 // 1. Contact status gate — provisional and blocked contacts get zero permissions
 // 2. Per-contact overrides → role defaults → escalate (for permissions in neither)
 // 3. Channel trust — high-sensitivity actions on low-trust channels are trust-blocked
+//
+// Role lookup is case-insensitive: LLM-assigned roles like 'Spouse' match 'spouse' in config.
+// If the role has no config match, falls back to trust_level tier defaults so confirmed
+// contacts with an explicit trust grant still get appropriate permissions.
+// Effective trust = max(channel trust, contact trust_level) — a contact's explicit trust
+// grant is not downgraded by the channel's inherent floor.
 
 import type {
   AuthConfig,
   AuthorizationResult,
   ContactStatus,
+  TrustLevel,
 } from './types.js';
 import { TRUST_RANK } from './types.js';
 
@@ -21,6 +28,8 @@ interface AuthOverrideInput {
 
 export interface AuthEvaluateInput {
   role: string | null;
+  /** Per-contact trust_level from DB, or null to use only the channel floor. */
+  trustLevel: TrustLevel | null;
   status: ContactStatus;
   channel: string;
   overrides: AuthOverrideInput[];
@@ -32,8 +41,10 @@ export interface AuthEvaluateInput {
  * Evaluates what a contact is allowed to do based on:
  * 1. Contact status (provisional/blocked → zero permissions)
  * 2. Per-contact overrides (explicit grants/denials from the CEO)
- * 3. Role defaults (from config/role-defaults.yaml)
- * 4. Channel trust (from config/channel-trust.yaml + config/permissions.yaml sensitivity)
+ * 3. Role defaults (from config/role-defaults.yaml, case-insensitive lookup)
+ *    Falls back to trust_level tier defaults when no role match exists.
+ * 4. Effective trust (max of channel trust and contact trust_level) used for
+ *    sensitivity gating, so explicit high-trust grants are not channel-downgraded.
  *
  * This is NOT an LLM decision — it's a deterministic function of config + data.
  */
@@ -56,14 +67,25 @@ export class AuthorizationService {
       };
     }
 
-    // Look up role defaults. Unknown roles (including null) fall back to 'unknown'.
-    // If neither the role nor 'unknown' exists in config, use an empty defaults object.
-    const roleName = input.role ?? 'unknown';
-    const roleDefaults = this.config.roles[roleName] ?? this.config.roles.unknown ?? {
-      description: 'fallback',
-      defaultPermissions: [],
-      defaultDeny: ['*'],
-    };
+    // Effective trust: the higher of the channel's inherent trust and the contact's
+    // explicit trust_level grant. A contact with trust_level='high' on email (low)
+    // should not have their CEO-granted trust overridden by the channel floor.
+    // Contacts with no explicit trust_level (null) use only the channel floor.
+    const channelTrustRank = TRUST_RANK[channelTrust] ?? 0;
+    const contactTrustRank = input.trustLevel != null ? (TRUST_RANK[input.trustLevel] ?? 0) : 0;
+    const effectiveTrustRank = Math.max(channelTrustRank, contactTrustRank);
+
+    // Role lookup: case-insensitive so LLM-assigned 'Spouse' matches config key 'spouse'.
+    // Fall back to trust_level tier defaults when the role has no config entry, so
+    // contacts with an explicit trust grant still get appropriate permissions even when
+    // the role is a free-text description ('Sister', 'Head Instructor, …').
+    // Ultimate fallback is the 'unknown' role, then a hard-deny object.
+    const roleName = (input.role ?? '').toLowerCase();
+    const roleDefaults =
+      (roleName !== '' ? this.config.roles[roleName] : undefined) ??
+      (input.trustLevel != null ? this.config.trustLevelDefaults?.[input.trustLevel] : undefined) ??
+      this.config.roles['unknown'] ??
+      { description: 'fallback', defaultPermissions: [], defaultDeny: ['*'] };
 
     // Build override map for O(1) lookup
     const overrideMap = new Map<string, boolean>();
@@ -84,7 +106,7 @@ export class AuthorizationService {
       // Layer 1: Check overrides first (highest precedence)
       if (overrideMap.has(permName)) {
         if (overrideMap.get(permName)) {
-          if (TRUST_RANK[channelTrust] >= TRUST_RANK[permDef.sensitivity]) {
+          if (effectiveTrustRank >= TRUST_RANK[permDef.sensitivity]) {
             allowed.push(permName);
           } else {
             trustBlocked.push(permName);
@@ -97,7 +119,7 @@ export class AuthorizationService {
 
       // Layer 2: Check role defaults
       if (roleAllowsAll || roleDefaults.defaultPermissions.includes(permName)) {
-        if (TRUST_RANK[channelTrust] >= TRUST_RANK[permDef.sensitivity]) {
+        if (effectiveTrustRank >= TRUST_RANK[permDef.sensitivity]) {
           allowed.push(permName);
         } else {
           trustBlocked.push(permName);

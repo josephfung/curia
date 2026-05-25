@@ -44,6 +44,25 @@ export function loadAuthConfig(configDir: string): AuthConfig {
     };
   }
 
+  // Trust-level tier defaults — optional section. Used as fallback when a contact's
+  // free-text role (e.g. 'Sister') has no matching key in `roles`.
+  const trustLevelDefaults: Record<string, RolePermissions> | undefined =
+    'trust_level_defaults' in rolesRaw
+      ? (() => {
+          const raw = (rolesRaw as { trust_level_defaults: Record<string, RawRoleEntry> })
+            .trust_level_defaults;
+          const result: Record<string, RolePermissions> = {};
+          for (const [tier, entry] of Object.entries(raw)) {
+            result[tier] = {
+              description: entry.description ?? tier,
+              defaultPermissions: entry.default_permissions ?? [],
+              defaultDeny: entry.default_deny ?? [],
+            };
+          }
+          return result;
+        })()
+      : undefined;
+
   // Permissions registry
   const permsRaw = yaml.load(
     readFileSync(path.join(configDir, 'permissions.yaml'), 'utf-8'),
@@ -109,5 +128,5 @@ export function loadAuthConfig(configDir: string): AuthConfig {
     }
   }
 
-  return { roles, permissions, channelTrust, channelPolicies };
+  return { roles, trustLevelDefaults, permissions, channelTrust, channelPolicies };
 }

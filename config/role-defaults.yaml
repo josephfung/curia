@@ -1,8 +1,15 @@
 # Role-based permission defaults.
 # Each role defines which permissions are granted and denied by default.
 # Per-contact overrides (in contact_auth_overrides table) take precedence.
-# Roles are open-ended — the CEO can create new roles at any time.
-# Unknown roles fall back to the 'unknown' entry.
+#
+# Role lookup is case-insensitive: 'Spouse' matches the 'spouse' key.
+# When a contact's free-text role (e.g. 'Sister', 'Head Instructor, Kicks') has no
+# config match, the system falls back to trust_level_defaults keyed by the contact's
+# trust_level ('ceo'|'high'|'medium'|'low'). Unknown roles with no trust_level
+# fall back to the 'unknown' entry below.
+#
+# This means trust_level is the primary authorization primitive for confirmed contacts
+# whose roles were set as free-text descriptions by the coordinator LLM.
 
 roles:
   ceo:
@@ -76,6 +83,46 @@ roles:
 
   unknown:
     description: "Fallback for contacts with no assigned role"
+    default_permissions: []
+    default_deny:
+      - "*"
+
+# Trust-level tier defaults — fallback when a contact's role has no config match.
+# Keyed by trust_level value. A contact with trust_level='high' and role='Sister'
+# (no 'sister' key in roles above) will use the 'high' entry below.
+trust_level_defaults:
+  ceo:
+    description: "CEO trust tier — full access"
+    default_permissions:
+      - "*"
+    default_deny: []
+
+  high:
+    description: "High-trust contact (family, close personal)"
+    default_permissions:
+      - see_personal_calendar
+      - book_travel
+      - manage_personal_appointments
+      - schedule_meetings
+      - request_action_items
+      - request_meeting_notes
+    default_deny:
+      - view_financial_reports
+      - view_board_materials
+      - access_internal_docs
+
+  medium:
+    description: "Medium-trust contact (professional)"
+    default_permissions:
+      - schedule_meetings
+      - request_action_items
+    default_deny:
+      - view_financial_reports
+      - view_board_materials
+      - access_internal_docs
+
+  low:
+    description: "Low-trust contact (acquaintance, cold contact)"
     default_permissions: []
     default_deny:
       - "*"
