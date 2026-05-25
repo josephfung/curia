@@ -265,6 +265,17 @@ export interface YamlConfig {
     /** TTL in hours for context bridge entries linking replies to the debrief agent. Default: 48. */
     contextBridgeTtlHours?: number;
   };
+
+  delegate?: {
+    /** Default timeout in ms for specialist delegations when no timeout_ms is passed. Default: 90000.
+     *  Override in local.yaml to match your deployment's standard-tier model latency. */
+    default_timeout_ms?: number;
+  };
+  scheduler?: {
+    /** Default assumed duration in seconds for scheduled jobs that declare no expectedDurationSeconds.
+     *  Used by the watchdog to compute recovery timeouts. Default: 600. */
+    default_expected_duration_seconds?: number;
+  };
 }
 
 /**

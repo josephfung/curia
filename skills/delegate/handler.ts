@@ -65,7 +65,7 @@ export class DelegateHandler implements SkillHandler {
       Number.isInteger(timeout_ms) &&
       timeout_ms > 0 &&
       Number.isFinite(timeout_ms);
-    const specialistTimeoutMs = isValidTimeout ? (timeout_ms as number) : DEFAULT_SPECIALIST_TIMEOUT_MS;
+    const specialistTimeoutMs = isValidTimeout ? (timeout_ms as number) : (ctx.defaultDelegateTimeoutMs ?? DEFAULT_SPECIALIST_TIMEOUT_MS);
 
     if (timeout_ms !== undefined && !isValidTimeout) {
       ctx.log.warn(
