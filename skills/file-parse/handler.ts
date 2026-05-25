@@ -339,10 +339,16 @@ export class FileParseHandler implements SkillHandler {
     let realPath: string;
     try {
       realPath = await fs.realpath(filePath);
-    } catch {
-      // File doesn't exist (ENOENT) — return the logical path and let the
-      // caller's fs.readFile produce the "expired" error message.
-      return filePath;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+        // File doesn't exist — return the logical path and let the
+        // caller's fs.readFile produce the "expired" error message.
+        return filePath;
+      }
+      // EACCES, EIO, etc. — can't verify the real path, reject the URL.
+      // Don't fall back to the logical path since that would bypass the
+      // symlink check on a path we couldn't resolve.
+      return null;
     }
 
     // Resolve the prefix directories too — on macOS /tmp is a symlink to
@@ -352,8 +358,13 @@ export class FileParseHandler implements SkillHandler {
         try {
           // realpath the directory (without trailing slash), then re-add it
           return await fs.realpath(prefix.slice(0, -1)) + '/';
-        } catch {
-          return prefix; // directory doesn't exist, keep the original
+        } catch (err) {
+          if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+            // Unexpected error resolving a prefix dir — fall back to the
+            // original string rather than failing the entire validation.
+            // This is less security-critical since we control the prefix values.
+          }
+          return prefix;
         }
       }),
     );
