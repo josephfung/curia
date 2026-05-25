@@ -276,20 +276,37 @@ export class DelegateHandler implements SkillHandler {
       try {
         const parsed = JSON.parse(response) as Record<string, unknown>;
         if (parsed._curia_protocol === 'clarification_request') {
-          ctx.log.info(
-            { targetAgent: agent, question: (parsed.question as string)?.slice(0, 100) },
-            'Specialist requested clarification — returning typed result to coordinator',
-          );
-          return {
-            success: true,
-            data: {
-              agent,
-              needs_clarification: true,
-              question: parsed.question,
-              partial_findings: parsed.partial_findings,
-              resume_token: parsed.resume_token,
-            },
-          };
+          // Validate that the protocol payload has the required fields as strings.
+          // The runtime produces these deterministically, but defensive validation
+          // prevents a malformed response from reaching the coordinator as typed data.
+          const question = parsed.question;
+          const partialFindings = parsed.partial_findings;
+          const resumeToken = parsed.resume_token;
+          if (
+            typeof question !== 'string' || question.trim() === '' ||
+            typeof partialFindings !== 'string' || partialFindings.trim() === '' ||
+            typeof resumeToken !== 'string' || resumeToken.trim() === ''
+          ) {
+            ctx.log.warn(
+              { targetAgent: agent },
+              'Clarification protocol marker present but payload fields are invalid — falling back to raw response',
+            );
+          } else {
+            ctx.log.info(
+              { targetAgent: agent, question: question.slice(0, 100) },
+              'Specialist requested clarification — returning typed result to coordinator',
+            );
+            return {
+              success: true,
+              data: {
+                agent,
+                needs_clarification: true,
+                question,
+                partial_findings: partialFindings,
+                resume_token: resumeToken,
+              },
+            };
+          }
         }
       } catch (err) {
         // SyntaxError is expected for normal text responses — suppress silently.
