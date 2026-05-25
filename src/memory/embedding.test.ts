@@ -63,10 +63,14 @@ describe('EmbeddingService — OpenAI backend telemetry', () => {
     }));
     (mockBus.publish as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('bus down'));
 
-    const service = EmbeddingService.createWithOpenAI('test-key', logger, mockBus, modelRegistry);
+    // Fresh logger with a warn spy — verifies the failure is logged, not silently swallowed.
+    const testLogger = createSilentLogger();
+    const warnSpy = vi.spyOn(testLogger, 'warn');
+    const service = EmbeddingService.createWithOpenAI('test-key', testLogger, mockBus, modelRegistry);
     // Must not throw — telemetry failure is non-fatal
     const result = await service.embed('hello world');
     expect(result).toEqual(FAKE_EMBEDDING);
+    expect(warnSpy).toHaveBeenCalledOnce();
   });
 
   it('does not call bus.publish when no bus is wired', async () => {
