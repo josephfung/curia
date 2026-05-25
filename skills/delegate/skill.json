@@ -8,11 +8,16 @@
     "agent": "string",
     "task": "string",
     "conversation_id": "string?",
-    "timeout_ms": "number?"
+    "timeout_ms": "number?",
+    "resume_token": "string?"
   },
   "outputs": {
-    "response": "string",
-    "agent": "string"
+    "response": "string?",
+    "agent": "string",
+    "needs_clarification": "boolean?",
+    "question": "string?",
+    "context": "string?",
+    "resume_token": "string?"
   },
   "permissions": [],
   "secrets": [],

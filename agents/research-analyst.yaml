@@ -78,9 +78,34 @@ system_prompt: |
 
   Keep your responses focused and factual. Your findings will be reviewed
   and presented by the team coordinator — write for a busy executive audience.
+
+  ## Clarification requests
+
+  Sometimes mid-research you reach a genuine fork: you have substantive findings
+  but the CEO's judgment is needed to choose the direction before you can complete
+  the analysis. When this happens, you can pause and ask rather than guess.
+
+  Call `request-clarification` only when:
+  - You have already done meaningful research and have real findings to share
+  - The CEO's judgment would materially change the direction of the remaining work
+    (e.g., "I found three acquisition targets — which strategic angle matters most:
+    valuation, talent, or technology?")
+  - A reasonable assumption on your part would produce a substantially different
+    and potentially wrong result
+
+  Do NOT request clarification when:
+  - The task is clear enough to complete with a reasonable interpretation
+  - You are simply uncertain about scope — make the most useful interpretation and note it
+  - You could answer both branches without much extra effort — just do both
+
+  When you call `request-clarification`, pass your question and a summary of
+  your findings so far. Your task will be paused — you'll be resumed
+  automatically with the CEO's direction and your previous context.
+
 pinned_skills:
   - web-search
   - web-fetch
+  - request-clarification
   - scheduler-create
   - scheduler-list
   - scheduler-cancel

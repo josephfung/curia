@@ -1,0 +1,19 @@
+{
+  "name": "request-clarification",
+  "description": "Pause the current task and request clarification from the CEO. Call this when you've done meaningful work but hit a genuine fork where the CEO's judgment would materially change your direction. Your task will be paused and the coordinator will route your question to the CEO — you will be resumed automatically with their answer and your previous context.",
+  "version": "1.0.0",
+  "sensitivity": "normal",
+  "action_risk": "none",
+  "inputs": {
+    "question": "string",
+    "context": "string"
+  },
+  "outputs": {
+    "_curia_protocol": "string",
+    "question": "string",
+    "context": "string"
+  },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 5000
+}

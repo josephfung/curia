@@ -7,10 +7,31 @@
 // The Coordinator uses this skill to delegate work: it calls
 // delegate({ agent: "research-analyst", task: "..." }) and gets back
 // the specialist's response, which it can then synthesize into its own reply.
+//
+// Clarification protocol: when a specialist calls request-clarification,
+// the runtime short-circuits and emits a JSON response with
+// _curia_protocol: "clarification_request". This handler detects that
+// protocol marker and returns a typed result with needs_clarification: true,
+// so the coordinator can route the question to the CEO.
+//
+// Resume: when the coordinator re-delegates with a resume_token, this handler
+// decodes the token, constructs a full task brief from the original context +
+// CEO's direction, and delegates to the specialist. The specialist sees a
+// well-formed task — no special resume detection needed in its prompt.
 
 import { randomUUID } from 'node:crypto';
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
 import { createAgentTask, type AgentResponseEvent } from '../../src/bus/events.js';
+
+/** Version marker for resume tokens — allows forward-compatible format changes. */
+const RESUME_TOKEN_VERSION = 1;
+
+interface ResumeTokenPayload {
+  v: number;
+  agent: string;
+  original_task: string;
+  context: string;
+}
 
 // Default wait for the specialist to respond — appropriate for interactive tasks.
 // Long-running scheduled tasks should pass timeout_ms explicitly (injected by the runtime
@@ -19,11 +40,12 @@ const DEFAULT_SPECIALIST_TIMEOUT_MS = 90000;
 
 export class DelegateHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {
-    const { agent, task, conversation_id, timeout_ms } = ctx.input as {
+    const { agent, task, conversation_id, timeout_ms, resume_token } = ctx.input as {
       agent?: string;
       task?: string;
       conversation_id?: string;
       timeout_ms?: unknown;
+      resume_token?: string;
     };
 
     // Validate required inputs
@@ -80,8 +102,81 @@ export class DelegateHandler implements SkillHandler {
 
     const conversationId = conversation_id ?? `delegate-${randomUUID()}`;
 
+    // Resume flow: when resume_token is provided, decode it and construct a
+    // full task brief from the original context + the CEO's direction (the
+    // `task` parameter). The specialist receives a self-contained task —
+    // no special resume detection logic needed in its prompt.
+    let effectiveTask = task;
+    if (resume_token && typeof resume_token === 'string') {
+      try {
+        const decoded = JSON.parse(
+          Buffer.from(resume_token, 'base64').toString('utf-8'),
+        ) as Record<string, unknown>;
+
+        if (decoded.v !== RESUME_TOKEN_VERSION) {
+          ctx.log.warn(
+            { targetAgent: agent, tokenVersion: decoded.v, expectedVersion: RESUME_TOKEN_VERSION },
+            'resume_token version mismatch — attempting to use anyway',
+          );
+        }
+
+        // Runtime validation: the token is opaque to the LLM, so a corrupted
+        // token must not silently produce a broken task brief.
+        const payload = decoded as unknown as ResumeTokenPayload;
+        if (!payload.original_task || !payload.context) {
+          const versionNote = decoded.v !== RESUME_TOKEN_VERSION
+            ? ` Token version ${String(decoded.v)} does not match expected version ${RESUME_TOKEN_VERSION} — this may be the cause.`
+            : '';
+          return {
+            success: false,
+            error: `resume_token is missing required fields (original_task, context).${versionNote} The token may be corrupted — ask the CEO to repeat their request.`,
+          };
+        }
+
+        // Guard against cross-agent token misuse: if the coordinator passes a
+        // resume_token generated for one specialist but targets a different one,
+        // the task brief would contain another agent's context. Reject early.
+        if (payload.agent && payload.agent !== agent) {
+          ctx.log.warn(
+            { targetAgent: agent, tokenAgent: payload.agent },
+            'resume_token was generated for a different agent — possible cross-agent token misuse',
+          );
+          return {
+            success: false,
+            error: `resume_token was generated for agent '${payload.agent}' but is being used to delegate to '${agent}'. Re-delegate to the correct specialist or ask the CEO to repeat their request.`,
+          };
+        }
+
+        effectiveTask = [
+          'You are continuing a task that was paused to get the CEO\'s direction.',
+          '',
+          '## Original Task',
+          payload.original_task,
+          '',
+          '## Your Progress So Far',
+          payload.context,
+          '',
+          '## CEO\'s Direction',
+          task,
+          '',
+          'Continue from where you left off.',
+        ].join('\n');
+
+        ctx.log.info(
+          { targetAgent: agent, originalAgent: payload.agent },
+          'Resuming task with resume_token — constructed task brief from original context + CEO direction',
+        );
+      } catch (err) {
+        ctx.log.error({ err, targetAgent: agent }, 'Failed to decode resume_token');
+        return {
+          success: false,
+          error: 'resume_token could not be decoded. The token may be corrupted — ask the CEO to repeat their request.',
+        };
+      }
+    }
+
     ctx.log.info(
-      { targetAgent: agent, task: task.slice(0, 100), timeoutMs: specialistTimeoutMs },
+      { targetAgent: agent, task: effectiveTask.slice(0, 100), timeoutMs: specialistTimeoutMs },
       'Delegating task to specialist',
     );
 
@@ -100,7 +195,7 @@ export class DelegateHandler implements SkillHandler {
       conversationId,
       channelId: 'internal',
       senderId: 'coordinator',
-      content: task,
+      content: effectiveTask,
       // Forward only the originator field, not the full taskMetadata. Other metadata fields
       // (e.g. future billing context, routing hints) are coordinator-internal and should
       // not propagate transitively down the delegation chain unless explicitly designed to.
@@ -172,6 +267,57 @@ export class DelegateHandler implements SkillHandler {
         ctx.bus.publish('dispatch', taskEvent),
       ]);
       ctx.log.info({ targetAgent: agent }, 'Specialist responded');
+
+      // Clarification protocol detection: the runtime emits a JSON response
+      // with _curia_protocol: "clarification_request" when a specialist calls
+      // request-clarification. Detect this and return a typed result so the
+      // coordinator gets structured fields (needs_clarification, question,
+      // context, resume_token) instead of raw text to parse.
+      try {
+        const parsed = JSON.parse(response) as Record<string, unknown>;
+        if (parsed._curia_protocol === 'clarification_request') {
+          // Validate that the protocol payload has the required fields as strings.
+          // The runtime produces these deterministically, but defensive validation
+          // prevents a malformed response from reaching the coordinator as typed data.
+          const question = parsed.question;
+          const ctxValue = parsed.context;
+          const resumeToken = parsed.resume_token;
+          if (
+            typeof question !== 'string' || question.trim() === '' ||
+            typeof ctxValue !== 'string' || ctxValue.trim() === '' ||
+            typeof resumeToken !== 'string' || resumeToken.trim() === ''
+          ) {
+            ctx.log.warn(
+              { targetAgent: agent },
+              'Clarification protocol marker present but payload fields are invalid — falling back to raw response',
+            );
+          } else {
+            ctx.log.info(
+              { targetAgent: agent, question: question.slice(0, 100) },
+              'Specialist requested clarification — returning typed result to coordinator',
+            );
+            return {
+              success: true,
+              data: {
+                agent,
+                needs_clarification: true,
+                question,
+                context: ctxValue,
+                resume_token: resumeToken,
+              },
+            };
+          }
+        }
+      } catch (err) {
+        // SyntaxError is expected for normal text responses — suppress silently.
+        // Any other error is unexpected and should be logged for debugging.
+        if (!(err instanceof SyntaxError)) {
+          ctx.log.warn(
+            { err, targetAgent: agent },
+            'Unexpected error parsing specialist response for clarification protocol — treating as normal text response',
+          );
+        }
+      }
 
       return {
         success: true,
