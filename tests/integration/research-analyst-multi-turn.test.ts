@@ -87,7 +87,11 @@ describe('Research-analyst multi-turn clarification (issue #611)', () => {
         signalSendCallCount++;
         const input = ctx.input as Record<string, unknown>;
         capturedSignalMessage = (input.message as string) ?? '';
-        capturedContextBridge = JSON.parse((input.context_bridge as string) ?? '{}') as Record<string, unknown>;
+        // Throw explicitly if context_bridge is absent — a missing field here means
+        // the coordinator mock forgot to include it, not that JSON.parse failed.
+        const rawBridge = input.context_bridge as string | undefined;
+        if (!rawBridge) throw new Error('mockSignalSend: context_bridge was not provided by the coordinator');
+        capturedContextBridge = JSON.parse(rawBridge) as Record<string, unknown>;
         return { success: true, data: { delivered_to: '+15551234567', channel: 'signal' } };
       },
     };
@@ -252,6 +256,9 @@ describe('Research-analyst multi-turn clarification (issue #611)', () => {
             };
 
           default:
+            // Use a Vitest assertion rather than a plain throw — AgentRuntime's outer
+            // catch swallows plain errors; an AssertionError surfaces correctly in the runner.
+            expect(coordinatorCalls, 'Unexpected coordinator LLM call — mock is being called more times than scripted').toBeLessThanOrEqual(6);
             throw new Error(`Unexpected coordinator LLM call #${coordinatorCalls}`);
         }
       },
@@ -292,6 +299,9 @@ describe('Research-analyst multi-turn clarification (issue #611)', () => {
             };
 
           default:
+            // Use a Vitest assertion rather than a plain throw — AgentRuntime's outer
+            // catch swallows plain errors; an AssertionError surfaces correctly in the runner.
+            expect(specialistCalls, 'Unexpected specialist LLM call — mock is being called more times than scripted').toBeLessThanOrEqual(2);
             throw new Error(`Unexpected specialist LLM call #${specialistCalls}`);
         }
       },
@@ -327,10 +337,13 @@ describe('Research-analyst multi-turn clarification (issue #611)', () => {
     specialist.register();
 
     // ── 6. Collect coordinator responses ────────────────────────────────────
+    //
+    // Only collect non-error responses — error responses (isError: true) contain
+    // runtime fallback text and would give misleading assertion failures.
 
     const coordinatorResponses: string[] = [];
     bus.subscribe('agent.response', 'system', async (event) => {
-      if (event.type === 'agent.response' && event.payload.agentId === 'coordinator') {
+      if (event.type === 'agent.response' && event.payload.agentId === 'coordinator' && !event.payload.isError) {
         coordinatorResponses.push(event.payload.content);
       }
     });
@@ -478,7 +491,7 @@ describe('Research-analyst multi-turn clarification (issue #611)', () => {
 
     let finalResponse = '';
     bus.subscribe('agent.response', 'system', async (event) => {
-      if (event.type === 'agent.response' && event.payload.agentId === 'coordinator') {
+      if (event.type === 'agent.response' && event.payload.agentId === 'coordinator' && !event.payload.isError) {
         finalResponse = event.payload.content;
       }
     });
