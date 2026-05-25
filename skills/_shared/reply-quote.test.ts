@@ -112,4 +112,15 @@ describe('buildReplyQuote', () => {
 
     expect(result).toContain('Date: 2025-05-21, 7:42 PM UTC');
   });
+
+  it('uses "Unknown date" when date is NaN (e.g. Nylas returns a non-numeric field)', () => {
+    // Luxon 3.x throws for non-number types (undefined), but accepts NaN (typeof 'number')
+    // and returns an Invalid DateTime — the dt.isValid guard prevents 'Invalid DateTime'
+    // from appearing in the quoted block sent to the recipient.
+    const msg = makeMessage({ date: NaN });
+    const result = buildReplyQuote(msg, 'America/Toronto');
+
+    expect(result).toContain('Date: Unknown date');
+    expect(result).not.toContain('Invalid DateTime');
+  });
 });

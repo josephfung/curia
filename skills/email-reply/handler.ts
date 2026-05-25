@@ -119,7 +119,7 @@ export class EmailReplyHandler implements SkillHandler {
       } catch (err) {
         ctx.log.warn(
           { err, replyToMessageId },
-          'email-reply: failed to build reply quote — proceeding without quote',
+          'email-reply: buildReplyQuote failed (HTML stripping or date formatting) — sending without quote',
         );
       }
 
@@ -137,6 +137,8 @@ export class EmailReplyHandler implements SkillHandler {
       }
 
       // Register outbound context entry (best-effort, always fires).
+      // Pass the agent-authored body only — not quotedBody — so outbound context stores
+      // the meaningful reply content without the formatting-only quote block.
       await registerOutboundContext(ctx.outboundContext, contextBridgeRaw, {
         channelId: 'email',
         content: body,

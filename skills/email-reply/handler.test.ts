@@ -156,7 +156,7 @@ describe('EmailReplyHandler', () => {
       expect(sendArg.body).not.toContain('---------- Original Message ----------');
       expect(warnSpy).toHaveBeenCalledWith(
         expect.objectContaining({ replyToMessageId: 'nylas-msg-1' }),
-        expect.stringContaining('failed to build reply quote'),
+        expect.stringContaining('buildReplyQuote failed'),
       );
     });
 
