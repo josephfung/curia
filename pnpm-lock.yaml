@@ -63,8 +63,8 @@ importers:
         specifier: ^8.1.1
         version: 8.1.1
       openai:
-        specifier: ^6.38.0
-        version: 6.38.0(zod@4.3.6)
+        specifier: ^6.39.0
+        version: 6.39.0(zod@4.3.6)
       openredaction:
         specifier: ^1.1.2
         version: 1.1.2(pdf-parse@2.4.5)
@@ -1925,8 +1925,8 @@ packages:
   once@1.4.0:
     resolution: {integrity: sha512-lNaJgI+2Q5URQBkccEKHTQOPaXdUxnZZElQTZY0MFUAuaEqe1E+Nyvgdz/aIyNi6Z9MzO5dv1H8n58/GELp3+w==}
 
-  openai@6.38.0:
-    resolution: {integrity: sha512-AoMplt2UalrpgUDMh3L09QWjNRlgJPipclQvA6sYAaeF6nHNBMgmikAZGmcYLn8on4d9sQY9Q8bOLfrBS7Lc8g==}
+  openai@6.39.0:
+    resolution: {integrity: sha512-O61LIsimY3acVabwvomwFhwrnN36yvHY2quIfy9keEcFytGgWeV35yLHQ6NVMLSBxRpHmcg2yuhCnlu2HT4pLQ==}
     hasBin: true
     peerDependencies:
       ws: ^8.18.0
@@ -4194,7 +4194,7 @@ snapshots:
     dependencies:
       wrappy: 1.0.2
 
-  openai@6.38.0(zod@4.3.6):
+  openai@6.39.0(zod@4.3.6):
     optionalDependencies:
       zod: 4.3.6
 
