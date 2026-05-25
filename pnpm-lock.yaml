@@ -39,11 +39,11 @@ importers:
         specifier: ^5.5.0
         version: 5.5.0
       cytoscape:
-        specifier: ^3.33.3
-        version: 3.33.3
+        specifier: ^3.33.4
+        version: 3.33.4
       cytoscape-fcose:
         specifier: ^2.2.0
-        version: 2.2.0(cytoscape@3.33.3)
+        version: 2.2.0(cytoscape@3.33.4)
       fastify:
         specifier: ^5.8.5
         version: 5.8.5
@@ -1272,8 +1272,8 @@ packages:
     peerDependencies:
       cytoscape: ^3.2.0
 
-  cytoscape@3.33.3:
-    resolution: {integrity: sha512-Gej7U+OKR+LZ8kvX7rb2HhCYJ0IhvEFsnkud4SB1PR+BUY/TsSO0dmOW59WEVLu51b1Rm+gQRKoz4bLYxGSZ2g==}
+  cytoscape@3.33.4:
+    resolution: {integrity: sha512-HIN5Pmd9MrX9BkV7tDwnOcEJCSFvCpc8X97h3f508J6I5FsqAY65wKOCvgH2CuP42CaahWaz4tuh32SOOIH7ww==}
     engines: {node: '>=0.10'}
 
   dateformat@4.6.3:
@@ -3515,12 +3515,12 @@ snapshots:
       shebang-command: 2.0.0
       which: 2.0.2
 
-  cytoscape-fcose@2.2.0(cytoscape@3.33.3):
+  cytoscape-fcose@2.2.0(cytoscape@3.33.4):
     dependencies:
       cose-base: 2.2.0
-      cytoscape: 3.33.3
+      cytoscape: 3.33.4
 
-  cytoscape@3.33.3: {}
+  cytoscape@3.33.4: {}
 
   dateformat@4.6.3: {}
 
