@@ -112,9 +112,11 @@ class OpenAIBackend implements EmbeddingBackend {
 
     // Wrap JSON parse so a malformed response surfaces as a distinct error
     // rather than an unhandled rejection with no context.
-    let json: { data: Array<{ embedding: number[] }>; usage: { prompt_tokens: number } };
+    // usage is marked optional: OpenAI always includes it on success, but
+    // malformed HTTP-200 error bodies may omit it; guard with ?? 0 below.
+    let json: { data: Array<{ embedding: number[] }>; usage?: { prompt_tokens?: number } };
     try {
-      json = await response.json() as { data: Array<{ embedding: number[] }>; usage: { prompt_tokens: number } };
+      json = await response.json() as { data: Array<{ embedding: number[] }>; usage?: { prompt_tokens?: number } };
     } catch (err) {
       this.logger.error({ err }, 'OpenAI embedding response JSON parse failed');
       throw new Error(`OpenAI embedding response parse error: ${(err as Error).message}`);
@@ -129,8 +131,10 @@ class OpenAIBackend implements EmbeddingBackend {
       throw new Error(`Unexpected embedding dimensions: ${embedding?.length}`);
     }
     // Telemetry — non-fatal; failure must not break the caller.
+    // ?? 0: usage is optional in the type — a missing field means 0 tokens recorded
+    // (cost tracking gap), which is safer than throwing a TypeError.
     const latencyMs = Date.now() - start;
-    await this.publishTelemetry(json.usage.prompt_tokens, latencyMs, text);
+    await this.publishTelemetry(json.usage?.prompt_tokens ?? 0, latencyMs, text);
     return embedding;
   }
 
