@@ -20,6 +20,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Fixed
 
 - **Email reply quoting** — natural agent-response replies (no skill invocation) now include the quoted original message, matching the skill-driven paths. `buildReplyQuote` moved to `src/skills/_shared/` so the email channel adapter can share it. (#720)
+- **`reply-quote`** — Outlook-on-Windows VML CSS from `<style>` blocks no longer leaks into the quoted body as visible text; delegates to `html-to-text.ts` which strips style/script block contents. (#733)
 
 ## [0.31.0] — 2026-05-26 — "TARS"
 

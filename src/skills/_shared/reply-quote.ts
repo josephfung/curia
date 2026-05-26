@@ -8,6 +8,7 @@
 // utilities (same pattern they use for SkillContext / SkillHandler types).
 
 import { DateTime } from 'luxon';
+import { htmlToText } from '../../channels/email/html-to-text.js';
 
 /**
  * Minimal message shape required to build a reply quote block.
@@ -20,39 +21,6 @@ export interface QuoteableMessage {
   date: number;    // Unix epoch seconds
   subject: string;
   body: string;    // HTML — will be stripped to plain text
-}
-
-/**
- * Strip HTML tags and decode common entities, leaving plain text suitable for
- * a quoted email block. Kept inline (rather than reusing src/channels/email/
- * html-to-text) so behavior matches the previous skills/_shared/ceo-nylas-client
- * implementation exactly — same regexes, same entity handling, same output.
- */
-function htmlToPlainText(html: string): string {
-  return html
-    .replace(/<br\s*\/?>/gi, '\n')
-    .replace(/<\/p>/gi, '\n\n')
-    .replace(/<\/div>/gi, '\n')
-    .replace(/<\/li>/gi, '\n')
-    // Strip all complete HTML tags.
-    .replace(/<[^>]+>/g, '')
-    // Strip incomplete tags — bare <tagname without a closing > is not caught by <[^>]+>
-    // above (which requires >). This prevents injected <script fragments from surviving
-    // into the plain-text body that is shown to the LLM. {0,500} caps match length to
-    // prevent stripping large text bodies on inputs with a lone < far from any >.
-    .replace(/<[a-zA-Z][^>]{0,500}/g, '')
-    // Decode HTML entities.
-    // Order matters: &amp; must be decoded LAST to prevent double-decoding.
-    // Decoding &amp; first would turn &amp;lt; into &lt; and then into <,
-    // smuggling a literal < into the output.
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&amp;/g, '&')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
 }
 
 /**
@@ -99,7 +67,7 @@ export function buildReplyQuote(message: QuoteableMessage, timezone?: string): s
     ? dt.toFormat('yyyy-MM-dd, h:mm a ZZZZ')
     : 'Unknown date';
 
-  const plainBody = htmlToPlainText(message.body);
+  const plainBody = htmlToText(message.body);
 
   const lines = [
     '',

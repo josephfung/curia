@@ -132,4 +132,36 @@ describe('buildReplyQuote', () => {
     expect(result).toContain('Date: Unknown date');
     expect(result).not.toContain('Invalid DateTime');
   });
+
+  // Regression: #733 — Outlook-on-Windows emails embed VML CSS in <style> blocks.
+  // The old local htmlToPlainText() stripped only tags, leaving the CSS text visible.
+  it('strips Outlook VML <style> block contents from the quoted body', () => {
+    // Minimal but realistic Outlook HTML: a <style> block with VML CSS rules
+    // followed by the actual message body. This is what enterprise senders produce.
+    const outlookVmlHtml = [
+      '<html><head>',
+      '<style>',
+      'v\\:* {behavior:url(#default#VML);}',
+      'o\\:* {behavior:url(#default#VML);}',
+      'w\\:* {behavior:url(#default#VML);}',
+      '.shape {behavior:url(#default#VML);}',
+      '</style>',
+      '</head><body>',
+      '<p>Hi Joseph,</p>',
+      '<p>Let me know your thoughts on the proposal.</p>',
+      '</body></html>',
+    ].join('\n');
+
+    const msg = makeMessage({ body: outlookVmlHtml });
+    const result = buildReplyQuote(msg, 'America/Toronto');
+
+    // VML CSS must not appear as visible text
+    expect(result).not.toContain('behavior:url');
+    expect(result).not.toContain('v\\:*');
+    expect(result).not.toContain('{behavior');
+
+    // Actual message text must survive
+    expect(result).toContain('Hi Joseph');
+    expect(result).toContain('Let me know your thoughts on the proposal.');
+  });
 });
