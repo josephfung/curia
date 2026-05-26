@@ -113,6 +113,15 @@ describe('ModelRegistry', () => {
       expect(meta!.capabilities).toContain('coding');
     });
 
+    it('resolves deepseek/deepseek-v4-pro with provider openrouter', () => {
+      const meta = registry.getModel('deepseek/deepseek-v4-pro');
+      expect(meta).toBeDefined();
+      expect(meta!.provider).toBe('openrouter');
+      expect(meta!.contextWindow).toBe(128_000);
+      expect(meta!.capabilities).toContain('coding');
+      expect(meta!.capabilities).toContain('reasoning');
+    });
+
     it('resolves openai/gpt-4o with provider openrouter', () => {
       const meta = registry.getModel('openai/gpt-4o');
       expect(meta).toBeDefined();
