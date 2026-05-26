@@ -106,6 +106,18 @@ Handler exports hooks: `onTask`, `onSkillResult`, `beforeRespond`.
 
 Agent YAML files are validated against a JSON Schema at load time. Invalid configs (missing required fields, unknown properties) cause a startup error with a clear message pointing to the offending file and field. Schema is generated from the TypeScript `AgentConfig` type to keep them in sync.
 
+### Runtime Template Variables
+
+Agent system prompts can reference a small set of runtime placeholders that the runtime interpolates when materializing the prompt (`interpolateRuntimeContext()` in `src/agents/loader.ts`):
+
+| Placeholder | Resolves to | Notes |
+|---|---|---|
+| `${agent_contact_id}` | The agent's own `contacts.id` | Opt-in. Used by agents that need to act in their own identity. |
+| `${principal_contact_id}` | The principal's `contacts.id` (the CEO/operator the deployment serves) | Opt-in. See [spec 09 — Principal Contact Resolution](09-contacts-and-identity.md). Use this in any prompt that needs to reach the principal — do not hardcode addresses or call `contact-lookup`-by-role for the principal. |
+| `${office_identity_block}` | The office identity prose block | See [spec 13 — Office Identity](13-office-identity.md). |
+
+Both `${agent_contact_id}` and `${principal_contact_id}` are guarded by a UUID-format check — non-UUID values resolve to an empty string and emit a one-time warning at boot. This prevents future changes to the ID source from accidentally injecting arbitrary text into a prompt.
+
 ---
 
 ## Agent Lifecycle

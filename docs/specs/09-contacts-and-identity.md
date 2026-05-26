@@ -187,6 +187,39 @@ External authoritative sources are the CEO's own systems. Identities from these 
 
 ---
 
+## Principal Contact Resolution
+
+The **principal** is the human Curia is built to serve — the CEO, founder, or operator the deployment belongs to. Exactly one contact is designated as the principal per deployment. Agents that need to send messages to, look up calendars for, or otherwise act on behalf of the principal resolve that contact via a single platform-managed handle, rather than each agent re-discovering "who is the CEO?" on every cron tick.
+
+### Bootstrap-time materialization
+
+At startup, `contactService.findContactBySystemRole('principal')` resolves the principal's `contacts.id` (a UUID) and the runtime caches it. The principal's contact ID is immutable for a deployment, so bootstrap-time resolution is correct — there is no per-turn refresh.
+
+### Exposure to agents: `${principal_contact_id}`
+
+Agent system prompts can reference `${principal_contact_id}` as a runtime template variable. The placeholder is interpolated by `interpolateRuntimeContext()` in `src/agents/loader.ts` when the agent's prompt is materialized, alongside the existing `${agent_contact_id}` (the agent's own identity).
+
+Both placeholders are **opt-in**: only agents that reference the placeholder pay the prompt-bytes cost. Agents that don't need to reach the principal — research-analyst, expense-tracker on receipts, etc. — simply don't reference it and the platform doesn't expand their attack surface with addresses they don't need.
+
+If `findContactBySystemRole('principal')` returns nothing (fresh deployment, before bootstrap), the placeholder resolves to an empty string and a one-time warning is logged. The same defense-in-depth UUID-format check used for `${agent_contact_id}` applies — any non-UUID value resolves to an empty string, so a future change to the ID source can't accidentally inject arbitrary text into the system prompt.
+
+### What is pre-resolved and what is not
+
+The platform pre-resolves only the principal's `contacts.id`. It does **not** pre-resolve verified email addresses, Signal numbers, calendar IDs, or timezone — those can change within a deployment lifetime, so bootstrap-time injection would go stale.
+
+Agents that need any of those values call `entity-context` with `${principal_contact_id}` at the start of their run. This keeps the live values fresh and consolidates the "who is the principal and how do I reach them?" question into a single skill call per agent run, instead of multiple `contact-lookup`-by-role calls scattered across the agent's pipeline.
+
+### Why not auto-injection?
+
+The platform deliberately does *not* auto-inject the principal contact ID into every agent prompt. Two reasons:
+
+1. **Attack surface.** Agents that have no business contacting the principal directly (specialist agents like research-analyst that should report through the coordinator) would be invited to do so. The opt-in pattern keeps the surface narrow.
+2. **Consistency.** The same opt-in pattern is established for `${agent_contact_id}`. Two placeholders with two different injection rules would be confusing.
+
+The durable countermeasure to poorly-written agents that hardcode the principal's addresses is the `Reaching the principal` convention documented in `CLAUDE.md`, plus reviewer discipline — not silent injection.
+
+---
+
 ## Unknown Sender Policy
 
 When an inbound message can't be matched to any contact, the system's response depends on the originating channel's trust level:

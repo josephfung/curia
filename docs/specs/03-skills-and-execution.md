@@ -154,6 +154,18 @@ All skill results are sanitized before being included in the agent's LLM context
 - **Concurrent invocations**: Max 5 concurrent skill invocations per agent task — not yet implemented
 - **Buffer limits**: Streaming skill responses capped at 1MB — not yet implemented
 
+#### Timeout safety: handlers must be at-most-once
+
+Skill timeouts are enforced via `Promise.race` against the handler. On timeout, the in-flight handler is **not** cancelled — any side effects it has already committed (DB writes, bus publishes, outbound sends) persist, and the caller sees a `<skill_error>Skill 'X' timed out after Yms</skill_error>` result.
+
+This means a "timed out" result is **not the same as "no work happened"**. Callers cannot safely retry on timeout unless the skill is genuinely idempotent (e.g. accepts an idempotency key, or only reads).
+
+Skill handlers should be designed so that a timeout leaves no half-committed visible state:
+
+- If the skill's purpose is to **create a thing** (a thread, a draft, a message), persist that thing as the first awaited step, then make every downstream step fire-and-forget. `bullpen` follows this pattern: `openThread()` (synchronous, awaited) followed by `bus.publish(agent.discuss)` (fire-and-forget, with a `.catch` for logging) — agents see the new thread via pending-thread context injection even if the publish never fires.
+- If the skill's purpose is to **deliver a side effect that cannot be made fire-and-forget** (a wire-level send), the timeout must be set comfortably above the channel's p99 latency, and callers must be instructed not to retry.
+- Skills that internally `await` long-running infrastructure (e.g. an LLM call as part of `infraLlm`) must propagate timeouts so the skill's own timeout is the effective deadline.
+
 ---
 
 ## Secrets Access
@@ -185,7 +197,7 @@ The framework ships with these skills (in `skills/` as part of core):
 - `config-store` — generic namespaced key-value store for persistent agent configuration; backs `company`, `meeting_links`, `travel_preferences`, `loyalty_programs`, `writing_config`, and any future per-agent config needs
 - `entity-context` — assemble full context for a list of contacts/entities
 - `get-autonomy` / `set-autonomy` — read and write the global autonomy score (CEO only)
-- `bullpen` — inter-agent discussion threads
+- `bullpen` — inter-agent discussion threads; `post`/`reply` persist the thread/message synchronously and fire-and-forget the `agent.discuss` publish so a slow subscriber can't push the handler past its timeout (see *Timeout safety* above)
 - `template-doc-request` — structured document request template (scheduling templates retired; calendar specialist composes scheduling email text directly)
 - `image-generate` — generate an image from a text prompt via DALL-E 3; returns a temporary CDN URL (~1hr TTL)
 
