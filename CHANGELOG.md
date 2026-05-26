@@ -13,6 +13,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Security
+
+- **`outbound.delivered`** — every successful outbound channel send now emits a canonical audit event from the gateway, closing the gap where skill-invoked sends were only visible via `skill.invoke`. (#729)
+
 ### Added
 
 - **`${principal_contact_id}` runtime placeholder** — agent system prompts can now reference the principal's contact ID directly; `meeting-debrief` and `calendar` no longer call `contact-lookup` by role on every invocation. (#716)
