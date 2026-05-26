@@ -15,7 +15,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Security
 
-- **`outbound.delivered`** — every successful outbound channel send now emits a canonical audit event from the gateway, closing the gap where skill-invoked sends were only visible via `skill.invoke`. (#729)
+- **`outbound.delivered`** — canonical audit event emitted by the gateway after every successful email or Signal send, closing the visibility gap for skill-invoked sends. HTTP/web conversations are already captured by `agent.response`; CLI is dev-only and excluded by design. (#729)
 
 ### Added
 
