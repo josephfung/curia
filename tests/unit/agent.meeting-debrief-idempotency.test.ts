@@ -53,8 +53,9 @@ describe('meeting-debrief idempotency guard (issue #724)', () => {
   });
 
   it('instructs the agent to skip posting when the idempotency key is already present', () => {
-    // Prevents re-posting to Bullpen when config-store already has the prompted: key.
-    expect(step6).toMatch(/found.*true|if.*found|already.*prompted|skip|do not post/i);
+    // Skipping must be explicitly tied to the found: true condition, not just any
+    // use of the word "skip". Matches "If `found: true`" / "if found" constructs only.
+    expect(step6).toMatch(/found.*true|if.*found|already.*prompted/i);
   });
 
   it('instructs the agent to write the idempotency key to config-store after the post, not before', () => {
@@ -77,5 +78,8 @@ describe('meeting-debrief idempotency guard (issue #724)', () => {
     // If the idempotency key write fails, the agent must NOT retry the bullpen post.
     // Without this guard, a write failure defeats the entire duplicate-prevention mechanism.
     expect(step6).toMatch(/stored.*false|store.*fail|success.*false|not.*persist|key.*not.*persisted|may not.*persist/i);
+    // Separately verify the no-retry instruction exists. A prompt that acknowledges write
+    // failure but still retries defeats the guard; this catches that regression.
+    expect(step6).toMatch(/do not retry|not retry|no.*retry/i);
   });
 });
