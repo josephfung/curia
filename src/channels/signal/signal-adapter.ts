@@ -273,6 +273,10 @@ export class SignalAdapter {
       recipient,
       groupId,
       message: outbound.payload.content,
+    }, {
+      taskEventId: outbound.payload.taskEventId,
+      conversationId: outbound.payload.conversationId,
+      parentEventId: outbound.id,   // link the outbound.delivered row back to the outbound.message event
     });
 
     if (result.success) {

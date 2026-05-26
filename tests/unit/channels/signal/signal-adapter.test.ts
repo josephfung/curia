@@ -312,6 +312,10 @@ describe('SignalAdapter', () => {
         recipient: '+14155551234',
         message: 'Hello from the agent',
       }),
+      expect.objectContaining({
+        conversationId: 'signal:+14155551234',
+        parentEventId: 'evt-1',
+      }),
     );
   });
 
@@ -337,6 +341,10 @@ describe('SignalAdapter', () => {
         groupId: 'abc123==',
         recipient: undefined,
         message: 'Group reply',
+      }),
+      expect.objectContaining({
+        conversationId: 'signal:group=abc123==',
+        parentEventId: 'evt-2',
       }),
     );
   });
