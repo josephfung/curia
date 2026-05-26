@@ -13,78 +13,62 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
-### Added
+## [0.31.0] — 2026-05-26 — "TARS"
 
-- **`deepseek/deepseek-v4-pro`** — added to model registry so it can be used as a standard-tier model in deployment config.
-
-### Fixed
-
-- **Delegated specialist `ctx.caller`** — the agent runtime now synthesizes `CallerContext` from `taskMetadata.originator` when `senderContext` is absent, so specialists invoked by `delegate` always have `ctx.caller` populated. (#710)
-- **Authorization role lookup** — role name is now normalized to lowercase before config lookup, so LLM-assigned roles like `'Spouse'` correctly match the `spouse` key in `role-defaults.yaml` instead of falling through to `unknown` (denied: \*).
-- **Authorization trust gating** — effective trust is now `max(channelTrust, contactTrustLevel)`, so confirmed contacts with an explicit `trust_level` grant (e.g. `high`, `ceo`) are no longer downgraded by the email channel's inherent low-trust floor. Fixes the CEO being unable to request their own calendar via email.
-- **Authorization trust fallback** — when a contact's free-text role has no config match, the system now falls back to `trust_level_defaults` (new section in `role-defaults.yaml`) before reaching `unknown`. Family members and other free-text-role contacts with an explicit trust grant now get appropriate permissions.
-- **Authorization boundary hardening** — unknown `trustLevel` values from the DB now throw (caught safely by contact-resolver, degrades to `authorization=null`) instead of silently collapsing to low trust; permissions with unrecognized sensitivity values escalate to the CEO instead of silently landing in `trustBlocked`; config loader validates that `trust_level_defaults` is a YAML mapping at startup.
-- **`file-parse`** — accepts `temp_file_url` as alternative to `content_base64`, bridging the gap with `ceo-inbox-download-attachment` which omits base64 content when temp storage is available.
-- **`contact-lookup`** — channel/email lookups now return status and identities (previously omitted); skill manifest documents input format so the LLM knows to use `by: "channel"` with `email:addr` syntax.
-- **`contact-merge`** — removed stale `ctx.caller` guard that blocked all delegated specialists; principal origination is already enforced by the execution layer's elevated-skill gate.
-- **`contact-grant-permission`** — falls back to originator contactId when caller context is unavailable (delegated specialist path).
-- **Email case sensitivity** — `linkIdentity` now normalizes email addresses to lowercase; `resolveByChannelIdentity` uses case-insensitive matching so mixed-case emails are found. Migration 044 adds a functional unique index on `LOWER(channel_identifier)` for the email channel.
+> **TARS** *(Interstellar, 2014, Christopher Nolan)* — the faintly wry robot who carried Cooper's messages across the tesseract back to Murph on Earth, with configurable parameters and his own quiet initiative. v0.31 is built around the same shapes: a delegation-aware context bridge that routes replies back to whichever agent started the thread, Curia's first proactive agent (meeting debrief), externalized timeouts you can tune, and a request-clarification skill for pausing mid-task to check in.
 
 ### Added
 
-- **Meeting debrief agent** — proactive specialist that scans the CEO's calendar for recently-ended external meetings, prompts for takeaways via Signal (Bullpen-through-coordinator), and executes follow-up actions from the CEO's notes (spec 17, #384).
-- **`request-clarification` skill** — any specialist can call this skill to pause mid-task and request CEO direction; the runtime short-circuits the tool-use loop and the DelegateHandler returns a typed result with a resume_token for seamless re-delegation.
-- **Multi-turn research conversations** — research-analyst can pause mid-research to ask a clarifying question; coordinator routes it to the CEO and re-delegates automatically when the CEO replies. (#611)
-
-- **`embedding.call` bus event** — `EmbeddingService` now publishes cost telemetry after each OpenAI embedding API call; token counts and estimated costs appear in `audit_log` alongside `llm.call` entries. (#654)
-
-- **`context-bridge-release`** — new coordinator skill to release outbound context entries when conversations complete. (#615)
-- **`outbound_context` table** — dedicated Postgres table replaces working-memory memos for outbound context tracking. (#615)
-- **Outbound context cleanup** — scheduler now purges expired and released `outbound_context` rows at startup and daily; count is logged at info level. (#679)
-- **Declarative job originator** — YAML-defined scheduled jobs now stamped with `systemRole: 'system'` originator at startup, distinguishing operator-configured work from principal-initiated and agent-decided tasks. (#558)
-
-- **Turn budget injection** — all agents now receive their exact turn limit in the system prompt at runtime, framed as a planning constraint so models can pace their tool use from turn 1 rather than hitting the ceiling silently. (#689)
+- **Meeting debrief agent** — Curia's first proactive specialist: scans the calendar every 5 minutes for recently-ended external meetings, prompts the CEO for takeaways via Signal (Bullpen-through-coordinator), and executes follow-up actions from the CEO's notes (spec 17, #384).
+- **Context bridging v2** — dedicated `outbound_context` Postgres table replaces working-memory memos; every send registers an entry, the dispatcher injects an `[ACTIVE OUTBOUND CONTEXT]` block on inbound, the coordinator-only `context-bridge-release` skill closes threads explicitly, and a periodic cleanup job keeps the table bounded. (#615, #679, #685, ADR-019)
+- **`request-clarification` skill** — specialists can pause mid-task to ask the CEO a clarifying question; the runtime short-circuits the tool-use loop and the DelegateHandler returns a resume_token for seamless re-delegation. (#706)
+- **Multi-turn research conversations** — research-analyst pauses mid-research, the coordinator routes the question to the CEO, and re-delegates automatically when the CEO replies. (#611)
+- **Turn budget injection** — every agent receives its exact turn limit in the system prompt as a planning constraint, with anti-retry, error-acceptance, and structured-output guidance; proximity warning widened from 3 to 5 turns remaining. (#689)
+- **`embedding.call` telemetry** — `EmbeddingService` publishes cost and token-count events alongside `llm.call` entries; `text-embedding-3-small` added to the model registry. (#654)
+- **Declarative job originator** — YAML-defined scheduled jobs are stamped with a `systemRole: 'system'` originator at startup, distinguishing operator-configured work from principal-initiated and agent-decided tasks. (#558)
+- **`deepseek/deepseek-v4-pro`** — added to the model registry so it can be used as a standard-tier model in deployment config.
 
 ### Changed
 
-- **Delegate timeout** — `DEFAULT_SPECIALIST_TIMEOUT_MS` moved from a hardcoded constant to `config.delegate.defaultTimeoutMs` (default 90s); deployments can override in `local.yaml` to match their standard-tier model latency without a code change. (#713)
-- **Scheduler recovery timeout** — `DEFAULT_EXPECTED_DURATION_SECONDS` moved to `config.scheduler.defaultExpectedDurationSeconds` (default 600s); deployments can adjust the watchdog fallback without patching the runtime. (#713)
-- **Scheduled task durations** — `expectedDurationSeconds` bumped across coordinator (120→360s) and contacts (dedup 300→900s, daily promotion 180→540s) scheduled tasks to reflect higher-latency standard-tier model. (#713)
-- **`SkillContext`** — added `defaultDelegateTimeoutMs?: number` field (sourced from config, read by the delegate skill). (#713)
-- **Multi-turn clarification protocol** — moved from hand-written prompt conventions (~145 lines across coordinator + research-analyst YAML) to a code-backed `request-clarification` skill with runtime short-circuit and DelegateHandler resume_token support. Coordinator prompt reduced by ~50 lines, research-analyst by ~55 lines.
-- **`turn-budget`** — added anti-retry, error acceptance, and structured output guidance; proximity threshold widened from 3 to 5 turns remaining. (#689)
-- **`ceo-inbox-draft-reply` / `email-draft-save` / `email-send` / `email-reply`** — reply drafts and sends now include the quoted original message body below the reply text, matching standard email client behaviour. (#673)
-- **Context bridging v2** — outbound context registry replaces working-memory memos; send skills gain optional `context_bridge` param for delegation-aware reply routing. (#615)
-- **Coordinator prompt** — `[PRIOR OUTBOUND CONTEXT]` replaced with `[ACTIVE OUTBOUND CONTEXT]` block including delegation guidance and entry IDs for release. (#615)
-- **`signal-send`**, **`email-send`**, **`email-reply`** — accept optional `context_bridge` JSON param; declare `outboundContext` capability. (#615)
-- **`file-parse` access relaxed** — `allowed_callers` restriction removed; skill is now invocable by any agent (previously restricted to `system`, `ceo-inbox`, `coordinator`). Custom agents that parse files (e.g., expense trackers processing receipt attachments) were previously blocked at runtime despite having the skill pinned. (#681)
-- **`ceo-inbox`** — urgent email alerts now route through the coordinator via Bullpen instead of calling `signal-send` directly; enables context bridge delegation for CEO replies. (#616)
+- **`ceo-inbox` URGENT alerts** — now route through the coordinator via Bullpen rather than calling `signal-send` directly; CEO replies to alerts route back to the inbox agent through context bridging. (#616)
+- **Email reply quoting** — `email-reply`, `email-draft-save`, `email-send`, and `ceo-inbox-draft-reply` now append the quoted original message body below the reply, matching standard email-client behaviour. (#673)
+- **Delegate and scheduler timeouts externalized** — `delegate.defaultTimeoutMs` (default 90 s) and `scheduler.defaultExpectedDurationSeconds` (default 600 s) are config keys with startup validation; deployments tune them in `local.yaml` without patching the runtime. Coordinator and contacts scheduled tasks bumped to reflect higher standard-tier latency. (#713)
+- **Multi-turn clarification protocol** — moved from ~145 lines of hand-written prompt convention to the code-backed `request-clarification` skill; coordinator and research-analyst prompts shrink by ~105 lines combined.
+- **`file-parse` access relaxed** — `allowed_callers` restriction removed; the skill is now invocable by any agent. Custom agents that parse files (e.g. expense trackers reading receipt attachments) were previously blocked at runtime despite having the skill pinned. (#681)
+- **`file-parse` accepts `temp_file_url`** — alternative to `content_base64`, bridging the gap with `ceo-inbox-download-attachment` for files staged in `CURIA_TEMPFILE_DIR`. (#709)
 
 ### Fixed
 
-- **Memory write rate limit** — `storeFact` source keys now match the format that `AgentRuntime.resetRateLimit()` clears, so the per-task write counter is properly scoped and cleaned up instead of accumulating globally until process restart. Affected skills: `config-store`, `memory-store`, `extract-facts`, `template-doc-request`.
-- **`workspace-mcp` tool tier** — upgraded to `complete`; `create_sheet` and `append_table_rows` require this tier, fixing T2125 expense-tracker setup and ingestion flows. (curia-deploy#65)
-- **`ceo-inbox-update-folders`** — added empty-folders guard matching `ceo-inbox-label`: falls back to the computed folder list when Nylas omits `folders` from the PUT response. (#596)
-- **`ceo-inbox-draft-reply`** — empty `from` now returns `{ success: false }` with an error log instead of silently creating a draft addressed to `unknown`. (#598)
+- **Delegated specialist auth and identity** — `ctx.caller` is synthesized from `taskMetadata.originator` when `senderContext` is absent (#710); `contact-merge` stale guard removed; `contact-grant-permission` falls back to originator contactId; `contact-lookup` returns status and identities and documents the `by: "channel"` input. (#711)
+- **Authorization boundary hardening** — role names lowercased before config lookup (so `'Spouse'` matches `spouse`); effective trust is `max(channelTrust, contactTrustLevel)` so confirmed contacts with explicit `trust_level` grants aren't downgraded by the channel floor (the CEO can now request own calendar via email); `trust_level_defaults` fallback for free-text roles; unknown trust values throw and degrade safely instead of silently collapsing; `trust_level_defaults` validated at startup. (#707)
+- **Email case sensitivity** — `linkIdentity` normalizes to lowercase; `resolveByChannelIdentity` is case-insensitive; migration 044 adds a functional unique index on `LOWER(channel_identifier)`.
+- **Memory write rate limit** — `storeFact` source keys now match the format `AgentRuntime.resetRateLimit()` clears; per-task counters scope and clean up correctly instead of accumulating globally. Affected: `config-store`, `memory-store`, `extract-facts`, `template-doc-request`.
+- **`workspace-mcp` tool tier** — upgraded to `complete`; `create_sheet` and `append_table_rows` now available. (curia-deploy#65)
+- **`ceo-inbox-update-folders`** — empty-folders guard prevents accidental folder wipes when Nylas omits `folders` from the PUT response. (#596)
+- **`ceo-inbox-draft-reply`** — fails on empty `from` rather than silently creating a draft addressed to `unknown`. (#598)
 
 ### Security
 
-- **`qs`** — pinned transitive dependency to `>=6.15.2` via pnpm override, closing CVE-2026-8723 (DoS via crash in `qs.stringify` with null/undefined in comma-format arrays).
-- **`package-lock.json`** — deleted stale npm lockfile and added it to `.gitignore`; the project uses pnpm exclusively and the file was generating spurious Dependabot alerts (#30, #32, #33).
-- **Governance skill caller restrictions** — `set-autonomy`, `approve-action`, `deny-action`, `dismiss-action`, and `delegate` now declare `"allowed_callers": ["coordinator"]`; prevents privilege escalation (rogue autonomy raise, self-approval) and rogue delegation chains from specialist agents. (#681)
+- **`qs` pinned to ≥ 6.15.2** — closes CVE-2026-8723 (DoS via `qs.stringify` crash on null/undefined in comma-format arrays).
+- **Governance skill caller restrictions** — `set-autonomy`, `approve-action`, `deny-action`, `dismiss-action`, and `delegate` declare `"allowed_callers": ["coordinator"]`; prevents rogue privilege escalation and delegation chains from specialist agents. (#681)
+- **`package-lock.json` removed** — gitignored alongside `yarn.lock`; pnpm is the source of truth, silencing spurious Dependabot alerts. (#30, #32, #33)
 
 ### Removed
 
-- **`context-memo.ts`** — deleted v1 outbound context memo write path from the dispatcher and removed the `context-memo` module entirely; context bridging now runs exclusively through `OutboundContextService`. (#615)
-- **`docs/superpowers/`** — deleted completed WIP planning docs (alias propagation gaps, principal bypass, Trivy scanning); all three features are merged. Two stale doc references in `agents/contacts.yaml` and `skills/contact-merge/handler.ts` updated to point to `docs/specs/14-autonomy-engine.md`.
-- **Shipped WIP design/plan docs** — deleted 9 `docs/wip/` files whose features have shipped (context bridging v2 design + plan, ceo-inbox bullpen retrofit design + plan, embedding telemetry design + plan, context-bridge auto-registration design + plan, meeting-debrief design); spec 11, spec 17, and ADR-019 are now the source of truth.
+- **v1 `context-memo`** — write path and module deleted; context bridging now runs exclusively through `OutboundContextService`. (#615)
+- **Shipped WIP design/plan docs** — 9 files in `docs/wip/` removed; spec 11, spec 17, and ADR-019 are now authoritative.
 
 ### Documentation
 
-- **Spec sync (v0.31)** — updated specs 02, 03, 04, 06, 07, 08, 09, 11, 15, 17 with v0.31 deltas (turn budget, CallerContext synthesis, `allowed_callers` two-tier, `outboundContext` capability, email-reply quoting, `is:unread` search, `human.decision` `deciderId`/`deciderChannel`, auth boundary hardening, declarative-job originator, `delegate.defaultTimeoutMs` / `scheduler.defaultExpectedDurationSeconds` config, `CURIA_TEMPFILE_DIR`, contact auto-promotion, case-insensitive email matching, Bullpen-through-coordinator URGENT alerts, empty-folders guard, draft-reply sender, outbound_context cleanup, meeting-debrief shipped status).
-- **Spec 11 extension** — added Outbound Context Bridge section documenting the v2 architecture (table, service, scoped capability, two-tier TTL, dispatcher injection); cross-referenced from specs 03, 04, 15, 17.
-- **ADR-019** — new ADR recording the v1 context-memo → v2 delegation-aware outbound context decision and consequences.
-- **Dev guides** — `configuration.md` documents new `delegate`, `scheduler`, `debrief` config blocks and `CURIA_TEMPFILE_DIR` env var; `adding-a-skill.md` documents the `outboundContext` capability; `smoke-tests.md` documents the `inspect-prompts` eval-harness refresh workflow.
+- **Spec sync** — specs 02–09, 11, 15, and 17 updated with v0.31 deltas; spec 11 gains a major Outbound Context Bridge section; ADR-019 records the v1 → v2 architectural decision; dev guides (`configuration.md`, `adding-a-skill.md`, `smoke-tests.md`) updated; public docs at meetcuria.com synced with the new agent, skills, capability, and config blocks.
+
+---
+
+*after the meeting*
+*the thread holds open, waiting*
+*for whatever next*
+
+---
 
 ## [0.30.0] — 2026-05-22 — "Kaylee Frye"
 
