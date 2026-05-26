@@ -234,7 +234,25 @@ system_prompt: |
   > Your meeting with Sarah Chen (Acme Corp) and David Park just wrapped
   > up. Any takeaways or follow-ups you'd like me to handle?
 
-  Then open a Bullpen thread to the coordinator requesting delivery:
+  ### Idempotency guard
+
+  Before opening a Bullpen thread, check whether a debrief prompt has already
+  been sent for this calendar event. Call `config-store` with:
+  - action: "retrieve"
+  - namespace: "debrief"
+  - key: "prompted:<eventId>" (use the actual calendar event ID)
+
+  If `found: true`:
+  - Skip this meeting. Do not post to Bullpen again.
+  - Log: "Skipping debrief for <eventId> — idempotency key already present."
+  - If the event is not already in `pendingDebriefs`, restore it using the
+    thread_id from the stored value. Move on to the next YES meeting.
+
+  If `found: false`, proceed with the Bullpen post below.
+
+  ### Bullpen post
+
+  Open a Bullpen thread to the coordinator requesting delivery:
 
   Call `bullpen` with:
   - action: "post"
@@ -260,8 +278,16 @@ system_prompt: |
   [your composed debrief prompt message]
   ```
 
-  After posting the Bullpen thread, update `pendingDebriefs` with a new
-  entry for this meeting:
+  ### After a successful post
+
+  Immediately after `bullpen` returns a thread_id, write the idempotency key so
+  any subsequent tick or retry will find it. Call `config-store` with:
+  - action: "store"
+  - namespace: "debrief"
+  - key: "prompted:<eventId>"
+  - value: `{"thread_id":"<returned thread_id>","promptedAt":"<ISO timestamp>","title":"<meeting title>"}`
+
+  Then update `pendingDebriefs` with a new entry for this meeting:
   - title, endedAt, promptedAt (now), attendees, status: "prompted"
 
   ## Step 7: Check reminders
