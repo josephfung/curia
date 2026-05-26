@@ -294,14 +294,14 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "default_timeout_ms": { "type": "integer", "minimum": 1 }
+        "defaultTimeoutMs": { "type": "integer", "minimum": 1 }
       }
     },
     "scheduler": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "default_expected_duration_seconds": { "type": "integer", "minimum": 1 }
+        "defaultExpectedDurationSeconds": { "type": "integer", "minimum": 1 }
       }
     }
   },

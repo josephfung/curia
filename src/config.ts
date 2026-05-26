@@ -269,12 +269,12 @@ export interface YamlConfig {
   delegate?: {
     /** Default timeout in ms for specialist delegations when no timeout_ms is passed. Default: 90000.
      *  Override in local.yaml to match your deployment's standard-tier model latency. */
-    default_timeout_ms?: number;
+    defaultTimeoutMs?: number;
   };
   scheduler?: {
     /** Default assumed duration in seconds for scheduled jobs that declare no expectedDurationSeconds.
      *  Used by the watchdog to compute recovery timeouts. Default: 600. */
-    default_expected_duration_seconds?: number;
+    defaultExpectedDurationSeconds?: number;
   };
 }
 
@@ -660,17 +660,17 @@ export function loadYamlConfig(configDir: string): YamlConfig {
 
   // Validate delegate if present — a zero or negative timeout would let every delegation
   // immediately time out, producing difficult-to-trace runtime symptoms.
-  const delegateTimeoutMs = config.delegate?.default_timeout_ms;
+  const delegateTimeoutMs = config.delegate?.defaultTimeoutMs;
   if (delegateTimeoutMs !== undefined && (!Number.isInteger(delegateTimeoutMs) || delegateTimeoutMs <= 0)) {
-    throw new Error(`delegate.default_timeout_ms must be a positive integer (milliseconds), got: ${delegateTimeoutMs}`);
+    throw new Error(`delegate.defaultTimeoutMs must be a positive integer (milliseconds), got: ${delegateTimeoutMs}`);
   }
 
   // Validate scheduler if present — a zero or negative duration would make the watchdog
   // immediately flag every job with no explicit expectedDurationSeconds as stuck.
-  const schedulerDefaultDuration = config.scheduler?.default_expected_duration_seconds;
+  const schedulerDefaultDuration = config.scheduler?.defaultExpectedDurationSeconds;
   if (schedulerDefaultDuration !== undefined && (!Number.isInteger(schedulerDefaultDuration) || schedulerDefaultDuration <= 0)) {
     throw new Error(
-      `scheduler.default_expected_duration_seconds must be a positive integer (seconds), got: ${schedulerDefaultDuration}`,
+      `scheduler.defaultExpectedDurationSeconds must be a positive integer (seconds), got: ${schedulerDefaultDuration}`,
     );
   }
 
