@@ -119,6 +119,17 @@ const AUTO_VERIFIED_SOURCES: ReadonlySet<IdentitySource> = new Set([
   'agent_called',
 ]);
 
+// Strip formatting characters from a phone identifier that already carries
+// a '+' prefix, producing a clean E.164 string (e.g. '+1-519-504-0098' → '+15195040098').
+// Identifiers without a '+' are returned as-is; the DB CHECK constraint will reject
+// them so the caller must supply a properly-formatted E.164 number.
+function normalizePhoneE164(identifier: string): string {
+  if (identifier.startsWith('+')) {
+    return '+' + identifier.slice(1).replace(/\D/g, '');
+  }
+  return identifier;
+}
+
 /**
  * ContactService manages the lifecycle of contacts and their channel identities.
  *
@@ -477,9 +488,17 @@ export class ContactService {
     // RFC 5321 allows case-sensitive local-parts, but in practice no major
     // provider enforces this — storing mixed-case causes lookup misses when
     // the LLM or inbound adapter uses a different casing.
-    const normalizedIdentifier = options.channel === 'email'
-      ? options.channelIdentifier.toLowerCase()
-      : options.channelIdentifier;
+    //
+    // Normalize phone/signal identifiers to E.164 (DB constraint enforces this).
+    // If the identifier already carries a '+' prefix, strip all formatting chars
+    // after it. Numbers lacking a '+' are left as-is — the DB CHECK constraint
+    // will reject them with a clear error so the caller must supply valid E.164.
+    const normalizedIdentifier =
+      options.channel === 'email'
+        ? options.channelIdentifier.toLowerCase()
+        : options.channel === 'phone' || options.channel === 'signal'
+        ? normalizePhoneE164(options.channelIdentifier)
+        : options.channelIdentifier;
 
     const identity: ChannelIdentity = {
       id: randomUUID(),
@@ -527,7 +546,16 @@ export class ContactService {
     channel: string,
     channelIdentifier: string,
   ): Promise<ResolvedSender | null> {
-    return this.backend.resolveByChannelIdentity(channel, channelIdentifier);
+    // Normalize the lookup key the same way linkIdentity normalizes at write time,
+    // so callers can look up by denormalized forms (e.g. '+1-519-504-0098') and
+    // still match the stored E.164 value ('+15195040098').
+    const normalizedIdentifier =
+      channel === 'email'
+        ? channelIdentifier.toLowerCase()
+        : channel === 'phone' || channel === 'signal'
+        ? normalizePhoneE164(channelIdentifier)
+        : channelIdentifier;
+    return this.backend.resolveByChannelIdentity(channel, normalizedIdentifier);
   }
 
   /** Get a contact together with all its linked channel identities. */
@@ -1639,16 +1667,23 @@ class InMemoryContactBackend implements ContactServiceBackend {
     channel: string,
     channelIdentifier: string,
   ): Promise<ResolvedSender | null> {
-    // Normalize email lookups to lowercase (mirrors Postgres backend).
-    const normalizedId = channel === 'email'
-      ? channelIdentifier.toLowerCase()
-      : channelIdentifier;
+    // Normalize lookup key to match stored form (mirrors Postgres backend + service layer).
+    // Email: lowercase. Phone/signal: E.164 (strip formatting from +-prefixed numbers).
+    const normalizedId =
+      channel === 'email'
+        ? channelIdentifier.toLowerCase()
+        : channel === 'phone' || channel === 'signal'
+        ? normalizePhoneE164(channelIdentifier)
+        : channelIdentifier;
 
     // Find the matching identity, then look up the contact
     for (const identity of this.identities.values()) {
-      const storedId = channel === 'email'
-        ? identity.channelIdentifier.toLowerCase()
-        : identity.channelIdentifier;
+      const storedId =
+        channel === 'email'
+          ? identity.channelIdentifier.toLowerCase()
+          : channel === 'phone' || channel === 'signal'
+          ? normalizePhoneE164(identity.channelIdentifier)
+          : identity.channelIdentifier;
       if (identity.channel === channel && storedId === normalizedId) {
         const contact = this.contacts.get(identity.contactId);
         if (contact) {
