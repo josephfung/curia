@@ -13,37 +13,38 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+## [0.31.1] — 2026-05-26 — "Janet"
+
+> **Janet** *(The Good Place, 2016, Michael Schur)* — the neighborhood's vast informational assistant: appears when summoned, answers with total knowledge of every resident, performs only the function asked, never lies about what she did. v0.31.1 reshapes Curia's agents along the same lines — they know who the principal is at bootstrap, stay on the task they were scheduled for, don't retry into uncertainty, and leave an honest audit trail of every wire-level send.
+
 ### Security
 
-- **`outbound.delivered`** — canonical audit event emitted by the gateway after every successful email or Signal send, closing the visibility gap for skill-invoked sends. HTTP/web conversations are already captured by `agent.response`; CLI is dev-only and excluded by design. (#729)
-
-### Fixed
-
-- **`calendar-list-events`** — adds optional `contactId` input for scheduled agents to look up calendars by contact UUID.
-- **`meeting-debrief`** — now passes `contactId: ${principal_contact_id}` to `calendar-list-events`, fixing cron-context calendar failures.
-- **`scheduler-report`, `scheduler-list`** — sensitivity changed to normal; `meeting-debrief` was blocking 6+ turns per tick on state writes.
-- **`ceo-inbox-read`** — timeout raised from 15 s to 30 s to absorb intermittent Nylas latency spikes.
+- **`outbound.delivered`** — canonical audit event from the outbound gateway after every successful email or Signal send. (#729, spec 06 / 10 / 15)
 
 ### Added
 
-- **`${principal_contact_id}` runtime placeholder** — agent system prompts can now reference the principal's contact ID directly; `meeting-debrief` and `calendar` no longer call `contact-lookup` by role on every invocation. (#716)
-- **`meeting-debrief` idempotency guard** — `config-store` key `prompted:<eventId>` now blocks duplicate Bullpen threads when `pendingDebriefs` state is lost between ticks. (#724)
+- **`${principal_contact_id}` placeholder** — agent system prompts reference the principal's contact ID directly; bootstrap-resolved, opt-in. (#716, spec 02 / 09)
+- **`meeting-debrief` idempotency guard** — `config-store` key `prompted:<eventId>` blocks duplicate Bullpen threads. (#724, spec 17)
+- **`calendar-list-events` optional `contactId`** — scheduled agents and the principal can look up calendars by contact UUID.
 
 ### Changed
 
-- **`buildReplyQuote`** — quoted reply blocks are now rendered as a sanitized HTML `<blockquote>` with styled attribution headers instead of plain text; original body HTML is preserved through `sanitize-html` (strips scripts, styles, event handlers, and `javascript:` URLs). `ceo-inbox-draft-reply` now also converts the LLM reply body to HTML before creating the Nylas draft. (#734)
+- **Email reply quoting** — HTML `<blockquote>` with attribution headers, sanitized; natural agent-response replies now included. (#720, #734)
+- **`scheduler-report`, `scheduler-list`** — sensitivity demoted to `normal`; scheduled agents can persist tick state without elevation.
+- **`ceo-inbox-read`** — timeout raised 15 s → 30 s to absorb Nylas latency spikes.
 
 ### Fixed
 
-- **`bullpen`** — `post` and `reply` now fire-and-forget the `agent.discuss` publish instead of awaiting it, so a slow subscriber no longer pushes the handler past its skill timeout and triggers duplicate-thread retries. Also unwinds the #722 `meeting-debrief` stopgap (no more `prompt_unconfirmed` state) since timeouts are no longer a realistic failure mode. (#721)
-- **Scheduler task drift** — coordinator's system prompt now includes a hard scope restriction when invoked via a scheduled job (`channelId: 'scheduler'`), preventing it from treating injected outbound-context entries as action triggers. (#730)
-- **`calendar-list-events`** — non-UUID caller contactId (e.g. `"system"` from scheduled jobs) now returns a clear, actionable error instead of a raw Postgres UUID parse failure. (#723)
-- **Email reply quoting** — natural agent-response replies (no skill invocation) now include the quoted original message, matching the skill-driven paths. `buildReplyQuote` moved to `src/skills/_shared/` so the email channel adapter can share it. (#720)
-- **`reply-quote`** — Outlook-on-Windows VML CSS from `<style>` blocks no longer leaks into the quoted body as visible text; delegates to `html-to-text.ts` which strips style/script block contents. (#733)
+- **`bullpen`** — `post`/`reply` fire-and-forget `agent.discuss`; slow subscribers no longer time out the handler. (#721, spec 03)
+- **Scheduler task drift** — coordinator's scheduler runs are scope-restricted; ambient context isn't an action trigger. (#730, spec 07)
+- **`calendar-list-events`** — non-UUID caller `contactId` returns a clear error instead of a raw Postgres parse failure. (#723)
+- **`calendar-list-events` authorization** — `contactId` override uses trusted originator metadata, not `ctx.caller` shape.
+- **`meeting-debrief` calendar lookups** — passes `contactId: ${principal_contact_id}` explicitly, fixing cron-context failures.
+- **`reply-quote`** — Outlook VML CSS no longer leaks into the quoted body as visible text. (#733)
 
 ### Removed
 
-- **Shipped WIP design/plan docs** — 2 files in `docs/wip/` for the `${principal_contact_id}` work removed; spec 09 (principal contact resolution) and spec 02 (runtime template variables) are now authoritative.
+- **Shipped WIP design/plan docs** — 2 files in `docs/wip/` removed; spec 09 and spec 02 are now authoritative.
 
 ## [0.31.0] — 2026-05-26 — "TARS"
 
