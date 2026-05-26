@@ -285,7 +285,14 @@ system_prompt: |
   - action: "store"
   - namespace: "debrief"
   - key: "prompted:<eventId>"
-  - value: `{"thread_id":"<returned thread_id>","promptedAt":"<ISO timestamp>","title":"<meeting title>"}`
+  - value: a JSON-encoded **string** (not an object), e.g.
+    `'{"thread_id":"<returned thread_id>","promptedAt":"<ISO timestamp>","title":"<meeting title>"}'`
+
+  If the store call returns `success: false` or `data.stored: false`, log the
+  failure and include a note in your Step 8 summary that the idempotency key for
+  `<eventId>` may not have persisted. Do NOT retry the Bullpen post — continue
+  to the next meeting. The guard may not hold until the next successful write,
+  but a duplicate is preferable to an infinite retry loop.
 
   Then update `pendingDebriefs` with a new entry for this meeting:
   - title, endedAt, promptedAt (now), attendees, status: "prompted"

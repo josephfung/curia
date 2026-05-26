@@ -16,7 +16,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Added
 
 - **`${principal_contact_id}` runtime placeholder** — agent system prompts can now reference the principal's contact ID directly; `meeting-debrief` and `calendar` no longer call `contact-lookup` by role on every invocation. (#716)
-- **`meeting-debrief` idempotency guard** — agent now checks `config-store` for a `prompted:<eventId>` key before opening a Bullpen thread, and writes the key (with `thread_id`) immediately after a successful post. Prevents duplicate debrief prompts if a tick crashes between post and state-write, or if a stale `pendingDebriefs` map is replayed. (#724)
+- **`meeting-debrief` idempotency guard** — `config-store` key `prompted:<eventId>` now blocks duplicate Bullpen threads when `pendingDebriefs` state is lost between ticks. (#724)
 
 ### Changed
 
