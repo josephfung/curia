@@ -143,7 +143,7 @@ export class EmailSendHandler implements SkillHandler {
         body,
         cc: ccAddresses,
         replyToMessageId,
-        ...(htmlQuote ? { htmlQuote } : {}),
+        htmlQuote,
       });
 
       if (!result.success) {

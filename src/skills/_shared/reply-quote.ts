@@ -122,7 +122,8 @@ const QUOTE_SANITIZE_OPTIONS: sanitizeHtml.IOptions = {
         ? {
             ...attribs,
             style: style
-              .replace(/\bexpression\s*\([^)]*\)/gi, '')
+              // dotAll (s flag) + lazy quantifier handles nested parens in the expression
+              .replace(/\bexpression\s*\(.*?\)/gis, '')
               .replace(/\bbehavior\s*:[^;]*/gi, ''),
           }
         : attribs;
