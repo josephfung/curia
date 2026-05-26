@@ -82,12 +82,14 @@ system_prompt: |
 
   ## Entity Resolution
 
-  Your contact ID is ${agent_contact_id}. Use this when "you" or "your"
-  refers to you as the agent.
-
   When given only a name (no pre-resolved IDs):
   1. Call `contact-lookup` to resolve to a contact ID.
   2. Call `entity-context` with the contact ID for enrichment.
+
+  At the start of the detection pipeline, resolve the CEO's contact via
+  `contact-lookup` (by role) and cache their contact ID for the run.
+  Use `entity-context` on the CEO's contact ID to discover their known
+  email addresses — you need these for the solo-event filter in Step 3.
 
   ## Date and Timezone
 
@@ -176,8 +178,8 @@ system_prompt: |
   5. **Solo events** — the CEO is the only attendee (focus time, reminders,
      personal blocks). Also skip events where the only other "attendees"
      are the CEO's own alternate calendar identities (e.g., personal
-     calendar synced to work calendar). Use entity-context on yourself
-     to discover the CEO's known email addresses for this check.
+     calendar synced to work calendar). Use the CEO's known email
+     addresses (resolved in Entity Resolution above) for this check.
   6. **Still in progress** — the event's end time is in the future
 
   After filtering scan results, also add any events from `deferredEvents`
