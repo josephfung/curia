@@ -22,8 +22,9 @@ export class CalendarListEventsHandler implements SkillHandler {
       return { success: false, error: 'Calendar not configured — Nylas credentials missing' };
     }
 
-    const { calendarId, timeMin, timeMax, maxResults, query, attendeeEmail } = ctx.input as {
+    const { calendarId, contactId, timeMin, timeMax, maxResults, query, attendeeEmail } = ctx.input as {
       calendarId?: string;
+      contactId?: string;
       timeMin?: string;
       timeMax?: string;
       maxResults?: number;
@@ -40,27 +41,46 @@ export class CalendarListEventsHandler implements SkillHandler {
 
     try {
       // Resolve which calendar(s) to query.
-      // If the caller provided a specific calendarId, use that.
-      // Otherwise, look up all calendars registered to the caller's contact.
+      // Priority: explicit calendarId > explicit contactId lookup > caller auto-lookup.
       let calendarIds: string[];
+
+      const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
       if (calendarId && typeof calendarId === 'string') {
         calendarIds = [calendarId];
+      } else if (contactId && typeof contactId === 'string') {
+        // Explicit contactId provided — used by scheduled agents that don't have a
+        // real caller contact (e.g. pass ${principal_contact_id} to look up the CEO's calendars).
+        if (!UUID_RE.test(contactId)) {
+          return {
+            success: false,
+            error: `Invalid contactId — must be a UUID, got "${contactId}"`,
+          };
+        }
+        if (!ctx.contactService) {
+          return { success: false, error: 'contactService not available — cannot look up calendars by contactId' };
+        }
+        const calendars = await ctx.contactService.getCalendarsForContact(contactId);
+        if (calendars.length === 0) {
+          return { success: false, error: `No calendars registered for contact ${contactId} — register a calendar first` };
+        }
+        calendarIds = calendars.map((c) => c.nylasCalendarId);
+        ctx.log.info({ contactId, calendarCount: calendarIds.length }, 'Resolved calendars for explicit contactId');
       } else if (ctx.contactService && ctx.caller) {
+        // Fall back to the caller's own contact — works for human-initiated tasks
+        // where the caller is a real contact UUID.
         // Two non-UUID sentinel values can appear in ctx.caller.contactId:
         //   'system'       — scheduled-job invocations (see makeSystemOriginator in contacts/principal.ts)
         //   'primary-user' — CLI sessions where the principal DB lookup failed at bootstrap
         // Both cause a Postgres parse error if passed to a UUID column.
-        // Reject early with an actionable message so the LLM can retry with an explicit calendarId.
-        const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
         if (!UUID_RE.test(ctx.caller.contactId)) {
           ctx.log.warn(
             { contactId: ctx.caller.contactId },
-            'calendar-list-events: rejecting non-UUID contactId — calendarId is required for system-context invocations',
+            'calendar-list-events: caller contactId is not a UUID — pass contactId (e.g. ${principal_contact_id}) for scheduled invocations',
           );
           return {
             success: false,
-            error: `calendarId is required when invoked from a non-contact-resolved context (caller contactId "${ctx.caller.contactId}" is not a UUID)`,
+            error: `calendarId or contactId is required when invoked from a non-contact-resolved context (caller contactId "${ctx.caller.contactId}" is not a UUID)`,
           };
         }
         const calendars = await ctx.contactService.getCalendarsForContact(ctx.caller.contactId);
@@ -70,7 +90,7 @@ export class CalendarListEventsHandler implements SkillHandler {
         calendarIds = calendars.map((c) => c.nylasCalendarId);
         ctx.log.info({ contactId: ctx.caller.contactId, calendarCount: calendarIds.length }, 'Resolved caller calendars');
       } else {
-        return { success: false, error: 'Missing required input: calendarId (and unable to resolve caller calendars)' };
+        return { success: false, error: 'Missing required input: calendarId or contactId (and unable to resolve caller calendars)' };
       }
 
       // Pass maxResults as the upstream fetch limit so callers asking for >200 events aren't silently capped.

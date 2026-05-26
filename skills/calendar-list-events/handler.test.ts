@@ -87,3 +87,82 @@ describe('CalendarListEventsHandler — system caller guard', () => {
     expect(result.success).toBe(true);
   });
 });
+
+describe('CalendarListEventsHandler — explicit contactId input', () => {
+  it('uses explicit contactId input to look up calendars, bypassing caller identity', async () => {
+    // Simulates a scheduled agent passing ${principal_contact_id} explicitly
+    const handler = new CalendarListEventsHandler();
+    const principalId = 'deadbeef-0000-0000-0000-000000000001';
+    const contactService = {
+      getCalendarsForContact: vi.fn().mockResolvedValue([
+        { nylasCalendarId: 'joseph@josephfung.ca' },
+      ]),
+    } as unknown as SkillContext['contactService'];
+
+    const result = await handler.execute(makeCtx({
+      input: {
+        contactId: principalId,
+        timeMin: '2026-05-26T00:00:00Z',
+        timeMax: '2026-05-26T23:59:59Z',
+      },
+      // System caller — would normally be rejected without an explicit contactId
+      caller: { contactId: 'system', role: null, channel: 'internal' },
+      contactService,
+      nylasCalendarClient: {
+        listEvents: vi.fn().mockResolvedValue([]),
+      } as unknown as SkillContext['nylasCalendarClient'],
+    }));
+
+    expect(contactService!.getCalendarsForContact).toHaveBeenCalledWith(principalId);
+    expect(result.success).toBe(true);
+  });
+
+  it('rejects a non-UUID contactId input', async () => {
+    const handler = new CalendarListEventsHandler();
+    const contactService = {
+      getCalendarsForContact: vi.fn(),
+    } as unknown as SkillContext['contactService'];
+
+    const result = await handler.execute(makeCtx({
+      input: {
+        contactId: 'joseph',
+        timeMin: '2026-05-26T00:00:00Z',
+        timeMax: '2026-05-26T23:59:59Z',
+      },
+      caller: { contactId: 'system', role: null, channel: 'internal' },
+      contactService,
+    }));
+
+    expect(result.success).toBe(false);
+    expect((result as { error: string }).error).toContain('UUID');
+    expect(contactService!.getCalendarsForContact).not.toHaveBeenCalled();
+  });
+
+  it('explicit contactId takes precedence over caller contactId', async () => {
+    const handler = new CalendarListEventsHandler();
+    const principalId = 'deadbeef-0000-0000-0000-000000000001';
+    const callerId = 'cafebabe-0000-0000-0000-000000000002';
+    const contactService = {
+      getCalendarsForContact: vi.fn().mockResolvedValue([
+        { nylasCalendarId: 'cal-principal' },
+      ]),
+    } as unknown as SkillContext['contactService'];
+
+    await handler.execute(makeCtx({
+      input: {
+        contactId: principalId,
+        timeMin: '2026-05-26T00:00:00Z',
+        timeMax: '2026-05-26T23:59:59Z',
+      },
+      caller: { contactId: callerId, role: null, channel: 'signal' },
+      contactService,
+      nylasCalendarClient: {
+        listEvents: vi.fn().mockResolvedValue([]),
+      } as unknown as SkillContext['nylasCalendarClient'],
+    }));
+
+    // Should use principalId, not callerId
+    expect(contactService!.getCalendarsForContact).toHaveBeenCalledWith(principalId);
+    expect(contactService!.getCalendarsForContact).not.toHaveBeenCalledWith(callerId);
+  });
+});

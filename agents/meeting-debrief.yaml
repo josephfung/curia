@@ -162,8 +162,11 @@ system_prompt: |
   Call `calendar-list-events` with:
   - timeMin: lastScanTimestamp (from prior run) or now minus 20 minutes
   - timeMax: now (the current time)
+  - contactId: ${principal_contact_id}
 
-  Omit calendarId — the skill auto-queries all CEO calendars.
+  Always pass contactId — this agent runs as a scheduled job (system context),
+  so the skill cannot auto-resolve calendars from the caller. Using
+  ${principal_contact_id} looks up all calendars registered to the CEO.
 
   ## Step 3: Filter candidates
 
