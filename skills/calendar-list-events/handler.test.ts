@@ -107,6 +107,7 @@ describe('CalendarListEventsHandler — explicit contactId input', () => {
       },
       // System caller — would normally be rejected without an explicit contactId
       caller: { contactId: 'system', role: null, channel: 'internal' },
+      taskMetadata: { originator: { systemRole: 'system' } },
       contactService,
       nylasCalendarClient: {
         listEvents: vi.fn().mockResolvedValue([]),
@@ -130,6 +131,7 @@ describe('CalendarListEventsHandler — explicit contactId input', () => {
         timeMax: '2026-05-26T23:59:59Z',
       },
       caller: { contactId: 'system', role: null, channel: 'internal' },
+      taskMetadata: { originator: { systemRole: 'system' } },
       contactService,
     }));
 
@@ -155,6 +157,7 @@ describe('CalendarListEventsHandler — explicit contactId input', () => {
         timeMax: '2026-05-26T23:59:59Z',
       },
       caller: { contactId: callerId, role: 'ceo', channel: 'signal' },
+      taskMetadata: { originator: { systemRole: 'principal' } },
       contactService,
       nylasCalendarClient: {
         listEvents: vi.fn().mockResolvedValue([]),
@@ -203,6 +206,7 @@ describe('CalendarListEventsHandler — explicit contactId input', () => {
         timeMax: '2026-05-26T23:59:59Z',
       },
       caller: { contactId: 'system', role: null, channel: 'internal' },
+      taskMetadata: { originator: { systemRole: 'system' } },
       contactService,
     }));
 
