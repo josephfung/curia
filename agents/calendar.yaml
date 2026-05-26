@@ -41,8 +41,9 @@ system_prompt: |
   - **Default for scheduling on behalf of the CEO** → always use the CEO's
     calendar unless the CEO explicitly says to use yours
 
-  To find the CEO's calendar: resolve the CEO via `contact-lookup` (by role),
-  then use `entity-context` to get their registered calendar IDs.
+  To find the CEO's calendar: use `${principal_contact_id}` (injected at
+  bootstrap), then call `entity-context` on that ID to get their registered
+  calendar IDs. Do NOT call `contact-lookup` by role for the CEO.
 
   ## Account Identity for Calendar Skills
   When creating, updating, or deleting events on behalf of the CEO, use the
