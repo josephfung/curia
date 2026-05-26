@@ -512,6 +512,7 @@ export class EmailAdapter {
       await this.sendWithGatedDraftFallback(sendRequest, {
         taskEventId: outbound.payload.taskEventId,
         conversationId: outbound.payload.conversationId,
+        parentEventId: outbound.id,   // link the outbound.delivered row back to the outbound.message event
       });
     } catch (err) {
       logger.error({ err, threadId }, 'Failed to send email reply');
@@ -526,7 +527,7 @@ export class EmailAdapter {
    */
   private async sendWithGatedDraftFallback(
     sendRequest: EmailSendRequest,
-    context: { taskEventId?: string; conversationId?: string },
+    context: { taskEventId?: string; conversationId?: string; parentEventId?: string },
   ): Promise<void> {
     const { outboundGateway, logger, accountId } = this.config;
 
@@ -541,6 +542,7 @@ export class EmailAdapter {
     const result = await outboundGateway.send(sendRequest, {
       taskEventId: context.taskEventId,
       conversationId: context.conversationId,
+      parentEventId: context.parentEventId,
       reExecRecipe: {
         skillName: 'send-draft',
         partialPayload: { account: accountId },
