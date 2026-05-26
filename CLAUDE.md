@@ -113,6 +113,24 @@ When adding a new agent, ensure it receives the autonomy block via the runtime i
 1. Create `agents/<name>.yaml` with required fields (name, description, model, system_prompt)
 2. Optionally add `handler: ./<name>.handler.ts` for custom logic
 
+### Reaching the principal
+
+Agents that need to send messages to, look up calendars for, or otherwise act
+on behalf of the principal MUST reference `${principal_contact_id}` in their
+system prompt. The runtime injects this placeholder at bootstrap from
+`contactService.findContactBySystemRole('principal')`.
+
+Pass `${principal_contact_id}` to `entity-context` to discover the principal's
+verified email addresses, Signal number, calendar IDs, and timezone. Do not
+hardcode addresses or phone numbers in agent prompts, and do not call
+`contact-lookup` by role for the principal — the platform resolves the ID
+once at bootstrap so every cron tick doesn't spend a skill call on an
+immutable value.
+
+This mirrors the existing `${agent_contact_id}` placeholder pattern (the
+agent's own identity). Both are opt-in: only agents that reference the
+placeholder pay the prompt-bytes cost.
+
 ## Creating Issues
 
 When creating a new GitHub issue:
