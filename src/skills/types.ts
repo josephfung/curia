@@ -162,6 +162,9 @@ export interface SkillContext {
   agentId?: string;
   /** ID of the originating agent.task event — for causal chain tracing in event payloads */
   taskEventId?: string;
+  /** Conversation ID from the originating task event. Used by skills that need to
+   *  thread this through to other system events (e.g. outbound delivery audit). */
+  conversationId?: string;
   /** Channel ID from the originating task event (e.g. "http", "internal", "signal").
    *  Used with agentId and taskEventId to construct the memory write source key. */
   channelId?: string;

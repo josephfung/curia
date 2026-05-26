@@ -527,6 +527,7 @@ export class ExecutionLayer {
       // capability-gated skills (bullpen) need these for event publishing; harmless for others.
       agentId: options?.agentId,
       taskEventId: options?.taskEventId,
+      conversationId: options?.conversationId,
       channelId: options?.channelId,
       // Pre-construct the memory write source key so skills pass a rate-limit-compatible
       // source to entityMemory.storeFact(). This key matches the format that
