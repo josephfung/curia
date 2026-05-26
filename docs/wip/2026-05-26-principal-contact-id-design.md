@@ -28,11 +28,32 @@ already loaded at bootstrap — `principalContact` is materialized at
 
 ## Scope
 
-**In scope:** Inject only the principal's contact UUID as `${principal_contact_id}`.
-This mirrors the existing `${agent_contact_id}` pattern.
+**In scope (this PR, curia repo):**
+
+- Inject the principal's contact UUID as `${principal_contact_id}` via
+  `interpolateRuntimeContext()`. Mirrors the existing `${agent_contact_id}`
+  pattern (opt-in placeholder, not auto-injected).
+- Update `meeting-debrief.yaml` and `calendar.yaml` to use the placeholder.
+- Add a CLAUDE.md convention documenting that agents needing to reach the
+  principal MUST use `${principal_contact_id}` rather than hardcoding addresses
+  or calling `contact-lookup`-by-role.
+
+**Cross-repo follow-up (separate PR, curia-deploy repo):**
+
+- Update `T2125-expense-tracker.yaml` to reference `${principal_contact_id}` in
+  a new entity-resolution paragraph. T2125 already has `entity-context` pinned;
+  the change is prose-only. This lands *after* the curia release that ships the
+  platform support, so the placeholder resolves rather than appearing as a
+  literal string.
 
 **Out of scope (explicit non-goals):**
 
+- **Auto-injecting** the principal contact ID into every agent prompt. Rejected
+  because (a) it expands the attack surface — unrelated agents like
+  research-analyst would be invited to contact the CEO directly when they have
+  no business doing so; (b) it diverges from the established `${agent_contact_id}`
+  opt-in pattern; (c) the real fix for poorly-written agents is the documented
+  convention plus review, not silent injection.
 - Pre-resolving the principal's email identities, calendar IDs, timezone, or any
   other enrichment data. Agents continue to call `entity-context` with the
   injected ID when they need that information.
@@ -40,6 +61,11 @@ This mirrors the existing `${agent_contact_id}` pattern.
   bootstrap-time injection is correct. (Identities and calendars *can* change,
   which is why they are excluded — bootstrap-time injection of those would go
   stale.)
+- Refactoring `digest.yaml` (curia-deploy) to replace its hardcoded Signal
+  number with the placeholder + entity-context. The existing
+  `@TODO(signal-config)` flags this work; it stays a separate ticket because
+  it changes runtime cost (adds a per-fire entity-context call) and pinned
+  skills, not just prose.
 
 ## Design
 
@@ -93,7 +119,23 @@ This mirrors the existing `${agent_contact_id}` pattern.
 - Keep `contact-lookup` in `pinned_skills` (line 173) — still used for other
   name resolution.
 
-### 4. Tests
+### 4. CLAUDE.md convention
+
+Add a short section to [repos/curia/CLAUDE.md](../../CLAUDE.md), near the
+existing "Adding Things" / "New Agent" guidance. Suggested wording:
+
+> **Reaching the principal.** Agents that need to send messages to, look up
+> calendars for, or otherwise act on behalf of the principal MUST reference
+> `${principal_contact_id}` in their system prompt. Pass that ID to
+> `entity-context` to discover the principal's verified email addresses,
+> Signal number, calendar IDs, and timezone. Do not hardcode addresses or
+> phone numbers in agent prompts, and do not use `contact-lookup`-by-role
+> for the principal — the platform resolves the ID at bootstrap.
+
+This is the durable countermeasure to "poorly written agents" — it documents
+the convention so reviewers and future agent authors can apply it consistently.
+
+### 5. Tests
 
 New `describe('interpolateRuntimeContext')` block in
 [tests/unit/agents/loader.test.ts](../../tests/unit/agents/loader.test.ts).
@@ -120,6 +162,22 @@ Cases for the new variable:
 - [ ] Unit test for `interpolateRuntimeContext()` covers the new variable
       (UUID-present, undefined, non-UUID, and isolation from other placeholders).
 - [ ] CHANGELOG.md updated under `## [Unreleased]` (per CLAUDE.md).
+- [ ] CLAUDE.md "Reaching the principal" convention added near the
+      "Adding Things" / "New Agent" section.
+
+## Cross-Repo Follow-Up (curia-deploy)
+
+After this PR ships and a curia release is cut that includes the new
+placeholder, open a follow-up PR against `curia-deploy`:
+
+- **`custom/agents/T2125-expense-tracker.yaml`** — add a small "Entity
+  Resolution" paragraph (mirroring `calendar.yaml`) instructing the agent
+  to use `${principal_contact_id}` and `entity-context` to discover the
+  CEO's email/Signal address before any `email-send` or `signal-send`
+  call. No skill manifest changes; `entity-context` is already pinned.
+
+Tracked separately so the curia release is the gate — the placeholder must
+exist in the platform before the curia-deploy YAML references it.
 
 ## Risks & Mitigations
 
