@@ -96,6 +96,35 @@ interface OutboundMessagePayload {
   taskEventId?: string;
 }
 
+// OutboundDeliveredPayload — emitted by OutboundGateway after a successful
+// wire-level dispatch (Nylas send, signal-cli send, or Nylas drafts.send).
+// This is the canonical "content left the system to a human recipient"
+// audit signal. Every successful outbound delivery emits exactly one row,
+// regardless of whether the caller was the dispatcher (via a channel adapter)
+// or a skill calling gateway.send() directly. See issue #729.
+interface OutboundDeliveredPayload {
+  /** Channel that carried the message — matches OutboundSendRequest.channel. */
+  channel: 'signal' | 'email';
+  /** External recipient identifier: E.164 (signal 1:1), base64 group ID
+   *  (signal group), or email address. */
+  recipientId: string;
+  /** Resolved during the gateway's blocked-contact check (Step 1). Absent
+   *  when no contact record existed for the recipient at send time —
+   *  promoteOrCreateRecipientContact() runs after dispatch, so v1 does not
+   *  resolve twice. */
+  recipientContactId?: string;
+  /** Post-PII-redaction message body that actually went on the wire. */
+  content: string;
+  /** Conversation ID when available (dispatcher-routed and skill-invoked
+   *  sends initiated from a coordinator task both have one). */
+  conversationId?: string;
+  /** Originating agent.task event ID, when available. */
+  taskEventId?: string;
+  /** Provider message ID — Nylas message ID for email, absent for
+   *  signal-cli (the RPC call returns no ID). */
+  messageId?: string;
+}
+
 // OutboundPiiRedactedPayload — emitted by the dispatch layer (via PiiRedactor)
 // when PII is redacted from an outbound message before delivery. The message is
 // still sent (with redacted content); this event provides an audit trail.
@@ -498,6 +527,16 @@ export interface OutboundMessageEvent extends BaseEvent {
   payload: OutboundMessagePayload;
 }
 
+// OutboundDeliveredEvent — published by OutboundGateway from the dispatch
+// layer (the gateway lives under src/skills/ but its bus operations run
+// with dispatch-layer permission, same as outbound.blocked). System layer
+// subscribes for audit logging; no channel-layer subscriber by design.
+export interface OutboundDeliveredEvent extends BaseEvent {
+  type: 'outbound.delivered';
+  sourceLayer: 'dispatch';
+  payload: OutboundDeliveredPayload;
+}
+
 // OutboundBlockedEvent — published by the dispatch layer when the content filter
 // intercepts and blocks an outbound message. Channel adapters subscribe to this so
 // they can surface a failure signal to the user (e.g., "message could not be sent").
@@ -779,6 +818,7 @@ export type BusEvent =
   | MessageHeldEvent      // Unknown sender policy: message held for CEO review
   | MessageRejectedEvent  // Unknown sender policy: message rejected, signals HTTP adapter to return 403
   | OutboundBlockedEvent  // Outbound content filter: message blocked before delivery (#38)
+  | OutboundDeliveredEvent // Outbound delivery: wire-level send succeeded (#729)
   | OutboundPiiRedactedEvent // Outbound PII redaction: PII scrubbed before delivery (#249)
   | OutboundNotificationEvent // System notifications routed through safety pipeline (#206)
   | ScheduleCreatedEvent   // Scheduler: job created
@@ -855,6 +895,23 @@ export function createOutboundMessage(
     id: randomUUID(),
     timestamp: new Date(),
     type: 'outbound.message',
+    sourceLayer: 'dispatch',
+    payload: rest,
+    parentEventId,
+  };
+}
+
+export function createOutboundDelivered(
+  // parentEventId is optional — dispatcher-routed sends pass the
+  // outbound.message event ID; skill-invoked sends omit it (the taskEventId
+  // field in the payload preserves the audit chain).
+  payload: OutboundDeliveredPayload & { parentEventId?: string },
+): OutboundDeliveredEvent {
+  const { parentEventId, ...rest } = payload;
+  return {
+    id: randomUUID(),
+    timestamp: new Date(),
+    type: 'outbound.delivered',
     sourceLayer: 'dispatch',
     payload: rest,
     parentEventId,
