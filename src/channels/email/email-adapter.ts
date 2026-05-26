@@ -505,7 +505,7 @@ export class EmailAdapter {
         subject: `Re: ${baseSubject}`,
         body,
         replyToMessageId: threadMessage.id,
-        ...(htmlQuote ? { htmlQuote } : {}),
+        htmlQuote,
         ...(ccAddresses.length > 0 ? { cc: ccAddresses } : {}),
       };
 

@@ -75,9 +75,10 @@ export class CeoInboxDraftReplyHandler implements SkillHandler {
 
       // Nylas v3 does not auto-populate the subject from reply_to_message_id —
       // we must set it explicitly or the draft lands with a blank subject.
-      const replySubject = original.subject.startsWith('Re: ')
-        ? original.subject
-        : `Re: ${original.subject}`;
+      // Strip existing Re: prefix (case-insensitive) before prepending our own to
+      // avoid "Re: RE: Re: ..." chains — matches the pattern used by email-reply
+      // and email-adapter.
+      const replySubject = `Re: ${original.subject.replace(/^Re:\s*/i, '')}`;
 
       ctx.log.info(
         { replyToMessageId, toCount: to.length, ccCount: cc.length, replySubject },
@@ -87,9 +88,15 @@ export class CeoInboxDraftReplyHandler implements SkillHandler {
       // Convert the LLM-authored markdown body to HTML before combining with the
       // quote — this path bypasses the gateway, so markdownToHtml is not called there.
       // Formatting is non-fatal — a failure must not block draft creation.
-      let quotedBody = markdownToHtml(body);
+      const htmlBody = markdownToHtml(body);
+      let draftBody = htmlBody;
       try {
-        quotedBody = quotedBody + buildReplyQuote(original, ctx.timezone, { format: 'html' });
+        const htmlQuote = buildReplyQuote(original, ctx.timezone, { format: 'html' });
+        // Apply the same size guard used by the other reply callers — a long quoted
+        // thread should not produce an oversized Nylas draft payload.
+        if (htmlBody.length + htmlQuote.length <= 50_000) {
+          draftBody = htmlBody + htmlQuote;
+        }
       } catch (err) {
         ctx.log.warn(
           { err, replyToMessageId },
@@ -100,7 +107,7 @@ export class CeoInboxDraftReplyHandler implements SkillHandler {
       const draft = await client.createDraftReply({
         replyToMessageId,
         subject: replySubject,
-        body: quotedBody,
+        body: draftBody,
         to,
         cc,
       });

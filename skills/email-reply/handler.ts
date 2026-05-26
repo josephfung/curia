@@ -135,7 +135,7 @@ export class EmailReplyHandler implements SkillHandler {
         subject: replySubject,
         body,
         replyToMessageId,
-        ...(htmlQuote ? { htmlQuote } : {}),
+        htmlQuote,
         ...(ccAddresses ? { cc: ccAddresses } : {}),
       });
 
