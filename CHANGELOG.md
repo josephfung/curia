@@ -17,6 +17,13 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 - **`outbound.delivered`** — canonical audit event emitted by the gateway after every successful email or Signal send, closing the visibility gap for skill-invoked sends. HTTP/web conversations are already captured by `agent.response`; CLI is dev-only and excluded by design. (#729)
 
+### Fixed
+
+- **`calendar-list-events`** — added optional `contactId` input so scheduled agents can look up calendars by contact UUID (e.g. `${principal_contact_id}`) instead of relying on caller identity, which is `"system"` in cron context and was causing a hard failure on every `meeting-debrief` tick.
+- **`meeting-debrief`** — Step 2 now passes `contactId: ${principal_contact_id}` to `calendar-list-events`, eliminating the first-turn failure and the LLM fallback that sometimes guessed an invalid calendar ID.
+- **`scheduler-report`, `scheduler-list`** — removed `sensitivity: elevated`; these are agent self-management reads/writes, not principal-gated operations. `meeting-debrief` was burning 6+ blocked turns per scheduled run trying to persist state it could never write.
+- **`ceo-inbox-read`** — increased timeout from 15 s to 30 s to accommodate Nylas API latency spikes that were intermittently aborting email reads.
+
 ### Added
 
 - **`${principal_contact_id}` runtime placeholder** — agent system prompts can now reference the principal's contact ID directly; `meeting-debrief` and `calendar` no longer call `contact-lookup` by role on every invocation. (#716)
