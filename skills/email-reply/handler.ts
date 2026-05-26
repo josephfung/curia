@@ -137,6 +137,9 @@ export class EmailReplyHandler implements SkillHandler {
         replyToMessageId,
         htmlQuote,
         ...(ccAddresses ? { cc: ccAddresses } : {}),
+      }, {
+        taskEventId: ctx.taskEventId,
+        conversationId: ctx.conversationId,
       });
 
       if (!result.success) {
