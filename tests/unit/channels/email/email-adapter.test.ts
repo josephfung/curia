@@ -314,8 +314,34 @@ describe('EmailAdapter — sendOutboundReply', () => {
     // No body content after the headers (Subject: is the last line)
     expect(callArg.body).toMatch(/Subject:.*$/m);
     // No warning — buildReplyQuote succeeded
-    expect(warnSpy).not.toHaveBeenCalledWith(
-      expect.anything(),
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it('sends without quote and logs warning when buildReplyQuote throws', async () => {
+    // Force buildReplyQuote to throw by providing a null `to` field (null.map() throws
+    // TypeError inside buildReplyQuote). The adapter only accesses `to` when the latest
+    // message is ours; since `from` here is the human's address, `latestIsOurs` is false
+    // and recipient resolution succeeds — the throw happens inside buildReplyQuote itself.
+    // This exercises the try/catch at email-adapter.ts:486-496.
+    const throwingMessage = {
+      ...makeMockMessage({
+        from: [{ email: CEO_EMAIL }],
+        to: [{ email: SELF_EMAIL }],
+      }),
+      to: null as unknown as Array<{ email: string }>,
+    };
+    (mocks.outboundGateway.listEmailMessages as ReturnType<typeof vi.fn>).mockResolvedValue([throwingMessage]);
+    const warnSpy = vi.spyOn(mocks.logger, 'warn');
+
+    await triggerOutbound(makeOutboundEvent('email:thread-abc'));
+
+    // Send still happens — unquoted
+    expect(mocks.outboundGateway.send).toHaveBeenCalledOnce();
+    const callArg = (mocks.outboundGateway.send as ReturnType<typeof vi.fn>).mock.calls[0]![0];
+    expect(callArg.body).toBe('Here is my reply.');
+    expect(callArg.body).not.toContain('---------- Original Message ----------');
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ threadId: 'thread-abc' }),
       expect.stringContaining('failed to build reply quote'),
     );
   });
