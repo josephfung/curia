@@ -178,4 +178,16 @@ describe('interpolateRuntimeContext', () => {
     // (matches existing behavior — see the JSDoc on interpolateRuntimeContext).
     expect(out).toBe(`\${office_identity_block} | ${VALID_UUID}`);
   });
+
+  it('strips ${agent_contact_id} to empty when agentContactId is omitted (call-site contract)', () => {
+    // Documents the trap that surfaced in PR #736 / Codeant comment 3305132768:
+    // interpolateRuntimeContext runs its full replace chain unconditionally,
+    // including the ${agent_contact_id} clause. Call sites in src/index.ts that
+    // process prompts referencing ${agent_contact_id} (e.g. calendar.yaml line
+    // 20) MUST pass agentContactId — otherwise the placeholder is blanked.
+    const out = interpolateRuntimeContext('id=${agent_contact_id}', {
+      principalContactId: VALID_UUID,
+    });
+    expect(out).toBe('id=');
+  });
 });
