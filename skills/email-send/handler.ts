@@ -144,6 +144,9 @@ export class EmailSendHandler implements SkillHandler {
         cc: ccAddresses,
         replyToMessageId,
         htmlQuote,
+      }, {
+        taskEventId: ctx.taskEventId,
+        conversationId: ctx.conversationId,
       });
 
       if (!result.success) {
