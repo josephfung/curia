@@ -290,9 +290,9 @@ describe('EmailAdapter — sendOutboundReply', () => {
     expect(callArg.body).toMatch(/Date: 2023-11-14, 5:13 PM EST/);
   });
 
-  it('sends without quote when buildReplyQuote throws', async () => {
-    // Match the email-reply skill's pattern: a message with body undefined causes
-    // htmlToPlainText(undefined) inside buildReplyQuote to throw. The recipient-
+  it('sends with quote headers (bodyless) when original body is undefined', async () => {
+    // htmlToText(undefined) returns '' gracefully, so buildReplyQuote succeeds and
+    // produces a quote block with headers but no body section. The recipient-
     // resolution code only touches from/to, so it still resolves cleanly.
     const brokenMessage = {
       ...makeMockMessage({
@@ -306,13 +306,16 @@ describe('EmailAdapter — sendOutboundReply', () => {
 
     await triggerOutbound(makeOutboundEvent('email:thread-abc'));
 
-    // Send still happens — unquoted
+    // Send still happens — quoted headers are included, body section is omitted
     expect(mocks.outboundGateway.send).toHaveBeenCalledOnce();
     const callArg = (mocks.outboundGateway.send as ReturnType<typeof vi.fn>).mock.calls[0]![0];
-    expect(callArg.body).toBe('Here is my reply.');
-    expect(callArg.body).not.toContain('---------- Original Message ----------');
-    expect(warnSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ threadId: 'thread-abc' }),
+    expect(callArg.body).toContain('Here is my reply.');
+    expect(callArg.body).toContain('---------- Original Message ----------');
+    // No body content after the headers (Subject: is the last line)
+    expect(callArg.body).toMatch(/Subject:.*$/m);
+    // No warning — buildReplyQuote succeeded
+    expect(warnSpy).not.toHaveBeenCalledWith(
+      expect.anything(),
       expect.stringContaining('failed to build reply quote'),
     );
   });
