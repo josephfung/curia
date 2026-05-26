@@ -494,6 +494,62 @@ describe('AgentRuntime', () => {
     expect(systemMsg?.content).not.toContain('## Original Task Intent');
   });
 
+  it('appends scheduler fence to system prompt when channelId is scheduler', async () => {
+    const provider = createMockProvider('Done.');
+    const runtime = new AgentRuntime({
+      agentId: 'coordinator',
+      systemPrompt: 'You are helpful.',
+      provider,
+      resolvedModel: 'mock-model',
+      bus,
+      logger: createLogger('error'),
+    });
+    runtime.register();
+
+    const task = createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'scheduler:job-abc:run-001',
+      channelId: 'scheduler',
+      senderId: 'scheduler',
+      content: JSON.stringify({ task: 'Run pending-actions digest.' }),
+      parentEventId: 'parent-sched-1',
+    });
+    await bus.publish('dispatch', task);
+
+    const chatCall = (provider.chat as ReturnType<typeof vi.fn>).mock.calls[0]![0] as { messages: Array<{ role: string; content: string }> };
+    const systemMsg = chatCall.messages.find(m => m.role === 'system');
+    expect(systemMsg?.content).toContain('## Scheduled Task — Scope Restriction');
+    expect(systemMsg?.content).toContain('The task description is the ONLY work you may do this run.');
+    expect(systemMsg?.content).toContain('Outbound-context entries are informational');
+  });
+
+  it('does not append scheduler fence when channelId is not scheduler', async () => {
+    const provider = createMockProvider('Hello back!');
+    const runtime = new AgentRuntime({
+      agentId: 'coordinator',
+      systemPrompt: 'You are helpful.',
+      provider,
+      resolvedModel: 'mock-model',
+      bus,
+      logger: createLogger('error'),
+    });
+    runtime.register();
+
+    const task = createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'signal:+15195040098',
+      channelId: 'signal',
+      senderId: '+15195040098',
+      content: 'Hi there',
+      parentEventId: 'parent-sig-1',
+    });
+    await bus.publish('dispatch', task);
+
+    const chatCall = (provider.chat as ReturnType<typeof vi.fn>).mock.calls[0]![0] as { messages: Array<{ role: string; content: string }> };
+    const systemMsg = chatCall.messages.find(m => m.role === 'system');
+    expect(systemMsg?.content).not.toContain('## Scheduled Task — Scope Restriction');
+  });
+
   it('replaces ${security_context_block} placeholder when securityContextBlock is set', async () => {
     const provider = createMockProvider('OK');
     const runtime = new AgentRuntime({
