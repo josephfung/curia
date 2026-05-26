@@ -265,7 +265,7 @@ describe('EmailAdapter — sendOutboundReply', () => {
 
     await triggerOutbound(makeOutboundEvent('email:thread-abc'));
 
-    const callArg = (mocks.outboundGateway.send as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    const callArg = (mocks.outboundGateway.send as ReturnType<typeof vi.fn>).mock.calls[0]![0];
     expect(callArg.body).toContain('Here is my reply.');
     expect(callArg.body).toContain('---------- Original Message ----------');
     expect(callArg.body).toContain('From: CEO <ceo@example.com>');
@@ -286,7 +286,7 @@ describe('EmailAdapter — sendOutboundReply', () => {
 
     await triggerOutbound(makeOutboundEvent('email:thread-abc'));
 
-    const callArg = (mocks.outboundGateway.send as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    const callArg = (mocks.outboundGateway.send as ReturnType<typeof vi.fn>).mock.calls[0]![0];
     expect(callArg.body).toMatch(/Date: 2023-11-14, 5:13 PM EST/);
   });
 
@@ -308,7 +308,7 @@ describe('EmailAdapter — sendOutboundReply', () => {
 
     // Send still happens — unquoted
     expect(mocks.outboundGateway.send).toHaveBeenCalledOnce();
-    const callArg = (mocks.outboundGateway.send as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    const callArg = (mocks.outboundGateway.send as ReturnType<typeof vi.fn>).mock.calls[0]![0];
     expect(callArg.body).toBe('Here is my reply.');
     expect(callArg.body).not.toContain('---------- Original Message ----------');
     expect(warnSpy).toHaveBeenCalledWith(
@@ -331,7 +331,7 @@ describe('EmailAdapter — sendOutboundReply', () => {
     // The agent's own reply is short — the *quote* is what would tip it over.
     await triggerOutbound(makeOutboundEvent('email:thread-abc'));
 
-    const callArg = (mocks.outboundGateway.send as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    const callArg = (mocks.outboundGateway.send as ReturnType<typeof vi.fn>).mock.calls[0]![0];
     expect(callArg.body).toBe('Here is my reply.');
     expect(callArg.body).not.toContain('---------- Original Message ----------');
   });
