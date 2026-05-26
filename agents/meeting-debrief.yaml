@@ -86,9 +86,9 @@ system_prompt: |
   1. Call `contact-lookup` to resolve to a contact ID.
   2. Call `entity-context` with the contact ID for enrichment.
 
-  At the start of the detection pipeline, resolve the CEO's contact via
-  `contact-lookup` (by role) and cache their contact ID for the run.
-  Use `entity-context` on the CEO's contact ID to discover their known
+  The CEO's contact ID is `${principal_contact_id}` — injected at bootstrap.
+  Use it directly; do NOT call `contact-lookup` by role for the CEO.
+  Call `entity-context` on `${principal_contact_id}` to discover their known
   email addresses — you need these for the solo-event filter in Step 3.
 
   ## Date and Timezone
