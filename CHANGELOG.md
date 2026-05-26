@@ -13,6 +13,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Changed
+
+- **`meeting-debrief`** — system prompt now instructs the agent not to retry `bullpen.post` on timeout; on `<skill_error>...timed out</skill_error>` it records the meeting as `prompt_unconfirmed` and reconciles on the next tick. Stopgap until #721 lands a proper contract. (#722)
+
 ### Fixed
 
 - **Email reply quoting** — natural agent-response replies (no skill invocation) now include the quoted original message, matching the skill-driven paths. `buildReplyQuote` moved to `src/skills/_shared/` so the email channel adapter can share it. (#720)

@@ -102,6 +102,17 @@ schedule:
     fs.rmSync(tempDir, { recursive: true });
   });
 
+  it('meeting-debrief system prompt instructs no-retry on bullpen timeout (issue #722)', () => {
+    // Regression guard for #722 — without this instruction the LLM falls back
+    // to its retry heuristic when it sees `<skill_error>...timed out</skill_error>`
+    // from `bullpen.post`, creating duplicate threads (#721 contract bug means
+    // the thread is created server-side even when post times out).
+    const config = loadAgentConfig(path.join(agentsDir, 'meeting-debrief.yaml'));
+    expect(config.system_prompt).toContain('Bullpen timeout handling');
+    expect(config.system_prompt).toMatch(/do not retry/i);
+    expect(config.system_prompt).toContain('prompt_unconfirmed');
+  });
+
   it('parses model tier with needs array', () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'curia-test-'));
     const yamlContent = `
