@@ -95,6 +95,17 @@ const MODEL_REGISTRY: Record<string, ModelMetadata> = {
     capabilities: ['coding'],
     maxOutputTokens: 8_192,
   },
+  // TODO: verify pricing against OpenRouter's pricing page — using v3 rates as placeholder.
+  'deepseek/deepseek-v4-pro': {
+    provider: 'openrouter',
+    contextWindow: 128_000,
+    pricing: {
+      inputPerMToken: 0.27,
+      outputPerMToken: 1.10,
+    },
+    capabilities: ['coding', 'reasoning'],
+    maxOutputTokens: 8_192,
+  },
   'openai/gpt-4o': {
     provider: 'openrouter',
     contextWindow: 128_000,

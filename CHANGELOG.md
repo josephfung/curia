@@ -13,6 +13,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Added
+
+- **`deepseek/deepseek-v4-pro`** — added to model registry so it can be used as a standard-tier model in deployment config.
+
 ### Fixed
 
 - **Delegated specialist `ctx.caller`** — the agent runtime now synthesizes `CallerContext` from `taskMetadata.originator` when `senderContext` is absent, so specialists invoked by `delegate` always have `ctx.caller` populated. (#710)
