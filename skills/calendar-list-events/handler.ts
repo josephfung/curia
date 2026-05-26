@@ -47,6 +47,22 @@ export class CalendarListEventsHandler implements SkillHandler {
       if (calendarId && typeof calendarId === 'string') {
         calendarIds = [calendarId];
       } else if (ctx.contactService && ctx.caller) {
+        // Two non-UUID sentinel values can appear in ctx.caller.contactId:
+        //   'system'       — scheduled-job invocations (see makeSystemOriginator in contacts/principal.ts)
+        //   'primary-user' — CLI sessions where the principal DB lookup failed at bootstrap
+        // Both cause a Postgres parse error if passed to a UUID column.
+        // Reject early with an actionable message so the LLM can retry with an explicit calendarId.
+        const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+        if (!UUID_RE.test(ctx.caller.contactId)) {
+          ctx.log.warn(
+            { contactId: ctx.caller.contactId },
+            'calendar-list-events: rejecting non-UUID contactId — calendarId is required for system-context invocations',
+          );
+          return {
+            success: false,
+            error: `calendarId is required when invoked from a non-contact-resolved context (caller contactId "${ctx.caller.contactId}" is not a UUID)`,
+          };
+        }
         const calendars = await ctx.contactService.getCalendarsForContact(ctx.caller.contactId);
         if (calendars.length === 0) {
           return { success: false, error: 'No calendars registered for this contact — register a calendar first' };

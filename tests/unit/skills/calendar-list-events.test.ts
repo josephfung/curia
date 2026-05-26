@@ -134,7 +134,7 @@ describe('CalendarListEventsHandler', () => {
       {
         nylasCalendarClient: nylasCalendarClient as never,
         contactService: contactService as never,
-        caller: { contactId: 'primary-user', role: 'ceo', channel: 'cli' },
+        caller: { contactId: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890', role: 'ceo', channel: 'cli' },
       },
     ));
 
@@ -143,7 +143,7 @@ describe('CalendarListEventsHandler', () => {
     expect(nylasCalendarClient.listEvents).toHaveBeenCalledTimes(2);
     expect(nylasCalendarClient.listEvents).toHaveBeenCalledWith('cal-work', '2026-04-01T00:00:00Z', '2026-04-02T00:00:00Z', undefined);
     expect(nylasCalendarClient.listEvents).toHaveBeenCalledWith('cal-personal', '2026-04-01T00:00:00Z', '2026-04-02T00:00:00Z', undefined);
-    expect(contactService.getCalendarsForContact).toHaveBeenCalledWith('primary-user');
+    expect(contactService.getCalendarsForContact).toHaveBeenCalledWith('a1b2c3d4-e5f6-7890-abcd-ef1234567890');
   });
 
   it('merges and sorts events from multiple calendars chronologically', async () => {
@@ -171,7 +171,7 @@ describe('CalendarListEventsHandler', () => {
       {
         nylasCalendarClient: nylasCalendarClient as never,
         contactService: contactService as never,
-        caller: { contactId: 'primary-user', role: 'ceo', channel: 'cli' },
+        caller: { contactId: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890', role: 'ceo', channel: 'cli' },
       },
     ));
 
@@ -371,7 +371,7 @@ describe('CalendarListEventsHandler', () => {
       {
         nylasCalendarClient: nylasCalendarClient as never,
         contactService: contactService as never,
-        caller: { contactId: 'primary-user', role: 'ceo', channel: 'cli' },
+        caller: { contactId: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890', role: 'ceo', channel: 'cli' },
       },
     ));
 
@@ -402,7 +402,7 @@ describe('CalendarListEventsHandler', () => {
       {
         nylasCalendarClient: nylasCalendarClient as never,
         contactService: contactService as never,
-        caller: { contactId: 'primary-user', role: 'ceo', channel: 'cli' },
+        caller: { contactId: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890', role: 'ceo', channel: 'cli' },
       },
     ));
 
@@ -428,7 +428,7 @@ describe('CalendarListEventsHandler', () => {
       {
         nylasCalendarClient: nylasCalendarClient as never,
         contactService: contactService as never,
-        caller: { contactId: 'primary-user', role: 'ceo', channel: 'cli' },
+        caller: { contactId: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890', role: 'ceo', channel: 'cli' },
       },
     ));
 
@@ -457,7 +457,7 @@ describe('CalendarListEventsHandler', () => {
       {
         nylasCalendarClient: nylasCalendarClient as never,
         contactService: contactService as never,
-        caller: { contactId: 'primary-user', role: 'ceo', channel: 'cli' },
+        caller: { contactId: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890', role: 'ceo', channel: 'cli' },
       },
     ));
 
