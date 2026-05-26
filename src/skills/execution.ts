@@ -547,7 +547,7 @@ export class ExecutionLayer {
       timezone: this.timezone,
       // Expose Curia's own email address so email skills can filter self from CC lists.
       selfEmail: this.selfEmail,
-      // Configurable fallback timeout for the delegate skill (sourced from config.delegate.default_timeout_ms).
+      // Configurable fallback timeout for the delegate skill (sourced from config.delegate.defaultTimeoutMs).
       defaultDelegateTimeoutMs: this.defaultDelegateTimeoutMs,
     };
 

@@ -13,13 +13,6 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
-### Changed
-
-- **Delegate timeout** — `DEFAULT_SPECIALIST_TIMEOUT_MS` moved from a hardcoded constant to `config.delegate.default_timeout_ms` (default 90s); deployments can override in `local.yaml` to match their standard-tier model latency without a code change. (#713)
-- **Scheduler recovery timeout** — `DEFAULT_EXPECTED_DURATION_SECONDS` moved to `config.scheduler.default_expected_duration_seconds` (default 600s); deployments can adjust the watchdog fallback without patching the runtime. (#713)
-- **Scheduled task durations** — `expectedDurationSeconds` bumped across coordinator (120→360s) and contacts (dedup 300→900s, daily promotion 180→540s) scheduled tasks to reflect higher-latency standard-tier model. (#713)
-- **`SkillContext`** — added `defaultDelegateTimeoutMs?: number` field (sourced from config, read by the delegate skill). (#713)
-
 ### Fixed
 
 - **Delegated specialist `ctx.caller`** — the agent runtime now synthesizes `CallerContext` from `taskMetadata.originator` when `senderContext` is absent, so specialists invoked by `delegate` always have `ctx.caller` populated. (#710)
@@ -50,6 +43,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
+- **Delegate timeout** — `DEFAULT_SPECIALIST_TIMEOUT_MS` moved from a hardcoded constant to `config.delegate.defaultTimeoutMs` (default 90s); deployments can override in `local.yaml` to match their standard-tier model latency without a code change. (#713)
+- **Scheduler recovery timeout** — `DEFAULT_EXPECTED_DURATION_SECONDS` moved to `config.scheduler.defaultExpectedDurationSeconds` (default 600s); deployments can adjust the watchdog fallback without patching the runtime. (#713)
+- **Scheduled task durations** — `expectedDurationSeconds` bumped across coordinator (120→360s) and contacts (dedup 300→900s, daily promotion 180→540s) scheduled tasks to reflect higher-latency standard-tier model. (#713)
+- **`SkillContext`** — added `defaultDelegateTimeoutMs?: number` field (sourced from config, read by the delegate skill). (#713)
 - **Multi-turn clarification protocol** — moved from hand-written prompt conventions (~145 lines across coordinator + research-analyst YAML) to a code-backed `request-clarification` skill with runtime short-circuit and DelegateHandler resume_token support. Coordinator prompt reduced by ~50 lines, research-analyst by ~55 lines.
 - **`turn-budget`** — added anti-retry, error acceptance, and structured output guidance; proximity threshold widened from 3 to 5 turns remaining. (#689)
 - **`ceo-inbox-draft-reply` / `email-draft-save` / `email-send` / `email-reply`** — reply drafts and sends now include the quoted original message body below the reply text, matching standard email client behaviour. (#673)
