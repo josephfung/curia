@@ -14,6 +14,9 @@ import type { ContactService } from '../../contacts/contact-service.js';
 import { convertNylasMessage } from './message-converter.js';
 import { createInboundMessage, type OutboundMessageEvent, type OutboundNotificationEvent } from '../../bus/events.js';
 import { sanitizeOutput } from '../../skills/sanitize.js';
+import { buildReplyQuote } from './reply-quote.js';
+
+const MAX_BODY_LENGTH = 50000;
 
 // ---------------------------------------------------------------------------
 // Address normalization helpers
@@ -47,6 +50,8 @@ export interface EmailAdapterConfig {
   pollingIntervalMs: number;
   /** This account's own email address — used to filter out self-sent messages */
   selfEmail: string;
+  /** IANA timezone used when rendering reply quote timestamps. */
+  timezone?: string;
   /**
    * Additional sender addresses to suppress, beyond selfEmail.
    * Case-insensitive.
@@ -465,12 +470,25 @@ export class EmailAdapter {
       // "Re: Re: Re: ..." chains when replying to already-replied threads.
       const baseSubject = threadMessage.subject.replace(/^Re:\s*/i, '');
 
+      let quotedBody = outbound.payload.content;
+      try {
+        const candidate = outbound.payload.content + buildReplyQuote(threadMessage, this.config.timezone);
+        // The agent-authored body is already bounded by upstream paths; the quote can
+        // still push a long reply over the gateway limit, so drop only the quote.
+        quotedBody = candidate.length <= MAX_BODY_LENGTH ? candidate : outbound.payload.content;
+      } catch (err) {
+        logger.warn(
+          { err, threadId, messageId: threadMessage.id },
+          'sendOutboundReply: buildReplyQuote failed — sending without quote',
+        );
+      }
+
       const sendRequest = {
         channel: 'email' as const,
         accountId: this.config.accountId,
         to: recipientEmail,
         subject: `Re: ${baseSubject}`,
-        body: outbound.payload.content,
+        body: quotedBody,
         replyToMessageId: threadMessage.id,
         ...(ccAddresses.length > 0 ? { cc: ccAddresses } : {}),
       };

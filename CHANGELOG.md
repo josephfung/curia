@@ -39,6 +39,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **Natural email replies include quote blocks** — `EmailAdapter.sendOutboundReply()` now appends the original message quote on plain agent-response replies, with the same timezone-aware formatter and safe fallback used by the email reply skills. (#720)
 - **Delegated specialist auth and identity** — `ctx.caller` is synthesized from `taskMetadata.originator` when `senderContext` is absent (#710); `contact-merge` stale guard removed; `contact-grant-permission` falls back to originator contactId; `contact-lookup` returns status and identities and documents the `by: "channel"` input. (#711)
 - **Authorization boundary hardening** — role names lowercased before config lookup (so `'Spouse'` matches `spouse`); effective trust is `max(channelTrust, contactTrustLevel)` so confirmed contacts with explicit `trust_level` grants aren't downgraded by the channel floor (the CEO can now request own calendar via email); `trust_level_defaults` fallback for free-text roles; unknown trust values throw and degrade safely instead of silently collapsing; `trust_level_defaults` validated at startup. (#707)
 - **Email case sensitivity** — `linkIdentity` normalizes to lowercase; `resolveByChannelIdentity` is case-insensitive; migration 044 adds a functional unique index on `LOWER(channel_identifier)`.

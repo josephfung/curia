@@ -967,6 +967,7 @@ async function main(): Promise<void> {
         contactService,
         pollingIntervalMs: config.nylasPollingIntervalMs,
         selfEmail: account.selfEmail,
+        timezone: config.timezone,
         excludedSenderEmails: account.excludedSenderEmails,
         ceoEmail: config.ceoPrimaryEmail,
         contactCreationMaxPerMessage: yamlConfig.contact_creation_limits?.max_per_message ?? 10,

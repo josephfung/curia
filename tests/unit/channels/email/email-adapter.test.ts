@@ -67,6 +67,7 @@ function makeAdapter(mocks: ReturnType<typeof createMocks>, overrides: Partial<{
   contactCreationMaxPerMessage: number;
   contactCreationMaxPerHour: number;
   ceoEmail: string;
+  timezone: string;
 }> = {}) {
   return new EmailAdapter({
     accountId: 'curia',
@@ -80,6 +81,7 @@ function makeAdapter(mocks: ReturnType<typeof createMocks>, overrides: Partial<{
     contactCreationMaxPerMessage: overrides.contactCreationMaxPerMessage ?? 10,
     contactCreationMaxPerHour: overrides.contactCreationMaxPerHour ?? 100,
     ceoEmail: overrides.ceoEmail ?? CEO_EMAIL,
+    timezone: overrides.timezone ?? 'America/Toronto',
   });
 }
 
@@ -244,6 +246,66 @@ describe('EmailAdapter — sendOutboundReply', () => {
       expect.objectContaining({ replyToMessageId: 'msg-latest' }),
       expect.any(Object),
     );
+  });
+
+  it('appends the original message quote to natural outbound replies', async () => {
+    const threadMessage = makeMockMessage({
+      id: 'msg-quoted',
+      from: [{ email: CEO_EMAIL, name: 'CEO' }],
+      to: [{ email: SELF_EMAIL, name: 'Curia' }],
+      subject: 'Q2 planning',
+      body: '<p>Original plan details.</p>',
+      date: 1700000000,
+    });
+    (mocks.outboundGateway.listEmailMessages as ReturnType<typeof vi.fn>).mockResolvedValue([threadMessage]);
+
+    await triggerOutbound(makeOutboundEvent('email:thread-abc'));
+
+    const sendArg = (mocks.outboundGateway.send as ReturnType<typeof vi.fn>).mock.calls[0][0] as { body: string };
+    expect(sendArg.body).toContain('Here is my reply.');
+    expect(sendArg.body).toContain('---------- Original Message ----------');
+    expect(sendArg.body).toContain('CEO <ceo@example.com>');
+    expect(sendArg.body).toContain('Original plan details.');
+  });
+
+  it('sends the unquoted body when building the natural reply quote fails', async () => {
+    const warnSpy = vi.spyOn(mocks.logger, 'warn');
+    const malformedMessage = {
+      ...makeMockMessage({
+        id: 'msg-bad-quote',
+        from: [{ email: CEO_EMAIL }],
+        to: [{ email: SELF_EMAIL }],
+      }),
+      body: undefined,
+      date: undefined,
+    } as unknown as NylasMessage;
+    (mocks.outboundGateway.listEmailMessages as ReturnType<typeof vi.fn>).mockResolvedValue([malformedMessage]);
+
+    await triggerOutbound(makeOutboundEvent('email:thread-abc'));
+
+    const sendArg = (mocks.outboundGateway.send as ReturnType<typeof vi.fn>).mock.calls[0][0] as { body: string };
+    expect(sendArg.body).toBe('Here is my reply.');
+    expect(sendArg.body).not.toContain('---------- Original Message ----------');
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ messageId: 'msg-bad-quote' }),
+      expect.stringContaining('buildReplyQuote failed'),
+    );
+  });
+
+  it('drops only the quote when it would exceed the email body limit', async () => {
+    const threadMessage = makeMockMessage({
+      id: 'msg-long-quote',
+      from: [{ email: CEO_EMAIL }],
+      to: [{ email: SELF_EMAIL }],
+      body: `<p>${'x'.repeat(50_000)}</p>`,
+    });
+    (mocks.outboundGateway.listEmailMessages as ReturnType<typeof vi.fn>).mockResolvedValue([threadMessage]);
+
+    await triggerOutbound(makeOutboundEvent('email:thread-abc'));
+
+    const sendArg = (mocks.outboundGateway.send as ReturnType<typeof vi.fn>).mock.calls[0][0] as { body: string };
+    expect(sendArg.body).toBe('Here is my reply.');
+    expect(sendArg.body).not.toContain('---------- Original Message ----------');
   });
 });
 
