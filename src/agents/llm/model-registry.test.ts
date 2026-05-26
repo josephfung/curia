@@ -117,9 +117,18 @@ describe('ModelRegistry', () => {
       const meta = registry.getModel('deepseek/deepseek-v4-pro');
       expect(meta).toBeDefined();
       expect(meta!.provider).toBe('openrouter');
-      expect(meta!.contextWindow).toBe(128_000);
+      expect(meta!.contextWindow).toBe(1_000_000);
       expect(meta!.capabilities).toContain('coding');
       expect(meta!.capabilities).toContain('reasoning');
+    });
+
+    it('returns correct pricing for deepseek/deepseek-v4-pro', () => {
+      const pricing = registry.getPricing('deepseek/deepseek-v4-pro');
+      expect(pricing).toBeDefined();
+      expect(pricing!.inputPerMToken).toBe(0.435);
+      expect(pricing!.outputPerMToken).toBe(0.87);
+      expect(pricing!.cacheCreationPerMToken).toBeUndefined();
+      expect(pricing!.cacheReadPerMToken).toBeUndefined();
     });
 
     it('resolves openai/gpt-4o with provider openrouter', () => {
