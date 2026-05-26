@@ -1180,6 +1180,7 @@ export class OutboundGateway {
     // Step 1: Blocked-contact check
     // ------------------------------------------------------------------
     let recipientTrustLevel: TrustLevel | null = null;
+    let recipientContactIdForDraft: string | undefined;
     try {
       const contact = await this.contactService.resolveByChannelIdentity('email', recipientEmail);
       if (contact !== null) {
@@ -1191,6 +1192,7 @@ export class OutboundGateway {
           return { success: false, blockedReason: 'Recipient is blocked' };
         }
         recipientTrustLevel = contact.trustLevel;
+        recipientContactIdForDraft = contact.contactId; // hoisted for outbound.delivered audit
       }
     } catch (err) {
       // Fail-open on DB errors — log at warn so anomalies are visible, but don't
@@ -1320,6 +1322,17 @@ export class OutboundGateway {
     // Step 4: Contact promotion (same as send())
     // ------------------------------------------------------------------
     await this.promoteOrCreateRecipientContact('email', recipientEmail);
+
+    // Emit the audit event — sendEmailDraft() is a genuine wire send and must
+    // produce the same outbound.delivered record as send(). No conversationId
+    // or taskEventId in scope here (the caller doesn't pass them).
+    await this.publishDelivered({
+      channel: 'email',
+      recipientId: recipientEmail,
+      recipientContactId: recipientContactIdForDraft,
+      content: body,
+      messageId: sentMessage.id,
+    });
 
     return { success: true, messageId: sentMessage.id };
   }
