@@ -113,13 +113,15 @@ export class EmailReplyHandler implements SkillHandler {
 
       // Append the quoted original message below the reply body. Formatting is
       // non-fatal — a quote failure must not block the reply from being sent.
-      let quotedBody = body;
+      // htmlQuote is passed separately so it is appended after markdownToHtml(body)
+      // in the gateway, preventing the HTML from being re-escaped.
+      let htmlQuote: string | undefined;
       try {
-        const candidate = body + buildReplyQuote(original, ctx.timezone);
+        const candidate = buildReplyQuote(original, ctx.timezone, { format: 'html' });
         // Skip the quote silently if it would push the body past the size limit
         // (the agent-authored body already passed the guard above; a long thread
         // could tip the combined total over). The reply still goes out unquoted.
-        quotedBody = candidate.length <= MAX_BODY_LENGTH ? candidate : body;
+        htmlQuote = body.length + candidate.length <= MAX_BODY_LENGTH ? candidate : undefined;
       } catch (err) {
         ctx.log.warn(
           { err, replyToMessageId },
@@ -131,8 +133,9 @@ export class EmailReplyHandler implements SkillHandler {
         channel: 'email',
         to: originalFrom,
         subject: replySubject,
-        body: quotedBody,
+        body,
         replyToMessageId,
+        ...(htmlQuote ? { htmlQuote } : {}),
         ...(ccAddresses ? { cc: ccAddresses } : {}),
       });
 

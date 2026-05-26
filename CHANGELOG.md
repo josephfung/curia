@@ -19,6 +19,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
+- **`buildReplyQuote`** — quoted reply blocks are now rendered as a sanitized HTML `<blockquote>` with styled attribution headers instead of plain text; original body HTML is preserved through `sanitize-html` (strips scripts, styles, event handlers, and `javascript:` URLs). `ceo-inbox-draft-reply` now also converts the LLM reply body to HTML before creating the Nylas draft. (#734)
 - **`meeting-debrief`** — system prompt now instructs the agent not to retry `bullpen.post` on timeout; on `<skill_error>...timed out</skill_error>` it records the meeting as `prompt_unconfirmed` and reconciles on the next tick. Stopgap until #721 lands a proper contract. (#722)
 
 ### Fixed

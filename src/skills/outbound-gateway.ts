@@ -53,6 +53,10 @@ export interface EmailSendRequest {
   cc?: string[];
   /** When set, Nylas threads the outbound message as a reply */
   replyToMessageId?: string;
+  /** Pre-formed HTML fragment appended verbatim after markdownToHtml(body).
+   *  Used for the quoted original message block: the HTML quote must not pass
+   *  through markdownToHtml because that converter escapes < and > characters. */
+  htmlQuote?: string;
 }
 
 export interface SignalOutboundRequest {
@@ -1531,7 +1535,8 @@ export class OutboundGateway {
       return { success: false, blockedReason: 'Email client not configured' };
     }
 
-    const htmlBody = markdownToHtml(request.body);
+    // htmlQuote is appended after conversion so it is not re-escaped by markdownToHtml.
+    const htmlBody = markdownToHtml(request.body) + (request.htmlQuote ?? '');
 
     try {
       const sendOptions: SendEmailOptions = {
@@ -1573,7 +1578,8 @@ export class OutboundGateway {
     // markdownToHtml is a pure function (no I/O, no realistic throw path).
     // Called outside the Nylas try-catch so that any future regression in the
     // converter is not silently misattributed as "Nylas send failed" in logs.
-    const htmlBody = markdownToHtml(request.body);
+    // htmlQuote is appended after conversion so it is not re-escaped by markdownToHtml.
+    const htmlBody = markdownToHtml(request.body) + (request.htmlQuote ?? '');
 
     try {
       const sendOptions: SendEmailOptions = {
