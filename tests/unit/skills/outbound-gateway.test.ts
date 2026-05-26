@@ -186,6 +186,52 @@ describe('OutboundGateway', () => {
     expect(mocks.nylasClient.sendMessage).toHaveBeenCalledOnce();
   });
 
+  it('publishes outbound.delivered on a successful email send with payload fields populated', async () => {
+    (mocks.contactService.resolveByChannelIdentity as ReturnType<typeof vi.fn>).mockResolvedValue({
+      contactId: 'contact-42',
+      displayName: 'Rita Recipient',
+      role: null,
+      status: 'confirmed',
+      kgNodeId: null,
+      verified: true,
+      trustLevel: 'medium',
+    });
+
+    const gateway = new OutboundGateway({
+      nylasClients: new Map([['curia', mocks.nylasClient]]),
+      contactService: mocks.contactService,
+      contentFilter: mocks.contentFilter,
+      bus: mocks.bus,
+      principalIdentities: [makePrincipalIdentity('ceo@example.com')],
+      logger: mocks.logger,
+    });
+
+    const result = await gateway.send(baseRequest, {
+      conversationId: 'conv-99',
+      taskEventId: 'task-7',
+      parentEventId: 'outbound-msg-1',
+    });
+
+    expect(result.success).toBe(true);
+
+    const publishCalls = (mocks.bus.publish as ReturnType<typeof vi.fn>).mock.calls;
+    const delivered = publishCalls
+      .map((call) => call[1] as BusEvent)
+      .find((evt) => evt.type === 'outbound.delivered');
+
+    expect(delivered, 'expected exactly one outbound.delivered event').toBeDefined();
+    expect(delivered!.payload).toMatchObject({
+      channel: 'email',
+      recipientId: 'recipient@example.com',
+      recipientContactId: 'contact-42',
+      content: 'Hi there!',
+      conversationId: 'conv-99',
+      taskEventId: 'task-7',
+      messageId: 'msg-123',
+    });
+    expect(delivered!.parentEventId).toBe('outbound-msg-1');
+  });
+
   describe('content filter', () => {
     it('blocks when filter rejects and does not call nylasClient for the original message', async () => {
       // The filter returns a blocked result — the gateway must stop here
