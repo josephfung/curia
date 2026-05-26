@@ -13,6 +13,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Added
+
+- **`${principal_contact_id}` runtime placeholder** — agent system prompts can now reference the principal's contact ID directly; `meeting-debrief` and `calendar` no longer call `contact-lookup` by role on every invocation. (#716)
+
 ### Changed
 
 - **`meeting-debrief`** — system prompt now instructs the agent not to retry `bullpen.post` on timeout; on `<skill_error>...timed out</skill_error>` it records the meeting as `prompt_unconfirmed` and reconciles on the next tick. Stopgap until #721 lands a proper contract. (#722)
