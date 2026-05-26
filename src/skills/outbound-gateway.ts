@@ -751,6 +751,20 @@ export class OutboundGateway {
       if (result.success && request.recipient) {
         await this.promoteOrCreateRecipientContact('signal', request.recipient);
       }
+      // Emit the audit event for all successful Signal sends (both 1:1 and group).
+      // messageId is intentionally omitted — signal-cli RPC returns no ID.
+      if (result.success) {
+        await this.publishDelivered({
+          channel: 'signal',
+          recipientId,
+          recipientContactId,
+          content: redactedBody,
+          conversationId: options?.conversationId,
+          taskEventId: options?.taskEventId,
+          parentEventId: options?.parentEventId,
+          // messageId intentionally omitted — signal-cli RPC returns no ID
+        });
+      }
       return result;
     }
   }

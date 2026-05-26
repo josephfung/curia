@@ -1858,6 +1858,65 @@ describe('isSystemNotification option on send()', () => {
 // still run. See design: docs/wip/2026-05-05-ceo-gate-bypass-design.md
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// outbound.delivered for Signal 1:1 sends — Task 4
+// ---------------------------------------------------------------------------
+
+describe('outbound.delivered on Signal send', () => {
+  it('publishes outbound.delivered on a successful 1:1 Signal send', async () => {
+    const mocks = createMocks();
+
+    const signalClient = {
+      send: vi.fn().mockResolvedValue(undefined),
+      listGroups: vi.fn().mockResolvedValue([]),
+    } as unknown as import('../../../src/channels/signal/signal-rpc-client.js').SignalRpcClient;
+
+    (mocks.contactService.resolveByChannelIdentity as ReturnType<typeof vi.fn>).mockResolvedValue({
+      contactId: 'contact-signal-1',
+      displayName: 'Phone Friend',
+      role: null,
+      status: 'confirmed',
+      kgNodeId: null,
+      verified: true,
+      trustLevel: 'medium',
+    });
+
+    const gateway = new OutboundGateway({
+      signalClient,
+      signalPhoneNumber: '+15550001111',
+      contactService: mocks.contactService,
+      contentFilter: mocks.contentFilter,
+      bus: mocks.bus,
+      principalIdentities: [makePrincipalIdentity('+15550009999', 'signal')],
+      logger: mocks.logger,
+    });
+
+    const result = await gateway.send(
+      { channel: 'signal', recipient: '+15555550123', message: 'pinging you' },
+      { conversationId: 'signal:+15555550123', taskEventId: 'task-99' },
+    );
+
+    expect(result.success).toBe(true);
+
+    const publishCalls = (mocks.bus.publish as ReturnType<typeof vi.fn>).mock.calls;
+    const delivered = publishCalls
+      .map((call) => call[1] as BusEvent)
+      .find((evt) => evt.type === 'outbound.delivered');
+
+    expect(delivered, 'expected outbound.delivered for 1:1 Signal send').toBeDefined();
+    expect(delivered!.payload).toMatchObject({
+      channel: 'signal',
+      recipientId: '+15555550123',
+      recipientContactId: 'contact-signal-1',
+      content: 'pinging you',
+      conversationId: 'signal:+15555550123',
+      taskEventId: 'task-99',
+    });
+    // messageId is intentionally omitted — signal-cli RPC returns no ID
+    expect(delivered!.payload.messageId).toBeUndefined();
+  });
+});
+
 describe('CEO recipient bypass on send()', () => {
   it('bypasses the autonomy gate when recipient is the CEO email and score < 70', async () => {
     const mocks = createMocks();
