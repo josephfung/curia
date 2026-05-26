@@ -1123,7 +1123,7 @@ export class OutboundGateway {
     draftId: string,
     accountId: string | undefined,
     draftMeta: { recipientEmail: string; body: string; subject: string },
-    options?: { humanApproved?: boolean },
+    options?: { humanApproved?: boolean; conversationId?: string; taskEventId?: string; parentEventId?: string },
   ): Promise<OutboundSendResult> {
     // ------------------------------------------------------------------
     // Step 0: Autonomy gate
@@ -1324,14 +1324,16 @@ export class OutboundGateway {
     await this.promoteOrCreateRecipientContact('email', recipientEmail);
 
     // Emit the audit event — sendEmailDraft() is a genuine wire send and must
-    // produce the same outbound.delivered record as send(). No conversationId
-    // or taskEventId in scope here (the caller doesn't pass them).
+    // produce the same outbound.delivered record as send().
     await this.publishDelivered({
       channel: 'email',
       recipientId: recipientEmail,
       recipientContactId: recipientContactIdForDraft,
       content: body,
       messageId: sentMessage.id,
+      conversationId: options?.conversationId,
+      taskEventId: options?.taskEventId,
+      parentEventId: options?.parentEventId,
     });
 
     return { success: true, messageId: sentMessage.id };

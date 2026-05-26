@@ -207,7 +207,7 @@ describe('SendDraftHandler', () => {
       'draft-abc123',
       'personal',
       expect.objectContaining({ recipientEmail: 'kevin@example.com' }),
-      { humanApproved: true },
+      expect.objectContaining({ humanApproved: true }),
     );
   });
 
@@ -223,7 +223,7 @@ describe('SendDraftHandler', () => {
         body: '<p>Hello Kevin</p>',
         subject: 'Re: Project Update',
       },
-      { humanApproved: true },
+      expect.objectContaining({ humanApproved: true }),
     );
   });
 
@@ -295,7 +295,7 @@ describe('SendDraftHandler', () => {
         'draft-abc123',
         'personal',
         expect.objectContaining({ recipientEmail: 'kevin@example.com' }),
-        { humanApproved: true },
+        expect.objectContaining({ humanApproved: true }),
       );
     });
 

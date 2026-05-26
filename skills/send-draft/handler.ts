@@ -121,7 +121,7 @@ export class SendDraftHandler implements SkillHandler {
       draftId,
       resolvedAccount,
       { recipientEmail: recipient, body: draft.body, subject: draft.subject },
-      { humanApproved: true },
+      { humanApproved: true, conversationId: ctx.conversationId, taskEventId: ctx.taskEventId },
     );
 
     if (!sendResult.success) {
