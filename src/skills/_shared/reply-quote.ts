@@ -20,7 +20,7 @@ export interface QuoteableMessage {
   to: Array<{ name?: string; email: string }>;
   date: number;    // Unix epoch seconds
   subject: string;
-  body: string;    // HTML — will be stripped to plain text
+  body: string | undefined | null;  // HTML — will be stripped to plain text; undefined/null treated as empty
 }
 
 /**
