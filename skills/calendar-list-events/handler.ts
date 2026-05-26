@@ -14,6 +14,7 @@
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
 import type { NylasCalendarEvent } from '../../src/channels/calendar/nylas-calendar-client.js';
 import { toLocalIso, formatDisplayTimezone } from '../../src/time/timestamp.js';
+import { isSystemOriginated, isPrincipalOriginated } from '../../src/contacts/principal.js';
 
 export class CalendarListEventsHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {
@@ -57,8 +58,10 @@ export class CalendarListEventsHandler implements SkillHandler {
         //   2. Principal caller (role === 'ceo') — the CEO can look up any contact's calendars
         // This prevents LLM-driven non-principal agents from reading other contacts' calendars
         // by constructing a contactId value.
-        const callerIsSystem = !UUID_RE.test(ctx.caller?.contactId ?? '');
-        const callerIsPrincipal = ctx.caller?.role === 'ceo';
+        // Use trusted originator metadata, not caller shape, to avoid misclassifying
+        // agent-originated delegated tasks (which can have non-UUID contactIds) as system.
+        const callerIsSystem = isSystemOriginated(ctx.taskMetadata);
+        const callerIsPrincipal = isPrincipalOriginated(ctx.taskMetadata);
         if (!callerIsSystem && !callerIsPrincipal) {
           return {
             success: false,
