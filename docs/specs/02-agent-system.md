@@ -302,3 +302,5 @@ All agents receive a `## Current Date & Time` block in their system prompt on ev
 | Dispatch layer — inject office identity (display name, email signature) into outbound | Done |
 | Dispatch layer — check pending Bullpen threads on every routing | Done |
 | Dispatch layer — subscribe to `agent.error` and notify user | Done |
+| Turn budget injection — agent runtime prepends a max-turns budget block to the system prompt, with proximity threshold and anti-retry guidance | Done |
+| CallerContext synthesis — delegated specialist tasks reconstruct a synthetic CallerContext from the originator so skills see consistent caller fields | Done |

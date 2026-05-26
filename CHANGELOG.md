@@ -77,6 +77,14 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 - **`context-memo.ts`** — deleted v1 outbound context memo write path from the dispatcher and removed the `context-memo` module entirely; context bridging now runs exclusively through `OutboundContextService`. (#615)
 - **`docs/superpowers/`** — deleted completed WIP planning docs (alias propagation gaps, principal bypass, Trivy scanning); all three features are merged. Two stale doc references in `agents/contacts.yaml` and `skills/contact-merge/handler.ts` updated to point to `docs/specs/14-autonomy-engine.md`.
+- **Shipped WIP design/plan docs** — deleted 9 `docs/wip/` files whose features have shipped (context bridging v2 design + plan, ceo-inbox bullpen retrofit design + plan, embedding telemetry design + plan, context-bridge auto-registration design + plan, meeting-debrief design); spec 11, spec 17, and ADR-019 are now the source of truth.
+
+### Documentation
+
+- **Spec sync (v0.31)** — updated specs 02, 03, 04, 06, 07, 08, 09, 11, 15, 17 with v0.31 deltas (turn budget, CallerContext synthesis, `allowed_callers` two-tier, `outboundContext` capability, email-reply quoting, `is:unread` search, `human.decision` `deciderId`/`deciderChannel`, auth boundary hardening, declarative-job originator, `delegate.defaultTimeoutMs` / `scheduler.defaultExpectedDurationSeconds` config, `CURIA_TEMPFILE_DIR`, contact auto-promotion, case-insensitive email matching, Bullpen-through-coordinator URGENT alerts, empty-folders guard, draft-reply sender, outbound_context cleanup, meeting-debrief shipped status).
+- **Spec 11 extension** — added Outbound Context Bridge section documenting the v2 architecture (table, service, scoped capability, two-tier TTL, dispatcher injection); cross-referenced from specs 03, 04, 15, 17.
+- **ADR-019** — new ADR recording the v1 context-memo → v2 delegation-aware outbound context decision and consequences.
+- **Dev guides** — `configuration.md` documents new `delegate`, `scheduler`, `debrief` config blocks and `CURIA_TEMPFILE_DIR` env var; `adding-a-skill.md` documents the `outboundContext` capability; `smoke-tests.md` documents the `inspect-prompts` eval-harness refresh workflow.
 
 ## [0.30.0] — 2026-05-22 — "Kaylee Frye"
 

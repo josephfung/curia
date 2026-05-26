@@ -531,3 +531,5 @@ The migration depends on `kg_nodes` existing (for the foreign key), so it must r
 | Integration tests: reactive identity establishment (unknown sender flow) | Not Done |
 | Integration tests: external source enrichment (CRM/calendar → contact) | Not Done |
 | Integration tests: authorization check (role defaults + overrides + trust) | Partial — three-layer logic unit-tested in `authorization.test.ts`; end-to-end integration test not covered |
+| Smart auto-promotion for provisional contacts — outbound email signals (`email-send`, `email-reply`) and calendar signals promote unverified provisional contacts to verified status | Done |
+| Case-insensitive email normalization — `contact-lookup` by email and `contact-merge` for delegated specialists tolerate case differences | Done |

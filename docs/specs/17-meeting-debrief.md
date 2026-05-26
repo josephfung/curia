@@ -145,7 +145,7 @@ When the meeting-debrief agent sends a prompt via Signal, the CEO's response arr
 4. Coordinator judges relevance — if reply relates to an active entry, delegates to the hinted specialist via the existing `delegate` skill
 5. Specialist processes and returns result; coordinator relays in its own voice
 
-**Storage:** Dedicated `outbound_context` Postgres table with structured fields (agent_id, expected_reply, delegation_hint, metadata JSONB, expires_at, released flag). See `docs/wip/2026-05-16-context-bridging-v2-design.md` for full schema.
+**Storage:** Dedicated `outbound_context` Postgres table with structured fields (agent_id, expected_reply, delegation_hint, metadata JSONB, expires_at, released flag). See [spec 11 — Outbound Context Bridge](11-entity-context-enrichment.md#outbound-context-bridge) for the schema, lifecycle, and capability surface. The architectural decision is recorded in [ADR-019](../adr/019-delegation-aware-outbound-context.md).
 
 **Lifecycle:**
 - **Created** atomically with the outbound send (via `context_bridge` param on send skills)
@@ -159,7 +159,7 @@ When the meeting-debrief agent sends a prompt via Signal, the CEO's response arr
 - No dispatcher routing bypass — coordinator is always the entry point
 - Skill registry enforcement: specialist agents do not have outbound communication skills pinned
 
-**Design spec:** `docs/wip/2026-05-16-context-bridging-v2-design.md` (issue #615)
+**Design spec:** [spec 11 §Outbound Context Bridge](11-entity-context-enrichment.md#outbound-context-bridge) + [ADR-019](../adr/019-delegation-aware-outbound-context.md) (issue #615)
 
 ---
 
@@ -326,16 +326,17 @@ These are out of scope for this feature but identified during design:
 | `skills/debrief-status/` | Skill for coordinator to query debrief state |
 | Config additions to `config/default.yaml` | `debrief:` top-level block |
 
-**Prerequisite infrastructure (delivered by #615 — context bridging v2):**
+**Prerequisite infrastructure (delivered by #615 — context bridging v2; see [spec 11 §Outbound Context Bridge](11-entity-context-enrichment.md#outbound-context-bridge)):**
 
 | File | Purpose |
 |---|---|
-| `src/db/migrations/NNN_create_outbound_context.sql` | Dedicated table for context bridge entries |
-| `src/dispatch/outbound-context.ts` | Service class: write, query active, release |
-| `skills/context-bridge-release/` | Coordinator skill to mark entries as released |
-| Updates to `skills/signal-send/`, `skills/email-send/` | Accept optional `context_bridge` param |
-| Update to `src/dispatch/dispatcher.ts` | Read path queries new table for injection |
-| Update to `agents/coordinator.yaml` | Delegation guidance for active context entries |
+| `src/db/migrations/042_create_outbound_context.sql` | Dedicated table for context bridge entries |
+| `src/dispatch/outbound-context.ts` | `OutboundContextService` + `ScopedOutboundContext`: register, query active, release, cleanup |
+| `skills/context-bridge-release/` | Coordinator-only skill to mark entries as released |
+| `src/dispatch/context-bridge-parse.ts` | Shared helper module to normalize `context_bridge` JSON inputs |
+| Updates to `skills/signal-send/`, `skills/email-send/`, `skills/email-reply/` | Unconditional registration on success; honor optional `context_bridge` param |
+| Update to `src/dispatch/dispatcher.ts` | Read path queries `outbound_context` for `[ACTIVE OUTBOUND CONTEXT]` injection |
+| Update to `agents/coordinator.yaml` | Delegation-hint guidance for outbound context entries |
 
 ---
 

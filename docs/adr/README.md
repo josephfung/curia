@@ -40,6 +40,7 @@ Each ADR follows the [Nygard format](https://adr.github.io/):
 | [016](016-mcp-sdk-dependency.md) | Official MCP SDK over hand-rolled transport; registry-transparent skill integration | Accepted |
 | [017](017-ceo-authorized-action-pattern.md) | CEO-authorized action pattern: task-origin check + `humanApproved` flag over per-action gateway methods | Accepted |
 | [018](018-curia-initiated-approval-requests.md) | Curia-initiated approval requests via unified `autonomy_action_log` state machine | Accepted |
+| [019](019-delegation-aware-outbound-context.md) | Delegation-aware outbound context via a dedicated registry (replaces v1 context-memo) | Accepted |
 
 ## Adding new ADRs
 

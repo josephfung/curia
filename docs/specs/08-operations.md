@@ -330,4 +330,8 @@ curia/
 | Non-root container — production image runs as `curia` user | Done |
 | Trivy scanning — filesystem (npm deps + secrets) on every PR; Docker image scan weekly | Done |
 | Branch protection on `main` — required PR review + passing status checks | Done |
+| `CURIA_TEMPFILE_DIR` env var — base directory for the `file-parse` `temp_file_url` path validation (see [spec 03](03-skills-and-execution.md)) | Done |
+| `qs` pinned to ≥ 6.15.2 — closes CVE-2026-8723 | Done |
+| `package-lock.json` (and `yarn.lock`) gitignored — pnpm is the source of truth | Done |
+| `workspace-mcp` upgraded to the `complete` tier — Sheets `create_sheet` and `append_table_rows` available | Done |
 | `curia setup` CLI — guided onboarding wizard for credentials and channel setup | Not Done |

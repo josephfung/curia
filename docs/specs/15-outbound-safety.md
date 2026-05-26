@@ -130,6 +130,10 @@ without cross-channel confirmation.
 | Outbound rate limiting per recipient | Not Done |
 | Blocklist management skills (`outbound-block` / `outbound-unblock`) | Not Done |
 | `outbound.notification` event type (CEO notifications route through the filter pipeline) | Done |
+| Email reply quoting — `email-reply` includes the quoted original message body in drafts and sends; the filter pipeline runs over the full quoted reply | Done |
+| ceo-inbox URGENT alerts route through coordinator via Bullpen — specialist agents no longer call `signal-send` directly; alerts are requested as Bullpen threads mentioning the coordinator (see [spec 17 §4](17-meeting-debrief.md)) | Done |
+| `ceo-inbox-update-folders` empty-folders guard — refuses to PUT an empty folder set to Nylas, preventing accidental folder wipes | Done |
+| `ceo-inbox-draft-reply` — fails on missing sender rather than substituting an `"unknown"` placeholder in the draft | Done |
 
 ---
 

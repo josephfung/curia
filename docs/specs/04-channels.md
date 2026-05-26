@@ -152,3 +152,5 @@ Each adapter implements reconnection with exponential backoff:
 | After max retries: publish `channel.disconnected` and stop | Not Done — event type not emitted; Signal adapter stops but does not publish this event |
 | Health endpoint reports adapter status (connected/disconnected/disabled) | Not Done — health endpoint only reports DB, agents, and skills |
 | Outbound message queue for disconnected channels (max 100, delivered on reconnect) | Not Done |
+| Email reply quoting — `email-reply` appends the quoted original message body to drafts and sends | Done |
+| Email search — `is:unread` is embedded into the Nylas search string when `unread_only` is set alongside a search query | Done |

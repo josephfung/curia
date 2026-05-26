@@ -101,6 +101,47 @@ Skills that return large payloads (web search results, long calendar lists, craw
 
 ---
 
+### `delegate`
+
+Controls how long the coordinator waits for a delegated specialist's reply before timing out.
+
+```yaml
+delegate:
+  defaultTimeoutMs: 90000   # 90 seconds — appropriate for interactive Sonnet-class delegations
+```
+
+Override in `config/local.yaml` to match the deployment's model latency profile. The value is validated at startup; non-numeric or non-positive values cause a hard startup failure.
+
+---
+
+### `scheduler`
+
+Runtime defaults for the scheduler watchdog and recovery logic.
+
+```yaml
+scheduler:
+  defaultExpectedDurationSeconds: 600   # 10 minutes
+```
+
+`defaultExpectedDurationSeconds` is used by the watchdog to compute a recovery timeout (`LEAST(expected × 7.5, expected + 3600)`) for scheduled jobs that don't declare an explicit `expectedDurationSeconds`. Raise this if you run long-running scheduled jobs without explicit duration hints. Validated at startup.
+
+---
+
+### `debrief`
+
+Configures the meeting-debrief specialist agent (see [spec 17](../specs/17-meeting-debrief.md)). The agent itself is defined in `agents/meeting-debrief.yaml`; this block controls the prompt-channel and reply-correlation knobs.
+
+```yaml
+debrief:
+  channel: signal               # channel for debrief prompts (signal | email)
+  reminderDelayMinutes: 120     # minutes before a reminder is sent for unanswered debriefs
+  contextBridgeTtlHours: 48     # TTL for context-bridge entries that link replies back to the debrief agent
+```
+
+`contextBridgeTtlHours` is passed through to the outbound-context registration when the agent sends a debrief prompt — it overrides the global `contextBridge.explicitExpiryHours` default below.
+
+---
+
 ### `contextBridge`
 
 Controls TTL (time-to-live) for outbound context entries — the records that let the coordinator link incoming replies to messages it previously sent.
@@ -262,5 +303,6 @@ Environment variables control secrets and deployment-specific values that must n
 | `SIGNAL_PHONE_NUMBER` | Tier 3 | Enables Signal channel |
 | `TAVILY_API_KEY` | Tier 3 | Enables `web-search` skill |
 | `GOOGLE_APPLICATION_CREDENTIALS` | Optional | Path to service account JSON for Google Drive |
+| `CURIA_TEMPFILE_DIR` | Optional | Base directory under which the `file-parse` skill resolves `temp_file_url` inputs. The skill rejects paths that escape this directory. Defaults to the OS temp dir when unset. |
 
 See [setup.md](setup.md) for a step-by-step walkthrough of setting these up.

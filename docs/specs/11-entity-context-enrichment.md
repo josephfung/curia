@@ -1,6 +1,6 @@
 # 11 — Entity Context Enrichment
 
-**Date:** 2026-04-02
+**Date:** 2026-04-02 (extended 2026-05-23 with Outbound Context Bridge)
 **Status:** Draft
 
 ## Overview
@@ -415,6 +415,109 @@ Calendars, email accounts, and CRM connections have fundamentally different sche
 
 ---
 
+## Outbound Context Bridge
+
+Entity context enrichment, as described above, answers the question *"what do we know about this entity?"* The **outbound context bridge** answers the complementary question for inbound messages: *"what did we previously send that this might be a reply to, and which agent should hear about it?"*
+
+Both systems are read-time enrichment layers consumed by the dispatcher before agents see inbound content. Entity context flows from the knowledge graph; outbound context flows from a dedicated registry of recent outbound messages.
+
+The design decision behind this subsystem — and the reasons it replaces the v1 `context-memo` body-embedded approach — is recorded in [ADR-019](../adr/019-delegation-aware-outbound-context.md).
+
+### Why a Registry, Not a Memo
+
+The first version (v1) of this feature persisted outbound context as an opaque memo string embedded in the outbound message body itself. That approach was channel-coupled, fragile under reply-quote trimming, and unable to support channels without a body field. It also offered no expiry, no release semantics, and no surface for non-send-skill agents (e.g., the meeting-debrief agent) to claim a reply thread.
+
+The v2 design moves outbound context into a dedicated table with a service layer and a scoped skill capability. See ADR-019 for the full rationale.
+
+### The `outbound_context` Table
+
+A single table records every outbound message Curia sends, with enough metadata for the dispatcher to inject context on matching inbound replies.
+
+| Column | Type | Purpose |
+|---|---|---|
+| `id` | `UUID` | Primary key |
+| `conversation_id` | `TEXT` | Conversation the outbound belongs to (scopes the read query) |
+| `channel_id` | `TEXT` | Channel the message was sent on (`email`, `signal`, future) |
+| `agent_id` | `TEXT` | Originating agent (`coordinator`, `research-analyst`, `meeting-debrief`, ...) |
+| `content_preview` | `TEXT` | Truncated message body (≤ 300 chars) for the LLM to recognize the thread |
+| `expected_reply` | `TEXT?` | Free-form hint about what reply the agent is expecting |
+| `delegation_hint` | `TEXT?` | Free-form hint about how a reply should be handled or routed |
+| `metadata` | `JSONB?` | Structured delegation context (e.g. `resume_tokens` for multi-turn clarification); capped at 16 KB |
+| `created_at` | `TIMESTAMPTZ` | Insert time |
+| `expires_at` | `TIMESTAMPTZ` | Auto-expiry deadline |
+| `released` | `BOOLEAN` | `true` once an agent explicitly closes the thread |
+
+A partial index `(expires_at, created_at DESC) WHERE released = false` covers the dispatcher's hot read.
+
+### `OutboundContextService`
+
+Owns all CRUD against `outbound_context`. Two surfaces:
+
+1. **Full service** — held by the dispatcher and other system-layer code. Methods include `register()`, `getActive(limit)`, `release(id, conversationId?)`, `cleanupExpired()`, and `formatInjectionBlock(entries, originalContent)`.
+
+2. **`ScopedOutboundContext`** — a per-conversation wrapper exposed to skills via the `outboundContext` capability. Pre-binds `conversationId` so skills don't need to know it. Exposes only `register` and `release`, plus `defaultExpiryHours` / `explicitExpiryHours` for skills that want to be explicit.
+
+### The `outboundContext` Skill Capability
+
+Send skills and other agents that need to claim reply threads declare `"outboundContext"` in their manifest `capabilities` array. The execution layer wires `ctx.outboundContext: ScopedOutboundContext` at invocation time.
+
+Skills that currently use the capability:
+
+- `email-send` — auto-registers on every successful send; honors explicit `context_bridge` JSON input.
+- `email-reply` — same pattern; the registered entry covers the *reply we just sent*, not the original message.
+- `signal-send` — same pattern.
+- `context-bridge-release` — **coordinator-only** skill (enforced via `allowed_callers`, see [spec 03](03-skills-and-execution.md)). Lets the coordinator explicitly close a thread when the LLM detects the conversation has concluded, freeing the slot before TTL expiry.
+
+A shared helper module `src/dispatch/context-bridge-parse.ts` (not a skill — it's used internally by send-skill handlers) normalizes the optional `context_bridge` JSON string input into the structured `OutboundContextEntry` shape consumed by `register()`.
+
+### Unconditional Auto-Registration
+
+All send-skill handlers register an outbound context entry on success — **regardless of whether the caller passed an explicit `context_bridge` input**. This fixes the v1 bug (#609) where proactive outbounds frequently shipped without a memo and the reply arrived as a context-less inbound.
+
+- **Auto-registered entries** carry the agent ID and content preview only. They expire in `defaultExpiryHours` (6h default).
+- **Explicit entries** (caller passed `context_bridge` JSON) carry the full hint set and expire in `explicitExpiryHours` (24h default).
+- A caller-specified `expires_in_hours` in the JSON always overrides the defaults.
+
+### TTL Configuration
+
+Defaults live under `contextBridge.*` in `config/default.yaml`:
+
+```yaml
+contextBridge:
+  defaultExpiryHours: 6      # auto-registered entries (proactive sends without metadata)
+  explicitExpiryHours: 24    # entries with explicit context_bridge JSON
+```
+
+Agent-specific overrides (e.g. `debrief.contextBridgeTtlHours = 48`) are passed via the explicit `context_bridge.expires_in_hours` field by the calling agent.
+
+### Dispatcher Injection
+
+On every inbound message, the dispatcher:
+
+1. Queries `OutboundContextService.getActive()` for non-released, non-expired entries.
+2. If any exist, calls `formatInjectionBlock(entries, originalContent)` to prepend an `[ACTIVE OUTBOUND CONTEXT — messages you've sent that may receive replies]` block to the content the coordinator sees.
+3. Each block includes `entry_id`, channel, originating agent, age, expiry-relative time, content preview, and any explicit hint fields.
+
+The coordinator reads this block, decides whether the inbound is a continuation of an outbound thread, and (if so) delegates to the originating agent — or invokes `context-bridge-release` if the LLM concludes the thread is done.
+
+### Coordinator Delegation Guidance
+
+The coordinator's system prompt includes explicit guidance for enriching outbound context with delegation hints when delegating to specialists. When the coordinator hands off a task that will produce an outbound message (e.g. asking research-analyst to draft and send an email), it sets the `context_bridge.delegation_hint` to a short instruction the dispatcher will surface back if a reply arrives — for example, *"reply belongs to research-analyst; resume the multi-turn research conversation"*.
+
+### Periodic Cleanup
+
+A scheduled job runs `cleanupExpired()` on a fixed cadence. The dispatcher's read query already filters by `expires_at > now() AND released = false`, so stale rows are invisible to consumers before cleanup runs — cleanup is a storage-hygiene concern, not a correctness concern.
+
+### Cross-References
+
+- [Spec 03 — Skills and Execution](03-skills-and-execution.md): the `outboundContext` capability surface and the coordinator-only `allowed_callers` restriction on `context-bridge-release`.
+- [Spec 04 — Channels](04-channels.md): how `email-send` / `email-reply` / `signal-send` register entries on successful send.
+- [Spec 15 — Outbound Safety](15-outbound-safety.md): how outbound-safety gates interact with auto-registration — registration happens on success only, after the safety pipeline has cleared the message.
+- [Spec 17 — Meeting Debrief](17-meeting-debrief.md): the debrief agent uses the outbound context bridge with a 48-hour TTL to claim replies to its proactive prompts.
+- [ADR-019](../adr/019-delegation-aware-outbound-context.md): the design decision and the v1 → v2 migration rationale.
+
+---
+
 ## Migration Path
 
 ### Phase 1: Foundation (this spec)
@@ -535,3 +638,20 @@ Calendars, email accounts, and CRM connections have fundamentally different sche
 | `entity-lookup` skill for broad KG entity search (orgs, events, places) | Not done |
 | Knowledge skills adoption (travel-preferences, loyalty-programs, etc.) | Not done |
 | Email skills adoption (when email connected accounts are added) | Not done |
+
+### Outbound Context Bridge (v2)
+
+| Item | Status |
+|---|---|
+| `outbound_context` table + partial index (migration 042) | Done |
+| `OutboundContextService` with full CRUD + injection-block formatting | Done |
+| `ScopedOutboundContext` + `outboundContext` skill capability | Done |
+| `context-bridge-parse` helper module (`src/dispatch/`) for skill input normalization | Done |
+| `context-bridge-release` coordinator-only skill | Done |
+| Unconditional auto-registration in `email-send` / `email-reply` / `signal-send` | Done |
+| Two-tier TTL config (`contextBridge.defaultExpiryHours` / `explicitExpiryHours`) | Done |
+| Dispatcher injection of `[ACTIVE OUTBOUND CONTEXT]` block on inbound | Done |
+| Periodic cleanup of expired/released rows (scheduled job) | Done |
+| Coordinator delegation-hint guidance in system prompt | Done |
+| v1 `context-memo.ts` write path removed | Done |
+| v1 `context-memo.ts` module deleted | Done |
