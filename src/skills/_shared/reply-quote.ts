@@ -1,9 +1,13 @@
 // reply-quote.ts — shared utility for building a quoted original message block
-// appended to reply emails. Used by ceo-inbox-draft-reply, email-draft-save,
-// email-reply, and email-send skill handlers.
+// appended to reply emails. Used by:
+//   - ceo-inbox-draft-reply, email-draft-save, email-reply, email-send skill handlers
+//   - EmailAdapter.sendOutboundReply for natural agent-response replies
+//
+// Lives under src/ (not skills/) so the channel adapter — which is bound to
+// rootDir=src — can import it. Skill handlers reach into src/ for shared
+// utilities (same pattern they use for SkillContext / SkillHandler types).
 
 import { DateTime } from 'luxon';
-import { htmlToPlainText } from './ceo-nylas-client.js';
 
 /**
  * Minimal message shape required to build a reply quote block.
@@ -16,6 +20,39 @@ export interface QuoteableMessage {
   date: number;    // Unix epoch seconds
   subject: string;
   body: string;    // HTML — will be stripped to plain text
+}
+
+/**
+ * Strip HTML tags and decode common entities, leaving plain text suitable for
+ * a quoted email block. Kept inline (rather than reusing src/channels/email/
+ * html-to-text) so behavior matches the previous skills/_shared/ceo-nylas-client
+ * implementation exactly — same regexes, same entity handling, same output.
+ */
+function htmlToPlainText(html: string): string {
+  return html
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/p>/gi, '\n\n')
+    .replace(/<\/div>/gi, '\n')
+    .replace(/<\/li>/gi, '\n')
+    // Strip all complete HTML tags.
+    .replace(/<[^>]+>/g, '')
+    // Strip incomplete tags — bare <tagname without a closing > is not caught by <[^>]+>
+    // above (which requires >). This prevents injected <script fragments from surviving
+    // into the plain-text body that is shown to the LLM. {0,500} caps match length to
+    // prevent stripping large text bodies on inputs with a lone < far from any >.
+    .replace(/<[a-zA-Z][^>]{0,500}/g, '')
+    // Decode HTML entities.
+    // Order matters: &amp; must be decoded LAST to prevent double-decoding.
+    // Decoding &amp; first would turn &amp;lt; into &lt; and then into <,
+    // smuggling a literal < into the output.
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
 }
 
 /**

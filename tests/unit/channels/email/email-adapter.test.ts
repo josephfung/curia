@@ -67,6 +67,7 @@ function makeAdapter(mocks: ReturnType<typeof createMocks>, overrides: Partial<{
   contactCreationMaxPerMessage: number;
   contactCreationMaxPerHour: number;
   ceoEmail: string;
+  timezone: string;
 }> = {}) {
   return new EmailAdapter({
     accountId: 'curia',
@@ -80,6 +81,7 @@ function makeAdapter(mocks: ReturnType<typeof createMocks>, overrides: Partial<{
     contactCreationMaxPerMessage: overrides.contactCreationMaxPerMessage ?? 10,
     contactCreationMaxPerHour: overrides.contactCreationMaxPerHour ?? 100,
     ceoEmail: overrides.ceoEmail ?? CEO_EMAIL,
+    timezone: overrides.timezone ?? 'America/Toronto',
   });
 }
 
@@ -245,6 +247,94 @@ describe('EmailAdapter — sendOutboundReply', () => {
       expect.any(Object),
     );
   });
+
+  // ── Reply-quote behavior (issue #720) ──────────────────────────────────────
+  // The natural agent-response path (this path) was missed when buildReplyQuote
+  // was wired into the skill handlers. Quote block must match the format used by
+  // the email-send / email-reply skills.
+
+  it('appends a quoted original message block to the reply body', async () => {
+    const humanMessage = makeMockMessage({
+      from: [{ email: CEO_EMAIL, name: 'CEO' }],
+      to: [{ email: SELF_EMAIL }],
+      subject: 'Q2 planning',
+      body: '<p>Hi Curia, can we sync on Q2?</p>',
+      date: 1700000000,
+    });
+    (mocks.outboundGateway.listEmailMessages as ReturnType<typeof vi.fn>).mockResolvedValue([humanMessage]);
+
+    await triggerOutbound(makeOutboundEvent('email:thread-abc'));
+
+    const callArg = (mocks.outboundGateway.send as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(callArg.body).toContain('Here is my reply.');
+    expect(callArg.body).toContain('---------- Original Message ----------');
+    expect(callArg.body).toContain('From: CEO <ceo@example.com>');
+    expect(callArg.body).toContain('Subject: Q2 planning');
+    // HTML stripped to plain text — angle brackets gone, content preserved
+    expect(callArg.body).toContain('Hi Curia, can we sync on Q2?');
+    expect(callArg.body).not.toContain('<p>');
+  });
+
+  it('uses the configured timezone when rendering the quoted Date line', async () => {
+    // date: 1700000000 = 2023-11-14T22:13:20Z; in America/Toronto that is 5:13 PM EST
+    const humanMessage = makeMockMessage({
+      from: [{ email: CEO_EMAIL }],
+      to: [{ email: SELF_EMAIL }],
+      date: 1700000000,
+    });
+    (mocks.outboundGateway.listEmailMessages as ReturnType<typeof vi.fn>).mockResolvedValue([humanMessage]);
+
+    await triggerOutbound(makeOutboundEvent('email:thread-abc'));
+
+    const callArg = (mocks.outboundGateway.send as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(callArg.body).toMatch(/Date: 2023-11-14, 5:13 PM EST/);
+  });
+
+  it('sends without quote when buildReplyQuote throws', async () => {
+    // Match the email-reply skill's pattern: a message with body undefined causes
+    // htmlToPlainText(undefined) inside buildReplyQuote to throw. The recipient-
+    // resolution code only touches from/to, so it still resolves cleanly.
+    const brokenMessage = {
+      ...makeMockMessage({
+        from: [{ email: CEO_EMAIL }],
+        to: [{ email: SELF_EMAIL }],
+      }),
+      body: undefined as unknown as string,
+    };
+    (mocks.outboundGateway.listEmailMessages as ReturnType<typeof vi.fn>).mockResolvedValue([brokenMessage]);
+    const warnSpy = vi.spyOn(mocks.logger, 'warn');
+
+    await triggerOutbound(makeOutboundEvent('email:thread-abc'));
+
+    // Send still happens — unquoted
+    expect(mocks.outboundGateway.send).toHaveBeenCalledOnce();
+    const callArg = (mocks.outboundGateway.send as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(callArg.body).toBe('Here is my reply.');
+    expect(callArg.body).not.toContain('---------- Original Message ----------');
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ threadId: 'thread-abc' }),
+      expect.stringContaining('failed to build reply quote'),
+    );
+  });
+
+  it('omits quote when body + quote would exceed MAX_BODY_LENGTH', async () => {
+    // Build a message whose body alone is just under the 50000 limit; appending
+    // any quote header tips it over.
+    const hugeBody = '<p>' + 'x'.repeat(49_900) + '</p>';
+    const humanMessage = makeMockMessage({
+      from: [{ email: CEO_EMAIL }],
+      to: [{ email: SELF_EMAIL }],
+      body: hugeBody,
+    });
+    (mocks.outboundGateway.listEmailMessages as ReturnType<typeof vi.fn>).mockResolvedValue([humanMessage]);
+
+    // The agent's own reply is short — the *quote* is what would tip it over.
+    await triggerOutbound(makeOutboundEvent('email:thread-abc'));
+
+    const callArg = (mocks.outboundGateway.send as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(callArg.body).toBe('Here is my reply.');
+    expect(callArg.body).not.toContain('---------- Original Message ----------');
+  });
 });
 
 // ── Inbound poll — excludedSenderEmails ──────────────────
@@ -264,6 +354,7 @@ describe('EmailAdapter — inbound poll: excludedSenderEmails', () => {
       contactCreationMaxPerMessage: 10,
       contactCreationMaxPerHour: 100,
       ceoEmail: CEO_EMAIL,
+      timezone: 'America/Toronto',
     });
 
     const msg = makeMockMessage({ from: [{ email: 'curia@example.com' }] });
@@ -294,6 +385,7 @@ describe('EmailAdapter — inbound poll: excludedSenderEmails', () => {
       contactCreationMaxPerMessage: 10,
       contactCreationMaxPerHour: 100,
       ceoEmail: CEO_EMAIL,
+      timezone: 'America/Toronto',
     });
 
     // Sender address uses different casing than the exclusion list entry
@@ -324,6 +416,7 @@ describe('EmailAdapter — inbound poll: excludedSenderEmails', () => {
       contactCreationMaxPerMessage: 10,
       contactCreationMaxPerHour: 100,
       ceoEmail: CEO_EMAIL,
+      timezone: 'America/Toronto',
     });
 
     // Different sender — should not be suppressed
@@ -397,6 +490,7 @@ describe('EmailAdapter — outbound.notification subscriber', () => {
       contactCreationMaxPerMessage: 10,
       contactCreationMaxPerHour: 100,
       ceoEmail: CEO_EMAIL,
+      timezone: 'America/Toronto',
     });
     await adapter.start();
 
@@ -1000,6 +1094,7 @@ describe('EmailAdapter — inbound poll: self-loop hardening', () => {
       contactCreationMaxPerMessage: 10,
       contactCreationMaxPerHour: 100,
       ceoEmail: CEO_EMAIL,
+      timezone: 'America/Toronto',
     });
 
     const sentViaAlias = makeMockMessage({

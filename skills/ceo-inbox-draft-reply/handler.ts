@@ -1,6 +1,6 @@
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
 import { CeoNylasClient, type NylasParticipant } from '../_shared/ceo-nylas-client.js';
-import { buildReplyQuote } from '../_shared/reply-quote.js';
+import { buildReplyQuote } from '../../src/skills/_shared/reply-quote.js';
 
 export class CeoInboxDraftReplyHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {
