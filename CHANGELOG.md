@@ -20,11 +20,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Changed
 
 - **`buildReplyQuote`** — quoted reply blocks are now rendered as a sanitized HTML `<blockquote>` with styled attribution headers instead of plain text; original body HTML is preserved through `sanitize-html` (strips scripts, styles, event handlers, and `javascript:` URLs). `ceo-inbox-draft-reply` now also converts the LLM reply body to HTML before creating the Nylas draft. (#734)
-- **`meeting-debrief`** — system prompt now instructs the agent not to retry `bullpen.post` on timeout; on `<skill_error>...timed out</skill_error>` it records the meeting as `prompt_unconfirmed` and reconciles on the next tick. Stopgap until #721 lands a proper contract. (#722)
 
 ### Fixed
 
-- **`bullpen`** — `post` and `reply` now fire-and-forget the `agent.discuss` publish instead of awaiting it, so a slow subscriber no longer pushes the handler past its skill timeout and triggers duplicate-thread retries. (#721)
+- **`bullpen`** — `post` and `reply` now fire-and-forget the `agent.discuss` publish instead of awaiting it, so a slow subscriber no longer pushes the handler past its skill timeout and triggers duplicate-thread retries. Also unwinds the #722 `meeting-debrief` stopgap (no more `prompt_unconfirmed` state) since timeouts are no longer a realistic failure mode. (#721)
 - **Scheduler task drift** — coordinator's system prompt now includes a hard scope restriction when invoked via a scheduled job (`channelId: 'scheduler'`), preventing it from treating injected outbound-context entries as action triggers. (#730)
 - **`calendar-list-events`** — non-UUID caller contactId (e.g. `"system"` from scheduled jobs) now returns a clear, actionable error instead of a raw Postgres UUID parse failure. (#723)
 - **Email reply quoting** — natural agent-response replies (no skill invocation) now include the quoted original message, matching the skill-driven paths. `buildReplyQuote` moved to `src/skills/_shared/` so the email channel adapter can share it. (#720)

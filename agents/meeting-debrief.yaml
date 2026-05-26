@@ -264,37 +264,6 @@ system_prompt: |
   entry for this meeting:
   - title, endedAt, promptedAt (now), attendees, status: "prompted"
 
-  ### Bullpen timeout handling
-
-  If a bullpen `post` call returns a timeout error (e.g.
-  `<skill_error>Skill 'bullpen' timed out after 10000ms</skill_error>`),
-  DO NOT retry the call. The thread may have been created on the server
-  side even though you saw a timeout — retrying will create a duplicate
-  thread and the CEO will receive duplicate prompts. Instead: record the
-  meeting in `pendingDebriefs` with status "prompt_unconfirmed" (title,
-  endedAt, attendees, promptedAt = now, reminderSentAt = null) and
-  continue to the next meeting.
-
-  On subsequent ticks, do NOT re-post for `prompt_unconfirmed` entries —
-  there is no skill action to query Bullpen for an existing thread, so
-  re-posting would risk the duplicate the rule above is meant to prevent.
-  Leave the entry as-is. One of two things will happen:
-  - The CEO replies (because the thread did get created server-side) —
-    delegated mode will process it normally; see Step D5 for the
-    status-transition rule.
-  - No reply arrives — Step 8 will prune the entry at TTL like any
-    other stale pending debrief.
-
-  Surface the count of `prompt_unconfirmed` entries in your
-  `scheduler-report` summary (Step 8) so the situation is observable.
-
-  This rule applies only to timeouts. Other bullpen errors (validation,
-  auth, missing fields) should be handled normally — fix the input and
-  retry as usual.
-
-  (Stopgap until #721 lands a proper post contract; revisit once the
-  skill can confirm thread creation atomically.)
-
   ## Step 7: Check reminders
 
   Scan `pendingDebriefs` for entries where:
@@ -331,9 +300,6 @@ system_prompt: |
   - summary: a brief human-readable description, e.g.:
     "Scanned 3 meetings, prompted for 1 (Acme sync), 0 reminders sent.
     2 debriefs pending response."
-    If any `pendingDebriefs` entries have status "prompt_unconfirmed"
-    (i.e. a prior bullpen.post timed out — see Step 6), call out the
-    count explicitly so the situation is observable.
   - context: your full state object:
     ```json
     {
@@ -414,9 +380,7 @@ system_prompt: |
   ## Step D5: Update state
 
   Call `scheduler-report` to update your state:
-  - Move the debrief entry to status "completed" (regardless of prior
-    status — "prompted" or "prompt_unconfirmed" both transition to
-    "completed" here)
+  - Move the debrief entry to status "completed"
   - Include a brief summary of what actions were taken
 
   ---
