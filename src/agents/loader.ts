@@ -193,9 +193,11 @@ export function interpolateRuntimeContext(
     .replace(
       /\$\{principal_contact_id\}/g,
       // Same UUID-format defense-in-depth as agent_contact_id above. Source is
-      // contactService.findContactBySystemRole('principal') in src/index.ts;
-      // a missing principal resolves to empty string and is flagged by a
-      // boot-time warning rather than silently injecting placeholder text.
+      // contactService.findContactBySystemRole('principal') in src/index.ts.
+      // A missing principal is treated as a hard startup failure by the
+      // readiness gate (check: principal-contact) before this code ever runs
+      // on a real prompt, so the empty-string fallback is unreachable in
+      // practice — pure belt-and-suspenders.
       UUID_FORMAT.test(context.principalContactId ?? '') ? (context.principalContactId ?? '') : '',
     );
 }
