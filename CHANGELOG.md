@@ -24,6 +24,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **`bullpen`** — `post` and `reply` now fire-and-forget the `agent.discuss` publish instead of awaiting it, so a slow subscriber no longer pushes the handler past its skill timeout and triggers duplicate-thread retries. (#721)
 - **Scheduler task drift** — coordinator's system prompt now includes a hard scope restriction when invoked via a scheduled job (`channelId: 'scheduler'`), preventing it from treating injected outbound-context entries as action triggers. (#730)
 - **`calendar-list-events`** — non-UUID caller contactId (e.g. `"system"` from scheduled jobs) now returns a clear, actionable error instead of a raw Postgres UUID parse failure. (#723)
 - **Email reply quoting** — natural agent-response replies (no skill invocation) now include the quoted original message, matching the skill-driven paths. `buildReplyQuote` moved to `src/skills/_shared/` so the email channel adapter can share it. (#720)
