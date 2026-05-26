@@ -28,7 +28,7 @@ import type { OutboundContentFilter } from '../dispatch/outbound-filter.js';
 import type { PiiRedactor } from '../dispatch/pii-redactor.js';
 import type { EventBus } from '../bus/bus.js';
 import type { Logger } from '../logger.js';
-import { createOutboundBlocked, createOutboundNotification, createAutonomySendBlocked } from '../bus/events.js';
+import { createOutboundBlocked, createOutboundDelivered, createOutboundNotification, createAutonomySendBlocked } from '../bus/events.js';
 import { AutonomyService } from '../autonomy/autonomy-service.js';
 import type { ActionLogRepo } from '../autonomy/action-log-repo.js';
 import { generateShortRef } from '../autonomy/approval-trigger.js';
@@ -287,6 +287,9 @@ export class OutboundGateway {
       taskEventId?: string;
       /** Conversation ID for action_log context. */
       conversationId?: string;
+      /** Parent bus event ID for the outbound.delivered audit row. Dispatcher-routed
+       *  sends pass the outbound.message event ID; skill-invoked sends omit it. */
+      parentEventId?: string;
       /**
        * Re-execution recipe for the pending_approval lifecycle.
        *
@@ -728,6 +731,16 @@ export class OutboundGateway {
       const result = await this.dispatchEmail({ ...request, body: redactedBody, subject: redactedSubject });
       if (result.success) {
         await this.promoteOrCreateRecipientContact('email', recipientId);
+        await this.publishDelivered({
+          channel: 'email',
+          recipientId,
+          recipientContactId,
+          content: redactedBody,
+          conversationId: options?.conversationId,
+          taskEventId: options?.taskEventId,
+          messageId: result.messageId,
+          parentEventId: options?.parentEventId,
+        });
       }
       return result;
     } else {
@@ -773,6 +786,32 @@ export class OutboundGateway {
         'outbound-gateway: failed to publish outbound.notification event',
       );
       return false;
+    }
+  }
+
+  /**
+   * Publish the canonical outbound.delivered audit event. Called from every
+   * successful wire-level dispatch path. Failures here are logged but never
+   * propagate — the message already went out, and we will not make the user's
+   * send conditional on the audit subsystem.
+   */
+  private async publishDelivered(payload: {
+    channel: 'signal' | 'email';
+    recipientId: string;
+    recipientContactId?: string;
+    content: string;
+    conversationId?: string;
+    taskEventId?: string;
+    messageId?: string;
+    parentEventId?: string;
+  }): Promise<void> {
+    try {
+      await this.bus.publish('dispatch', createOutboundDelivered(payload));
+    } catch (err) {
+      this.log.error(
+        { err, channel: payload.channel, recipientId: redactId(payload.recipientId) },
+        'outbound-gateway: failed to publish outbound.delivered event — send already succeeded, audit row is missing',
+      );
     }
   }
 
