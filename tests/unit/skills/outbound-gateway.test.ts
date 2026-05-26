@@ -1313,6 +1313,67 @@ describe('OutboundGateway.sendEmailDraft', () => {
     expect(result.success).toBe(false);
     expect(result.blockedReason).toMatch(/draft send failed/i);
   });
+
+  it('publishes outbound.delivered when sendEmailDraft succeeds', async () => {
+    const nylasWithSendDraft = {
+      sendMessage: vi.fn().mockResolvedValue({ id: 'sent-msg-1' }),
+      sendDraft: vi.fn().mockResolvedValue({ id: 'sent-from-draft-1' }),
+      getMessage: vi.fn().mockResolvedValue({}),
+      listMessages: vi.fn().mockResolvedValue([]),
+    } as unknown as NylasClient;
+
+    const logger = createLogger('error');
+    const contactService = {
+      resolveByChannelIdentity: vi.fn().mockResolvedValue({
+        contactId: 'draft-recipient',
+        displayName: 'Draft Recipient',
+        role: null,
+        status: 'confirmed',
+        kgNodeId: null,
+        verified: true,
+        trustLevel: 'medium',
+      }),
+    } as unknown as ContactService;
+    const contentFilter = {
+      check: vi.fn().mockResolvedValue({ passed: true, findings: [] }),
+    } as unknown as OutboundContentFilter;
+    const bus = {
+      publish: vi.fn().mockResolvedValue(undefined),
+      subscribe: vi.fn(),
+    } as unknown as EventBus;
+
+    const gateway = new OutboundGateway({
+      nylasClients: new Map([['curia', nylasWithSendDraft]]),
+      contactService,
+      contentFilter,
+      bus,
+      principalIdentities: [makePrincipalIdentity('ceo@example.com')],
+      logger,
+    });
+
+    const result = await gateway.sendEmailDraft(
+      'draft-xyz',
+      'curia',
+      { recipientEmail: 'reply@example.com', body: 'approved reply', subject: 'Re: hi' },
+      { humanApproved: true },
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.messageId).toBe('sent-from-draft-1');
+
+    const delivered = (bus.publish as ReturnType<typeof vi.fn>).mock.calls
+      .map((call) => call[1] as BusEvent)
+      .find((evt) => evt.type === 'outbound.delivered');
+
+    expect(delivered, 'expected outbound.delivered from sendEmailDraft').toBeDefined();
+    expect(delivered!.payload).toMatchObject({
+      channel: 'email',
+      recipientId: 'reply@example.com',
+      recipientContactId: 'draft-recipient',
+      content: 'approved reply',
+      messageId: 'sent-from-draft-1',
+    });
+  });
 });
 
 describe('humanApproved option on send()', () => {
