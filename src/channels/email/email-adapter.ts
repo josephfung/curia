@@ -14,6 +14,12 @@ import type { ContactService } from '../../contacts/contact-service.js';
 import { convertNylasMessage } from './message-converter.js';
 import { createInboundMessage, type OutboundMessageEvent, type OutboundNotificationEvent } from '../../bus/events.js';
 import { sanitizeOutput } from '../../skills/sanitize.js';
+import { buildReplyQuote } from '../../skills/_shared/reply-quote.js';
+
+// Mirrors MAX_BODY_LENGTH in skills/email-send/handler.ts and skills/email-reply/handler.ts.
+// When the agent's response plus the quoted original would exceed this, the quote
+// is silently dropped so the reply still sends.
+const MAX_REPLY_BODY_LENGTH = 50_000;
 
 // ---------------------------------------------------------------------------
 // Address normalization helpers
@@ -67,6 +73,12 @@ export interface EmailAdapterConfig {
    * Sliding window resets after 1 hour. Default: 100.
    */
   contactCreationMaxPerHour: number;
+  /**
+   * IANA timezone (e.g. "America/Toronto") used when rendering the Date line in
+   * appended reply quotes. Sourced from the global `TIMEZONE` env var to match
+   * the timezone the skills receive via SkillContext.
+   */
+  timezone: string;
 }
 
 export class EmailAdapter {
@@ -465,12 +477,30 @@ export class EmailAdapter {
       // "Re: Re: Re: ..." chains when replying to already-replied threads.
       const baseSubject = threadMessage.subject.replace(/^Re:\s*/i, '');
 
+      // Append a quoted copy of the original message below the reply body so
+      // the recipient sees the context they replied to. Matches the format
+      // used by email-send / email-reply / email-draft-save skills. The quote
+      // is best-effort — if formatting fails or the total body would exceed
+      // MAX_REPLY_BODY_LENGTH, the reply still goes out without the quote.
+      let body = outbound.payload.content;
+      try {
+        const candidate = body + buildReplyQuote(threadMessage, this.config.timezone);
+        if (candidate.length <= MAX_REPLY_BODY_LENGTH) {
+          body = candidate;
+        }
+      } catch (err) {
+        logger.warn(
+          { err, threadId, messageId: threadMessage.id },
+          'sendOutboundReply: failed to build reply quote — proceeding without quote',
+        );
+      }
+
       const sendRequest = {
         channel: 'email' as const,
         accountId: this.config.accountId,
         to: recipientEmail,
         subject: `Re: ${baseSubject}`,
-        body: outbound.payload.content,
+        body,
         replyToMessageId: threadMessage.id,
         ...(ccAddresses.length > 0 ? { cc: ccAddresses } : {}),
       };

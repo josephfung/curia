@@ -178,6 +178,7 @@ describe('Draft Fallback Flow Integration', () => {
         ceoEmail: 'ceo@company.com',
         contactCreationMaxPerMessage: 10,
         contactCreationMaxPerHour: 100,
+        timezone: 'America/Toronto',
       });
 
       // start() subscribes to bus events — we need it for the outbound.message handler.
@@ -257,6 +258,7 @@ describe('Draft Fallback Flow Integration', () => {
         ceoEmail: 'ceo@company.com',
         contactCreationMaxPerMessage: 10,
         contactCreationMaxPerHour: 100,
+        timezone: 'America/Toronto',
       });
 
       await adapter.start();
@@ -324,6 +326,7 @@ describe('Draft Fallback Flow Integration', () => {
         ceoEmail: 'ceo@company.com',
         contactCreationMaxPerMessage: 10,
         contactCreationMaxPerHour: 100,
+        timezone: 'America/Toronto',
       });
 
       // Adapter for the 'joseph' account
@@ -339,6 +342,7 @@ describe('Draft Fallback Flow Integration', () => {
         ceoEmail: 'ceo@company.com',
         contactCreationMaxPerMessage: 10,
         contactCreationMaxPerHour: 100,
+        timezone: 'America/Toronto',
       });
 
       await adapterCuria.start();

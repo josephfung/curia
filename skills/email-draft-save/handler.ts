@@ -7,7 +7,7 @@
 // the CEO reviews and sends it from their email client.
 
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
-import { buildReplyQuote } from '../_shared/reply-quote.js';
+import { buildReplyQuote } from '../../src/skills/_shared/reply-quote.js';
 
 export class EmailDraftSaveHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {

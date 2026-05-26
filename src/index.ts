@@ -971,6 +971,7 @@ async function main(): Promise<void> {
         ceoEmail: config.ceoPrimaryEmail,
         contactCreationMaxPerMessage: yamlConfig.contact_creation_limits?.max_per_message ?? 10,
         contactCreationMaxPerHour: yamlConfig.contact_creation_limits?.max_per_hour ?? 100,
+        timezone: config.timezone,
       }));
     }
   }

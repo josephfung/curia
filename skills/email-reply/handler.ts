@@ -15,7 +15,7 @@
 
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
 import { registerOutboundContext } from '../../src/dispatch/context-bridge-parse.js';
-import { buildReplyQuote } from '../_shared/reply-quote.js';
+import { buildReplyQuote } from '../../src/skills/_shared/reply-quote.js';
 
 const MAX_BODY_LENGTH = 50000;
 
