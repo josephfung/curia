@@ -123,9 +123,10 @@ describe('CeoInboxDraftReplyHandler', () => {
     expect(ccEmails).toContain('charlie@example.com');
     expect(ccEmails).not.toContain('ceo@example.com');
 
-    // Body should include the reply text followed by the quoted original
+    // Body should be HTML: reply text converted from markdown + HTML quoted original
     expect(draftBody.body).toContain('Thanks for reaching out.');
-    expect(draftBody.body).toContain('---------- Original Message ----------');
+    // HTML blockquote attribution
+    expect(draftBody.body).toContain('<strong>From:</strong>');
     expect(draftBody.body).toContain('alice@external.com');
   });
 
@@ -380,13 +381,14 @@ describe('CeoInboxDraftReplyHandler', () => {
 
     const draftBody = JSON.parse(draftCall![1]!.body as string);
 
-    // Quote should contain stripped plain text, not HTML
-    expect(draftBody.body).toContain('Hello world');
-    expect(draftBody.body).not.toContain('<p>');
-    expect(draftBody.body).not.toContain('<b>');
-    // Reply text should precede the quote
+    // HTML mode: original body HTML is preserved inside the blockquote, not stripped
+    // The original `<p>Hello <b>world</b></p>` survives sanitization intact.
+    expect(draftBody.body).toContain('Hello');
+    expect(draftBody.body).toContain('<b>world</b>');
+    expect(draftBody.body).toContain('<blockquote');
+    // Reply text (converted from markdown by markdownToHtml) precedes the HTML quote block
     expect(draftBody.body.indexOf('Thanks for reaching out.')).toBeLessThan(
-      draftBody.body.indexOf('---------- Original Message ----------'),
+      draftBody.body.indexOf('<blockquote'),
     );
   });
 

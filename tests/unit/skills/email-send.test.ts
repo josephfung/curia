@@ -49,11 +49,13 @@ describe('EmailSendHandler — reply quote', () => {
     expect(result.success).toBe(true);
     expect(gateway.getEmailMessage).toHaveBeenCalledWith('msg-orig');
 
-    const sendArg = gateway.send.mock.calls[0]![0] as { body: string; replyToMessageId?: string };
+    const sendArg = gateway.send.mock.calls[0]![0] as { body: string; htmlQuote?: string; replyToMessageId?: string };
+    // Reply body stays as markdown; gateway converts it to HTML
     expect(sendArg.body).toContain('Sounds good!');
-    expect(sendArg.body).toContain('---------- Original Message ----------');
-    expect(sendArg.body).toContain('Alice <alice@example.com>');
-    expect(sendArg.body).toContain('Let me know your thoughts.');
+    // HTML quote passed separately so markdownToHtml does not re-escape it
+    expect(sendArg.htmlQuote).toContain('<blockquote');
+    expect(sendArg.htmlQuote).toContain('alice@example.com');
+    expect(sendArg.htmlQuote).toContain('Let me know your thoughts.');
     expect(sendArg.replyToMessageId).toBe('msg-orig');
   });
 

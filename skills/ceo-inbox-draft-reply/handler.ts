@@ -1,6 +1,7 @@
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
 import { CeoNylasClient, type NylasParticipant } from '../_shared/ceo-nylas-client.js';
 import { buildReplyQuote } from '../../src/skills/_shared/reply-quote.js';
+import { markdownToHtml } from '../../src/channels/email/markdown-to-html.js';
 
 export class CeoInboxDraftReplyHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {
@@ -83,11 +84,12 @@ export class CeoInboxDraftReplyHandler implements SkillHandler {
         'ceo-inbox-draft-reply: computed reply-all recipients',
       );
 
-      // Append the quoted original message below the reply body. Formatting is
-      // non-fatal — a malformed message body should not block draft creation.
-      let quotedBody = body;
+      // Convert the LLM-authored markdown body to HTML before combining with the
+      // quote — this path bypasses the gateway, so markdownToHtml is not called there.
+      // Formatting is non-fatal — a failure must not block draft creation.
+      let quotedBody = markdownToHtml(body);
       try {
-        quotedBody = body + buildReplyQuote(original, ctx.timezone);
+        quotedBody = quotedBody + buildReplyQuote(original, ctx.timezone, { format: 'html' });
       } catch (err) {
         ctx.log.warn(
           { err, replyToMessageId },

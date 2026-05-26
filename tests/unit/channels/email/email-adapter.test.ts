@@ -266,13 +266,16 @@ describe('EmailAdapter — sendOutboundReply', () => {
     await triggerOutbound(makeOutboundEvent('email:thread-abc'));
 
     const callArg = (mocks.outboundGateway.send as ReturnType<typeof vi.fn>).mock.calls[0]![0];
+    // Reply body stays as markdown in body field; gateway converts it to HTML
     expect(callArg.body).toContain('Here is my reply.');
-    expect(callArg.body).toContain('---------- Original Message ----------');
-    expect(callArg.body).toContain('From: CEO <ceo@example.com>');
-    expect(callArg.body).toContain('Subject: Q2 planning');
-    // HTML stripped to plain text — angle brackets gone, content preserved
-    expect(callArg.body).toContain('Hi Curia, can we sync on Q2?');
-    expect(callArg.body).not.toContain('<p>');
+    // HTML quote is passed separately so it is not re-escaped by markdownToHtml
+    expect(callArg.htmlQuote).toContain('<strong>From:</strong>');
+    expect(callArg.htmlQuote).toContain('CEO');
+    expect(callArg.htmlQuote).toContain('ceo@example.com');
+    expect(callArg.htmlQuote).toContain('Q2 planning');
+    // Original HTML body is preserved inside the blockquote (not stripped to plain text)
+    expect(callArg.htmlQuote).toContain('<blockquote');
+    expect(callArg.htmlQuote).toContain('Hi Curia, can we sync on Q2?');
   });
 
   it('uses the configured timezone when rendering the quoted Date line', async () => {
@@ -287,7 +290,7 @@ describe('EmailAdapter — sendOutboundReply', () => {
     await triggerOutbound(makeOutboundEvent('email:thread-abc'));
 
     const callArg = (mocks.outboundGateway.send as ReturnType<typeof vi.fn>).mock.calls[0]![0];
-    expect(callArg.body).toMatch(/Date: 2023-11-14, 5:13 PM EST/);
+    expect(callArg.htmlQuote).toMatch(/2023-11-14, 5:13 PM EST/);
   });
 
   it('sends with quote headers (bodyless) when original body is undefined', async () => {
@@ -306,13 +309,14 @@ describe('EmailAdapter — sendOutboundReply', () => {
 
     await triggerOutbound(makeOutboundEvent('email:thread-abc'));
 
-    // Send still happens — quoted headers are included, body section is omitted
+    // Send still happens — quoted headers are included, no blockquote (empty body)
     expect(mocks.outboundGateway.send).toHaveBeenCalledOnce();
     const callArg = (mocks.outboundGateway.send as ReturnType<typeof vi.fn>).mock.calls[0]![0];
     expect(callArg.body).toContain('Here is my reply.');
-    expect(callArg.body).toContain('---------- Original Message ----------');
-    // No body content after the headers (Subject: is the last line)
-    expect(callArg.body).toMatch(/Subject:.*$/m);
+    expect(callArg.htmlQuote).toContain('<strong>From:</strong>');
+    expect(callArg.htmlQuote).toContain('<strong>Subject:</strong>');
+    // No blockquote when the original body is empty
+    expect(callArg.htmlQuote).not.toContain('<blockquote');
     // No warning — buildReplyQuote succeeded
     expect(warnSpy).not.toHaveBeenCalled();
   });

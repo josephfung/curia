@@ -482,11 +482,14 @@ export class EmailAdapter {
       // used by email-send / email-reply / email-draft-save skills. The quote
       // is best-effort — if formatting fails or the total body would exceed
       // MAX_REPLY_BODY_LENGTH, the reply still goes out without the quote.
-      let body = outbound.payload.content;
+      // htmlQuote is passed separately so it is appended after markdownToHtml(body)
+      // in the gateway, preventing the HTML from being re-escaped.
+      const body = outbound.payload.content;
+      let htmlQuote: string | undefined;
       try {
-        const candidate = body + buildReplyQuote(threadMessage, this.config.timezone);
-        if (candidate.length <= MAX_REPLY_BODY_LENGTH) {
-          body = candidate;
+        const candidate = buildReplyQuote(threadMessage, this.config.timezone, { format: 'html' });
+        if (body.length + candidate.length <= MAX_REPLY_BODY_LENGTH) {
+          htmlQuote = candidate;
         }
       } catch (err) {
         logger.warn(
@@ -502,6 +505,7 @@ export class EmailAdapter {
         subject: `Re: ${baseSubject}`,
         body,
         replyToMessageId: threadMessage.id,
+        ...(htmlQuote ? { htmlQuote } : {}),
         ...(ccAddresses.length > 0 ? { cc: ccAddresses } : {}),
       };
 

@@ -104,7 +104,9 @@ export class EmailSendHandler implements SkillHandler {
     // the reply body. Both the fetch and the formatting are non-fatal — if either
     // fails, proceed with the unquoted body and log a warning at the correct step.
     // Note: email-send has no account routing, so getEmailMessage uses the primary account.
-    let quotedBody = body;
+    // htmlQuote is passed separately so it is appended after markdownToHtml(body)
+    // in the gateway, preventing the HTML from being re-escaped.
+    let htmlQuote: string | undefined;
     if (replyToMessageId) {
       let original: Awaited<ReturnType<typeof ctx.outboundGateway.getEmailMessage>> | undefined;
       try {
@@ -117,11 +119,11 @@ export class EmailSendHandler implements SkillHandler {
       }
       if (original !== undefined) {
         try {
-          const candidate = body + buildReplyQuote(original, ctx.timezone);
+          const candidate = buildReplyQuote(original, ctx.timezone, { format: 'html' });
           // Skip the quote silently if it would push the body past the size limit
           // (the agent-authored body already passed the guard above; the quote block
           // itself could tip a long thread over). The send still goes out unquoted.
-          quotedBody = candidate.length <= MAX_BODY_LENGTH ? candidate : body;
+          htmlQuote = body.length + candidate.length <= MAX_BODY_LENGTH ? candidate : undefined;
         } catch (err) {
           ctx.log.warn(
             { err, replyToMessageId },
@@ -138,9 +140,10 @@ export class EmailSendHandler implements SkillHandler {
         channel: 'email',
         to: toAddresses[0]!,
         subject,
-        body: quotedBody,
+        body,
         cc: ccAddresses,
         replyToMessageId,
+        ...(htmlQuote ? { htmlQuote } : {}),
       });
 
       if (!result.success) {
