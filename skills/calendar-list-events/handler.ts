@@ -51,6 +51,20 @@ export class CalendarListEventsHandler implements SkillHandler {
       } else if (contactId && typeof contactId === 'string') {
         // Explicit contactId provided — used by scheduled agents that don't have a
         // real caller contact (e.g. pass ${principal_contact_id} to look up the CEO's calendars).
+        //
+        // Only allow this override in two cases:
+        //   1. System/scheduled context (caller contactId is not a UUID — it's 'system' etc.)
+        //   2. Principal caller (role === 'ceo') — the CEO can look up any contact's calendars
+        // This prevents LLM-driven non-principal agents from reading other contacts' calendars
+        // by constructing a contactId value.
+        const callerIsSystem = !UUID_RE.test(ctx.caller?.contactId ?? '');
+        const callerIsPrincipal = ctx.caller?.role === 'ceo';
+        if (!callerIsSystem && !callerIsPrincipal) {
+          return {
+            success: false,
+            error: `contactId override is not allowed for this caller — only system-context (scheduled) invocations and principal callers may look up calendars by contactId`,
+          };
+        }
         if (!UUID_RE.test(contactId)) {
           return {
             success: false,
@@ -181,7 +195,7 @@ export class CalendarListEventsHandler implements SkillHandler {
       return { success: true, data };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      ctx.log.error({ err, calendarId }, 'Failed to list events');
+      ctx.log.error({ err, calendarId, contactId }, 'Failed to list events');
       return { success: false, error: `Failed to list events: ${message}` };
     }
   }
