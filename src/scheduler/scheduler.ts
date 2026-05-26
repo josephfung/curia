@@ -91,7 +91,7 @@ export interface SchedulerConfig {
   /** Outbound context service — when present, expired/released rows are purged daily and at startup. */
   outboundContextService?: OutboundContextService;
   /** Assumed task duration for jobs with no explicit expectedDurationSeconds.
-   *  Sourced from config.scheduler.default_expected_duration_seconds. Default: 600. */
+   *  Sourced from config.scheduler.defaultExpectedDurationSeconds. Default: 600. */
   defaultExpectedDurationSeconds?: number;
 }
 

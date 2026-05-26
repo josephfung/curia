@@ -658,17 +658,35 @@ export function loadYamlConfig(configDir: string): YamlConfig {
     }
   }
 
-  // Validate delegate if present — a zero or negative timeout would let every delegation
-  // immediately time out, producing difficult-to-trace runtime symptoms.
+  // Validate delegate if present.
+  // Guard: if set to a scalar (e.g. `delegate: 90000`) optional chaining would silently
+  // return undefined and the override would be dropped — fail loudly instead.
+  if (config.delegate !== undefined && (typeof config.delegate !== 'object' || Array.isArray(config.delegate) || config.delegate === null)) {
+    throw new Error(`delegate must be a YAML mapping, got: ${typeof config.delegate}`);
+  }
   const delegateTimeoutMs = config.delegate?.defaultTimeoutMs;
-  if (delegateTimeoutMs !== undefined && (!Number.isInteger(delegateTimeoutMs) || delegateTimeoutMs <= 0)) {
-    throw new Error(`delegate.defaultTimeoutMs must be a positive integer (milliseconds), got: ${delegateTimeoutMs}`);
+  if (delegateTimeoutMs !== undefined) {
+    // A zero or negative value would let every delegation time out immediately.
+    if (!Number.isInteger(delegateTimeoutMs) || delegateTimeoutMs <= 0) {
+      throw new Error(`delegate.defaultTimeoutMs must be a positive integer (milliseconds), got: ${delegateTimeoutMs}`);
+    }
+    // Node.js setTimeout silently overflows values > 2^31-1, treating them as ~0 ms.
+    const NODE_MAX_TIMER_MS = 2_147_483_647;
+    if (delegateTimeoutMs > NODE_MAX_TIMER_MS) {
+      throw new Error(
+        `delegate.defaultTimeoutMs exceeds Node.js timer limit (${NODE_MAX_TIMER_MS} ms), got: ${delegateTimeoutMs}`,
+      );
+    }
   }
 
-  // Validate scheduler if present — a zero or negative duration would make the watchdog
-  // immediately flag every job with no explicit expectedDurationSeconds as stuck.
+  // Validate scheduler if present.
+  // Guard: same scalar-config pitfall as delegate above.
+  if (config.scheduler !== undefined && (typeof config.scheduler !== 'object' || Array.isArray(config.scheduler) || config.scheduler === null)) {
+    throw new Error(`scheduler must be a YAML mapping, got: ${typeof config.scheduler}`);
+  }
   const schedulerDefaultDuration = config.scheduler?.defaultExpectedDurationSeconds;
   if (schedulerDefaultDuration !== undefined && (!Number.isInteger(schedulerDefaultDuration) || schedulerDefaultDuration <= 0)) {
+    // A zero or negative duration would make the watchdog immediately flag all jobs as stuck.
     throw new Error(
       `scheduler.defaultExpectedDurationSeconds must be a positive integer (seconds), got: ${schedulerDefaultDuration}`,
     );

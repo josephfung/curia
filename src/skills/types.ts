@@ -232,7 +232,7 @@ export interface SkillContext {
    *  Pre-scoped with conversationId by the execution layer. */
   outboundContext?: import('../dispatch/outbound-context.js').OutboundContextCapability;
   /** Configurable fallback timeout for specialist delegations when no timeout_ms is supplied.
-   *  Sourced from config.delegate.default_timeout_ms. Relevant to the delegate skill only. */
+   *  Sourced from config.delegate.defaultTimeoutMs. Relevant to the delegate skill only. */
   defaultDelegateTimeoutMs?: number;
 }
 
