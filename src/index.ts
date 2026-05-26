@@ -885,15 +885,12 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  // If no principal contact exists yet (fresh deployment, before bootstrap),
-  // ${principal_contact_id} resolves to empty string in agent system prompts.
-  // Mirror the agent_contact_id warning (line ~507) so the misconfiguration
-  // is visible in logs and searchable by the placeholder name.
-  if (!principalContact) {
-    logger.warn(
-      'No contact with system_role=principal found — agent system prompt ${principal_contact_id} will be empty until setup is complete',
-    );
-  }
+  // Note: a missing principal does NOT degrade — the readiness check below
+  // converts it into a fatal startup error with a searchable `check: principal-contact`
+  // log line and aborts boot. No separate warn here; that would duplicate the
+  // readiness error and misleadingly imply degraded operation. The empty-string
+  // fallback for ${principal_contact_id} in src/agents/loader.ts is therefore
+  // pure defense-in-depth — unreachable while the readiness gate stands.
 
   // --- Startup readiness checks ---
   // All checks must pass before the system accepts inbound messages.
