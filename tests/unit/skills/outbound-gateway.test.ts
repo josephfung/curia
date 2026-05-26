@@ -1915,6 +1915,61 @@ describe('outbound.delivered on Signal send', () => {
     // messageId is intentionally omitted — signal-cli RPC returns no ID
     expect(delivered!.payload.messageId).toBeUndefined();
   });
+
+  it('publishes outbound.delivered on a successful Signal group send', async () => {
+    const mocks = createMocks();
+
+    const signalClient = {
+      send: vi.fn().mockResolvedValue(undefined),
+      listGroups: vi.fn().mockResolvedValue([
+        {
+          id: 'group-base64==',
+          name: 'Test Group',
+          members: [
+            { number: '+15555550001' },
+            { number: '+15555550002' },
+          ],
+          pendingMembers: [],
+          isMember: true,
+        },
+      ]),
+    } as unknown as import('../../../src/channels/signal/signal-rpc-client.js').SignalRpcClient;
+
+    // contactService returns null for the group ID lookup — groups have no individual contact record.
+    // The blocked-contact check sees null and proceeds (fail-open / no record = not blocked).
+    (mocks.contactService.resolveByChannelIdentity as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+
+    const gateway = new OutboundGateway({
+      signalClient,
+      signalPhoneNumber: '+15550001111',
+      contactService: mocks.contactService,
+      contentFilter: mocks.contentFilter,
+      bus: mocks.bus,
+      principalIdentities: [makePrincipalIdentity('+15550009999', 'signal')],
+      logger: mocks.logger,
+    });
+
+    const result = await gateway.send(
+      { channel: 'signal', groupId: 'group-base64==', message: 'group ping' },
+      { conversationId: 'signal:group=group-base64==' },
+    );
+
+    expect(result.success).toBe(true);
+
+    const delivered = (mocks.bus.publish as ReturnType<typeof vi.fn>).mock.calls
+      .map((call) => call[1] as BusEvent)
+      .find((evt) => evt.type === 'outbound.delivered');
+
+    expect(delivered, 'expected outbound.delivered for Signal group send').toBeDefined();
+    expect(delivered!.payload).toMatchObject({
+      channel: 'signal',
+      recipientId: 'group-base64==',
+      content: 'group ping',
+      conversationId: 'signal:group=group-base64==',
+    });
+    // messageId is intentionally omitted — signal-cli RPC returns no ID
+    expect(delivered!.payload.messageId).toBeUndefined();
+  });
 });
 
 describe('CEO recipient bypass on send()', () => {
