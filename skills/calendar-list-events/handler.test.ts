@@ -138,7 +138,7 @@ describe('CalendarListEventsHandler — explicit contactId input', () => {
     expect(contactService!.getCalendarsForContact).not.toHaveBeenCalled();
   });
 
-  it('explicit contactId takes precedence over caller contactId', async () => {
+  it('explicit contactId takes precedence over caller contactId when caller is principal', async () => {
     const handler = new CalendarListEventsHandler();
     const principalId = 'deadbeef-0000-0000-0000-000000000001';
     const callerId = 'cafebabe-0000-0000-0000-000000000002';
@@ -148,21 +148,65 @@ describe('CalendarListEventsHandler — explicit contactId input', () => {
       ]),
     } as unknown as SkillContext['contactService'];
 
-    await handler.execute(makeCtx({
+    const result = await handler.execute(makeCtx({
       input: {
         contactId: principalId,
         timeMin: '2026-05-26T00:00:00Z',
         timeMax: '2026-05-26T23:59:59Z',
       },
-      caller: { contactId: callerId, role: null, channel: 'signal' },
+      caller: { contactId: callerId, role: 'ceo', channel: 'signal' },
       contactService,
       nylasCalendarClient: {
         listEvents: vi.fn().mockResolvedValue([]),
       } as unknown as SkillContext['nylasCalendarClient'],
     }));
 
-    // Should use principalId, not callerId
     expect(contactService!.getCalendarsForContact).toHaveBeenCalledWith(principalId);
     expect(contactService!.getCalendarsForContact).not.toHaveBeenCalledWith(callerId);
+    expect(result.success).toBe(true);
+  });
+
+  it('rejects contactId override for non-principal, non-system callers', async () => {
+    const handler = new CalendarListEventsHandler();
+    const someContactId = 'deadbeef-0000-0000-0000-000000000001';
+    const callerContactId = 'cafebabe-0000-0000-0000-000000000002';
+    const contactService = {
+      getCalendarsForContact: vi.fn(),
+    } as unknown as SkillContext['contactService'];
+
+    const result = await handler.execute(makeCtx({
+      input: {
+        contactId: someContactId,
+        timeMin: '2026-05-26T00:00:00Z',
+        timeMax: '2026-05-26T23:59:59Z',
+      },
+      // Regular UUID caller with no ceo role — should be blocked
+      caller: { contactId: callerContactId, role: null, channel: 'signal' },
+      contactService,
+    }));
+
+    expect(result.success).toBe(false);
+    expect((result as { error: string }).error).toContain('not allowed');
+    expect(contactService!.getCalendarsForContact).not.toHaveBeenCalled();
+  });
+
+  it('surfaces a clear error when getCalendarsForContact throws in the contactId path', async () => {
+    const handler = new CalendarListEventsHandler();
+    const contactService = {
+      getCalendarsForContact: vi.fn().mockRejectedValue(new Error('connection terminated unexpectedly')),
+    } as unknown as SkillContext['contactService'];
+
+    const result = await handler.execute(makeCtx({
+      input: {
+        contactId: 'deadbeef-0000-0000-0000-000000000001',
+        timeMin: '2026-05-26T00:00:00Z',
+        timeMax: '2026-05-26T23:59:59Z',
+      },
+      caller: { contactId: 'system', role: null, channel: 'internal' },
+      contactService,
+    }));
+
+    expect(result.success).toBe(false);
+    expect((result as { error: string }).error).toContain('Failed to list events');
   });
 });
