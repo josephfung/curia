@@ -97,6 +97,7 @@ describe('SignalSendHandler', () => {
     }
     expect(gateway.send).toHaveBeenCalledWith(
       expect.objectContaining({ channel: 'signal', recipient: '+14155551234', message: 'hello' }),
+      { taskEventId: undefined, conversationId: undefined },
     );
   });
 
@@ -128,6 +129,7 @@ describe('SignalSendHandler', () => {
     }
     expect(gateway.send).toHaveBeenCalledWith(
       expect.objectContaining({ channel: 'signal', groupId: 'grpABC==', message: 'team update' }),
+      { taskEventId: undefined, conversationId: undefined },
     );
   });
 

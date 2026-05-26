@@ -133,6 +133,9 @@ export class SignalSendHandler implements SkillHandler {
           channel: 'signal',
           groupId: group_id,
           message,
+        }, {
+          taskEventId: ctx.taskEventId,
+          conversationId: ctx.conversationId,
         });
 
         if (!result.success) {
@@ -164,6 +167,9 @@ export class SignalSendHandler implements SkillHandler {
         channel: 'signal',
         recipient: recipient,
         message,
+      }, {
+        taskEventId: ctx.taskEventId,
+        conversationId: ctx.conversationId,
       });
 
       if (!result.success) {
