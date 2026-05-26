@@ -658,6 +658,22 @@ export function loadYamlConfig(configDir: string): YamlConfig {
     }
   }
 
+  // Validate delegate if present — a zero or negative timeout would let every delegation
+  // immediately time out, producing difficult-to-trace runtime symptoms.
+  const delegateTimeoutMs = config.delegate?.default_timeout_ms;
+  if (delegateTimeoutMs !== undefined && (!Number.isInteger(delegateTimeoutMs) || delegateTimeoutMs <= 0)) {
+    throw new Error(`delegate.default_timeout_ms must be a positive integer (milliseconds), got: ${delegateTimeoutMs}`);
+  }
+
+  // Validate scheduler if present — a zero or negative duration would make the watchdog
+  // immediately flag every job with no explicit expectedDurationSeconds as stuck.
+  const schedulerDefaultDuration = config.scheduler?.default_expected_duration_seconds;
+  if (schedulerDefaultDuration !== undefined && (!Number.isInteger(schedulerDefaultDuration) || schedulerDefaultDuration <= 0)) {
+    throw new Error(
+      `scheduler.default_expected_duration_seconds must be a positive integer (seconds), got: ${schedulerDefaultDuration}`,
+    );
+  }
+
   return config;
 }
 
