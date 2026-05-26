@@ -173,6 +173,7 @@ describe('EmailReplyHandler — CC modes', () => {
       expect.objectContaining({
         cc: ['bob@example.com', 'carol@example.com'],
       }),
+      expect.anything(),
     );
   });
 
@@ -245,6 +246,7 @@ describe('EmailReplyHandler — CC modes', () => {
       expect.objectContaining({
         cc: ['a@example.com', 'b@example.com'],
       }),
+      expect.anything(),
     );
   });
 });
