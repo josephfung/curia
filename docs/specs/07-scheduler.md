@@ -246,3 +246,6 @@ Four skills available to agents:
 | Audit logging (`schedule.fired`, `schedule.suspended`, `schedule.recovered` events) | Done |
 | Declarative job cleanup — auto-cancel stale YAML schedules on cron changes or removals | Done |
 | Health endpoint: scheduler stats (active jobs, suspended jobs, next due) | Not Done |
+| `TaskOriginator` threaded through declarative (YAML-defined) scheduled jobs so specialist tasks fired by cron carry the originating caller through the bus | Done |
+| Periodic cleanup of expired or released `outbound_context` rows via a scheduled job (see [spec 11 §Outbound Context Bridge](11-entity-context-enrichment.md#outbound-context-bridge)) | Done |
+| `delegate.defaultTimeoutMs` and `scheduler.defaultExpectedDurationSeconds` config keys (camelCase) with startup validation | Done |

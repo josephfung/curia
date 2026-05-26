@@ -366,3 +366,8 @@ These are non-negotiable for launch.
 | Trust-gated action thresholds use `messageTrustScore` numeric values, enforced via Coordinator system prompt | Done |
 | Data sensitivity tags on knowledge graph entities | Done |
 | Bulk export gates active for confidential+ data | Not Done |
+| `human.decision` audit events populate `deciderId` and `deciderChannel` for every decision | Done |
+| Auth boundary — case-insensitive role lookup in authorization checks | Done |
+| Auth boundary — `trust_level` fallback when a contact has no explicit override | Done |
+| Auth boundary — effective-trust gating on contact-grant-permission and adjacent skills | Done |
+| Auth boundary — `trust_level_defaults` keys validated at config load time | Done |

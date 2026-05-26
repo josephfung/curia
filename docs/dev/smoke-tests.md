@@ -201,3 +201,29 @@ expected_behaviors:
 5. Submit the YAML file — no other changes needed
 
 A good smoke test is a gift to the next person who touches that feature. It doesn't have to be complex to be useful.
+
+---
+
+## Refreshing eval-harness prompt blocks (`inspect-prompts`)
+
+Smoke tests in `curia-deploy` mock the system-prompt injection blocks (office identity, executive profile, trust thresholds, agent list) so the LLM judge sees a stable prompt across runs. When any of those resolved blocks change, the mocks have to be refreshed — otherwise the judge is grading against stale context.
+
+`scripts/inspect-prompts.ts` prints the current resolved blocks as JSON. Run it from a Curia checkout connected to a bootstrapped database and pipe the output into `curia-deploy`:
+
+```bash
+pnpm inspect-prompts > /path/to/curia-deploy/tests/eval/prompt-blocks.json
+```
+
+On a live server the same command runs against the production checkout:
+
+```bash
+pnpm --prefix /opt/curia tsx --env-file=.env scripts/inspect-prompts.ts
+```
+
+**Re-run after:**
+- editing `config/office-identity.yaml` or applying identity changes via the API
+- editing `config/executive-profile.yaml` or applying profile changes via the API
+- changing `security.trust_thresholds` in `config/default.yaml`
+- adding or removing specialist agents (`agents/*.yaml`)
+
+The script connects to the database directly and does not require Curia to be running.

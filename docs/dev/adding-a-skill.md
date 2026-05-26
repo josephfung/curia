@@ -160,6 +160,7 @@ Valid capability names and what they grant:
 | `confidencePipeline` | `ConfidencePipeline` | Contact confidence scoring. Skills that modify trust-related data (trust level, identity pairings) should declare this and fire scoring signals through it. |
 | `tempFileStore` | `TempFileStore` | Writing binary buffers to a secure tmpfs mount; returns `file://` URLs for MCP tools that accept file paths. Used by email download skills for binary-correct attachment handoff. |
 | `infraLlm` | `InfraLlm` | Constrained LLM access — `classify()` and `extract()` only, no raw `chat()`. Routed through `ModelRouter` with full telemetry. For infrastructure skills that need LLM reasoning without unbounded access. |
+| `outboundContext` | `ScopedOutboundContext` | Register/release outbound-context entries (delegation-aware reply correlation). Used by send skills and any agent that wants to claim a reply thread. See [spec 11 §Outbound Context Bridge](../specs/11-entity-context-enrichment.md#outbound-context-bridge). |
 
 Services NOT in this list (`contactService`, `entityContextAssembler`, `agentPersona`) are **universal** — available to every skill without declaration. Omit `capabilities` entirely if your skill only uses universal services.
 
@@ -329,6 +330,11 @@ interface SkillContext {
   /** Constrained LLM access — declare "infraLlm" in capabilities.
    *  Provides classify() and extract() only — no raw chat(). */
   infraLlm?: InfraLlm;
+
+  /** Outbound context registry — declare "outboundContext" in capabilities.
+   *  Pre-scoped to the current conversation. Methods: register, release.
+   *  Use to claim reply threads for delegation-aware reply routing. */
+  outboundContext?: ScopedOutboundContext;
 
   // --- Universal fields (available to all skills) ---
 

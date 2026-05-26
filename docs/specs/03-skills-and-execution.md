@@ -233,3 +233,8 @@ These are not bundled but documented as recommended integrations:
 | Built-in skill: `image-generate` (DALL-E 3 image generation) | Done |
 | Built-in skill: `memory-query` (freeform KG search) | Done |
 | Built-in skill: `memory-store` (write-with-validation) | Done |
+| `outboundContext` capability — pre-scoped `ScopedOutboundContext` injected into send skills for context-bridge registration (see [spec 11](11-entity-context-enrichment.md#outbound-context-bridge)) | Done |
+| Two-tier `allowed_callers` pattern — coordinator-only restrictions for governance skills (e.g. `context-bridge-release`); validator tests enforce manifest correctness at load time | Done |
+| Built-in skill: `request-clarification` — multi-turn clarification systemized as a reusable skill | Done |
+| Built-in skill: `file-parse` — accepts `temp_file_url` as an alternative to `content_base64`, with `CURIA_TEMPFILE_DIR` path validation | Done |
+| Built-in skill: `context-bridge-release` — coordinator-only, marks outbound context entries released | Done |
