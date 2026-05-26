@@ -113,7 +113,10 @@ interface OutboundDeliveredPayload {
    *  promoteOrCreateRecipientContact() runs after dispatch, so v1 does not
    *  resolve twice. */
   recipientContactId?: string;
-  /** Post-PII-redaction message body that actually went on the wire. */
+  /** Message body that actually went on the wire. For sends routed through
+   *  OutboundGateway.send(), this is the post-PII-redaction body. For
+   *  sendEmailDraft(), PII redaction is skipped (draft content passed
+   *  through the pipeline at creation time). */
   content: string;
   /** Conversation ID when available (dispatcher-routed and skill-invoked
    *  sends initiated from a coordinator task both have one). */
