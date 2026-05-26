@@ -1255,11 +1255,13 @@ async function main(): Promise<void> {
     } else if (agentConfig.inject_specialists) {
       // Specialists that need to know about available agents
       // opt in via inject_specialists: true in their YAML.
-      // Pass principalContactId so specialists (e.g. meeting-debrief) can
-      // reference ${principal_contact_id} without calling contact-lookup-by-role.
+      // Pass agentContactId AND principalContactId so specialists can reference
+      // their own identity (${agent_contact_id}) and the principal's contact ID
+      // (${principal_contact_id}) without calling contact-lookup-by-role.
       try {
         systemPrompt = interpolateRuntimeContext(systemPrompt, {
           availableSpecialists: agentRegistry.specialistSummary(),
+          agentContactId: agentIdentityContactId,
           principalContactId: principalContact?.id,
         });
       } catch (err) {
@@ -1267,13 +1269,16 @@ async function main(): Promise<void> {
         throw err;
       }
     } else {
-      // All other specialists: resolve ${principal_contact_id} so any agent
-      // that references the placeholder gets the principal's contact ID at
-      // bootstrap. Specialists list is not needed here (those agents don't
-      // route work to other specialists). principalContactId is safe to pass
-      // unconditionally — interpolateRuntimeContext only acts on prompts that
-      // contain the literal placeholder.
+      // All other specialists: resolve ${agent_contact_id} (the agent's own
+      // identity, e.g. calendar.yaml's "Your contact ID is ${agent_contact_id}")
+      // and ${principal_contact_id} so both placeholders work without each
+      // specialist needing inject_specialists. interpolateRuntimeContext runs
+      // its full replace chain unconditionally — values not passed here would
+      // be blanked to empty string by the UUID-format check, so we MUST pass
+      // every contact ID the prompt could reference. Specialists list is
+      // omitted because non-inject_specialists agents don't route work.
       systemPrompt = interpolateRuntimeContext(systemPrompt, {
+        agentContactId: agentIdentityContactId,
         principalContactId: principalContact?.id,
       });
     }
