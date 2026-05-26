@@ -72,31 +72,34 @@ export class BullpenHandler implements SkillHandler {
             topic, ctx.agentId, cleanParticipants, content, mentionedAgentIds, originator,
           );
 
-          // Publish is best-effort — thread is already persisted. If publish fails,
-          // agents will still see the thread via pending-thread context injection.
-          // The originator is also stored on the thread row, so BullpenDispatcher can
-          // rehydrate it from DB when processing poll-fallback replies.
-          try {
-            await ctx.bus.publish('agent', createAgentDiscuss({
-              threadId: thread.id,
-              messageId: message.id,
-              topic: thread.topic,
-              senderAgentId: ctx.agentId,
-              participants: thread.participants,
-              mentionedAgentIds,
-              content,
-              // Forward the parent task's originator so BullpenDispatcher can stamp it
-              // on the reply tasks it creates for each participant. This ensures
-              // isPrincipalOriginated() returns correctly for CEO-authorized bullpen work.
-              originator,
-              parentEventId: ctx.taskEventId,
-            }));
-          } catch (publishErr) {
+          // Publish is fire-and-forget — thread is already persisted. We do NOT
+          // await here because bus.publish dispatches subscribers sequentially
+          // (see src/bus/bus.ts) and a slow agent.discuss subscriber would push
+          // the handler past its skill timeout, causing the caller to retry
+          // and create duplicate threads even though the side-effects are
+          // already committed (issue #721). If publish fails, agents will still
+          // see the thread via pending-thread context injection, and the
+          // originator is stored on the thread row so BullpenDispatcher can
+          // rehydrate it when processing poll-fallback replies.
+          void ctx.bus.publish('agent', createAgentDiscuss({
+            threadId: thread.id,
+            messageId: message.id,
+            topic: thread.topic,
+            senderAgentId: ctx.agentId,
+            participants: thread.participants,
+            mentionedAgentIds,
+            content,
+            // Forward the parent task's originator so BullpenDispatcher can stamp it
+            // on the reply tasks it creates for each participant. This ensures
+            // isPrincipalOriginated() returns correctly for CEO-authorized bullpen work.
+            originator,
+            parentEventId: ctx.taskEventId,
+          })).catch((publishErr: unknown) => {
             ctx.log.error(
               { err: publishErr, threadId: thread.id, originatorRole: originator?.systemRole ?? 'none' },
               'Bullpen: thread created but discuss event publish failed — agents will see it on next poll (originator preserved in thread row)',
             );
-          }
+          });
 
           return { success: true, data: { thread_id: thread.id, message_id: message.id } };
         }
@@ -127,28 +130,28 @@ export class BullpenHandler implements SkillHandler {
 
           const message = await ctx.bullpenService.postMessage(threadId, ctx.agentId, content, mentionedAgentIds);
 
-          // Publish is best-effort — reply is already persisted. If publish fails,
-          // agents will still see the message via pending-thread context injection.
-          try {
-            await ctx.bus.publish('agent', createAgentDiscuss({
-              threadId,
-              messageId: message.id,
-              topic: existing.thread.topic,
-              senderAgentId: ctx.agentId,
-              participants: existing.thread.participants,
-              mentionedAgentIds,
-              content,
-              // Forward the parent task's originator so BullpenDispatcher can stamp it
-              // on the reply tasks it creates for each participant.
-              originator: ctx.taskMetadata?.originator as TaskOriginator | undefined,
-              parentEventId: ctx.taskEventId,
-            }));
-          } catch (publishErr) {
+          // Publish is fire-and-forget — reply is already persisted. Same
+          // rationale as `post`: bus.publish dispatches subscribers sequentially,
+          // so awaiting here would re-introduce the timeout hazard from #721.
+          // Agents will still see the message via pending-thread context injection.
+          void ctx.bus.publish('agent', createAgentDiscuss({
+            threadId,
+            messageId: message.id,
+            topic: existing.thread.topic,
+            senderAgentId: ctx.agentId,
+            participants: existing.thread.participants,
+            mentionedAgentIds,
+            content,
+            // Forward the parent task's originator so BullpenDispatcher can stamp it
+            // on the reply tasks it creates for each participant.
+            originator: ctx.taskMetadata?.originator as TaskOriginator | undefined,
+            parentEventId: ctx.taskEventId,
+          })).catch((publishErr: unknown) => {
             ctx.log.error(
               { err: publishErr, threadId },
               'Bullpen: reply posted but discuss event publish failed — agents will see it on next poll',
             );
-          }
+          });
 
           return { success: true, data: { thread_id: threadId, message_id: message.id } };
         }

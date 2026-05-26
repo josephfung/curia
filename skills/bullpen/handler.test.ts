@@ -156,4 +156,103 @@ describe('BullpenHandler', () => {
     expect(result.success).toBe(false);
     expect((result as { success: false; error: string }).error).toMatch(/unknown action/i);
   });
+
+  // Regression test for #721: bus.publish awaits subscribers sequentially
+  // (see src/bus/bus.ts), so a slow agent.discuss subscriber would block
+  // bullpen.post past its 10s skill timeout — even though the thread row was
+  // already committed. The handler must return as soon as openThread commits;
+  // publish is fire-and-forget per the handler comments.
+  it('post: returns immediately even when bus.publish is slow', async () => {
+    let publishResolve: (() => void) | undefined;
+    const slowPublish = vi.fn().mockImplementation(
+      () => new Promise<void>((resolve) => { publishResolve = resolve; }),
+    );
+    const ctx = makeCtx(
+      {
+        action: 'post',
+        topic: 'slow subscriber',
+        participants: ['coordinator', 'agent-b'],
+        content: 'Should not block',
+      },
+      {
+        bus: {
+          publish: slowPublish,
+          subscribe: vi.fn(),
+        } as unknown as SkillContext['bus'],
+      },
+    );
+
+    const start = Date.now();
+    const result = await handler.execute(ctx);
+    const elapsed = Date.now() - start;
+
+    expect(result.success).toBe(true);
+    // Publish is still in-flight, but handler returned without awaiting it.
+    expect(slowPublish).toHaveBeenCalledOnce();
+    expect(publishResolve).toBeDefined();
+    // Generous upper bound — openThread is in-memory, should be milliseconds.
+    expect(elapsed).toBeLessThan(500);
+
+    // Cleanup so the dangling promise doesn't keep vitest open.
+    publishResolve!();
+  });
+
+  it('reply: returns immediately even when bus.publish is slow', async () => {
+    // Open a thread normally first.
+    const openCtx = makeCtx({
+      action: 'post',
+      topic: 'slow reply',
+      participants: ['coordinator', 'agent-b'],
+      content: 'Start',
+    });
+    const openResult = await handler.execute(openCtx);
+    const threadId = ((openResult as { success: true; data: Record<string, unknown> }).data).thread_id as string;
+
+    let publishResolve: (() => void) | undefined;
+    const slowPublish = vi.fn().mockImplementation(
+      () => new Promise<void>((resolve) => { publishResolve = resolve; }),
+    );
+    const replyCtx = makeCtx(
+      { action: 'reply', thread_id: threadId, content: 'reply body' },
+      {
+        bullpenService: openCtx.bullpenService,
+        agentId: 'agent-b',
+        bus: { publish: slowPublish, subscribe: vi.fn() } as unknown as SkillContext['bus'],
+      },
+    );
+
+    const start = Date.now();
+    const result = await handler.execute(replyCtx);
+    const elapsed = Date.now() - start;
+
+    expect(result.success).toBe(true);
+    expect(slowPublish).toHaveBeenCalledOnce();
+    expect(publishResolve).toBeDefined();
+    expect(elapsed).toBeLessThan(500);
+
+    publishResolve!();
+  });
+
+  it('post: a publish rejection does not surface as a handler failure', async () => {
+    const failingPublish = vi.fn().mockRejectedValue(new Error('bus exploded'));
+    const ctx = makeCtx(
+      {
+        action: 'post',
+        topic: 'publish fail',
+        participants: ['coordinator'],
+        content: 'still ok',
+      },
+      {
+        bus: { publish: failingPublish, subscribe: vi.fn() } as unknown as SkillContext['bus'],
+      },
+    );
+
+    const result = await handler.execute(ctx);
+    expect(result.success).toBe(true);
+
+    // Let the rejected promise settle so the .catch() runs before the test
+    // exits — otherwise vitest may flag an unhandled rejection.
+    await new Promise((r) => setImmediate(r));
+    expect(failingPublish).toHaveBeenCalledOnce();
+  });
 });
