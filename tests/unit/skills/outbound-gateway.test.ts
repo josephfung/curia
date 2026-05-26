@@ -458,6 +458,80 @@ describe('OutboundGateway', () => {
       });
     });
   });
+
+  // ---------------------------------------------------------------------------
+  // Defensive invariant tests — outbound.delivered must NEVER fire on a blocked
+  // or failed send; bus.publish failure must NEVER propagate as a send failure.
+  // These tests should pass immediately (no implementation changes needed) because
+  // the emission is correctly wired inside `if (result.success)` blocks.
+  // ---------------------------------------------------------------------------
+
+  it('does NOT publish outbound.delivered when content filter blocks the send', async () => {
+    (mocks.contentFilter.check as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      passed: false,
+      findings: [{ rule: 'pii-credit-card', detail: 'card number detected' }],
+    });
+
+    const gateway = new OutboundGateway({
+      nylasClients: new Map([['curia', mocks.nylasClient]]),
+      contactService: mocks.contactService,
+      contentFilter: mocks.contentFilter,
+      bus: mocks.bus,
+      principalIdentities: [makePrincipalIdentity('ceo@example.com')],
+      logger: mocks.logger,
+    });
+
+    const result = await gateway.send(baseRequest);
+
+    expect(result.success).toBe(false);
+    const delivered = (mocks.bus.publish as ReturnType<typeof vi.fn>).mock.calls
+      .map((call) => call[1] as BusEvent)
+      .find((evt) => evt.type === 'outbound.delivered');
+    expect(delivered).toBeUndefined();
+  });
+
+  it('does NOT publish outbound.delivered when Nylas throws', async () => {
+    (mocks.nylasClient.sendMessage as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('Nylas down'));
+
+    const gateway = new OutboundGateway({
+      nylasClients: new Map([['curia', mocks.nylasClient]]),
+      contactService: mocks.contactService,
+      contentFilter: mocks.contentFilter,
+      bus: mocks.bus,
+      principalIdentities: [makePrincipalIdentity('ceo@example.com')],
+      logger: mocks.logger,
+    });
+
+    const result = await gateway.send(baseRequest);
+
+    expect(result.success).toBe(false);
+    const delivered = (mocks.bus.publish as ReturnType<typeof vi.fn>).mock.calls
+      .map((call) => call[1] as BusEvent)
+      .find((evt) => evt.type === 'outbound.delivered');
+    expect(delivered).toBeUndefined();
+  });
+
+  it('returns success even when publishing outbound.delivered throws', async () => {
+    (mocks.bus.publish as ReturnType<typeof vi.fn>).mockImplementation(async (_layer: string, evt: BusEvent) => {
+      if (evt.type === 'outbound.delivered') throw new Error('bus down');
+    });
+
+    const gateway = new OutboundGateway({
+      nylasClients: new Map([['curia', mocks.nylasClient]]),
+      contactService: mocks.contactService,
+      contentFilter: mocks.contentFilter,
+      bus: mocks.bus,
+      principalIdentities: [makePrincipalIdentity('ceo@example.com')],
+      logger: mocks.logger,
+    });
+
+    const result = await gateway.send(baseRequest);
+
+    // The wire send succeeded — bus-publish failure must not surface as a send failure
+    expect(result.success).toBe(true);
+    // Verify the message ID is still returned (the Nylas send DID succeed)
+    expect(result.messageId).toBeDefined();
+  });
 });
 
 // ---------------------------------------------------------------------------
