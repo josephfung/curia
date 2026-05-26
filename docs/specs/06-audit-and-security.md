@@ -50,11 +50,13 @@ The bus validates publisher authorization at registration time. Each module regi
 
 | Layer | Can Publish | Can Subscribe |
 |---|---|---|
-| `channel` | `inbound.message`, `inbound.event` | `outbound.message`, `outbound.event` |
+| `channel` | `inbound.message`, `inbound.event`, `outbound.delivered` | `outbound.message`, `outbound.event` |
 | `dispatch` | `agent.task`, `outbound.message` | `inbound.message`, `agent.response`, `agent.error` |
 | `agent` | `skill.invoke`, `agent.response`, `agent.discuss`, `memory.*` | `agent.task`, `skill.result`, `agent.discuss` |
 | `execution` | `skill.result` | `skill.invoke` |
 | `system` | ALL (audit, scheduler, memory engine) | ALL |
+
+`outbound.delivered` is emitted by the channel layer's outbound gateway after every successful wire-level send (email, Signal). It is distinct from `outbound.message` (which is emitted by `dispatch` when an `agent.response` is translated to a send request): `outbound.message` represents *intent to send*, while `outbound.delivered` represents *confirmed wire-level delivery*. Together they close the visibility gap for skill-invoked sends that bypass the `agent.response` path. See [spec 10 — Audit Log Hardening](10-audit-log-hardening.md) and [spec 15 — Outbound Safety](15-outbound-safety.md).
 
 Attempting to publish an unauthorized event type throws an error at call time. This is the primary security boundary.
 

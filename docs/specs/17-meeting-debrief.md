@@ -105,6 +105,18 @@ The agent's `agent_tasks.progress` JSON field tracks:
 - `pendingDebriefs` entries pruned after `claimTtlHours` (default 48 hours)
 - **Before pruning expired entries**, the agent publishes an `audit.event` recording: meeting title, attendees, whether a prompt was sent, whether a response was received, and whether follow-up actions were taken. This ensures auditability even when state is cleaned up.
 
+#### Cross-tick idempotency via `config-store`
+
+`pendingDebriefs` lives in `agent_tasks.progress` and is the agent's primary "have I prompted for this meeting?" state. But scheduled-job runs are stateless across crashes, pruning, or state-loss bugs — if `pendingDebriefs` is empty when a new tick starts, the agent has no protection against re-prompting for a meeting it already prompted for.
+
+The agent maintains a parallel idempotency record in `config-store` keyed by calendar event ID:
+
+- Before opening a Bullpen thread for a meeting, the agent calls `config-store get prompted:<calendarEventId>`.
+- If the key exists, the agent skips — a prompt was already sent for this event.
+- After a successful `bullpen.post`, the agent writes `config-store set prompted:<calendarEventId>` with the resulting thread ID and timestamp.
+
+The idempotency key has a longer TTL than `pendingDebriefs` (e.g. matching the configured `claimTtlHours`), so it survives a `pendingDebriefs` reset and prevents duplicate prompts during the entire window the meeting could plausibly still warrant a debrief. This is layer-2 defense, independent of [the bullpen fire-and-forget contract](03-skills-and-execution.md) — even if a future regression brings back bullpen retry storms, this guard prevents duplicate user-facing messages.
+
 ### Durable knowledge → KG facts (only when worth remembering)
 
 - **Debrief preferences:** "CEO prefers no debrief prompts for meetings with Christophe" → fact on Christophe's contact KG node. Long-lived, inspectable, used by Stage 2 judgment.

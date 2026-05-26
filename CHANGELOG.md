@@ -34,6 +34,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Email reply quoting** — natural agent-response replies (no skill invocation) now include the quoted original message, matching the skill-driven paths. `buildReplyQuote` moved to `src/skills/_shared/` so the email channel adapter can share it. (#720)
 - **`reply-quote`** — Outlook-on-Windows VML CSS from `<style>` blocks no longer leaks into the quoted body as visible text; delegates to `html-to-text.ts` which strips style/script block contents. (#733)
 
+### Removed
+
+- **Shipped WIP design/plan docs** — 2 files in `docs/wip/` for the `${principal_contact_id}` work removed; spec 09 (principal contact resolution) and spec 02 (runtime template variables) are now authoritative.
+
 ## [0.31.0] — 2026-05-26 — "TARS"
 
 > **TARS** *(Interstellar, 2014, Christopher Nolan)* — the faintly wry robot who carried Cooper's messages across the tesseract back to Murph on Earth, with configurable parameters and his own quiet initiative. v0.31 is built around the same shapes: a delegation-aware context bridge that routes replies back to whichever agent started the thread, Curia's first proactive agent (meeting debrief), externalized timeouts you can tune, and a request-clarification skill for pausing mid-task to check in.

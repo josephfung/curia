@@ -54,9 +54,19 @@ message must pass through it regardless of origin.
 1. **Blocked contact check** — reject immediately if the recipient is blocked
 2. **Content filter** — run the two-stage filter pipeline (see below)
 3. **Channel dispatch** — route to the appropriate channel client (`email` → Nylas, etc.)
+4. **Audit emission** — on successful wire-level delivery, emit `outbound.delivered`
 
 The gateway fails closed: if the content filter crashes, the message is blocked. A channel
 client failure returns a structured error; it does not silently drop the message.
+
+### `outbound.delivered` — the canonical wire-level audit event
+
+The gateway emits an `outbound.delivered` event after every successful send. This is the canonical "did something actually leave the building?" audit signal:
+
+- Emitted exactly once per successful send.
+- Includes `channel`, `recipientId`, `content`, `conversationId` (or null), `taskEventId`, and the originating `skillInvocationId` so the causal chain is reconstructible.
+- Distinct from `outbound.message` (emitted by `dispatch` when translating `agent.response` → send request), which represents *intent* to send and is only emitted for response-path sends. Skill-invoked sends (`signal-send`, `email-send`, `email-reply`, etc.) bypass `dispatch` entirely; without `outbound.delivered`, those sends would be invisible to a security review counting outbound traffic. See [spec 10](10-audit-log-hardening.md) for the full extraction-row contract.
+- HTTP/web responses are captured by `agent.response` and are out of scope for `outbound.delivered`. CLI is dev-only and excluded by design.
 
 ---
 

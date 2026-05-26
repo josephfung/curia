@@ -50,6 +50,7 @@ The audit logger extracts structured fields from each event payload before INSER
 | `agent.task` | `delegate` | `pending` | `agent` / agentId | `system` / `dispatch` |
 | `agent.response` | `respond` | `success` | `conversation` / conversationId | `agent` / agentId |
 | `outbound.message` | `send` | `success` | `conversation` / conversationId | `system` / `dispatch` |
+| `outbound.delivered` | `deliver` | `success` | `conversation` / conversationId | `channel` / channelId |
 | `skill.invoke` | `execute` | `pending` | `skill` / skillName | `agent` / agentId |
 | `skill.result` | `execute` | from `result.success` | `skill` / skillName | `agent` / agentId |
 | `memory.store` | `create` | `success` | `kg_node` / nodeId | `agent` / agentId |
@@ -59,6 +60,8 @@ The audit logger extracts structured fields from each event payload before INSER
 | `message.held` | `hold` | `pending` | `message` / heldMessageId | `system` / `dispatch` |
 
 **Design note on `outbound.message` initiator:** The initiator is attributed to `system/dispatch` because the dispatch layer performs the send. To find the upstream agent that composed the response, follow the `parent_event_id` chain back to the `agent.response` event. This keeps the extraction logic simple (no parent lookups) while the causal chain preserves full attribution for deeper queries.
+
+**Design note on `outbound.delivered` vs `outbound.message`:** `outbound.message` is emitted by `dispatch` when an `agent.response` is translated into a send request — it records *intent to send* along the `agent.response → outbound.message → channel` path. `outbound.delivered` is emitted by the channel layer's outbound gateway immediately after a successful wire-level send (email accepted by Nylas, Signal accepted by the daemon) and records *confirmed wire-level delivery*. The two coexist because not every send originates from an `agent.response`: skill-invoked sends (`signal-send`, `email-send`, `email-reply`, etc.) bypass the dispatch translation path entirely. `outbound.delivered` is therefore the canonical "did something actually leave the building?" audit event — security reviews counting outbound traffic should query `outbound.delivered`, not `outbound.message`.
 
 This extraction happens in the audit logger, not in the event factories. The event factories remain unchanged — they produce domain events, not audit records. The audit logger is the translation layer.
 
