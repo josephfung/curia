@@ -885,6 +885,16 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
+  // If no principal contact exists yet (fresh deployment, before bootstrap),
+  // ${principal_contact_id} resolves to empty string in agent system prompts.
+  // Mirror the agent_contact_id warning (line ~507) so the misconfiguration
+  // is visible in logs and searchable by the placeholder name.
+  if (!principalContact) {
+    logger.warn(
+      'No contact with system_role=principal found — agent system prompt ${principal_contact_id} will be empty until setup is complete',
+    );
+  }
+
   // --- Startup readiness checks ---
   // All checks must pass before the system accepts inbound messages.
   // See docs/wip/2026-05-10-principal-identity-design.md
@@ -1240,18 +1250,32 @@ async function main(): Promise<void> {
       systemPrompt = interpolateRuntimeContext(systemPrompt, {
         availableSpecialists: agentRegistry.specialistSummary(),
         agentContactId: agentIdentityContactId,
+        principalContactId: principalContact?.id,
       });
     } else if (agentConfig.inject_specialists) {
       // Specialists that need to know about available agents
       // opt in via inject_specialists: true in their YAML.
+      // Pass principalContactId so specialists (e.g. meeting-debrief) can
+      // reference ${principal_contact_id} without calling contact-lookup-by-role.
       try {
         systemPrompt = interpolateRuntimeContext(systemPrompt, {
           availableSpecialists: agentRegistry.specialistSummary(),
+          principalContactId: principalContact?.id,
         });
       } catch (err) {
         logger.error({ err, agentName: agentConfig.name }, 'Failed to interpolate specialists into agent system prompt');
         throw err;
       }
+    } else {
+      // All other specialists: resolve ${principal_contact_id} so any agent
+      // that references the placeholder gets the principal's contact ID at
+      // bootstrap. Specialists list is not needed here (those agents don't
+      // route work to other specialists). principalContactId is safe to pass
+      // unconditionally — interpolateRuntimeContext only acts on prompts that
+      // contain the literal placeholder.
+      systemPrompt = interpolateRuntimeContext(systemPrompt, {
+        principalContactId: principalContact?.id,
+      });
     }
 
     // Resolve this agent's capability tier to a concrete model, then look up
