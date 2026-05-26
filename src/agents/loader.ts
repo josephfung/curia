@@ -138,6 +138,11 @@ function interpolatePersona(
  * - ${current_date} — today's date in the configured timezone (YYYY-MM-DD, Day)
  * - ${timezone} — the configured IANA timezone name
  * - ${agent_contact_id} — the agent's own contact ID (seeded at bootstrap)
+ * - ${principal_contact_id} — the principal's contact ID (loaded at bootstrap from
+ *   contactService.findContactBySystemRole('principal')). Agents that need to act
+ *   on behalf of the principal should reference this rather than calling
+ *   contact-lookup-by-role on every invocation. See CLAUDE.md "Reaching the
+ *   principal" for the authoring convention.
  *
  * This runs at bootstrap time (after all agents are registered) and is separate
  * from persona interpolation which runs at config load time.
@@ -151,6 +156,7 @@ export function interpolateRuntimeContext(
   context: {
     availableSpecialists?: string;
     agentContactId?: string;
+    principalContactId?: string;
     officeIdentityBlock?: string;
     executiveVoiceBlock?: string;
   },
@@ -183,5 +189,13 @@ export function interpolateRuntimeContext(
       // explicit check here ensures a future change (env var, config, etc.) can't
       // accidentally inject arbitrary text into the system prompt.
       UUID_FORMAT.test(context.agentContactId ?? '') ? (context.agentContactId ?? '') : '',
+    )
+    .replace(
+      /\$\{principal_contact_id\}/g,
+      // Same UUID-format defense-in-depth as agent_contact_id above. Source is
+      // contactService.findContactBySystemRole('principal') in src/index.ts;
+      // a missing principal resolves to empty string and is flagged by a
+      // boot-time warning rather than silently injecting placeholder text.
+      UUID_FORMAT.test(context.principalContactId ?? '') ? (context.principalContactId ?? '') : '',
     );
 }
