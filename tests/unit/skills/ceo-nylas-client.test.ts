@@ -28,6 +28,11 @@ function mockFetchSuccess(data: unknown = []) {
 }
 
 describe('htmlToPlainText', () => {
+  it('returns empty string for null or undefined input', () => {
+    expect(htmlToPlainText(null)).toBe('');
+    expect(htmlToPlainText(undefined)).toBe('');
+  });
+
   it('strips basic HTML tags', () => {
     expect(htmlToPlainText('<p>Hello <b>world</b></p>')).toBe('Hello world');
   });

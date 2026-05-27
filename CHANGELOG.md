@@ -15,11 +15,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Security
 
-- **HTML sanitization** — fixed closing-tag regexes in `htmlToText`, `stripHtmlTags`, and `htmlToPlainText` to use `[^>]*` instead of `\s*`, so tags like `</script foo>` are matched and stripped (CodeQL `js/bad-tag-filter`). Merged complete- and incomplete-tag strip loops into one stability loop to eliminate single-pass bypasses. Added `<script>`/`<style>` block content stripping to `htmlToPlainText` in `ceo-nylas-client.ts`. (#CodeQL alerts 61–68, 55)
-
-### Fixed
-
-- **Declarative scheduler jobs** — include `source_agent_id` in the persisted identity so two specialist agents can declare identical schedules targeting the same agent without silently collapsing into one row. (#231)
+- **HTML sanitization** — hardened `htmlToText`, `stripHtmlTags`, and `htmlToPlainText` closing-tag regexes and tag-strip loops against bypass attacks; added `<script>`/`<style>` content stripping to `ceo-nylas-client.ts`. (CodeQL #55, #61–68)
 
 ## [0.31.1] — 2026-05-26 — "Janet"
 
