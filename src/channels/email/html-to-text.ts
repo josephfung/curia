@@ -17,8 +17,8 @@ export function htmlToText(html: string | undefined | null): string {
   // closing tags with unexpected attributes like </script foo> that \s* misses.
   for (let prev = ''; prev !== text; ) {
     prev = text;
-    text = text.replace(/<style[^>]*>[\s\S]*?<\/style[^>]*>/gi, '');
-    text = text.replace(/<script[^>]*>[\s\S]*?<\/script[^>]*>/gi, '');
+    text = text.replace(/<style[^>]*>[\s\S]*?<\/style[^>]*>/gi, ''); // codeql[js/incomplete-multi-character-sanitization]
+    text = text.replace(/<script[^>]*>[\s\S]*?<\/script[^>]*>/gi, ''); // codeql[js/incomplete-multi-character-sanitization]
   }
 
   // Convert <br> variants to newlines
@@ -37,7 +37,7 @@ export function htmlToText(html: string | undefined | null): string {
   // tag pattern to prevent consuming large bodies on inputs with a lone <.
   for (let prev = ''; prev !== text; ) {
     prev = text;
-    text = text.replace(/<[^>]+>/g, '');          // complete tags
+    text = text.replace(/<[^>]+>/g, ''); // codeql[js/incomplete-multi-character-sanitization] complete tags
     text = text.replace(/<[a-zA-Z][^>]{0,500}/g, ''); // incomplete tags
   }
 
