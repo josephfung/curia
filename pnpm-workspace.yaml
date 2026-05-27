@@ -1,3 +1,5 @@
+allowBuilds:
+  esbuild: set this to true or false
 # Explicitly declare pnpm v11 default: prevent transitive (indirect) dependencies
 # from being resolved via exotic sources (git repos, direct tarball URLs).
 # Note: this does NOT restrict direct dependencies listed in package.json,
@@ -5,6 +7,8 @@
 # We declare this explicitly so the policy is visible and survives future
 # pnpm default changes.
 blockExoticSubdeps: true
+patchedDependencies:
+  nylas@8.1.2: patches/nylas@8.1.2.patch
 
 # If a dependency needs to run postinstall scripts (e.g. native addons),
 # explicitly allow it here. Currently no packages require this.
