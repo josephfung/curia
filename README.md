@@ -92,24 +92,20 @@ Skills come in two flavours (local handlers and MCP servers) behind a single int
 
 ---
 
-## Quick Start
+## Quickstart
 
-> **Note:** Curia is in pre-alpha. The spec is complete; implementation is underway. Star the repo to follow progress.
-
-**Prerequisites:** Node >= 22, PostgreSQL 16+ with pgvector, an LLM provider API key (Anthropic, OpenAI, or Ollama).
+**Prerequisites:** [Docker](https://docs.docker.com/get-docker/), Node >= 22, pnpm, and an [Anthropic API key](https://console.anthropic.com).
 
 ```bash
 git clone https://github.com/josephfung/curia.git
 cd curia
-cp .env.example .env        # add your API keys and DB connection
-npm install
-npm run db:migrate
-npm start
+pnpm setup
 ```
 
-The full setup guide covers configuration tiers, channel setup, Docker Compose, and verification steps:
+Curia will be running at `http://localhost:3000`. The setup script prints your bootstrap secret — save it to a password manager and use it on the login page to create your account.
 
-**[→ Full installation guide](https://docs.meetcuria.com/get-started/installation)**
+**[→ Full installation guide](https://docs.meetcuria.com/get-started/installation)**  
+(channels, production deploy, configuration reference)
 
 ---
 

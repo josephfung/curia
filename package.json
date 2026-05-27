@@ -8,6 +8,7 @@
     "node": ">=22"
   },
   "scripts": {
+    "setup": "bash scripts/setup.sh",
     "predev": "pnpm migrate",
     "dev": "tsx watch --env-file=.env --ignore curia.log src/index.ts",
     "prelocal": "pnpm migrate",
