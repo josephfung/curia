@@ -52,6 +52,7 @@
     "sanitize-html": "^2.17.4"
   },
   "pnpm": {
+    "onlyBuiltDependencies": ["esbuild"],
     "overrides": {
       "hono": ">=4.12.18",
       "fast-uri": ">=3.1.2",

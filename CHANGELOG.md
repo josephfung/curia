@@ -17,6 +17,11 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 - **HTML sanitization** — hardened `htmlToText`, `stripHtmlTags`, and `htmlToPlainText` closing-tag regexes and tag-strip loops against bypass attacks; added `<script>`/`<style>` content stripping to `ceo-nylas-client.ts`. (CodeQL #55, #61–68)
 
+### Fixed
+
+- **Declarative scheduler jobs** — include `source_agent_id` in the persisted identity so two specialist agents can declare identical schedules targeting the same agent without silently collapsing into one row. (#231)
+- **Trivy Docker Image Scan** — add `onlyBuiltDependencies: ["esbuild"]` to `package.json` so pnpm 11's build-script approval check doesn't abort the Docker build cold.
+
 ## [0.31.1] — 2026-05-26 — "Janet"
 
 > **Janet** *(The Good Place, 2016, Michael Schur)* — the neighborhood's vast informational assistant: appears when summoned, answers with total knowledge of every resident, performs only the function asked, never lies about what she did. v0.31.1 reshapes Curia's agents along the same lines — they know who the principal is at bootstrap, stay on the task they were scheduled for, don't retry into uncertainty, and leave an honest audit trail of every wire-level send.
