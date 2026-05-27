@@ -409,23 +409,43 @@ function normalizeMessageFull(msg: NylasApiMessage): NylasMessageFull {
 
 // ── HTML → plain text utility ───────────────────────────────────────────────
 
-export function htmlToPlainText(html: string): string {
-  return html
+export function htmlToPlainText(html: string | undefined | null): string {
+  if (!html) return '';
+  // First convert block-level tags to newlines (single-pass, not security-sensitive).
+  let text = html
     .replace(/<br\s*\/?>/gi, '\n')
     .replace(/<\/p>/gi, '\n\n')
     .replace(/<\/div>/gi, '\n')
-    .replace(/<\/li>/gi, '\n')
-    // Strip all complete HTML tags.
-    .replace(/<[^>]+>/g, '')
-    // Strip incomplete tags — bare <tagname without a closing > is not caught by <[^>]+>
-    // above (which requires >). This prevents injected <script fragments from surviving
-    // into the plain-text body that is shown to the LLM. {0,500} caps match length to
-    // prevent stripping large text bodies on inputs with a lone < far from any >.
-    .replace(/<[a-zA-Z][^>]{0,500}/g, '')
-    // Decode HTML entities.
-    // Order matters: &amp; must be decoded LAST to prevent double-decoding.
-    // Decoding &amp; first would turn &amp;lt; into &lt; and then into <,
-    // smuggling a literal < into the output.
+    .replace(/<\/li>/gi, '\n');
+
+  // Strip <script> and <style> blocks including their content. Loop until the
+  // string stops changing to prevent nested-substitution bypass (e.g.
+  // <scri<script>pt>…<scri<script>pt> leaves outer fragments that merge into
+  // <script>…</script> after one pass; a second pass catches those).
+  // [^>]* before the closing > handles padded tags like </script > and also
+  // closing tags with unexpected attributes like </script foo> that \s* misses.
+  for (let prev = ''; prev !== text; ) {
+    prev = text;
+    text = text.replace(/<script[^>]*>[\s\S]*?<\/script[^>]*>/gi, '');
+    text = text.replace(/<style[^>]*>[\s\S]*?<\/style[^>]*>/gi, '');
+  }
+
+  // Strip all remaining HTML tags. Loop until stable — stripping a complete tag
+  // can expose an incomplete <tagname fragment from a nested structure, and
+  // stripping an incomplete fragment can in turn expose a new complete tag.
+  // {0,500} caps the incomplete-tag pattern to prevent consuming large bodies
+  // on inputs with a lone < far from any >.
+  for (let prev = ''; prev !== text; ) {
+    prev = text;
+    text = text.replace(/<[^>]+>/g, '');          // complete tags
+    text = text.replace(/<[a-zA-Z][^>]{0,500}/g, ''); // incomplete tags
+  }
+
+  // Decode HTML entities.
+  // Order matters: &amp; must be decoded LAST to prevent double-decoding.
+  // Decoding &amp; first would turn &amp;lt; into &lt; and then into <,
+  // smuggling a literal < into the output.
+  return text
     .replace(/&lt;/g, '<')
     .replace(/&gt;/g, '>')
     .replace(/&quot;/g, '"')

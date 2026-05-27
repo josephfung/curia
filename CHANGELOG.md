@@ -13,9 +13,9 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
-### Fixed
+### Security
 
-- **Declarative scheduler jobs** — include `source_agent_id` in the persisted identity so two specialist agents can declare identical schedules targeting the same agent without silently collapsing into one row. (#231)
+- **HTML sanitization** — hardened `htmlToText`, `stripHtmlTags`, and `htmlToPlainText` closing-tag regexes and tag-strip loops against bypass attacks; added `<script>`/`<style>` content stripping to `ceo-nylas-client.ts`. (CodeQL #55, #61–68)
 
 ## [0.31.1] — 2026-05-26 — "Janet"
 

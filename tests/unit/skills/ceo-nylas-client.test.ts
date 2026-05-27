@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import pino from 'pino';
+import { htmlToPlainText } from '../../../skills/_shared/ceo-nylas-client.js';
 
 // We can't easily mock global fetch per-test with vi.fn(), so instead we
 // test the CeoNylasClient by spying on global.fetch and inspecting the URL
@@ -25,6 +26,60 @@ function mockFetchSuccess(data: unknown = []) {
     }),
   );
 }
+
+describe('htmlToPlainText', () => {
+  it('returns empty string for null or undefined input', () => {
+    expect(htmlToPlainText(null)).toBe('');
+    expect(htmlToPlainText(undefined)).toBe('');
+  });
+
+  it('strips basic HTML tags', () => {
+    expect(htmlToPlainText('<p>Hello <b>world</b></p>')).toBe('Hello world');
+  });
+
+  it('converts <br> to newlines', () => {
+    expect(htmlToPlainText('Line 1<br>Line 2')).toContain('Line 1\nLine 2');
+  });
+
+  it('strips <script> blocks including their content', () => {
+    const html = 'before <script>alert(1)</script> after';
+    const result = htmlToPlainText(html);
+    expect(result).toContain('before');
+    expect(result).toContain('after');
+    expect(result).not.toContain('alert');
+    expect(result).not.toContain('<script');
+  });
+
+  it('strips <style> blocks including their content', () => {
+    const html = '<style>.x { color: red; }</style><p>Content</p>';
+    const result = htmlToPlainText(html);
+    expect(result).toContain('Content');
+    expect(result).not.toContain('color');
+    expect(result).not.toContain('<style');
+  });
+
+  it('strips <script> blocks whose closing tag has trailing whitespace (</script >)', () => {
+    const html = 'before <script>evil()</script > after';
+    const result = htmlToPlainText(html);
+    expect(result).not.toContain('evil');
+    expect(result).toContain('before');
+    expect(result).toContain('after');
+  });
+
+  it('handles nested-substitution bypass attempt (<scri<script>pt>)', () => {
+    // A crafted input that tries to smuggle <script> through the strip:
+    // stripping the inner <script>...</script> block leaves outer fragments
+    // that merge into a new <script> tag. The stability loop catches this.
+    const html = '<scri<script>alert(1)</script>pt>payload</script>';
+    const result = htmlToPlainText(html);
+    expect(result).not.toContain('<script');
+    expect(result).not.toContain('alert');
+  });
+
+  it('decodes HTML entities', () => {
+    expect(htmlToPlainText('&amp; &lt; &gt;')).toBe('& < >');
+  });
+});
 
 describe('CeoNylasClient.listMessages — folder alias normalization', () => {
   it('normalizes DRAFTS to DRAFT for Gmail compatibility', async () => {
