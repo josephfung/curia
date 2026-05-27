@@ -409,7 +409,8 @@ function normalizeMessageFull(msg: NylasApiMessage): NylasMessageFull {
 
 // ── HTML → plain text utility ───────────────────────────────────────────────
 
-export function htmlToPlainText(html: string): string {
+export function htmlToPlainText(html: string | undefined | null): string {
+  if (!html) return '';
   // First convert block-level tags to newlines (single-pass, not security-sensitive).
   let text = html
     .replace(/<br\s*\/?>/gi, '\n')

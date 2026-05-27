@@ -18,17 +18,25 @@
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
 import { toLocalIso, formatDisplayTimezone } from '../../src/time/timestamp.js';
 
-// Strip HTML tags for plaintext extraction.
+// Strip HTML tags and script/style block content for plaintext extraction.
 // Not a full DOM parser — good enough for preview purposes.
-// Note: this function strips tags but not block content, so <script>payload</script>
-// will leave "payload" in the output. The threat model here is LLM context
-// injection, not XSS rendering; a separate issue tracks adding block stripping.
 function stripHtml(content: string): string {
-  // Loop until stable: stripping a complete inner tag (e.g. <a> from <sc<a>ript)
-  // can expose an incomplete <script fragment. Re-running catches what each pass
-  // reveals. {0,500} caps the incomplete-tag match to prevent consuming large
-  // bodies on inputs with a lone < far from any >.
   let result = content;
+
+  // Strip <script> and <style> blocks including their content. Loop until
+  // stable to prevent nested-substitution bypass.
+  // [^>]* before the closing > handles padded tags like </script > and also
+  // closing tags with unexpected attributes like </script foo> that \s* misses.
+  for (let prev = ''; prev !== result; ) {
+    prev = result;
+    result = result.replace(/<script[^>]*>[\s\S]*?<\/script[^>]*>/gi, '');
+    result = result.replace(/<style[^>]*>[\s\S]*?<\/style[^>]*>/gi, '');
+  }
+
+  // Strip all remaining HTML tags. Loop until stable — stripping a complete tag
+  // can expose an incomplete <tagname fragment, and stripping an incomplete
+  // fragment can expose a new complete tag. {0,500} caps the incomplete-tag
+  // pattern to prevent consuming large bodies on inputs with a lone <.
   // codeql[js/incomplete-multi-character-sanitization] — the loop runs until stable,
   // so any <script fragment exposed by a tag removal is caught on the next pass.
   for (let prev = ''; prev !== result; ) {
