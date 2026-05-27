@@ -393,18 +393,26 @@ describe('FileParseHandler', () => {
 
   describe('temp_file_url support', () => {
     const handler = new FileParseHandler();
-    // Use /tmp/curia-tempfiles/ which is in the allowed prefix list
-    const tempDir = '/tmp/curia-tempfiles';
+    // Use /tmp/curia-tempfiles/ which is in the handler's allowed prefix list.
+    // mkdtemp creates a uniquely-named subdirectory so the path is not
+    // predictable — avoids the js/insecure-temporary-file CodeQL pattern.
+    // The unique subdir still starts with /tmp/curia-tempfiles/ so it passes
+    // the handler's allow-list check.
+    const TEMPFILES_BASE = '/tmp/curia-tempfiles';
+    let tempDir: string;
     let testFilePath: string;
 
     beforeAll(async () => {
-      await fs.mkdir(tempDir, { recursive: true });
+      await fs.mkdir(TEMPFILES_BASE, { recursive: true });
+      tempDir = await fs.mkdtemp(path.join(TEMPFILES_BASE, 'test-'));
       testFilePath = path.join(tempDir, 'test-file.csv');
       await fs.writeFile(testFilePath, 'vendor,amount\nAcme,50.00');
     });
 
     afterAll(async () => {
-      try { await fs.unlink(testFilePath); } catch { /* cleanup best-effort */ }
+      if (tempDir) {
+        try { await fs.rm(tempDir, { recursive: true, force: true }); } catch { /* cleanup best-effort */ }
+      }
     });
 
     it('reads file from temp_file_url when content_base64 is empty', async () => {

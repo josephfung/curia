@@ -16,6 +16,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Security
 
 - **HTML sanitization** — hardened `htmlToText`, `stripHtmlTags`, and `htmlToPlainText` closing-tag regexes and tag-strip loops against bypass attacks; added `<script>`/`<style>` content stripping to `ceo-nylas-client.ts`. (CodeQL #55, #61–68)
+- **Insecure temp file** — `file-parse` tests now create a unique `mkdtemp` subdirectory under `/tmp/curia-tempfiles/` instead of a fixed path. (CodeQL #69, #70)
 
 ### Fixed
 
