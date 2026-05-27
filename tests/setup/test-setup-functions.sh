@@ -60,6 +60,51 @@ assert_invalid_key "rejects sk-ant with no suffix" "sk-ant"
 assert_invalid_key "rejects sk-ant- with empty suffix" "sk-ant-"
 assert_invalid_key "rejects key with spaces" "sk-ant- abc123"
 
+# --- write_env tests ---
+
+echo ""
+echo "=== write_env ==="
+
+# Create a minimal .env.example for testing
+_tmp_example=$(mktemp)
+cat > "$_tmp_example" <<'EXAMPLE_EOF'
+DB_USER=your-db-user
+DB_PASSWORD=your-db-password
+DATABASE_URL=postgres://your-db-user:your-db-password@localhost:5432/curia
+ANTHROPIC_API_KEY=sk-ant-...
+API_TOKEN=your-secret-token-here
+WEB_APP_BOOTSTRAP_SECRET=replace-with-a-long-random-secret
+# NYLAS_API_KEY=nyk_v0_...
+LOG_LEVEL=info
+EXAMPLE_EOF
+
+_tmp_env=$(mktemp)
+
+# Override script globals for test isolation
+ENV_EXAMPLE="$_tmp_example"
+ENV_FILE="$_tmp_env"
+DB_USER="curia"
+DB_PASSWORD="testpassword123abc"
+API_TOKEN="testtoken456def"
+WEB_APP_BOOTSTRAP_SECRET="testsecret789ghi"
+DATABASE_URL="postgres://curia:testpassword123abc@localhost:5432/curia"
+
+write_env "sk-ant-testkey999"
+
+assert_true "DB_USER=curia written"                   "$_tmp_env" "DB_USER=curia"
+assert_true "DB_PASSWORD written"                      "$_tmp_env" "DB_PASSWORD=testpassword123abc"
+assert_true "DATABASE_URL written"                     "$_tmp_env" "DATABASE_URL=postgres://curia:testpassword123abc@localhost:5432/curia"
+assert_true "ANTHROPIC_API_KEY written"                "$_tmp_env" "ANTHROPIC_API_KEY=sk-ant-testkey999"
+assert_true "API_TOKEN written"                        "$_tmp_env" "API_TOKEN=testtoken456def"
+assert_true "WEB_APP_BOOTSTRAP_SECRET written"         "$_tmp_env" "WEB_APP_BOOTSTRAP_SECRET=testsecret789ghi"
+assert_true "optional comment line preserved"          "$_tmp_env" "# NYLAS_API_KEY"
+assert_true "non-substituted var preserved"            "$_tmp_env" "LOG_LEVEL=info"
+
+rm -f "$_tmp_example" "$_tmp_env"
+# Reset ENV_FILE/ENV_EXAMPLE to real paths after test
+ENV_FILE="$REPO_ROOT/.env"
+ENV_EXAMPLE="$REPO_ROOT/.env.example"
+
 # --- Results ---
 
 echo ""
