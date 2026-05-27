@@ -14,7 +14,7 @@ info()    { echo -e "${BOLD}==> $*${RESET}"; }
 success() { echo -e "${GREEN}✓${RESET}  $*"; }
 warn()    { echo -e "${YELLOW}⚠${RESET}  $*" >&2; }
 error()   { echo -e "${RED}✗${RESET}  $*" >&2; }
-hint()    { echo -e "${GREY}   $*${RESET}"; }
+hint()    { echo -e "${GREY}   $*${RESET}" >&2; }
 
 # --- Paths ---
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -89,6 +89,8 @@ prompt_anthropic_key() {
         local remaining=$((max_attempts - attempts))
         if [[ $remaining -gt 0 ]]; then
             error "Key must start with 'sk-ant-' followed by letters, numbers, hyphens, or underscores. Try again ($remaining attempt(s) remaining):"
+        else
+            error "Key must start with 'sk-ant-' followed by letters, numbers, hyphens, or underscores."
         fi
     done
 
