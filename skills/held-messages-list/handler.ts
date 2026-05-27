@@ -29,19 +29,17 @@ function stripHtml(content: string): string {
   // closing tags with unexpected attributes like </script foo> that \s* misses.
   for (let prev = ''; prev !== result; ) {
     prev = result;
-    result = result.replace(/<script[^>]*>[\s\S]*?<\/script[^>]*>/gi, ''); // codeql[js/incomplete-multi-character-sanitization]
-    result = result.replace(/<style[^>]*>[\s\S]*?<\/style[^>]*>/gi, ''); // codeql[js/incomplete-multi-character-sanitization]
+    result = result.replace(/<script[^>]*>[\s\S]*?<\/script[^>]*>/gi, '');
+    result = result.replace(/<style[^>]*>[\s\S]*?<\/style[^>]*>/gi, '');
   }
 
   // Strip all remaining HTML tags. Loop until stable — stripping a complete tag
   // can expose an incomplete <tagname fragment, and stripping an incomplete
   // fragment can expose a new complete tag. {0,500} caps the incomplete-tag
   // pattern to prevent consuming large bodies on inputs with a lone <.
-  // codeql[js/incomplete-multi-character-sanitization] — the loop runs until stable,
-  // so any <script fragment exposed by a tag removal is caught on the next pass.
   for (let prev = ''; prev !== result; ) {
     prev = result;
-    result = result.replace(/<[^>]+>/g, ''); // codeql[js/incomplete-multi-character-sanitization] complete tags
+    result = result.replace(/<[^>]+>/g, ''); // complete tags
     result = result.replace(/<[a-zA-Z][^>]{0,500}/g, ''); // incomplete tags
   }
   return result;

@@ -18,7 +18,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **HTML sanitization** — hardened `htmlToText`, `stripHtmlTags`, and `htmlToPlainText` closing-tag regexes and tag-strip loops against bypass attacks; added `<script>`/`<style>` content stripping to `ceo-nylas-client.ts`. (CodeQL #55, #61–68)
 - **Insecure temp file** — `file-parse` tests now create a unique `mkdtemp` subdirectory under `/tmp/curia-tempfiles/` instead of a fixed path. (CodeQL #69, #70)
 - **ip-address XSS** — bumped transitive `ip-address` from 10.1.0 to 10.2.0 via lockfile refresh and added a defensive `>=10.1.1` override. (CodeQL #54)
-- **CodeQL suppression** — added inline `codeql[js/incomplete-multi-character-sanitization]` annotations on the loop-until-stable HTML strip lines in `html-to-text.ts`, `ceo-nylas-client.ts`, `file-parse/handler.ts`, and `held-messages-list/handler.ts`; CodeQL cannot model the loop invariant and flags individual passes as incomplete. (CodeQL #71–81)
+- **CodeQL false-positive** — disabled `js/incomplete-multi-character-sanitization` in `codeql-config.yml`; all flagged sites use a loop-until-stable pattern the rule cannot model, making every alert a false positive; inline suppression comments were ineffective. (CodeQL #71–92)
 
 ### Fixed
 
