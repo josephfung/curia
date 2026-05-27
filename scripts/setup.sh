@@ -28,7 +28,7 @@ SETUP_MODE="full"  # "full" | "resume"
 # Verifies docker, docker compose, node >= 22, and pnpm are available.
 # Exits 1 with an install link on the first missing tool.
 check_prerequisites() {
-    if ! docker info &>/dev/null 2>&1; then
+    if ! docker info &>/dev/null; then
         error "docker not found or not running."
         hint "Install at: https://docs.docker.com/get-docker/"
         exit 1
@@ -46,8 +46,8 @@ check_prerequisites() {
         exit 1
     fi
     local node_major
-    node_major=$(node --version | sed 's/v//' | cut -d. -f1)
-    if [[ "$node_major" -lt 22 ]]; then
+    node_major=$(node --version 2>/dev/null | sed 's/^v//' | cut -d. -f1)
+    if [[ -z "$node_major" ]] || [[ "$node_major" -lt 22 ]]; then
         error "Node $(node --version) found, but >= 22 is required."
         hint "Update at: https://nodejs.org/"
         exit 1
@@ -73,14 +73,14 @@ prompt_anthropic_key() {
     local attempts=0
     local max_attempts=3
 
-    echo ""
-    echo "Curia needs an Anthropic API key to run its agents."
+    echo "" >&2
+    echo "Curia needs an Anthropic API key to run its agents." >&2
     hint "Get one at: https://console.anthropic.com"
-    echo ""
+    echo "" >&2
 
     while [[ $attempts -lt $max_attempts ]]; do
         read -rsp "Paste your key: " key
-        echo ""
+        echo "" >&2
         if validate_anthropic_key "$key"; then
             echo "$key"
             return 0
