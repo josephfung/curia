@@ -203,6 +203,12 @@ wait_for_postgres() {
 # Starts Postgres, runs migrations, starts the full stack, writes SETUP_COMPLETE marker.
 # Sources .env to get HTTP_PORT and WEB_APP_BOOTSTRAP_SECRET for the summary.
 run_infra() {
+    if [[ ! -f "$ENV_FILE" ]]; then
+        error ".env not found. Cannot continue setup."
+        hint "Run: pnpm setup  (choose option 2 — Resume setup)"
+        exit 1
+    fi
+
     # Export all .env vars into the shell environment so pnpm migrate and the
     # summary box can read DATABASE_URL, HTTP_PORT, WEB_APP_BOOTSTRAP_SECRET, etc.
     set -a
