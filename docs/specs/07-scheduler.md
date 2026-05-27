@@ -21,6 +21,7 @@ Built into the main process, backed by Postgres. Handles both user-defined recur
 ```sql
 CREATE TABLE scheduled_jobs (
   id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  source_agent_id TEXT NOT NULL DEFAULT '',
   agent_id      TEXT NOT NULL,
   cron_expr     TEXT,
   run_at        TIMESTAMPTZ,
@@ -205,6 +206,8 @@ schedule:
 ```
 
 These are created at startup from the agent's YAML config. `loadDeclarativeJobs` is **idempotent** — on each startup it reconciles the declared schedules against existing jobs and auto-cancels stale entries (jobs whose cron expression has changed or whose YAML entry has been removed). This prevents orphaned jobs from accumulating when agent configs are updated between restarts.
+
+Declarative job identity includes both the declaring agent (`source_agent_id`) and the target agent (`agent_id`). That means two specialist agents can declare the same cron/task payload against a shared coordinator without one schedule overwriting the other.
 
 #### `intent_anchor` (optional)
 

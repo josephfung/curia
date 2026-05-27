@@ -676,7 +676,7 @@ describe('SchedulerService', () => {
     it('upserts using ON CONFLICT and returns the job id', async () => {
       pool.query.mockResolvedValueOnce({ rows: [{ id: 'job-decl' }] });
 
-      const id = await svc.upsertDeclarativeJob('agent-1', {
+      const id = await svc.upsertDeclarativeJob('source-1', 'agent-1', {
         cron: '0 8 * * 1',
         task: 'weekly-standup',
       });
@@ -685,13 +685,27 @@ describe('SchedulerService', () => {
       const [sql] = pool.query.mock.calls[0] as [string];
       // Column-based conflict syntax — matches the partial unique index definition.
       // ON CONFLICT ON CONSTRAINT only works with named CONSTRAINTs, not named indexes.
-      expect(sql).toContain('ON CONFLICT (agent_id, cron_expr, (task_payload::text)) WHERE created_by = \'system\'');
+      expect(sql).toContain('ON CONFLICT (source_agent_id, agent_id, cron_expr, (task_payload::text)) WHERE created_by = \'system\'');
+    });
+
+    it('persists sourceAgentId separately from the target agent id', async () => {
+      pool.query.mockResolvedValueOnce({ rows: [{ id: 'job-source' }] });
+
+      await svc.upsertDeclarativeJob('writing-scout', 'coordinator', {
+        cron: '30 8 * * 2',
+        task: 'Run the writing scout',
+      });
+
+      const [sql, params] = pool.query.mock.calls[0] as [string, unknown[]];
+      expect(sql).toContain('source_agent_id');
+      expect(params[0]).toBe('writing-scout');
+      expect(params[1]).toBe('coordinator');
     });
 
     it('writes expectedDurationSeconds when provided', async () => {
       pool.query.mockResolvedValueOnce({ rows: [{ id: 'job-decl-1' }] });
 
-      await svc.upsertDeclarativeJob('coordinator', {
+      await svc.upsertDeclarativeJob('coordinator', 'coordinator', {
         cron: '30 7 * * *',
         task: 'Send morning brief',
         expectedDurationSeconds: 60,
@@ -705,7 +719,7 @@ describe('SchedulerService', () => {
     it('writes NULL for expected_duration_seconds when not provided, clearing any stale DB value', async () => {
       pool.query.mockResolvedValueOnce({ rows: [{ id: 'job-decl-2' }] });
 
-      await svc.upsertDeclarativeJob('coordinator', {
+      await svc.upsertDeclarativeJob('coordinator', 'coordinator', {
         cron: '0 9 * * 1',
         task: 'Weekly standup',
         // no expectedDurationSeconds — should write NULL, not omit the column
@@ -724,7 +738,7 @@ describe('SchedulerService', () => {
       for (const invalid of invalids) {
         pool.query.mockResolvedValueOnce({ rows: [{ id: 'job-x' }] });
 
-        await svc.upsertDeclarativeJob('coordinator', {
+        await svc.upsertDeclarativeJob('coordinator', 'coordinator', {
           cron: '0 9 * * *',
           task: 'test',
           expectedDurationSeconds: invalid,
@@ -743,7 +757,7 @@ describe('SchedulerService', () => {
       pool.query.mockResolvedValueOnce({ rows: [{ id: 'job-anchor' }] });
       pool.query.mockResolvedValueOnce({ rows: [], rowCount: 1 });
 
-      await svc.upsertDeclarativeJob('coordinator', {
+      await svc.upsertDeclarativeJob('coordinator', 'coordinator', {
         cron: '0 9 * * 1',
         task: 'weekly digest',
         intent_anchor: 'Produce a weekly summary of key business metrics',
@@ -772,7 +786,7 @@ describe('SchedulerService', () => {
       pool.query.mockResolvedValueOnce({ rows: [{ id: 'job-anchor-2' }] });
       pool.query.mockResolvedValueOnce({ rows: [], rowCount: 0 });
 
-      await svc.upsertDeclarativeJob('coordinator', {
+      await svc.upsertDeclarativeJob('coordinator', 'coordinator', {
         cron: '0 9 * * 1',
         task: 'weekly digest',
         intent_anchor: 'Produce a weekly summary of key business metrics',
@@ -790,7 +804,7 @@ describe('SchedulerService', () => {
     it('does not create an agent_tasks row when intent_anchor is absent', async () => {
       pool.query.mockResolvedValueOnce({ rows: [{ id: 'job-no-anchor' }] });
 
-      await svc.upsertDeclarativeJob('coordinator', {
+      await svc.upsertDeclarativeJob('coordinator', 'coordinator', {
         cron: '0 9 * * 1',
         task: 'weekly standup',
       });
@@ -802,7 +816,7 @@ describe('SchedulerService', () => {
     it('stamps a system originator with systemRole system and channel declarative', async () => {
       pool.query.mockResolvedValueOnce({ rows: [{ id: 'job-orig' }] });
 
-      await svc.upsertDeclarativeJob('coordinator', {
+      await svc.upsertDeclarativeJob('coordinator', 'coordinator', {
         cron: '*/15 * * * *',
         task: 'Check inbox',
       });
@@ -831,7 +845,7 @@ describe('SchedulerService', () => {
       });
 
       const liveTuples = [
-        { agentId: 'coordinator', cronExpr: '*/30 6-17 * * *', taskPayload: '{"task":"old-cron"}' },
+        { sourceAgentId: 'coordinator', agentId: 'coordinator', cronExpr: '*/30 6-17 * * *', taskPayload: '{"task":"old-cron"}' },
       ];
 
       const count = await svc.cancelStaleDeclarativeJobs(liveTuples);
@@ -860,7 +874,7 @@ describe('SchedulerService', () => {
       pool.query.mockResolvedValueOnce({ rows: [] });
 
       await svc.cancelStaleDeclarativeJobs([
-        { agentId: 'coordinator', cronExpr: '0 9 * * *', taskPayload: '{"task":"brief"}' },
+        { sourceAgentId: 'coordinator', agentId: 'coordinator', cronExpr: '0 9 * * *', taskPayload: '{"task":"brief"}' },
       ]);
 
       const [sql] = pool.query.mock.calls[0] as [string];
@@ -874,17 +888,19 @@ describe('SchedulerService', () => {
       pool.query.mockResolvedValueOnce({ rows: [] });
 
       const liveTuples = [
-        { agentId: 'agent-a', cronExpr: '0 8 * * *', taskPayload: '{"task":"t1"}' },
-        { agentId: 'agent-b', cronExpr: '0 9 * * 1', taskPayload: '{"task":"t2"}' },
+        { sourceAgentId: 'source-a', agentId: 'agent-a', cronExpr: '0 8 * * *', taskPayload: '{"task":"t1"}' },
+        { sourceAgentId: 'source-b', agentId: 'agent-b', cronExpr: '0 9 * * 1', taskPayload: '{"task":"t2"}' },
       ];
 
       await svc.cancelStaleDeclarativeJobs(liveTuples);
 
       const [, params] = pool.query.mock.calls[0] as [string, unknown[]];
-      // All six values from the two tuples should appear in the params array
+      // All eight values from the two tuples should appear in the params array
+      expect(params).toContain('source-a');
       expect(params).toContain('agent-a');
       expect(params).toContain('0 8 * * *');
       expect(params).toContain('{"task":"t1"}');
+      expect(params).toContain('source-b');
       expect(params).toContain('agent-b');
       expect(params).toContain('0 9 * * 1');
       expect(params).toContain('{"task":"t2"}');

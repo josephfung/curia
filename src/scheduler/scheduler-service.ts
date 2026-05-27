@@ -443,7 +443,8 @@ export class SchedulerService {
   /**
    * Upsert a declarative job (system-created, idempotent on restart).
    * Uses ON CONFLICT with the column list matching the partial unique index
-   * scheduled_jobs_declarative_uq (agent_id, cron_expr, task_payload::text WHERE created_by = 'system').
+   * scheduled_jobs_declarative_uq
+   * (source_agent_id, agent_id, cron_expr, task_payload::text WHERE created_by = 'system').
    * Note: ON CONFLICT ON CONSTRAINT only works with named CONSTRAINTS, not named indexes —
    * so we use the column-based syntax here to match the CREATE UNIQUE INDEX definition.
    *
@@ -452,6 +453,7 @@ export class SchedulerService {
    * preserve the existing agent_task row (and its accumulated progress) across restarts.
    */
   async upsertDeclarativeJob(
+    sourceAgentId: string,
     agentId: string,
     schedule: { cron: string; task: string; expectedDurationSeconds?: number; intent_anchor?: string },
   ): Promise<string> {
@@ -471,7 +473,7 @@ export class SchedulerService {
 
     if (rawDuration !== undefined && !validDuration) {
       this.logger.warn(
-        { agentId, cron: schedule.cron, expectedDurationSeconds: rawDuration },
+        { sourceAgentId, agentId, cron: schedule.cron, expectedDurationSeconds: rawDuration },
         'upsertDeclarativeJob: expectedDurationSeconds is invalid (must be a positive finite integer) — falling back to system default watchdog threshold; check the agent YAML config',
       );
     }
@@ -493,16 +495,17 @@ export class SchedulerService {
     const originator = makeSystemOriginator();
 
     const sql = `
-      INSERT INTO scheduled_jobs (agent_id, cron_expr, task_payload, status, next_run_at, created_by, timezone, expected_duration_seconds, originator)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-      ON CONFLICT (agent_id, cron_expr, (task_payload::text)) WHERE created_by = 'system'
-      DO UPDATE SET next_run_at = $5,
-                    timezone = $7,
-                    expected_duration_seconds = $8,
-                    originator = COALESCE(scheduled_jobs.originator, $9)
+      INSERT INTO scheduled_jobs (source_agent_id, agent_id, cron_expr, task_payload, status, next_run_at, created_by, timezone, expected_duration_seconds, originator)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+      ON CONFLICT (source_agent_id, agent_id, cron_expr, (task_payload::text)) WHERE created_by = 'system'
+      DO UPDATE SET next_run_at = $6,
+                    timezone = $8,
+                    expected_duration_seconds = $9,
+                    originator = COALESCE(scheduled_jobs.originator, $10)
       RETURNING id
     `;
     const params: unknown[] = [
+      sourceAgentId,
       agentId,
       schedule.cron,
       JSON.stringify(taskPayload),
@@ -573,10 +576,10 @@ export class SchedulerService {
    * Returns the number of rows cancelled.
    */
   async cancelStaleDeclarativeJobs(
-    liveTuples: Array<{ agentId: string; cronExpr: string; taskPayload: string }>,
+    liveTuples: Array<{ sourceAgentId: string; agentId: string; cronExpr: string; taskPayload: string }>,
   ): Promise<number> {
     // Build a parameterized exclusion clause. Each live tuple becomes a
-    // (agent_id, cron_expr, task_payload::text) triple in a VALUES list so
+    // (source_agent_id, agent_id, cron_expr, task_payload::text) tuple in a VALUES list so
     // the NOT IN check is a single set operation — no per-tuple subqueries.
     //
     // When there are zero live tuples, every system row is stale (all schedules
@@ -592,15 +595,15 @@ export class SchedulerService {
       // the cast, a multi-key payload could diverge between JS JSON.stringify
       // key order and PostgreSQL's canonical key order, silently failing to
       // shield a live job from cancellation.
-      valuePlaceholders.push(`($${idx}, $${idx + 1}, $${idx + 2}::jsonb::text)`);
-      params.push(tuple.agentId, tuple.cronExpr, tuple.taskPayload);
-      idx += 3;
+      valuePlaceholders.push(`($${idx}, $${idx + 1}, $${idx + 2}, $${idx + 3}::jsonb::text)`);
+      params.push(tuple.sourceAgentId, tuple.agentId, tuple.cronExpr, tuple.taskPayload);
+      idx += 4;
     }
 
     // When liveTuples is non-empty, exclude the live set. When empty, no exclusion
     // is needed — the UPDATE targets all system rows with pending/failed status.
     const exclusionClause = valuePlaceholders.length > 0
-      ? `AND (agent_id, cron_expr, task_payload::text) NOT IN (VALUES ${valuePlaceholders.join(', ')})`
+      ? `AND (source_agent_id, agent_id, cron_expr, task_payload::text) NOT IN (VALUES ${valuePlaceholders.join(', ')})`
       : '';
 
     const sql = `

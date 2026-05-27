@@ -562,11 +562,11 @@ export class Scheduler {
     const knownAgents = new Set(agentConfigs.map(config => config.name));
     // Collect all (source -> target) schedule edges for cycle detection after upserts.
     const edges: Array<{ source: string; target: string }> = [];
-    // Collect (agent_id, cron_expr, task_payload) tuples for every YAML-declared schedule that
+    // Collect (source_agent_id, agent_id, cron_expr, task_payload) tuples for every YAML-declared schedule that
     // passes the knownAgents guard. Used to shield existing DB rows from stale-job cleanup.
     // Populated BEFORE the upsert attempt so that a transient upsert failure cannot cause a
     // still-declared job's existing DB row to be misclassified as stale and cancelled.
-    const declaredTuples: Array<{ agentId: string; cronExpr: string; taskPayload: string }> = [];
+    const declaredTuples: Array<{ sourceAgentId: string; agentId: string; cronExpr: string; taskPayload: string }> = [];
 
     for (const config of agentConfigs) {
       if (!config.schedule || config.schedule.length === 0) {
@@ -593,6 +593,7 @@ export class Scheduler {
         // (A transient DB error during the upsert must not cause a still-declared
         // job's existing pending row to be cancelled on this startup pass.)
         declaredTuples.push({
+          sourceAgentId: config.name,
           agentId: targetAgentId,
           cronExpr: schedule.cron,
           taskPayload: JSON.stringify({ task: schedule.task }),
@@ -600,6 +601,7 @@ export class Scheduler {
 
         try {
           const jobId = await this.schedulerService.upsertDeclarativeJob(
+            config.name,
             targetAgentId,
             schedule,
           );
