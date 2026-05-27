@@ -133,15 +133,25 @@ handle_existing_env() {
     echo "" >&2
     echo "Your .env already exists. Looks like you've been here before." >&2
     echo "" >&2
-    echo "  1  Start the stack      → docker compose up -d            (default)" >&2
+    # Default to option 2 if setup never completed (safer than starting a stack without migrations).
+    local default_choice="1"
+    if [[ -z "$has_completed" ]]; then
+        default_choice="2"
+    fi
+
+    if [[ "$default_choice" == "1" ]]; then
+        echo "  1  Start the stack      → docker compose up -d            (default)" >&2
+    else
+        echo "  1  Start the stack      → docker compose up -d" >&2
+    fi
     echo "  2  Resume setup         → re-run infra with existing .env" >&2
     if [[ -z "$has_completed" ]]; then
-        echo -e "     ${YELLOW}↑ Setup didn't finish last time — this is probably what you want${RESET}" >&2
+        echo -e "     ${YELLOW}↑ Setup didn't finish last time — this is probably what you want (default)${RESET}" >&2
     fi
     echo -e "  3  Full reset           → ${YELLOW}⚠${RESET}  regenerates secrets, invalidates active sessions" >&2
     echo "" >&2
-    read -rp "Choice [1]: " choice
-    choice="${choice:-1}"
+    read -rp "Choice [$default_choice]: " choice
+    choice="${choice:-$default_choice}"
 
     case "$choice" in
         1)
@@ -182,14 +192,23 @@ wait_for_postgres() {
 
     info "Waiting for Postgres to be ready..."
     while [[ $elapsed -lt $max_wait ]]; do
-        local container_id
-        container_id=$(docker compose --project-directory "$REPO_ROOT" ps -q postgres 2>/dev/null || true)
+        local container_id ps_err
+        # Distinguish "container not started yet" (empty output, exit 0) from docker failures.
+        if ! ps_err=$(docker compose --project-directory "$REPO_ROOT" ps -q postgres 2>&1); then
+            error "docker compose ps failed: $ps_err"
+            hint "Check logs: docker compose --project-directory \"$REPO_ROOT\" logs postgres"
+            exit 1
+        fi
+        container_id="$ps_err"
         if [[ -n "$container_id" ]]; then
-            local health
-            health=$(docker inspect --format='{{.State.Health.Status}}' "$container_id" 2>/dev/null || echo "unknown")
-            if [[ "$health" == "healthy" ]]; then
-                success "Postgres is ready"
-                return 0
+            local health inspect_err
+            # Container may exit between ps and inspect — treat that as not-healthy yet.
+            if inspect_err=$(docker inspect --format='{{.State.Health.Status}}' "$container_id" 2>&1); then
+                health="$inspect_err"
+                if [[ "$health" == "healthy" ]]; then
+                    success "Postgres is ready"
+                    return 0
+                fi
             fi
         fi
         sleep 2
@@ -237,7 +256,11 @@ run_infra() {
     success "Migrations applied"
 
     info "Starting Curia..."
-    docker compose --project-directory "$REPO_ROOT" up -d
+    if ! docker compose --project-directory "$REPO_ROOT" up -d; then
+        error "Failed to start Curia stack."
+        hint "Check logs: docker compose --project-directory \"$REPO_ROOT\" logs"
+        exit 1
+    fi
     success "Curia is up"
 
     # Mark setup as complete so the idempotency menu can distinguish restart vs recovery.
