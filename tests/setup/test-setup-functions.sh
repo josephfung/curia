@@ -198,6 +198,36 @@ fi
 rm -f "$_menu_env" "$_hint_env"
 ENV_FILE="$REPO_ROOT/.env"
 
+# --- print_summary tests ---
+
+echo ""
+echo "=== print_summary ==="
+
+HTTP_PORT="3000"
+_test_secret="aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899"
+_summary_output=$(print_summary "$_test_secret")
+
+_assert_output() {
+    local desc="$1"
+    local pattern="$2"
+    if echo "$_summary_output" | grep -qF "$pattern"; then
+        echo "  ✓ $desc"
+        PASS=$((PASS + 1))
+    else
+        echo "  ✗ $desc — expected '$pattern'"
+        FAIL=$((FAIL + 1))
+    fi
+}
+
+_assert_output "contains 'Curia is running'"                "Curia is running."
+_assert_output "contains login URL"                         "http://localhost:3000"
+_assert_output "contains the full secret"                   "$_test_secret"
+_assert_output "contains 'Bootstrap secret' label"          "Bootstrap secret"
+_assert_output "contains password manager instruction"      "save this to a password manager"
+_assert_output "contains login instruction"                 "Enter it on the login page"
+_assert_output "contains box top-left corner"               "╔"
+_assert_output "contains box bottom-right corner"           "╝"
+
 # --- Results ---
 
 echo ""

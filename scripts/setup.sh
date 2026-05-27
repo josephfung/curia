@@ -244,9 +244,50 @@ run_infra() {
     print_summary "$WEB_APP_BOOTSTRAP_SECRET"
 }
 
+# Prints the final summary box with login URL and bootstrap secret.
+# $1 = WEB_APP_BOOTSTRAP_SECRET (plain hex, no formatting)
+print_summary() {
+    local secret="$1"
+    local port="${HTTP_PORT:-3000}"
+    local W=70  # inner box width; wide enough for a 64-char hex secret + padding
+    local border
+    border=$(printf '═%.0s' $(seq 1 $W))
+
+    echo ""
+    printf "╔%s╗\n" "$border"
+    printf "║%-${W}s║\n" ""
+    printf "║   %-$((W-3))s║\n" "Curia is running."
+    printf "║%-${W}s║\n" ""
+    printf "║   %-$((W-3))s║\n" "Open:    http://localhost:${port}"
+    printf "║%-${W}s║\n" ""
+    printf "║   %-$((W-3))s║\n" "Bootstrap secret (save this to a password manager):"
+    printf "║   %-$((W-3))s║\n" "${secret}"
+    printf "║%-${W}s║\n" ""
+    printf "║   %-$((W-3))s║\n" "Enter it on the login page to create your account."
+    printf "║   %-$((W-3))s║\n" "You won't be shown it again here."
+    printf "║%-${W}s║\n" ""
+    printf "╚%s╝\n" "$border"
+    echo ""
+}
+
 main() {
     check_prerequisites
-    echo "Prerequisites OK — rest of setup not yet implemented"
+
+    if [[ -f "$ENV_FILE" ]]; then
+        handle_existing_env
+        # handle_existing_env exits for option 1 (start only) and aborted option 3.
+        # Returns with SETUP_MODE="resume" (option 2) or SETUP_MODE="full" (option 3 confirmed).
+    fi
+
+    if [[ "$SETUP_MODE" == "full" ]]; then
+        generate_secrets
+        local anthropic_key
+        anthropic_key=$(prompt_anthropic_key)
+        write_env "$anthropic_key"
+        success ".env written"
+    fi
+
+    run_infra
 }
 
 # Guard: only run main when executed directly, not when sourced (enables testing).
