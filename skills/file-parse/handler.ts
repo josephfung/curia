@@ -385,24 +385,23 @@ function stripHtmlTags(html: string): string {
   // input like <scri<script>X</script>pt>…<scri<script>Y</script>pt> causes the
   // g-flag replace to strip both inner blocks simultaneously, leaving the outer
   // fragments to merge into <script>…</script>. A second pass catches that.
-  // \s* before the closing > handles whitespace-padded tags like </script >.
+  // [^>]* before the closing > handles padded tags like </script > and also
+  // closing tags with unexpected attributes like </script foo> that \s* misses.
   for (let prev = ''; prev !== text; ) {
     prev = text;
-    text = text.replace(/<script[^>]*>[\s\S]*?<\/script\s*>/gi, '');
-    text = text.replace(/<style[^>]*>[\s\S]*?<\/style\s*>/gi, '');
+    text = text.replace(/<script[^>]*>[\s\S]*?<\/script[^>]*>/gi, '');
+    text = text.replace(/<style[^>]*>[\s\S]*?<\/style[^>]*>/gi, '');
   }
 
-  // Strip all complete HTML tags (< ... >).
-  text = text.replace(/<[^>]+>/g, ' ');
-
-  // Strip incomplete tags — bare <tagname without a closing > cannot be caught
-  // by <[^>]+> above (which requires >). Loop until stable: stripping a complete
-  // inner tag can expose a bare <script fragment from a nested pattern.
-  // {0,500} caps match length to prevent consuming large text bodies on inputs
-  // with a lone < far from any >.
+  // Strip all remaining HTML tags. Loop until stable — stripping a complete tag
+  // can expose an incomplete <tagname fragment from a nested structure, and
+  // stripping an incomplete fragment can in turn expose a new complete tag.
+  // {0,500} caps the incomplete-tag pattern to prevent consuming large bodies
+  // on inputs with a lone < far from any >.
   for (let prev = ''; prev !== text; ) {
     prev = text;
-    text = text.replace(/<[a-zA-Z][^>]{0,500}/g, ' ');
+    text = text.replace(/<[^>]+>/g, ' ');          // complete tags
+    text = text.replace(/<[a-zA-Z][^>]{0,500}/g, ' '); // incomplete tags
   }
 
   // Decode HTML entities.

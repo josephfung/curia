@@ -29,11 +29,12 @@ function stripHtml(content: string): string {
   // reveals. {0,500} caps the incomplete-tag match to prevent consuming large
   // bodies on inputs with a lone < far from any >.
   let result = content;
+  // codeql[js/incomplete-multi-character-sanitization] — the loop runs until stable,
+  // so any <script fragment exposed by a tag removal is caught on the next pass.
   for (let prev = ''; prev !== result; ) {
     prev = result;
-    result = result
-      .replace(/<[^>]+>/g, '')               // complete tags
-      .replace(/<[a-zA-Z][^>]{0,500}/g, ''); // incomplete tags
+    result = result.replace(/<[^>]+>/g, '');          // complete tags
+    result = result.replace(/<[a-zA-Z][^>]{0,500}/g, ''); // incomplete tags
   }
   return result;
 }
