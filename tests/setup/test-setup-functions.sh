@@ -8,12 +8,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Source the script under test without running main (guarded by BASH_SOURCE check at script bottom)
 source "$SCRIPT_DIR/../../scripts/setup.sh"
 
-# Mock docker for testing (prevent hanging on compose up)
-docker() {
-    # Silently ignore docker calls in tests
-    return 0
-}
-
 # --- Helpers ---
 
 assert_true() {
@@ -144,7 +138,7 @@ echo "DB_USER=curia" > "$_menu_env"
     ENV_FILE="$_menu_env"
     SETUP_MODE="full"
     handle_existing_env < <(printf "3\nno\n")
-) 2>/dev/null || true
+) 2>/dev/null
 if [[ -f "$_menu_env" ]]; then
     echo "  ✓ option 3 + 'no' does not delete .env"
     PASS=$((PASS + 1))
@@ -174,19 +168,33 @@ else
     FAIL=$((FAIL + 1))
 fi
 
-# Test SETUP_COMPLETE marker detection
-_completed_env=$(mktemp)
-printf "DB_USER=curia\n# SETUP_COMPLETE\n" > "$_completed_env"
-ENV_FILE="$_completed_env"
-if grep -q "^# SETUP_COMPLETE" "$_completed_env"; then
-    echo "  ✓ SETUP_COMPLETE marker is detectable via grep"
+# Test SETUP_COMPLETE marker: hint shown when absent, hidden when present
+_hint_env=$(mktemp)
+echo "DB_USER=curia" > "$_hint_env"  # no SETUP_COMPLETE
+ENV_FILE="$_hint_env"
+SETUP_MODE="full"
+_stderr_output=$(echo "2" | handle_existing_env 2>&1 >/dev/null)
+if echo "$_stderr_output" | grep -q "Setup didn't finish last time"; then
+    echo "  ✓ hint shown when SETUP_COMPLETE absent"
     PASS=$((PASS + 1))
 else
-    echo "  ✗ SETUP_COMPLETE marker detection failed"
+    echo "  ✗ hint should appear when SETUP_COMPLETE is absent"
     FAIL=$((FAIL + 1))
 fi
 
-rm -f "$_menu_env" "$_completed_env"
+printf "DB_USER=curia\n# SETUP_COMPLETE\n" > "$_hint_env"  # with SETUP_COMPLETE
+ENV_FILE="$_hint_env"
+SETUP_MODE="full"
+_stderr_output=$(echo "2" | handle_existing_env 2>&1 >/dev/null)
+if ! echo "$_stderr_output" | grep -q "Setup didn't finish last time"; then
+    echo "  ✓ hint hidden when SETUP_COMPLETE present"
+    PASS=$((PASS + 1))
+else
+    echo "  ✗ hint should be hidden when SETUP_COMPLETE is present"
+    FAIL=$((FAIL + 1))
+fi
+
+rm -f "$_menu_env" "$_hint_env"
 ENV_FILE="$REPO_ROOT/.env"
 
 # --- Results ---
