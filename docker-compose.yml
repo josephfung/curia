@@ -41,6 +41,11 @@ services:
     ports:
       - "${HTTP_PORT:-3000}:3000"
     env_file: .env
+    environment:
+      # Override DATABASE_URL so the container reaches postgres by service name,
+      # not localhost (which resolves to the container itself inside Docker).
+      # The .env value uses localhost for host-side tools (pnpm migrate, dev mode).
+      DATABASE_URL: "postgres://${DB_USER:-curia}:${DB_PASSWORD}@postgres:5432/curia"
     depends_on:
       postgres:
         condition: service_healthy
