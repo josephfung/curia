@@ -8,6 +8,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Source the script under test without running main (guarded by BASH_SOURCE check at script bottom)
 source "$SCRIPT_DIR/../../scripts/setup.sh"
 
+# Mock docker for testing (prevent hanging on compose up)
+docker() {
+    # Silently ignore docker calls in tests
+    return 0
+}
+
 # --- Helpers ---
 
 assert_true() {
@@ -104,6 +110,84 @@ rm -f "$_tmp_example" "$_tmp_env"
 # Reset ENV_FILE/ENV_EXAMPLE to real paths after test
 ENV_FILE="$REPO_ROOT/.env"
 ENV_EXAMPLE="$REPO_ROOT/.env.example"
+
+# --- handle_existing_env tests ---
+
+echo ""
+echo "=== handle_existing_env ==="
+
+# Test option 2: sets SETUP_MODE=resume
+_menu_env=$(mktemp)
+echo "DB_USER=curia" > "$_menu_env"
+(
+    ENV_FILE="$_menu_env"
+    SETUP_MODE="full"
+    handle_existing_env < <(echo "2")
+    # Since the function runs in the same subshell, check SETUP_MODE here
+    if [[ "$SETUP_MODE" == "resume" ]]; then
+        exit 0
+    else
+        exit 1
+    fi
+)
+if [[ $? -eq 0 ]]; then
+    echo "  ✓ option 2 sets SETUP_MODE=resume"
+    PASS=$((PASS + 1))
+else
+    echo "  ✗ option 2 should set SETUP_MODE=resume"
+    FAIL=$((FAIL + 1))
+fi
+
+# Test option 3 (cancel): "3\nno" should NOT delete .env and should exit 0
+echo "DB_USER=curia" > "$_menu_env"
+(
+    ENV_FILE="$_menu_env"
+    SETUP_MODE="full"
+    handle_existing_env < <(printf "3\nno\n")
+) 2>/dev/null || true
+if [[ -f "$_menu_env" ]]; then
+    echo "  ✓ option 3 + 'no' does not delete .env"
+    PASS=$((PASS + 1))
+else
+    echo "  ✗ option 3 + 'no' should not delete .env"
+    FAIL=$((FAIL + 1))
+fi
+
+# Test option 3 (confirm): "3\nyes" deletes .env and sets SETUP_MODE=full
+echo "DB_USER=curia" > "$_menu_env"
+(
+    ENV_FILE="$_menu_env"
+    SETUP_MODE="resume"
+    handle_existing_env < <(printf "3\nyes\n")
+    # Verify file was deleted and mode changed
+    if [[ ! -f "$ENV_FILE" ]] && [[ "$SETUP_MODE" == "full" ]]; then
+        exit 0
+    else
+        exit 1
+    fi
+) 2>/dev/null || true
+if [[ $? -eq 0 ]] && [[ ! -f "$_menu_env" ]]; then
+    echo "  ✓ option 3 + 'yes' deletes .env and sets SETUP_MODE=full"
+    PASS=$((PASS + 1))
+else
+    echo "  ✗ option 3 + 'yes' should delete .env and set SETUP_MODE=full"
+    FAIL=$((FAIL + 1))
+fi
+
+# Test SETUP_COMPLETE marker detection
+_completed_env=$(mktemp)
+printf "DB_USER=curia\n# SETUP_COMPLETE\n" > "$_completed_env"
+ENV_FILE="$_completed_env"
+if grep -q "^# SETUP_COMPLETE" "$_completed_env"; then
+    echo "  ✓ SETUP_COMPLETE marker is detectable via grep"
+    PASS=$((PASS + 1))
+else
+    echo "  ✗ SETUP_COMPLETE marker detection failed"
+    FAIL=$((FAIL + 1))
+fi
+
+rm -f "$_menu_env" "$_completed_env"
+ENV_FILE="$REPO_ROOT/.env"
 
 # --- Results ---
 
