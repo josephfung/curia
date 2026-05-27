@@ -120,6 +120,59 @@ write_env() {
         "$ENV_EXAMPLE" > "$ENV_FILE"
 }
 
+# Shown when .env already exists. Returns with SETUP_MODE set based on choice.
+# Choice 1 exits the script entirely (user starts stack manually). Choices 2 & 3 return.
+handle_existing_env() {
+    local has_completed=""
+    if grep -q "^# SETUP_COMPLETE" "$ENV_FILE" 2>/dev/null; then
+        has_completed=1
+    fi
+
+    echo "" >&2
+    echo "Your .env already exists. Looks like you've been here before." >&2
+    echo "" >&2
+    echo "  1  Start the stack      → docker compose up -d            (default)" >&2
+    echo "  2  Resume setup         → re-run infra with existing .env" >&2
+    if [[ -z "$has_completed" ]]; then
+        echo -e "     ${YELLOW}↑ Setup didn't finish last time — this is probably what you want${RESET}" >&2
+    fi
+    echo -e "  3  Full reset           → ${YELLOW}⚠${RESET}  regenerates secrets, invalidates active sessions" >&2
+    echo "" >&2
+    read -rp "Choice [1]: " choice
+    choice="${choice:-1}"
+
+    case "$choice" in
+        1)
+            # User chose to start stack manually — exit setup
+            info "Starting the stack..."
+            hint "You can also run this directly: docker compose up -d"
+            docker compose --project-directory "$REPO_ROOT" up -d
+            success "Stack is up."
+            exit 0
+            ;;
+        2)
+            # Resume mode: keep existing .env and re-run infra
+            SETUP_MODE="resume"
+            ;;
+        3)
+            # Full reset: delete .env and regenerate everything
+            echo "" >&2
+            warn "This will regenerate all secrets. Any active sessions will be invalidated."
+            read -rp "Type 'yes' to confirm: " confirm
+            if [[ "$confirm" != "yes" ]]; then
+                echo "Aborted." >&2
+                exit 0
+            fi
+            rm "$ENV_FILE"
+            SETUP_MODE="full"
+            ;;
+        *)
+            error "Invalid choice '${choice}'. Run pnpm setup again and enter 1, 2, or 3."
+            exit 1
+            ;;
+    esac
+}
+
 main() {
     check_prerequisites
     echo "Prerequisites OK — rest of setup not yet implemented"
