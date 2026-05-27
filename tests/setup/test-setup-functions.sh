@@ -149,6 +149,7 @@ fi
 
 # Test option 3 (confirm): "3\nyes" deletes .env and sets SETUP_MODE=full
 echo "DB_USER=curia" > "$_menu_env"
+_opt3_rc=0
 (
     ENV_FILE="$_menu_env"
     SETUP_MODE="resume"
@@ -159,8 +160,8 @@ echo "DB_USER=curia" > "$_menu_env"
     else
         exit 1
     fi
-) 2>/dev/null || true
-if [[ $? -eq 0 ]] && [[ ! -f "$_menu_env" ]]; then
+) 2>/dev/null || _opt3_rc=$?
+if [[ $_opt3_rc -eq 0 ]] && [[ ! -f "$_menu_env" ]]; then
     echo "  ✓ option 3 + 'yes' deletes .env and sets SETUP_MODE=full"
     PASS=$((PASS + 1))
 else
