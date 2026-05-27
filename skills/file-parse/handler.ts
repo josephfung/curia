@@ -389,8 +389,8 @@ function stripHtmlTags(html: string): string {
   // closing tags with unexpected attributes like </script foo> that \s* misses.
   for (let prev = ''; prev !== text; ) {
     prev = text;
-    text = text.replace(/<script[^>]*>[\s\S]*?<\/script[^>]*>/gi, '');
-    text = text.replace(/<style[^>]*>[\s\S]*?<\/style[^>]*>/gi, '');
+    text = text.replace(/<script[^>]*>[\s\S]*?<\/script[^>]*>/gi, ''); // codeql[js/incomplete-multi-character-sanitization]
+    text = text.replace(/<style[^>]*>[\s\S]*?<\/style[^>]*>/gi, ''); // codeql[js/incomplete-multi-character-sanitization]
   }
 
   // Strip all remaining HTML tags. Loop until stable — stripping a complete tag

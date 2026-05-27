@@ -426,8 +426,8 @@ export function htmlToPlainText(html: string | undefined | null): string {
   // closing tags with unexpected attributes like </script foo> that \s* misses.
   for (let prev = ''; prev !== text; ) {
     prev = text;
-    text = text.replace(/<script[^>]*>[\s\S]*?<\/script[^>]*>/gi, '');
-    text = text.replace(/<style[^>]*>[\s\S]*?<\/style[^>]*>/gi, '');
+    text = text.replace(/<script[^>]*>[\s\S]*?<\/script[^>]*>/gi, ''); // codeql[js/incomplete-multi-character-sanitization]
+    text = text.replace(/<style[^>]*>[\s\S]*?<\/style[^>]*>/gi, ''); // codeql[js/incomplete-multi-character-sanitization]
   }
 
   // Strip all remaining HTML tags. Loop until stable — stripping a complete tag
@@ -437,7 +437,7 @@ export function htmlToPlainText(html: string | undefined | null): string {
   // on inputs with a lone < far from any >.
   for (let prev = ''; prev !== text; ) {
     prev = text;
-    text = text.replace(/<[^>]+>/g, '');          // complete tags
+    text = text.replace(/<[^>]+>/g, ''); // codeql[js/incomplete-multi-character-sanitization] complete tags
     text = text.replace(/<[a-zA-Z][^>]{0,500}/g, ''); // incomplete tags
   }
 
