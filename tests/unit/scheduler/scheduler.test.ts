@@ -809,9 +809,11 @@ describe('Scheduler', () => {
       expect(schedulerService.upsertDeclarativeJob).toHaveBeenCalledTimes(2);
       expect(schedulerService.upsertDeclarativeJob).toHaveBeenCalledWith(
         'coordinator',
+        'coordinator',
         { cron: '0 9 * * 1', task: 'weekly-standup' },
       );
       expect(schedulerService.upsertDeclarativeJob).toHaveBeenCalledWith(
+        'coordinator',
         'coordinator',
         { cron: '0 8 * * *', task: 'daily-brief' },
       );
@@ -868,10 +870,52 @@ describe('Scheduler', () => {
 
       await scheduler.loadDeclarativeJobs(configs);
 
-      // Should be called with 'coordinator', not 'writing-scout'
+      // The source stays 'writing-scout' while the target is 'coordinator'.
       expect(schedulerService.upsertDeclarativeJob).toHaveBeenCalledWith(
+        'writing-scout',
         'coordinator',
         { cron: '30 8 * * 2', task: 'Run the writing scout', agent_id: 'coordinator' },
+      );
+    });
+
+    it('passes distinct sourceAgentIds for identical schedules targeting the same agent', async () => {
+      schedulerService.upsertDeclarativeJob.mockResolvedValue('job-decl-1');
+
+      const configs: AgentYamlConfig[] = [
+        {
+          name: 'writing-scout',
+          model: { provider: 'anthropic', model: 'claude-3' },
+          system_prompt: 'Scout.',
+          schedule: [
+            { cron: '30 8 * * 2', task: 'Check the shared inbox', agent_id: 'coordinator' },
+          ],
+        },
+        {
+          name: 'researcher',
+          model: { provider: 'anthropic', model: 'claude-3' },
+          system_prompt: 'Research.',
+          schedule: [
+            { cron: '30 8 * * 2', task: 'Check the shared inbox', agent_id: 'coordinator' },
+          ],
+        },
+        {
+          name: 'coordinator',
+          model: { provider: 'anthropic', model: 'claude-3' },
+          system_prompt: 'Coord.',
+        },
+      ];
+
+      await scheduler.loadDeclarativeJobs(configs);
+
+      expect(schedulerService.upsertDeclarativeJob).toHaveBeenCalledWith(
+        'writing-scout',
+        'coordinator',
+        { cron: '30 8 * * 2', task: 'Check the shared inbox', agent_id: 'coordinator' },
+      );
+      expect(schedulerService.upsertDeclarativeJob).toHaveBeenCalledWith(
+        'researcher',
+        'coordinator',
+        { cron: '30 8 * * 2', task: 'Check the shared inbox', agent_id: 'coordinator' },
       );
     });
 
@@ -892,6 +936,7 @@ describe('Scheduler', () => {
       await scheduler.loadDeclarativeJobs(configs);
 
       expect(schedulerService.upsertDeclarativeJob).toHaveBeenCalledWith(
+        'my-agent',
         'my-agent',
         { cron: '0 9 * * 1', task: 'weekly task' },
       );
@@ -1013,6 +1058,7 @@ describe('Scheduler', () => {
 
       expect(schedulerService.upsertDeclarativeJob).toHaveBeenCalledWith(
         'coordinator',
+        'coordinator',
         {
           cron: '0 9 * * 1',
           task: 'weekly digest',
@@ -1041,15 +1087,17 @@ describe('Scheduler', () => {
 
       expect(schedulerService.cancelStaleDeclarativeJobs).toHaveBeenCalledTimes(1);
       const [declaredTuples] = schedulerService.cancelStaleDeclarativeJobs.mock.calls[0] as [
-        Array<{ agentId: string; cronExpr: string; taskPayload: string }>,
+        Array<{ sourceAgentId: string; agentId: string; cronExpr: string; taskPayload: string }>,
       ];
       expect(declaredTuples).toHaveLength(2);
       expect(declaredTuples).toContainEqual({
+        sourceAgentId: 'coordinator',
         agentId: 'coordinator',
         cronExpr: '0 9 * * 1',
         taskPayload: JSON.stringify({ task: 'weekly-standup' }),
       });
       expect(declaredTuples).toContainEqual({
+        sourceAgentId: 'coordinator',
         agentId: 'coordinator',
         cronExpr: '0 8 * * *',
         taskPayload: JSON.stringify({ task: 'daily-brief' }),
@@ -1080,23 +1128,25 @@ describe('Scheduler', () => {
       await scheduler.loadDeclarativeJobs(configs);
 
       const [declaredTuples] = schedulerService.cancelStaleDeclarativeJobs.mock.calls[0] as [
-        Array<{ agentId: string; cronExpr: string; taskPayload: string }>,
+        Array<{ sourceAgentId: string; agentId: string; cronExpr: string; taskPayload: string }>,
       ];
       // Both tuples — including the one whose upsert failed — must be in the declared set
       expect(declaredTuples).toHaveLength(2);
       expect(declaredTuples).toContainEqual({
+        sourceAgentId: 'agent-x',
         agentId: 'agent-x',
         cronExpr: '0 1 * * *',
         taskPayload: JSON.stringify({ task: 'fail-task' }),
       });
       expect(declaredTuples).toContainEqual({
+        sourceAgentId: 'agent-x',
         agentId: 'agent-x',
         cronExpr: '0 2 * * *',
         taskPayload: JSON.stringify({ task: 'ok-task' }),
       });
     });
 
-    it('uses targetAgentId (not source config.name) in the declared tuple', async () => {
+    it('keeps both sourceAgentId and targetAgentId in the declared tuple', async () => {
       schedulerService.upsertDeclarativeJob.mockResolvedValue('job-1');
       schedulerService.cancelStaleDeclarativeJobs.mockResolvedValue(0);
 
@@ -1119,11 +1169,11 @@ describe('Scheduler', () => {
       await scheduler.loadDeclarativeJobs(configs);
 
       const [declaredTuples] = schedulerService.cancelStaleDeclarativeJobs.mock.calls[0] as [
-        Array<{ agentId: string; cronExpr: string; taskPayload: string }>,
+        Array<{ sourceAgentId: string; agentId: string; cronExpr: string; taskPayload: string }>,
       ];
-      // The declared tuple must use 'coordinator' (the targetAgentId), not 'writing-scout'
       expect(declaredTuples).toEqual([
         {
+          sourceAgentId: 'writing-scout',
           agentId: 'coordinator',
           cronExpr: '30 8 * * 2',
           taskPayload: JSON.stringify({ task: 'Run the writing scout' }),

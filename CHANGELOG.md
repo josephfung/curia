@@ -13,6 +13,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Declarative scheduler jobs** — include `source_agent_id` in the persisted identity so two specialist agents can declare identical schedules targeting the same agent without silently collapsing into one row. (#231)
+
 ## [0.31.1] — 2026-05-26 — "Janet"
 
 > **Janet** *(The Good Place, 2016, Michael Schur)* — the neighborhood's vast informational assistant: appears when summoned, answers with total knowledge of every resident, performs only the function asked, never lies about what she did. v0.31.1 reshapes Curia's agents along the same lines — they know who the principal is at bootstrap, stay on the task they were scheduled for, don't retry into uncertainty, and leave an honest audit trail of every wire-level send.
