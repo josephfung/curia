@@ -97,6 +97,29 @@ prompt_anthropic_key() {
     exit 1
 }
 
+# Populates global secret variables using openssl CSPRNG.
+generate_secrets() {
+    DB_USER="curia"
+    DB_PASSWORD=$(openssl rand -hex 32)
+    API_TOKEN=$(openssl rand -hex 32)
+    WEB_APP_BOOTSTRAP_SECRET=$(openssl rand -hex 32)
+    DATABASE_URL="postgres://curia:${DB_PASSWORD}@localhost:5432/curia"
+}
+
+# Templates ENV_EXAMPLE into ENV_FILE, substituting generated secrets.
+# Takes the Anthropic API key as $1. Optional vars remain commented.
+write_env() {
+    local anthropic_key="$1"
+    sed \
+        -e "s|^DB_USER=.*|DB_USER=${DB_USER}|" \
+        -e "s|^DB_PASSWORD=.*|DB_PASSWORD=${DB_PASSWORD}|" \
+        -e "s|^DATABASE_URL=.*|DATABASE_URL=${DATABASE_URL}|" \
+        -e "s|^ANTHROPIC_API_KEY=.*|ANTHROPIC_API_KEY=${anthropic_key}|" \
+        -e "s|^API_TOKEN=.*|API_TOKEN=${API_TOKEN}|" \
+        -e "s|^WEB_APP_BOOTSTRAP_SECRET=.*|WEB_APP_BOOTSTRAP_SECRET=${WEB_APP_BOOTSTRAP_SECRET}|" \
+        "$ENV_EXAMPLE" > "$ENV_FILE"
+}
+
 main() {
     check_prerequisites
     echo "Prerequisites OK — rest of setup not yet implemented"
