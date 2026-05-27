@@ -173,6 +173,71 @@ handle_existing_env() {
     esac
 }
 
+# Polls docker for Postgres healthy status every 2s, up to 60s. Exits 1 on timeout.
+wait_for_postgres() {
+    local max_wait=60
+    local elapsed=0
+
+    info "Waiting for Postgres to be ready..."
+    while [[ $elapsed -lt $max_wait ]]; do
+        local container_id
+        container_id=$(docker compose --project-directory "$REPO_ROOT" ps -q postgres 2>/dev/null || true)
+        if [[ -n "$container_id" ]]; then
+            local health
+            health=$(docker inspect --format='{{.State.Health.Status}}' "$container_id" 2>/dev/null || echo "unknown")
+            if [[ "$health" == "healthy" ]]; then
+                success "Postgres is ready"
+                return 0
+            fi
+        fi
+        sleep 2
+        elapsed=$((elapsed + 2))
+        echo -e "${GREY}   ... still waiting (${elapsed}s)${RESET}"
+    done
+
+    error "Postgres did not become healthy within ${max_wait}s."
+    hint "Check logs: docker compose --project-directory \"$REPO_ROOT\" logs postgres"
+    exit 1
+}
+
+# Starts Postgres, runs migrations, starts the full stack, writes SETUP_COMPLETE marker.
+# Sources .env to get HTTP_PORT and WEB_APP_BOOTSTRAP_SECRET for the summary.
+run_infra() {
+    # Export all .env vars into the shell environment so pnpm migrate and the
+    # summary box can read DATABASE_URL, HTTP_PORT, WEB_APP_BOOTSTRAP_SECRET, etc.
+    set -a
+    # shellcheck source=/dev/null
+    source "$ENV_FILE"
+    set +a
+
+    info "Starting Postgres..."
+    docker compose --project-directory "$REPO_ROOT" up -d postgres
+
+    wait_for_postgres
+
+    if [[ ! -d "$REPO_ROOT/node_modules" ]]; then
+        info "Installing dependencies..."
+        pnpm --prefix "$REPO_ROOT" install --frozen-lockfile
+    fi
+
+    info "Running migrations..."
+    if ! pnpm --prefix "$REPO_ROOT" run migrate; then
+        error "Migrations failed. See the output above."
+        hint "To retry: pnpm setup  (choose option 2 — Resume setup)"
+        exit 1
+    fi
+    success "Migrations applied"
+
+    info "Starting Curia..."
+    docker compose --project-directory "$REPO_ROOT" up -d
+    success "Curia is up"
+
+    # Mark setup as complete so the idempotency menu can distinguish restart vs recovery.
+    printf "\n# SETUP_COMPLETE\n" >> "$ENV_FILE"
+
+    print_summary "$WEB_APP_BOOTSTRAP_SECRET"
+}
+
 main() {
     check_prerequisites
     echo "Prerequisites OK — rest of setup not yet implemented"
