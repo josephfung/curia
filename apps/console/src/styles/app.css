@@ -1,0 +1,313 @@
+/* Curia console app styles — design tokens + layout.
+   Sourced from curia-design-system/ui_kits/web-app/styles.css. */
+
+/* ── 1. Theme tokens ─────────────────────────────────────────────────── */
+:root {
+  --app-bg:           #F5F4F1;
+  --app-bg-sunken:    #ECEAE5;
+  --app-card:         #FFFFFF;
+  --app-card-elev:    #FFFFFF;
+  --app-side:         #FFFFFF;
+  --app-muted:        #ECEAE5;
+  --app-accent-bg:    #D9D6D0;
+  --app-border:       rgba(28,28,30,0.10);
+  --app-border-soft:  rgba(28,28,30,0.06);
+  --app-input-bd:     rgba(28,28,30,0.16);
+  --app-fg:           #1C1C1E;
+  --app-fg-muted:     #6F6E6B;
+  --app-fg-subtle:    #8E8C87;
+  --app-primary:      #1C1C1E;
+  --app-primary-fg:   #FFFFFF;
+  --app-destructive:  #C24A30;
+  --app-teal:         #1A6B5E;
+  --app-teal-soft:    rgba(26,107,94,0.10);
+  --app-blue:         #4174C8;
+  --app-blue-soft:    #6BAED6;
+  --app-green:        #5E9E6B;
+  --app-amber:        #C9874A;
+  --app-violet:       #7E6BA8;
+  --app-row-zebra:    rgba(28,28,30,0.025);
+  --app-row-hover:    rgba(26,107,94,0.06);
+  --shadow-1:         0 1px 2px rgba(28,28,30,0.06);
+  --shadow-2:         0 4px 16px rgba(28,28,30,0.10);
+  --shadow-drawer:    -16px 0 32px -16px rgba(28,28,30,0.18);
+}
+
+[data-theme="dark"] {
+  --app-bg:           #111111;
+  --app-bg-sunken:    #0A0A0A;
+  --app-card:         #1E1E1E;
+  --app-card-elev:    #2A2A2C;
+  --app-side:         #1E1E1E;
+  --app-muted:        #373737;
+  --app-accent-bg:    #555555;
+  --app-border:       rgba(255,255,255,0.10);
+  --app-border-soft:  rgba(255,255,255,0.06);
+  --app-input-bd:     rgba(255,255,255,0.15);
+  --app-fg:           #FAFAFA;
+  --app-fg-muted:     #ADADAD;
+  --app-fg-subtle:    #6F6F70;
+  --app-primary:      #DEDEDE;
+  --app-primary-fg:   #1E1E1E;
+  --app-destructive:  #E86040;
+  --app-teal:         #478189;
+  --app-teal-soft:    rgba(71,129,137,0.14);
+  --app-blue:         #4174C8;
+  --app-blue-soft:    #6BAED6;
+  --app-green:        #5E9E6B;
+  --app-amber:        #C9874A;
+  --app-violet:       #7E6BA8;
+  --app-row-zebra:    rgba(255,255,255,0.025);
+  --app-row-hover:    rgba(71,129,137,0.10);
+  --shadow-1:         0 1px 2px rgba(0,0,0,0.40);
+  --shadow-2:         0 4px 16px rgba(0,0,0,0.45);
+  --shadow-drawer:    -16px 0 32px -16px rgba(0,0,0,0.40);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --app-bg:           #111111;
+    --app-bg-sunken:    #0A0A0A;
+    --app-card:         #1E1E1E;
+    --app-card-elev:    #2A2A2C;
+    --app-side:         #1E1E1E;
+    --app-muted:        #373737;
+    --app-accent-bg:    #555555;
+    --app-border:       rgba(255,255,255,0.10);
+    --app-border-soft:  rgba(255,255,255,0.06);
+    --app-input-bd:     rgba(255,255,255,0.15);
+    --app-fg:           #FAFAFA;
+    --app-fg-muted:     #ADADAD;
+    --app-fg-subtle:    #6F6F70;
+    --app-primary:      #DEDEDE;
+    --app-primary-fg:   #1E1E1E;
+    --app-destructive:  #E86040;
+    --app-teal:         #478189;
+    --app-teal-soft:    rgba(71,129,137,0.14);
+    --app-row-zebra:    rgba(255,255,255,0.025);
+    --app-row-hover:    rgba(71,129,137,0.10);
+    --shadow-1:         0 1px 2px rgba(0,0,0,0.40);
+    --shadow-2:         0 4px 16px rgba(0,0,0,0.45);
+    --shadow-drawer:    -16px 0 32px -16px rgba(0,0,0,0.40);
+  }
+}
+
+/* ── 2. Base reset ───────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; overflow: hidden; }
+
+body {
+  background: var(--app-bg);
+  color: var(--app-fg);
+  font-family: 'Manrope', system-ui, sans-serif;
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+#root, .app-root { height: 100vh; width: 100%; display: flex; flex-direction: row; overflow: hidden; }
+
+/* ── 3. Sidebar ──────────────────────────────────────────────────────── */
+.sidebar {
+  flex: none; width: 220px; padding: 16px 10px 10px;
+  background: var(--app-side); border-right: 1px solid var(--app-border);
+  display: flex; flex-direction: column; overflow-y: auto;
+}
+.sidebar-wordmark {
+  color: var(--app-fg); padding: 6px 10px 22px;
+  display: flex; align-items: center;
+}
+.sidebar-wordmark svg { display: block; height: 22px; width: auto; }
+
+.nav-group { display: flex; flex-direction: column; gap: 2px; }
+
+.nav-item, .nav-sub-item {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  border: none; background: none; font-family: inherit;
+  border-radius: 6px; cursor: pointer; text-align: left;
+  color: var(--app-fg-muted);
+  transition: background 120ms, color 120ms;
+}
+.nav-item     { padding: 7px 10px; font-size: 14px; font-weight: 500; }
+.nav-sub-item { padding: 6px 10px 6px 30px; font-size: 13px; font-weight: 500; }
+.nav-item:hover, .nav-sub-item:hover { background: var(--app-muted); color: var(--app-fg); }
+.nav-item.active, .nav-sub-item.active { background: var(--app-muted); color: var(--app-fg); }
+
+.chevron { transition: transform 200ms; margin-left: auto; }
+.chevron.collapsed { transform: rotate(-90deg); }
+
+.sidebar-footer {
+  margin-top: auto;
+  padding-top: 10px;
+  border-top: 1px solid var(--app-border);
+  display: flex; flex-direction: column; gap: 4px;
+}
+.sidebar-user {
+  display: flex; align-items: center; gap: 10px;
+  width: 100%;
+  padding: 8px;
+  background: none; border: none; cursor: pointer;
+  border-radius: 6px;
+  transition: background 120ms;
+}
+.sidebar-user:hover { background: var(--app-muted); }
+.sidebar-user-avatar {
+  width: 30px; height: 30px;
+  background: var(--app-muted);
+  border: 1px solid var(--app-border);
+  border-radius: 50%;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 11px; font-weight: 700;
+  color: var(--app-fg);
+  flex: none;
+}
+.sidebar-user-meta {
+  display: flex; flex-direction: column; align-items: flex-start;
+  min-width: 0;
+}
+.sidebar-user-name { font-size: 13px; font-weight: 500; color: var(--app-fg); line-height: 1.2; }
+.sidebar-user-org {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px; color: var(--app-fg-muted);
+  letter-spacing: 0.04em;
+}
+
+.theme-toggle {
+  display: inline-flex;
+  background: var(--app-muted);
+  border: 1px solid var(--app-border);
+  border-radius: 999px;
+  padding: 2px;
+  gap: 0;
+  margin: 4px 8px 4px;
+  align-self: flex-start;
+}
+.theme-toggle-btn {
+  padding: 4px 8px;
+  font-family: inherit; font-size: 11px; font-weight: 500;
+  background: transparent; border: none; color: var(--app-fg-muted);
+  border-radius: 999px; cursor: pointer;
+  display: inline-flex; align-items: center; gap: 4px;
+  text-transform: uppercase; letter-spacing: 0.06em;
+  transition: background 120ms, color 120ms;
+}
+.theme-toggle-btn:hover { color: var(--app-fg); }
+.theme-toggle-btn.active { background: var(--app-card); color: var(--app-fg); box-shadow: var(--shadow-1); }
+
+/* ── 4. Main content ─────────────────────────────────────────────────── */
+.main { flex: 1; display: flex; flex-direction: column; overflow: hidden; background: var(--app-bg); position: relative; min-width: 0; }
+
+/* ── 5. Topbar ───────────────────────────────────────────────────────── */
+.topbar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 10px 20px;
+  background: var(--app-bg);
+  border-bottom: 1px solid var(--app-border);
+  min-height: 56px;
+}
+.topbar-title { display: flex; flex-direction: column; gap: 1px; flex: 0 0 auto; min-width: 0; }
+.topbar-crumb {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px; font-weight: 500;
+  letter-spacing: 0.10em; text-transform: uppercase;
+  color: var(--app-fg-muted);
+}
+.topbar-h1 {
+  margin: 0;
+  font-family: 'Lora', Georgia, serif;
+  font-weight: 500;
+  font-size: 18px;
+  line-height: 1.15;
+  color: var(--app-fg);
+  white-space: nowrap;
+}
+.topbar-controls {
+  display: flex; align-items: center; gap: 12px;
+  flex: 1 1 auto; min-width: 0;
+  justify-content: flex-end;
+}
+.topbar-divider { width: 1px; height: 22px; background: var(--app-border); }
+
+.mobile-menu-btn {
+  display: none;
+  background: none; border: none; cursor: pointer;
+  color: var(--app-fg-muted);
+  padding: 4px; border-radius: 6px;
+}
+@media (max-width: 768px) { .mobile-menu-btn { display: flex; } }
+
+/* ── 6. Forms ────────────────────────────────────────────────────────── */
+input[type="text"], input[type="password"], input[type="email"], textarea, select {
+  background: var(--app-card);
+  border: 1px solid var(--app-input-bd);
+  border-radius: 6px;
+  color: var(--app-fg);
+  font-family: inherit; font-size: 14px; padding: 8px 12px; outline: none;
+  width: 100%;
+  transition: border-color 120ms, box-shadow 120ms;
+}
+input:focus, textarea:focus, select:focus {
+  border-color: var(--app-teal);
+  box-shadow: 0 0 0 3px var(--app-teal-soft);
+}
+
+/* ── 7. Buttons ──────────────────────────────────────────────────────── */
+.btn {
+  font-family: inherit; font-size: 14px; font-weight: 600;
+  padding: 8px 16px; border-radius: 6px; cursor: pointer;
+  border: 1px solid transparent;
+  transition: all 120ms cubic-bezier(0.2, 0, 0, 1);
+  white-space: nowrap;
+  display: inline-flex; align-items: center; gap: 6px;
+}
+.btn-primary { background: var(--app-primary); color: var(--app-primary-fg); border: none; }
+.btn-primary:hover    { opacity: 0.88; }
+.btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.btn-secondary { background: var(--app-card); color: var(--app-fg); border: 1px solid var(--app-input-bd); }
+.btn-secondary:hover { background: var(--app-muted); }
+
+/* ── 8. Login page ───────────────────────────────────────────────────── */
+.login-root {
+  height: 100vh; width: 100%;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--app-bg);
+}
+.login-card {
+  width: 100%; max-width: 340px;
+  padding: 36px 32px 32px;
+  background: var(--app-card);
+  border: 1px solid var(--app-border);
+  border-radius: 10px;
+  box-shadow: var(--shadow-2);
+  display: flex; flex-direction: column; gap: 24px;
+}
+.login-wordmark {
+  color: var(--app-fg);
+  display: flex; align-items: center;
+  height: 26px;
+}
+.login-wordmark svg { display: block; height: 26px; width: auto; }
+.login-form { display: flex; flex-direction: column; gap: 12px; }
+.login-error {
+  margin: 0;
+  font-size: 13px; color: var(--app-destructive);
+}
+.login-form .btn-primary {
+  width: 100%;
+  padding: 10px 16px;
+  justify-content: center;
+  font-size: 14px;
+}
+
+/* ── 9. Dashboard placeholder ────────────────────────────────────────── */
+.placeholder-body {
+  flex: 1;
+  display: flex; align-items: center; justify-content: center;
+  color: var(--app-fg-muted);
+  font-family: 'Lora', Georgia, serif;
+  font-size: 16px;
+}
