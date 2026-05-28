@@ -30,6 +30,7 @@ import { healthRoutes } from './routes/health.js';
 import { agentRoutes } from './routes/agents.js';
 import { jobRoutes } from './routes/jobs.js';
 import { messageRoutes } from './routes/messages.js';
+import { consoleRoutes } from './routes/console.js';
 import { knowledgeGraphRoutes } from './routes/kg.js';
 import { identityRoutes } from './routes/identity.js';
 import { executiveRoutes } from './routes/executive.js';
@@ -120,7 +121,7 @@ export class HttpAdapter {
       // Job routes bypass bearer auth — the dashboard accesses them via session cookie,
       // and jobRoutes calls assertSecret on every handler.
       if (
-        routeUrl === '/' ||         // 404 placeholder — public, no auth needed
+        routeUrl === '/*' ||        // console SPA — static files + client-side routes
         routeUrl === '/auth' ||
         routeUrl === '/old' ||      // legacy UI shell — exact matches prevent accidental
         routeUrl === '/old/*' ||    // bypass for any future /old-prefixed routes
@@ -219,6 +220,10 @@ export class HttpAdapter {
         sessions,
       });
     }
+
+    // Console app — registered last so all explicit API/KG/old routes above take priority
+    // over its /* wildcard. The React app handles auth client-side via session cookie.
+    await this.app.register(consoleRoutes);
 
     // Start listening
     await this.app.listen({ port, host: '0.0.0.0' });

@@ -3791,13 +3791,7 @@ export async function knowledgeGraphRoutes(
   const { pool, logger, webAppBootstrapSecret, secureCookies, bus, eventRouter, contactService, sessions } = options;
   // sessions is managed by HttpAdapter — no local Map creation needed here.
 
-  // GET / — placeholder until the new console app claims this route.
-  app.get('/', async (_request, reply) => {
-    return reply.status(404).type('text/html; charset=utf-8').send(
-      '<!doctype html><html lang="en"><head><meta charset="utf-8" /><title>Curia</title></head>' +
-      '<body><p>Console coming soon. Legacy UI available at <a href="/old">/old</a>.</p></body></html>',
-    );
-  });
+  // GET / is now handled by consoleRoutes (apps/console Vite build), not here.
 
   // Shared handler for the legacy hand-rolled UI — served at /old and /old/* so
   // that /old/<view> paths (e.g. /old/contacts) resolve to the shell. All view

@@ -6,16 +6,22 @@ WORKDIR /app
 # Enable pnpm via corepack (ships with Node 22)
 RUN corepack enable
 
-# Install dependencies first (layer caching — deps change less often than src)
+# Install dependencies first (layer caching — deps change less often than src).
+# Copy all workspace manifests so pnpm installs the full workspace in one shot.
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY apps/console/package.json ./apps/console/
 RUN pnpm install --frozen-lockfile
 
-# Copy source and build
+# Build backend
 COPY src/ ./src/
 COPY tsconfig.json ./
 # Skip --dts: type declarations are for library consumers, not the runtime image.
 # tsup's DTS build also trips a TS 6.0 deprecation error on any tsconfig with baseUrl.
 RUN pnpm exec tsup src/index.ts --format esm --no-dts
+
+# Build console frontend — output lands in apps/console/dist/
+COPY apps/console/ ./apps/console/
+RUN pnpm --filter @curia/console run build
 
 # Production stage: minimal runtime image
 FROM node:22-slim
@@ -51,6 +57,9 @@ RUN pnpm add tsx
 
 # Copy compiled output from build stage
 COPY --from=build /app/dist ./dist
+
+# Copy console static bundle — served by Fastify at runtime
+COPY --from=build /app/apps/console/dist ./apps/console/dist
 
 # Copy runtime data files loaded at startup
 # Full src/ is needed because skill handlers import from src/ (e.g., bus/events.ts)

@@ -62,6 +62,12 @@ jobs:
       - name: Type check
         run: pnpm run typecheck
 
+      - name: Type check console
+        run: pnpm --filter @curia/console run typecheck
+
+      - name: Build console
+        run: pnpm --filter @curia/console run build
+
       - name: Lint
         run: pnpm run lint
 

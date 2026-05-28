@@ -13,6 +13,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Added
+
+- **Console app scaffold** — new `apps/console/` Vite + React + TanStack Router app; Fastify serves the static bundle at `/` with SPA fallback; auth-gated dashboard placeholder; design-system components (Sidebar, Topbar, Icons) copied and converted to TypeScript. `pnpm dev` starts both the backend and the Vite dev server concurrently. (#750)
+
 ### Fixed
 
 - **Migration `016_kg_node_uniqueness`** — Step 4 now checks for pre-existing contacts on canonical KG nodes before re-pointing, preventing a duplicate-key violation on `idx_contacts_kg_node_unique` when a canonical node already had its own contact row.
