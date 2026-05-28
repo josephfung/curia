@@ -3800,10 +3800,9 @@ export async function knowledgeGraphRoutes(
   });
 
   // Shared handler for the legacy hand-rolled UI — served at /old and /old/* so
-  // bookmarks to any SPA sub-path (e.g. /old/contacts) continue to work.
-  // All navigation between views is client-side only; the server just needs to
-  // return the same HTML shell regardless of the path segment after /old.
-  const serveOldUi = async (_request: FastifyRequest, reply: FastifyReply): Promise<void> => {
+  // that /old/<view> paths (e.g. /old/contacts) resolve to the shell. All view
+  // navigation is client-side; the server serves the same HTML regardless of sub-path.
+  const serveOldUi = (_request: FastifyRequest, reply: FastifyReply): void => {
     reply
       .type('text/html; charset=utf-8')
       // Prevent the page from being embedded in an iframe (clickjacking defence).
