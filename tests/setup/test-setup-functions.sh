@@ -113,6 +113,7 @@ echo "=== handle_existing_env ==="
 # Test option 2: sets SETUP_MODE=resume
 _menu_env=$(mktemp)
 echo "DB_USER=curia" > "$_menu_env"
+_opt2_rc=0
 (
     ENV_FILE="$_menu_env"
     SETUP_MODE="full"
@@ -123,8 +124,8 @@ echo "DB_USER=curia" > "$_menu_env"
     else
         exit 1
     fi
-)
-if [[ $? -eq 0 ]]; then
+) 2>/dev/null || _opt2_rc=$?
+if [[ $_opt2_rc -eq 0 ]]; then
     echo "  ✓ option 2 sets SETUP_MODE=resume"
     PASS=$((PASS + 1))
 else

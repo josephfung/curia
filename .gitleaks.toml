@@ -9,6 +9,9 @@ useDefault = true
 paths = [
   '''tests/''',
   '''pnpm-lock\.yaml''',
+  # Planning and spec docs use example API key patterns (e.g. sk-ant-testkey999)
+  # in code snippets to illustrate format validation — not real credentials.
+  '''docs/superpowers/''',
 ]
 regexes = [
   # Postgres connection strings pointing at localhost (test/dev configs, CI, .env.example)
