@@ -13,6 +13,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Migration `016_kg_node_uniqueness`** — Step 4 now checks for pre-existing contacts on canonical KG nodes before re-pointing, preventing a duplicate-key violation on `idx_contacts_kg_node_unique` when a canonical node already had its own contact row.
+
 ### Changed
 
 - **Legacy web UI** — moved from `/` to `/old` and `/old/*`; `/` now returns a 404 placeholder pending the new console app. (#749)

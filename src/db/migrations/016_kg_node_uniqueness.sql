@@ -57,9 +57,17 @@ WHERE target_node_id = m.duplicate_id;
 
 -- Step 4: Re-point contacts.kg_node_id to canonical.
 -- Use ROW_NUMBER() to deterministically pick one contact per canonical_id.
--- That contact gets re-pointed; all other contacts for the same canonical
--- are NULLed to avoid violating idx_contacts_kg_node_unique.
-WITH ranked AS (
+-- That contact gets re-pointed only if no contact already points to canonical_id
+-- (a pre-existing contact would violate idx_contacts_kg_node_unique). All other
+-- duplicate-linked contacts are NULLed regardless.
+WITH
+already_claimed AS (
+  -- canonical nodes that already have a contact pointing directly at them
+  SELECT DISTINCT kg_node_id AS canonical_id
+  FROM contacts
+  WHERE kg_node_id IN (SELECT canonical_id FROM _kg_node_canonical)
+),
+ranked AS (
   SELECT
     c.id           AS contact_id,
     m.canonical_id,
@@ -72,10 +80,11 @@ WITH ranked AS (
 )
 UPDATE contacts
 SET kg_node_id = CASE
-  WHEN r.rn = 1 THEN r.canonical_id
+  WHEN r.rn = 1 AND ac.canonical_id IS NULL THEN r.canonical_id
   ELSE NULL
 END
 FROM ranked r
+LEFT JOIN already_claimed ac ON ac.canonical_id = r.canonical_id
 WHERE contacts.id = r.contact_id;
 
 -- Step 5: Delete duplicate nodes (ON DELETE CASCADE removes remaining edges)
