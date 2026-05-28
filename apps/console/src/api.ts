@@ -7,7 +7,11 @@ export async function apiFetch(path: string, init?: RequestInit): Promise<Respon
 export async function checkSession(): Promise<boolean> {
   try {
     const res = await apiFetch('/api/identity');
-    if (!res.ok) return false;
+    // Only 401/403 means the session is definitely gone — redirect to login.
+    // Transient errors (429, 500, etc.) keep the user on the current page to
+    // avoid a forced logout every time the backend hiccups.
+    if (res.status === 401 || res.status === 403) return false;
+    if (!res.ok) return true;
     // Guard against the SPA fallback: when identityRoutes are not registered
     // (e.g. webAppBootstrapSecret missing), /api/identity falls through to the
     // console/* catch-all and returns index.html with a 200. Checking for a

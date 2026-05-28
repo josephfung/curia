@@ -94,18 +94,21 @@
 
 /* ── 2. Base reset ───────────────────────────────────────────────────── */
 *, *::before, *::after { box-sizing: border-box; }
-html, body { height: 100%; margin: 0; overflow: hidden; }
+/* overflow: hidden lives on .app-root (dashboard shell), not html/body, so
+   full-page routes like /login can scroll on small viewports. */
+html, body { height: 100%; margin: 0; }
 
 body {
   background: var(--app-bg);
   color: var(--app-fg);
-  font-family: 'Manrope', system-ui, sans-serif;
+  font-family: Manrope, system-ui, sans-serif;
   font-size: 14px;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
-#root, .app-root { height: 100vh; width: 100%; display: flex; flex-direction: row; overflow: hidden; }
+#root { height: 100%; }
+.app-root { height: 100vh; width: 100%; display: flex; flex-direction: row; overflow: hidden; }
 
 /* ── 3. Sidebar ──────────────────────────────────────────────────────── */
 .sidebar {
@@ -217,7 +220,7 @@ body {
 }
 .topbar-h1 {
   margin: 0;
-  font-family: 'Lora', Georgia, serif;
+  font-family: Lora, Georgia, serif;
   font-weight: 500;
   font-size: 18px;
   line-height: 1.15;
@@ -238,6 +241,41 @@ body {
   padding: 4px; border-radius: 6px;
 }
 @media (max-width: 768px) { .mobile-menu-btn { display: flex; } }
+
+.topbar-search {
+  display: flex; align-items: center; gap: 6px;
+  background: var(--app-card);
+  border: 1px solid var(--app-input-bd);
+  border-radius: 6px;
+  padding: 5px 10px;
+  min-width: 180px;
+}
+.topbar-search-icon { flex: none; color: var(--app-fg-muted); }
+.topbar-search input {
+  flex: 1; border: none; background: transparent;
+  color: var(--app-fg); font-family: inherit; font-size: 13px;
+  outline: none; padding: 0;
+}
+@media (max-width: 768px) { .topbar-search { display: none; } }
+
+/* Mobile sidebar: slide in from left; triggered by data-mobile-sidebar='open'
+   set on document.documentElement when the menu button is tapped. */
+@media (max-width: 768px) {
+  .sidebar {
+    position: fixed; top: 0; left: 0; bottom: 0;
+    z-index: 100;
+    transform: translateX(-100%);
+    transition: transform 250ms ease;
+  }
+  [data-mobile-sidebar='open'] .sidebar { transform: translateX(0); }
+  /* Dim backdrop behind the sidebar when open. */
+  html[data-mobile-sidebar='open']::before {
+    content: '';
+    position: fixed; inset: 0;
+    background: rgba(0, 0, 0, 0.35);
+    z-index: 99;
+  }
+}
 
 /* ── 6. Forms ────────────────────────────────────────────────────────── */
 input[type="text"], input[type="password"], input[type="email"], textarea, select {
@@ -308,6 +346,6 @@ input:focus, textarea:focus, select:focus {
   flex: 1;
   display: flex; align-items: center; justify-content: center;
   color: var(--app-fg-muted);
-  font-family: 'Lora', Georgia, serif;
+  font-family: Lora, Georgia, serif;
   font-size: 16px;
 }

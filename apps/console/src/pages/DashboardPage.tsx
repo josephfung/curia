@@ -9,7 +9,8 @@ function useTheme(): [Theme, (t: Theme) => void] {
   const [theme, setTheme] = useState<Theme>(() => {
     try {
       return (localStorage.getItem('curia-theme') as Theme) ?? 'system';
-    } catch {
+    } catch (err) {
+      console.error('[useTheme] failed reading curia-theme from localStorage:', err);
       return 'system';
     }
   });
@@ -23,7 +24,9 @@ function useTheme(): [Theme, (t: Theme) => void] {
     }
     try {
       localStorage.setItem('curia-theme', theme);
-    } catch { /* ignore */ }
+    } catch (err) {
+      console.error('[useTheme] failed writing curia-theme to localStorage:', err);
+    }
   }, [theme]);
 
   return [theme, setTheme];

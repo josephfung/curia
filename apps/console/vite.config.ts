@@ -5,7 +5,10 @@ export default defineConfig({
   plugins: [react()],
   build: {
     outDir: 'dist',
-    sourcemap: true,
+    // Emit source maps only in development; production builds omit .map files
+    // so internal implementation details are not publicly accessible via the
+    // static file server.
+    sourcemap: process.env['NODE_ENV'] !== 'production',
   },
   server: {
     // In dev, proxy API and auth calls to the Fastify backend on :3000.
