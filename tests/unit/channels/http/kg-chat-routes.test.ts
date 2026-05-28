@@ -220,7 +220,7 @@ describe('KG chat routes', () => {
 });
 
 describe('KG web UI shell', () => {
-  it('GET / — response contains Chat nav button and #view-chat section', async () => {
+  it('GET /old — response contains Chat nav button and #view-chat section', async () => {
     const app = Fastify();
     await app.register(cookie);
     await app.register(knowledgeGraphRoutes, {
@@ -232,7 +232,7 @@ describe('KG web UI shell', () => {
       eventRouter: createMockEventRouter(),
     });
 
-    const response = await app.inject({ method: 'GET', url: '/' });
+    const response = await app.inject({ method: 'GET', url: '/old' });
 
     expect(response.statusCode).toBe(200);
     expect(response.headers['content-type']).toMatch(/text\/html/);

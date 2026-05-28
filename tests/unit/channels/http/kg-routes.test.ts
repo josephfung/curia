@@ -80,7 +80,43 @@ describe('knowledgeGraphRoutes', () => {
     await app.close();
   });
 
-  it('serves the UI shell', async () => {
+  it('serves the UI shell at /old', async () => {
+    const app = Fastify();
+    await app.register(knowledgeGraphRoutes, {
+      pool,
+      logger: createLogger(),
+      webAppBootstrapSecret: 'secret-1',
+      secureCookies: false,
+      sessions: new Map(),
+    });
+
+    const response = await app.inject({ method: 'GET', url: '/old' });
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toContain('Knowledge Graph');
+
+    await app.close();
+  });
+
+  it('serves the UI shell at /old/* sub-paths', async () => {
+    const app = Fastify();
+    await app.register(knowledgeGraphRoutes, {
+      pool,
+      logger: createLogger(),
+      webAppBootstrapSecret: 'secret-1',
+      secureCookies: false,
+      sessions: new Map(),
+    });
+
+    for (const path of ['/old/chat', '/old/contacts', '/old/tasks']) {
+      const response = await app.inject({ method: 'GET', url: path });
+      expect(response.statusCode).toBe(200);
+      expect(response.body).toContain('Knowledge Graph');
+    }
+
+    await app.close();
+  });
+
+  it('returns 404 at / pending the new console', async () => {
     const app = Fastify();
     await app.register(knowledgeGraphRoutes, {
       pool,
@@ -91,8 +127,7 @@ describe('knowledgeGraphRoutes', () => {
     });
 
     const response = await app.inject({ method: 'GET', url: '/' });
-    expect(response.statusCode).toBe(200);
-    expect(response.body).toContain('Knowledge Graph');
+    expect(response.statusCode).toBe(404);
 
     await app.close();
   });
