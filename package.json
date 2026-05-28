@@ -70,7 +70,6 @@
     "@types/js-yaml": "^4.0.9",
     "@types/luxon": "^3.7.1",
     "@types/node": "^25.9.1",
-    "@types/pdf-parse": "^1.1.5",
     "@types/pg": "^8.20.0",
     "@types/sanitize-html": "^2.16.1",
     "@typescript-eslint/eslint-plugin": "^8.59.4",
