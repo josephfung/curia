@@ -122,7 +122,8 @@ export class HttpAdapter {
       if (
         routeUrl === '/' ||         // 404 placeholder — public, no auth needed
         routeUrl === '/auth' ||
-        routeUrl.startsWith('/old') ||  // legacy UI shell at /old and /old/*
+        routeUrl === '/old' ||      // legacy UI shell — exact matches prevent accidental
+        routeUrl === '/old/*' ||    // bypass for any future /old-prefixed routes
         routeUrl.startsWith('/assets') ||
         routeUrl.startsWith('/api/kg') ||
         routeUrl.startsWith('/api/identity') ||
