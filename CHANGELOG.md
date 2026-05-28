@@ -28,6 +28,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 - **Declarative scheduler jobs** — include `source_agent_id` in the persisted identity so two specialist agents can declare identical schedules targeting the same agent without silently collapsing into one row. (#231)
 - **Trivy Docker Image Scan** — add `onlyBuiltDependencies: ["esbuild"]` to `package.json` so pnpm 11's build-script approval check doesn't abort the Docker build cold.
+- **Dockerfile esbuild build** — include `pnpm-workspace.yaml` in the build-stage `COPY` so `allowBuilds` reaches pnpm inside Docker.
 
 ## [0.31.1] — 2026-05-26 — "Janet"
 
