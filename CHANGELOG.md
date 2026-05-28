@@ -20,6 +20,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Fixed
 
 - **Migration `016_kg_node_uniqueness`** — Step 4 now checks for pre-existing contacts on canonical KG nodes before re-pointing, preventing a duplicate-key violation on `idx_contacts_kg_node_unique` when a canonical node already had its own contact row.
+- **Console Vite dev proxy** — `/old` and the four cytoscape assets (`cytoscape.min.js`, `layout-base.js`, `cose-base.js`, `cytoscape-fcose.js`) are now proxied to Fastify in the Vite dev server; without this the Vite SPA intercepted `/old` requests and the legacy UI was unreachable in dev. (#750)
 
 ### Changed
 
