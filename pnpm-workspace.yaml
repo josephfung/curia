@@ -6,7 +6,7 @@
 # pnpm default changes.
 blockExoticSubdeps: true
 
-# If a dependency needs to run postinstall scripts (e.g. native addons),
-# explicitly allow it here. Currently no packages require this.
-#   allowBuilds:
-#     some-package: true
+# esbuild requires a postinstall step to download the platform binary.
+# Both versions (used by vite and tsup) are approved here.
+allowBuilds:
+  esbuild: true

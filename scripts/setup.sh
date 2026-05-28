@@ -185,7 +185,7 @@ handle_existing_env() {
             SETUP_MODE="full"
             ;;
         *)
-            error "Invalid choice '${choice}'. Run pnpm setup again and enter 1, 2, or 3."
+            error "Invalid choice '${choice}'. Run pnpm run setup again and enter 1, 2, or 3."
             exit 1
             ;;
     esac
@@ -232,7 +232,7 @@ wait_for_postgres() {
 run_infra() {
     if [[ ! -f "$ENV_FILE" ]]; then
         error ".env not found. Cannot continue setup."
-        hint "Run: pnpm setup  (choose option 2 — Resume setup)"
+        hint "Run: pnpm run setup  (choose option 2 — Resume setup)"
         exit 1
     fi
 
