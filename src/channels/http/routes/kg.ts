@@ -1,7 +1,7 @@
 import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { Pool } from 'pg';
 import type { EventBus } from '../../../bus/bus.js';
 import { createInboundMessage } from '../../../bus/events.js';
@@ -3791,7 +3791,19 @@ export async function knowledgeGraphRoutes(
   const { pool, logger, webAppBootstrapSecret, secureCookies, bus, eventRouter, contactService, sessions } = options;
   // sessions is managed by HttpAdapter — no local Map creation needed here.
 
+  // GET / — placeholder until the new console app claims this route.
   app.get('/', async (_request, reply) => {
+    return reply.status(404).type('text/html; charset=utf-8').send(
+      '<!doctype html><html lang="en"><head><meta charset="utf-8" /><title>Curia</title></head>' +
+      '<body><p>Console coming soon. Legacy UI available at <a href="/old">/old</a>.</p></body></html>',
+    );
+  });
+
+  // Shared handler for the legacy hand-rolled UI — served at /old and /old/* so
+  // bookmarks to any SPA sub-path (e.g. /old/contacts) continue to work.
+  // All navigation between views is client-side only; the server just needs to
+  // return the same HTML shell regardless of the path segment after /old.
+  const serveOldUi = async (_request: FastifyRequest, reply: FastifyReply): Promise<void> => {
     reply
       .type('text/html; charset=utf-8')
       // Prevent the page from being embedded in an iframe (clickjacking defence).
@@ -3799,7 +3811,12 @@ export async function knowledgeGraphRoutes(
       // Stop browsers from MIME-sniffing the response away from text/html.
       .header('X-Content-Type-Options', 'nosniff')
       .send(createUiHtml());
-  });
+  };
+
+  app.get('/old', serveOldUi);
+  // Wildcard catches /old/kg, /old/chat, /old/contacts, etc. The * captures
+  // the remainder including an empty string (i.e. /old/ also matches).
+  app.get('/old/*', serveOldUi);
 
   // POST /auth — exchanges the bootstrap secret for an HttpOnly session cookie.
   // Tighter rate limit than the global default: 10 attempts per 15 minutes per IP,

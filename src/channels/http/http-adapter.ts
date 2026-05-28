@@ -120,8 +120,9 @@ export class HttpAdapter {
       // Job routes bypass bearer auth — the dashboard accesses them via session cookie,
       // and jobRoutes calls assertSecret on every handler.
       if (
-        routeUrl === '/' ||
+        routeUrl === '/' ||         // 404 placeholder — public, no auth needed
         routeUrl === '/auth' ||
+        routeUrl.startsWith('/old') ||  // legacy UI shell at /old and /old/*
         routeUrl.startsWith('/assets') ||
         routeUrl.startsWith('/api/kg') ||
         routeUrl.startsWith('/api/identity') ||
