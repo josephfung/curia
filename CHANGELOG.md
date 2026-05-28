@@ -20,6 +20,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **ip-address XSS** — bumped transitive `ip-address` from 10.1.0 to 10.2.0 via lockfile refresh and added a defensive `>=10.1.1` override. (CodeQL #54)
 - **CodeQL false-positive** — disabled `js/incomplete-multi-character-sanitization` in `codeql-config.yml`; all flagged sites use a loop-until-stable pattern the rule cannot model, making every alert a false positive; inline suppression comments were ineffective. (CodeQL #71–92)
 
+### Added
+
+- **`pnpm setup`** — single-command setup script (`scripts/setup.sh`) for fresh clones: checks prerequisites, generates secrets, prompts for an Anthropic API key, writes `.env`, starts Postgres, runs migrations, starts the full stack, and prints the bootstrap secret. Re-running on an existing checkout presents a safe idempotency menu. README Quickstart updated accordingly. (#755)
+
 ### Fixed
 
 - **Declarative scheduler jobs** — include `source_agent_id` in the persisted identity so two specialist agents can declare identical schedules targeting the same agent without silently collapsing into one row. (#231)
