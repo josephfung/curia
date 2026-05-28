@@ -20,7 +20,7 @@ export default function LoginPage() {
         body: JSON.stringify({ secret }),
       });
       if (!res.ok) {
-        const data = (await res.json()) as { error?: string };
+        const data = (await res.json()) as unknown as { error?: string };
         setError(data.error ?? 'Authentication failed.');
         return;
       }
@@ -41,6 +41,7 @@ export default function LoginPage() {
         <form onSubmit={handleSubmit} className="login-form">
           <input
             type="password"
+            aria-label="Access key"
             placeholder="Access key"
             value={secret}
             onChange={(e) => setSecret(e.target.value)}

@@ -33,7 +33,9 @@ function ThemeToggle({ theme, onChange }: { theme: Theme; onChange: (t: Theme) =
       {options.map((opt) => (
         <button
           key={opt.v}
+          type="button"
           className={`theme-toggle-btn${theme === opt.v ? ' active' : ''}`}
+          aria-pressed={theme === opt.v}
           onClick={() => onChange(opt.v)}
           title={`${opt.label} theme`}
         >

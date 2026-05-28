@@ -11,7 +11,7 @@
 
 import type { FastifyPluginAsync } from 'fastify';
 import fastifyStatic from '@fastify/static';
-import { join } from 'node:path';
+import { join, resolve, relative } from 'node:path';
 import { existsSync } from 'node:fs';
 import { stat } from 'node:fs/promises';
 
@@ -48,7 +48,13 @@ export const consoleRoutes: FastifyPluginAsync = async (app) => {
 
     // Try to serve a real file (assets, favicon, manifest, etc.).
     if (urlPath) {
-      const absPath = join(consoleDist, urlPath);
+      // Normalize the path and reject anything that escapes consoleDist (e.g. "../../etc").
+      // path.resolve collapses ".." segments; path.relative confirms containment.
+      const absPath = resolve(consoleDist, urlPath);
+      if (relative(consoleDist, absPath).startsWith('..')) {
+        // Path traversal attempt — treat as a SPA route rather than probing the filesystem.
+        return reply.sendFile('index.html');
+      }
       try {
         const s = await stat(absPath);
         if (s.isFile()) return reply.sendFile(urlPath);

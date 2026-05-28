@@ -68,6 +68,7 @@ export function TopbarSearch({ placeholder, value, onChange, onSubmit }: TopbarS
       </svg>
       <input
         type="text"
+        aria-label={placeholder ?? 'Search'}
         placeholder={placeholder}
         value={value ?? ''}
         onChange={(e) => onChange?.(e.target.value)}
