@@ -187,11 +187,18 @@ export class FileParseHandler implements SkillHandler {
     try {
       const parser = new PDFParse({ data: buffer });
       try {
-        const parsed = await parser.getText();
-        rawText = parsed.text;
+        // pageJoiner: '' suppresses pdf-parse v2's default "-- N of M --" page
+        // markers. Without this, a text-less PDF yields marker noise instead of
+        // an empty string (defeating the image-only check below), and extracted
+        // text is polluted with separators.
+        const parsed = await parser.getText({ pageJoiner: '' });
+        rawText = parsed.text ?? '';
       } finally {
-        // Release the underlying pdfjs worker/resources even on error.
-        await parser.destroy();
+        // Release the pdfjs worker/resources, but never let a cleanup failure
+        // overwrite a real extraction error (or a good result) on the way out.
+        await parser.destroy().catch((destroyErr) => {
+          ctx.log.warn({ err: destroyErr }, 'file-parse: PDF parser cleanup failed');
+        });
       }
     } catch (err) {
       ctx.log.error({ err }, 'file-parse: PDF text extraction failed');
@@ -199,9 +206,11 @@ export class FileParseHandler implements SkillHandler {
     }
 
     if (!rawText.trim()) {
-      // No extractable text layer. This is a genuinely scanned/image-only PDF
-      // (or one whose fonts carry no extractable text). Distinct from an
-      // extraction *error* above — here parsing succeeded but yielded nothing.
+      // No extractable text layer: a genuinely scanned/image-only PDF (or one
+      // whose fonts carry no extractable text). Parsing succeeded but yielded
+      // nothing — distinct from the extraction *error* above. `reason` gives the
+      // caller a machine-readable fact so it reports the cause instead of
+      // inferring one from an empty string.
       return {
         success: true,
         data: {
@@ -209,6 +218,7 @@ export class FileParseHandler implements SkillHandler {
           raw_text: '',
           structured: null,
           confidence: 0,
+          reason: 'no_text_layer',
         },
       };
     }

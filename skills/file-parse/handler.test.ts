@@ -379,6 +379,28 @@ describe('FileParseHandler', () => {
       }
     });
 
+    it('flags a no-text-layer PDF with a machine-readable reason, not an LLM call', async () => {
+      const infraLlm = makeInfraLlm('{}');
+      const handler = new FileParseHandler();
+      const fixturePath = path.join(import.meta.dirname, '__fixtures__', 'no-text-layer.pdf');
+      const content = (await fs.readFile(fixturePath)).toString('base64');
+      const result = await handler.execute(makeCtx({
+        content_base64: content,
+        mime_type: 'application/pdf',
+        extract_as: 'receipt',
+      }, infraLlm));
+
+      expect(result.success).toBe(true);
+      if (result.success) {
+        const data = result.data as Record<string, unknown>;
+        expect(data.raw_text).toBe('');
+        expect(data.confidence).toBe(0);
+        expect(data.reason).toBe('no_text_layer');
+      }
+      // A PDF with no text layer must not be shipped to the LLM as junk.
+      expect(infraLlm.extract).not.toHaveBeenCalled();
+    });
+
     it('passes extracted PDF text to the LLM for structured extraction', async () => {
       const infraLlm = makeInfraLlm('{"vendor":"Acme Corp","amount":"123.45"}');
       const handler = new FileParseHandler();
