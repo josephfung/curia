@@ -7,7 +7,7 @@ WORKDIR /app
 RUN corepack enable
 
 # Install dependencies first (layer caching — deps change less often than src)
-COPY package.json pnpm-lock.yaml ./
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 RUN pnpm install --frozen-lockfile
 
 # Copy source and build
@@ -40,7 +40,7 @@ WORKDIR /app
 RUN corepack enable
 
 # Copy manifest and lockfile, then install production deps only
-COPY package.json pnpm-lock.yaml ./
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 RUN pnpm install --frozen-lockfile --prod
 
 # tsx is needed at runtime: skill handlers are .ts files loaded via dynamic
