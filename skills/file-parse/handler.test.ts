@@ -341,6 +341,16 @@ describe('FileParseHandler', () => {
   });
 
   describe('PDF handling', () => {
+    // A minimal, valid text-layer PDF with known content. Guards against the
+    // pdf-parse v1→v2 API regression where the library was called as a function
+    // (v1) on a class export (v2), making every PDF throw and be misreported as
+    // "image-only". See issue #770.
+    async function readSampleReceiptPdfBase64(): Promise<string> {
+      const fixturePath = path.join(import.meta.dirname, '__fixtures__', 'sample-receipt.pdf');
+      const buffer = await fs.readFile(fixturePath);
+      return buffer.toString('base64');
+    }
+
     it('returns error for corrupt PDF content', async () => {
       const content = Buffer.from('not a pdf').toString('base64');
       const handler = new FileParseHandler();
@@ -350,6 +360,39 @@ describe('FileParseHandler', () => {
       }, makeInfraLlm('{}')));
       expect(result.success).toBe(false);
       if (!result.success) expect(result.error).toMatch(/pdf/i);
+    });
+
+    it('extracts the text layer from a real text-based PDF (extract_as: raw)', async () => {
+      const handler = new FileParseHandler();
+      const result = await handler.execute(makeCtx({
+        content_base64: await readSampleReceiptPdfBase64(),
+        mime_type: 'application/pdf',
+        extract_as: 'raw',
+      }, makeInfraLlm('{}')));
+
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.type).toBe('pdf');
+        expect(result.data.raw_text).toContain('Acme Corp');
+        expect(result.data.raw_text).toContain('123.45');
+        expect(result.data.confidence).toBeGreaterThan(0);
+      }
+    });
+
+    it('passes extracted PDF text to the LLM for structured extraction', async () => {
+      const infraLlm = makeInfraLlm('{"vendor":"Acme Corp","amount":"123.45"}');
+      const handler = new FileParseHandler();
+      const result = await handler.execute(makeCtx({
+        content_base64: await readSampleReceiptPdfBase64(),
+        mime_type: 'application/pdf',
+        extract_as: 'receipt',
+      }, infraLlm));
+
+      expect(result.success).toBe(true);
+      expect(infraLlm.extract).toHaveBeenCalledOnce();
+      // The text layer (not an empty string) must reach the LLM prompt.
+      const promptArg = (infraLlm.extract as ReturnType<typeof vi.fn>).mock.calls[0]![0] as string;
+      expect(promptArg).toContain('123.45');
     });
   });
 

@@ -15,10 +15,10 @@ import { createRequire } from 'node:module';
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
 import type { InfraLlm } from '../../src/skills/infra-llm.js';
 
-// pdf-parse is CJS-only and doesn't provide a default ESM export.
-// Use createRequire to load it reliably under Node ESM + tsx.
+// pdf-parse v2 exposes a class (`PDFParse`), not a callable default export.
+// Load via createRequire so the CJS build is used reliably under Node ESM + tsx.
 const require = createRequire(import.meta.url);
-const pdfParse = require('pdf-parse') as typeof import('pdf-parse');
+const { PDFParse } = require('pdf-parse') as typeof import('pdf-parse');
 import { parseCsv } from './csv.js';
 import { getExtractionPrompt, type ExtractAs } from './prompts.js';
 
@@ -185,15 +185,23 @@ export class FileParseHandler implements SkillHandler {
   ): Promise<SkillResult> {
     let rawText: string;
     try {
-      const parsed = await pdfParse(buffer);
-      rawText = parsed.text;
+      const parser = new PDFParse({ data: buffer });
+      try {
+        const parsed = await parser.getText();
+        rawText = parsed.text;
+      } finally {
+        // Release the underlying pdfjs worker/resources even on error.
+        await parser.destroy();
+      }
     } catch (err) {
       ctx.log.error({ err }, 'file-parse: PDF text extraction failed');
-      return { success: false, error: 'Failed to extract text from PDF — file may be corrupt or image-only' };
+      return { success: false, error: 'Failed to extract text from PDF — the file may be corrupt or unreadable' };
     }
 
     if (!rawText.trim()) {
-      // Image-only PDF — no text layer. Return with guidance.
+      // No extractable text layer. This is a genuinely scanned/image-only PDF
+      // (or one whose fonts carry no extractable text). Distinct from an
+      // extraction *error* above — here parsing succeeded but yielded nothing.
       return {
         success: true,
         data: {
