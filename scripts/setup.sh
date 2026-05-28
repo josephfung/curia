@@ -258,7 +258,7 @@ run_infra() {
     info "Running migrations..."
     if ! pnpm --prefix "$REPO_ROOT" run migrate; then
         error "Migrations failed. See the output above."
-        hint "To retry: pnpm setup  (choose option 2 — Resume setup)"
+        hint "To retry: pnpm run setup  (choose option 2 — Resume setup)"
         exit 1
     fi
     success "Migrations applied"
