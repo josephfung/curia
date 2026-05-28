@@ -22,7 +22,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
-- **`pnpm setup`** — single-command setup script (`scripts/setup.sh`) for fresh clones: checks prerequisites, generates secrets, prompts for an Anthropic API key, writes `.env`, starts Postgres, runs migrations, starts the full stack, and prints the bootstrap secret. Re-running on an existing checkout presents a safe idempotency menu. README Quickstart updated accordingly. (#755)
+- **`pnpm run setup`** — single-command setup for fresh clones; run `pnpm run setup`, not `pnpm setup`. (#755)
 
 ### Fixed
 

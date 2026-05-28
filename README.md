@@ -99,7 +99,7 @@ Skills come in two flavours (local handlers and MCP servers) behind a single int
 ```bash
 git clone https://github.com/josephfung/curia.git
 cd curia
-pnpm setup
+pnpm run setup
 ```
 
 Curia will be running at `http://localhost:3000`. The setup script prints your bootstrap secret — save it to a password manager and use it on the login page to create your account.
