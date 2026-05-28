@@ -25,7 +25,7 @@ ENV_EXAMPLE="$REPO_ROOT/.env.example"
 # Global: set by handle_existing_env to control main() flow
 SETUP_MODE="full"  # "full" | "resume"
 
-# Verifies docker, docker compose, node >= 22, and pnpm are available.
+# Verifies docker, docker compose, node >= 22, pnpm, and openssl are available.
 # Exits 1 with an install link on the first missing tool.
 check_prerequisites() {
     if ! docker info &>/dev/null; then
@@ -58,6 +58,12 @@ check_prerequisites() {
         hint "Install at: https://pnpm.io/installation"
         exit 1
     fi
+
+    if ! command -v openssl &>/dev/null; then
+        error "openssl not found (required for secret generation)."
+        hint "Install via your system package manager (e.g. brew install openssl)"
+        exit 1
+    fi
 }
 
 # Returns 0 if key matches sk-ant-... format, 1 otherwise.
@@ -79,7 +85,7 @@ prompt_anthropic_key() {
     echo "" >&2
 
     while [[ $attempts -lt $max_attempts ]]; do
-        read -rsp "Paste your key: " key
+        read -rsp "Paste your key: " key || true
         echo "" >&2
         if validate_anthropic_key "$key"; then
             echo "$key"
@@ -222,7 +228,7 @@ wait_for_postgres() {
 }
 
 # Starts Postgres, runs migrations, starts the full stack, writes SETUP_COMPLETE marker.
-# Sources .env to get HTTP_PORT and WEB_APP_BOOTSTRAP_SECRET for the summary.
+# Parses .env to get DATABASE_URL, HTTP_PORT, and WEB_APP_BOOTSTRAP_SECRET for use at runtime.
 run_infra() {
     if [[ ! -f "$ENV_FILE" ]]; then
         error ".env not found. Cannot continue setup."
@@ -230,12 +236,14 @@ run_infra() {
         exit 1
     fi
 
-    # Export all .env vars into the shell environment so pnpm migrate and the
-    # summary box can read DATABASE_URL, HTTP_PORT, WEB_APP_BOOTSTRAP_SECRET, etc.
-    set -a
-    # shellcheck source=/dev/null
-    source "$ENV_FILE"
-    set +a
+    # Export .env vars into the shell environment safely — parse KEY=VALUE lines without
+    # executing shell code. (source would run any shell expression in the .env file.)
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        [[ "$line" =~ ^[[:space:]]*(#|$) ]] && continue
+        if [[ "$line" =~ ^([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]]; then
+            export "${BASH_REMATCH[1]}=${BASH_REMATCH[2]}"
+        fi
+    done < "$ENV_FILE"
 
     info "Starting Postgres..."
     docker compose --project-directory "$REPO_ROOT" up -d postgres

@@ -45,7 +45,7 @@ Verify all four are present and runnable. Fail immediately on the first missing 
 
 Present an interactive menu:
 
-```
+```text
 Your .env already exists. Looks like you've been here before.
 
   1  Start the stack      → docker compose up -d            (default)
@@ -75,7 +75,7 @@ Generate cryptographically random secrets using `openssl rand -hex 32`:
 
 Only when writing a fresh `.env`. Print the console URL before asking:
 
-```
+```text
 Curia needs an Anthropic API key to run its agents.
 Get one at: https://console.anthropic.com
 
@@ -98,7 +98,7 @@ docker compose up -d postgres
 
 Poll every 2 seconds, up to 60 seconds, printing elapsed time each tick:
 
-```
+```text
 ==> Waiting for Postgres to be ready...
    ... still waiting (2s)
    ... still waiting (4s)
@@ -106,7 +106,7 @@ Poll every 2 seconds, up to 60 seconds, printing elapsed time each tick:
 ```
 
 On timeout, exit with:
-```
+```text
 ✗  Postgres did not become healthy within 60s.
    Check logs: docker compose logs postgres
 ```
@@ -125,7 +125,7 @@ pnpm run migrate
 ```
 
 On failure, exit with:
-```
+```text
 ✗  Migrations failed. See the output above.
    To retry: pnpm setup  (choose option 2 — Resume setup)
 ```
@@ -144,7 +144,7 @@ Append `# SETUP_COMPLETE` to `.env`. This marker is used by the idempotency chec
 
 ### 12. Print summary box
 
-```
+```text
 ╔════════════════════════════════════════════════════════╗
 ║                                                        ║
 ║   Curia is running.                                    ║

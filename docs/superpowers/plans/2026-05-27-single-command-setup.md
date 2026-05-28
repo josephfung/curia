@@ -819,7 +819,7 @@ In the `"scripts"` object, add `"setup"` as the first entry (it's the top-level 
 
 Change these two lines:
 
-```
+```text
 # Before:
 DB_USER=your-db-user
 DB_PASSWORD=your-db-password
