@@ -13,6 +13,14 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Added
+
+- **Contacts view** — Contacts are now accessible at `/contacts` in the new console app with full create, edit, and delete support. Trust level is editable in the drawer. The legacy `/old/contacts` view has been removed. (#781)
+
+### Changed
+
+- **`/api/kg/contacts`** — GET and PATCH responses now include `trustLevel`; PATCH accepts `trustLevel` to update it via `ContactService.setTrustLevel`.
+
 ### Fixed
 
 - **Migration 015 collision** — merged `015_create_bullpen` and `015_scheduler_resilience` into a single `015_bullpen_and_scheduler_resilience` to resolve a duplicate-prefix conflict.

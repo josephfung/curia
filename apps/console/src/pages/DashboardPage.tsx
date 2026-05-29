@@ -15,7 +15,11 @@ export default function DashboardPage() {
   }, [mobileOpen]);
 
   function handleNavigate(view: string) {
-    if (view === 'autonomy') {
+    if (view === 'contacts') {
+      navigate({ to: '/contacts' }).catch(err => {
+        console.error('[DashboardPage] navigation to /contacts failed:', err);
+      });
+    } else if (view === 'autonomy' || view === 'settings') {
       navigate({ to: '/settings/autonomy' }).catch(err => {
         console.error('[DashboardPage] navigation to /settings/autonomy failed:', err);
       });

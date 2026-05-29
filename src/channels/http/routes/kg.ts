@@ -7,7 +7,7 @@ import type { EventBus } from '../../../bus/bus.js';
 import { createInboundMessage } from '../../../bus/events.js';
 import type { Logger } from '../../../logger.js';
 import type { ContactService } from '../../../contacts/contact-service.js';
-import type { ContactStatus } from '../../../contacts/types.js';
+import type { ContactStatus, TrustLevel } from '../../../contacts/types.js';
 import { MessageRejectedError, type EventRouter } from '../event-router.js';
 import { assertSecret, compareSecrets, hashToken, type SessionStore } from '../session-auth.js';
 
@@ -534,48 +534,6 @@ function createUiHtml(): string {
     .conv-item:hover  { background: var(--accent); color: var(--fg); }
     .conv-item.active { background: var(--muted);  color: var(--fg); }
 
-    /* Contacts view */
-    .contacts-layout {
-      flex: 1;
-      display: flex;
-      overflow: hidden;
-    }
-    .contacts-list-panel {
-      flex: none;
-      width: 360px;
-      border-right: 1px solid var(--border);
-      display: flex;
-      flex-direction: column;
-      overflow: hidden;
-    }
-    .contacts-list {
-      flex: 1;
-      overflow-y: auto;
-      padding: 10px;
-      display: flex;
-      flex-direction: column;
-      gap: 6px;
-    }
-    .contact-card {
-      padding: 10px;
-      border: 1px solid var(--border);
-      border-radius: var(--radius-md);
-      cursor: pointer;
-      transition: border-color 0.12s, background 0.12s;
-    }
-    .contact-card:hover { border-color: var(--teal); }
-    .contact-card.active {
-      border-color: var(--teal);
-      background: rgba(71,129,137,0.08);
-    }
-    .contacts-editor {
-      flex: 1;
-      overflow-y: auto;
-      padding: 16px;
-      display: flex;
-      flex-direction: column;
-      gap: 14px;
-    }
     .tasks-layout {
       flex: 1;
       display: flex;
@@ -798,15 +756,6 @@ function createUiHtml(): string {
               Knowledge Graph
             </button>
 
-            <button id="nav-contacts" class="nav-sub-item" onclick="navigate('contacts', 'Contacts', 'nav-contacts')">
-              <!-- person icon -->
-              <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-                <circle cx="6.5" cy="4" r="2.5"/>
-                <path d="M1 12c0-3.038 2.462-5.5 5.5-5.5S12 8.962 12 12"/>
-              </svg>
-              Contacts
-            </button>
-
             <button id="nav-tasks" class="nav-sub-item" onclick="navigate('tasks', 'Tasks', 'nav-tasks')">
               <!-- checklist icon -->
               <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
@@ -898,61 +847,6 @@ function createUiHtml(): string {
             </div>
           </div>
 
-        </div>
-      </div>
-
-      <!-- Contacts view -->
-      <div id="view-contacts" style="display: none; height: 100%; flex-direction: column;">
-        <div style="flex: none; display: flex; align-items: center; gap: 10px; padding: 10px 16px; border-bottom: 1px solid var(--border);">
-          <input id="contacts-search-input" type="text" placeholder="Search contacts by name or role\u2026" style="max-width: 360px;" />
-          <button id="contacts-search-btn" class="btn-primary">Search</button>
-          <button id="contacts-new-btn" class="btn-primary">+ New Contact</button>
-          <span id="contacts-status" style="font-size: 0.75rem; color: var(--fg-muted); margin-left: 4px;"></span>
-        </div>
-        <div class="contacts-layout">
-          <div class="contacts-list-panel">
-            <div style="padding: 10px 12px 0; font-size: 0.6875rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; color: var(--fg-muted);">Contacts</div>
-            <div id="contacts-list" class="contacts-list"></div>
-          </div>
-          <div class="contacts-editor">
-            <div style="display: flex; justify-content: space-between; align-items: center;">
-              <h2 id="contacts-editor-title" style="font-family: 'Lora', Georgia, serif; font-size: 1.375rem; font-weight: 500; margin: 0;">Create Contact</h2>
-              <button id="contacts-delete-btn" class="btn-primary" style="display: none; background: var(--destructive); color: var(--fg);">Delete</button>
-            </div>
-
-            <form id="contacts-form" style="display: flex; flex-direction: column; gap: 12px; max-width: 720px;">
-              <div class="form-grid">
-                <div class="form-field">
-                  <label for="contact-display-name">Display name</label>
-                  <input id="contact-display-name" type="text" placeholder="e.g. Ada Lovelace" required />
-                </div>
-                <div class="form-field">
-                  <label for="contact-role">Role</label>
-                  <input id="contact-role" type="text" placeholder="e.g. CTO" />
-                </div>
-                <div class="form-field">
-                  <label for="contact-status">Status</label>
-                  <select id="contact-status">
-                    <option value="confirmed">confirmed</option>
-                    <option value="provisional">provisional</option>
-                    <option value="blocked">blocked</option>
-                  </select>
-                </div>
-                <div class="form-field">
-                  <label for="contact-kg-node-id">KG node ID (optional)</label>
-                  <input id="contact-kg-node-id" type="text" placeholder="UUID (optional)" />
-                </div>
-              </div>
-              <div class="form-field">
-                <label for="contact-notes">Notes</label>
-                <textarea id="contact-notes" rows="4" placeholder="Notes about this contact\u2026"></textarea>
-              </div>
-              <div style="display: flex; gap: 10px;">
-                <button type="submit" id="contacts-save-btn" class="btn-primary">Create Contact</button>
-                <button type="button" id="contacts-cancel-btn" class="btn-primary" style="background: var(--muted); color: var(--fg);">Cancel</button>
-              </div>
-            </form>
-          </div>
         </div>
       </div>
 
@@ -1130,9 +1024,6 @@ function createUiHtml(): string {
     var settingsOpen = true; // Settings nav section expanded by default
 
     var activeNavId = 'nav-kg';
-    var contacts = [];
-    var selectedContactId = null;
-    var contactsMode = 'create';
     var tasks = [];
     var selectedTaskId = null;
     var tasksMode = 'create';
@@ -1172,21 +1063,6 @@ function createUiHtml(): string {
     var memorySubmenu = document.getElementById('memory-submenu');
     var settingsSubmenu = document.getElementById('settings-submenu');
     var settingsCaret   = document.getElementById('settings-chevron');
-    var contactsStatusEl = document.getElementById('contacts-status');
-    var contactsSearchInput = document.getElementById('contacts-search-input');
-    var contactsSearchBtn = document.getElementById('contacts-search-btn');
-    var contactsNewBtn = document.getElementById('contacts-new-btn');
-    var contactsListEl = document.getElementById('contacts-list');
-    var contactsForm = document.getElementById('contacts-form');
-    var contactsEditorTitle = document.getElementById('contacts-editor-title');
-    var contactsDeleteBtn = document.getElementById('contacts-delete-btn');
-    var contactsSaveBtn = document.getElementById('contacts-save-btn');
-    var contactsCancelBtn = document.getElementById('contacts-cancel-btn');
-    var contactDisplayNameInput = document.getElementById('contact-display-name');
-    var contactRoleInput = document.getElementById('contact-role');
-    var contactStatusInput = document.getElementById('contact-status');
-    var contactKgNodeIdInput = document.getElementById('contact-kg-node-id');
-    var contactNotesInput = document.getElementById('contact-notes');
     var tasksStatusEl = document.getElementById('tasks-status');
     var tasksSearchInput = document.getElementById('tasks-search-input');
     var tasksSearchBtn = document.getElementById('tasks-search-btn');
@@ -1234,11 +1110,6 @@ function createUiHtml(): string {
     if (!authWall || !mainApp || !authForm || !authInput || !authError ||
         !statusEl || !resultsEl || !searchInput || !searchBtn ||
         !memoryCaret || !memorySubmenu || !settingsSubmenu || !settingsCaret ||
-        !contactsStatusEl || !contactsSearchInput || !contactsSearchBtn ||
-        !contactsNewBtn || !contactsListEl || !contactsForm || !contactsEditorTitle ||
-        !contactsDeleteBtn || !contactsSaveBtn || !contactsCancelBtn ||
-        !contactDisplayNameInput || !contactRoleInput || !contactStatusInput ||
-        !contactKgNodeIdInput || !contactNotesInput ||
         !tasksStatusEl || !tasksSearchInput || !tasksSearchBtn || !tasksNewBtn ||
         !tasksListEl || !tasksForm || !tasksEditorTitle || !tasksDeleteBtn ||
         !tasksSaveBtn || !tasksCancelBtn || !taskAgentIdInput || !taskStatusInput ||
@@ -1438,12 +1309,10 @@ function createUiHtml(): string {
     function navigate(view, title, navId) {
       var kgView            = document.getElementById('view-kg');
       var chatView          = document.getElementById('view-chat');
-      var contactsView      = document.getElementById('view-contacts');
       var tasksView         = document.getElementById('view-tasks');
       var scheduledJobsView = document.getElementById('view-scheduled-jobs');
       kgView.style.display            = view === 'kg'             ? 'flex' : 'none';
       chatView.style.display          = view === 'chat'           ? 'flex' : 'none';
-      contactsView.style.display      = view === 'contacts'       ? 'flex' : 'none';
       tasksView.style.display         = view === 'tasks'          ? 'flex' : 'none';
       scheduledJobsView.style.display = view === 'scheduled-jobs' ? 'flex' : 'none';
       // When returning to the KG view, tell Cytoscape to re-measure the container.
@@ -1465,9 +1334,6 @@ function createUiHtml(): string {
         if (cy && cy.elements().length === 0) {
           loadDefaultGraph();
         }
-      }
-      if (view === 'contacts') {
-        loadContacts();
       }
       if (view === 'tasks') {
         loadTasks();
@@ -1906,174 +1772,6 @@ function createUiHtml(): string {
 
     searchBtn.addEventListener('click', search);
     searchInput.addEventListener('keydown', function(e) { if (e.key === 'Enter') search(); });
-
-    // ── Contacts ──────────────────────────────────────────────────────
-    function setContactsStatus(msg, isError) {
-      contactsStatusEl.textContent = msg;
-      contactsStatusEl.style.color = isError ? 'var(--destructive)' : 'var(--fg-muted)';
-    }
-
-    function resetContactForm() {
-      contactsMode = 'create';
-      selectedContactId = null;
-      contactsEditorTitle.textContent = 'Create Contact';
-      contactsSaveBtn.textContent = 'Create Contact';
-      contactsDeleteBtn.style.display = 'none';
-      contactDisplayNameInput.value = '';
-      contactRoleInput.value = '';
-      contactStatusInput.value = 'confirmed';
-      contactKgNodeIdInput.value = '';
-      contactNotesInput.value = '';
-      renderContactsList(contacts);
-    }
-
-    function fillContactForm(contact) {
-      contactsMode = 'edit';
-      selectedContactId = contact.id;
-      contactsEditorTitle.textContent = 'Edit Contact';
-      contactsSaveBtn.textContent = 'Save Changes';
-      contactsDeleteBtn.style.display = 'inline-flex';
-      contactDisplayNameInput.value = contact.displayName;
-      contactRoleInput.value = contact.role || '';
-      contactStatusInput.value = contact.status;
-      contactKgNodeIdInput.value = contact.kgNodeId || '';
-      contactNotesInput.value = contact.notes || '';
-      renderContactsList(contacts);
-    }
-
-    function renderContactsList(list) {
-      contactsListEl.replaceChildren();
-      if (!list.length) {
-        var empty = document.createElement('p');
-        empty.style.cssText = 'font-size: 0.8125rem; color: var(--fg-muted); margin: 4px 2px;';
-        empty.textContent = 'No contacts found.';
-        contactsListEl.appendChild(empty);
-        return;
-      }
-      list.forEach(function(contact) {
-        var card = document.createElement('div');
-        card.className = 'contact-card' + (selectedContactId === contact.id ? ' active' : '');
-        var name = document.createElement('div');
-        name.style.cssText = 'font-size: 0.875rem; font-weight: 600; color: var(--fg);';
-        name.textContent = contact.displayName;
-        var meta = document.createElement('div');
-        meta.style.cssText = 'font-size: 0.75rem; color: var(--fg-muted); margin-top: 3px;';
-        meta.textContent = (contact.role || 'No role') + ' · ' + contact.status;
-        card.append(name, meta);
-        card.addEventListener('click', function() { fillContactForm(contact); });
-        contactsListEl.appendChild(card);
-      });
-    }
-
-    function loadContacts() {
-      setContactsStatus('Loading contacts…');
-      fetchJson('/api/kg/contacts')
-        .then(function(data) {
-          contacts = data.contacts || [];
-          renderContactsList(contacts);
-          setContactsStatus(contacts.length + ' contact' + (contacts.length === 1 ? '' : 's'));
-          if (contactsMode === 'edit') {
-            var selected = contacts.find(function(c) { return c.id === selectedContactId; });
-            if (selected) {
-              fillContactForm(selected);
-            } else {
-              resetContactForm();
-            }
-          }
-        })
-        .catch(function(err) { setContactsStatus(String(err), true); });
-    }
-
-    function filterContacts() {
-      var q = contactsSearchInput.value.trim().toLowerCase();
-      if (!q) {
-        renderContactsList(contacts);
-        setContactsStatus(contacts.length + ' contact' + (contacts.length === 1 ? '' : 's'));
-        return;
-      }
-      var filtered = contacts.filter(function(c) {
-        return c.displayName.toLowerCase().includes(q) || (c.role || '').toLowerCase().includes(q);
-      });
-      renderContactsList(filtered);
-      setContactsStatus(filtered.length + ' result' + (filtered.length === 1 ? '' : 's'));
-    }
-
-    function saveContact(e) {
-      e.preventDefault();
-      var displayName = contactDisplayNameInput.value.trim();
-      if (!displayName) {
-        setContactsStatus('Display name is required.', true);
-        return;
-      }
-
-      var payload = {
-        displayName: displayName,
-        role: contactRoleInput.value.trim() || null,
-        status: contactStatusInput.value,
-        kgNodeId: contactKgNodeIdInput.value.trim() || null,
-        notes: contactNotesInput.value.trim() || null,
-      };
-
-      contactsSaveBtn.disabled = true;
-      setContactsStatus(contactsMode === 'create' ? 'Creating contact…' : 'Saving contact…');
-
-      var request = contactsMode === 'create'
-        ? fetch('/api/kg/contacts', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload),
-          })
-        : fetch('/api/kg/contacts/' + encodeURIComponent(selectedContactId), {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload),
-          });
-
-      request
-        .then(function(res) {
-          return res.json().then(function(body) {
-            if (!res.ok) throw new Error(body.error || ('HTTP ' + res.status));
-            return body;
-          });
-        })
-        .then(function() {
-          setContactsStatus(contactsMode === 'create' ? 'Contact created.' : 'Contact updated.');
-          loadContacts();
-          if (contactsMode === 'create') resetContactForm();
-        })
-        .catch(function(err) { setContactsStatus(err.message || String(err), true); })
-        .finally(function() { contactsSaveBtn.disabled = false; });
-    }
-
-    function deleteContact() {
-      if (!selectedContactId) return;
-      if (!confirm('Delete this contact? This action cannot be undone.')) return;
-      contactsDeleteBtn.disabled = true;
-      setContactsStatus('Deleting contact…');
-      fetch('/api/kg/contacts/' + encodeURIComponent(selectedContactId), { method: 'DELETE' })
-        .then(function(res) {
-          if (!res.ok) return res.json().then(function(body) { throw new Error(body.error || ('HTTP ' + res.status)); });
-        })
-        .then(function() {
-          setContactsStatus('Contact deleted.');
-          resetContactForm();
-          loadContacts();
-        })
-        .catch(function(err) { setContactsStatus(err.message || String(err), true); })
-        .finally(function() { contactsDeleteBtn.disabled = false; });
-    }
-
-    contactsForm.addEventListener('submit', saveContact);
-    contactsDeleteBtn.addEventListener('click', deleteContact);
-    contactsNewBtn.addEventListener('click', resetContactForm);
-    contactsCancelBtn.addEventListener('click', resetContactForm);
-    contactsSearchBtn.addEventListener('click', filterContacts);
-    contactsSearchInput.addEventListener('keydown', function(e) {
-      if (e.key === 'Enter') {
-        e.preventDefault();
-        filterContacts();
-      }
-    });
 
     // ── Agent Tasks ──────────────────────────────────────────────────
     function setTasksStatus(msg, isError) {
@@ -3293,6 +2991,7 @@ export async function knowledgeGraphRoutes(
         displayName: contact.displayName,
         role: contact.role,
         status: contact.status,
+        trustLevel: contact.trustLevel,
         notes: contact.notes,
         createdAt: contact.createdAt.toISOString(),
         updatedAt: contact.updatedAt.toISOString(),
@@ -3306,6 +3005,7 @@ export async function knowledgeGraphRoutes(
       displayName?: unknown;
       role?: unknown;
       status?: unknown;
+      trustLevel?: unknown;
       notes?: unknown;
       kgNodeId?: unknown;
     };
@@ -3316,6 +3016,11 @@ export async function knowledgeGraphRoutes(
     const status = typeof body.status === 'string' ? body.status : 'confirmed';
     if (!validContactStatuses.includes(status as ContactStatus)) {
       return reply.status(400).send({ error: 'Invalid status.' });
+    }
+    const validTrustLevelsCreate = ['ceo', 'high', 'medium', 'low'];
+    if (body.trustLevel !== undefined && body.trustLevel !== null &&
+        (typeof body.trustLevel !== 'string' || !validTrustLevelsCreate.includes(body.trustLevel))) {
+      return reply.status(400).send({ error: 'Invalid trustLevel.' });
     }
 
     const kgNodeId =
@@ -3335,16 +3040,28 @@ export async function knowledgeGraphRoutes(
       source: 'kg_web_ui',
     });
 
+    // Apply trustLevel if provided — createContact always initialises it to null.
+    if (typeof body.trustLevel === 'string') {
+      await contactService.setTrustLevel(created.id, body.trustLevel as TrustLevel);
+    }
+
+    const freshCreated = await contactService.getContact(created.id);
+    if (!freshCreated) {
+      // Should never happen — contact was just created — but guard rather than return stale data.
+      logger.error({ contactId: created.id }, 'POST /api/kg/contacts: contact not found after creation');
+      return reply.status(500).send({ error: 'Contact created but could not be retrieved.' });
+    }
     return reply.status(201).send({
       contact: {
-        id: created.id,
-        kgNodeId: created.kgNodeId,
-        displayName: created.displayName,
-        role: created.role,
-        status: created.status,
-        notes: created.notes,
-        createdAt: created.createdAt.toISOString(),
-        updatedAt: created.updatedAt.toISOString(),
+        id: freshCreated.id,
+        kgNodeId: freshCreated.kgNodeId,
+        displayName: freshCreated.displayName,
+        role: freshCreated.role,
+        status: freshCreated.status,
+        trustLevel: freshCreated.trustLevel,
+        notes: freshCreated.notes,
+        createdAt: freshCreated.createdAt.toISOString(),
+        updatedAt: freshCreated.updatedAt.toISOString(),
       },
     });
   });
@@ -3356,12 +3073,26 @@ export async function knowledgeGraphRoutes(
       displayName?: unknown;
       role?: unknown;
       status?: unknown;
+      trustLevel?: unknown;
       notes?: unknown;
       kgNodeId?: unknown;
     };
     const contact = await contactService.getContact(id);
     if (!contact) {
       return reply.status(404).send({ error: 'Contact not found.' });
+    }
+
+    // Validate all inputs before any mutations to avoid partial writes on bad input.
+    if (typeof body.status === 'string' && !validContactStatuses.includes(body.status as ContactStatus)) {
+      return reply.status(400).send({ error: 'Invalid status.' });
+    }
+    const validTrustLevels = ['ceo', 'high', 'medium', 'low'];
+    if ('trustLevel' in body && body.trustLevel !== null &&
+        (typeof body.trustLevel !== 'string' || !validTrustLevels.includes(body.trustLevel))) {
+      return reply.status(400).send({ error: 'Invalid trustLevel.' });
+    }
+    if (typeof body.kgNodeId === 'string' && body.kgNodeId.trim().length > 0 && !UUID_RE.test(body.kgNodeId.trim())) {
+      return reply.status(400).send({ error: 'Invalid kgNodeId: must be a valid UUID.' });
     }
 
     if (typeof body.displayName === 'string') {
@@ -3377,17 +3108,14 @@ export async function knowledgeGraphRoutes(
       ]);
     }
     if (typeof body.status === 'string') {
-      if (!validContactStatuses.includes(body.status as ContactStatus)) {
-        return reply.status(400).send({ error: 'Invalid status.' });
-      }
       await contactService.setStatus(id, body.status as ContactStatus);
+    }
+    if ('trustLevel' in body) {
+      await contactService.setTrustLevel(id, (body.trustLevel as TrustLevel | null));
     }
 
     // Notes and kgNodeId are updated directly by preserving the rest of the contact.
     // This route exists only for the web UI and does not expose generic backend mutation.
-    if (typeof body.kgNodeId === 'string' && body.kgNodeId.trim().length > 0 && !UUID_RE.test(body.kgNodeId.trim())) {
-      return reply.status(400).send({ error: 'Invalid kgNodeId: must be a valid UUID.' });
-    }
     if (typeof body.notes === 'string' || typeof body.kgNodeId === 'string' || body.notes === null || body.kgNodeId === null) {
       const refreshed = await contactService.getContact(id);
       if (!refreshed) {
@@ -3407,19 +3135,21 @@ export async function knowledgeGraphRoutes(
     }
 
     const updated = await contactService.getContact(id);
+    if (!updated) {
+      return reply.status(500).send({ error: 'Contact not found after update.' });
+    }
     return reply.send({
-      contact: updated
-        ? {
-            id: updated.id,
-            kgNodeId: updated.kgNodeId,
-            displayName: updated.displayName,
-            role: updated.role,
-            status: updated.status,
-            notes: updated.notes,
-            createdAt: updated.createdAt.toISOString(),
-            updatedAt: updated.updatedAt.toISOString(),
-          }
-        : null,
+      contact: {
+        id: updated.id,
+        kgNodeId: updated.kgNodeId,
+        displayName: updated.displayName,
+        role: updated.role,
+        status: updated.status,
+        trustLevel: updated.trustLevel,
+        notes: updated.notes,
+        createdAt: updated.createdAt.toISOString(),
+        updatedAt: updated.updatedAt.toISOString(),
+      },
     });
   });
 
