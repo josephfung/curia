@@ -121,7 +121,8 @@ export class HttpAdapter {
       // Job routes bypass bearer auth — the dashboard accesses them via session cookie,
       // and jobRoutes calls assertSecret on every handler.
       if (
-        routeUrl === '/*' ||        // console SPA — static files + client-side routes
+        routeUrl === '/' ||         // @fastify/static registers GET / for index.html when wildcard:false
+        routeUrl === '/*' ||        // console SPA catch-all for client-side routes (/login, etc.)
         routeUrl === '/auth' ||
         routeUrl === '/old' ||      // legacy UI shell — exact matches prevent accidental
         routeUrl === '/old/*' ||    // bypass for any future /old-prefixed routes

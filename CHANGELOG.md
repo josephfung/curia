@@ -19,6 +19,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **Console root path auth bypass** — `GET /` now skips bearer auth; `@fastify/static` registers it as a distinct route when `wildcard: false`, so the `/*` bypass added in #769 did not cover it.
 - **`file-parse` PDF extraction** — call the v2 `PDFParse` class; the v1 API was throwing on every PDF, misreported as "image-only". (#770)
 - **Migration `016_kg_node_uniqueness`** — Step 4 now checks for pre-existing contacts on canonical KG nodes before re-pointing, preventing a duplicate-key violation on `idx_contacts_kg_node_unique` when a canonical node already had its own contact row.
 - **Console Vite dev proxy** — `/old` and the four cytoscape assets (`cytoscape.min.js`, `layout-base.js`, `cose-base.js`, `cytoscape-fcose.js`) are now proxied to Fastify in the Vite dev server; without this the Vite SPA intercepted `/old` requests and the legacy UI was unreachable in dev. (#750)
