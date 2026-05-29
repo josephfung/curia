@@ -107,11 +107,29 @@ describe('knowledgeGraphRoutes', () => {
       sessions: new Map(),
     });
 
-    for (const path of ['/old/chat', '/old/contacts', '/old/tasks']) {
+    // /old/chat is excluded here — it redirects to /chat (see the test below)
+    for (const path of ['/old/contacts', '/old/tasks']) {
       const response = await app.inject({ method: 'GET', url: path });
       expect(response.statusCode).toBe(200);
       expect(response.body).toContain('Knowledge Graph');
     }
+
+    await app.close();
+  });
+
+  it('redirects /old/chat to /chat', async () => {
+    const app = Fastify();
+    await app.register(knowledgeGraphRoutes, {
+      pool,
+      logger: createLogger(),
+      webAppBootstrapSecret: 'secret-1',
+      secureCookies: false,
+      sessions: new Map(),
+    });
+
+    const response = await app.inject({ method: 'GET', url: '/old/chat' });
+    expect(response.statusCode).toBe(302);
+    expect(response.headers['location']).toBe('/chat');
 
     await app.close();
   });
