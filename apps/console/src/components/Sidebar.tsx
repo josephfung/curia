@@ -70,7 +70,9 @@ export function Sidebar({ activeView, onNavigate, theme, onThemeChange }: Sideba
         <button
           className={`nav-item${activeView === 'chat' ? ' active' : ''}`}
           onClick={() => {
-            navigate({ to: '/chat' }).catch(console.error);
+            navigate({ to: '/chat' }).catch((err: unknown) => {
+              console.error('[Sidebar] navigation to /chat failed:', err);
+            });
             setOpen(false);
           }}
         >

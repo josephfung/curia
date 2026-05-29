@@ -2473,7 +2473,9 @@ export async function knowledgeGraphRoutes(
   // /old/chat is now served by the React console at /chat.
   // This exact-match route takes priority over the /old/* wildcard below
   // (Fastify's radix router resolves exact matches before wildcards).
-  app.get('/old/chat', (_req, reply) => reply.redirect('/chat'));
+  // Using 302 (temporary) rather than 301 (permanent) while the new view stabilises.
+  // Fastify 5 signature: redirect(url, statusCode?) — url comes first.
+  app.get('/old/chat', (_req, reply) => reply.redirect('/chat', 302));
 
   app.get('/old', serveOldUi);
   // Wildcard catches /old/kg, /old/contacts, etc. The * captures

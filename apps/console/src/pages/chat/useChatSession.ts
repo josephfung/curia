@@ -49,9 +49,10 @@ export function useChatSession(): ChatSession {
         setMessages(prev => [...prev, makeMessage('status', statusText)]);
       }
     };
-    source.onerror = () => {
+    source.onerror = (event) => {
       // SSE failures are non-fatal — the POST response is authoritative.
       // Close immediately to prevent the browser's automatic reconnection loop.
+      console.error('[useChatSession] SSE stream error:', event);
       source.close();
     };
 
@@ -67,12 +68,25 @@ export function useChatSession(): ChatSession {
         try {
           const errData = await res.json() as { error?: string };
           if (errData.error) errMsg = errData.error;
-        } catch { /* non-JSON error body — use the status fallback */ }
+        } catch (bodyErr) {
+          // Non-JSON error body — log for debugging, fall back to HTTP status.
+          console.error('[useChatSession] failed to parse error response body:', bodyErr);
+        }
         setMessages(prev => [...prev, makeMessage('error', errMsg)]);
         return;
       }
 
-      const data = await res.json() as { reply: string; conversationId: string };
+      const raw = await res.json() as unknown;
+      if (
+        typeof raw !== 'object' ||
+        raw === null ||
+        typeof (raw as Record<string, unknown>)['reply'] !== 'string'
+      ) {
+        console.error('[useChatSession] unexpected response shape:', raw);
+        setMessages(prev => [...prev, makeMessage('error', 'Received an unexpected response.')]);
+        return;
+      }
+      const data = raw as { reply: string; conversationId: string };
       setMessages(prev => [...prev, makeMessage('agent', data.reply)]);
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Network error';

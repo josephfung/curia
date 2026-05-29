@@ -9,7 +9,10 @@ export function parseSseEvent(data: string): string | null {
   let payload: unknown;
   try {
     payload = JSON.parse(data);
-  } catch {
+  } catch (parseErr) {
+    // Non-fatal: malformed SSE data is silently ignored.
+    // Log at debug level so it's visible in DevTools when investigating SSE issues.
+    console.debug('[parseSseEvent] failed to parse SSE data:', parseErr);
     return null;
   }
   if (typeof payload !== 'object' || payload === null) return null;
