@@ -11,6 +11,7 @@ export function ChatThread({ messages }: ChatThreadProps) {
 
   // Scroll to the latest message whenever the list grows.
   useEffect(() => {
+    if (messages.length === 0) return;
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
