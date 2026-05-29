@@ -13,6 +13,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Changed
+
+- **`ceo-inbox`** — restricted polling schedule from 24/7 to 6am–11pm local time, reducing idle LLM calls during dead hours.
+
 ### Added
 
 - **Console app scaffold** — new `apps/console/` Vite + React + TanStack Router app; Fastify serves the static bundle at `/` with SPA fallback; auth-gated dashboard placeholder; design-system components (Sidebar, Topbar, Icons) copied and converted to TypeScript. `pnpm dev` starts both the backend and the Vite dev server concurrently. (#750)
