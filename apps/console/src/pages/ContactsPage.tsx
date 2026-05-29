@@ -399,6 +399,16 @@ export default function ContactsPage() {
             <div style={{ padding: 32, color: 'var(--app-destructive)', fontSize: 13 }}>{loadError}</div>
           ) : (
             <>
+              {/* Mobile search — TopbarSearch is hidden below 768px by the shared stylesheet */}
+              <div className="contacts-mobile-search">
+                <input
+                  type="text"
+                  placeholder="Search name or role…"
+                  value={search}
+                  onChange={e => { setSearch(e.target.value); setPage(1); }}
+                />
+              </div>
+
               <div className="records-toolbar">
                 <div className="records-toolbar-left">
                   {(['all', 'confirmed', 'provisional', 'blocked'] as const).map(v => (
@@ -425,19 +435,25 @@ export default function ContactsPage() {
                     <table className="records-table">
                       <thead>
                         <tr>
-                          <th className="sortable" onClick={() => toggleSort('displayName')}>
-                            Name <span className="sort-arrow">{sortArrow('displayName')}</span>
+                          <th className="sortable" aria-sort={sort.key === 'displayName' ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none'}>
+                            <button className="sort-btn" onClick={() => toggleSort('displayName')}>
+                              Name <span className="sort-arrow">{sortArrow('displayName')}</span>
+                            </button>
                           </th>
-                          <th className="sortable" onClick={() => toggleSort('role')}>
-                            Role <span className="sort-arrow">{sortArrow('role')}</span>
+                          <th className="sortable" aria-sort={sort.key === 'role' ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none'}>
+                            <button className="sort-btn" onClick={() => toggleSort('role')}>
+                              Role <span className="sort-arrow">{sortArrow('role')}</span>
+                            </button>
                           </th>
-                          <th className="col-org">Organization</th>
-                          <th className="sortable" onClick={() => toggleSort('status')}>
-                            Status <span className="sort-arrow">{sortArrow('status')}</span>
+                          <th className="sortable" aria-sort={sort.key === 'status' ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none'}>
+                            <button className="sort-btn" onClick={() => toggleSort('status')}>
+                              Status <span className="sort-arrow">{sortArrow('status')}</span>
+                            </button>
                           </th>
-                          <th className="col-email">Email</th>
-                          <th className="sortable col-updated" onClick={() => toggleSort('updatedAt')}>
-                            Updated <span className="sort-arrow">{sortArrow('updatedAt')}</span>
+                          <th className="sortable col-updated" aria-sort={sort.key === 'updatedAt' ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none'}>
+                            <button className="sort-btn" onClick={() => toggleSort('updatedAt')}>
+                              Updated <span className="sort-arrow">{sortArrow('updatedAt')}</span>
+                            </button>
                           </th>
                           <th style={{ textAlign: 'right' }}>Actions</th>
                         </tr>
@@ -462,9 +478,7 @@ export default function ContactsPage() {
                               </div>
                             </td>
                             <td>{c.role ?? ''}</td>
-                            <td className="cell-muted col-org"></td>
                             <td><span className={`status-pill ${c.status}`}>{c.status}</span></td>
-                            <td className="cell-mono col-email"></td>
                             <td className="cell-mono col-updated">{formatDate(c.updatedAt)}</td>
                             <td>
                               <div className="cell-actions" onClick={e => e.stopPropagation()}>
@@ -483,7 +497,7 @@ export default function ContactsPage() {
                         ))}
                         {pageRows.length === 0 && (
                           <tr>
-                            <td colSpan={7} style={{ textAlign: 'center', padding: 40, color: 'var(--app-fg-muted)' }}>
+                            <td colSpan={5} style={{ textAlign: 'center', padding: 40, color: 'var(--app-fg-muted)' }}>
                               No contacts match.
                             </td>
                           </tr>

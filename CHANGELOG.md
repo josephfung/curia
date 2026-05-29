@@ -15,7 +15,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
-- **Contacts view** — Contacts are now accessible at `/contacts` in the new console app with full create, edit, and delete support. Trust level is editable in the drawer. The legacy `/old/contacts` view has been removed. (#781)
+- **Contacts view** — new console page at `/contacts` with full CRUD and editable trust level; legacy `/old/contacts` removed. (#781)
 
 ### Changed
 

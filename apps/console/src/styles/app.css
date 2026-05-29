@@ -909,7 +909,7 @@ input:focus, textarea:focus, select:focus {
 }
 .drawer-title-h2 {
   margin: 2px 0 0;
-  font-family: 'Lora', Georgia, serif;
+  font-family: Lora, Georgia, serif;
   font-weight: 500; font-size: 22px; line-height: 1.2;
   color: var(--app-fg);
 }
@@ -937,6 +937,10 @@ input:focus, textarea:focus, select:focus {
 .edit-drawer-form { padding: 16px 18px; display: flex; flex-direction: column; gap: 14px; }
 
 /* ── Records (CRUD table views) ────────────────────────────────────── */
+/* Mobile-only search bar (TopbarSearch is hidden below 768px by the shared stylesheet) */
+.contacts-mobile-search { display: none; padding: 8px 16px; }
+.contacts-mobile-search input { width: 100%; }
+
 .records-layout { flex: 1; display: flex; overflow: hidden; min-height: 0; }
 .records-main {
   flex: 1; display: flex; flex-direction: column; overflow: hidden; min-width: 0;
@@ -981,8 +985,13 @@ table.records-table thead th {
   white-space: nowrap;
   z-index: 1;
 }
-table.records-table thead th.sortable { cursor: pointer; user-select: none; }
+table.records-table thead th.sortable { user-select: none; }
 table.records-table thead th.sortable:hover { color: var(--app-fg); }
+table.records-table thead th.sortable .sort-btn {
+  background: none; border: none; padding: 0;
+  font: inherit; color: inherit; cursor: pointer;
+  display: inline-flex; align-items: center; gap: 4px;
+}
 table.records-table thead th .sort-arrow {
   display: inline-block; margin-left: 4px; opacity: 0.6; font-size: 10px;
 }
@@ -1093,9 +1102,9 @@ table.records-table tbody tr.active td { background: transparent; }
   }
   .form-grid { grid-template-columns: 1fr; }
   /* Hide lower-priority columns on narrow screens */
-  table.records-table .col-org,
-  table.records-table .col-email,
   table.records-table .col-updated { display: none; }
   .records-toolbar { padding: 8px 14px; }
   .records-pagination { padding: 8px 14px; }
+  /* Show the mobile search bar (TopbarSearch is hidden at this breakpoint) */
+  .contacts-mobile-search { display: block; }
 }

@@ -3092,7 +3092,14 @@ export async function knowledgeGraphRoutes(
         (typeof body.trustLevel !== 'string' || !validTrustLevels.includes(body.trustLevel))) {
       return reply.status(400).send({ error: 'Invalid trustLevel.' });
     }
-    if (typeof body.kgNodeId === 'string' && body.kgNodeId.trim().length > 0 && !UUID_RE.test(body.kgNodeId.trim())) {
+    // Trim once; collapse whitespace-only strings to null so they don't reach the DB as invalid UUIDs.
+    const normalizedKgNodeId: string | null | undefined =
+      typeof body.kgNodeId === 'string'
+        ? (body.kgNodeId.trim() || null)
+        : body.kgNodeId === null
+        ? null
+        : undefined;
+    if (typeof normalizedKgNodeId === 'string' && !UUID_RE.test(normalizedKgNodeId)) {
       return reply.status(400).send({ error: 'Invalid kgNodeId: must be a valid UUID.' });
     }
 
@@ -3129,7 +3136,7 @@ export async function knowledgeGraphRoutes(
         [
           id,
           typeof body.notes === 'string' ? body.notes : body.notes === null ? null : refreshed.notes,
-          typeof body.kgNodeId === 'string' ? body.kgNodeId : body.kgNodeId === null ? null : refreshed.kgNodeId,
+          normalizedKgNodeId !== undefined ? normalizedKgNodeId : refreshed.kgNodeId,
           new Date().toISOString(),
         ],
       );
@@ -3137,7 +3144,7 @@ export async function knowledgeGraphRoutes(
 
     const updated = await contactService.getContact(id);
     if (!updated) {
-      return reply.status(500).send({ error: 'Contact not found after update.' });
+      return reply.status(404).send({ error: 'Contact not found after update.' });
     }
     return reply.send({
       contact: {
