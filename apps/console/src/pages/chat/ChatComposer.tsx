@@ -36,10 +36,15 @@ export function ChatComposer({ disabled, onSend }: ChatComposerProps) {
     }
   }
 
+  function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    submit();
+  }
+
   return (
     <form
       className="chat-composer"
-      onSubmit={e => { e.preventDefault(); submit(); }}
+      onSubmit={handleSubmit}
     >
       <textarea
         ref={textareaRef}
