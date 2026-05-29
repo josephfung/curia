@@ -84,6 +84,8 @@ export default function WizardPage() {
   }, []);
 
   function goTo(step: number) {
+    // Non-critical navigation: if a router guard blocks this, the user stays on the
+    // current step. Swallowing the error is intentional — there's no UI to surface it.
     navigate({ to: '/setup', search: { step } }).catch(() => {});
   }
 
@@ -116,7 +118,9 @@ export default function WizardPage() {
       if (!putRes.ok) throw new Error(await extractError(putRes));
       const reloadRes = await apiFetch('/api/identity/reload', { method: 'POST' });
       if (!reloadRes.ok) throw new Error(await extractError(reloadRes));
-      navigate({ to: '/' }).catch(() => {});
+      // await inside the try block so navigation failures are caught and surface
+      // the submitError + re-enable buttons, rather than leaving a stuck spinner.
+      await navigate({ to: '/' });
     } catch (err) {
       setSubmitError(err instanceof Error ? err.message : 'Save failed');
       setSubmitting(false);
