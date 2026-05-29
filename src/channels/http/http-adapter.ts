@@ -162,7 +162,12 @@ export class HttpAdapter {
       }
     } catch (err) {
       // Non-fatal: existing sessions are lost on this restart, but new logins will work.
-      logger.error({ err }, 'Failed to restore sessions from Postgres');
+      // 42P01 = undefined_table: migration 047_create_sessions.sql has not been applied yet.
+      if ((err as { code?: string }).code === '42P01') {
+        logger.error({ err }, 'Session table does not exist — run pending migrations before deploying');
+      } else {
+        logger.error({ err }, 'Failed to restore sessions from Postgres; existing sessions lost on this restart');
+      }
     }
 
     const pruneInterval = setInterval(() => {
@@ -173,7 +178,7 @@ export class HttpAdapter {
       // Mirror the in-memory sweep to Postgres. Fire-and-forget: a missed prune cycle is harmless
       // because assertSecret re-checks the expiry timestamp on every request.
       pool.query('DELETE FROM sessions WHERE expires_at < NOW()').catch((err: unknown) => {
-        logger.warn({ err }, 'Session prune query failed');
+        logger.error({ err }, 'Session prune DELETE failed — Postgres session storage may be unavailable');
       });
     }, 60_000);
     pruneInterval.unref();
