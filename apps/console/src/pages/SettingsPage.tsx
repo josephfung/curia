@@ -81,7 +81,9 @@ async function errorMessage(res: Response): Promise<string> {
     try {
       const d = await res.json() as { error?: string };
       if (d.error) return d.error;
-    } catch { /* fall through */ }
+    } catch (err) {
+      console.error('[errorMessage] failed to read JSON error body:', err);
+    }
   }
   return `HTTP ${res.status}`;
 }
@@ -175,7 +177,9 @@ function AutonomySection() {
 
       // Refetch history from the start so the new entry comes from the server
       // with a real ID — avoids duplicate rows when "Show more" is clicked.
-      void loadHistory(0);
+      loadHistory(0).catch(err => {
+        console.error('[handleSave] post-save history refresh failed:', err);
+      });
     } catch (err) {
       setSaveStatus(`Error: ${err instanceof Error ? err.message : 'unknown error'}`);
     } finally {
@@ -334,9 +338,13 @@ function SettingsLayout({ activeSection, children }: SettingsLayoutProps) {
 
   function handleNavigate(view: string) {
     if (view === 'autonomy') {
-      void navigate({ to: '/settings/autonomy' });
+      navigate({ to: '/settings/autonomy' }).catch(err => {
+        console.error('[SettingsLayout] navigation to /settings/autonomy failed:', err);
+      });
     } else if (view === 'dashboard') {
-      void navigate({ to: '/' });
+      navigate({ to: '/' }).catch(err => {
+        console.error('[SettingsLayout] navigation to / failed:', err);
+      });
     }
   }
 

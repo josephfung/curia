@@ -5,7 +5,9 @@ export type Theme = 'light' | 'system' | 'dark';
 export function useTheme(): [Theme, (t: Theme) => void] {
   const [theme, setTheme] = useState<Theme>(() => {
     try {
-      return (localStorage.getItem('curia-theme') as Theme) ?? 'system';
+      const stored = localStorage.getItem('curia-theme');
+      if (stored === 'light' || stored === 'system' || stored === 'dark') return stored;
+      return 'system';
     } catch (err) {
       console.error('[useTheme] failed reading curia-theme from localStorage:', err);
       return 'system';
