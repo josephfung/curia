@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useNavigate } from '@tanstack/react-router';
 import { useMobileMenu } from '../context/MobileMenu';
 import {
   CuriaWordmark,
@@ -52,6 +53,7 @@ export function Sidebar({ activeView, onNavigate, theme, onThemeChange }: Sideba
     activeView === 'settings' || activeView === 'wizard',
   );
   const { setOpen } = useMobileMenu();
+  const navigate = useNavigate();
 
   const go = (v: string) => {
     onNavigate(v);
@@ -67,7 +69,10 @@ export function Sidebar({ activeView, onNavigate, theme, onThemeChange }: Sideba
       <div className="nav-group">
         <button
           className={`nav-item${activeView === 'chat' ? ' active' : ''}`}
-          onClick={() => go('chat')}
+          onClick={() => {
+            navigate({ to: '/chat' }).catch(console.error);
+            setOpen(false);
+          }}
         >
           <IconChat />
           Chat
