@@ -233,6 +233,40 @@ describe('BullpenHandler', () => {
     publishResolve!();
   });
 
+  it('post: returns existing thread when source_message_id matches a prior post', async () => {
+    const ctx = makeCtx({
+      action: 'post',
+      topic: 'expense receipt',
+      participants: ['coordinator', 't2125-expense-tracker'],
+      content: 'Please process this receipt',
+      source_message_id: 'email-msg-abc123',
+    });
+
+    const first = await handler.execute(ctx);
+    expect(first.success).toBe(true);
+    const firstData = (first as { success: true; data: Record<string, unknown> }).data;
+
+    // Second post with the same source_message_id — simulates a duplicate ceo-inbox run
+    const ctx2 = makeCtx({
+      action: 'post',
+      topic: 'expense receipt',
+      participants: ['coordinator', 't2125-expense-tracker'],
+      content: 'Please process this receipt',
+      source_message_id: 'email-msg-abc123',
+    }, { bullpenService: ctx.bullpenService, bus: ctx.bus });
+
+    const second = await handler.execute(ctx2);
+    expect(second.success).toBe(true);
+    const secondData = (second as { success: true; data: Record<string, unknown> }).data;
+
+    // Must return the same thread — no new thread opened
+    expect(secondData.thread_id).toBe(firstData.thread_id);
+    // Dedup flag must be set
+    expect(secondData.deduplicated).toBe(true);
+    // Bus publish called exactly once — no duplicate agent.discuss event
+    expect((ctx.bus!.publish as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(1);
+  });
+
   it('post: a publish rejection does not surface as a handler failure', async () => {
     const failingPublish = vi.fn().mockRejectedValue(new Error('bus exploded'));
     const ctx = makeCtx(

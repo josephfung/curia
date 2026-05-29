@@ -13,6 +13,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`bullpen`** — `post` action is now idempotent when `source_message_id` is provided: a duplicate call returns the existing thread instead of opening a second one. Prevents duplicate specialist dispatches when a ceo-inbox run is interrupted before its high-water mark saves. (#708)
+
 ### Changed
 
 - **`ceo-inbox`** — restricted polling schedule from 24/7 to 6am–11pm local time, reducing idle LLM calls during dead hours.

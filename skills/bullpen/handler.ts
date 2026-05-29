@@ -64,13 +64,31 @@ export class BullpenHandler implements SkillHandler {
             ? (rawMentioned as string[]).map(m => m.trim()).filter(m => m.length > 0 && cleanParticipants.includes(m))
             : cleanParticipants;
 
+          // Optional dedup key — when provided, openThread returns the existing thread
+          // if one was already created for this source message. (issue #708)
+          const rawSourceMessageId = input['source_message_id'];
+          const sourceMessageId = typeof rawSourceMessageId === 'string' && rawSourceMessageId.trim()
+            ? rawSourceMessageId.trim()
+            : undefined;
+
           // Capture originator before openThread so we can pass it both to the thread
           // record (for poll-fallback rehydration) and to the agent.discuss event payload.
           const originator = ctx.taskMetadata?.originator as TaskOriginator | undefined;
 
-          const { thread, message } = await ctx.bullpenService.openThread(
-            topic, ctx.agentId, cleanParticipants, content, mentionedAgentIds, originator,
+          const { thread, message, deduplicated } = await ctx.bullpenService.openThread(
+            topic, ctx.agentId, cleanParticipants, content, mentionedAgentIds, originator, sourceMessageId,
           );
+
+          // Skip publish entirely on dedup hit — the existing thread's participants were
+          // already notified when the original thread was opened. Re-publishing would
+          // cause duplicate agent.discuss events and therefore duplicate task dispatches.
+          if (deduplicated) {
+            ctx.log.info(
+              { threadId: thread.id, sourceMessageId },
+              'Bullpen: dedup hit — returning existing thread, skipping agent.discuss publish',
+            );
+            return { success: true, data: { thread_id: thread.id, message_id: message.id, deduplicated: true } };
+          }
 
           // Publish is fire-and-forget — thread is already persisted. We do NOT
           // await here because bus.publish dispatches subscribers sequentially
@@ -101,7 +119,7 @@ export class BullpenHandler implements SkillHandler {
             );
           });
 
-          return { success: true, data: { thread_id: thread.id, message_id: message.id } };
+          return { success: true, data: { thread_id: thread.id, message_id: message.id, deduplicated: false } };
         }
 
         case 'reply': {
