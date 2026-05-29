@@ -44,9 +44,9 @@ describe('getSessionInfo', () => {
     expect(await getSessionInfo()).toEqual({ valid: false, configured: false });
   });
 
-  it('returns valid=false on network error', async () => {
+  it('treats network errors as valid/configured to avoid forced logout', async () => {
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('Network error')));
-    expect(await getSessionInfo()).toEqual({ valid: false, configured: false });
+    expect(await getSessionInfo()).toEqual({ valid: true, configured: true });
   });
 });
 

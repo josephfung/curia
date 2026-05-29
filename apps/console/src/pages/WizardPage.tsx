@@ -84,9 +84,9 @@ export default function WizardPage() {
   }, []);
 
   function goTo(step: number) {
-    // Non-critical navigation: if a router guard blocks this, the user stays on the
-    // current step. Swallowing the error is intentional — there's no UI to surface it.
-    navigate({ to: '/setup', search: { step } }).catch(() => {});
+    // Step navigation is non-critical — if the router rejects, the user stays on
+    // the current step. Void the promise explicitly rather than using an empty catch.
+    void navigate({ to: '/setup', search: { step } });
   }
 
   function handleContinue() {
@@ -275,8 +275,9 @@ export default function WizardPage() {
         })}
       </div>
       <div className="wizard-preview">{tonePreviewText(state.toneBaseline)}</div>
-      <div className="wizard-label">Detail level</div>
+      <label className="wizard-label" htmlFor="w-verbosity">Detail level</label>
       <input
+        id="w-verbosity"
         type="range"
         min={0}
         max={100}
@@ -286,8 +287,9 @@ export default function WizardPage() {
       />
       <div className="slider-labels"><span>Brief</span><span>Thorough</span></div>
       <div className="wizard-sample">{verbosityBand(state.verbosity)}</div>
-      <div className="wizard-label">Directness</div>
+      <label className="wizard-label" htmlFor="w-directness">Directness</label>
       <input
+        id="w-directness"
         type="range"
         min={0}
         max={100}

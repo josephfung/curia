@@ -24,7 +24,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
-- **Wizard console port** — onboarding wizard ported to the new React console app at `/setup`; first-time users are redirected there automatically on login. Removes the legacy KG app wizard overlay. (#751)
+- **Wizard console port** — onboarding wizard at `/setup` with first-run redirect; removes legacy KG wizard overlay. (#751)
 
 - **Autonomy console view** — Autonomy settings ported to the new console app at `/settings/autonomy`; includes the score display, live-preview slider, reason field, save, and paginated history. Removed the Autonomy view from the legacy `/old` UI. (#752)
 

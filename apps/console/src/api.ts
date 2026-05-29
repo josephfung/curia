@@ -24,8 +24,9 @@ export async function getSessionInfo(): Promise<SessionInfo> {
     const data = await res.json() as { configured?: boolean };
     return { valid: true, configured: data.configured !== false };
   } catch {
-    // Network failure — treat as unauthenticated rather than crashing the app.
-    return { valid: false, configured: false };
+    // Network failure — keep the user where they are rather than forcing a /login redirect.
+    // We can't distinguish a transient blip from a genuine auth drop, so assume still valid.
+    return { valid: true, configured: true };
   }
 }
 
