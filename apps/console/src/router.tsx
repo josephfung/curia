@@ -19,6 +19,7 @@ const WorkspacePage = lazy(() =>
 );
 const WizardPage = lazy(() => import('./pages/WizardPage'));
 const ContactsPage = lazy(() => import('./pages/ContactsPage'));
+const ChatPage = lazy(() => import('./pages/ChatPage'));
 
 const rootRoute = createRootRoute({
   component: () => (
@@ -48,6 +49,12 @@ const dashboardRoute = createRoute({
   getParentRoute: () => authedRoute,
   path: '/',
   component: DashboardPage,
+});
+
+const chatRoute = createRoute({
+  getParentRoute: () => authedRoute,
+  path: '/chat',
+  component: ChatPage,
 });
 
 // Setup wizard — full-screen, no sidebar/topbar.
@@ -105,6 +112,7 @@ const contactsRoute = createRoute({
 const routeTree = rootRoute.addChildren([
   authedRoute.addChildren([
     dashboardRoute,
+    chatRoute,
     setupRoute,
     contactsRoute,
     settingsRoute.addChildren([autonomyRoute, workspaceRoute]),
