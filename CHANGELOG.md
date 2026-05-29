@@ -15,6 +15,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **Migration 015 collision** — merged `015_create_bullpen` and `015_scheduler_resilience` into a single `015_bullpen_and_scheduler_resilience` to resolve a duplicate-prefix conflict.
 - **HTTP session persistence** — hashed tokens written to Postgres and restored on startup; browser auth survives restarts. (#748)
 - **`bullpen`** — `post` is now idempotent when `source_message_id` is provided; returns existing thread on duplicate. (#708)
 
