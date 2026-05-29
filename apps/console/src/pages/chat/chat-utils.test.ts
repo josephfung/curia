@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseSseEvent } from './chat-utils.js';
+import { parseSseEvent, makeMessage } from './chat-utils.js';
 
 describe('parseSseEvent', () => {
   it('returns status text for skill.invoke events', () => {
@@ -39,5 +39,20 @@ describe('parseSseEvent', () => {
   it('returns null for non-object JSON', () => {
     expect(parseSseEvent('42')).toBeNull();
     expect(parseSseEvent('"hello"')).toBeNull();
+  });
+});
+
+describe('makeMessage', () => {
+  it('returns a Message with the given kind and text', () => {
+    const msg = makeMessage('user', 'hello');
+    expect(msg.kind).toBe('user');
+    expect(msg.text).toBe('hello');
+    expect(typeof msg.id).toBe('string');
+  });
+
+  it('generates a unique id on each call', () => {
+    const a = makeMessage('agent', 'x');
+    const b = makeMessage('agent', 'x');
+    expect(a.id).not.toBe(b.id);
   });
 });
