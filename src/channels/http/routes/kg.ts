@@ -9,7 +9,7 @@ import type { Logger } from '../../../logger.js';
 import type { ContactService } from '../../../contacts/contact-service.js';
 import type { ContactStatus } from '../../../contacts/types.js';
 import { MessageRejectedError, type EventRouter } from '../event-router.js';
-import { assertSecret, type SessionStore } from '../session-auth.js';
+import { assertSecret, hashToken, type SessionStore } from '../session-auth.js';
 
 export interface KnowledgeGraphRouteOptions {
   pool: Pool;
@@ -3549,7 +3549,18 @@ export async function knowledgeGraphRoutes(
 
     // Issue a 256-bit random session token. The secret itself never goes in the cookie.
     const token = randomBytes(32).toString('hex');
-    sessions.set(token, Date.now() + 24 * 60 * 60 * 1000); // expires in 24 hours
+    const tokenHash = hashToken(token);
+    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours from now
+    sessions.set(tokenHash, expiresAt.getTime());
+
+    // Persist to Postgres so the session survives a process restart. ON CONFLICT is a safety
+    // net against the astronomically unlikely case of a hash collision on a 256-bit token.
+    await pool.query(
+      `INSERT INTO sessions (token_hash, last_seen_at, expires_at)
+       VALUES ($1, NOW(), $2)
+       ON CONFLICT (token_hash) DO UPDATE SET expires_at = EXCLUDED.expires_at, last_seen_at = NOW()`,
+      [tokenHash, expiresAt],
+    );
 
     reply.setCookie('curia_session', token, {
       httpOnly: true,

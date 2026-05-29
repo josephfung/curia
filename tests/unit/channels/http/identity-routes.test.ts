@@ -3,6 +3,7 @@ import cookie from '@fastify/cookie';
 import type { Pool } from 'pg';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { identityRoutes } from '../../../../src/channels/http/routes/identity.js';
+import { hashToken } from '../../../../src/channels/http/session-auth.js';
 import type { OfficeIdentityService } from '../../../../src/identity/service.js';
 import type { OfficeIdentity } from '../../../../src/identity/types.js';
 
@@ -89,7 +90,7 @@ describe('GET /api/identity — configured flag', () => {
 
   it('accepts a valid session cookie in place of the header', async () => {
     const token = 'valid-session-token';
-    sessions.set(token, Date.now() + 60_000);
+    sessions.set(hashToken(token), Date.now() + 60_000);
 
     const pool = {
       query: vi.fn().mockResolvedValue({ rows: [{ configured: true }] }),
@@ -142,7 +143,7 @@ describe('PUT /api/identity — session cookie auth', () => {
 
   it('accepts PUT with a valid session cookie', async () => {
     const token = 'put-session-token';
-    sessions.set(token, Date.now() + 60_000);
+    sessions.set(hashToken(token), Date.now() + 60_000);
 
     const pool = { query: vi.fn() } as unknown as Pool;
     const identityService = createMockIdentityService();

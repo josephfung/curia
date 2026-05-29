@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import type { FastifyRequest, FastifyReply } from 'fastify';
-import { assertSecret, type SessionStore } from '../../../../src/channels/http/session-auth.js';
+import { assertSecret, hashToken, type SessionStore } from '../../../../src/channels/http/session-auth.js';
 
 // Helper: build a minimal FastifyRequest with optional session cookie and optional secret header.
 function makeRequest(opts: {
@@ -44,7 +44,8 @@ describe('assertSecret', () => {
 
   it('accepts a valid session cookie', () => {
     const token = 'valid-token-abc';
-    sessions.set(token, Date.now() + 60_000);
+    // Map is keyed by hash; assertSecret hashes the cookie value before lookup.
+    sessions.set(hashToken(token), Date.now() + 60_000);
     const request = makeRequest({ sessionToken: token });
     const reply = makeReply();
     expect(assertSecret(request, reply as unknown as FastifyReply, configuredSecret, sessions)).toBe(true);
@@ -52,7 +53,7 @@ describe('assertSecret', () => {
 
   it('rejects an expired session cookie', () => {
     const token = 'expired-token';
-    sessions.set(token, Date.now() - 1000);
+    sessions.set(hashToken(token), Date.now() - 1000);
     const request = makeRequest({ sessionToken: token });
     const reply = makeReply();
     expect(assertSecret(request, reply as unknown as FastifyReply, configuredSecret, sessions)).toBe(false);
