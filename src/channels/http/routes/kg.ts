@@ -1,4 +1,4 @@
-import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
@@ -9,7 +9,7 @@ import type { Logger } from '../../../logger.js';
 import type { ContactService } from '../../../contacts/contact-service.js';
 import type { ContactStatus } from '../../../contacts/types.js';
 import { MessageRejectedError, type EventRouter } from '../event-router.js';
-import { assertSecret, hashToken, type SessionStore } from '../session-auth.js';
+import { assertSecret, compareSecrets, hashToken, type SessionStore } from '../session-auth.js';
 
 export interface KnowledgeGraphRouteOptions {
   pool: Pool;
@@ -3540,15 +3540,7 @@ export async function knowledgeGraphRoutes(
     const body = request.body as { secret?: unknown };
     const provided = typeof body?.secret === 'string' ? body.secret : '';
 
-    // Use buffer byte lengths, not String.length, before timingSafeEqual — multi-byte UTF-8
-    // secrets have the same char count but different byte count, which causes timingSafeEqual
-    // to throw a RangeError if the char-count guard passes but byte lengths differ.
-    const providedBuf = Buffer.from(provided);
-    const secretBuf = Buffer.from(webAppBootstrapSecret);
-    if (
-      providedBuf.length !== secretBuf.length ||
-      !timingSafeEqual(providedBuf, secretBuf)
-    ) {
+    if (!compareSecrets(provided, webAppBootstrapSecret)) {
       return reply.status(401).send({ error: 'Invalid access key.' });
     }
 

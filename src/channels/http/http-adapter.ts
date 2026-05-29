@@ -161,25 +161,35 @@ export class HttpAdapter {
         logger.info({ count: rows.length }, 'Restored sessions from Postgres');
       }
     } catch (err) {
-      // Non-fatal: existing sessions are lost on this restart, but new logins will work.
-      // 42P01 = undefined_table: migration 047_create_sessions.sql has not been applied yet.
+      // 42P01 = undefined_table: migration 047 has not been applied yet. Log and continue so
+      // operators see an actionable message; logins will fail until the migration runs.
       if ((err as { code?: string }).code === '42P01') {
-        logger.error({ err }, 'Session table does not exist — run pending migrations before deploying');
+        logger.error({ err }, 'Session table does not exist — run pending migrations; logins unavailable until migration 047 is applied');
       } else {
-        logger.error({ err }, 'Failed to restore sessions from Postgres; existing sessions lost on this restart');
+        // Any other error (bad credentials, connectivity) means we cannot guarantee sessions
+        // are restored. Fail fast so the process is restarted into a clean state rather than
+        // silently dropping every persisted session.
+        logger.error({ err }, 'Failed to restore sessions from Postgres');
+        throw err;
       }
     }
 
+    // In-flight guard: if Postgres is slow and a prune DELETE takes longer than 60 s, the next
+    // interval tick would launch a second concurrent DELETE against the same pool, eventually
+    // exhausting connections. Skip the DB prune for this tick if one is already running.
+    let isPruning = false;
     const pruneInterval = setInterval(() => {
       const now = Date.now();
       for (const [tokenHash, expiresAt] of sessions) {
         if (now > expiresAt) sessions.delete(tokenHash);
       }
-      // Mirror the in-memory sweep to Postgres. Fire-and-forget: a missed prune cycle is harmless
-      // because assertSecret re-checks the expiry timestamp on every request.
-      pool.query('DELETE FROM sessions WHERE expires_at < NOW()').catch((err: unknown) => {
-        logger.error({ err }, 'Session prune DELETE failed — Postgres session storage may be unavailable');
-      });
+      if (isPruning) return;
+      isPruning = true;
+      pool.query('DELETE FROM sessions WHERE expires_at < NOW()')
+        .catch((err: unknown) => {
+          logger.error({ err }, 'Session prune DELETE failed — Postgres session storage may be unavailable');
+        })
+        .finally(() => { isPruning = false; });
     }, 60_000);
     pruneInterval.unref();
 

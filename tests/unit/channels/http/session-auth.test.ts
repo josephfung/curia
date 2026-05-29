@@ -73,4 +73,16 @@ describe('assertSecret', () => {
     expect(assertSecret(request, reply as unknown as FastifyReply, undefined, sessions)).toBe(false);
     expect(reply.statusCode).toBe(503);
   });
+
+  it('rejects a multi-byte secret mismatch without throwing', () => {
+    // 'éé' (2 chars, 4 bytes UTF-8) vs '€€' (2 chars, 6 bytes UTF-8):
+    // same char count, different byte length — the old String.length guard would have
+    // passed the length check and caused timingSafeEqual to throw a RangeError.
+    const request = makeRequest({ secretHeader: 'éé' });
+    const reply = makeReply();
+    expect(() =>
+      assertSecret(request, reply as unknown as FastifyReply, '€€', sessions),
+    ).not.toThrow();
+    expect(reply.statusCode).toBe(401);
+  });
 });
