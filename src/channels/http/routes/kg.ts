@@ -3561,12 +3561,17 @@ export async function knowledgeGraphRoutes(
     // Write to Postgres first — if the DB write fails, the Map is never updated and the
     // cookie is never sent, so no phantom session can be created.
     // ON CONFLICT is a safety net against an astronomically unlikely 256-bit hash collision.
-    await pool.query(
-      `INSERT INTO sessions (token_hash, last_seen_at, expires_at)
-       VALUES ($1, NOW(), $2)
-       ON CONFLICT (token_hash) DO UPDATE SET expires_at = EXCLUDED.expires_at, last_seen_at = NOW()`,
-      [tokenHash, expiresAt],
-    );
+    try {
+      await pool.query(
+        `INSERT INTO sessions (token_hash, last_seen_at, expires_at)
+         VALUES ($1, NOW(), $2)
+         ON CONFLICT (token_hash) DO UPDATE SET expires_at = EXCLUDED.expires_at, last_seen_at = NOW()`,
+        [tokenHash, expiresAt],
+      );
+    } catch (err) {
+      logger.error({ err }, 'Failed to persist session to Postgres');
+      return reply.status(503).send({ error: 'Login is temporarily unavailable. Please try again.' });
+    }
     sessions.set(tokenHash, expiresAt.getTime());
 
     reply.setCookie('curia_session', token, {
