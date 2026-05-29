@@ -341,6 +341,10 @@ function SettingsLayout({ activeSection, children }: SettingsLayoutProps) {
       navigate({ to: '/settings/autonomy' }).catch(err => {
         console.error('[SettingsLayout] navigation to /settings/autonomy failed:', err);
       });
+    } else if (view === 'settings') {
+      navigate({ to: '/settings/workspace' }).catch(err => {
+        console.error('[SettingsLayout] navigation to /settings/workspace failed:', err);
+      });
     } else if (view === 'dashboard') {
       navigate({ to: '/' }).catch(err => {
         console.error('[SettingsLayout] navigation to / failed:', err);
