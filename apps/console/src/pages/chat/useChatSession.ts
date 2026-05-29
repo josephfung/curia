@@ -1,5 +1,5 @@
 // apps/console/src/pages/chat/useChatSession.ts
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { apiFetch } from '../../api.js';
 import { makeMessage, parseSseEvent } from './chat-utils.js';
 import type { Message } from './types.js';
@@ -15,8 +15,13 @@ export function useChatSession(): ChatSession {
   const [sending, setSending] = useState(false);
   // isSending is a ref so the double-send guard is immune to stale closures.
   const isSending = useRef(false);
+  // Holds the active EventSource so cleanup can close it on unmount.
+  const sourceRef = useRef<EventSource | null>(null);
   // One conversationId per page session — generated on first send and reused.
   const conversationId = useRef<string | null>(null);
+
+  // Close any in-flight SSE connection when the component unmounts.
+  useEffect(() => () => { sourceRef.current?.close(); }, []);
 
   async function send(text: string): Promise<void> {
     if (isSending.current || text.trim().length === 0) return;
@@ -37,6 +42,7 @@ export function useChatSession(): ChatSession {
       `/api/kg/chat/stream?conversationId=${encodeURIComponent(convId)}`,
       { withCredentials: true },
     );
+    sourceRef.current = source;
     source.onmessage = (event: MessageEvent<string>) => {
       const statusText = parseSseEvent(event.data);
       if (statusText) {
@@ -74,6 +80,7 @@ export function useChatSession(): ChatSession {
     } finally {
       isSending.current = false;
       source.close();
+      sourceRef.current = null;
       setSending(false);
     }
   }
