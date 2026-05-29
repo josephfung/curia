@@ -11,6 +11,12 @@ import { checkSession } from './api';
 
 // Route components are lazy-loaded so Vite produces separate chunks per route.
 const DashboardPage = lazy(() => import('./pages/DashboardPage'));
+const AutonomyPage = lazy(() =>
+  import('./pages/SettingsPage').then(m => ({ default: m.AutonomyPage })),
+);
+const WorkspacePage = lazy(() =>
+  import('./pages/SettingsPage').then(m => ({ default: m.WorkspacePage })),
+);
 
 const rootRoute = createRootRoute({
   component: () => (
@@ -38,6 +44,34 @@ const dashboardRoute = createRoute({
   component: DashboardPage,
 });
 
+// Settings layout route — bare /settings redirects to the default section.
+const settingsRoute = createRoute({
+  getParentRoute: () => authedRoute,
+  path: '/settings',
+  beforeLoad: ({ location }) => {
+    if (location.pathname === '/settings' || location.pathname === '/settings/') {
+      throw redirect({ to: '/settings/autonomy' });
+    }
+  },
+  component: () => (
+    <Suspense fallback={null}>
+      <Outlet />
+    </Suspense>
+  ),
+});
+
+const autonomyRoute = createRoute({
+  getParentRoute: () => settingsRoute,
+  path: '/autonomy',
+  component: AutonomyPage,
+});
+
+const workspaceRoute = createRoute({
+  getParentRoute: () => settingsRoute,
+  path: '/workspace',
+  component: WorkspacePage,
+});
+
 const loginRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/login',
@@ -45,7 +79,10 @@ const loginRoute = createRoute({
 });
 
 const routeTree = rootRoute.addChildren([
-  authedRoute.addChildren([dashboardRoute]),
+  authedRoute.addChildren([
+    dashboardRoute,
+    settingsRoute.addChildren([autonomyRoute, workspaceRoute]),
+  ]),
   loginRoute,
 ]);
 

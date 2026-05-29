@@ -10,6 +10,7 @@ import {
   IconClock,
   IconSettings,
   IconWand,
+  IconAutonomy,
   IconChevron,
 } from './Icons';
 
@@ -48,7 +49,10 @@ function ThemeToggle({ theme, onChange }: { theme: Theme; onChange: (t: Theme) =
 
 export function Sidebar({ activeView, onNavigate, theme, onThemeChange }: SidebarProps) {
   const [memoryOpen, setMemoryOpen] = useState(true);
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  // Auto-open Settings group when an autonomy view is active.
+  const [settingsOpen, setSettingsOpen] = useState(
+    activeView === 'autonomy' || activeView === 'settings' || activeView === 'wizard',
+  );
   const { setOpen } = useMobileMenu();
 
   const go = (v: string) => {
@@ -132,6 +136,13 @@ export function Sidebar({ activeView, onNavigate, theme, onThemeChange }: Sideba
               >
                 <IconWand />
                 Setup Wizard
+              </button>
+              <button
+                className={`nav-sub-item${activeView === 'autonomy' ? ' active' : ''}`}
+                onClick={() => go('autonomy')}
+              >
+                <IconAutonomy />
+                Autonomy
               </button>
             </div>
           )}
