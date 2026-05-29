@@ -1152,6 +1152,7 @@ table.records-table tbody tr.active td { background: transparent; }
 /* Status and error: no bubble, centered, small text only. */
 .msg-bubble.status {
   align-self: center;
+  width: auto;
   max-width: 100%;
   background: none;
   padding: 0;
@@ -1162,6 +1163,7 @@ table.records-table tbody tr.active td { background: transparent; }
 
 .msg-bubble.error {
   align-self: center;
+  width: auto;
   max-width: 100%;
   background: none;
   padding: 0;
@@ -1181,6 +1183,7 @@ table.records-table tbody tr.active td { background: transparent; }
 /* Override the global textarea defaults for the composer. */
 .chat-composer textarea {
   flex: 1;
+  width: auto;
   resize: none;
   min-height: 42px;
   max-height: 160px;
