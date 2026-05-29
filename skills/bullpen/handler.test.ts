@@ -267,6 +267,46 @@ describe('BullpenHandler', () => {
     expect((ctx.bus!.publish as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(1);
   });
 
+  it('post: concurrent duplicate posts (23505 race) — one thread, one publish', async () => {
+    // Two handler.execute calls race with the same source_message_id on a shared
+    // bullpenService. The in-memory backend now mirrors Postgres by throwing code
+    // '23505' when the duplicate insert arrives. BullpenService.openThread catches
+    // that, re-fetches the winning thread, and returns deduplicated: true — so the
+    // handler skips the second bus.publish.
+    const bullpenService = BullpenService.createInMemory();
+    const bus = {
+      publish: vi.fn().mockResolvedValue(undefined),
+      subscribe: vi.fn(),
+    } as unknown as SkillContext['bus'];
+
+    const makeRaceCtx = () => makeCtx(
+      {
+        action: 'post',
+        topic: 'concurrent topic',
+        participants: ['coordinator', 'agent-b'],
+        content: 'racing message',
+        source_message_id: 'email-race-concurrent',
+      },
+      { bullpenService, bus },
+    );
+
+    const [r1, r2] = await Promise.all([
+      handler.execute(makeRaceCtx()),
+      handler.execute(makeRaceCtx()),
+    ]);
+
+    expect(r1.success).toBe(true);
+    expect(r2.success).toBe(true);
+    const d1 = (r1 as { success: true; data: Record<string, unknown> }).data;
+    const d2 = (r2 as { success: true; data: Record<string, unknown> }).data;
+    // Both must reference the same winning thread
+    expect(d1.thread_id).toBe(d2.thread_id);
+    // Exactly one call was marked as a dedup hit
+    expect([d1.deduplicated, d2.deduplicated].filter(Boolean)).toHaveLength(1);
+    // bus.publish fired exactly once — no duplicate agent.discuss
+    expect((bus.publish as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(1);
+  });
+
   it('post: a publish rejection does not surface as a handler failure', async () => {
     const failingPublish = vi.fn().mockRejectedValue(new Error('bus exploded'));
     const ctx = makeCtx(

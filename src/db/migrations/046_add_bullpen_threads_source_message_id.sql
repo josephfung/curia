@@ -2,12 +2,12 @@
 
 ALTER TABLE bullpen_threads ADD COLUMN source_message_id TEXT;
 
--- Unique constraint scoped to non-null values only (partial index).
--- Null source_message_id means "no dedup key" — threads without one are
--- always created unconditionally and must not block each other.
+-- Unique constraint scoped to non-null, non-empty values only (partial index).
+-- Null or empty source_message_id means "no dedup key" — threads without one
+-- are always created unconditionally and must not block each other.
 CREATE UNIQUE INDEX idx_bullpen_threads_source_message_id
   ON bullpen_threads (source_message_id)
-  WHERE source_message_id IS NOT NULL;
+  WHERE source_message_id IS NOT NULL AND source_message_id <> '';
 
 -- Rollback:
 -- DROP INDEX IF EXISTS idx_bullpen_threads_source_message_id;
