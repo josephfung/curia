@@ -23,6 +23,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **Autonomy console view** — Autonomy settings ported to the new console app at `/settings/autonomy`; includes the score display, live-preview slider, reason field, save, and paginated history. Removed the Autonomy view from the legacy `/old` UI. (#752)
+
 - **Console app scaffold** — new `apps/console/` Vite + React + TanStack Router app; Fastify serves the static bundle at `/` with SPA fallback; auth-gated dashboard placeholder; design-system components (Sidebar, Topbar, Icons) copied and converted to TypeScript. `pnpm dev` starts both the backend and the Vite dev server concurrently. (#750)
 
 ### Fixed

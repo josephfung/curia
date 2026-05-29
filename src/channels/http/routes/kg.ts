@@ -826,27 +826,6 @@ function createUiHtml(): string {
       color: var(--accent);
       margin-bottom: 8px;
     }
-    .autonomy-history-entry {
-      padding: 10px 14px;
-      background: var(--card);
-      border: 1px solid var(--border);
-      border-radius: var(--radius-md);
-    }
-    .autonomy-history-entry .score-change {
-      font-weight: 600;
-      font-size: 0.875rem;
-    }
-    .autonomy-history-entry .meta {
-      font-size: 0.75rem;
-      color: var(--fg-muted);
-      margin-top: 3px;
-    }
-    .autonomy-history-entry .reason {
-      font-size: 0.8125rem;
-      font-style: italic;
-      color: var(--fg-muted);
-      margin-top: 4px;
-    }
     .posture-grid { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 28px; }
     .posture-card {
       flex: 1;
@@ -1089,14 +1068,6 @@ function createUiHtml(): string {
                 <path d="M8 5l3.5-3.5"/>
               </svg>
               Setup Wizard
-            </button>
-            <button id="nav-autonomy" class="nav-sub-item" onclick="navigate('autonomy', 'Autonomy', 'nav-autonomy')">
-              <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M6.5 11.5a5 5 0 1 1 0-10 5 5 0 0 1 0 10z"/>
-                <path d="M6.5 3.5v1"/>
-                <path d="M6.5 6.5l2-2"/>
-              </svg>
-              Autonomy
             </button>
           </div>
         </div>
@@ -1344,43 +1315,6 @@ function createUiHtml(): string {
         </div>
       </div>
 
-      <!-- Autonomy settings view — hidden until user clicks the Autonomy nav item -->
-      <div id="view-autonomy" style="display: none; height: 100%; flex-direction: column; overflow-y: auto; padding: 24px 32px; max-width: 720px;">
-
-        <h2 style="font-family: 'Lora', Georgia, serif; font-size: 1.375rem; font-weight: 500; margin: 0 0 24px;">Autonomy</h2>
-
-        <!-- Current state display -->
-        <div id="autonomy-current" style="margin-bottom: 28px;">
-          <div style="display: flex; align-items: baseline; gap: 12px; margin-bottom: 8px;">
-            <span id="autonomy-score-display" style="font-size: 2rem; font-weight: 700; color: var(--fg);"></span>
-            <span id="autonomy-band-badge" class="badge"></span>
-          </div>
-          <p id="autonomy-band-description" style="font-size: 0.875rem; color: var(--fg-muted); margin: 0; line-height: 1.5;"></p>
-        </div>
-
-        <!-- Score adjustment control -->
-        <div style="margin-bottom: 32px; padding: 20px; background: var(--card); border: 1px solid var(--border); border-radius: var(--radius-lg);">
-          <div style="font-size: 0.6875rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; color: var(--fg-muted); margin-bottom: 12px;">Adjust Score</div>
-          <input id="autonomy-slider" type="range" min="0" max="100" step="1" value="75"
-            style="width: 100%; accent-color: var(--primary); margin-bottom: 6px;" />
-          <div class="slider-labels"><span>Restricted</span><span>Full</span></div>
-
-          <div style="margin-top: 16px;">
-            <label for="autonomy-reason" style="display: block; font-size: 0.6875rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; color: var(--fg-muted); margin-bottom: 6px;">Reason (optional)</label>
-            <textarea id="autonomy-reason" rows="2" placeholder="Reason for change (optional)" style="width: 100%; resize: vertical;"></textarea>
-          </div>
-
-          <button id="autonomy-save-btn" class="btn-primary" disabled style="margin-top: 12px;">Save</button>
-          <span id="autonomy-save-status" style="font-size: 0.75rem; color: var(--fg-muted); margin-left: 10px;"></span>
-        </div>
-
-        <!-- History section -->
-        <div>
-          <div style="font-size: 0.6875rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; color: var(--fg-muted); margin-bottom: 12px;">Recent Changes</div>
-          <div id="autonomy-history-list" style="display: flex; flex-direction: column; gap: 8px;"></div>
-          <button id="autonomy-show-more-btn" class="btn-primary" style="margin-top: 12px; display: none; background: var(--muted); color: var(--fg);">Show more</button>
-        </div>
-      </div>
 
       <!-- Chat view — hidden until user clicks the Chat nav item -->
       <div id="view-chat" style="display: none; height: 100%; flex-direction: row;">
@@ -1571,40 +1505,6 @@ function createUiHtml(): string {
     var jobs = [];
     var selectedJobId = null;
     var jobsMode = 'create';
-
-    // -- Autonomy state --
-    var autonomySavedScore = null; // last-saved score (to detect slider changes)
-    var autonomyHistoryOffset = 0;
-    var autonomyHistoryTotal = 0;
-
-    var AUTONOMY_BANDS = {
-      'full':              { label: 'Full',              color: '#5E9E6B', description: 'Act independently. No confirmation needed for standard operations. Flag only genuinely novel, irreversible, or high-stakes actions \u2014 where the downside of acting without checking outweighs the cost of the pause.' },
-      'spot-check':        { label: 'Spot-check',        color: '#6BAED6', description: 'Proceed on routine tasks. For consequential actions \u2014 sending external communications, creating commitments, or acting on behalf of the CEO \u2014 note what you are doing in your response so the CEO maintains visibility. No need to stop and ask.' },
-      'approval-required': { label: 'Approval Required', color: '#C9874A', description: 'For any consequential action, present your plan and explicitly ask for confirmation before proceeding. Routine reporting, summarization, and information retrieval can proceed without approval. When in doubt, draft and ask.' },
-      'draft-only':        { label: 'Draft Only',        color: '#7E6BA8', description: 'Prepare drafts, plans, and analysis, but do not send, publish, schedule, or act on behalf of the CEO without an explicit instruction to do so. Surface your work for review; execution requires a direct go-ahead.' },
-      'restricted':        { label: 'Restricted',        color: '#E86040', description: 'Present options and analysis only. Take no independent action. All outputs are advisory. Every step that would have an external effect requires explicit CEO instruction.' },
-    };
-
-    function bandForScore(score) {
-      if (score >= 90) return 'full';
-      if (score >= 80) return 'spot-check';
-      if (score >= 70) return 'approval-required';
-      if (score >= 60) return 'draft-only';
-      return 'restricted';
-    }
-
-    function timeAgo(dateStr) {
-      var now = Date.now();
-      var then = new Date(dateStr).getTime();
-      var seconds = Math.floor((now - then) / 1000);
-      if (seconds < 60) return 'just now';
-      var minutes = Math.floor(seconds / 60);
-      if (minutes < 60) return minutes + 'm ago';
-      var hours = Math.floor(minutes / 60);
-      if (hours < 24) return hours + 'h ago';
-      var days = Math.floor(hours / 24);
-      return days + 'd ago';
-    }
 
     // ── Chat state ─────────────────────────────────────────────────────
     // Active EventSource for SSE — one per conversation, null when idle.
@@ -1942,7 +1842,6 @@ function createUiHtml(): string {
       var contactsView      = document.getElementById('view-contacts');
       var tasksView         = document.getElementById('view-tasks');
       var scheduledJobsView = document.getElementById('view-scheduled-jobs');
-      var autonomyView      = document.getElementById('view-autonomy');
       var viewWizard        = document.getElementById('view-wizard');
 
       // When navigating to the wizard, fetch the current identity to pre-fill fields,
@@ -1976,7 +1875,6 @@ function createUiHtml(): string {
       contactsView.style.display      = view === 'contacts'       ? 'flex' : 'none';
       tasksView.style.display         = view === 'tasks'          ? 'flex' : 'none';
       scheduledJobsView.style.display = view === 'scheduled-jobs' ? 'flex' : 'none';
-      if (autonomyView) autonomyView.style.display = view === 'autonomy' ? 'flex' : 'none';
       if (viewWizard) viewWizard.style.display = 'none'; // always hide when navigating elsewhere
       // When returning to the KG view, tell Cytoscape to re-measure the container.
       // The canvas dimensions may be stale if the view was hidden (display:none)
@@ -2006,9 +1904,6 @@ function createUiHtml(): string {
       }
       if (view === 'scheduled-jobs') {
         loadJobs();
-      }
-      if (view === 'autonomy') {
-        loadAutonomy();
       }
 
       // On first entry into the Chat view with no conversations yet, ensure
@@ -3366,168 +3261,6 @@ function createUiHtml(): string {
         .finally(function() { jobsDeleteBtn.disabled = false; });
     }
 
-    // -- Autonomy functions --
-
-    function loadAutonomy() {
-      fetch('/api/autonomy')
-        .then(function(res) {
-          if (!res.ok) return res.json().then(function(d) { throw new Error(d.error || ('HTTP ' + res.status)); });
-          return res.json();
-        })
-        .then(function(data) {
-          if (!data.autonomy) {
-            // Render into individual child elements rather than setting textContent on the
-            // parent — setting textContent destroys all children (#autonomy-score-display,
-            // #autonomy-band-badge, #autonomy-band-description), which breaks any subsequent
-            // call to renderAutonomyState() that tries to getElementById on them.
-            document.getElementById('autonomy-score-display').textContent = '—';
-            document.getElementById('autonomy-band-badge').textContent = 'Not configured';
-            document.getElementById('autonomy-band-description').textContent =
-              'Autonomy not configured. Run migration 011 first.';
-            return;
-          }
-          autonomySavedScore = data.autonomy.score;
-          renderAutonomyState(data.autonomy.score, data.autonomy.band, data.autonomy.bandDescription);
-          document.getElementById('autonomy-slider').value = data.autonomy.score;
-          // Reset stale form state from a previous session so we don't show a dirty form
-          // with an enabled save button or leftover reason text on reload.
-          document.getElementById('autonomy-reason').value = '';
-          document.getElementById('autonomy-save-status').textContent = '';
-          document.getElementById('autonomy-save-btn').disabled = true;
-        })
-        .catch(function(err) {
-          document.getElementById('autonomy-current').textContent =
-            'Failed to load autonomy settings: ' + (err && err.message ? err.message : 'unknown error');
-        });
-
-      // Reset and load history
-      autonomyHistoryOffset = 0;
-      document.getElementById('autonomy-history-list').replaceChildren();
-      loadAutonomyHistory();
-    }
-
-    function renderAutonomyState(score, band, description) {
-      var bandInfo = AUTONOMY_BANDS[band] || { label: band, color: '#999' };
-      document.getElementById('autonomy-score-display').textContent = score;
-      var badge = document.getElementById('autonomy-band-badge');
-      badge.textContent = bandInfo.label;
-      badge.style.background = bandInfo.color + '22';
-      badge.style.color = bandInfo.color;
-      badge.style.border = '1px solid ' + bandInfo.color + '44';
-      document.getElementById('autonomy-band-description').textContent = description;
-    }
-
-    function buildHistoryEntry(entry) {
-      var bandInfo = AUTONOMY_BANDS[entry.band] || { label: entry.band, color: '#999' };
-      var div = document.createElement('div');
-      div.className = 'autonomy-history-entry';
-
-      // Score change line
-      var scoreDiv = document.createElement('div');
-      scoreDiv.className = 'score-change';
-      var scoreText = (entry.previousScore !== null && entry.previousScore !== undefined)
-        ? entry.previousScore + ' \u2192 ' + entry.score
-        : '\u2014 \u2192 ' + entry.score;
-      scoreDiv.appendChild(document.createTextNode(scoreText + ' '));
-      var badge = document.createElement('span');
-      badge.className = 'badge';
-      badge.style.fontSize = '0.6875rem';
-      badge.style.background = bandInfo.color + '22';
-      badge.style.color = bandInfo.color;
-      badge.style.border = '1px solid ' + bandInfo.color + '44';
-      badge.textContent = bandInfo.label;
-      scoreDiv.appendChild(badge);
-      div.appendChild(scoreDiv);
-
-      // Meta line (who + when)
-      var metaDiv = document.createElement('div');
-      metaDiv.className = 'meta';
-      metaDiv.textContent = entry.changedBy + ' \u00b7 ' + timeAgo(entry.changedAt);
-      div.appendChild(metaDiv);
-
-      // Reason (if present)
-      if (entry.reason) {
-        var reasonDiv = document.createElement('div');
-        reasonDiv.className = 'reason';
-        reasonDiv.textContent = entry.reason;
-        div.appendChild(reasonDiv);
-      }
-
-      return div;
-    }
-
-    function loadAutonomyHistory() {
-      var btn = document.getElementById('autonomy-show-more-btn');
-      btn.disabled = true;  // prevent double-click during load
-
-      fetch('/api/autonomy/history?limit=5&offset=' + autonomyHistoryOffset)
-        .then(function(res) {
-          if (!res.ok) return res.json().then(function(d) { throw new Error(d.error || ('HTTP ' + res.status)); });
-          return res.json();
-        })
-        .then(function(data) {
-          autonomyHistoryTotal = data.total;
-          var list = document.getElementById('autonomy-history-list');
-          data.history.forEach(function(entry) {
-            list.appendChild(buildHistoryEntry(entry));
-          });
-          autonomyHistoryOffset += data.history.length;
-          btn.disabled = false;
-          btn.style.display = (autonomyHistoryOffset < autonomyHistoryTotal) ? 'inline-block' : 'none';
-        })
-        .catch(function(err) {
-          btn.disabled = false;
-          var errEl = document.createElement('p');
-          errEl.style.color = 'var(--destructive)';
-          errEl.textContent = 'Failed to load history: ' + (err && err.message ? err.message : 'unknown error');
-          document.getElementById('autonomy-history-list').appendChild(errEl);
-          btn.style.display = 'none';
-        });
-    }
-
-    function saveAutonomy() {
-      var score = parseInt(document.getElementById('autonomy-slider').value, 10);
-      var reason = document.getElementById('autonomy-reason').value.trim() || undefined;
-      var saveBtn = document.getElementById('autonomy-save-btn');
-      var status = document.getElementById('autonomy-save-status');
-      saveBtn.disabled = true;
-      status.textContent = 'Saving\u2026';
-
-      fetch('/api/autonomy', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ score: score, reason: reason }),
-      })
-        .then(function(res) {
-          if (!res.ok) return res.json().then(function(d) { throw new Error(d.error); });
-          return res.json();
-        })
-        .then(function(data) {
-          autonomySavedScore = data.autonomy.score;
-          renderAutonomyState(data.autonomy.score, data.autonomy.band, data.autonomy.bandDescription);
-          document.getElementById('autonomy-reason').value = '';
-          status.textContent = 'Saved';
-          setTimeout(function() { status.textContent = ''; }, 2000);
-
-          // Prepend new entry to history
-          var newEntry = {
-            score: data.autonomy.score,
-            previousScore: data.previousScore,
-            band: data.autonomy.band,
-            changedBy: 'web-ui',
-            changedAt: new Date().toISOString(),
-            reason: reason || null,
-          };
-          var list = document.getElementById('autonomy-history-list');
-          list.insertBefore(buildHistoryEntry(newEntry), list.firstChild);
-          autonomyHistoryTotal++;
-          autonomyHistoryOffset++;
-        })
-        .catch(function(err) {
-          status.textContent = 'Error: ' + (err && err.message ? err.message : 'unknown error');
-          saveBtn.disabled = false;
-        });
-    }
 
     jobsForm.addEventListener('submit', saveJob);
     jobsDeleteBtn.addEventListener('click', deleteJob);
@@ -3762,23 +3495,6 @@ function createUiHtml(): string {
 
     chatForm.addEventListener('submit', sendChatMessage);
 
-    // -- Autonomy event bindings --
-
-    document.getElementById('autonomy-slider').addEventListener('input', function() {
-      var score = parseInt(this.value, 10);
-      var band = bandForScore(score);
-      var bandInfo = AUTONOMY_BANDS[band];
-      renderAutonomyState(score, band, bandInfo.description);
-      document.getElementById('autonomy-save-btn').disabled = (score === autonomySavedScore);
-    });
-
-    document.getElementById('autonomy-save-btn').addEventListener('click', function() {
-      saveAutonomy();
-    });
-
-    document.getElementById('autonomy-show-more-btn').addEventListener('click', function() {
-      loadAutonomyHistory();
-    });
   </script>
 </body>
 </html>`;

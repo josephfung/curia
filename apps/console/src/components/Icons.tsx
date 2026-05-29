@@ -147,6 +147,17 @@ export function IconSend({ size }: IconProps) {
   );
 }
 
+export function IconAutonomy({ size }: IconProps) {
+  return (
+    <Icon size={size}>
+      <path d="M12 2a10 10 0 0 1 7.38 16.75" />
+      <path d="M4.62 18.75A10 10 0 0 1 12 2" />
+      <circle cx="12" cy="12" r="1" />
+      <line x1="12" y1="11" x2="16" y2="7" />
+    </Icon>
+  );
+}
+
 // Inline Curia wordmark SVG — uses currentColor for theme tracking
 export function CuriaWordmark(props: SVGProps<SVGSVGElement>) {
   return (
