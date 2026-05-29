@@ -22,6 +22,20 @@ export function hashToken(token: string): string {
 }
 
 /**
+ * Timing-safe string comparison using Buffer byte lengths.
+ * Returns true only when a and b are byte-for-byte identical.
+ *
+ * Why byteLength not charLength: a multi-byte UTF-8 secret can have the same char count
+ * as a different-byte-length string, causing timingSafeEqual to throw a RangeError if
+ * the char-count guard passes but byte lengths differ.
+ */
+export function compareSecrets(a: string, b: string): boolean {
+  const aBuf = Buffer.from(a);
+  const bBuf = Buffer.from(b);
+  return aBuf.length === bBuf.length && timingSafeEqual(aBuf, bBuf);
+}
+
+/**
  * Verify that the request is authenticated via session cookie or bootstrap secret header.
  *
  * Returns true if authenticated. Returns false and sends an error response if not.
@@ -63,15 +77,7 @@ export function assertSecret(
     });
     return false;
   }
-  // Compare byte lengths (not char lengths) before calling timingSafeEqual — it throws if
-  // the two buffers differ in length. A multi-byte UTF-8 secret can have the same char count
-  // but different byte length, so using Buffer.byteLength rather than String.length is correct.
-  const providedBuf = Buffer.from(provided);
-  const configuredBuf = Buffer.from(configuredSecret);
-  if (
-    providedBuf.length !== configuredBuf.length ||
-    !timingSafeEqual(providedBuf, configuredBuf)
-  ) {
+  if (!compareSecrets(provided, configuredSecret)) {
     reply.status(401).send({
       error: 'Unauthorized. Authenticate via POST /auth or provide the x-web-bootstrap-secret header.',
     });
