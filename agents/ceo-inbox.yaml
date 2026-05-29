@@ -42,7 +42,7 @@ error_budget:
   max_cost_usd: 0.50
 
 schedule:
-  - cron: "*/15 * * * *"
+  - cron: "*/15 6-23 * * *"  # restricted to 6am–11pm local time; dead hours don't justify the cost
     task: >
       Check the CEO's inbox for unread messages. For each unread message,
       triage it using the protocol below. Process messages oldest-first.
