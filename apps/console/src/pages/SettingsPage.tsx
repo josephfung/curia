@@ -343,7 +343,7 @@ function SettingsLayout({ activeSection, children }: SettingsLayoutProps) {
   return (
     <MobileMenuContext.Provider value={{ open: mobileOpen, setOpen: setMobileOpen }}>
       <div className="app-root">
-        <Sidebar activeView="autonomy" onNavigate={handleNavigate} theme={theme} onThemeChange={setTheme} />
+        <Sidebar activeView={activeSection === 'autonomy' ? 'autonomy' : 'settings'} onNavigate={handleNavigate} theme={theme} onThemeChange={setTheme} />
         <main className="main">
           <Topbar crumb="Settings" title={activeSection === 'autonomy' ? 'Autonomy' : 'Settings'} />
           <div className="settings-shell">

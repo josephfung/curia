@@ -3,7 +3,7 @@ import { useNavigate } from '@tanstack/react-router';
 import { MobileMenuContext } from '../context/MobileMenu';
 import { Sidebar } from '../components/Sidebar';
 import { Topbar } from '../components/Topbar';
-import { useTheme } from '../hooks/useTheme.js';
+import { useTheme } from '../hooks/useTheme';
 
 export default function DashboardPage() {
   const [theme, setTheme] = useTheme();
