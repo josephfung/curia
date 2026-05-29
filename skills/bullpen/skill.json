@@ -10,11 +10,13 @@
     "participants": "string[]? (agent IDs to include in the thread; required when action is 'post')",
     "mentioned_agent_ids": "string[]? (agent IDs to at-mention; defaults to all participants when action is 'post')",
     "content": "string? (message body; required when action is 'post' or 'reply')",
-    "thread_id": "string? (thread ID; required when action is 'reply', 'get_thread', or 'close')"
+    "thread_id": "string? (thread ID; required when action is 'reply', 'get_thread', or 'close')",
+    "source_message_id": "string? (dedup key for 'post'; if a thread already exists with this ID the existing thread is returned instead of creating a new one)"
   },
   "outputs": {
     "thread_id": "string: the thread ID",
     "message_id": "string: the persisted message ID (post/reply)",
+    "deduplicated": "boolean: true when source_message_id matched an existing thread and no new thread was opened (post only)",
     "thread": "object: full thread + messages (get_thread)",
     "status": "string: 'closed' (close)"
   },

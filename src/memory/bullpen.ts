@@ -3,6 +3,12 @@ import type { Pool } from 'pg';
 import type { Logger } from '../logger.js';
 import type { TaskOriginator } from '../contacts/types.js';
 
+// Postgres error code for unique_violation — used to detect concurrent duplicate
+// INSERT on source_message_id and recover into the dedup path instead of failing.
+function isUniqueConstraintViolation(err: unknown): boolean {
+  return typeof err === 'object' && err !== null && (err as { code?: unknown }).code === '23505';
+}
+
 // -- Public types --
 
 export interface BullpenThread {
@@ -18,6 +24,11 @@ export interface BullpenThread {
   // agent.discuss publish fails) can rehydrate the originator when dispatching
   // participant tasks. null for threads opened without an authenticated originator.
   originator: TaskOriginator | null;
+  // Optional dedup key. When set, openThread is idempotent: a second call with the
+  // same sourceMessageId returns the existing thread instead of creating a new one.
+  // Used by ceo-inbox to prevent duplicate bullpen threads when the high-water mark
+  // save is interrupted and the next run re-processes the same email. (issue #708)
+  sourceMessageId: string | null;
 }
 
 export interface BullpenMessage {
@@ -49,6 +60,7 @@ interface BullpenBackend {
   postMessage(threadId: string, message: BullpenMessage): Promise<void>;
   closeThread(threadId: string): Promise<void>;
   getThread(threadId: string): Promise<{ thread: BullpenThread; messages: BullpenMessage[] } | null>;
+  findThreadBySourceMessageId(sourceMessageId: string): Promise<{ thread: BullpenThread; message: BullpenMessage } | null>;
   getPendingThreadsForAgent(agentId: string, windowMs: number): Promise<PendingThreadContext[]>;
 }
 
@@ -57,10 +69,24 @@ interface BullpenBackend {
 class InMemoryBullpenBackend implements BullpenBackend {
   private threads = new Map<string, BullpenThread>();
   private messages = new Map<string, BullpenMessage[]>();
+  // Maps sourceMessageId -> threadId for dedup lookups.
+  private sourceIdToThreadId = new Map<string, string>();
 
   async openThread(thread: BullpenThread, message: BullpenMessage): Promise<void> {
     this.threads.set(thread.id, { ...thread });
     this.messages.set(thread.id, [{ ...message }]);
+    if (thread.sourceMessageId) {
+      this.sourceIdToThreadId.set(thread.sourceMessageId, thread.id);
+    }
+  }
+
+  async findThreadBySourceMessageId(sourceMessageId: string): Promise<{ thread: BullpenThread; message: BullpenMessage } | null> {
+    const threadId = this.sourceIdToThreadId.get(sourceMessageId);
+    if (!threadId) return null;
+    const thread = this.threads.get(threadId);
+    const msgs = this.messages.get(threadId);
+    if (!thread || !msgs || msgs.length === 0) return null;
+    return { thread: { ...thread }, message: { ...msgs[0]! } };
   }
 
   async postMessage(threadId: string, message: BullpenMessage): Promise<void> {
@@ -129,9 +155,9 @@ class PostgresBullpenBackend implements BullpenBackend {
     try {
       await client.query('BEGIN');
       await client.query(
-        `INSERT INTO bullpen_threads (id, topic, creator_agent_id, participants, status, message_count, last_message_at, created_at, originator)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-        [thread.id, thread.topic, thread.creatorAgentId, thread.participants, thread.status, thread.messageCount, thread.lastMessageAt, thread.createdAt, thread.originator ? JSON.stringify(thread.originator) : null],
+        `INSERT INTO bullpen_threads (id, topic, creator_agent_id, participants, status, message_count, last_message_at, created_at, originator, source_message_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+        [thread.id, thread.topic, thread.creatorAgentId, thread.participants, thread.status, thread.messageCount, thread.lastMessageAt, thread.createdAt, thread.originator ? JSON.stringify(thread.originator) : null, thread.sourceMessageId ?? null],
       );
       await client.query(
         `INSERT INTO bullpen_messages (id, thread_id, sender_type, sender_id, content, mentioned_agent_ids, created_at)
@@ -140,7 +166,7 @@ class PostgresBullpenBackend implements BullpenBackend {
       );
       await client.query('COMMIT');
     } catch (err) {
-      this.logger.error({ err, threadId: thread.id }, 'Bullpen openThread transaction failed');
+      this.logger.error({ err, threadId: thread.id, sourceMessageId: thread.sourceMessageId }, 'Bullpen openThread transaction failed');
       await client.query('ROLLBACK');
       throw err;
     } finally {
@@ -193,9 +219,9 @@ class PostgresBullpenBackend implements BullpenBackend {
     const threadRes = await this.pool.query<{
       id: string; topic: string; creator_agent_id: string; participants: string[];
       status: string; message_count: number; last_message_at: Date | null; created_at: Date;
-      originator: Record<string, unknown> | null;
+      originator: Record<string, unknown> | null; source_message_id: string | null;
     }>(
-      `SELECT id, topic, creator_agent_id, participants, status, message_count, last_message_at, created_at, originator
+      `SELECT id, topic, creator_agent_id, participants, status, message_count, last_message_at, created_at, originator, source_message_id
        FROM bullpen_threads WHERE id = $1`,
       [threadId],
     );
@@ -206,6 +232,7 @@ class PostgresBullpenBackend implements BullpenBackend {
       participants: row.participants, status: row.status as 'open' | 'closed',
       messageCount: row.message_count, lastMessageAt: row.last_message_at, createdAt: row.created_at,
       originator: row.originator as TaskOriginator | null,
+      sourceMessageId: row.source_message_id,
     };
 
     const msgRes = await this.pool.query<{
@@ -224,6 +251,47 @@ class PostgresBullpenBackend implements BullpenBackend {
     }));
 
     return { thread, messages };
+  }
+
+  async findThreadBySourceMessageId(sourceMessageId: string): Promise<{ thread: BullpenThread; message: BullpenMessage } | null> {
+    // Single JOIN avoids the two-query split-snapshot window: if the thread row and
+    // its first message row are in the same committed transaction, this query reads
+    // them atomically. If the thread exists but has no messages (data corruption),
+    // the JOIN returns no rows and we return null.
+    const res = await this.pool.query<{
+      id: string; topic: string; creator_agent_id: string; participants: string[];
+      status: string; message_count: number; last_message_at: Date | null; created_at: Date;
+      originator: Record<string, unknown> | null; source_message_id: string | null;
+      msg_id: string; msg_sender_id: string; msg_content: unknown;
+      msg_mentioned_agent_ids: string[]; msg_created_at: Date;
+    }>(
+      `SELECT t.id, t.topic, t.creator_agent_id, t.participants, t.status,
+              t.message_count, t.last_message_at, t.created_at, t.originator, t.source_message_id,
+              m.id AS msg_id, m.sender_id AS msg_sender_id, m.content AS msg_content,
+              m.mentioned_agent_ids AS msg_mentioned_agent_ids, m.created_at AS msg_created_at
+       FROM bullpen_threads t
+       JOIN bullpen_messages m ON m.thread_id = t.id
+       WHERE t.source_message_id = $1
+       ORDER BY m.created_at ASC
+       LIMIT 1`,
+      [sourceMessageId],
+    );
+    if (res.rows.length === 0) return null;
+    const row = res.rows[0]!;
+    const thread: BullpenThread = {
+      id: row.id, topic: row.topic, creatorAgentId: row.creator_agent_id,
+      participants: row.participants, status: row.status as 'open' | 'closed',
+      messageCount: row.message_count, lastMessageAt: row.last_message_at, createdAt: row.created_at,
+      originator: row.originator as TaskOriginator | null,
+      sourceMessageId: row.source_message_id,
+    };
+    const message: BullpenMessage = {
+      id: row.msg_id, threadId: row.id, senderType: 'agent' as const,
+      senderId: row.msg_sender_id,
+      content: typeof row.msg_content === 'string' ? row.msg_content : JSON.stringify(row.msg_content),
+      mentionedAgentIds: row.msg_mentioned_agent_ids, createdAt: row.msg_created_at,
+    };
+    return { thread, message };
   }
 
   async getPendingThreadsForAgent(agentId: string, windowMs: number): Promise<PendingThreadContext[]> {
@@ -291,7 +359,16 @@ export class BullpenService {
     initialContent: string,
     mentionedAgentIds: string[],
     originator?: TaskOriginator,
-  ): Promise<{ thread: BullpenThread; message: BullpenMessage }> {
+    sourceMessageId?: string,
+  ): Promise<{ thread: BullpenThread; message: BullpenMessage; deduplicated: boolean }> {
+    // Idempotency: if a sourceMessageId was provided and a thread already exists for
+    // that message, return it instead of creating a duplicate. Protects against the
+    // ceo-inbox race where the high-water mark save is interrupted between runs. (#708)
+    if (sourceMessageId) {
+      const existing = await this.backend.findThreadBySourceMessageId(sourceMessageId);
+      if (existing) return { ...existing, deduplicated: true };
+    }
+
     // Normalize: always include the creator, deduplicate, preserve order.
     const normalizedParticipants = [...new Set([creatorAgentId, ...participants])];
     const now = new Date();
@@ -301,14 +378,27 @@ export class BullpenService {
       // Persist originator so BullpenDispatcher can rehydrate it on the poll-fallback
       // path if the initial agent.discuss event publish fails.
       originator: originator ?? null,
+      sourceMessageId: sourceMessageId ?? null,
     };
     const message: BullpenMessage = {
       id: randomUUID(), threadId: thread.id, senderType: 'agent',
       senderId: creatorAgentId, content: initialContent,
       mentionedAgentIds, createdAt: now,
     };
-    await this.backend.openThread(thread, message);
-    return { thread, message };
+    try {
+      await this.backend.openThread(thread, message);
+    } catch (err: unknown) {
+      // If a concurrent openThread call won the race and its INSERT committed
+      // first, we hit the unique constraint on source_message_id (Postgres error
+      // code 23505). Re-fetch the winning thread and return it as a dedup hit
+      // rather than propagating a skill failure to the caller.
+      if (sourceMessageId && isUniqueConstraintViolation(err)) {
+        const existing = await this.backend.findThreadBySourceMessageId(sourceMessageId);
+        if (existing) return { ...existing, deduplicated: true };
+      }
+      throw err;
+    }
+    return { thread, message, deduplicated: false };
   }
 
   async postMessage(

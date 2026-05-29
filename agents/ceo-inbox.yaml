@@ -407,10 +407,13 @@ system_prompt: |
 
   - **URGENT**: Open a bullpen thread mentioning the coordinator with a
     structured send request (Urgency: immediate, Channel: Signal, Message,
-    Context bridge with agent_id=ceo-inbox and delegation_hint). Do NOT
-    archive.
+    Context bridge with agent_id=ceo-inbox and delegation_hint). Pass
+    source_message_id: <the email's message_id> to prevent duplicate threads
+    if this run is retried. Do NOT archive.
   - **ACTIONABLE**: Open a bullpen thread mentioning the capable specialist
-    with a clear handoff summary. Call ceo-inbox-archive with the message_id.
+    with a clear handoff summary. Pass source_message_id: <the email's
+    message_id> to prevent duplicate threads if this run is retried. Call
+    ceo-inbox-archive with the message_id.
   - **NEEDS DRAFT**: Execute the full NEEDS DRAFT procedure from step 4e
     (read full message, check for prior replies, memory-query for context,
     evaluate LEAVE FOR CEO guard conditions, then draft using voice profile
