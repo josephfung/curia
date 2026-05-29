@@ -594,7 +594,7 @@ input:focus, textarea:focus, select:focus {
 }
 
 .wizard-heading {
-  font-family: 'Lora', Georgia, serif;
+  font-family: Lora, Georgia, serif;
   font-size: 1.375rem;
   font-weight: 600;
   color: var(--app-fg);
