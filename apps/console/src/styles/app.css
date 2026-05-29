@@ -251,10 +251,16 @@ body {
   min-width: 180px;
 }
 .topbar-search-icon { flex: none; color: var(--app-fg-muted); }
-.topbar-search input {
+/* Higher specificity than the global input[type="text"] rule to prevent double border. */
+.topbar-search input,
+.topbar-search input[type="text"] {
   flex: 1; border: none; background: transparent;
   color: var(--app-fg); font-family: inherit; font-size: 13px;
-  outline: none; padding: 0;
+  outline: none; padding: 0; width: auto; box-shadow: none;
+}
+.topbar-search input:focus,
+.topbar-search input[type="text"]:focus {
+  border: none; box-shadow: none;
 }
 @media (max-width: 768px) { .topbar-search { display: none; } }
 
@@ -1000,7 +1006,26 @@ table.records-table tbody tr.active td { background: transparent; }
 .cell-muted   { color: var(--app-fg-muted); font-size: 12px; }
 .cell-mono    { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--app-fg-muted); }
 .cell-actions { display: flex; gap: 4px; justify-content: flex-end; }
-.cell-with-avatar { display: flex; align-items: center; gap: 10px; }
+.cell-with-avatar { display: flex; align-items: center; gap: 8px; }
+.system-role-badge {
+  display: inline-block;
+  font-size: 10px; font-weight: 700; letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 1px 6px; border-radius: 4px;
+  border: 1px solid;
+  line-height: 1.6;
+  flex-shrink: 0;
+}
+.system-role-principal {
+  background: color-mix(in srgb, var(--app-teal) 12%, transparent);
+  color: var(--app-teal);
+  border-color: color-mix(in srgb, var(--app-teal) 30%, transparent);
+}
+.system-role-agent {
+  background: color-mix(in srgb, var(--app-fg-muted) 12%, transparent);
+  color: var(--app-fg-muted);
+  border-color: color-mix(in srgb, var(--app-fg-muted) 30%, transparent);
+}
 
 .avatar-sm {
   width: 26px; height: 26px;

@@ -2992,6 +2992,7 @@ export async function knowledgeGraphRoutes(
         role: contact.role,
         status: contact.status,
         trustLevel: contact.trustLevel,
+        systemRole: contact.systemRole,
         notes: contact.notes,
         createdAt: contact.createdAt.toISOString(),
         updatedAt: contact.updatedAt.toISOString(),

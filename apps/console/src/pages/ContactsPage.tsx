@@ -10,6 +10,7 @@ import { useTheme } from '../hooks/useTheme.js';
 
 type ContactStatus = 'confirmed' | 'provisional' | 'blocked';
 type TrustLevel = 'ceo' | 'high' | 'medium' | 'low' | null;
+type SystemRole = 'principal' | 'agent' | 'system' | null;
 
 interface Contact {
   id: string;
@@ -19,6 +20,7 @@ interface Contact {
   status: ContactStatus;
   notes: string | null;
   trustLevel: TrustLevel;
+  systemRole: SystemRole;
   createdAt: string;
   updatedAt: string;
 }
@@ -235,7 +237,12 @@ function ContactEditDrawer({ contact, creating, onClose, onSaved, onDeleted }: D
 
       <div className="drawer-footer">
         {!creating && (
-          <button className="btn btn-danger btn-sm" onClick={() => void handleDelete()} disabled={deleting}>
+          <button
+            className="btn btn-danger btn-sm"
+            onClick={() => void handleDelete()}
+            disabled={deleting || contact?.systemRole !== null && contact?.systemRole !== undefined}
+            title={contact?.systemRole ? 'System contacts cannot be deleted' : undefined}
+          >
             {deleting ? 'Deleting…' : 'Delete'}
           </button>
         )}
@@ -446,6 +453,12 @@ export default function ContactsPage() {
                               <div className="cell-with-avatar">
                                 <span className="avatar-sm">{initials(c.displayName)}</span>
                                 <span className="cell-primary">{c.displayName}</span>
+                                {c.systemRole === 'principal' && (
+                                  <span className="system-role-badge system-role-principal">Principal</span>
+                                )}
+                                {c.systemRole === 'agent' && (
+                                  <span className="system-role-badge system-role-agent">Agent</span>
+                                )}
                               </div>
                             </td>
                             <td>{c.role ?? ''}</td>
