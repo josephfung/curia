@@ -2470,8 +2470,13 @@ export async function knowledgeGraphRoutes(
       .send(createUiHtml());
   };
 
+  // /old/chat is now served by the React console at /chat.
+  // This exact-match route takes priority over the /old/* wildcard below
+  // (Fastify's radix router resolves exact matches before wildcards).
+  app.get('/old/chat', (_req, reply) => reply.redirect('/chat'));
+
   app.get('/old', serveOldUi);
-  // Wildcard catches /old/kg, /old/chat, /old/contacts, etc. The * captures
+  // Wildcard catches /old/kg, /old/contacts, etc. The * captures
   // the remainder including an empty string (i.e. /old/ also matches).
   app.get('/old/*', serveOldUi);
 
