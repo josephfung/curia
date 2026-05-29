@@ -144,12 +144,37 @@ export class HttpAdapter {
 
     // Shared session store — used by both KG and identity routes to validate browser sessions.
     // Sessions are set by POST /auth (KG routes) and verified by both route registrations.
+    // Map keys are SHA-256 hashes of the raw token (matching the DB column).
     const sessions: SessionStore = new Map();
+
+    // Restore active sessions from Postgres so existing browser tabs survive a process restart.
+    // Only rows that haven't expired yet are loaded; the cookie expiry on the client enforces the
+    // 24-hour TTL independently, so there's no risk of surfacing stale sessions here.
+    try {
+      const { rows } = await pool.query<{ token_hash: string; expires_at: Date }>(
+        'SELECT token_hash, expires_at FROM sessions WHERE expires_at > NOW()',
+      );
+      for (const row of rows) {
+        sessions.set(row.token_hash, row.expires_at.getTime());
+      }
+      if (rows.length > 0) {
+        logger.info({ count: rows.length }, 'Restored sessions from Postgres');
+      }
+    } catch (err) {
+      // Non-fatal: existing sessions are lost on this restart, but new logins will work.
+      logger.error({ err }, 'Failed to restore sessions from Postgres');
+    }
+
     const pruneInterval = setInterval(() => {
       const now = Date.now();
-      for (const [token, expiresAt] of sessions) {
-        if (now > expiresAt) sessions.delete(token);
+      for (const [tokenHash, expiresAt] of sessions) {
+        if (now > expiresAt) sessions.delete(tokenHash);
       }
+      // Mirror the in-memory sweep to Postgres. Fire-and-forget: a missed prune cycle is harmless
+      // because assertSecret re-checks the expiry timestamp on every request.
+      pool.query('DELETE FROM sessions WHERE expires_at < NOW()').catch((err: unknown) => {
+        logger.warn({ err }, 'Session prune query failed');
+      });
     }, 60_000);
     pruneInterval.unref();
 

@@ -15,6 +15,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **HTTP session persistence** — sessions now survive process restarts; active browser tabs no longer lose auth on deploy. Sessions are stored in Postgres (token SHA-256 hashed) and restored into the in-memory Map at startup. (#748)
 - **`bullpen`** — `post` is now idempotent when `source_message_id` is provided; returns existing thread on duplicate. (#708)
 
 ### Changed

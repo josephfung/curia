@@ -6,11 +6,20 @@
 //
 // The sessions Map is created in HttpAdapter and passed to both route registrations.
 
-import { timingSafeEqual } from 'node:crypto';
+import { createHash, timingSafeEqual } from 'node:crypto';
 import type { FastifyRequest, FastifyReply } from 'fastify';
 
 // token → expiry timestamp in ms. Lives in HttpAdapter, shared across route registrations.
+// Map keys are SHA-256 hashes of the raw token so the plaintext never touches the DB.
 export type SessionStore = Map<string, number>;
+
+/**
+ * SHA-256 hash of a session token. Used as the Map key and the DB column value so the
+ * raw 256-bit token stays only in the HttpOnly cookie and is never persisted anywhere.
+ */
+export function hashToken(token: string): string {
+  return createHash('sha256').update(token).digest('hex');
+}
 
 /**
  * Verify that the request is authenticated via session cookie or bootstrap secret header.
@@ -39,7 +48,8 @@ export function assertSecret(
   const cookies = (request as unknown as { cookies?: Record<string, string | undefined> }).cookies;
   const sessionToken = cookies?.['curia_session'];
   if (sessionToken) {
-    const expiresAt = sessions.get(sessionToken);
+    // Hash before lookup — the Map is keyed by SHA-256(token), matching what was stored.
+    const expiresAt = sessions.get(hashToken(sessionToken));
     if (expiresAt !== undefined && Date.now() < expiresAt) return true;
     // Expired or unknown token — fall through to header check below.
   }
