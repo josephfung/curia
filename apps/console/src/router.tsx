@@ -18,6 +18,7 @@ const WorkspacePage = lazy(() =>
   import('./pages/SettingsPage').then(m => ({ default: m.WorkspacePage })),
 );
 const WizardPage = lazy(() => import('./pages/WizardPage'));
+const ContactsPage = lazy(() => import('./pages/ContactsPage'));
 
 const rootRoute = createRootRoute({
   component: () => (
@@ -95,10 +96,17 @@ const loginRoute = createRoute({
   component: LoginPage,
 });
 
+const contactsRoute = createRoute({
+  getParentRoute: () => authedRoute,
+  path: '/contacts',
+  component: ContactsPage,
+});
+
 const routeTree = rootRoute.addChildren([
   authedRoute.addChildren([
     dashboardRoute,
     setupRoute,
+    contactsRoute,
     settingsRoute.addChildren([autonomyRoute, workspaceRoute]),
   ]),
   loginRoute,

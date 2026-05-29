@@ -337,7 +337,11 @@ function SettingsLayout({ activeSection, children }: SettingsLayoutProps) {
   }, [mobileOpen]);
 
   function handleNavigate(view: string) {
-    if (view === 'autonomy') {
+    if (view === 'contacts') {
+      navigate({ to: '/contacts' }).catch(err => {
+        console.error('[SettingsLayout] navigation to /contacts failed:', err);
+      });
+    } else if (view === 'autonomy') {
       navigate({ to: '/settings/autonomy' }).catch(err => {
         console.error('[SettingsLayout] navigation to /settings/autonomy failed:', err);
       });
