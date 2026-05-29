@@ -16,7 +16,9 @@ export default function DashboardPage() {
 
   function handleNavigate(view: string) {
     if (view === 'autonomy') {
-      void navigate({ to: '/settings/autonomy' });
+      navigate({ to: '/settings/autonomy' }).catch(err => {
+        console.error('[DashboardPage] navigation to /settings/autonomy failed:', err);
+      });
     }
   }
 
