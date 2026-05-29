@@ -3,20 +3,20 @@ import { Link, useNavigate } from '@tanstack/react-router';
 import { MobileMenuContext } from '../context/MobileMenu';
 import { Sidebar } from '../components/Sidebar';
 import { Topbar } from '../components/Topbar';
-import { apiFetch } from '../api.js';
-import { useTheme } from '../hooks/useTheme.js';
+import { apiFetch } from '../api';
+import { useTheme } from '../hooks/useTheme';
 
 // ── Band metadata ─────────────────────────────────────────────────────────────
 
 type AutonomyBand = 'full' | 'spot-check' | 'approval-required' | 'draft-only' | 'restricted';
 
 // Band colors match the legacy UI and the app's design token palette.
-const BAND_META: Record<AutonomyBand, { label: string; color: string }> = {
-  'full':              { label: 'Full',              color: '#5E9E6B' },
-  'spot-check':        { label: 'Spot-check',        color: '#6BAED6' },
-  'approval-required': { label: 'Approval Required', color: '#C9874A' },
-  'draft-only':        { label: 'Draft Only',        color: '#7E6BA8' },
-  'restricted':        { label: 'Restricted',        color: '#E86040' },
+const BAND_META: Record<AutonomyBand, { label: string; color: string; description: string }> = {
+  'full':              { label: 'Full',              color: '#5E9E6B', description: 'Curia acts independently with no confirmation required for any standard operation.' },
+  'spot-check':        { label: 'Spot-check',        color: '#6BAED6', description: 'Curia proceeds with most actions and flags a small random sample for your review.' },
+  'approval-required': { label: 'Approval Required', color: '#C9874A', description: 'Curia drafts and plans, then pauses for your explicit approval before acting.' },
+  'draft-only':        { label: 'Draft Only',        color: '#7E6BA8', description: 'Curia prepares drafts and summaries but does not send, schedule, or commit anything.' },
+  'restricted':        { label: 'Restricted',        color: '#E86040', description: 'Curia operates in read-only mode. No writes, sends, or external actions.' },
 };
 
 function bandForScore(score: number): AutonomyBand {
@@ -74,6 +74,18 @@ interface HistoryEntry {
   changedAt: string;
 }
 
+// Safe error message extraction — guards against non-JSON error bodies (e.g. rate-limiter HTML).
+async function errorMessage(res: Response): Promise<string> {
+  const ct = res.headers.get('content-type') ?? '';
+  if (ct.includes('application/json')) {
+    try {
+      const d = await res.json() as { error?: string };
+      if (d.error) return d.error;
+    } catch { /* fall through */ }
+  }
+  return `HTTP ${res.status}`;
+}
+
 // ── Autonomy section ──────────────────────────────────────────────────────────
 
 function AutonomySection() {
@@ -93,10 +105,9 @@ function AutonomySection() {
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState<string | null>(null);
 
-  // The description shown follows the slider live — fall back to the API-supplied
-  // description for the current saved band when the slider hasn't moved yet.
+  // Both the badge and description follow the slider live — BAND_META owns the copy.
   const liveBand = bandForScore(sliderScore);
-  const liveDescription = config?.bandDescription ?? '';
+  const liveDescription = BAND_META[liveBand].description;
 
   const loadHistory = useCallback(async (offset: number) => {
     setHistoryLoading(true);
@@ -104,8 +115,7 @@ function AutonomySection() {
     try {
       const res = await apiFetch(`/api/autonomy/history?limit=5&offset=${offset}`);
       if (!res.ok) {
-        const d = await res.json() as { error?: string };
-        throw new Error(d.error ?? `HTTP ${res.status}`);
+        throw new Error(await errorMessage(res));
       }
       const data = await res.json() as { history: HistoryEntry[]; total: number };
       setHistory(prev => offset === 0 ? data.history : [...prev, ...data.history]);
@@ -123,15 +133,16 @@ function AutonomySection() {
       try {
         const res = await apiFetch('/api/autonomy');
         if (!res.ok) {
-          const d = await res.json() as { error?: string };
-          throw new Error(d.error ?? `HTTP ${res.status}`);
+          throw new Error(await errorMessage(res));
         }
         const data = await res.json() as { autonomy: AutonomyConfig | null };
-        if (data.autonomy) {
-          setConfig(data.autonomy);
-          setSliderScore(data.autonomy.score);
-          setSavedScore(data.autonomy.score);
+        if (!data.autonomy) {
+          setLoadError('Autonomy settings have not been initialized on this instance.');
+          return;
         }
+        setConfig(data.autonomy);
+        setSliderScore(data.autonomy.score);
+        setSavedScore(data.autonomy.score);
       } catch (err) {
         setLoadError(err instanceof Error ? err.message : 'Failed to load autonomy settings');
       }
@@ -150,8 +161,7 @@ function AutonomySection() {
         body: JSON.stringify({ score: sliderScore, reason: reason.trim() || undefined }),
       });
       if (!res.ok) {
-        const d = await res.json() as { error?: string };
-        throw new Error(d.error ?? `HTTP ${res.status}`);
+        throw new Error(await errorMessage(res));
       }
       const data = await res.json() as {
         autonomy: AutonomyConfig;
@@ -163,19 +173,9 @@ function AutonomySection() {
       setSaveStatus('Saved');
       setTimeout(() => setSaveStatus(''), 2000);
 
-      // Prepend new entry to history without refetching.
-      const newEntry: HistoryEntry = {
-        id: crypto.randomUUID(),
-        score: data.autonomy.score,
-        previousScore: data.previousScore,
-        band: data.autonomy.band,
-        changedBy: 'web-ui',
-        changedAt: new Date().toISOString(),
-        reason: reason.trim() || null,
-      };
-      setHistory(prev => [newEntry, ...prev]);
-      setHistoryTotal(t => t + 1);
-      setHistoryOffset(o => o + 1);
+      // Refetch history from the start so the new entry comes from the server
+      // with a real ID — avoids duplicate rows when "Show more" is clicked.
+      void loadHistory(0);
     } catch (err) {
       setSaveStatus(`Error: ${err instanceof Error ? err.message : 'unknown error'}`);
     } finally {
