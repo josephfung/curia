@@ -3540,34 +3540,41 @@ export async function knowledgeGraphRoutes(
     const body = request.body as { secret?: unknown };
     const provided = typeof body?.secret === 'string' ? body.secret : '';
 
+    // Use buffer byte lengths, not String.length, before timingSafeEqual — multi-byte UTF-8
+    // secrets have the same char count but different byte count, which causes timingSafeEqual
+    // to throw a RangeError if the char-count guard passes but byte lengths differ.
+    const providedBuf = Buffer.from(provided);
+    const secretBuf = Buffer.from(webAppBootstrapSecret);
     if (
-      provided.length !== webAppBootstrapSecret.length ||
-      !timingSafeEqual(Buffer.from(provided), Buffer.from(webAppBootstrapSecret))
+      providedBuf.length !== secretBuf.length ||
+      !timingSafeEqual(providedBuf, secretBuf)
     ) {
       return reply.status(401).send({ error: 'Invalid access key.' });
     }
 
     // Issue a 256-bit random session token. The secret itself never goes in the cookie.
+    const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
     const token = randomBytes(32).toString('hex');
     const tokenHash = hashToken(token);
-    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours from now
-    sessions.set(tokenHash, expiresAt.getTime());
+    const expiresAt = new Date(Date.now() + SESSION_TTL_MS);
 
-    // Persist to Postgres so the session survives a process restart. ON CONFLICT is a safety
-    // net against the astronomically unlikely case of a hash collision on a 256-bit token.
+    // Write to Postgres first — if the DB write fails, the Map is never updated and the
+    // cookie is never sent, so no phantom session can be created.
+    // ON CONFLICT is a safety net against an astronomically unlikely 256-bit hash collision.
     await pool.query(
       `INSERT INTO sessions (token_hash, last_seen_at, expires_at)
        VALUES ($1, NOW(), $2)
        ON CONFLICT (token_hash) DO UPDATE SET expires_at = EXCLUDED.expires_at, last_seen_at = NOW()`,
       [tokenHash, expiresAt],
     );
+    sessions.set(tokenHash, expiresAt.getTime());
 
     reply.setCookie('curia_session', token, {
       httpOnly: true,
       secure: secureCookies,  // true in prod (https://), false for http://localhost
       sameSite: 'strict',
       path: '/',
-      maxAge: 86400,          // 24 hours in seconds
+      maxAge: SESSION_TTL_MS / 1000,
     });
 
     return reply.status(200).send({ ok: true });
