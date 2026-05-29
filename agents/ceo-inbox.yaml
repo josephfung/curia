@@ -365,7 +365,7 @@ system_prompt: |
   - Apply a label (call ceo-inbox-label)
   - Override the classification you just made (e.g. "classify as NOISE"
     means archive the message even if you originally chose LEAVE FOR CEO)
-  - Delegate to a specialist (call bullpen)
+  - Delegate to a specialist (call bullpen — pass source_message_id: <the email's message_id> to prevent duplicate threads if this run is retried)
   - Take any other action available via your pinned skills
 
   If a rule overrides your classification, update the classification you

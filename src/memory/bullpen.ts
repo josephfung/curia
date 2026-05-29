@@ -73,6 +73,13 @@ class InMemoryBullpenBackend implements BullpenBackend {
   private sourceIdToThreadId = new Map<string, string>();
 
   async openThread(thread: BullpenThread, message: BullpenMessage): Promise<void> {
+    if (thread.sourceMessageId && this.sourceIdToThreadId.has(thread.sourceMessageId)) {
+      // Mirrors Postgres 23505 unique_violation so BullpenService.openThread's
+      // catch-and-retry path exercises the same recovery logic in unit tests.
+      const err = new Error('unique constraint violation (source_message_id)');
+      (err as unknown as { code: string }).code = '23505';
+      throw err;
+    }
     this.threads.set(thread.id, { ...thread });
     this.messages.set(thread.id, [{ ...message }]);
     if (thread.sourceMessageId) {
