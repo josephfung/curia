@@ -754,7 +754,7 @@ export async function knowledgeGraphRoutes(
    * publishing so a fast response isn't missed, then map publish/timeout/rejection
    * errors to structured HTTP status codes.
    */
-  app.post('/api/kg/chat/messages', async (request, reply) => {
+  app.post('/api/kg/chat/messages', KG_RATE, async (request, reply) => {
     if (!assertSecret(request, reply, webAppBootstrapSecret, sessions)) return;
 
     const body = request.body as { message?: unknown; conversationId?: unknown };
@@ -812,7 +812,7 @@ export async function knowledgeGraphRoutes(
    * Streams outbound.message, skill.invoke, and skill.result events from the EventRouter,
    * optionally filtered by ?conversationId=xxx. Mirrors GET /api/messages/stream.
    */
-  app.get('/api/kg/chat/stream', async (request, reply) => {
+  app.get('/api/kg/chat/stream', KG_RATE, async (request, reply) => {
     if (!assertSecret(request, reply, webAppBootstrapSecret, sessions)) return;
 
     const query = request.query as { conversationId?: string };

@@ -295,7 +295,6 @@ export default function ContactsPage() {
     const routes: Record<string, string> = {
       contacts:  '/contacts',
       kg:        '/kg',
-      chat:      '/chat',
       tasks:     '/tasks',
       jobs:      '/jobs',
       autonomy:  '/settings/autonomy',

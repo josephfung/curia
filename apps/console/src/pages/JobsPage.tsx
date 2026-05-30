@@ -469,7 +469,6 @@ export default function JobsPage() {
       contacts:  '/contacts',
       jobs:      '/jobs',
       kg:        '/kg',
-      chat:      '/chat',
       tasks:     '/',
       autonomy:  '/settings/autonomy',
       settings:  '/settings/autonomy',
