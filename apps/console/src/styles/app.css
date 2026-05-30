@@ -1216,9 +1216,9 @@ table.records-table tbody tr.active td { background: transparent; }
   background: var(--app-card);
   border: 1px solid var(--app-border);
   border-radius: 12px 12px 12px 2px;
-  /* Markdown-rendered content resets: prevent browser defaults from adding
-     excessive margin inside the constrained bubble width. */
-  white-space: normal;
+  /* Keep pre-wrap (from .msg-bubble base) so that agent messages displaying
+     plain text (html: null fallback) still preserve newlines. HTML content
+     from markdownToHtml() uses block elements that manage their own spacing. */
 }
 .msg-bubble.agent p { margin: 0 0 8px; }
 .msg-bubble.agent p:last-child { margin-bottom: 0; }

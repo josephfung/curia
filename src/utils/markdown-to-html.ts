@@ -49,7 +49,10 @@ export function markdownToHtml(markdown: string): string {
     return `<p>${paragraphText}</p>`;
   });
 
-  return htmlBlocks.filter((b) => b !== '').join('\n');
+  // Join with no separator: block elements (p, ul, hr) handle their own spacing.
+  // A '\n' separator would create a stray whitespace text node between blocks,
+  // visible as a blank line when the parent container has white-space: pre-wrap.
+  return htmlBlocks.filter((b) => b !== '').join('');
 }
 
 function applyInline(text: string): string {

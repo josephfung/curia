@@ -792,7 +792,15 @@ export async function knowledgeGraphRoutes(
 
     try {
       const content = await responsePromise;
-      return reply.send({ reply: content, html: markdownToHtml(content), conversationId });
+      // Per-try/catch so a markdownToHtml failure falls back gracefully rather
+      // than turning a successful agent response into a 500.
+      let html: string | null = null;
+      try {
+        html = markdownToHtml(content);
+      } catch (convErr) {
+        logger.warn({ err: convErr, conversationId }, 'markdownToHtml failed for chat reply; sending plain text');
+      }
+      return reply.send({ reply: content, html, conversationId });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       logger.error({ err, conversationId }, 'KG chat message handling failed');
