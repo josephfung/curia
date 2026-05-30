@@ -47,8 +47,12 @@ export function useChatSession(): ChatSession {
   const [hasMore, setHasMore] = useState(false);
   const [loadingHistory, setLoadingHistory] = useState(false);
 
-  // isSending is a ref so the double-send guard is immune to stale closures.
+  // isSending and isLoadingMore are refs so their guards are immune to stale closures.
+  // Using refs rather than state prevents the IntersectionObserver from tearing
+  // down and re-mounting on every loadMore cycle (which could cause a double-fetch
+  // during the brief window when state hasn't propagated to the observer's closure).
   const isSending = useRef(false);
+  const isLoadingMore = useRef(false);
   // Holds the active EventSource so cleanup can close it on unmount.
   const sourceRef = useRef<EventSource | null>(null);
   // One conversationId per chat thread — persisted in localStorage.
@@ -83,8 +87,9 @@ export function useChatSession(): ChatSession {
         const first = data.messages[0];
         if (first) oldestTimestamp.current = first.timestamp;
       })
-      .catch(() => {
+      .catch((err: unknown) => {
         // History fetch is best-effort — a failure doesn't prevent new messages.
+        console.debug('[useChatSession] initial history fetch failed:', err);
       })
       .finally(() => setLoadingHistory(false));
   // Run once on mount; conversationId.current is a ref, not a reactive dep.
@@ -93,8 +98,9 @@ export function useChatSession(): ChatSession {
 
   const loadMore = useCallback(async () => {
     const convId = conversationId.current;
-    if (!convId || loadingHistory || !hasMore) return;
+    if (!convId || isLoadingMore.current || !hasMore) return;
 
+    isLoadingMore.current = true;
     setLoadingHistory(true);
     try {
       const cursor = oldestTimestamp.current
@@ -103,7 +109,10 @@ export function useChatSession(): ChatSession {
       const res = await apiFetch(
         `/api/kg/chat/history?conversationId=${encodeURIComponent(convId)}&limit=${HISTORY_PAGE_SIZE}${cursor}`,
       );
-      if (!res.ok) return;
+      if (!res.ok) {
+        console.debug('[useChatSession] loadMore returned non-ok status:', res.status);
+        return;
+      }
       const data = (await res.json()) as HistoryResponse;
       if (data.messages.length === 0) {
         setHasMore(false);
@@ -114,12 +123,14 @@ export function useChatSession(): ChatSession {
       setHasMore(data.hasMore);
       const first = data.messages[0];
       if (first) oldestTimestamp.current = first.timestamp;
-    } catch {
+    } catch (err) {
       // loadMore failures are non-fatal — the visible thread is unaffected.
+      console.debug('[useChatSession] loadMore failed:', err);
     } finally {
+      isLoadingMore.current = false;
       setLoadingHistory(false);
     }
-  }, [loadingHistory, hasMore]);
+  }, [hasMore]);
 
   async function send(text: string): Promise<void> {
     if (isSending.current || text.trim().length === 0) return;
@@ -193,11 +204,13 @@ export function useChatSession(): ChatSession {
         setMessages((prev) => [...prev, makeMessage('error', 'Received an unexpected response.')]);
         return;
       }
-      const data = raw as { reply: string; html: string; conversationId: string };
+      // Runtime guard above confirmed `reply` is a string; cast through unknown
+      // per project convention for narrowing from Record<string, unknown>.
+      const data = raw as unknown as { reply: string; html: string | null; conversationId: string };
       setMessages((prev) => [
         ...prev,
         makeMessage('agent', data.reply, {
-          html: data.html,
+          html: data.html ?? undefined,
           timestamp: new Date(),
         }),
       ]);
