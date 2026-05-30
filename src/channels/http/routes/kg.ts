@@ -2472,6 +2472,7 @@ export async function knowledgeGraphRoutes(
       ],
     );
     if (!inserted.rowCount) {
+      logger.error('kg: INSERT agent_tasks returned no rows');
       return reply.status(500).send({ error: 'Failed to create task.' });
     }
     return reply.status(201).send({
@@ -2589,6 +2590,7 @@ export async function knowledgeGraphRoutes(
     );
     // Guard against concurrent deletes between the existence check and the UPDATE.
     if (!updated.rowCount) {
+      logger.warn({ taskId: id }, 'kg: PATCH agent_tasks matched 0 rows — likely concurrent delete');
       return reply.status(404).send({ error: 'Agent task not found.' });
     }
     return reply.send({
