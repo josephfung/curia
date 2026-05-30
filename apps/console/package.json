@@ -18,11 +18,5 @@
     "react-dom": "^19.1.0",
     "typescript": "^6.0.3",
     "vite": "^8.0.14"
-  },
-  "dependencies": {
-    "cose-base": "^2.2.0",
-    "cytoscape": "^3.33.4",
-    "cytoscape-fcose": "^2.2.0",
-    "layout-base": "^2.0.1"
   }
 }
