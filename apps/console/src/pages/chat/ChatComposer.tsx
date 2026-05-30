@@ -29,6 +29,8 @@ export function ChatComposer({ disabled, onSend }: ChatComposerProps) {
   }
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
+    // IME composition is still in progress — Enter should confirm the candidate, not submit.
+    if (e.nativeEvent.isComposing) return;
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       // requestSubmit() triggers the parent form's onSubmit, keeping submit logic in one place.

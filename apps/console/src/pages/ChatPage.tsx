@@ -15,15 +15,24 @@ export default function ChatPage() {
   const { messages, sending, send } = useChatSession();
 
   useEffect(() => {
-    document.documentElement.dataset['mobileSidebar'] = mobileOpen ? 'open' : '';
+    if (mobileOpen) {
+      document.documentElement.dataset['mobileSidebar'] = 'open';
+    } else {
+      delete document.documentElement.dataset['mobileSidebar'];
+    }
+    return () => { delete document.documentElement.dataset['mobileSidebar']; };
   }, [mobileOpen]);
 
   function handleNavigate(view: string) {
-    if (view === 'autonomy') {
-      navigate({ to: '/settings/autonomy' }).catch(err => {
-        console.error('[ChatPage] navigation to /settings/autonomy failed:', err);
-      });
-    }
+    const to =
+      view === 'settings' ? '/settings' :
+      view === 'wizard'   ? '/setup' :
+      view === 'autonomy' ? '/settings/autonomy' :
+      null;
+    if (!to) return;
+    navigate({ to }).catch((err: unknown) => {
+      console.error(`[ChatPage] navigation to ${to} failed:`, err);
+    });
   }
 
   return (
