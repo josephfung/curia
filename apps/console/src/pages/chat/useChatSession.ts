@@ -56,8 +56,13 @@ export function useChatSession(): ChatSession {
   // Holds the active EventSource so cleanup can close it on unmount.
   const sourceRef = useRef<EventSource | null>(null);
   // One conversationId per chat thread — persisted in localStorage.
+  // localStorage.getItem can throw SecurityError in restricted browsing contexts
+  // (e.g. Safari private mode with strict settings), so we guard the read.
   const conversationId = useRef<string | null>(
-    typeof window !== 'undefined' ? localStorage.getItem(CONV_ID_KEY) : null,
+    (() => {
+      if (typeof window === 'undefined') return null;
+      try { return localStorage.getItem(CONV_ID_KEY); } catch { return null; }
+    })(),
   );
   // ISO timestamp of the oldest loaded message — used as the pagination cursor.
   const oldestTimestamp = useRef<string | null>(null);
@@ -70,28 +75,37 @@ export function useChatSession(): ChatSession {
     const convId = conversationId.current;
     if (!convId) return;
 
-    setLoadingHistory(true);
-    apiFetch(
-      `/api/kg/chat/history?conversationId=${encodeURIComponent(convId)}&limit=${HISTORY_PAGE_SIZE}`,
-    )
-      .then((res) => {
-        if (!res.ok) return;
-        return res.json() as Promise<HistoryResponse>;
-      })
-      .then((data) => {
-        if (!data || data.messages.length === 0) return;
+    // Using an inner async function inside useEffect so we can await cleanly
+    // while still returning a synchronous cleanup function from the effect.
+    const load = async () => {
+      setLoadingHistory(true);
+      try {
+        const res = await apiFetch(
+          `/api/kg/chat/history?conversationId=${encodeURIComponent(convId)}&limit=${HISTORY_PAGE_SIZE}`,
+        );
+        if (!res.ok) {
+          console.error('[useChatSession] initial history fetch returned non-ok status:', res.status);
+          return;
+        }
+        const data = (await res.json()) as HistoryResponse;
+        if (data.messages.length === 0) return;
         const loaded = historyToMessages(data.messages);
-        setMessages(loaded);
+        // Functional update guards against a race where the user sends a message
+        // before history arrives: only replace state if no messages have been added yet.
+        setMessages((prev) => (prev.length === 0 ? loaded : [...loaded, ...prev]));
         setHasMore(data.hasMore);
         // Record the timestamp of the oldest loaded message for subsequent loadMore calls.
         const first = data.messages[0];
         if (first) oldestTimestamp.current = first.timestamp;
-      })
-      .catch((err: unknown) => {
+      } catch (err: unknown) {
         // History fetch is best-effort — a failure doesn't prevent new messages.
-        console.debug('[useChatSession] initial history fetch failed:', err);
-      })
-      .finally(() => setLoadingHistory(false));
+        console.error('[useChatSession] initial history fetch failed:', err);
+      } finally {
+        setLoadingHistory(false);
+      }
+    };
+
+    void load();
   // Run once on mount; conversationId.current is a ref, not a reactive dep.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -110,7 +124,10 @@ export function useChatSession(): ChatSession {
         `/api/kg/chat/history?conversationId=${encodeURIComponent(convId)}&limit=${HISTORY_PAGE_SIZE}${cursor}`,
       );
       if (!res.ok) {
-        console.debug('[useChatSession] loadMore returned non-ok status:', res.status);
+        // Treat non-ok as terminal to prevent the IntersectionObserver from
+        // re-triggering loadMore in an infinite retry loop while hasMore is still true.
+        console.error('[useChatSession] loadMore returned non-ok status:', res.status);
+        setHasMore(false);
         return;
       }
       const data = (await res.json()) as HistoryResponse;
@@ -124,8 +141,9 @@ export function useChatSession(): ChatSession {
       const first = data.messages[0];
       if (first) oldestTimestamp.current = first.timestamp;
     } catch (err) {
-      // loadMore failures are non-fatal — the visible thread is unaffected.
-      console.debug('[useChatSession] loadMore failed:', err);
+      // Treat network errors as terminal (same infinite-retry guard as non-ok above).
+      console.error('[useChatSession] loadMore failed:', err);
+      setHasMore(false);
     } finally {
       isLoadingMore.current = false;
       setLoadingHistory(false);
@@ -138,7 +156,8 @@ export function useChatSession(): ChatSession {
     if (!conversationId.current) {
       const newId = crypto.randomUUID();
       conversationId.current = newId;
-      localStorage.setItem(CONV_ID_KEY, newId);
+      // Guarded for restricted browsing contexts (e.g. Safari private mode).
+      try { localStorage.setItem(CONV_ID_KEY, newId); } catch { /* best-effort */ }
     }
     const convId = conversationId.current;
 
