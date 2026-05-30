@@ -16,7 +16,7 @@ export function ChatThread({ messages }: ChatThreadProps) {
   }, [messages]);
 
   return (
-    <div className="chat-messages">
+    <div className="chat-messages" role="log" aria-live="polite" aria-relevant="additions text">
       {messages.map(msg => (
         <div key={msg.id} className={`msg-bubble ${msg.kind}`}>
           {msg.text}

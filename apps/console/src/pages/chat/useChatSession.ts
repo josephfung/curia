@@ -36,27 +36,30 @@ export function useChatSession(): ChatSession {
     isSending.current = true;
     setSending(true);
 
-    // Open the SSE stream BEFORE the POST to avoid racing a fast reply.
-    // withCredentials sends the session cookie, matching apiFetch behavior.
-    const source = new EventSource(
-      `/api/kg/chat/stream?conversationId=${encodeURIComponent(convId)}`,
-      { withCredentials: true },
-    );
-    sourceRef.current = source;
-    source.onmessage = (event: MessageEvent<string>) => {
-      const statusText = parseSseEvent(event.data);
-      if (statusText) {
-        setMessages(prev => [...prev, makeMessage('status', statusText)]);
-      }
-    };
-    source.onerror = (event) => {
-      // SSE failures are non-fatal — the POST response is authoritative.
-      // Close immediately to prevent the browser's automatic reconnection loop.
-      console.error('[useChatSession] SSE stream error:', event);
-      source.close();
-    };
-
+    // EventSource is created inside try so a synchronous constructor failure
+    // (e.g. CSP block) hits the catch block and resets the sending state.
+    let source: EventSource | undefined;
     try {
+      // Open the SSE stream BEFORE the POST to avoid racing a fast reply.
+      // withCredentials sends the session cookie, matching apiFetch behavior.
+      source = new EventSource(
+        `/api/kg/chat/stream?conversationId=${encodeURIComponent(convId)}`,
+        { withCredentials: true },
+      );
+      sourceRef.current = source as EventSource;
+      source.onmessage = (event: MessageEvent<string>) => {
+        const statusText = parseSseEvent(event.data);
+        if (statusText) {
+          setMessages(prev => [...prev, makeMessage('status', statusText)]);
+        }
+      };
+      source.onerror = (event) => {
+        // SSE failures are non-fatal — the POST response is authoritative.
+        // Close immediately to prevent the browser's automatic reconnection loop.
+        console.error('[useChatSession] SSE stream error:', event);
+        // source is always defined here — onerror can only fire after construction.
+        source!.close();
+      };
       const res = await apiFetch('/api/kg/chat/messages', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -93,7 +96,7 @@ export function useChatSession(): ChatSession {
       setMessages(prev => [...prev, makeMessage('error', msg)]);
     } finally {
       isSending.current = false;
-      source.close();
+      source?.close();
       sourceRef.current = null;
       setSending(false);
     }
