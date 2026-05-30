@@ -906,21 +906,21 @@ input:focus, textarea:focus, select:focus {
 .status-pill.confirmed::before  { background: var(--app-green); }
 .status-pill.provisional::before { background: var(--app-amber); }
 .status-pill.blocked::before    { background: var(--app-destructive); }
-/* Task statuses */
+/* Shared task + job statuses */
 .status-pill.active::before     { background: var(--app-teal); }
 .status-pill.pending::before    { background: var(--app-amber); }
-.status-pill.paused::before     { background: var(--app-blue); }
 .status-pill.completed::before  { background: var(--app-green); }
 .status-pill.failed::before     { background: var(--app-destructive); }
 .status-pill.cancelled::before  { background: var(--app-fg-muted); }
 
-/* Job statuses */
-.status-pill.pending::before    { background: var(--app-amber); }
+/* Job-specific statuses */
 .status-pill.running::before    { background: var(--app-teal); }
 .status-pill.suspended::before  { background: var(--app-destructive); }
+/* Jobs: paused = amber */
 .status-pill.paused::before     { background: var(--app-amber); }
-.status-pill.completed::before  { background: var(--app-green); }
-.status-pill.failed::before     { background: var(--app-destructive); }
+
+/* Tasks: paused = blue — scoped to override the job rule above */
+.tasks-page .status-pill.paused::before { background: var(--app-blue); }
 
 /* ── Drawer (right-anchored) ───────────────────────────────────────── */
 .drawer {
@@ -991,7 +991,6 @@ input:focus, textarea:focus, select:focus {
 }
 .records-toolbar-left  { display: flex; align-items: center; gap: 10px; }
 .records-toolbar-right { margin-left: auto; display: flex; align-items: center; gap: 8px; }
-.topbar-meta { font-size: 12px; color: var(--app-fg-muted); }
 .records-filter-chip {
   display: inline-flex; align-items: center; gap: 6px;
   padding: 5px 10px;

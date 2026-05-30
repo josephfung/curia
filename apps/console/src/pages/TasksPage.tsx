@@ -411,7 +411,7 @@ export default function TasksPage() {
             aria-hidden="true"
           />
         )}
-        <main className="main">
+        <main className="main tasks-page">
           <Topbar crumb="Memory" title="Tasks">
             <TopbarSearch
               placeholder="Search agent or intent…"
