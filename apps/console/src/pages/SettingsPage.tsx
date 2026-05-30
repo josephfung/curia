@@ -343,6 +343,7 @@ function SettingsLayout({ activeSection, children }: SettingsLayoutProps) {
       autonomy:  '/settings/autonomy',
       settings:  '/settings/workspace',
       dashboard: '/',
+      wizard:    '/setup',
     };
     const to = routes[view];
     if (to) {

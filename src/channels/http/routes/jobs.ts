@@ -78,9 +78,12 @@ export async function jobRoutes(
 
     // Normalize whitespace-only string fields to absent so required-field
     // checks below behave consistently regardless of how the client submits them.
-    const agentId = body.agent_id?.trim() || undefined;
-    const cronExpr = body.cron_expr?.trim() || undefined;
-    const runAt = body.run_at?.trim() || undefined;
+    // typeof guards defend against non-string values (e.g. numbers) that bypass
+    // the TypeScript cast above — trimming a non-string would throw before our
+    // error handler runs.
+    const agentId = typeof body.agent_id === 'string' ? body.agent_id.trim() || undefined : undefined;
+    const cronExpr = typeof body.cron_expr === 'string' ? body.cron_expr.trim() || undefined : undefined;
+    const runAt = typeof body.run_at === 'string' ? body.run_at.trim() || undefined : undefined;
 
     if (!agentId) {
       return reply.status(400).send({ error: 'agent_id is required' });
@@ -137,8 +140,10 @@ export async function jobRoutes(
 
     // Normalize whitespace-only string schedule fields to absent so they don't
     // pass the hasUpdateFields check while carrying no real value.
-    const cronExpr = body.cron_expr?.trim() || undefined;
-    const runAt = body.run_at?.trim() || undefined;
+    // typeof guards defend against non-string values that would throw before the
+    // try/catch below runs.
+    const cronExpr = typeof body.cron_expr === 'string' ? body.cron_expr.trim() || undefined : undefined;
+    const runAt = typeof body.run_at === 'string' ? body.run_at.trim() || undefined : undefined;
 
     const hasUpdateFields =
       cronExpr !== undefined ||

@@ -27,6 +27,8 @@ export default function ChatPage() {
     const routes: Record<string, string> = {
       contacts: '/contacts',
       jobs:     '/jobs',
+      kg:       '/',
+      tasks:    '/',
       settings: '/settings',
       wizard:   '/setup',
       autonomy: '/settings/autonomy',
