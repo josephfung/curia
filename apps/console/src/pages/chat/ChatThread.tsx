@@ -56,6 +56,8 @@ export function ChatThread({ messages, hasMore, loadingHistory, loadMore }: Chat
                 container.scrollTop += container.scrollHeight - prevScrollHeight;
               }
             });
+          }).catch((err: unknown) => {
+            console.error('[ChatThread] loadMore rejected:', err);
           });
         }
       },

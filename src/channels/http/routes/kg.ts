@@ -923,20 +923,29 @@ export async function knowledgeGraphRoutes(
       // Take at most `limit` rows, then restore chronological order.
       const rows = result.rows.slice(0, limit).reverse();
 
-      const messages = rows.map((row) => ({
-        id: row.id,
-        role: row.role as 'user' | 'assistant',
-        content: row.content,
-        // Pre-render HTML only for assistant messages — user text is displayed as-is.
-        html: row.role === 'assistant' ? markdownToHtml(row.content) : null,
-        timestamp: row.created_at.toISOString(),
-      }));
+      const messages = rows.map((row) => {
+        // Per-row try/catch so one bad message doesn't fail the whole page.
+        let html: string | null = null;
+        if (row.role === 'assistant') {
+          try {
+            html = markdownToHtml(row.content);
+          } catch (convErr) {
+            logger.warn({ err: convErr, messageId: row.id }, 'markdownToHtml failed for history row; falling back to plain text');
+          }
+        }
+        return {
+          id: row.id,
+          role: row.role as 'user' | 'assistant',
+          content: row.content,
+          html,
+          timestamp: row.created_at.toISOString(),
+        };
+      });
 
       return reply.send({ messages, hasMore });
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
       logger.error({ err, conversationId }, 'KG chat history fetch failed');
-      return reply.status(500).send({ error: message });
+      return reply.status(500).send({ error: 'Failed to fetch chat history' });
     }
   });
 }
