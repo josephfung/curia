@@ -24,11 +24,14 @@ export default function ChatPage() {
   }, [mobileOpen]);
 
   function handleNavigate(view: string) {
-    const to =
-      view === 'settings' ? '/settings' :
-      view === 'wizard'   ? '/setup' :
-      view === 'autonomy' ? '/settings/autonomy' :
-      null;
+    const routes: Record<string, string> = {
+      contacts: '/contacts',
+      jobs:     '/jobs',
+      settings: '/settings',
+      wizard:   '/setup',
+      autonomy: '/settings/autonomy',
+    };
+    const to = routes[view];
     if (!to) return;
     navigate({ to }).catch((err: unknown) => {
       console.error(`[ChatPage] navigation to ${to} failed:`, err);

@@ -76,35 +76,50 @@ export async function jobRoutes(
       error_budget?: Record<string, unknown>;
     };
 
-    // Validate required fields
-    if (!body.agent_id) {
+    // Normalize whitespace-only string fields to absent so required-field
+    // checks below behave consistently regardless of how the client submits them.
+    const agentId = body.agent_id?.trim() || undefined;
+    const cronExpr = body.cron_expr?.trim() || undefined;
+    const runAt = body.run_at?.trim() || undefined;
+
+    if (!agentId) {
       return reply.status(400).send({ error: 'agent_id is required' });
     }
     if (!body.task_payload) {
       return reply.status(400).send({ error: 'task_payload is required' });
     }
-    if (!body.cron_expr && !body.run_at) {
+    if (!cronExpr && !runAt) {
       return reply.status(400).send({ error: 'Either cron_expr or run_at must be provided' });
     }
 
     try {
       const result = await schedulerService.createJob({
-        agentId: body.agent_id,
-        cronExpr: body.cron_expr,
-        runAt: body.run_at ? new Date(body.run_at) : undefined,
+        agentId,
+        cronExpr,
+        runAt: runAt ? new Date(runAt) : undefined,
         taskPayload: body.task_payload,
         createdBy: 'api',
         intentAnchor: body.intent_anchor,
         errorBudget: body.error_budget,
       });
-      return reply.status(201).send(result);
+
+      // Fetch the full job row so the caller can render it immediately without
+      // a separate GET request.
+      const job = await schedulerService.getJob(result.jobId);
+      if (!job) {
+        // Extremely unlikely: job was created then immediately cancelled between
+        // the insert and this read.
+        return reply.status(404).send({ error: 'Job not found after creation' });
+      }
+
+      return reply.status(201).send({ job });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to create job';
       return reply.status(400).send({ error: message });
     }
   });
 
-  // -- PATCH /api/jobs/:id — update an existing job --
+  // -- PATCH /api/jobs/:id — update or unsuspend an existing job --
 
   app.patch('/api/jobs/:id', async (request, reply) => {
     if (!assertSecret(request, reply, webAppBootstrapSecret, sessions)) return;
@@ -116,28 +131,46 @@ export async function jobRoutes(
       task_payload?: Record<string, unknown>;
     };
 
-    // When not unsuspending, require at least one updatable field so we don't
-    // report a successful update when nothing actually changes in the database.
+    // Normalize whitespace-only string schedule fields to absent so they don't
+    // pass the hasUpdateFields check while carrying no real value.
+    const cronExpr = body.cron_expr?.trim() || undefined;
+    const runAt = body.run_at?.trim() || undefined;
+
     const hasUpdateFields =
-      body.cron_expr !== undefined ||
-      body.run_at !== undefined ||
+      cronExpr !== undefined ||
+      runAt !== undefined ||
       body.task_payload !== undefined;
 
+    // Existence check: return 404 now rather than letting a downstream no-op
+    // UPDATE silently succeed or the unsuspend path throw an opaque error.
+    const existing = await schedulerService.getJob(id);
+    if (!existing) {
+      return reply.status(404).send({ error: 'Job not found' });
+    }
+
     try {
-      // If the caller is setting status back to 'pending', treat it as an unsuspend.
-      // The unsuspendJob method handles validation (must currently be suspended).
+      // Setting status to 'pending' is the unsuspend/unpause path.
       if (body.status === 'pending') {
         await schedulerService.unsuspendJob(id);
       } else if (!hasUpdateFields) {
         return reply.status(400).send({ error: 'At least one of cron_expr, run_at, or task_payload must be provided' });
       } else {
         await schedulerService.updateJob(id, {
-          cronExpr: body.cron_expr,
-          runAt: body.run_at ? new Date(body.run_at) : undefined,
+          cronExpr,
+          runAt: runAt ? new Date(runAt) : undefined,
           taskPayload: body.task_payload,
         });
       }
-      return reply.status(200).send({ updated: true, jobId: id });
+
+      // Read the updated row back so the caller can update its local state
+      // without a separate GET. Return 404 if the job disappeared between the
+      // mutation above and this read (e.g. concurrent cancel).
+      const job = await schedulerService.getJob(id);
+      if (!job) {
+        return reply.status(404).send({ error: 'Job not found after update' });
+      }
+
+      return reply.status(200).send({ job });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to update job';
       return reply.status(400).send({ error: message });

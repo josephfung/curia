@@ -337,21 +337,17 @@ function SettingsLayout({ activeSection, children }: SettingsLayoutProps) {
   }, [mobileOpen]);
 
   function handleNavigate(view: string) {
-    if (view === 'contacts') {
-      navigate({ to: '/contacts' }).catch(err => {
-        console.error('[SettingsLayout] navigation to /contacts failed:', err);
-      });
-    } else if (view === 'autonomy') {
-      navigate({ to: '/settings/autonomy' }).catch(err => {
-        console.error('[SettingsLayout] navigation to /settings/autonomy failed:', err);
-      });
-    } else if (view === 'settings') {
-      navigate({ to: '/settings/workspace' }).catch(err => {
-        console.error('[SettingsLayout] navigation to /settings/workspace failed:', err);
-      });
-    } else if (view === 'dashboard') {
-      navigate({ to: '/' }).catch(err => {
-        console.error('[SettingsLayout] navigation to / failed:', err);
+    const routes: Record<string, string> = {
+      contacts:  '/contacts',
+      jobs:      '/jobs',
+      autonomy:  '/settings/autonomy',
+      settings:  '/settings/workspace',
+      dashboard: '/',
+    };
+    const to = routes[view];
+    if (to) {
+      navigate({ to }).catch(err => {
+        console.error(`[SettingsLayout] navigation to ${to} failed:`, err);
       });
     }
   }
