@@ -111,17 +111,28 @@ export class HttpAdapter {
 
     // Auth hook — runs before every request
     this.app.addHook('onRequest', async (request, reply) => {
-      // Skip auth for health endpoint — it's used by load balancers and monitors.
-      // Use routeOptions.url (the registered pattern) so query strings don't break the match.
+      // routeOptions.url is the registered pattern (e.g. '/assets/index-CU1g6HdR.js' or '/*').
+      // request.url is the actual request path (with query string).
       const routeUrl = request.routeOptions.url ?? '';
-      if (routeUrl === '/api/health') return;
-      // These routes bypass bearer auth and enforce their own auth internally.
+
+      // Non-API routes are the console app (static assets, SPA pages, /auth) — no bearer auth.
+      //
+      // @fastify/static v9 with wildcard:false scans consoleDist at startup and registers
+      // an individual Fastify route per file (e.g. /assets/index-CU1g6HdR.js). These exact
+      // paths don't match a '/*' check, so we gate on !startsWith('/api/') instead.
+      //
+      // We also check request.url as a fallback: the console '/*' catch-all absorbs GET
+      // requests to unregistered paths, including probes like GET /api/nonexistent. Without
+      // the request.url check, those would get routeUrl='/*', skip auth, and silently return
+      // the React app HTML. Checking the actual URL keeps unregistered /api/ paths enforced.
+      if (!routeUrl.startsWith('/api/') && !request.url.startsWith('/api/')) return;
+
+      // These API routes use session-cookie auth and bypass bearer token enforcement.
       if (
-        routeUrl === '/' ||         // @fastify/static registers GET / for index.html when wildcard:false
-        routeUrl === '/*' ||        // console SPA catch-all for client-side routes (/login, etc.)
-        routeUrl === '/auth' ||
+        routeUrl === '/api/health' ||
         routeUrl.startsWith('/api/kg') ||
         routeUrl.startsWith('/api/identity') ||
+        routeUrl.startsWith('/api/executive') ||
         routeUrl.startsWith('/api/jobs') ||
         routeUrl.startsWith('/api/autonomy')
       ) return;
