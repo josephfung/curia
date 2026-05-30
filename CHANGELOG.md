@@ -13,6 +13,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Console static asset auth** — `@fastify/static` v9 with `wildcard:false` registers an individual Fastify route per file in `consoleDist`, so `routeOptions.url` returns the exact asset path (e.g. `/assets/index-CU1g6HdR.js`) rather than `/*`; the old bypass list missed these routes and every static asset returned 401. Auth hook now skips bearer auth for all non-`/api/` routes.
+
 ### Added
 
 - **Knowledge Graph view** — new `/kg` console page with Cytoscape/fcose canvas, node search sidebar, in-place neighborhood expansion, color-by-type/sensitivity/decay toggle, node detail drawer, and URL-persisted `?q=`/`?node=` state; removes legacy `createUiHtml()` and `/old` routes. (#780)
