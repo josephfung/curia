@@ -43,6 +43,15 @@ function formatDate(iso: string | null): string {
   return iso.slice(0, 16).replace('T', ' ');
 }
 
+// Convert a UTC ISO timestamp to the datetime-local input format (local wall-clock time).
+// Slicing the UTC string directly produces a string the input treats as local time,
+// shifting the stored moment by the user's timezone offset on every save.
+function utcToLocal(utcIso: string | null): string {
+  if (!utcIso) return '';
+  const d = new Date(utcIso);
+  return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+}
+
 function formatSchedule(job: Job): string {
   if (job.cronExpr) return job.cronExpr;
   if (job.runAt) return formatDate(job.runAt);
@@ -120,7 +129,7 @@ function JobEditDrawer({ job, creating, onClose, onSaved, onDeleted }: DrawerPro
 
   const [agentId, setAgentId] = useState(job?.agentId ?? '');
   const [cronExpr, setCronExpr] = useState(job?.cronExpr ?? '');
-  const [runAt, setRunAt] = useState(job?.runAt?.slice(0, 16) ?? '');
+  const [runAt, setRunAt] = useState(utcToLocal(job?.runAt ?? null));
   const [scheduleType, setScheduleType] = useState<'cron' | 'run_at'>(isCronJob ? 'cron' : 'run_at');
   const [taskPayload, setTaskPayload] = useState(
     job ? JSON.stringify(job.taskPayload, null, 2) : '{\n  \n}',
@@ -495,8 +504,12 @@ export default function JobsPage() {
     }
     const dir = sort.dir === 'asc' ? 1 : -1;
     rows = [...rows].sort((a, b) => {
-      const av = (a[sort.key] ?? '') as string;
-      const bv = (b[sort.key] ?? '') as string;
+      // 'cronExpr' is the sort key for the Schedule column; fall back to runAt
+      // for one-time jobs so they sort by date rather than all comparing as ''.
+      const getVal = (j: Job): string =>
+        sort.key === 'cronExpr' ? formatSchedule(j) : ((j[sort.key] ?? '') as string);
+      const av = getVal(a);
+      const bv = getVal(b);
       if (av < bv) return -1 * dir;
       if (av > bv) return  1 * dir;
       return 0;

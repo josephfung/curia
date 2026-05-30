@@ -104,6 +104,26 @@ describe('Job routes', () => {
   // -- POST /api/jobs --
 
   it('POST /api/jobs creates a job (201)', async () => {
+    // Route calls getJob() after createJob() to return the full job row.
+    const createdJob: JobRow = {
+      id: 'job-1',
+      agentId: 'agent-a',
+      cronExpr: '0 9 * * *',
+      runAt: null,
+      taskPayload: { task: 'daily-report' },
+      status: 'pending',
+      lastRunAt: null,
+      nextRunAt: '2026-04-01T09:00:00Z',
+      lastError: null,
+      consecutiveFailures: 0,
+      createdBy: 'api',
+      createdAt: '2026-03-29T00:00:00Z',
+      agentTaskId: null,
+      intentAnchor: null,
+      progress: null,
+    };
+    vi.mocked(scheduler.getJob).mockResolvedValueOnce(createdJob);
+
     const response = await app.inject({
       method: 'POST',
       url: '/api/jobs',
@@ -116,7 +136,8 @@ describe('Job routes', () => {
     });
     expect(response.statusCode).toBe(201);
     const body = JSON.parse(response.body);
-    expect(body).toHaveProperty('jobId');
+    expect(body).toHaveProperty('job');
+    expect(body.job.id).toBe('job-1');
     expect(scheduler.createJob).toHaveBeenCalledWith(
       expect.objectContaining({
         agentId: 'agent-a',
@@ -183,7 +204,30 @@ describe('Job routes', () => {
 
   // -- PATCH /api/jobs/:id --
 
+  // Reusable job stub for PATCH tests — routes now call getJob() for existence
+  // checks and post-mutation read-backs, so we need a non-null mock return.
+  const patchJob: JobRow = {
+    id: 'job-50',
+    agentId: 'agent-b',
+    cronExpr: '0 9 * * *',
+    runAt: null,
+    taskPayload: { task: 'test' },
+    status: 'suspended',
+    lastRunAt: null,
+    nextRunAt: null,
+    lastError: null,
+    consecutiveFailures: 0,
+    createdBy: 'api',
+    createdAt: '2026-03-29T00:00:00Z',
+    agentTaskId: null,
+    intentAnchor: null,
+    progress: null,
+  };
+
   it('PATCH /api/jobs/:id unsuspends a suspended job', async () => {
+    // getJob called twice: existence check + post-mutation read-back.
+    vi.mocked(scheduler.getJob).mockResolvedValueOnce(patchJob).mockResolvedValueOnce({ ...patchJob, status: 'pending' });
+
     const response = await app.inject({
       method: 'PATCH',
       url: '/api/jobs/job-50',
@@ -192,11 +236,15 @@ describe('Job routes', () => {
     });
     expect(response.statusCode).toBe(200);
     const body = JSON.parse(response.body);
-    expect(body).toEqual({ updated: true, jobId: 'job-50' });
+    expect(body).toHaveProperty('job');
+    expect(body.job.id).toBe('job-50');
     expect(scheduler.unsuspendJob).toHaveBeenCalledWith('job-50');
   });
 
   it('PATCH /api/jobs/:id calls updateJob for non-status changes', async () => {
+    // getJob called twice: existence check + post-mutation read-back.
+    vi.mocked(scheduler.getJob).mockResolvedValueOnce(patchJob).mockResolvedValueOnce(patchJob);
+
     const response = await app.inject({
       method: 'PATCH',
       url: '/api/jobs/job-50',
@@ -212,6 +260,8 @@ describe('Job routes', () => {
   });
 
   it('PATCH /api/jobs/:id returns 400 on service error', async () => {
+    // getJob returns the job (existence check passes), then unsuspendJob throws.
+    vi.mocked(scheduler.getJob).mockResolvedValueOnce(patchJob);
     vi.mocked(scheduler.unsuspendJob).mockRejectedValueOnce(new Error('Job job-50 not found or not suspended'));
 
     const response = await app.inject({
