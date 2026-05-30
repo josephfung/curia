@@ -16,6 +16,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Added
 
 - **Scheduled Jobs view** — new `/jobs` console page with CRUD, status filters, and resume action for suspended jobs; removes legacy nav item. (#782)
+- **Tasks view** — new console page at `/tasks` with full CRUD, sortable columns, and status filter chips; legacy `/old/tasks` removed. (#783)
 - **Contacts view** — new console page at `/contacts` with full CRUD and editable trust level; legacy `/old/contacts` removed. (#781)
 
 ### Changed

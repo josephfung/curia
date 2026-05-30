@@ -315,18 +315,19 @@ input:focus, textarea:focus, select:focus {
 .btn-secondary:hover { background: var(--app-muted); }
 
 .btn-danger { background: var(--app-destructive); color: #fff; border: none; }
-.btn-danger:hover { opacity: 0.88; }
+.btn-danger:hover    { opacity: 0.88; }
 .btn-danger:disabled { opacity: 0.5; cursor: not-allowed; }
 
-.btn-sm { padding: 5px 10px; font-size: 12px; }
+.btn-sm { padding: 5px 12px; font-size: 13px; }
 
 .btn-icon {
-  background: none; border: none;
-  color: var(--app-fg-muted); padding: 4px; border-radius: 4px;
-  cursor: pointer; display: inline-flex; align-items: center;
-  transition: all 120ms;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px;
+  border: none; background: transparent; cursor: pointer;
+  border-radius: 4px; color: var(--app-fg-muted);
+  transition: background 120ms, color 120ms;
 }
-.btn-icon:hover { color: var(--app-fg); background: var(--app-muted); }
+.btn-icon:hover { background: var(--app-muted); color: var(--app-fg); }
 
 .topbar-meta { font-size: 12px; color: var(--app-fg-muted); }
 
@@ -879,6 +880,7 @@ input:focus, textarea:focus, select:focus {
   color: #fff; line-height: 1.4;
 }
 .badge-person       { background: var(--app-teal); }
+.badge-task         { background: var(--app-violet); }
 .badge-organization { background: var(--app-blue-soft); color: #111; }
 .badge-project      { background: var(--app-violet); }
 .badge-decision     { background: var(--app-amber); }
@@ -904,6 +906,13 @@ input:focus, textarea:focus, select:focus {
 .status-pill.confirmed::before  { background: var(--app-green); }
 .status-pill.provisional::before { background: var(--app-amber); }
 .status-pill.blocked::before    { background: var(--app-destructive); }
+/* Task statuses */
+.status-pill.active::before     { background: var(--app-teal); }
+.status-pill.pending::before    { background: var(--app-amber); }
+.status-pill.paused::before     { background: var(--app-blue); }
+.status-pill.completed::before  { background: var(--app-green); }
+.status-pill.failed::before     { background: var(--app-destructive); }
+.status-pill.cancelled::before  { background: var(--app-fg-muted); }
 
 /* Job statuses */
 .status-pill.pending::before    { background: var(--app-amber); }
@@ -966,6 +975,8 @@ input:focus, textarea:focus, select:focus {
 .contacts-mobile-search input { width: 100%; }
 .jobs-mobile-search { display: none; padding: 8px 16px; }
 .jobs-mobile-search input { width: 100%; }
+.tasks-mobile-search { display: none; padding: 8px 16px; }
+.tasks-mobile-search input { width: 100%; }
 
 .records-layout { flex: 1; display: flex; overflow: hidden; min-height: 0; }
 .records-main {
@@ -980,6 +991,7 @@ input:focus, textarea:focus, select:focus {
 }
 .records-toolbar-left  { display: flex; align-items: center; gap: 10px; }
 .records-toolbar-right { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+.topbar-meta { font-size: 12px; color: var(--app-fg-muted); }
 .records-filter-chip {
   display: inline-flex; align-items: center; gap: 6px;
   padding: 5px 10px;
@@ -1042,6 +1054,8 @@ table.records-table tbody tr.active td { background: transparent; }
 .cell-mono    { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--app-fg-muted); }
 .cell-actions { display: flex; gap: 4px; justify-content: flex-end; }
 .cell-with-avatar { display: flex; align-items: center; gap: 8px; }
+/* Truncate long text in the intent anchor column */
+.cell-intent { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--app-fg-muted); font-size: 12px; }
 .system-role-badge {
   display: inline-block;
   font-size: 10px; font-weight: 700; letter-spacing: 0.04em;
@@ -1134,6 +1148,7 @@ table.records-table tbody tr.active td { background: transparent; }
   /* Show the mobile search bars (TopbarSearch is hidden at this breakpoint) */
   .contacts-mobile-search { display: block; }
   .jobs-mobile-search { display: block; }
+  .tasks-mobile-search { display: block; }
 }
 
 /* ── Chat layout ─────────────────────────────────────────────────────── */

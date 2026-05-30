@@ -534,47 +534,6 @@ function createUiHtml(): string {
     .conv-item:hover  { background: var(--accent); color: var(--fg); }
     .conv-item.active { background: var(--muted);  color: var(--fg); }
 
-    .tasks-layout {
-      flex: 1;
-      display: flex;
-      overflow: hidden;
-    }
-    .tasks-list-panel {
-      flex: none;
-      width: 380px;
-      border-right: 1px solid var(--border);
-      display: flex;
-      flex-direction: column;
-      overflow: hidden;
-    }
-    .tasks-list {
-      flex: 1;
-      overflow-y: auto;
-      padding: 10px;
-      display: flex;
-      flex-direction: column;
-      gap: 6px;
-    }
-    .task-card {
-      padding: 10px;
-      border: 1px solid var(--border);
-      border-radius: var(--radius-md);
-      cursor: pointer;
-      transition: border-color 0.12s, background 0.12s;
-    }
-    .task-card:hover { border-color: var(--teal); }
-    .task-card.active {
-      border-color: var(--teal);
-      background: rgba(71,129,137,0.08);
-    }
-    .tasks-editor {
-      flex: 1;
-      overflow-y: auto;
-      padding: 16px;
-      display: flex;
-      flex-direction: column;
-      gap: 14px;
-    }
     .jobs-layout {
       flex: 1;
       display: flex;
@@ -756,16 +715,8 @@ function createUiHtml(): string {
               Knowledge Graph
             </button>
 
-            <button id="nav-tasks" class="nav-sub-item" onclick="navigate('tasks', 'Tasks', 'nav-tasks')">
-              <!-- checklist icon -->
-              <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-                <rect x="1.5" y="1.5" width="10" height="10" rx="1.5"/>
-                <path d="M4 6.5L5.5 8L9 4.5"/>
-              </svg>
-              Tasks
-            </button>
-
             <!-- Scheduled Jobs removed: ported to /jobs in the new console app (#782) -->
+            <!-- Tasks removed: ported to /tasks in the new console app (#783) -->
           </div>
         </div>
 
@@ -840,74 +791,6 @@ function createUiHtml(): string {
             </div>
           </div>
 
-        </div>
-      </div>
-
-      <!-- Agent Tasks view -->
-      <div id="view-tasks" style="display: none; height: 100%; flex-direction: column;">
-        <div style="flex: none; display: flex; align-items: center; gap: 10px; padding: 10px 16px; border-bottom: 1px solid var(--border);">
-          <input id="tasks-search-input" type="text" placeholder="Search agent tasks by agent, intent, or status…" style="max-width: 420px;" />
-          <button id="tasks-search-btn" class="btn-primary">Search</button>
-          <button id="tasks-new-btn" class="btn-primary">+ New Agent Task</button>
-          <span id="tasks-status" style="font-size: 0.75rem; color: var(--fg-muted); margin-left: 4px;"></span>
-        </div>
-        <div class="tasks-layout">
-          <div class="tasks-list-panel">
-            <div style="padding: 10px 12px 0; font-size: 0.6875rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; color: var(--fg-muted);">Agent Tasks</div>
-            <div id="tasks-list" class="tasks-list"></div>
-          </div>
-          <div class="tasks-editor">
-            <div style="display: flex; justify-content: space-between; align-items: center;">
-              <h2 id="tasks-editor-title" style="font-family: 'Lora', Georgia, serif; font-size: 1.375rem; font-weight: 500; margin: 0;">Create Agent Task</h2>
-              <button id="tasks-delete-btn" class="btn-primary" style="display: none; background: var(--destructive); color: var(--fg);">Delete</button>
-            </div>
-
-            <form id="tasks-form" style="display: flex; flex-direction: column; gap: 12px; max-width: 900px;">
-              <div class="form-grid">
-                <div class="form-field">
-                  <label for="task-agent-id">Agent ID</label>
-                  <input id="task-agent-id" type="text" placeholder="e.g. coordinator" required />
-                </div>
-                <div class="form-field">
-                  <label for="task-status">Status</label>
-                  <select id="task-status">
-                    <option value="active">active</option>
-                    <option value="pending">pending</option>
-                    <option value="paused">paused</option>
-                    <option value="completed">completed</option>
-                    <option value="failed">failed</option>
-                    <option value="cancelled">cancelled</option>
-                  </select>
-                </div>
-              </div>
-              <div class="form-field">
-                <label for="task-intent-anchor">Intent anchor</label>
-                <textarea id="task-intent-anchor" rows="2" placeholder="Persistent task goal/context..." required></textarea>
-              </div>
-              <div class="form-grid">
-                <div class="form-field">
-                  <label for="task-conversation-id">Conversation ID (optional UUID)</label>
-                  <input id="task-conversation-id" type="text" placeholder="UUID (optional)" />
-                </div>
-                <div class="form-field">
-                  <label for="task-scheduled-job-id">Scheduled Job ID (optional UUID)</label>
-                  <input id="task-scheduled-job-id" type="text" placeholder="UUID (optional)" />
-                </div>
-              </div>
-              <div class="form-field">
-                <label for="task-error-budget">Error budget JSON</label>
-                <textarea id="task-error-budget" rows="4" placeholder='{"maxTurns": 12, "maxConsecutiveErrors": 3}'></textarea>
-              </div>
-              <div class="form-field">
-                <label for="task-progress">Progress JSON</label>
-                <textarea id="task-progress" rows="5" placeholder='{"phase":"initializing"}'></textarea>
-              </div>
-              <div style="display: flex; gap: 10px;">
-                <button type="submit" id="tasks-save-btn" class="btn-primary">Create Agent Task</button>
-                <button type="button" id="tasks-cancel-btn" class="btn-primary" style="background: var(--muted); color: var(--fg);">Cancel</button>
-              </div>
-            </form>
-          </div>
         </div>
       </div>
 
@@ -1017,9 +900,6 @@ function createUiHtml(): string {
     var settingsOpen = true; // Settings nav section expanded by default
 
     var activeNavId = 'nav-kg';
-    var tasks = [];
-    var selectedTaskId = null;
-    var tasksMode = 'create';
     var jobs = [];
     var selectedJobId = null;
     var jobsMode = 'create';
@@ -1056,23 +936,6 @@ function createUiHtml(): string {
     var memorySubmenu = document.getElementById('memory-submenu');
     var settingsSubmenu = document.getElementById('settings-submenu');
     var settingsCaret   = document.getElementById('settings-chevron');
-    var tasksStatusEl = document.getElementById('tasks-status');
-    var tasksSearchInput = document.getElementById('tasks-search-input');
-    var tasksSearchBtn = document.getElementById('tasks-search-btn');
-    var tasksNewBtn = document.getElementById('tasks-new-btn');
-    var tasksListEl = document.getElementById('tasks-list');
-    var tasksForm = document.getElementById('tasks-form');
-    var tasksEditorTitle = document.getElementById('tasks-editor-title');
-    var tasksDeleteBtn = document.getElementById('tasks-delete-btn');
-    var tasksSaveBtn = document.getElementById('tasks-save-btn');
-    var tasksCancelBtn = document.getElementById('tasks-cancel-btn');
-    var taskAgentIdInput = document.getElementById('task-agent-id');
-    var taskStatusInput = document.getElementById('task-status');
-    var taskIntentAnchorInput = document.getElementById('task-intent-anchor');
-    var taskConversationIdInput = document.getElementById('task-conversation-id');
-    var taskScheduledJobIdInput = document.getElementById('task-scheduled-job-id');
-    var taskErrorBudgetInput = document.getElementById('task-error-budget');
-    var taskProgressInput = document.getElementById('task-progress');
     var jobsStatusEl = document.getElementById('jobs-status');
     var jobsSearchInput = document.getElementById('jobs-search-input');
     var jobsSearchBtn = document.getElementById('jobs-search-btn');
@@ -1103,11 +966,6 @@ function createUiHtml(): string {
     if (!authWall || !mainApp || !authForm || !authInput || !authError ||
         !statusEl || !resultsEl || !searchInput || !searchBtn ||
         !memoryCaret || !memorySubmenu || !settingsSubmenu || !settingsCaret ||
-        !tasksStatusEl || !tasksSearchInput || !tasksSearchBtn || !tasksNewBtn ||
-        !tasksListEl || !tasksForm || !tasksEditorTitle || !tasksDeleteBtn ||
-        !tasksSaveBtn || !tasksCancelBtn || !taskAgentIdInput || !taskStatusInput ||
-        !taskIntentAnchorInput || !taskConversationIdInput || !taskScheduledJobIdInput ||
-        !taskErrorBudgetInput || !taskProgressInput ||
         !jobsStatusEl || !jobsSearchInput || !jobsSearchBtn || !jobsNewBtn || !jobsListEl ||
         !jobsForm || !jobsEditorTitle || !jobsDeleteBtn || !jobsSaveBtn || !jobsCancelBtn ||
         !jobAgentIdInput || !jobStatusInput || !jobCronExprInput || !jobRunAtInput ||
@@ -1302,11 +1160,9 @@ function createUiHtml(): string {
     function navigate(view, title, navId) {
       var kgView            = document.getElementById('view-kg');
       var chatView          = document.getElementById('view-chat');
-      var tasksView         = document.getElementById('view-tasks');
       var scheduledJobsView = document.getElementById('view-scheduled-jobs');
       kgView.style.display            = view === 'kg'             ? 'flex' : 'none';
       chatView.style.display          = view === 'chat'           ? 'flex' : 'none';
-      tasksView.style.display         = view === 'tasks'          ? 'flex' : 'none';
       scheduledJobsView.style.display = view === 'scheduled-jobs' ? 'flex' : 'none';
       // When returning to the KG view, tell Cytoscape to re-measure the container.
       // The canvas dimensions may be stale if the view was hidden (display:none)
@@ -1327,9 +1183,6 @@ function createUiHtml(): string {
         if (cy && cy.elements().length === 0) {
           loadDefaultGraph();
         }
-      }
-      if (view === 'tasks') {
-        loadTasks();
       }
       if (view === 'scheduled-jobs') {
         loadJobs();
@@ -1766,228 +1619,7 @@ function createUiHtml(): string {
     searchBtn.addEventListener('click', search);
     searchInput.addEventListener('keydown', function(e) { if (e.key === 'Enter') search(); });
 
-    // ── Agent Tasks ──────────────────────────────────────────────────
-    function setTasksStatus(msg, isError) {
-      tasksStatusEl.textContent = msg;
-      tasksStatusEl.style.color = isError ? 'var(--destructive)' : 'var(--fg-muted)';
-    }
 
-    function prettyJson(value) {
-      return JSON.stringify(value || {}, null, 2);
-    }
-
-    function parseJsonField(raw, fallback, fieldName) {
-      var value = raw.trim();
-      if (!value) return fallback;
-      try {
-        return JSON.parse(value);
-      } catch {
-        throw new Error(fieldName + ' must be valid JSON.');
-      }
-    }
-
-    function resetTaskForm() {
-      tasksMode = 'create';
-      selectedTaskId = null;
-      tasksEditorTitle.textContent = 'Create Agent Task';
-      tasksSaveBtn.textContent = 'Create Agent Task';
-      tasksDeleteBtn.style.display = 'none';
-      taskAgentIdInput.value = '';
-      taskStatusInput.value = 'active';
-      taskIntentAnchorInput.value = '';
-      taskConversationIdInput.value = '';
-      taskScheduledJobIdInput.value = '';
-      taskErrorBudgetInput.value = prettyJson({ maxTurns: 12, maxConsecutiveErrors: 3 });
-      taskProgressInput.value = prettyJson({});
-      renderTasksList(tasks);
-    }
-
-    function fillTaskForm(task) {
-      tasksMode = 'edit';
-      selectedTaskId = task.id;
-      tasksEditorTitle.textContent = 'Edit Agent Task';
-      tasksSaveBtn.textContent = 'Save Changes';
-      tasksDeleteBtn.style.display = 'inline-flex';
-      taskAgentIdInput.value = task.agentId;
-      taskStatusInput.value = task.status;
-      taskIntentAnchorInput.value = task.intentAnchor;
-      taskConversationIdInput.value = task.conversationId || '';
-      taskScheduledJobIdInput.value = task.scheduledJobId || '';
-      taskErrorBudgetInput.value = prettyJson(task.errorBudget);
-      taskProgressInput.value = prettyJson(task.progress);
-      renderTasksList(tasks);
-    }
-
-    function renderTasksList(list) {
-      tasksListEl.replaceChildren();
-      if (!list.length) {
-        var empty = document.createElement('p');
-        empty.style.cssText = 'font-size: 0.8125rem; color: var(--fg-muted); margin: 4px 2px;';
-        empty.textContent = 'No agent tasks found.';
-        tasksListEl.appendChild(empty);
-        return;
-      }
-      list.forEach(function(task) {
-        var card = document.createElement('div');
-        card.className = 'task-card' + (selectedTaskId === task.id ? ' active' : '');
-
-        var title = document.createElement('div');
-        title.style.cssText = 'font-size: 0.875rem; font-weight: 600; color: var(--fg);';
-        title.textContent = task.agentId + ' · ' + task.status;
-
-        var intent = document.createElement('div');
-        intent.style.cssText = 'font-size: 0.75rem; color: var(--fg-muted); margin-top: 4px; line-height: 1.35;';
-        intent.textContent = task.intentAnchor;
-
-        var meta = document.createElement('div');
-        meta.style.cssText = 'font-size: 0.6875rem; color: var(--fg-muted); margin-top: 6px;';
-        meta.textContent = 'Updated ' + new Date(task.updatedAt).toLocaleString();
-
-        card.append(title, intent, meta);
-        card.addEventListener('click', function() { fillTaskForm(task); });
-        tasksListEl.appendChild(card);
-      });
-    }
-
-    function loadTasks() {
-      setTasksStatus('Loading agent tasks…');
-      fetchJson('/api/kg/tasks')
-        .then(function(data) {
-          tasks = data.tasks || [];
-          // Re-apply active search filter after reload instead of always showing the full list.
-          // Without this, saving/deleting a task would silently clear the user's filter while
-          // leaving the search input populated — a misleading UI state.
-          if (tasksSearchInput.value.trim()) {
-            filterTasks();
-          } else {
-            renderTasksList(tasks);
-            setTasksStatus(tasks.length + ' agent task' + (tasks.length === 1 ? '' : 's'));
-          }
-          if (tasksMode === 'create' && !taskAgentIdInput.value) {
-            resetTaskForm();
-            return;
-          }
-          if (tasksMode === 'edit') {
-            var selected = tasks.find(function(t) { return t.id === selectedTaskId; });
-            if (selected) {
-              fillTaskForm(selected);
-            } else {
-              resetTaskForm();
-            }
-          }
-        })
-        .catch(function(err) { setTasksStatus(String(err), true); });
-    }
-
-    function filterTasks() {
-      var q = tasksSearchInput.value.trim().toLowerCase();
-      if (!q) {
-        renderTasksList(tasks);
-        setTasksStatus(tasks.length + ' agent task' + (tasks.length === 1 ? '' : 's'));
-        return;
-      }
-      var filtered = tasks.filter(function(task) {
-        return task.agentId.toLowerCase().includes(q) ||
-          task.intentAnchor.toLowerCase().includes(q) ||
-          task.status.toLowerCase().includes(q);
-      });
-      renderTasksList(filtered);
-      setTasksStatus(filtered.length + ' result' + (filtered.length === 1 ? '' : 's'));
-    }
-
-    function saveTask(e) {
-      e.preventDefault();
-      var agentId = taskAgentIdInput.value.trim();
-      var intentAnchor = taskIntentAnchorInput.value.trim();
-      if (!agentId) {
-        setTasksStatus('Agent ID is required.', true);
-        return;
-      }
-      if (!intentAnchor) {
-        setTasksStatus('Intent anchor is required.', true);
-        return;
-      }
-
-      var errorBudget;
-      var progress;
-      try {
-        errorBudget = parseJsonField(taskErrorBudgetInput.value, {}, 'Error budget');
-        progress = parseJsonField(taskProgressInput.value, {}, 'Progress');
-      } catch (err) {
-        setTasksStatus(err.message || String(err), true);
-        return;
-      }
-
-      var payload = {
-        agentId: agentId,
-        intentAnchor: intentAnchor,
-        status: taskStatusInput.value,
-        conversationId: taskConversationIdInput.value.trim() || null,
-        scheduledJobId: taskScheduledJobIdInput.value.trim() || null,
-        errorBudget: errorBudget,
-        progress: progress,
-      };
-
-      tasksSaveBtn.disabled = true;
-      setTasksStatus(tasksMode === 'create' ? 'Creating agent task…' : 'Saving agent task…');
-      var request = tasksMode === 'create'
-        ? fetch('/api/kg/tasks', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload),
-          })
-        : fetch('/api/kg/tasks/' + encodeURIComponent(selectedTaskId), {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload),
-          });
-
-      request
-        .then(function(res) {
-          return res.json().then(function(body) {
-            if (!res.ok) throw new Error(body.error || ('HTTP ' + res.status));
-            return body;
-          });
-        })
-        .then(function() {
-          setTasksStatus(tasksMode === 'create' ? 'Agent task created.' : 'Agent task updated.');
-          loadTasks();
-          if (tasksMode === 'create') resetTaskForm();
-        })
-        .catch(function(err) { setTasksStatus(err.message || String(err), true); })
-        .finally(function() { tasksSaveBtn.disabled = false; });
-    }
-
-    function deleteTask() {
-      if (!selectedTaskId) return;
-      if (!confirm('Delete this agent task? This action cannot be undone.')) return;
-      tasksDeleteBtn.disabled = true;
-      setTasksStatus('Deleting agent task…');
-      fetch('/api/kg/tasks/' + encodeURIComponent(selectedTaskId), { method: 'DELETE' })
-        .then(function(res) {
-          if (!res.ok) return res.json().then(function(body) { throw new Error(body.error || ('HTTP ' + res.status)); });
-        })
-        .then(function() {
-          setTasksStatus('Agent task deleted.');
-          resetTaskForm();
-          loadTasks();
-        })
-        .catch(function(err) { setTasksStatus(err.message || String(err), true); })
-        .finally(function() { tasksDeleteBtn.disabled = false; });
-    }
-
-    tasksForm.addEventListener('submit', saveTask);
-    tasksDeleteBtn.addEventListener('click', deleteTask);
-    tasksNewBtn.addEventListener('click', resetTaskForm);
-    tasksCancelBtn.addEventListener('click', resetTaskForm);
-    tasksSearchBtn.addEventListener('click', filterTasks);
-    tasksSearchInput.addEventListener('keydown', function(e) {
-      if (e.key === 'Enter') {
-        e.preventDefault();
-        filterTasks();
-      }
-    });
-    resetTaskForm();
 
     // ── Scheduled Jobs ───────────────────────────────────────────────
     function setJobsStatus(msg, isError) {
@@ -2469,6 +2101,8 @@ export async function knowledgeGraphRoutes(
   // Using 302 (temporary) rather than 301 (permanent) while the new view stabilises.
   // Fastify 5 signature: redirect(url, statusCode?) — url comes first.
   app.get('/old/chat', (_req, reply) => reply.redirect('/chat', 302));
+  // /old/tasks is now served by the React console at /tasks.
+  app.get('/old/tasks', (_req, reply) => reply.redirect('/tasks', 302));
 
   app.get('/old', serveOldUi);
   // Wildcard catches /old/kg, /old/contacts, etc. The * captures
@@ -2837,9 +2471,12 @@ export async function knowledgeGraphRoutes(
         scheduledJobId,
       ],
     );
+    if (!inserted.rowCount) {
+      return reply.status(500).send({ error: 'Failed to create task.' });
+    }
     return reply.status(201).send({
       task: serializeTask(
-        inserted.rows[0] as {
+        inserted.rows[0]! as {
           id: string;
           agent_id: string;
           intent_anchor: string;
@@ -2950,9 +2587,13 @@ export async function knowledgeGraphRoutes(
         scheduledJobId,
       ],
     );
+    // Guard against concurrent deletes between the existence check and the UPDATE.
+    if (!updated.rowCount) {
+      return reply.status(404).send({ error: 'Agent task not found.' });
+    }
     return reply.send({
       task: serializeTask(
-        updated.rows[0] as {
+        updated.rows[0]! as {
           id: string;
           agent_id: string;
           intent_anchor: string;
