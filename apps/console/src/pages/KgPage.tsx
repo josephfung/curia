@@ -338,6 +338,14 @@ export default function KgPage() {
   // latest value without capturing a stale closure.
   const colorModeRef = useRef<ColorMode>('type');
 
+  // Mirror search state in a ref so the single-mount Cytoscape tap handler
+  // can always read the current value without a stale closure.
+  const searchRef = useRef(initialQ ?? '');
+
+  // Aborts the previous neighborhood fetch when a new one starts, preventing
+  // stale responses from overwriting the canvas after rapid clicks.
+  const neighborhoodAbortRef = useRef<AbortController | null>(null);
+
   useEffect(() => {
     document.documentElement.dataset['mobileSidebar'] = mobileOpen ? 'open' : '';
   }, [mobileOpen]);
@@ -409,16 +417,22 @@ export default function KgPage() {
   async function loadNeighborhood(nodeId: string) {
     const cy = cyRef.current;
     if (!cy) return;
+    neighborhoodAbortRef.current?.abort();
+    const controller = new AbortController();
+    neighborhoodAbortRef.current = controller;
     setStatus('Loading…');
     try {
       const res = await apiFetch(
         `/api/kg/graph?node_id=${encodeURIComponent(nodeId)}&depth=2`,
+        { signal: controller.signal },
       );
       if (!res.ok) throw new Error(await errorMessage(res));
       const data = await res.json() as { nodes: ApiKgNode[]; edges: ApiKgEdge[] };
+      if (cy.destroyed()) return;
       renderGraph(cy, data);
       setStatus(`${data.nodes.length} nodes · ${data.edges.length} edges`);
     } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') return;
       console.error('[KgPage] neighborhood load failed:', err);
       setStatus('Failed to load');
     }
@@ -429,10 +443,14 @@ export default function KgPage() {
   async function expandNeighborhood(nodeId: string) {
     const cy = cyRef.current;
     if (!cy) return;
+    neighborhoodAbortRef.current?.abort();
+    const controller = new AbortController();
+    neighborhoodAbortRef.current = controller;
     setStatus('Expanding…');
     try {
       const res = await apiFetch(
         `/api/kg/graph?node_id=${encodeURIComponent(nodeId)}&depth=1`,
+        { signal: controller.signal },
       );
       if (!res.ok) throw new Error(await errorMessage(res));
       const data = await res.json() as { nodes: ApiKgNode[]; edges: ApiKgEdge[] };
@@ -440,6 +458,8 @@ export default function KgPage() {
       const newNodes = data.nodes.filter(n => !cy.getElementById(n.id).length);
       const newEdges = data.edges.filter(e => !cy.getElementById(e.id).length);
       const newElements = [...newNodes.map(nodeToElement), ...newEdges.map(edgeToElement)];
+
+      if (cy.destroyed()) return;
 
       if (newElements.length > 0) {
         // Snapshot positions before adding so fcose can pin existing nodes.
@@ -460,6 +480,7 @@ export default function KgPage() {
 
       setStatus(`${cy.nodes().length} nodes · ${cy.edges().length} edges`);
     } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') return;
       console.error('[KgPage] expand failed:', err);
       setStatus(String(err));
     }
@@ -483,7 +504,9 @@ export default function KgPage() {
       const nodeData = evt.target.data() as ApiKgNode;
       void expandNeighborhood(evt.target.id());
       setSelectedNode(nodeData);
-      syncUrl(search, nodeData.id);
+      // Use searchRef.current — this handler is registered once at mount and
+      // would otherwise capture a permanently stale `search` state value.
+      syncUrl(searchRef.current, nodeData.id);
     });
 
     cy.on('dbltap', 'node', evt => {
@@ -521,7 +544,7 @@ export default function KgPage() {
         if (res.ok) {
           const data = await res.json() as { nodes: ApiKgNode[]; edges: ApiKgEdge[] };
           const cy = cyRef.current;
-          if (cy) {
+          if (cy && !cy.destroyed()) {
             renderGraph(cy, data);
             setStatus(`${data.nodes.length} nodes · ${data.edges.length} edges`);
           }
@@ -549,6 +572,7 @@ export default function KgPage() {
 
   function handleSearch(q: string) {
     setSearch(q);
+    searchRef.current = q;
   }
 
   function submitSearch() {
