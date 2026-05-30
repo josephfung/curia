@@ -220,7 +220,7 @@ describe('KG chat routes', () => {
 });
 
 describe('KG web UI shell', () => {
-  it('GET /old — returns 404 now that the legacy UI has been removed', async () => {
+  it('GET /old — knowledgeGraphRoutes no longer defines this route (returns 404 in isolation; the SPA catch-all is not registered here)', async () => {
     const app = Fastify();
     await app.register(cookie);
     await app.register(knowledgeGraphRoutes, {

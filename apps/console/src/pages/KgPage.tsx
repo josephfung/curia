@@ -435,6 +435,12 @@ export default function KgPage() {
       const data = await res.json() as { nodes: ApiKgNode[]; edges: ApiKgEdge[] };
       if (cy.destroyed()) return;
       renderGraph(cy, data);
+      // Sync selection + URL so refresh and back-nav restore this view.
+      const focused = data.nodes.find(n => n.id === nodeId) ?? null;
+      setSelectedNode(focused);
+      syncUrl(searchRef.current, focused?.id);
+      cy.elements().removeClass('focal');
+      if (focused) cy.getElementById(focused.id).addClass('focal');
       setStatus(`${data.nodes.length} nodes · ${data.edges.length} edges`);
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') return;
@@ -505,7 +511,7 @@ export default function KgPage() {
 
     cyRef.current = cy;
 
-    cy.on('tap', 'node', evt => {
+    cy.on('onetap', 'node', evt => {
       const nodeData = evt.target.data() as ApiKgNode;
       void expandNeighborhood(evt.target.id());
       setSelectedNode(nodeData);
