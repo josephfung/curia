@@ -14,4 +14,4 @@ blockExoticSubdeps: true
 # esbuild requires a postinstall step to download the platform binary.
 # Both versions (used by vite and tsup) are approved here.
 allowBuilds:
-  esbuild: set this to true or false
+  esbuild: true
