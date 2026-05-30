@@ -294,8 +294,8 @@ export default function ContactsPage() {
   function handleNavigate(view: string) {
     const routes: Record<string, string> = {
       contacts:  '/contacts',
-      kg:        '/',
-      chat:      '/',
+      kg:        '/kg',
+      chat:      '/chat',
       tasks:     '/tasks',
       jobs:      '/jobs',
       autonomy:  '/settings/autonomy',

@@ -468,7 +468,7 @@ export default function JobsPage() {
     const routes: Record<string, string> = {
       contacts:  '/contacts',
       jobs:      '/jobs',
-      kg:        '/',
+      kg:        '/kg',
       chat:      '/chat',
       tasks:     '/',
       autonomy:  '/settings/autonomy',

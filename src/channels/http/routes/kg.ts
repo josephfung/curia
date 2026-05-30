@@ -1,7 +1,5 @@
 import { randomBytes, randomUUID } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
-import { createRequire } from 'node:module';
-import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import type { FastifyInstance } from 'fastify';
 import type { Pool } from 'pg';
 import type { EventBus } from '../../../bus/bus.js';
 import { createInboundMessage } from '../../../bus/events.js';
@@ -75,9 +73,6 @@ function normalizeLimit(raw: string | undefined, fallback: number, max: number):
   return Math.max(1, Math.min(parsed, max));
 }
 
-// Design tokens — dark mode, from the Curia design system (theme.md).
-// Keeping them here as a reference makes it easy to update the palette in one place
-// without hunting through inline styles.
 function createUiHtml(): string {
   return `<!doctype html>
 <html lang="en">
@@ -2080,35 +2075,6 @@ export async function knowledgeGraphRoutes(
   const { pool, logger, webAppBootstrapSecret, secureCookies, bus, eventRouter, contactService, sessions } = options;
   // sessions is managed by HttpAdapter — no local Map creation needed here.
 
-  // GET / is now handled by consoleRoutes (apps/console Vite build), not here.
-
-  // Shared handler for the legacy hand-rolled UI — served at /old and /old/* so
-  // that /old/<view> paths (e.g. /old/contacts) resolve to the shell. All view
-  // navigation is client-side; the server serves the same HTML regardless of sub-path.
-  const serveOldUi = (_request: FastifyRequest, reply: FastifyReply): void => {
-    reply
-      .type('text/html; charset=utf-8')
-      // Prevent the page from being embedded in an iframe (clickjacking defence).
-      .header('X-Frame-Options', 'DENY')
-      // Stop browsers from MIME-sniffing the response away from text/html.
-      .header('X-Content-Type-Options', 'nosniff')
-      .send(createUiHtml());
-  };
-
-  // /old/chat is now served by the React console at /chat.
-  // This exact-match route takes priority over the /old/* wildcard below
-  // (Fastify's radix router resolves exact matches before wildcards).
-  // Using 302 (temporary) rather than 301 (permanent) while the new view stabilises.
-  // Fastify 5 signature: redirect(url, statusCode?) — url comes first.
-  app.get('/old/chat', (_req, reply) => reply.redirect('/chat', 302));
-  // /old/tasks is now served by the React console at /tasks.
-  app.get('/old/tasks', (_req, reply) => reply.redirect('/tasks', 302));
-
-  app.get('/old', serveOldUi);
-  // Wildcard catches /old/kg, /old/contacts, etc. The * captures
-  // the remainder including an empty string (i.e. /old/ also matches).
-  app.get('/old/*', serveOldUi);
-
   // POST /auth — exchanges the bootstrap secret for an HttpOnly session cookie.
   // Tighter rate limit than the global default: 10 attempts per 15 minutes per IP,
   // preventing online brute-force against the secret.
@@ -2159,62 +2125,9 @@ export async function knowledgeGraphRoutes(
     return reply.status(200).send({ ok: true });
   });
 
-  // Per-route rate limits for KG handlers (CodeQL js/missing-rate-limiting).
-  // Two tiers, both well above normal usage:
-  //   ASSET_RATE — static JS bundles served with immutable Cache-Control;
-  //               browsers only fetch once, so 60/min is a generous ceiling
-  //               against scanners without affecting real users.
-  //   KG_RATE    — KG explorer and task/contact API endpoints; 60/min per IP
-  //               allows rapid interactive browsing while blocking DoS-level
-  //               query floods against the database.
-  const ASSET_RATE = { config: { rateLimit: { max: 60, timeWindow: '1 minute' } } };
+  // Rate limit for KG API endpoints: 60/min per IP allows interactive browsing
+  // while blocking DoS-level query floods against the database.
   const KG_RATE = { config: { rateLimit: { max: 60, timeWindow: '1 minute' } } };
-
-  app.get('/assets/cytoscape.min.js', ASSET_RATE, async (_request, reply) => {
-    // Use createRequire so Node's module resolution finds cytoscape relative to
-    // this source file, not relative to the compiled bundle output path.
-    // The URL-relative approach (new URL('../../../../node_modules/...')) breaks
-    // when tsup bundles everything into a flat dist/index.js — the path walks
-    // above the project root and produces a 500.
-    const require = createRequire(import.meta.url);
-    const cytoscapePath = require.resolve('cytoscape/dist/cytoscape.min.js');
-    const source = await readFile(cytoscapePath, 'utf8');
-    // Long-lived cache — cytoscape is a pinned dependency; the version never
-    // changes without a code change, so immutable caching is safe here.
-    reply
-      .type('application/javascript; charset=utf-8')
-      .header('Cache-Control', 'public, max-age=31536000, immutable')
-      .send(source);
-  });
-
-  // cytoscape-fcose layout extension — requires layout-base and cose-base as UMD globals.
-  // All three are served as self-hosted assets using the same createRequire pattern as cytoscape.
-  app.get('/assets/layout-base.js', ASSET_RATE, async (_request, reply) => {
-    const require = createRequire(import.meta.url);
-    const source = await readFile(require.resolve('layout-base/layout-base.js'), 'utf8');
-    reply
-      .type('application/javascript; charset=utf-8')
-      .header('Cache-Control', 'public, max-age=31536000, immutable')
-      .send(source);
-  });
-
-  app.get('/assets/cose-base.js', ASSET_RATE, async (_request, reply) => {
-    const require = createRequire(import.meta.url);
-    const source = await readFile(require.resolve('cose-base/cose-base.js'), 'utf8');
-    reply
-      .type('application/javascript; charset=utf-8')
-      .header('Cache-Control', 'public, max-age=31536000, immutable')
-      .send(source);
-  });
-
-  app.get('/assets/cytoscape-fcose.js', ASSET_RATE, async (_request, reply) => {
-    const require = createRequire(import.meta.url);
-    const source = await readFile(require.resolve('cytoscape-fcose/cytoscape-fcose.js'), 'utf8');
-    reply
-      .type('application/javascript; charset=utf-8')
-      .header('Cache-Control', 'public, max-age=31536000, immutable')
-      .send(source);
-  });
 
   app.get('/api/kg/nodes', KG_RATE, async (request, reply) => {
     if (!assertSecret(request, reply, webAppBootstrapSecret, sessions)) return;
