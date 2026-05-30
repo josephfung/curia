@@ -1167,6 +1167,34 @@ table.records-table tbody tr.active td { background: transparent; }
   gap: 10px;
 }
 
+/* History load sentinel — zero-height trigger element at the top of the thread. */
+.chat-history-sentinel {
+  min-height: 1px;
+}
+.chat-history-loading {
+  text-align: center;
+  font-size: 11px;
+  color: var(--app-fg-subtle);
+  padding: 4px 0 8px;
+  font-style: italic;
+}
+
+/* Wrapper for user/agent messages: stacks bubble + timestamp in a column,
+   aligned to the correct side. Status/error messages remain standalone bubbles. */
+.msg-group {
+  display: flex;
+  flex-direction: column;
+}
+.msg-group.user { align-items: flex-end; }
+.msg-group.agent { align-items: flex-start; }
+
+.msg-time {
+  font-size: 11px;
+  color: var(--app-fg-subtle);
+  margin-top: 3px;
+  padding: 0 2px;
+}
+
 /* Base bubble — kind-specific classes override alignment and background. */
 .msg-bubble {
   width: fit-content;
@@ -1180,16 +1208,29 @@ table.records-table tbody tr.active td { background: transparent; }
 }
 
 .msg-bubble.user {
-  align-self: flex-end;
   background: var(--app-card-elev);
   border-radius: 12px 12px 2px 12px;
 }
 
 .msg-bubble.agent {
-  align-self: flex-start;
   background: var(--app-card);
   border: 1px solid var(--app-border);
   border-radius: 12px 12px 12px 2px;
+  /* Markdown-rendered content resets: prevent browser defaults from adding
+     excessive margin inside the constrained bubble width. */
+  white-space: normal;
+}
+.msg-bubble.agent p { margin: 0 0 8px; }
+.msg-bubble.agent p:last-child { margin-bottom: 0; }
+.msg-bubble.agent ul { margin: 0 0 8px; padding-left: 18px; }
+.msg-bubble.agent ul:last-child { margin-bottom: 0; }
+.msg-bubble.agent li { margin-bottom: 2px; }
+.msg-bubble.agent code {
+  font-family: var(--app-font-mono, monospace);
+  font-size: 0.88em;
+  background: var(--app-card-elev);
+  padding: 1px 4px;
+  border-radius: 3px;
 }
 
 /* Status and error: no bubble, centered, small text only. */

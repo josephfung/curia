@@ -12,7 +12,7 @@ export default function ChatPage() {
   const [theme, setTheme] = useTheme();
   const [mobileOpen, setMobileOpen] = useState(false);
   const navigate = useNavigate();
-  const { messages, sending, send } = useChatSession();
+  const { messages, sending, hasMore, loadingHistory, send, loadMore } = useChatSession();
 
   useEffect(() => {
     if (mobileOpen) {
@@ -47,7 +47,12 @@ export default function ChatPage() {
         <main className="main">
           <Topbar crumb="Curia" title="Chat" />
           <div className="chat-page">
-            <ChatThread messages={messages} />
+            <ChatThread
+              messages={messages}
+              hasMore={hasMore}
+              loadingHistory={loadingHistory}
+              loadMore={loadMore}
+            />
             <ChatComposer disabled={sending} onSend={send} />
           </div>
         </main>

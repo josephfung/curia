@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseSseEvent, makeMessage } from './chat-utils.js';
+import { parseSseEvent, makeMessage, formatTimestamp } from './chat-utils.js';
 
 describe('parseSseEvent', () => {
   it('returns status text for skill.invoke events', () => {
@@ -54,5 +54,35 @@ describe('makeMessage', () => {
     const a = makeMessage('agent', 'x');
     const b = makeMessage('agent', 'x');
     expect(a.id).not.toBe(b.id);
+  });
+
+  it('forwards html and timestamp opts onto the message', () => {
+    const ts = new Date('2026-05-30T09:24:00Z');
+    const msg = makeMessage('agent', 'hi', { html: '<p>hi</p>', timestamp: ts });
+    expect(msg.html).toBe('<p>hi</p>');
+    expect(msg.timestamp).toBe(ts);
+  });
+
+  it('leaves html and timestamp undefined when opts are omitted', () => {
+    const msg = makeMessage('user', 'hello');
+    expect(msg.html).toBeUndefined();
+    expect(msg.timestamp).toBeUndefined();
+  });
+});
+
+describe('formatTimestamp', () => {
+  it('returns "Today · <time>" for a timestamp from today', () => {
+    const now = new Date();
+    const result = formatTimestamp(now);
+    expect(result).toMatch(/^Today · /);
+  });
+
+  it('returns "<Mon DD> · <time>" for a timestamp from a different day', () => {
+    const old = new Date('2026-04-01T10:00:00');
+    const result = formatTimestamp(old);
+    // Should not start with "Today ·"
+    expect(result).not.toMatch(/^Today · /);
+    // Should contain a middle dot
+    expect(result).toContain(' · ');
   });
 });

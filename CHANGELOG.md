@@ -16,6 +16,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Added
 
 - **Knowledge Graph view** — new `/kg` console page with Cytoscape/fcose canvas, node search sidebar, in-place neighborhood expansion, color-by-type/sensitivity/decay toggle, node detail drawer, and URL-persisted `?q=`/`?node=` state; removes legacy `createUiHtml()` and `/old` routes. (#780)
+- **Chat view improvements** — agent replies now render markdown (bold, lists, code, italics) via server-side conversion; messages show timestamps; history hydrates from `working_memory` on reload (persisted via localStorage); scrolling up loads older pages. (#175)
 - **Scheduled Jobs view** — new `/jobs` console page with CRUD, status filters, and resume action for suspended jobs; removes legacy nav item. (#782)
 - **Tasks view** — new console page at `/tasks` with full CRUD, sortable columns, and status filter chips; legacy `/old/tasks` removed. (#783)
 - **Contacts view** — new console page at `/contacts` with full CRUD and editable trust level; legacy `/old/contacts` removed. (#781)
