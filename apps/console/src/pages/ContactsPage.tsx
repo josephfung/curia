@@ -297,7 +297,7 @@ export default function ContactsPage() {
       kg:        '/',
       chat:      '/',
       tasks:     '/',
-      jobs:      '/',
+      jobs:      '/jobs',
       autonomy:  '/settings/autonomy',
       settings:  '/settings/autonomy',
       wizard:    '/setup',

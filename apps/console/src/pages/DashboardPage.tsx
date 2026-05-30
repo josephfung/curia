@@ -15,13 +15,17 @@ export default function DashboardPage() {
   }, [mobileOpen]);
 
   function handleNavigate(view: string) {
-    if (view === 'contacts') {
-      navigate({ to: '/contacts' }).catch(err => {
-        console.error('[DashboardPage] navigation to /contacts failed:', err);
-      });
-    } else if (view === 'autonomy' || view === 'settings') {
-      navigate({ to: '/settings/autonomy' }).catch(err => {
-        console.error('[DashboardPage] navigation to /settings/autonomy failed:', err);
+    const routes: Record<string, string> = {
+      contacts: '/contacts',
+      jobs:     '/jobs',
+      autonomy: '/settings/autonomy',
+      settings: '/settings/autonomy',
+      wizard:   '/setup',
+    };
+    const to = routes[view];
+    if (to) {
+      navigate({ to }).catch(err => {
+        console.error(`[DashboardPage] navigation to ${to} failed:`, err);
       });
     }
   }

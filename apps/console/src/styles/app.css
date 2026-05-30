@@ -314,6 +314,22 @@ input:focus, textarea:focus, select:focus {
 .btn-secondary { background: var(--app-card); color: var(--app-fg); border: 1px solid var(--app-input-bd); }
 .btn-secondary:hover { background: var(--app-muted); }
 
+.btn-danger { background: var(--app-destructive); color: #fff; border: none; }
+.btn-danger:hover { opacity: 0.88; }
+.btn-danger:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.btn-sm { padding: 5px 10px; font-size: 12px; }
+
+.btn-icon {
+  background: none; border: none;
+  color: var(--app-fg-muted); padding: 4px; border-radius: 4px;
+  cursor: pointer; display: inline-flex; align-items: center;
+  transition: all 120ms;
+}
+.btn-icon:hover { color: var(--app-fg); background: var(--app-muted); }
+
+.topbar-meta { font-size: 12px; color: var(--app-fg-muted); }
+
 /* ── 8. Login page ───────────────────────────────────────────────────── */
 .login-root {
   height: 100vh; width: 100%;
@@ -889,6 +905,14 @@ input:focus, textarea:focus, select:focus {
 .status-pill.provisional::before { background: var(--app-amber); }
 .status-pill.blocked::before    { background: var(--app-destructive); }
 
+/* Job statuses */
+.status-pill.pending::before    { background: var(--app-amber); }
+.status-pill.running::before    { background: var(--app-teal); }
+.status-pill.suspended::before  { background: var(--app-destructive); }
+.status-pill.paused::before     { background: var(--app-amber); }
+.status-pill.completed::before  { background: var(--app-green); }
+.status-pill.failed::before     { background: var(--app-destructive); }
+
 /* ── Drawer (right-anchored) ───────────────────────────────────────── */
 .drawer {
   flex: none;
@@ -937,9 +961,11 @@ input:focus, textarea:focus, select:focus {
 .edit-drawer-form { padding: 16px 18px; display: flex; flex-direction: column; gap: 14px; }
 
 /* ── Records (CRUD table views) ────────────────────────────────────── */
-/* Mobile-only search bar (TopbarSearch is hidden below 768px by the shared stylesheet) */
+/* Mobile-only search bars (TopbarSearch is hidden below 768px by the shared stylesheet) */
 .contacts-mobile-search { display: none; padding: 8px 16px; }
 .contacts-mobile-search input { width: 100%; }
+.jobs-mobile-search { display: none; padding: 8px 16px; }
+.jobs-mobile-search input { width: 100%; }
 
 .records-layout { flex: 1; display: flex; overflow: hidden; min-height: 0; }
 .records-main {
@@ -1105,8 +1131,9 @@ table.records-table tbody tr.active td { background: transparent; }
   table.records-table .col-updated { display: none; }
   .records-toolbar { padding: 8px 14px; }
   .records-pagination { padding: 8px 14px; }
-  /* Show the mobile search bar (TopbarSearch is hidden at this breakpoint) */
+  /* Show the mobile search bars (TopbarSearch is hidden at this breakpoint) */
   .contacts-mobile-search { display: block; }
+  .jobs-mobile-search { display: block; }
 }
 
 /* ── Chat layout ─────────────────────────────────────────────────────── */

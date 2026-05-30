@@ -765,14 +765,7 @@ function createUiHtml(): string {
               Tasks
             </button>
 
-            <button id="nav-scheduled-jobs" class="nav-sub-item" onclick="navigate('scheduled-jobs', 'Scheduled Jobs', 'nav-scheduled-jobs')">
-              <!-- clock icon -->
-              <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-                <circle cx="6.5" cy="6.5" r="5"/>
-                <path d="M6.5 3.75v3.15l2 1.25"/>
-              </svg>
-              Scheduled Jobs
-            </button>
+            <!-- Scheduled Jobs removed: ported to /jobs in the new console app (#782) -->
           </div>
         </div>
 
