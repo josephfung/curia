@@ -1,12 +1,12 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from '@tanstack/react-router';
-import { MobileMenuContext } from '../context/MobileMenu';
-import { Sidebar } from '../components/Sidebar';
-import { Topbar } from '../components/Topbar';
-import { useTheme } from '../hooks/useTheme';
-import { ChatThread } from './chat/ChatThread';
-import { ChatComposer } from './chat/ChatComposer';
-import { useChatSession } from './chat/useChatSession';
+import { MobileMenuContext } from '../context/MobileMenu.js';
+import { Sidebar } from '../components/Sidebar.js';
+import { Topbar } from '../components/Topbar.js';
+import { useTheme } from '../hooks/useTheme.js';
+import { ChatThread } from './chat/ChatThread.js';
+import { ChatComposer } from './chat/ChatComposer.js';
+import { useChatSession } from './chat/useChatSession.js';
 
 export default function ChatPage() {
   const [theme, setTheme] = useTheme();

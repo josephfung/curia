@@ -906,31 +906,18 @@ export async function knowledgeGraphRoutes(
     try {
       // Fetch limit+1 rows so we can tell if there are more pages without a COUNT query.
       // Rows arrive newest-first; we reverse after slicing to serve them chronologically.
-      let result;
-      if (beforeDate) {
-        result = await pool.query<HistoryRow>(
-          `SELECT id, role, content, created_at
-           FROM working_memory
-           WHERE conversation_id = $1
-             AND archived = false
-             AND role IN ('user', 'assistant')
-             AND created_at < $2
-           ORDER BY created_at DESC
-           LIMIT $3`,
-          [conversationId, beforeDate.toISOString(), limit + 1],
-        );
-      } else {
-        result = await pool.query<HistoryRow>(
-          `SELECT id, role, content, created_at
-           FROM working_memory
-           WHERE conversation_id = $1
-             AND archived = false
-             AND role IN ('user', 'assistant')
-           ORDER BY created_at DESC
-           LIMIT $2`,
-          [conversationId, limit + 1],
-        );
-      }
+      // The $2::timestamptz IS NULL check makes the before-cursor optional in a single query.
+      const result = await pool.query<HistoryRow>(
+        `SELECT id, role, content, created_at
+         FROM working_memory
+         WHERE conversation_id = $1
+           AND archived = false
+           AND role IN ('user', 'assistant')
+           AND ($2::timestamptz IS NULL OR created_at < $2)
+         ORDER BY created_at DESC
+         LIMIT $3`,
+        [conversationId, beforeDate?.toISOString() ?? null, limit + 1],
+      );
 
       const hasMore = result.rows.length > limit;
       // Take at most `limit` rows, then restore chronological order.

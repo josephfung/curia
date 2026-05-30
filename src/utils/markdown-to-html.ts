@@ -55,8 +55,14 @@ export function markdownToHtml(markdown: string): string {
 function applyInline(text: string): string {
   let out = escapeHtml(text);
 
-  // Inline code first to avoid re-processing its contents
-  out = out.replace(/`([^`]+)`/g, '<code>$1</code>');
+  // Replace code spans with stable placeholders before bold/italic processing so
+  // that content like `**inside code**` is not transformed by the bold regex.
+  // \x00 is safe here: escapeHtml doesn't produce it and LLM text won't contain it.
+  const codePlaceholders: string[] = [];
+  out = out.replace(/`([^`]+)`/g, (_, inner: string) => {
+    codePlaceholders.push(`<code>${inner}</code>`);
+    return `\x00CODE${codePlaceholders.length - 1}\x00`;
+  });
 
   // Bold: **text** or __text__
   out = out.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
@@ -66,6 +72,9 @@ function applyInline(text: string): string {
   out = out.replace(/(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)/g, '<em>$1</em>');
   // Italic: _text_ (word-boundary anchored to avoid matching underscores in identifiers)
   out = out.replace(/(?<!_)\b_(?!_)(.+?)(?<!_)_\b(?!_)/g, '<em>$1</em>');
+
+  // Restore code spans
+  out = out.replace(/\x00CODE(\d+)\x00/g, (_, i: string) => codePlaceholders[parseInt(i, 10)]!);
 
   return out;
 }

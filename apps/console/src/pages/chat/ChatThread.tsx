@@ -14,25 +14,23 @@ export function ChatThread({ messages, hasMore, loadingHistory, loadMore }: Chat
   const bottomRef = useRef<HTMLDivElement>(null);
   const topSentinelRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
-  // Track message count so auto-scroll fires only when new messages arrive at
-  // the bottom — not when older history is prepended at the top.
-  const prevMessageCount = useRef(messages.length);
+  // Tracks the ID of the last rendered message and how many messages were
+  // visible before the most recent render so we can distinguish three cases:
+  //   • empty → initial history load: prev=0, don't scroll (would yank to bottom)
+  //   • new user/agent message: prev>0 and last ID changes, scroll to bottom
+  //   • history prepended: last ID unchanged, don't scroll
+  const prevCount = useRef(0);
+  const lastMessageId = useRef<string | undefined>(undefined);
 
-  // Scroll to bottom on new messages. Skips when history is prepended (the
-  // message count grows but the last message ID hasn't changed).
-  const lastMessageId = useRef<string | undefined>(messages[messages.length - 1]?.id);
   useEffect(() => {
+    const prev = prevCount.current;
+    prevCount.current = messages.length;
     const currentLastId = messages[messages.length - 1]?.id;
-    const countGrew = messages.length > prevMessageCount.current;
-    prevMessageCount.current = messages.length;
 
-    // If the last message ID changed, a new message arrived at the bottom.
-    if (countGrew && currentLastId !== lastMessageId.current) {
-      lastMessageId.current = currentLastId;
+    if (prev > 0 && currentLastId !== lastMessageId.current) {
       bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-    } else {
-      lastMessageId.current = currentLastId;
     }
+    lastMessageId.current = currentLastId;
   }, [messages]);
 
   // IntersectionObserver on the top sentinel triggers loadMore when the user
@@ -50,11 +48,14 @@ export function ChatThread({ messages, hasMore, loadingHistory, loadMore }: Chat
           const prevScrollHeight = container?.scrollHeight ?? 0;
 
           void loadMore().then(() => {
-            // After React re-renders the prepended messages, shift scrollTop by
-            // the height delta so the user stays at the same visual position.
-            if (container) {
-              container.scrollTop += container.scrollHeight - prevScrollHeight;
-            }
+            // Defer until after the browser paints the prepended messages;
+            // React's setState is async so scrollHeight hasn't grown yet
+            // by the time the promise resolves.
+            requestAnimationFrame(() => {
+              if (container) {
+                container.scrollTop += container.scrollHeight - prevScrollHeight;
+              }
+            });
           });
         }
       },
