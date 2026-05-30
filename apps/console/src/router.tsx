@@ -20,6 +20,7 @@ const WorkspacePage = lazy(() =>
 const WizardPage = lazy(() => import('./pages/WizardPage'));
 const ContactsPage = lazy(() => import('./pages/ContactsPage'));
 const JobsPage = lazy(() => import('./pages/JobsPage'));
+const TasksPage = lazy(() => import('./pages/TasksPage'));
 const ChatPage = lazy(() => import('./pages/ChatPage'));
 
 const rootRoute = createRootRoute({
@@ -116,6 +117,12 @@ const jobsRoute = createRoute({
   component: JobsPage,
 });
 
+const tasksRoute = createRoute({
+  getParentRoute: () => authedRoute,
+  path: '/tasks',
+  component: TasksPage,
+});
+
 const routeTree = rootRoute.addChildren([
   authedRoute.addChildren([
     dashboardRoute,
@@ -123,6 +130,7 @@ const routeTree = rootRoute.addChildren([
     setupRoute,
     contactsRoute,
     jobsRoute,
+    tasksRoute,
     settingsRoute.addChildren([autonomyRoute, workspaceRoute]),
   ]),
   loginRoute,
