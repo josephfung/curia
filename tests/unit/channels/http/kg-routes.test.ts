@@ -107,12 +107,10 @@ describe('knowledgeGraphRoutes', () => {
       sessions: new Map(),
     });
 
-    // /old/chat is excluded here — it redirects to /chat (see the test below)
-    for (const path of ['/old/contacts', '/old/tasks']) {
-      const response = await app.inject({ method: 'GET', url: path });
-      expect(response.statusCode).toBe(200);
-      expect(response.body).toContain('Knowledge Graph');
-    }
+    // /old/chat and /old/tasks are excluded here — they redirect (see tests below)
+    const response = await app.inject({ method: 'GET', url: '/old/contacts' });
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toContain('Knowledge Graph');
 
     await app.close();
   });
@@ -130,6 +128,23 @@ describe('knowledgeGraphRoutes', () => {
     const response = await app.inject({ method: 'GET', url: '/old/chat' });
     expect(response.statusCode).toBe(302);
     expect(response.headers['location']).toBe('/chat');
+
+    await app.close();
+  });
+
+  it('redirects /old/tasks to /tasks', async () => {
+    const app = Fastify();
+    await app.register(knowledgeGraphRoutes, {
+      pool,
+      logger: createLogger(),
+      webAppBootstrapSecret: 'secret-1',
+      secureCookies: false,
+      sessions: new Map(),
+    });
+
+    const response = await app.inject({ method: 'GET', url: '/old/tasks' });
+    expect(response.statusCode).toBe(302);
+    expect(response.headers['location']).toBe('/tasks');
 
     await app.close();
   });
