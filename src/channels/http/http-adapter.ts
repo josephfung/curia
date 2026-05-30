@@ -115,18 +115,11 @@ export class HttpAdapter {
       // Use routeOptions.url (the registered pattern) so query strings don't break the match.
       const routeUrl = request.routeOptions.url ?? '';
       if (routeUrl === '/api/health') return;
-      // KG web app routes bypass bearer auth — the app shell, static assets, and
-      // /auth exchange need no token; /api/kg/* routes enforce their own session/secret.
-      // Identity routes bypass bearer auth — they enforce their own bootstrap secret auth.
-      // Job routes bypass bearer auth — the dashboard accesses them via session cookie,
-      // and jobRoutes calls assertSecret on every handler.
+      // These routes bypass bearer auth and enforce their own auth internally.
       if (
         routeUrl === '/' ||         // @fastify/static registers GET / for index.html when wildcard:false
         routeUrl === '/*' ||        // console SPA catch-all for client-side routes (/login, etc.)
         routeUrl === '/auth' ||
-        routeUrl === '/old' ||      // legacy UI shell — exact matches prevent accidental
-        routeUrl === '/old/*' ||    // bypass for any future /old-prefixed routes
-        routeUrl.startsWith('/assets') ||
         routeUrl.startsWith('/api/kg') ||
         routeUrl.startsWith('/api/identity') ||
         routeUrl.startsWith('/api/jobs') ||

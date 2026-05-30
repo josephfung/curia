@@ -1233,3 +1233,325 @@ table.records-table tbody tr.active td { background: transparent; }
   font-family: inherit;
   font-size: 13px;
 }
+
+/* ── KG page ─────────────────────────────────────────────────── */
+
+/* Three-column layout: [sidebar] [canvas] [detail drawer] */
+.kg-layout {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* Left sidebar: search box + node list */
+.kg-sidebar {
+  width: 240px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--app-border);
+  background: var(--app-card);
+  overflow: hidden;
+}
+
+.kg-sidebar-search {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--app-border-soft);
+  display: flex;
+  gap: 6px;
+}
+
+.kg-sidebar-search input {
+  flex: 1;
+  height: 30px;
+  padding: 0 8px;
+  border: 1px solid var(--app-input-bd);
+  border-radius: 6px;
+  background: var(--app-bg);
+  color: var(--app-fg);
+  font-family: inherit;
+  font-size: 12px;
+  outline: none;
+}
+
+.kg-sidebar-search input:focus {
+  border-color: var(--app-teal);
+  box-shadow: 0 0 0 2px var(--app-teal-soft);
+}
+
+.kg-sidebar-search button {
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--app-input-bd);
+  border-radius: 6px;
+  background: var(--app-bg);
+  color: var(--app-fg-muted);
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.12s, color 0.12s;
+}
+
+.kg-sidebar-search button:hover {
+  background: var(--app-muted);
+  color: var(--app-fg);
+}
+
+.kg-sidebar-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px;
+}
+
+.kg-node-card {
+  padding: 8px 10px;
+  border: 1px solid var(--app-border);
+  border-radius: 6px;
+  margin-bottom: 4px;
+  cursor: pointer;
+  background: transparent;
+  transition: background 0.12s, border-color 0.12s;
+  text-align: left;
+  width: 100%;
+}
+
+.kg-node-card:hover {
+  background: var(--app-row-hover);
+  border-color: var(--app-teal);
+}
+
+.kg-node-card-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--app-fg);
+  margin-bottom: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kg-node-card-meta {
+  font-size: 11px;
+  color: var(--app-fg-muted);
+}
+
+/* Center: graph canvas + toolbar above */
+.kg-canvas-wrap {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+  position: relative;
+}
+
+.kg-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--app-border-soft);
+  flex-shrink: 0;
+  background: var(--app-card);
+}
+
+.kg-toolbar-label {
+  font-size: 11px;
+  color: var(--app-fg-muted);
+  margin-right: 4px;
+}
+
+.kg-color-btn {
+  height: 24px;
+  padding: 0 10px;
+  border: 1px solid var(--app-input-bd);
+  border-radius: 12px;
+  background: transparent;
+  color: var(--app-fg-muted);
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+
+.kg-color-btn:hover {
+  background: var(--app-muted);
+  color: var(--app-fg);
+}
+
+.kg-color-btn.active {
+  background: var(--app-teal-soft);
+  border-color: var(--app-teal);
+  color: var(--app-teal);
+}
+
+.kg-status {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--app-fg-subtle);
+  font-family: 'JetBrains Mono', monospace;
+}
+
+/* Cytoscape canvas container — fills remaining height */
+.kg-canvas {
+  flex: 1;
+  min-height: 0;
+  background: var(--app-bg-sunken);
+}
+
+/* Right: read-only node detail panel */
+.kg-detail-drawer {
+  width: 320px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--app-border);
+  background: var(--app-card);
+  box-shadow: var(--shadow-drawer);
+  overflow: hidden;
+}
+
+.kg-detail-header {
+  padding: 14px 16px 10px;
+  border-bottom: 1px solid var(--app-border-soft);
+  flex-shrink: 0;
+}
+
+.kg-detail-header-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.kg-detail-badges {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.kg-detail-title {
+  font-family: 'Lora', Georgia, serif;
+  font-size: 1.125rem;
+  font-weight: 500;
+  color: var(--app-fg);
+  line-height: 1.3;
+  word-break: break-word;
+  margin: 0;
+}
+
+.kg-detail-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 14px 16px;
+}
+
+.kg-detail-field {
+  margin-bottom: 12px;
+}
+
+.kg-detail-field-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--app-fg-subtle);
+  margin-bottom: 2px;
+}
+
+.kg-detail-field-value {
+  font-size: 12px;
+  color: var(--app-fg);
+  word-break: break-word;
+}
+
+.kg-detail-field-value.mono {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+}
+
+/* Properties key/value table inside the detail panel */
+.kg-props-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+  margin-top: 4px;
+}
+
+.kg-props-table td {
+  padding: 3px 6px 3px 0;
+  vertical-align: top;
+  color: var(--app-fg-muted);
+}
+
+.kg-props-table td:first-child {
+  font-weight: 500;
+  color: var(--app-fg);
+  width: 40%;
+  padding-right: 10px;
+}
+
+/* Badge variants for KG node types (extend the existing badge styles) */
+.badge-kg-person       { background: rgba(71,129,137,0.12); color: #478189; border: 1px solid rgba(71,129,137,0.3); }
+.badge-kg-organization { background: rgba(107,174,214,0.12); color: #4174C8; border: 1px solid rgba(107,174,214,0.3); }
+.badge-kg-project      { background: rgba(126,107,168,0.12); color: #7E6BA8; border: 1px solid rgba(126,107,168,0.3); }
+.badge-kg-decision     { background: rgba(201,135,74,0.12); color: #C9874A; border: 1px solid rgba(201,135,74,0.3); }
+.badge-kg-event        { background: rgba(94,158,107,0.12); color: #5E9E6B; border: 1px solid rgba(94,158,107,0.3); }
+.badge-kg-concept      { background: rgba(136,136,136,0.12); color: #888888; border: 1px solid rgba(136,136,136,0.3); }
+.badge-kg-fact         { background: rgba(68,68,68,0.12); color: #888888; border: 1px solid rgba(68,68,68,0.3); }
+
+/* Badge variants for sensitivity */
+.badge-kg-public       { background: rgba(94,158,107,0.12); color: #5E9E6B; border: 1px solid rgba(94,158,107,0.3); }
+.badge-kg-internal     { background: rgba(65,116,200,0.12); color: #4174C8; border: 1px solid rgba(65,116,200,0.3); }
+.badge-kg-confidential { background: rgba(201,135,74,0.12); color: #C9874A; border: 1px solid rgba(201,135,74,0.3); }
+.badge-kg-restricted   { background: rgba(232,96,64,0.12); color: #E86040; border: 1px solid rgba(232,96,64,0.3); }
+
+/* Mobile: stack sidebar above canvas, hide detail drawer inline */
+@media (max-width: 768px) {
+  .kg-layout { flex-direction: column; }
+
+  .kg-sidebar {
+    width: 100%;
+    max-height: 200px;
+    border-right: none;
+    border-bottom: 1px solid var(--app-border);
+  }
+
+  .kg-detail-drawer {
+    position: fixed;
+    inset: 0;
+    width: 100%;
+    z-index: 200;
+    box-shadow: none;
+  }
+
+  /* Mobile search bar under topbar */
+  .kg-mobile-search {
+    display: flex;
+    gap: 6px;
+    padding: 8px 16px;
+    border-bottom: 1px solid var(--app-border-soft);
+    background: var(--app-card);
+  }
+
+  .kg-mobile-search input {
+    flex: 1;
+    height: 34px;
+    padding: 0 10px;
+    border: 1px solid var(--app-input-bd);
+    border-radius: 6px;
+    background: var(--app-bg);
+    color: var(--app-fg);
+    font-family: inherit;
+    font-size: 13px;
+    outline: none;
+  }
+}
+
+@media (min-width: 769px) {
+  .kg-mobile-search { display: none; }
+}

@@ -220,7 +220,7 @@ describe('KG chat routes', () => {
 });
 
 describe('KG web UI shell', () => {
-  it('GET /old — response contains Chat nav button and #view-chat section', async () => {
+  it('GET /old — returns 404 now that the legacy UI has been removed', async () => {
     const app = Fastify();
     await app.register(cookie);
     await app.register(knowledgeGraphRoutes, {
@@ -234,12 +234,7 @@ describe('KG web UI shell', () => {
 
     const response = await app.inject({ method: 'GET', url: '/old' });
 
-    expect(response.statusCode).toBe(200);
-    expect(response.headers['content-type']).toMatch(/text\/html/);
-    expect(response.body).toContain('id="nav-chat"');
-    expect(response.body).toContain('id="view-chat"');
-    // Confirm the nav button routes to 'chat' (not 'coming-soon').
-    expect(response.body).toContain("navigate('chat'");
+    expect(response.statusCode).toBe(404);
 
     await app.close();
   });

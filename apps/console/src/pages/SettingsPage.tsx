@@ -340,6 +340,7 @@ function SettingsLayout({ activeSection, children }: SettingsLayoutProps) {
     const routes: Record<string, string> = {
       contacts:  '/contacts',
       jobs:      '/jobs',
+      kg:        '/kg',
       autonomy:  '/settings/autonomy',
       settings:  '/settings/workspace',
       dashboard: '/',

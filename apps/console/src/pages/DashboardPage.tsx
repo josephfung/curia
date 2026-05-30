@@ -18,6 +18,7 @@ export default function DashboardPage() {
     const routes: Record<string, string> = {
       contacts: '/contacts',
       jobs:     '/jobs',
+      kg:       '/kg',
       autonomy: '/settings/autonomy',
       settings: '/settings/autonomy',
       wizard:   '/setup',

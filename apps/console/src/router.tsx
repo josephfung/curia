@@ -21,6 +21,7 @@ const WizardPage = lazy(() => import('./pages/WizardPage'));
 const ContactsPage = lazy(() => import('./pages/ContactsPage'));
 const JobsPage = lazy(() => import('./pages/JobsPage'));
 const TasksPage = lazy(() => import('./pages/TasksPage'));
+const KgPage = lazy(() => import('./pages/KgPage'));
 const ChatPage = lazy(() => import('./pages/ChatPage'));
 
 const rootRoute = createRootRoute({
@@ -123,6 +124,16 @@ const tasksRoute = createRoute({
   component: TasksPage,
 });
 
+const kgRoute = createRoute({
+  getParentRoute: () => authedRoute,
+  path: '/kg',
+  validateSearch: (search: Record<string, unknown>) => ({
+    q: typeof search['q'] === 'string' ? search['q'] : undefined,
+    node: typeof search['node'] === 'string' ? search['node'] : undefined,
+  }),
+  component: KgPage,
+});
+
 const routeTree = rootRoute.addChildren([
   authedRoute.addChildren([
     dashboardRoute,
@@ -131,6 +142,7 @@ const routeTree = rootRoute.addChildren([
     contactsRoute,
     jobsRoute,
     tasksRoute,
+    kgRoute,
     settingsRoute.addChildren([autonomyRoute, workspaceRoute]),
   ]),
   loginRoute,

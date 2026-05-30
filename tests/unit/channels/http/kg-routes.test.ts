@@ -80,76 +80,7 @@ describe('knowledgeGraphRoutes', () => {
     await app.close();
   });
 
-  it('serves the UI shell at /old', async () => {
-    const app = Fastify();
-    await app.register(knowledgeGraphRoutes, {
-      pool,
-      logger: createLogger(),
-      webAppBootstrapSecret: 'secret-1',
-      secureCookies: false,
-      sessions: new Map(),
-    });
-
-    const response = await app.inject({ method: 'GET', url: '/old' });
-    expect(response.statusCode).toBe(200);
-    expect(response.body).toContain('Knowledge Graph');
-
-    await app.close();
-  });
-
-  it('serves the UI shell at /old/* sub-paths', async () => {
-    const app = Fastify();
-    await app.register(knowledgeGraphRoutes, {
-      pool,
-      logger: createLogger(),
-      webAppBootstrapSecret: 'secret-1',
-      secureCookies: false,
-      sessions: new Map(),
-    });
-
-    // /old/chat and /old/tasks are excluded here — they redirect (see other redirect tests)
-    const response = await app.inject({ method: 'GET', url: '/old/contacts' });
-    expect(response.statusCode).toBe(200);
-    expect(response.body).toContain('Knowledge Graph');
-
-    await app.close();
-  });
-
-  it('redirects /old/chat to /chat', async () => {
-    const app = Fastify();
-    await app.register(knowledgeGraphRoutes, {
-      pool,
-      logger: createLogger(),
-      webAppBootstrapSecret: 'secret-1',
-      secureCookies: false,
-      sessions: new Map(),
-    });
-
-    const response = await app.inject({ method: 'GET', url: '/old/chat' });
-    expect(response.statusCode).toBe(302);
-    expect(response.headers['location']).toBe('/chat');
-
-    await app.close();
-  });
-
-  it('redirects /old/tasks to /tasks', async () => {
-    const app = Fastify();
-    await app.register(knowledgeGraphRoutes, {
-      pool,
-      logger: createLogger(),
-      webAppBootstrapSecret: 'secret-1',
-      secureCookies: false,
-      sessions: new Map(),
-    });
-
-    const response = await app.inject({ method: 'GET', url: '/old/tasks' });
-    expect(response.statusCode).toBe(302);
-    expect(response.headers['location']).toBe('/tasks');
-
-    await app.close();
-  });
-
-  it('returns 404 at / pending the new console', async () => {
+  it('returns 404 at / (console app handles that route, not kg.ts)', async () => {
     const app = Fastify();
     await app.register(knowledgeGraphRoutes, {
       pool,
