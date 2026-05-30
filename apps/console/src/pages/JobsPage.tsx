@@ -417,7 +417,7 @@ function JobEditDrawer({ job, creating, onClose, onSaved, onDeleted }: DrawerPro
 
 type StatusFilter = 'all' | JobStatus;
 
-const ALL_STATUSES: JobStatus[] = ['pending', 'running', 'suspended', 'completed', 'cancelled', 'failed'];
+const ALL_STATUSES: JobStatus[] = ['pending', 'running', 'suspended', 'paused', 'completed', 'cancelled', 'failed'];
 
 export default function JobsPage() {
   const [theme, setTheme] = useTheme();
@@ -439,6 +439,9 @@ export default function JobsPage() {
   }, [mobileOpen]);
 
   const load = useCallback(async () => {
+    // Clear stale state before each fetch so error and data cannot coexist.
+    setLoadError(null);
+    setJobs([]);
     try {
       const res = await apiFetch('/api/jobs');
       if (!res.ok) throw new Error(await errorMessage(res));

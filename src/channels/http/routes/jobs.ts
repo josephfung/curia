@@ -108,8 +108,12 @@ export async function jobRoutes(
       const job = await schedulerService.getJob(result.jobId);
       if (!job) {
         // Extremely unlikely: job was created then immediately cancelled between
-        // the insert and this read.
-        return reply.status(404).send({ error: 'Job not found after creation' });
+        // the insert and this read. Use 500 — the job exists in the DB, the
+        // failure is on our side (read-back), not the client's request.
+        return reply.status(500).send({
+          error: 'Job was created but could not be retrieved — refresh to see it.',
+          jobId: result.jobId,
+        });
       }
 
       return reply.status(201).send({ job });
@@ -141,14 +145,15 @@ export async function jobRoutes(
       runAt !== undefined ||
       body.task_payload !== undefined;
 
-    // Existence check: return 404 now rather than letting a downstream no-op
-    // UPDATE silently succeed or the unsuspend path throw an opaque error.
-    const existing = await schedulerService.getJob(id);
-    if (!existing) {
-      return reply.status(404).send({ error: 'Job not found' });
-    }
-
     try {
+      // Existence check inside try so any DB error is caught and serialized
+      // consistently with the rest of the route, rather than surfacing as an
+      // unstructured Fastify 500.
+      const existing = await schedulerService.getJob(id);
+      if (!existing) {
+        return reply.status(404).send({ error: 'Job not found' });
+      }
+
       // Setting status to 'pending' is the unsuspend/unpause path.
       if (body.status === 'pending') {
         await schedulerService.unsuspendJob(id);
