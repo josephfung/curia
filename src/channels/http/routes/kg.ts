@@ -8,6 +8,7 @@ import type { ContactService } from '../../../contacts/contact-service.js';
 import type { ContactStatus, TrustLevel } from '../../../contacts/types.js';
 import { MessageRejectedError, type EventRouter } from '../event-router.js';
 import { assertSecret, compareSecrets, hashToken, type SessionStore } from '../session-auth.js';
+import { markdownToHtml } from '../../../utils/markdown-to-html.js';
 
 export interface KnowledgeGraphRouteOptions {
   pool: Pool;
@@ -791,7 +792,7 @@ export async function knowledgeGraphRoutes(
 
     try {
       const content = await responsePromise;
-      return reply.send({ reply: content, conversationId });
+      return reply.send({ reply: content, html: markdownToHtml(content), conversationId });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       logger.error({ err, conversationId }, 'KG chat message handling failed');
@@ -852,5 +853,103 @@ export async function knowledgeGraphRoutes(
       clearInterval(heartbeat);
       cleanup();
     });
+  });
+
+  /**
+   * GET /api/kg/chat/history — fetch paginated chat history from working_memory.
+   *
+   * Query params:
+   *   - conversationId: string (required)
+   *   - before: string (optional ISO timestamp — returns messages older than this cursor)
+   *   - limit: number (optional, default 25, max 50)
+   *
+   * Returns messages in chronological order (oldest first) so the client can
+   * prepend them to the thread. Fetches one extra row to determine hasMore.
+   *
+   * Only user/assistant turns are returned — system turns (synthetic summaries
+   * inserted by the summarisation pass) are excluded since they are internal
+   * artifacts not intended for display.
+   */
+  app.get('/api/kg/chat/history', async (request, reply) => {
+    if (!assertSecret(request, reply, webAppBootstrapSecret, sessions)) return;
+
+    const query = request.query as {
+      conversationId?: string;
+      before?: string;
+      limit?: string;
+    };
+
+    if (typeof query.conversationId !== 'string' || query.conversationId.trim().length === 0) {
+      return reply.status(400).send({ error: 'Missing required query param: conversationId' });
+    }
+    const conversationId = query.conversationId.trim();
+
+    const rawLimit = parseInt(query.limit ?? '25', 10);
+    const limit = isNaN(rawLimit) || rawLimit < 1 ? 25 : Math.min(rawLimit, 50);
+
+    // Validate the before cursor: must be a parseable ISO date if provided.
+    let beforeDate: Date | undefined;
+    if (query.before !== undefined && query.before.trim().length > 0) {
+      beforeDate = new Date(query.before);
+      if (isNaN(beforeDate.getTime())) {
+        return reply.status(400).send({ error: 'Invalid before param: must be an ISO timestamp' });
+      }
+    }
+
+    interface HistoryRow {
+      id: string;
+      role: string;
+      content: string;
+      created_at: Date;
+    }
+
+    try {
+      // Fetch limit+1 rows so we can tell if there are more pages without a COUNT query.
+      // Rows arrive newest-first; we reverse after slicing to serve them chronologically.
+      let result;
+      if (beforeDate) {
+        result = await pool.query<HistoryRow>(
+          `SELECT id, role, content, created_at
+           FROM working_memory
+           WHERE conversation_id = $1
+             AND archived = false
+             AND role IN ('user', 'assistant')
+             AND created_at < $2
+           ORDER BY created_at DESC
+           LIMIT $3`,
+          [conversationId, beforeDate.toISOString(), limit + 1],
+        );
+      } else {
+        result = await pool.query<HistoryRow>(
+          `SELECT id, role, content, created_at
+           FROM working_memory
+           WHERE conversation_id = $1
+             AND archived = false
+             AND role IN ('user', 'assistant')
+           ORDER BY created_at DESC
+           LIMIT $2`,
+          [conversationId, limit + 1],
+        );
+      }
+
+      const hasMore = result.rows.length > limit;
+      // Take at most `limit` rows, then restore chronological order.
+      const rows = result.rows.slice(0, limit).reverse();
+
+      const messages = rows.map((row) => ({
+        id: row.id,
+        role: row.role as 'user' | 'assistant',
+        content: row.content,
+        // Pre-render HTML only for assistant messages — user text is displayed as-is.
+        html: row.role === 'assistant' ? markdownToHtml(row.content) : null,
+        timestamp: row.created_at.toISOString(),
+      }));
+
+      return reply.send({ messages, hasMore });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.error({ err, conversationId }, 'KG chat history fetch failed');
+      return reply.status(500).send({ error: message });
+    }
   });
 }
