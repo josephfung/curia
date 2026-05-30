@@ -107,7 +107,7 @@ describe('knowledgeGraphRoutes', () => {
       sessions: new Map(),
     });
 
-    // /old/chat and /old/tasks are excluded here — they redirect (see tests below)
+    // /old/chat and /old/tasks are excluded here — they redirect (see other redirect tests)
     const response = await app.inject({ method: 'GET', url: '/old/contacts' });
     expect(response.statusCode).toBe(200);
     expect(response.body).toContain('Knowledge Graph');
