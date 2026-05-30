@@ -384,14 +384,19 @@ export default function KgPage() {
   const loadHeroGraph = useCallback(async () => {
     const cy = cyRef.current;
     if (!cy || cy.elements().length > 0) return;
+    neighborhoodAbortRef.current?.abort();
+    const controller = new AbortController();
+    neighborhoodAbortRef.current = controller;
     setStatus('Loading…');
     try {
-      const res = await apiFetch('/api/kg/graph?limit=20');
+      const res = await apiFetch('/api/kg/graph?limit=20', { signal: controller.signal });
       if (!res.ok) throw new Error(await errorMessage(res));
       const data = await res.json() as { nodes: ApiKgNode[]; edges: ApiKgEdge[] };
+      if (cy.destroyed()) return;
       renderGraph(cy, data);
       setStatus(`${data.nodes.length} nodes · ${data.edges.length} edges`);
     } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') return;
       console.error('[KgPage] hero graph load failed:', err);
       setStatus('Failed to load graph');
     }
@@ -482,7 +487,7 @@ export default function KgPage() {
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') return;
       console.error('[KgPage] expand failed:', err);
-      setStatus(String(err));
+      setStatus('Failed to expand');
     }
   }
 
@@ -537,11 +542,16 @@ export default function KgPage() {
 
     // Restore ?node= selection from URL (e.g. browser back/refresh).
     if (initialNode) {
+      neighborhoodAbortRef.current?.abort();
+      const controller = new AbortController();
+      neighborhoodAbortRef.current = controller;
       void (async () => {
-        const res = await apiFetch(
-          `/api/kg/graph?node_id=${encodeURIComponent(initialNode)}&depth=2`,
-        );
-        if (res.ok) {
+        try {
+          const res = await apiFetch(
+            `/api/kg/graph?node_id=${encodeURIComponent(initialNode)}&depth=2`,
+            { signal: controller.signal },
+          );
+          if (!res.ok) throw new Error(await errorMessage(res));
           const data = await res.json() as { nodes: ApiKgNode[]; edges: ApiKgEdge[] };
           const cy = cyRef.current;
           if (cy && !cy.destroyed()) {
@@ -550,6 +560,10 @@ export default function KgPage() {
           }
           const found = data.nodes.find(n => n.id === initialNode);
           if (found) setSelectedNode(found);
+        } catch (err) {
+          if (err instanceof DOMException && err.name === 'AbortError') return;
+          console.error('[KgPage] ?node= restore failed:', err);
+          setStatus('Failed to restore node');
         }
       })();
     } else {
