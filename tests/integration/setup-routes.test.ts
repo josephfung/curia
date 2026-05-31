@@ -45,6 +45,15 @@ describeIf('/api/setup/* routes', () => {
     pool = new Pool({ connectionString: DATABASE_URL });
     await pool.query('SELECT 1 FROM contacts LIMIT 0');
 
+    // Other test files (notably ceo-bootstrap.test.ts) may leave a principal contact
+    // behind. Clear it so the partial unique index doesn't trip the "creates" cases.
+    // Destructive — see the file header comment for required DB posture.
+    await pool.query(
+      `DELETE FROM contact_channel_identities WHERE contact_id IN
+         (SELECT id FROM contacts WHERE system_role = 'principal')`,
+    );
+    await pool.query(`DELETE FROM contacts WHERE system_role = 'principal'`);
+
     const buildApp = async (setupRequiredAtBoot: boolean) => {
       const app = Fastify();
       // rate-limit plugin is required because setup routes attach { config: { rateLimit: ... } }
