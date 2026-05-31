@@ -122,6 +122,19 @@ export async function ensurePrincipalContact(
             `ensure-principal: winner contact ${winnerRow.id} has no kg_node_id after rescue UPDATE — inspect contacts table`,
           );
         }
+        // Loser-path orphan cleanup: if the winner already had their own kg_node_id
+        // before we got here, the node we created at line 80 is now unreferenced.
+        // The NOT EXISTS guard makes the delete safe under further concurrent races
+        // (some other process may have linked our node to their own contact between
+        // our UPDATE recheck above and this DELETE).
+        if (winnerKgNodeId !== kgNodeId) {
+          await pool.query(
+            `DELETE FROM kg_nodes
+             WHERE id = $1
+               AND NOT EXISTS (SELECT 1 FROM contacts WHERE kg_node_id = $1)`,
+            [kgNodeId],
+          );
+        }
         logger.info(
           { contactId: winnerRow.id, kgNodeId: winnerKgNodeId },
           'ensure-principal: concurrent race resolved — existing principal used',

@@ -961,7 +961,18 @@ async function main(): Promise<void> {
   //   For now we assume Nylas + Signal together, so this path is only for dev flexibility.
   let outboundGateway: OutboundGateway | undefined;
   const hasAnyOutboundClient = nylasClientMap.size > 0 || !!signalRpcClient;
-  if (hasAnyOutboundClient && outboundFilter) {
+  // Defense-in-depth for setup-required mode: even though inbound email/Signal
+  // adapters are skipped (so no inbound traffic should be triggering outbound
+  // replies), the OutboundGateway is also used by notifiers (suspension, recovery,
+  // approval) and skills that send directly. Skipping the gateway construction
+  // here closes those non-reply send paths too — there is no email/Signal
+  // egress at all until the operator completes setup and restarts.
+  if (setupRequiredAtBoot && hasAnyOutboundClient) {
+    logger.warn(
+      'SETUP-REQUIRED mode: outbound gateway NOT initialized — no email/Signal egress (notifiers, autonomy alerts) until restart',
+    );
+  }
+  if (hasAnyOutboundClient && outboundFilter && !setupRequiredAtBoot) {
     outboundGateway = new OutboundGateway({
       nylasClients: nylasClientMap.size > 0 ? nylasClientMap : undefined,
       signalClient: signalRpcClient,
