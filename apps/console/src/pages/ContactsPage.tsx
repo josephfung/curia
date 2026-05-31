@@ -1,5 +1,4 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
-import { useNavigate } from '@tanstack/react-router';
 import { MobileMenuContext } from '../context/MobileMenu.js';
 import { Sidebar } from '../components/Sidebar.js';
 import { Topbar, TopbarSearch, TopbarDivider } from '../components/Topbar.js';
@@ -261,7 +260,6 @@ function ContactEditDrawer({ contact, creating, onClose, onSaved, onDeleted }: D
 export default function ContactsPage() {
   const [theme, setTheme] = useTheme();
   const [mobileOpen, setMobileOpen] = useState(false);
-  const navigate = useNavigate();
 
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -290,24 +288,6 @@ export default function ContactsPage() {
   }, []);
 
   useEffect(() => { void load(); }, [load]);
-
-  function handleNavigate(view: string) {
-    const routes: Record<string, string> = {
-      contacts:  '/contacts',
-      kg:        '/kg',
-      tasks:     '/tasks',
-      jobs:      '/jobs',
-      autonomy:  '/settings/autonomy',
-      settings:  '/settings/autonomy',
-      wizard:    '/setup',
-    };
-    const to = routes[view];
-    if (to) {
-      navigate({ to }).catch(err => {
-        console.error(`[ContactsPage] navigation to ${to} failed:`, err);
-      });
-    }
-  }
 
   const counts = useMemo(() => ({
     all:         contacts.length,
@@ -370,7 +350,7 @@ export default function ContactsPage() {
   return (
     <MobileMenuContext.Provider value={{ open: mobileOpen, setOpen: setMobileOpen }}>
       <div className="app-root">
-        <Sidebar activeView="contacts" onNavigate={handleNavigate} theme={theme} onThemeChange={setTheme} />
+        <Sidebar activeView="contacts" theme={theme} onThemeChange={setTheme} />
         {mobileOpen && (
           <div
             className="sidebar-backdrop"

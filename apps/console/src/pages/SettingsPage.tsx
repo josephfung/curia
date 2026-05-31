@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Link, useNavigate } from '@tanstack/react-router';
+import { Link } from '@tanstack/react-router';
 import { MobileMenuContext } from '../context/MobileMenu';
 import { Sidebar } from '../components/Sidebar';
 import { Topbar } from '../components/Topbar';
@@ -330,34 +330,15 @@ interface SettingsLayoutProps {
 function SettingsLayout({ activeSection, children }: SettingsLayoutProps) {
   const [theme, setTheme] = useTheme();
   const [mobileOpen, setMobileOpen] = useState(false);
-  const navigate = useNavigate();
 
   useEffect(() => {
     document.documentElement.dataset['mobileSidebar'] = mobileOpen ? 'open' : '';
   }, [mobileOpen]);
 
-  function handleNavigate(view: string) {
-    const routes: Record<string, string> = {
-      contacts:  '/contacts',
-      jobs:      '/jobs',
-      kg:        '/kg',
-      autonomy:  '/settings/autonomy',
-      settings:  '/settings/workspace',
-      dashboard: '/',
-      wizard:    '/setup',
-    };
-    const to = routes[view];
-    if (to) {
-      navigate({ to }).catch(err => {
-        console.error(`[SettingsLayout] navigation to ${to} failed:`, err);
-      });
-    }
-  }
-
   return (
     <MobileMenuContext.Provider value={{ open: mobileOpen, setOpen: setMobileOpen }}>
       <div className="app-root">
-        <Sidebar activeView="settings" onNavigate={handleNavigate} theme={theme} onThemeChange={setTheme} />
+        <Sidebar activeView="settings" theme={theme} onThemeChange={setTheme} />
         <main className="main">
           <Topbar crumb="Settings" title="Workspace" />
           <div className="settings-shell">

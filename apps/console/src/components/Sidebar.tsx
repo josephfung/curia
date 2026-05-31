@@ -18,10 +18,19 @@ type Theme = 'light' | 'system' | 'dark';
 
 interface SidebarProps {
   activeView: string;
-  onNavigate: (view: string) => void;
   theme: Theme;
   onThemeChange: (theme: Theme) => void;
 }
+
+const ROUTES: Record<string, string> = {
+  chat:     '/chat',
+  kg:       '/kg',
+  contacts: '/contacts',
+  tasks:    '/tasks',
+  jobs:     '/jobs',
+  settings: '/settings/autonomy',
+  wizard:   '/setup',
+};
 
 function ThemeToggle({ theme, onChange }: { theme: Theme; onChange: (t: Theme) => void }) {
   const options: Array<{ v: Theme; label: string }> = [
@@ -47,7 +56,7 @@ function ThemeToggle({ theme, onChange }: { theme: Theme; onChange: (t: Theme) =
   );
 }
 
-export function Sidebar({ activeView, onNavigate, theme, onThemeChange }: SidebarProps) {
+export function Sidebar({ activeView, theme, onThemeChange }: SidebarProps) {
   const [memoryOpen, setMemoryOpen] = useState(true);
   const [settingsOpen, setSettingsOpen] = useState(
     activeView === 'settings' || activeView === 'wizard',
@@ -55,8 +64,13 @@ export function Sidebar({ activeView, onNavigate, theme, onThemeChange }: Sideba
   const { setOpen } = useMobileMenu();
   const navigate = useNavigate();
 
-  const go = (v: string) => {
-    onNavigate(v);
+  const go = (view: string) => {
+    const to = ROUTES[view];
+    if (to) {
+      navigate({ to }).catch((err: unknown) => {
+        console.error(`[Sidebar] navigation to ${to} failed:`, err);
+      });
+    }
     setOpen(false);
   };
 
@@ -69,12 +83,7 @@ export function Sidebar({ activeView, onNavigate, theme, onThemeChange }: Sideba
       <div className="nav-group">
         <button
           className={`nav-item${activeView === 'chat' ? ' active' : ''}`}
-          onClick={() => {
-            navigate({ to: '/chat' }).catch((err: unknown) => {
-              console.error('[Sidebar] navigation to /chat failed:', err);
-            });
-            setOpen(false);
-          }}
+          onClick={() => go('chat')}
         >
           <IconChat />
           Chat

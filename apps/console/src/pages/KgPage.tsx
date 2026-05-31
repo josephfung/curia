@@ -611,33 +611,12 @@ export default function KgPage() {
     });
   }
 
-  // ── Navigation ────────────────────────────────────────────────────────────
-
-  function handleNavigate(view: string) {
-    const routes: Record<string, string> = {
-      contacts:  '/contacts',
-      jobs:      '/jobs',
-      kg:        '/kg',
-      tasks:     '/',
-      chat:      '/chat',
-      autonomy:  '/settings/autonomy',
-      settings:  '/settings/autonomy',
-      wizard:    '/setup',
-    };
-    const to = routes[view];
-    if (to) {
-      navigate({ to }).catch(err => {
-        console.error(`[KgPage] navigation to ${to} failed:`, err);
-      });
-    }
-  }
-
   // ── Render ────────────────────────────────────────────────────────────────
 
   return (
     <MobileMenuContext.Provider value={{ open: mobileOpen, setOpen: setMobileOpen }}>
       <div className="app-root">
-        <Sidebar activeView="kg" onNavigate={handleNavigate} theme={theme} onThemeChange={setTheme} />
+        <Sidebar activeView="kg" theme={theme} onThemeChange={setTheme} />
         {mobileOpen && (
           <div
             className="sidebar-backdrop"
