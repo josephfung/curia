@@ -1,6 +1,12 @@
 // Pure helper functions for the wizard — no React, no DOM, fully testable.
 
 export interface WizardState {
+  // Step 1 — About you. Captured separately from the assistant identity below
+  // and POSTed to /api/setup/principal so the principal contact exists before
+  // the rest of the form is saved. Auto-skipped when a principal is already
+  // present (e.g. CEO_PRIMARY_EMAIL deployments).
+  principalName: string;
+  // Steps 2–5 — assistant identity, tone, posture, review.
   name: string;
   title: string;
   signature: string;
@@ -25,6 +31,7 @@ export interface LocalIdentity {
 }
 
 export const DEFAULT_WIZARD_STATE: WizardState = {
+  principalName: '',
   name: 'Alex Curia',
   title: 'Executive Assistant to the CEO',
   signature: '',
@@ -34,6 +41,10 @@ export const DEFAULT_WIZARD_STATE: WizardState = {
   posture: 'conservative',
   preferences: '',
 };
+
+// Backend's POST /api/setup/principal accepts up to 200 characters; enforce the
+// same ceiling client-side so the user sees the error before a round-trip.
+export const PRINCIPAL_NAME_MAX_LENGTH = 200;
 
 // All valid tone words — mirrors BASELINE_TONE_OPTIONS in src/identity/types.ts.
 // @TODO: consider exposing this via the API so both sides stay in sync automatically.
@@ -109,9 +120,24 @@ export function postureReviewDesc(posture: WizardState['posture']): string {
   return map[posture];
 }
 
-// Returns true if the user can advance past step 1 (name is required).
-export function validateStep1(name: string): boolean {
+// Returns true if a string is non-empty after trimming. Shared validator for
+// both the principal name (step 1) and the assistant name (step 2) — both
+// follow the same "must not be blank" rule.
+export function validateNonEmptyName(name: string): boolean {
   return name.trim().length > 0;
+}
+
+// Returns null if the principal name passes both the non-empty and length
+// checks; otherwise returns an error string suitable for inline display.
+// Two checks instead of a single boolean because the user-visible message
+// needs to distinguish "missing" from "too long".
+export function validatePrincipalName(name: string): string | null {
+  const trimmed = name.trim();
+  if (trimmed.length === 0) return 'Your name is required.';
+  if (trimmed.length > PRINCIPAL_NAME_MAX_LENGTH) {
+    return `Name must be ${PRINCIPAL_NAME_MAX_LENGTH} characters or fewer.`;
+  }
+  return null;
 }
 
 // Maps WizardState onto an existing LocalIdentity, appending preferences.

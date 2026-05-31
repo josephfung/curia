@@ -7,7 +7,9 @@ import {
   verbosityReviewDesc,
   directnessReviewDesc,
   postureReviewDesc,
-  validateStep1,
+  validateNonEmptyName,
+  validatePrincipalName,
+  PRINCIPAL_NAME_MAX_LENGTH,
   buildIdentityPayload,
   type WizardState,
   type LocalIdentity,
@@ -125,19 +127,47 @@ describe('postureReviewDesc', () => {
   });
 });
 
-// ── validateStep1 ─────────────────────────────────────────────────────────────
+// ── validateNonEmptyName ──────────────────────────────────────────────────────
 
-describe('validateStep1', () => {
+describe('validateNonEmptyName', () => {
   it('returns true for a non-empty name', () => {
-    expect(validateStep1('Alex')).toBe(true);
+    expect(validateNonEmptyName('Alex')).toBe(true);
   });
 
   it('returns false for an empty name', () => {
-    expect(validateStep1('')).toBe(false);
+    expect(validateNonEmptyName('')).toBe(false);
   });
 
   it('returns false for whitespace-only name', () => {
-    expect(validateStep1('   ')).toBe(false);
+    expect(validateNonEmptyName('   ')).toBe(false);
+  });
+});
+
+// ── validatePrincipalName ─────────────────────────────────────────────────────
+
+describe('validatePrincipalName', () => {
+  it('returns null for a valid name', () => {
+    expect(validatePrincipalName('Jane Doe')).toBeNull();
+  });
+
+  it('returns an error message for an empty name', () => {
+    expect(validatePrincipalName('')).toBe('Your name is required.');
+  });
+
+  it('returns an error message for whitespace-only input', () => {
+    expect(validatePrincipalName('   ')).toBe('Your name is required.');
+  });
+
+  it('returns an error when over the length ceiling', () => {
+    const tooLong = 'X'.repeat(PRINCIPAL_NAME_MAX_LENGTH + 1);
+    expect(validatePrincipalName(tooLong)).toBe(
+      `Name must be ${PRINCIPAL_NAME_MAX_LENGTH} characters or fewer.`,
+    );
+  });
+
+  it('accepts a name exactly at the length ceiling', () => {
+    const atLimit = 'X'.repeat(PRINCIPAL_NAME_MAX_LENGTH);
+    expect(validatePrincipalName(atLimit)).toBeNull();
   });
 });
 
@@ -153,6 +183,7 @@ describe('buildIdentityPayload', () => {
   };
 
   const state: WizardState = {
+    principalName: 'Jane Doe',
     name: 'Alex Curia',
     title: 'Executive Assistant to the CEO',
     signature: 'Best, Alex',
