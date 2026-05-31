@@ -1161,6 +1161,9 @@ table.records-table tbody tr.active td { background: transparent; }
 .chat-messages {
   flex: 1;
   overflow-y: auto;
+  /* Reserve scrollbar gutter symmetrically so the content column stays
+     centered even on platforms with classic (non-overlay) scrollbars. */
+  scrollbar-gutter: stable both-edges;
   /* On wide screens, keep content in an 800px column centered in the pane.
      max(24px, …) ensures at least 24px side padding on narrow viewports. */
   padding: 20px max(24px, calc((100% - 800px) / 2));
