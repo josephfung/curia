@@ -306,35 +306,72 @@ describeIf('/api/setup/* routes', () => {
 
   describe('POST /api/setup/restart', () => {
     // The restart endpoint refuses (409) unless setup prerequisites are
-    // actually complete. Seed the prerequisites for the happy-path test so
-    // the assertion exercises the success branch.
+    // actually complete. Seed the prerequisites for the happy-path test.
+    //
+    // Robust against parallel test files (vitest workers share the DB): the
+    // prerequisite checks only need ANY principal to exist and ANY wizard/api
+    // identity version to exist, so we write our own and tolerate whatever
+    // else is in the database. INSERT...ON CONFLICT keeps this idempotent
+    // even when a parallel test file's principal still exists.
     async function seedSetupPrerequisites() {
-      await appSetupMode.inject({
-        method: 'POST',
-        url: '/api/setup/principal',
-        headers: { ...AUTH_HEADER, 'content-type': 'application/json' },
-        payload: { name: `${TEST_LABEL_PREFIX} RestartHappy` },
-      });
-      // Write a wizard-flagged identity version so isIdentityConfigured() returns true.
+      // Principal contact. The partial unique index on system_role='principal'
+      // means at most one row can have that role; ON CONFLICT DO NOTHING is
+      // the cheapest way to express "make sure one exists, don't care whose".
       await pool.query(
-        `INSERT INTO office_identity_versions (version, config, changed_by, note)
-         VALUES (
-           (SELECT COALESCE(MAX(version), 0) + 1 FROM office_identity_versions),
-           '{}'::jsonb,
-           'wizard',
-           'setup-routes test'
-         )`,
+        `INSERT INTO contacts (id, display_name, role, status, trust_level, system_role, created_at, updated_at)
+         VALUES (gen_random_uuid(), $1, 'ceo', 'confirmed', 'ceo', 'principal', now(), now())
+         ON CONFLICT DO NOTHING`,
+        [`${TEST_LABEL_PREFIX} RestartHappy`],
       );
+
+      // Identity version. UNIQUE(version) is the only constraint; the
+      // max+1 expression races with concurrent inserters but pg raises 23505
+      // rather than silently producing dup keys — retry once is enough for
+      // a two-worker collision in practice.
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          await pool.query(
+            `INSERT INTO office_identity_versions (version, config, changed_by, note)
+             VALUES (
+               (SELECT COALESCE(MAX(version), 0) + 1 FROM office_identity_versions),
+               '{}'::jsonb,
+               'wizard',
+               'setup-routes test'
+             )`,
+          );
+          break;
+        } catch (err) {
+          if ((err as { code?: string }).code !== '23505' || attempt === 2) throw err;
+        }
+      }
     }
 
     it('schedules a process exit when setup is complete in setup-required mode', async () => {
       await seedSetupPrerequisites();
+
+      // Sanity-check that the seed actually landed before exercising the
+      // endpoint under test. Integration tests share a single DB across
+      // worker processes, so a precondition that "should be" true can be
+      // raced out from under us (e.g. another file's beforeAll wiping
+      // principals). Asserting here means a 409 from the restart POST is
+      // unambiguous — it'd be a real bug in the endpoint, not seed flake.
+      const statusRes = await appSetupMode.inject({
+        method: 'GET',
+        url: '/api/setup/status',
+        headers: AUTH_HEADER,
+      });
+      const status = JSON.parse(statusRes.body);
+      expect(status.principalExists, 'principal must exist for happy-path seed').toBe(true);
+      expect(status.identityConfigured, 'identity must be configured for happy-path seed').toBe(true);
+
       const res = await appSetupMode.inject({
         method: 'POST',
         url: '/api/setup/restart',
         headers: AUTH_HEADER,
       });
-      expect(res.statusCode).toBe(200);
+      // If this assertion ever fails again on CI, surface the response body
+      // so the failure tells us which branch the endpoint took.
+      expect(res.statusCode, `restart POST body: ${res.body}`).toBe(200);
       const body = JSON.parse(res.body);
       expect(body.restarting).toBe(true);
       expect(typeof body.exitDelayMs).toBe('number');
@@ -345,17 +382,30 @@ describeIf('/api/setup/* routes', () => {
     });
 
     it('returns 409 in setup-required mode when prerequisites are not met', async () => {
-      // No principal, no identity — the endpoint must refuse rather than
-      // exiting into an unrecoverable churn loop.
+      // Wipe any principal a parallel test file (notably ceo-bootstrap.test.ts)
+      // may have created so the prerequisite check resolves to false. The
+      // wider cleanup in the outer beforeEach only filters by display_name
+      // prefix, which doesn't catch other files' principals. We can't
+      // realistically wipe identity versions (other workers may be racing
+      // inserts into office_identity_versions), so we don't assert on it.
+      await pool.query(
+        `DELETE FROM contact_channel_identities WHERE contact_id IN
+           (SELECT id FROM contacts WHERE system_role = 'principal')`,
+      );
+      await pool.query(`DELETE FROM contacts WHERE system_role = 'principal'`);
+
       const res = await appSetupMode.inject({
         method: 'POST',
         url: '/api/setup/restart',
         headers: AUTH_HEADER,
       });
-      expect(res.statusCode).toBe(409);
+      expect(res.statusCode, `restart POST body: ${res.body}`).toBe(409);
       expect(processExitCalls).toHaveLength(0);
       const body = JSON.parse(res.body);
       expect(body.principalExists).toBe(false);
+      // identityConfigured may be true (left over from a parallel test) or
+      // false (clean run). Either way, !principalExists is enough to trip
+      // the 409 branch — that's what we assert.
       expect(typeof body.identityConfigured).toBe('boolean');
     });
 
