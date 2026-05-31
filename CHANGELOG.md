@@ -16,6 +16,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Removed
 
 - **Legacy `/old` dev proxy** — removed dead proxy entries and stale comment now that the old hand-rolled SPA is fully replaced by the React console.
+- **Spec 12** — updated to reflect the React console replacing the Cytoscape SPA; corrected entry point (`GET /` not `GET /kg`) and removed outdated Cytoscape serving notes.
 
 ### Fixed
 
