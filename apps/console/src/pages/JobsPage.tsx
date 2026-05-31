@@ -355,7 +355,8 @@ function JobEditDrawer({ job, creating, onClose, onSaved, onDeleted }: DrawerPro
                 </div>
               )}
 
-              {job?.lastRunAt && (
+              {/* Show when any prior-run data exists — lastRunAt may be null for timed_out jobs recovered by recoverStuckJob */}
+              {(job?.lastRunAt || job?.lastRunOutcome || job?.lastRunSummary) && (
                 <>
                   <div className="form-grid">
                     <div className="form-field">
