@@ -906,18 +906,23 @@ async function main(): Promise<void> {
   ];
   const readinessReport = await runReadinessChecks(readinessChecks);
 
-  // setup-required mode: if the principal check is the only thing failing, keep
-  // the process running with just the dispatcher + HTTP adapter so the operator
-  // can complete the onboarding wizard via the web UI (issue #771 / #766). The
-  // wizard's POST /api/setup/principal creates the principal contact; the next
-  // restart picks it up and brings email/Signal up.
+  // setup-required mode: if every readiness failure is a recoverable-by-setup
+  // one (today only `principal-contact`), keep the process running with just the
+  // dispatcher + HTTP adapter so the operator can complete the onboarding wizard
+  // via the web UI (issue #771 / #766). The wizard's POST /api/setup/principal
+  // creates the principal contact; the next restart picks it up and brings
+  // email/Signal up. Any failure NOT in the allow-list remains fatal.
   //
-  // Any other readiness failure remains fatal — only the principal-contact
-  // failure is recoverable through the in-app flow.
+  // Encode this as `.every(...)` over an explicit allow-list — not as a
+  // failures.length===1 check — so the moment a second readiness check is
+  // added, partial setup-required mode doesn't silently disappear if both
+  // checks fail. Any new check needs to be deliberately added to the allow-list
+  // before it counts as recoverable-by-in-app-flow.
+  const RECOVERABLE_BY_SETUP: ReadonlySet<string> = new Set(['principal-contact']);
   const setupRequiredAtBoot =
     !readinessReport.ready &&
-    readinessReport.failures.length === 1 &&
-    readinessReport.failures[0]!.name === 'principal-contact';
+    readinessReport.failures.length > 0 &&
+    readinessReport.failures.every((f) => RECOVERABLE_BY_SETUP.has(f.name));
 
   if (!readinessReport.ready && !setupRequiredAtBoot) {
     for (const failure of readinessReport.failures) {
