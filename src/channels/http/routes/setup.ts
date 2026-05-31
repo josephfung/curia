@@ -193,7 +193,17 @@ export async function setupRoutes(
       { bootStartedAt, delayMs: RESTART_EXIT_DELAY_MS },
       'POST /api/setup/restart: scheduling process exit so supervisor can bring Curia back in normal mode',
     );
-    scheduleProcessExit(RESTART_EXIT_DELAY_MS);
+    // The 200 reply has already gone out by the time the timer fires, but if
+    // scheduleProcessExit itself throws synchronously, Fastify's default error
+    // handler would try to send another response (and warn about it). The
+    // injected wrapper today is a plain setTimeout — won't throw — but the
+    // contract allows any impl. Log and proceed; the client has its 200 and
+    // the polling loop's timeout is the safety net if the exit never lands.
+    try {
+      scheduleProcessExit(RESTART_EXIT_DELAY_MS);
+    } catch (err) {
+      logger.error({ err }, 'POST /api/setup/restart: scheduleProcessExit threw — restart will not occur');
+    }
     return reply.send({ restarting: true, exitDelayMs: RESTART_EXIT_DELAY_MS });
   });
 }

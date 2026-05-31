@@ -264,8 +264,16 @@ export class HttpAdapter {
         // Inject the actual exit trigger here rather than have setup.ts call
         // process.exit directly; this keeps the route handler unit-testable
         // and keeps the "kill the process" capability narrowly scoped.
+        //
+        // No .unref() on the timer: the whole point of this scheduled exit is
+        // to be the forcing function that brings the process down so the
+        // supervisor can boot it fresh. .unref() would let Node exit early
+        // (defeating the explicit exit), or — worse — let the process hang
+        // if some other ref is keeping the loop alive and the timer never
+        // fires. The 500ms delay is short enough that the active ref doesn't
+        // meaningfully prolong a healthy shutdown.
         scheduleProcessExit: (delayMs) => {
-          setTimeout(() => process.exit(0), delayMs).unref();
+          setTimeout(() => process.exit(0), delayMs);
         },
       });
     }
