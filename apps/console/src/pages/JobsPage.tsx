@@ -352,16 +352,31 @@ function JobEditDrawer({ job, creating, onClose, onSaved, onDeleted }: DrawerPro
               )}
 
               {job?.lastRunAt && (
-                <div className="form-grid">
-                  <div className="form-field">
-                    <label>Last run</label>
-                    <div className="form-field-readonly cell-mono">{formatDate(job.lastRunAt)}</div>
+                <>
+                  <div className="form-grid">
+                    <div className="form-field">
+                      <label>Last run</label>
+                      <div className="form-field-readonly cell-mono">{formatDate(job.lastRunAt)}</div>
+                    </div>
+                    <div className="form-field">
+                      <label>Outcome</label>
+                      <div className="form-field-readonly">
+                        {job.lastRunOutcome
+                          ? <span className={`status-pill ${job.lastRunOutcome}`}>{job.lastRunOutcome}</span>
+                          : '—'
+                        }
+                      </div>
+                    </div>
                   </div>
-                  <div className="form-field">
-                    <label>Outcome</label>
-                    <div className="form-field-readonly">{job.lastRunOutcome ?? '—'}</div>
-                  </div>
-                </div>
+                  {job.lastRunSummary && (
+                    <div className="form-field">
+                      <label>Last run summary</label>
+                      <div className="form-field-readonly" style={{ fontSize: 12, wordBreak: 'break-word' }}>
+                        {job.lastRunSummary}
+                      </div>
+                    </div>
+                  )}
+                </>
               )}
 
               {job?.lastError && (
@@ -436,7 +451,7 @@ export default function JobsPage() {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>('pending');
   const [sort, setSort] = useState<{ key: keyof Job; dir: 'asc' | 'desc' }>({ key: 'createdAt', dir: 'desc' });
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
@@ -673,7 +688,12 @@ export default function JobsPage() {
                             </td>
                             <td className="cell-mono">{formatSchedule(j)}</td>
                             <td className="cell-mono col-updated">{formatDate(j.nextRunAt)}</td>
-                            <td>{j.lastRunOutcome ?? <span className="cell-muted">—</span>}</td>
+                            <td>
+                              {j.lastRunOutcome
+                                ? <span className={`status-pill ${j.lastRunOutcome}`}>{j.lastRunOutcome}</span>
+                                : <span className="cell-muted">—</span>
+                              }
+                            </td>
                             <td className="cell-mono col-updated">{formatDate(j.createdAt)}</td>
                             <td>
                               <div className="cell-actions" onClick={e => e.stopPropagation()}>

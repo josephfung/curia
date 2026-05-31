@@ -13,6 +13,14 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Added
+
+- **Scheduled jobs — last run outcome and summary** — Jobs page now shows `last_run_outcome` as a colour-coded badge (green/red/amber) in the table and edit drawer, and surfaces the agent-written `last_run_summary` in the detail panel when present. (#241)
+
+### Changed
+
+- **Scheduled jobs — default filter** — Jobs page opens on the "Pending" filter instead of "All", reducing noise on instances with a long job history.
+
 ### Removed
 
 - **Legacy `/old` dev proxy** — removed dead proxy entries and stale comment now that the old hand-rolled SPA is fully replaced by the React console.
