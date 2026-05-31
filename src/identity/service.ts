@@ -4,47 +4,22 @@
 // Initialized before the coordinator boots so ${office_identity_block} is always available.
 //
 // Load precedence at startup (initialize()):
-//   1. If office_identity_current exists in DB → load from DB (runtime edits take precedence)
-//   2. If no DB record → load from config/office-identity.yaml and seed as version 1
-//   3. If neither exists → fail fast with a clear error message
+//   1. If office_identity_current exists in DB → load from DB (the authoritative source)
+//   2. If no DB record → seed the DB with DEFAULT_OFFICE_IDENTITY (changedBy='system_default')
+//      so the wizard has a starting point on first boot.
 //
-// Hot reload is triggered by:
-//   - chokidar file watcher on config/office-identity.yaml (writes a new DB version, then calls reload())
-//   - POST /api/identity/reload endpoint
+// Hot reload is triggered by POST /api/identity/reload (called by the wizard after PUT).
+// The YAML-file + chokidar watcher path has been removed — the DB is the single source
+// of truth and the wizard is the only edit path.
 //
 // Every identity change emits a config.change bus event via the audit trail.
 
-import * as fs from 'node:fs';
-import yaml from 'js-yaml';
-import chokidar, { type FSWatcher } from 'chokidar';
 import type { Pool } from 'pg';
 import type { Logger } from '../logger.js';
 import type { EventBus } from '../bus/bus.js';
 import { createConfigChange } from '../bus/events.js';
 import { type OfficeIdentity, type OfficeIdentityVersion, BASELINE_TONE_OPTIONS } from './types.js';
-
-// Raw YAML shape from config/office-identity.yaml.
-// Kept separate from OfficeIdentity so we control the snake_case → camelCase mapping explicitly.
-interface RawOfficeIdentityYaml {
-  office?: {
-    assistant?: {
-      name?: string;
-      title?: string;
-      email_signature?: string;
-    };
-    tone?: {
-      baseline?: string[];
-      verbosity?: number;
-      directness?: number;
-    };
-    behavioral_preferences?: string[];
-    decision_style?: {
-      external_actions?: string;
-      internal_analysis?: string;
-    };
-    constraints?: string[];
-  };
-}
+import { DEFAULT_OFFICE_IDENTITY } from './defaults.js';
 
 // Map verbosity score to prose guidance.
 // Bands are approximate — these are guidelines, not hard cutoffs.
@@ -118,35 +93,29 @@ function buildDiffSummary(prev: OfficeIdentity, next: OfficeIdentity): string {
 export class OfficeIdentityService {
   // In-memory cached identity — populated during initialize(), refreshed via reload().
   private cached: OfficeIdentity | null = null;
-  private watcher: FSWatcher | null = null;
 
   constructor(
     private readonly pool: Pool,
     private readonly logger: Logger,
     private readonly bus: EventBus,
-    // Absolute path to config/office-identity.yaml (resolved in index.ts).
-    private readonly configFilePath: string,
   ) {}
 
   /**
-   * Initialize the service: load identity from DB or YAML, start file watcher.
+   * Initialize the service: load identity from DB, or seed in-code defaults if absent.
    * Must be called before the coordinator boots.
    */
   async initialize(): Promise<void> {
-    // Try to load from DB first — DB takes precedence over the file.
     const dbIdentity = await this.loadFromDb();
     if (dbIdentity) {
       this.cached = dbIdentity;
       this.logger.info('Office identity loaded from DB');
-    } else {
-      // No DB record — seed from YAML file as version 1.
-      const fileIdentity = this.loadFromFile();
-      await this.update(fileIdentity, 'file_load', 'Initial load from config/office-identity.yaml');
-      this.logger.info('Office identity seeded from config/office-identity.yaml (version 1)');
+      return;
     }
-
-    // Start the file watcher so YAML edits take effect on the next coordinator turn.
-    this.startFileWatcher();
+    // No DB record — seed with the in-code defaults so the wizard has a starting
+    // point and so ${office_identity_block} can compile to something sensible
+    // before the operator first edits.
+    await this.update(DEFAULT_OFFICE_IDENTITY, 'system_default', 'Initial seed from in-code defaults');
+    this.logger.info('Office identity seeded from in-code defaults (version 1)');
   }
 
   /**
@@ -369,23 +338,13 @@ export class OfficeIdentityService {
   }
 
   /**
-   * Stop the file watcher. Called during graceful shutdown.
+   * Graceful-shutdown hook. Currently a no-op (no background watchers or timers).
+   * Kept on the API so existing shutdown sequences in src/index.ts continue to
+   * compile and so future background work (e.g. periodic DB-pointer integrity
+   * checks) has a place to land.
    */
   async stop(): Promise<void> {
-    if (this.watcher) {
-      try {
-        await this.watcher.close();
-        this.logger.debug('Office identity file watcher stopped');
-      } catch (err) {
-        this.logger.error({ err }, 'Error closing office identity file watcher');
-        // Don't rethrow — callers (shutdown handler, tests) must be able to proceed
-        // even if the watcher close fails. The process is going away anyway.
-      } finally {
-        // Null out even if close() throws so repeated stop() calls don't try to
-        // close an already-errored watcher.
-        this.watcher = null;
-      }
-    }
+    // intentionally empty
   }
 
   // -- Private helpers --
@@ -409,64 +368,6 @@ export class OfficeIdentityService {
       }
       throw err;
     }
-  }
-
-  /** Load the identity config from the YAML file. Throws if file is missing or invalid. */
-  private loadFromFile(): OfficeIdentity {
-    let raw: string;
-    try {
-      raw = fs.readFileSync(this.configFilePath, 'utf-8');
-    } catch (err) {
-      throw new Error(
-        `Cannot read office identity config at ${this.configFilePath}: ` +
-        `${err instanceof Error ? err.message : String(err)}. ` +
-        'Create config/office-identity.yaml to configure the office identity.',
-      );
-    }
-
-    let parsed: RawOfficeIdentityYaml;
-    try {
-      parsed = yaml.load(raw) as RawOfficeIdentityYaml;
-    } catch (err) {
-      throw new Error(
-        `Invalid YAML in ${this.configFilePath}: ${err instanceof Error ? err.message : String(err)}`,
-      );
-    }
-
-    return this.mapYamlToIdentity(parsed);
-  }
-
-  /** Map the raw YAML shape to the normalized OfficeIdentity interface. */
-  private mapYamlToIdentity(raw: RawOfficeIdentityYaml): OfficeIdentity {
-    const o = raw?.office;
-    if (!o) {
-      throw new Error('config/office-identity.yaml is missing the top-level "office:" key');
-    }
-    if (!o.assistant?.name) {
-      throw new Error('config/office-identity.yaml is missing office.assistant.name');
-    }
-
-    const externalActions = (o.decision_style?.external_actions ?? 'conservative') as 'conservative' | 'balanced' | 'proactive';
-    const internalAnalysis = (o.decision_style?.internal_analysis ?? 'proactive') as 'conservative' | 'balanced' | 'proactive';
-
-    return {
-      assistant: {
-        name: o.assistant.name,
-        title: o.assistant.title ?? '',
-        emailSignature: o.assistant.email_signature ?? '',
-      },
-      tone: {
-        baseline: o.tone?.baseline ?? [],
-        verbosity: o.tone?.verbosity ?? 50,
-        directness: o.tone?.directness ?? 75,
-      },
-      behavioralPreferences: o.behavioral_preferences ?? [],
-      decisionStyle: {
-        externalActions,
-        internalAnalysis,
-      },
-      constraints: o.constraints ?? [],
-    };
   }
 
   /** Validate that the identity config is well-formed before persisting. */
@@ -504,57 +405,5 @@ export class OfficeIdentityService {
     if (!validDecisionStyles.includes(config.decisionStyle.internalAnalysis)) {
       throw new Error(`decision_style.internal_analysis must be conservative | balanced | proactive`);
     }
-  }
-
-  /** Start watching the config file for changes. Writes a new DB version on change. */
-  private startFileWatcher(): void {
-    // chokidar watches the config file and triggers a reload on any change.
-    // The write-then-reload sequence ensures the DB is always authoritative:
-    // the file change writes a new DB version, then reload() reads from DB.
-    this.watcher = chokidar.watch(this.configFilePath, {
-      // Ignore initial add event — we've already loaded the file.
-      ignoreInitial: true,
-      // Stabilization delay to avoid multiple rapid events from a single save.
-      awaitWriteFinish: { stabilityThreshold: 300, pollInterval: 100 },
-    });
-
-    this.watcher.on('change', () => {
-      this.logger.info({ path: this.configFilePath }, 'Office identity file changed — reloading');
-      // Two-step: parse the file first, then write to DB.
-      // Separated so parse errors (operator-fixable by editing the file again) are
-      // distinguished from DB write errors (infrastructure failure requiring separate attention).
-      Promise.resolve()
-        .then(async () => {
-          // Step 1: parse the updated YAML.
-          // On failure (bad YAML, missing required fields), log and abort. The existing
-          // in-memory identity is kept. The operator can fix the file and save again.
-          let newIdentity: OfficeIdentity;
-          try {
-            newIdentity = this.loadFromFile();
-          } catch (err: unknown) {
-            this.logger.error(
-              { err, path: this.configFilePath },
-              'Failed to parse office identity YAML — keeping existing identity. Fix the file and save again to retry.',
-            );
-            return;
-          }
-
-          // Step 2: persist to DB. This is a more serious failure — the file was valid
-          // but we couldn't commit the new version. Likely a DB connectivity issue.
-          await this.update(newIdentity, 'file_load', 'Hot reload from config/office-identity.yaml');
-        })
-        .catch((err: unknown) => {
-          this.logger.error(
-            { err },
-            'Failed to write office identity to DB during hot reload — keeping existing identity. Check database connectivity.',
-          );
-        });
-    });
-
-    this.watcher.on('error', (err: unknown) => {
-      this.logger.error({ err }, 'Office identity file watcher error');
-    });
-
-    this.logger.debug({ path: this.configFilePath }, 'Office identity file watcher started');
   }
 }

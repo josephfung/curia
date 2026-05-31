@@ -383,7 +383,7 @@ interface ConfigChangePayload {
   config_type: string;          // e.g. 'office_identity'
   version: number;              // new version number
   previous_version: number;     // previous version number (0 if this is the first)
-  changed_by: string;           // 'wizard' | 'api' | 'file_load'
+  changed_by: string;           // 'wizard' | 'api' | 'system_default' | 'file_load' (legacy)
   note?: string;                // optional human-readable reason
   diff_summary: string;         // human-readable summary of what changed
 }

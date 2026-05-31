@@ -241,8 +241,9 @@ async function main(): Promise<void> {
   // Must be initialized after migrations (schema) and bus (emits config.change events),
   // and before agents boot (coordinator needs ${office_identity_block}).
   // Fatal on failure: without an identity, the coordinator system prompt is incomplete.
-  const identityConfigPath = path.resolve(import.meta.dirname, '../config/office-identity.yaml');
-  const officeIdentityService = new OfficeIdentityService(pool, logger, bus, identityConfigPath);
+  // First boot seeds DEFAULT_OFFICE_IDENTITY from src/identity/defaults.ts; subsequent
+  // boots load whichever version the wizard or API last wrote.
+  const officeIdentityService = new OfficeIdentityService(pool, logger, bus);
   try {
     await officeIdentityService.initialize();
     logger.info({ name: officeIdentityService.get().assistant.name }, 'Office identity initialized');
@@ -933,9 +934,13 @@ async function main(): Promise<void> {
   if (setupRequiredAtBoot) {
     // Single banner log line — the operator's main signal that the system isn't fully live.
     // External adapters skipped below; HTTP stays up to serve the onboarding wizard.
+    //
+    // Log the setup path only, not a fully-qualified URL: the process binds to 0.0.0.0
+    // on `httpPort`, and the operator-facing origin (localhost vs Docker host vs
+    // production hostname) is environment-dependent and not knowable here.
     logger.warn(
-      { setupUrl: `http://localhost:${config.httpPort}/setup` },
-      'SETUP-REQUIRED mode: no principal contact found. External channels (email/Signal) are NOT running. Complete onboarding at the setup URL above, then restart this process to bring them online.',
+      { setupPath: '/setup', httpPort: config.httpPort },
+      'SETUP-REQUIRED mode: no principal contact found. External channels (email/Signal) are NOT running. Open the wizard at the /setup path on this host, complete onboarding, then restart this process to bring external channels online.',
     );
   } else {
     logger.info('All startup readiness checks passed');

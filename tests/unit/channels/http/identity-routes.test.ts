@@ -34,7 +34,7 @@ describe('GET /api/identity — configured flag', () => {
 
   beforeEach(() => sessions.clear());
 
-  it('returns configured: false when only file_load versions exist', async () => {
+  it('returns configured: false when only seed versions exist (no wizard/api edits)', async () => {
     const pool = {
       query: vi.fn().mockResolvedValue({ rows: [{ configured: false }] }),
     } as unknown as Pool;
