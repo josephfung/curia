@@ -1009,6 +1009,162 @@ describe('AgentRuntime tool-use loop', () => {
     expect(mockExecution.invoke).toHaveBeenCalledTimes(4);
     expect(responseContent).toBeTruthy();
   });
+
+  // -- Empty-response recovery (Bug #801) --
+  // When Gemini (or any model) returns empty text after tool use AND the recovery
+  // prompt also fails, the runtime must emit agent.error so the scheduler can mark
+  // the job failed. Previously only agent.response(isError: true) was emitted,
+  // which the scheduler subscriber skips — leaving the job stuck in "running" until
+  // the watchdog times it out 70 minutes later.
+
+  it('publishes agent.error when empty-response recovery fails after tool use', async () => {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+
+    const provider: LLMProvider = {
+      id: 'mock',
+      chat: vi.fn()
+        .mockResolvedValueOnce({
+          // Turn 1: request a tool
+          type: 'tool_use' as const,
+          toolCalls: [{ id: 'call-recovery-1', name: 'web-fetch', input: { url: 'https://example.com' } }],
+          usage: { inputTokens: 50, outputTokens: 10, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+          provenance: MOCK_PROVENANCE,
+        })
+        .mockResolvedValueOnce({
+          // Turn 2: empty text after tool result (the Gemini "do not output" pattern)
+          type: 'text' as const,
+          content: '',
+          usage: { inputTokens: 100, outputTokens: 0, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+          provenance: MOCK_PROVENANCE,
+        })
+        .mockResolvedValueOnce({
+          // Turn 3: recovery prompt also returns empty — recovery fails
+          type: 'text' as const,
+          content: '',
+          usage: { inputTokens: 120, outputTokens: 0, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+          provenance: MOCK_PROVENANCE,
+        }),
+    };
+
+    const mockExecution = {
+      invoke: vi.fn().mockResolvedValue({ success: true, data: 'page content' }),
+    } as unknown as ExecutionLayer;
+
+    const agentErrors: AgentErrorEvent[] = [];
+    bus.subscribe('agent.error', 'system', (event) => {
+      agentErrors.push(event as AgentErrorEvent);
+    });
+    const agentResponses: AgentResponseEvent[] = [];
+    bus.subscribe('agent.response', 'dispatch', (event) => {
+      agentResponses.push(event as AgentResponseEvent);
+    });
+
+    const agent = new AgentRuntime({
+      agentId: 'coordinator',
+      systemPrompt: 'You are an assistant.',
+      provider,
+      resolvedModel: 'mock-model',
+      bus,
+      logger,
+      executionLayer: mockExecution,
+      pinnedSkills: ['web-fetch'],
+      skillToolDefs: [{ name: 'web-fetch', description: 'Fetch', input_schema: { type: 'object' as const, properties: { url: { type: 'string' } }, required: ['url'] } }],
+    });
+    agent.register();
+
+    const task = createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'conv-recovery-fail',
+      channelId: 'cli',
+      senderId: 'user',
+      content: 'Fetch something',
+      parentEventId: 'parent-recovery-fail',
+    });
+    await bus.publish('dispatch', task);
+
+    // 3 LLM calls: tool_use → empty text → empty recovery
+    expect(provider.chat).toHaveBeenCalledTimes(3);
+    // Response must be flagged as an error
+    expect(agentResponses).toHaveLength(1);
+    expect(agentResponses[0]!.payload.isError).toBe(true);
+    // agent.error must also be published so the scheduler receives a completion signal
+    expect(agentErrors).toHaveLength(1);
+    expect(agentErrors[0]!.payload.errorType).toBe('PROVIDER_ERROR');
+  });
+
+  it('does not publish agent.error when empty-response recovery succeeds', async () => {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+
+    const provider: LLMProvider = {
+      id: 'mock',
+      chat: vi.fn()
+        .mockResolvedValueOnce({
+          type: 'tool_use' as const,
+          toolCalls: [{ id: 'call-recovery-ok-1', name: 'web-fetch', input: { url: 'https://example.com' } }],
+          usage: { inputTokens: 50, outputTokens: 10, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+          provenance: MOCK_PROVENANCE,
+        })
+        .mockResolvedValueOnce({
+          type: 'text' as const,
+          content: '',
+          usage: { inputTokens: 100, outputTokens: 0, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+          provenance: MOCK_PROVENANCE,
+        })
+        .mockResolvedValueOnce({
+          // Recovery succeeds with non-empty text
+          type: 'text' as const,
+          content: 'Done.',
+          usage: { inputTokens: 120, outputTokens: 5, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+          provenance: MOCK_PROVENANCE,
+        }),
+    };
+
+    const mockExecution = {
+      invoke: vi.fn().mockResolvedValue({ success: true, data: 'page content' }),
+    } as unknown as ExecutionLayer;
+
+    const agentErrors: AgentErrorEvent[] = [];
+    bus.subscribe('agent.error', 'system', (event) => {
+      agentErrors.push(event as AgentErrorEvent);
+    });
+    const agentResponses: AgentResponseEvent[] = [];
+    bus.subscribe('agent.response', 'dispatch', (event) => {
+      agentResponses.push(event as AgentResponseEvent);
+    });
+
+    const agent = new AgentRuntime({
+      agentId: 'coordinator',
+      systemPrompt: 'You are an assistant.',
+      provider,
+      resolvedModel: 'mock-model',
+      bus,
+      logger,
+      executionLayer: mockExecution,
+      pinnedSkills: ['web-fetch'],
+      skillToolDefs: [{ name: 'web-fetch', description: 'Fetch', input_schema: { type: 'object' as const, properties: { url: { type: 'string' } }, required: ['url'] } }],
+    });
+    agent.register();
+
+    const task = createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'conv-recovery-ok',
+      channelId: 'cli',
+      senderId: 'user',
+      content: 'Fetch something',
+      parentEventId: 'parent-recovery-ok',
+    });
+    await bus.publish('dispatch', task);
+
+    expect(provider.chat).toHaveBeenCalledTimes(3);
+    // Recovery succeeded: normal (non-error) response
+    expect(agentResponses).toHaveLength(1);
+    expect(agentResponses[0]!.payload.isError).toBeUndefined();
+    expect(agentResponses[0]!.payload.content).toBe('Done.');
+    // No agent.error when recovery succeeds
+    expect(agentErrors).toHaveLength(0);
+  });
 });
 
 // -- Error budget enforcement tests --
