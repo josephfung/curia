@@ -918,6 +918,8 @@ input:focus, textarea:focus, select:focus {
 .status-pill.suspended::before  { background: var(--app-destructive); }
 /* Jobs: paused = amber */
 .status-pill.paused::before     { background: var(--app-amber); }
+/* last_run_outcome values — timed_out gets amber (partial/warning tone) */
+.status-pill.timed_out::before  { background: var(--app-amber); }
 
 /* Tasks: paused = blue — scoped to override the job rule above */
 .tasks-page .status-pill.paused::before { background: var(--app-blue); }
