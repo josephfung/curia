@@ -16,6 +16,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Fixed
 
 - **Console static asset auth** — `@fastify/static` v9 with `wildcard:false` registers an individual Fastify route per file in `consoleDist`, so `routeOptions.url` returns the exact asset path (e.g. `/assets/index-CU1g6HdR.js`) rather than `/*`; the old bypass list missed these routes and every static asset returned 401. Auth hook now skips bearer auth for all non-`/api/` routes.
+- **Chat max-width** — thread and composer are now constrained to an 800px column on wide desktop screens, eliminating the large empty side margins.
 
 ### Added
 
