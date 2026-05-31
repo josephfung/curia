@@ -1060,6 +1060,20 @@ export class AgentRuntime {
             },
             'LLM returned empty text response after tool use — recovery also failed, sending fallback',
           );
+          // Publish agent.error so the scheduler subscriber receives a completion signal.
+          // Without this, the scheduler only sees agent.response(isError: true), which it
+          // explicitly skips — leaving the job stuck in "running" until the watchdog fires.
+          await this.publishAgentError(
+            {
+              type: 'PROVIDER_ERROR',
+              source: 'runtime',
+              message: 'LLM returned empty text after tool use; recovery prompt also produced no output',
+              retryable: false,
+              context: { recoveryType: recovery.type, inputTokens: response.usage.inputTokens },
+              timestamp: new Date(),
+            },
+            taskEvent,
+          );
           isResponseError = true;
           responseContent = "I'm sorry, I wasn't able to formulate a response. Please try again.";
         }

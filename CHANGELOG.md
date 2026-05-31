@@ -13,6 +13,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Agent runtime** — empty-response recovery failure now publishes `agent.error` in addition to `agent.response(isError: true)`, giving the scheduler the completion signal it needs to mark the job failed instead of waiting for the watchdog timeout. (#801)
+
 ### Added
 
 - **Setup-required boot mode** — a missing principal contact no longer crash-loops the process; the dispatcher and HTTP adapter stay up while email + Signal are skipped, so the onboarding wizard can be reached at `/setup`. Restart picks up the new principal and brings external channels online. (#766, #771)
