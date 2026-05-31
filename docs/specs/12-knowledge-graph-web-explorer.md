@@ -4,24 +4,19 @@
 
 Provide a secure browser-based UI for inspecting Curia's knowledge graph directly from the existing Postgres schema (`kg_nodes`, `kg_edges`) without changing storage architecture.
 
-## Visualization layer choice
+## Implementation approach
 
-We selected **Cytoscape.js** as the visualization layer and wrapped it in Curia's Node/Fastify HTTP channel, serving the asset locally from `node_modules`.
+The original design used a hand-rolled Cytoscape.js SPA served directly by Fastify from `node_modules`. This was migrated to the React console (`apps/console/`) as part of the framework migration (#753). The console is now the sole UI; the legacy SPA has been removed.
 
-Why Cytoscape.js:
-- Mature open-source project (MIT licensed, long maintenance history).
-- Designed for interactive graph analysis (layout, styling, neighborhood-focused exploration).
-- Lightweight to embed in a single-page internal tool.
-- Works with plain JSON node/edge payloads, mapping directly to the Postgres-backed model Curia already has.
+The KG view in the React console uses the same `/api/kg/*` API routes, now rendered via React and Cytoscape.js bundled through Vite.
 
 ## Security model
 
 The web explorer is gated by `WEB_APP_BOOTSTRAP_SECRET` from `.env`:
-- `GET /kg` serves the UI shell (no graph data).
-- `GET /api/kg/nodes` requires `x-web-bootstrap-secret`.
-- `GET /api/kg/graph` requires `x-web-bootstrap-secret`.
+- `GET /` serves the React console shell (session cookie required for data).
+- All `/api/kg/*` routes require either `x-web-bootstrap-secret` header or a valid `curia_session` cookie.
 
-If `WEB_APP_BOOTSTRAP_SECRET` is missing, the feature is intentionally disabled.
+If `WEB_APP_BOOTSTRAP_SECRET` is missing, the KG API routes are not registered at all (intentional 404, not 503).
 
 ## API surface
 
@@ -33,18 +28,14 @@ If `WEB_APP_BOOTSTRAP_SECRET` is missing, the feature is intentionally disabled.
   - Query params: `node_id`, `depth`, `limit`
   - Purpose: neighborhood traversal for a selected node; falls back to recent nodes when no `node_id` is provided.
 
-## Notes
-
-This design intentionally keeps dependencies minimal and uses the existing Node.js runtime so operational dependencies stay aligned with Curia's current deployment profile.
-
 ---
 
 ## Implementation Status
 
 | Item | Status |
 |---|---|
-| `GET /kg` — serves the UI shell (Cytoscape.js single-page app) | Done |
 | `GET /api/kg/nodes` — text search with `query`, `type`, `limit` params | Done |
 | `GET /api/kg/graph` — neighborhood traversal with `node_id`, `depth`, `limit` params | Done |
 | `WEB_APP_BOOTSTRAP_SECRET` gating on all data API routes | Done |
-| Cytoscape.js served from `node_modules` (no external CDN dependency) | Done |
+| KG view ported to React console (`apps/console/src/pages/KgPage.tsx`) | Done |
+| Legacy Cytoscape SPA (`/old`) removed | Done |
