@@ -8,6 +8,11 @@
 //
 // Requires a running Postgres with migrations applied.
 // Skips gracefully when DATABASE_URL is not set.
+//
+// IMPORTANT: requires a DB with NO pre-existing principal contact. The partial
+// unique index on system_role='principal' means the "creates" case will 23505
+// if any other principal already exists. CI runs against a fresh container;
+// for local dev runs, point DATABASE_URL at an empty test database.
 
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import pg from 'pg';

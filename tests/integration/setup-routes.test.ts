@@ -6,6 +6,12 @@
 //
 // Requires a running Postgres with migrations applied.
 // Skips gracefully when DATABASE_URL is not set.
+//
+// IMPORTANT: requires a DB with NO pre-existing principal contact. The partial
+// unique index on system_role='principal' means the "creates a principal" cases
+// will 23505 if any other principal already exists in the database. CI runs
+// against a fresh container; for local dev runs, point DATABASE_URL at an empty
+// test database, not your working dev database.
 
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import Fastify, { type FastifyInstance } from 'fastify';
