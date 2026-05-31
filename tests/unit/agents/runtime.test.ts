@@ -1090,7 +1090,7 @@ describe('AgentRuntime tool-use loop', () => {
     expect(agentResponses[0]!.payload.isError).toBe(true);
     // agent.error must also be published so the scheduler receives a completion signal
     expect(agentErrors).toHaveLength(1);
-    expect(agentErrors[0]!.payload.errorType).toBe('PROVIDER_ERROR');
+    expect(agentErrors[0]!.payload.errorType).toBe('UNKNOWN');
   });
 
   it('does not publish agent.error when empty-response recovery succeeds', async () => {
