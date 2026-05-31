@@ -66,6 +66,12 @@ export interface HttpAdapterConfig {
    * Captured at boot; never changes over the process lifetime.
    */
   setupRequiredAtBoot: boolean;
+  /**
+   * ISO timestamp captured at the very start of main() so the wizard's post-
+   * setup polling loop can detect a process restart (the value changes after
+   * the supervisor brings the new process up). Exposed via GET /api/setup/status.
+   */
+  bootStartedAt: string;
 }
 
 export class HttpAdapter {
@@ -254,6 +260,13 @@ export class HttpAdapter {
         pool,
         logger,
         setupRequiredAtBoot: this.config.setupRequiredAtBoot,
+        bootStartedAt: this.config.bootStartedAt,
+        // Inject the actual exit trigger here rather than have setup.ts call
+        // process.exit directly; this keeps the route handler unit-testable
+        // and keeps the "kill the process" capability narrowly scoped.
+        scheduleProcessExit: (delayMs) => {
+          setTimeout(() => process.exit(0), delayMs).unref();
+        },
       });
     }
 

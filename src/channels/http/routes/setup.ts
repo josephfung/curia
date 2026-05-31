@@ -9,6 +9,8 @@
 // Endpoints:
 //   POST /api/setup/principal — name-only principal creation (idempotent)
 //   GET  /api/setup/status    — does the system need setup? what's done so far?
+//   POST /api/setup/restart   — terminate the process so the supervisor brings
+//                               it back into normal (non-setup-required) mode
 //
 // All routes require session cookie or x-web-bootstrap-secret authentication
 // (same pattern as identity routes). Routes are only registered when
@@ -34,6 +36,19 @@ export interface SetupRouteOptions {
    * can prompt the operator to restart once they've finished the wizard.
    */
   setupRequiredAtBoot: boolean;
+  /**
+   * ISO timestamp captured at the start of main() in src/index.ts. Exposed on
+   * GET /api/setup/status so the post-setup polling loop in the wizard can
+   * distinguish "old process still dying" from "new process up" — when this
+   * value changes across responses, the supervisor restart has completed.
+   */
+  bootStartedAt: string;
+  /**
+   * Triggers a process exit so the supervisor (Docker, systemd) can bring the
+   * process back up in normal mode. Injected for testability — production
+   * passes a small wrapper around process.exit; tests pass a spy.
+   */
+  scheduleProcessExit: (delayMs: number) => void;
 }
 
 // Match identity.ts: tighter rate limit on auth-sensitive routes (10/min vs the
@@ -48,7 +63,21 @@ export async function setupRoutes(
   app: FastifyInstance,
   options: SetupRouteOptions,
 ): Promise<void> {
-  const { webAppBootstrapSecret, sessions, pool, logger, setupRequiredAtBoot } = options;
+  const {
+    webAppBootstrapSecret,
+    sessions,
+    pool,
+    logger,
+    setupRequiredAtBoot,
+    bootStartedAt,
+    scheduleProcessExit,
+  } = options;
+
+  // Delay before process.exit so Fastify can finish flushing the 200 response.
+  // 500ms is comfortably more than the bytes-on-the-wire time for a tiny JSON
+  // body and well under the typical browser fetch timeout — the wizard's
+  // polling loop will already be running by the time the process actually dies.
+  const RESTART_EXIT_DELAY_MS = 500;
 
   function requireAuth(request: FastifyRequest, reply: FastifyReply): boolean {
     return assertSecret(request, reply, webAppBootstrapSecret, sessions);
@@ -124,6 +153,7 @@ export async function setupRoutes(
         principalExists,
         identityConfigured,
         externalAdaptersPending,
+        bootStartedAt,
       });
     } catch (err) {
       logger.error({ err }, 'GET /api/setup/status: failed to compute setup status');
@@ -131,5 +161,39 @@ export async function setupRoutes(
         error: 'Failed to compute setup status. Check server logs.',
       });
     }
+  });
+
+  // -- POST /api/setup/restart --
+  //
+  // Authoritative trigger for "I've finished setup, please come back in normal
+  // mode." Responds 200, then schedules a process exit so the supervisor
+  // (Docker restart policy, systemd, etc.) brings the process back. The wizard
+  // polls GET /api/setup/status for a different bootStartedAt + externalAdapters
+  // Pending=false to know the restart has landed.
+  //
+  // Guarded by `setupRequiredAtBoot`: a restart triggered against an already-
+  // healthy process would be a surprise side effect with no recovery story.
+  // Rejecting it here makes the endpoint inert in normal operation.
+  //
+  // In dev (`pnpm dev`), no supervisor exists — the process will die and stay
+  // dead until the developer re-runs the dev command. The wizard's polling
+  // loop times out gracefully and tells them so.
+  app.post('/api/setup/restart', AUTH_RATE, async (request, reply) => {
+    if (!requireAuth(request, reply)) return;
+
+    if (!setupRequiredAtBoot) {
+      // The process was not started in setup-required mode, so there is
+      // nothing to "come back into" — a restart here would just be downtime.
+      return reply.status(409).send({
+        error: 'Curia is already running in normal mode; no restart is needed.',
+      });
+    }
+
+    logger.warn(
+      { bootStartedAt, delayMs: RESTART_EXIT_DELAY_MS },
+      'POST /api/setup/restart: scheduling process exit so supervisor can bring Curia back in normal mode',
+    );
+    scheduleProcessExit(RESTART_EXIT_DELAY_MS);
+    return reply.send({ restarting: true, exitDelayMs: RESTART_EXIT_DELAY_MS });
   });
 }
