@@ -1,5 +1,4 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
-import { useNavigate } from '@tanstack/react-router';
 import { MobileMenuContext } from '../context/MobileMenu.js';
 import { Sidebar } from '../components/Sidebar.js';
 import { Topbar, TopbarSearch, TopbarDivider } from '../components/Topbar.js';
@@ -451,7 +450,6 @@ const ALL_STATUSES: JobStatus[] = ['pending', 'running', 'suspended', 'paused', 
 export default function JobsPage() {
   const [theme, setTheme] = useTheme();
   const [mobileOpen, setMobileOpen] = useState(false);
-  const navigate = useNavigate();
 
   const [jobs, setJobs] = useState<Job[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -483,24 +481,6 @@ export default function JobsPage() {
   }, []);
 
   useEffect(() => { void load(); }, [load]);
-
-  function handleNavigate(view: string) {
-    const routes: Record<string, string> = {
-      contacts:  '/contacts',
-      jobs:      '/jobs',
-      kg:        '/kg',
-      tasks:     '/',
-      autonomy:  '/settings/autonomy',
-      settings:  '/settings/autonomy',
-      wizard:    '/setup',
-    };
-    const to = routes[view];
-    if (to) {
-      navigate({ to }).catch(err => {
-        console.error(`[JobsPage] navigation to ${to} failed:`, err);
-      });
-    }
-  }
 
   const counts = useMemo(() => {
     const c: Record<string, number> = { all: jobs.length };
@@ -572,7 +552,7 @@ export default function JobsPage() {
   return (
     <MobileMenuContext.Provider value={{ open: mobileOpen, setOpen: setMobileOpen }}>
       <div className="app-root">
-        <Sidebar activeView="jobs" onNavigate={handleNavigate} theme={theme} onThemeChange={setTheme} />
+        <Sidebar activeView="jobs" theme={theme} onThemeChange={setTheme} />
         {mobileOpen && (
           <div
             className="sidebar-backdrop"

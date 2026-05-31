@@ -1,5 +1,4 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
-import { useNavigate } from '@tanstack/react-router';
 import { MobileMenuContext } from '../context/MobileMenu.js';
 import { Sidebar } from '../components/Sidebar.js';
 import { Topbar, TopbarSearch, TopbarDivider } from '../components/Topbar.js';
@@ -291,7 +290,6 @@ type StatusFilter = typeof STATUS_FILTERS[number];
 export default function TasksPage() {
   const [theme, setTheme] = useTheme();
   const [mobileOpen, setMobileOpen] = useState(false);
-  const navigate = useNavigate();
 
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -321,25 +319,6 @@ export default function TasksPage() {
   }, []);
 
   useEffect(() => { void load(); }, [load]);
-
-  function handleNavigate(view: string) {
-    const routes: Record<string, string> = {
-      tasks:    '/tasks',
-      contacts: '/contacts',
-      kg:       '/',
-      chat:     '/',
-      jobs:     '/',
-      autonomy: '/settings/autonomy',
-      settings: '/settings/autonomy',
-      wizard:   '/setup',
-    };
-    const to = routes[view];
-    if (to) {
-      navigate({ to }).catch(err => {
-        console.error(`[TasksPage] navigation to ${to} failed:`, err);
-      });
-    }
-  }
 
   const counts = useMemo(() => {
     const c: Record<StatusFilter, number> = { all: tasks.length, active: 0, pending: 0, paused: 0, completed: 0, failed: 0, cancelled: 0 };
@@ -403,7 +382,7 @@ export default function TasksPage() {
   return (
     <MobileMenuContext.Provider value={{ open: mobileOpen, setOpen: setMobileOpen }}>
       <div className="app-root">
-        <Sidebar activeView="tasks" onNavigate={handleNavigate} theme={theme} onThemeChange={setTheme} />
+        <Sidebar activeView="tasks" theme={theme} onThemeChange={setTheme} />
         {mobileOpen && (
           <div
             className="sidebar-backdrop"

@@ -1,5 +1,4 @@
 import { useState, useEffect } from 'react';
-import { useNavigate } from '@tanstack/react-router';
 import { MobileMenuContext } from '../context/MobileMenu.js';
 import { Sidebar } from '../components/Sidebar.js';
 import { Topbar } from '../components/Topbar.js';
@@ -11,7 +10,6 @@ import { useChatSession } from './chat/useChatSession.js';
 export default function ChatPage() {
   const [theme, setTheme] = useTheme();
   const [mobileOpen, setMobileOpen] = useState(false);
-  const navigate = useNavigate();
   const { messages, sending, hasMore, loadingHistory, send, loadMore } = useChatSession();
 
   useEffect(() => {
@@ -23,27 +21,10 @@ export default function ChatPage() {
     return () => { delete document.documentElement.dataset['mobileSidebar']; };
   }, [mobileOpen]);
 
-  function handleNavigate(view: string) {
-    const routes: Record<string, string> = {
-      contacts: '/contacts',
-      jobs:     '/jobs',
-      kg:       '/kg',
-      tasks:    '/',
-      settings: '/settings',
-      wizard:   '/setup',
-      autonomy: '/settings/autonomy',
-    };
-    const to = routes[view];
-    if (!to) return;
-    navigate({ to }).catch((err: unknown) => {
-      console.error(`[ChatPage] navigation to ${to} failed:`, err);
-    });
-  }
-
   return (
     <MobileMenuContext.Provider value={{ open: mobileOpen, setOpen: setMobileOpen }}>
       <div className="app-root">
-        <Sidebar activeView="chat" onNavigate={handleNavigate} theme={theme} onThemeChange={setTheme} />
+        <Sidebar activeView="chat" theme={theme} onThemeChange={setTheme} />
         <main className="main">
           <Topbar crumb="Curia" title="Chat" />
           <div className="chat-page">
