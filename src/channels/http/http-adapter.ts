@@ -119,13 +119,18 @@ export class HttpAdapter {
       //
       // @fastify/static v9 with wildcard:false scans consoleDist at startup and registers
       // an individual Fastify route per file (e.g. /assets/index-CU1g6HdR.js). These exact
-      // paths don't match a '/*' check, so we gate on !startsWith('/api/') instead.
+      // paths don't match a '/*' check, so we gate on isApiPath() instead.
       //
       // We also check request.url as a fallback: the console '/*' catch-all absorbs GET
-      // requests to unregistered paths, including probes like GET /api/nonexistent. Without
-      // the request.url check, those would get routeUrl='/*', skip auth, and silently return
-      // the React app HTML. Checking the actual URL keeps unregistered /api/ paths enforced.
-      if (!routeUrl.startsWith('/api/') && !request.url.startsWith('/api/')) return;
+      // requests to unregistered paths (e.g. GET /api/nonexistent, GET /api). Without
+      // the request.url check, those get routeUrl='/*', skip auth, and silently return
+      // the React app HTML. Checking the actual URL keeps unregistered /api paths enforced.
+      //
+      // isApiPath matches '/api' exactly and '/api/...' — avoids false positives like
+      // '/api-docs' while catching the bare '/api' case that startsWith('/api/') misses.
+      const isApiPath = (p: string) => p === '/api' || p.startsWith('/api/');
+      const requestPath = (request.url ?? '').split('?')[0] ?? '';
+      if (!isApiPath(routeUrl) && !isApiPath(requestPath)) return;
 
       // These API routes use session-cookie auth and bypass bearer token enforcement.
       if (
