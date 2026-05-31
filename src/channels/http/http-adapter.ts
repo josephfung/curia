@@ -35,6 +35,7 @@ import { knowledgeGraphRoutes } from './routes/kg.js';
 import { identityRoutes } from './routes/identity.js';
 import { executiveRoutes } from './routes/executive.js';
 import { autonomyRoutes } from './routes/autonomy.js';
+import { setupRoutes } from './routes/setup.js';
 import type { OfficeIdentityService } from '../../identity/service.js';
 import type { ExecutiveProfileService } from '../../executive/service.js';
 import type { ContactService } from '../../contacts/contact-service.js';
@@ -57,6 +58,14 @@ export interface HttpAdapterConfig {
   executiveProfileService?: ExecutiveProfileService;
   contactService: ContactService;
   autonomyService?: AutonomyService;
+  /**
+   * True when the process booted without a principal contact and is running in
+   * setup-required mode (email + Signal adapters are skipped until restart).
+   * Drives the externalAdaptersPending flag on GET /api/setup/status so the
+   * frontend can prompt the operator to restart once setup is complete.
+   * Captured at boot; never changes over the process lifetime.
+   */
+  setupRequiredAtBoot: boolean;
 }
 
 export class HttpAdapter {
@@ -226,6 +235,20 @@ export class HttpAdapter {
         webAppBootstrapSecret,
         sessions,
         pool,
+      });
+    }
+
+    // Setup routes — onboarding wizard backend (issue #771). Same session-cookie
+    // auth as identity routes, registered alongside them so the wizard can call
+    // both without separate auth paths. Skipped when the bootstrap secret is
+    // unset (no web UI configured, no wizard to back).
+    if (webAppBootstrapSecret) {
+      await this.app.register(setupRoutes, {
+        webAppBootstrapSecret,
+        sessions,
+        pool,
+        logger,
+        setupRequiredAtBoot: this.config.setupRequiredAtBoot,
       });
     }
 

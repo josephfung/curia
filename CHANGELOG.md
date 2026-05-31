@@ -15,6 +15,9 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **Setup-required boot mode** — a missing principal contact no longer crash-loops the process; the dispatcher and HTTP adapter stay up while email + Signal are skipped, so the onboarding wizard can be reached at `/setup`. Restart picks up the new principal and brings external channels online. (#766, #771)
+- **`POST /api/setup/principal`** — name-only principal contact creation, idempotent, for the wizard's "About you" step. (#771)
+- **`GET /api/setup/status`** — reports `{ principalExists, identityConfigured, externalAdaptersPending }` so the console router can land on the correct onboarding screen. (#771)
 - **Scheduled jobs — last run outcome and summary** — Jobs page now shows `last_run_outcome` as a colour-coded badge (green/red/amber) in the table and edit drawer, and surfaces the agent-written `last_run_summary` in the detail panel when present. (#241)
 
 ### Changed

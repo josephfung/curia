@@ -906,13 +906,35 @@ async function main(): Promise<void> {
   ];
   const readinessReport = await runReadinessChecks(readinessChecks);
 
-  if (!readinessReport.ready) {
+  // setup-required mode: if the principal check is the only thing failing, keep
+  // the process running with just the dispatcher + HTTP adapter so the operator
+  // can complete the onboarding wizard via the web UI (issue #771 / #766). The
+  // wizard's POST /api/setup/principal creates the principal contact; the next
+  // restart picks it up and brings email/Signal up.
+  //
+  // Any other readiness failure remains fatal — only the principal-contact
+  // failure is recoverable through the in-app flow.
+  const setupRequiredAtBoot =
+    !readinessReport.ready &&
+    readinessReport.failures.length === 1 &&
+    readinessReport.failures[0]!.name === 'principal-contact';
+
+  if (!readinessReport.ready && !setupRequiredAtBoot) {
     for (const failure of readinessReport.failures) {
       logger.error({ check: failure.name, reason: failure.reason }, 'Startup readiness check failed');
     }
     throw new Error(`Startup readiness failed: ${readinessReport.failures.map((f) => f.name).join(', ')}`);
   }
-  logger.info('All startup readiness checks passed');
+  if (setupRequiredAtBoot) {
+    // Single banner log line — the operator's main signal that the system isn't fully live.
+    // External adapters skipped below; HTTP stays up to serve the onboarding wizard.
+    logger.warn(
+      { setupUrl: `http://localhost:${config.httpPort}/setup` },
+      'SETUP-REQUIRED mode: no principal contact found. External channels (email/Signal) are NOT running. Complete onboarding at the setup URL above, then restart this process to bring them online.',
+    );
+  } else {
+    logger.info('All startup readiness checks passed');
+  }
 
   // Outbound gateway — single choke-point for all outbound external communication.
   // Runs blocked-contact checks and content filtering before any message leaves Curia.
@@ -1491,20 +1513,36 @@ async function main(): Promise<void> {
   // events always have a subscriber. Starting before registration would drop emails
   // arriving during the startup window (each adapter advances its own high-water mark
   // on poll, so dropped messages are never retried).
-  for (const adapter of emailAdapters) {
-    await adapter.start();
-  }
-  if (emailAdapters.length > 0) {
-    logger.info({ count: emailAdapters.length }, 'Email channel adapter(s) started');
+  //
+  // In setup-required mode we skip external adapters entirely — without a principal
+  // contact there is no recipient policy, no autonomy-bypass identity match, and no
+  // sane fallback for received emails. The operator restarts after completing setup
+  // to bring these up for real.
+  if (!setupRequiredAtBoot) {
+    for (const adapter of emailAdapters) {
+      await adapter.start();
+    }
+    if (emailAdapters.length > 0) {
+      logger.info({ count: emailAdapters.length }, 'Email channel adapter(s) started');
+    }
+  } else if (emailAdapters.length > 0) {
+    logger.warn(
+      { count: emailAdapters.length },
+      'SETUP-REQUIRED mode: skipping email adapter startup — restart after setup to enable',
+    );
   }
 
   // Start the Signal adapter AFTER the dispatcher is registered — same ordering rule as email.
   // SignalAdapter.start() connects to the signal-cli socket and registers the inbound listener.
   // If signal-cli is not yet running (e.g., cold start with both containers starting simultaneously),
   // the RPC client's exponential backoff will retry until the socket is available.
-  if (signalAdapter) {
+  //
+  // Skipped in setup-required mode for the same reason as email — see above.
+  if (signalAdapter && !setupRequiredAtBoot) {
     await signalAdapter.start();
     logger.info('Signal channel adapter started');
+  } else if (signalAdapter && setupRequiredAtBoot) {
+    logger.warn('SETUP-REQUIRED mode: skipping Signal adapter startup — restart after setup to enable');
   }
 
   // HTTP API channel — REST + SSE endpoints for external clients.
@@ -1525,6 +1563,7 @@ async function main(): Promise<void> {
     executiveProfileService,
     contactService,
     autonomyService,
+    setupRequiredAtBoot,
   });
 
   try {
