@@ -10,7 +10,6 @@ import {
   IconChecklist,
   IconClock,
   IconSettings,
-  IconWand,
   IconChevron,
 } from './Icons';
 
@@ -29,7 +28,6 @@ const ROUTES: Record<string, string> = {
   tasks:    '/tasks',
   jobs:     '/jobs',
   settings: '/settings/workspace',
-  wizard:   '/setup',
 };
 
 function ThemeToggle({ theme, onChange }: { theme: Theme; onChange: (t: Theme) => void }) {
@@ -58,9 +56,7 @@ function ThemeToggle({ theme, onChange }: { theme: Theme; onChange: (t: Theme) =
 
 export function Sidebar({ activeView, theme, onThemeChange }: SidebarProps) {
   const [memoryOpen, setMemoryOpen] = useState(true);
-  const [settingsOpen, setSettingsOpen] = useState(
-    activeView === 'settings' || activeView === 'wizard',
-  );
+  const [settingsOpen, setSettingsOpen] = useState(activeView === 'settings');
   const { setOpen } = useMobileMenu();
   const navigate = useNavigate();
 
@@ -146,13 +142,7 @@ export function Sidebar({ activeView, theme, onThemeChange }: SidebarProps) {
                 <IconSettings />
                 Workspace
               </button>
-              <button
-                className={`nav-sub-item${activeView === 'wizard' ? ' active' : ''}`}
-                onClick={() => go('wizard')}
-              >
-                <IconWand />
-                Setup Wizard
-              </button>
+
             </div>
           )}
         </div>
