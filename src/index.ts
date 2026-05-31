@@ -106,6 +106,13 @@ import { compileSecurityContextBlock } from './security/security-context.js';
 import { OutboundContextService } from './dispatch/outbound-context.js';
 
 async function main(): Promise<void> {
+  // Captured at the very start of main() so the wizard's post-setup polling
+  // loop can distinguish "old process still dying" from "new process up" by
+  // comparing this value across requests. Exposed on GET /api/setup/status.
+  // Plain ISO string — no need for a monotonic clock here, restarts always
+  // produce a strictly-later wall-clock time.
+  const bootStartedAt = new Date().toISOString();
+
   // 1. Config & logging — no dependencies, must come first.
   // loadConfig() throws synchronously if DATABASE_URL is missing, which is
   // intentional: we want a hard failure before any I/O is attempted.
@@ -1585,6 +1592,7 @@ async function main(): Promise<void> {
     contactService,
     autonomyService,
     setupRequiredAtBoot,
+    bootStartedAt,
   });
 
   try {

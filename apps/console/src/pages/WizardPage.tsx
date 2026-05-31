@@ -32,7 +32,28 @@ interface SetupStatusResponse {
   principalExists: boolean;
   identityConfigured: boolean;
   externalAdaptersPending: boolean;
+  bootStartedAt: string;
 }
+
+// State machine for the post-save restart flow. `idle` covers both "haven't
+// submitted yet" and "submitted but no restart needed" (deployments where
+// setupRequiredAtBoot was false already had external channels running).
+// The timeout state carries originalBootStartedAt forward so a manual retry
+// can resume polling with the same "before any restart" reference point —
+// without that, a user who restarts manually during the dev-mode timeout
+// window would get a false-positive match against the timed-out process's
+// own stamp.
+type RestartState =
+  | { kind: 'idle' }
+  | { kind: 'waiting'; originalBootStartedAt: string; startedAt: number }
+  | { kind: 'timeout'; originalBootStartedAt: string };
+
+// Polling cadence + total wait budget. 60s is comfortable for a Docker
+// container restart on typical hardware; production-cold-boot in pathological
+// cases can exceed this, which is why the timeout-state has a retry button
+// rather than just giving up.
+const RESTART_POLL_INTERVAL_MS = 2_000;
+const RESTART_TIMEOUT_MS = 60_000;
 
 // ── Safe error extraction ─────────────────────────────────────────────────────
 
@@ -64,6 +85,7 @@ export default function WizardPage() {
   const [assistantNameError, setAssistantNameError] = useState('');
   const [submitError, setSubmitError] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [restartState, setRestartState] = useState<RestartState>({ kind: 'idle' });
 
   // Pre-populate form from current identity and check setup status on mount.
   // Run both fetches in parallel; setup status drives the Step 1 auto-skip
@@ -114,6 +136,58 @@ export default function WizardPage() {
       void navigate({ to: '/setup', search: { step: 2 } });
     }
   }, [principalExists, currentStep, navigate]);
+
+  // Post-restart polling loop. Runs only while restartState === 'waiting'.
+  // Polls /api/setup/status every RESTART_POLL_INTERVAL_MS, tolerating
+  // network errors (the process is dying then booting back; connection
+  // failures during that window are expected). The supervisor has brought
+  // a new process up when bootStartedAt has changed AND externalAdapters
+  // Pending is false — both required because the second condition alone
+  // could flicker false from the old process during graceful shutdown.
+  //
+  // The `cancelled` flag guards against setState-after-unmount when the
+  // user navigates away mid-poll. setInterval can't be used directly
+  // because async polls would stack on slow networks; recursive
+  // setTimeout schedules the next tick only after the current one settles.
+  useEffect(() => {
+    if (restartState.kind !== 'waiting') return;
+    const { originalBootStartedAt, startedAt } = restartState;
+    let cancelled = false;
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+
+    async function pollOnce() {
+      if (cancelled) return;
+      if (Date.now() - startedAt > RESTART_TIMEOUT_MS) {
+        setRestartState({ kind: 'timeout', originalBootStartedAt });
+        return;
+      }
+      try {
+        const res = await apiFetch('/api/setup/status');
+        if (res.ok) {
+          const data = await res.json() as SetupStatusResponse;
+          const restarted =
+            data.bootStartedAt !== originalBootStartedAt &&
+            !data.externalAdaptersPending;
+          if (restarted) {
+            if (!cancelled) await navigate({ to: '/chat' });
+            return;
+          }
+        }
+      } catch {
+        // Connection errors are expected while the process is restarting.
+        // Swallow and re-schedule; the timeout above caps the total wait.
+      }
+      if (!cancelled) {
+        timeoutHandle = setTimeout(() => void pollOnce(), RESTART_POLL_INTERVAL_MS);
+      }
+    }
+
+    void pollOnce();
+    return () => {
+      cancelled = true;
+      if (timeoutHandle) clearTimeout(timeoutHandle);
+    };
+  }, [restartState, navigate]);
 
   // Returns the navigation promise so callers that need to know whether the
   // route change succeeded (handlePrincipalContinue) can await it and surface
@@ -188,9 +262,32 @@ export default function WizardPage() {
       if (!putRes.ok) throw new Error(await extractError(putRes));
       const reloadRes = await apiFetch('/api/identity/reload', { method: 'POST' });
       if (!reloadRes.ok) throw new Error(await extractError(reloadRes));
-      // await inside the try block so navigation failures are caught and surface
-      // the submitError + re-enable buttons, rather than leaving a stuck spinner.
-      await navigate({ to: '/' });
+
+      // Decide whether we need a restart. After PUT /api/identity, the server
+      // recomputes externalAdaptersPending; if true, the process booted in
+      // setup-required mode and email/Signal are not running yet. If false,
+      // either the deployment never needed a restart (CEO_PRIMARY_EMAIL set
+      // a principal at boot) or we already restarted in a previous attempt.
+      const statusRes = await apiFetch('/api/setup/status');
+      if (!statusRes.ok) throw new Error(await extractError(statusRes));
+      const status = await statusRes.json() as SetupStatusResponse;
+
+      if (!status.externalAdaptersPending) {
+        await navigate({ to: '/chat' });
+        return;
+      }
+
+      // Capture the pre-restart bootStartedAt so the polling loop can detect
+      // the supervisor bringing a new process up. Trigger the restart, then
+      // switch the wizard's render into the wait state — the polling effect
+      // below picks it up from there.
+      const restartRes = await apiFetch('/api/setup/restart', { method: 'POST' });
+      if (!restartRes.ok) throw new Error(await extractError(restartRes));
+      setRestartState({
+        kind: 'waiting',
+        originalBootStartedAt: status.bootStartedAt,
+        startedAt: Date.now(),
+      });
     } catch (err) {
       setSubmitError(err instanceof Error ? err.message : 'Save failed');
       setSubmitting(false);
@@ -263,6 +360,66 @@ export default function WizardPage() {
         <div className="wizard-body">
           <div className="wizard-content" style={{ color: 'var(--app-fg-muted)' }}>
             Loading…
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ── Restart wait / timeout takeover ────────────────────────────────────────
+  //
+  // Replaces the wizard steps entirely once handleSubmit has triggered a
+  // process restart. The polling effect above will swap us to /chat on
+  // success or to the timeout state on the 60-second deadline.
+  if (restartState.kind === 'waiting') {
+    return (
+      <div className="wizard-page">
+        {header}
+        <div className="wizard-body">
+          <div className="wizard-content">
+            <div className="wizard-heading">Setting up channels…</div>
+            <div className="wizard-subheading">
+              Curia is restarting to bring email and Signal online. This usually takes
+              a few seconds. You'll be redirected automatically when it's ready.
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (restartState.kind === 'timeout') {
+    return (
+      <div className="wizard-page">
+        {header}
+        <div className="wizard-body">
+          <div className="wizard-content">
+            <div className="wizard-heading">Curia didn't come back yet</div>
+            <div className="wizard-subheading">
+              The restart is taking longer than expected. If you started Curia with{' '}
+              <code>pnpm dev</code>, run that command again and click below to keep
+              waiting. Otherwise check your deploy logs for errors.
+            </div>
+            <div className="wizard-nav">
+              <span />
+              <button
+                type="button"
+                className="btn-wizard-next"
+                onClick={() => setRestartState({
+                  // Resume polling without re-issuing the restart POST: the
+                  // operator may have already restarted manually, in which case
+                  // the next poll will see a different bootStartedAt and succeed.
+                  // The original stamp carries forward from the timeout state so
+                  // we don't accept the previous (already-timed-out) process's
+                  // own stamp as a "restart happened" match.
+                  kind: 'waiting',
+                  originalBootStartedAt: restartState.originalBootStartedAt,
+                  startedAt: Date.now(),
+                })}
+              >
+                Keep waiting
+              </button>
+            </div>
           </div>
         </div>
       </div>

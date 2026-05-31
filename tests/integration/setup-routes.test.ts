@@ -38,8 +38,13 @@ describeIf('/api/setup/* routes', () => {
   // assert the status flag responds to the boot-time value, not live state.
   let appSetupMode: FastifyInstance;
   let appNormalMode: FastifyInstance;
+  let bootStartedAtSetupMode: string;
+  let bootStartedAtNormalMode: string;
   // Sessions intentionally empty — tests use the bootstrap-secret header.
   const sessions: Map<string, number> = new Map();
+  // Captured calls into the injected scheduleProcessExit hook; assert on this
+  // instead of actually exiting the test runner.
+  const processExitCalls: number[] = [];
 
   beforeAll(async () => {
     pool = new Pool({ connectionString: DATABASE_URL });
@@ -54,7 +59,17 @@ describeIf('/api/setup/* routes', () => {
     );
     await pool.query(`DELETE FROM contacts WHERE system_role = 'principal'`);
 
-    const buildApp = async (setupRequiredAtBoot: boolean) => {
+    // Each test app gets its own bootStartedAt — when we exercise the polling
+    // loop's "different boot" detection in the frontend later, the same logic
+    // applies here: a new process produces a strictly-later timestamp.
+    bootStartedAtSetupMode = '2026-05-31T18:00:00.000Z';
+    bootStartedAtNormalMode = '2026-05-31T18:30:00.000Z';
+
+    const buildApp = async (
+      setupRequiredAtBoot: boolean,
+      bootStartedAt: string,
+      scheduleProcessExit: (delayMs: number) => void,
+    ) => {
       const app = Fastify();
       // rate-limit plugin is required because setup routes attach { config: { rateLimit: ... } }
       // per route — without it Fastify errors on registration.
@@ -65,13 +80,19 @@ describeIf('/api/setup/* routes', () => {
         pool,
         logger,
         setupRequiredAtBoot,
+        bootStartedAt,
+        scheduleProcessExit,
       });
       await app.ready();
       return app;
     };
 
-    appSetupMode = await buildApp(true);
-    appNormalMode = await buildApp(false);
+    appSetupMode = await buildApp(true, bootStartedAtSetupMode, (delayMs) => {
+      processExitCalls.push(delayMs);
+    });
+    appNormalMode = await buildApp(false, bootStartedAtNormalMode, (delayMs) => {
+      processExitCalls.push(delayMs);
+    });
   });
 
   afterAll(async () => {
@@ -96,6 +117,9 @@ describeIf('/api/setup/* routes', () => {
       `DELETE FROM kg_nodes WHERE source = 'bootstrap' AND label LIKE $1`,
       [`${TEST_LABEL_PREFIX}%`],
     );
+    // Reset the captured restart-trigger calls between tests so each restart
+    // test sees a fresh array.
+    processExitCalls.length = 0;
   });
 
   describe('POST /api/setup/principal', () => {
@@ -214,6 +238,25 @@ describeIf('/api/setup/* routes', () => {
       expect(body.externalAdaptersPending).toBe(false);
     });
 
+    it('returns the bootStartedAt timestamp configured at app construction', async () => {
+      // The wizard's post-restart polling loop compares this value across
+      // responses to detect that the supervisor has brought the new process
+      // up; if the status response stopped including it, that detection
+      // would silently break. Each app instance gets a distinct boot stamp.
+      const setupRes = await appSetupMode.inject({
+        method: 'GET',
+        url: '/api/setup/status',
+        headers: AUTH_HEADER,
+      });
+      const normalRes = await appNormalMode.inject({
+        method: 'GET',
+        url: '/api/setup/status',
+        headers: AUTH_HEADER,
+      });
+      expect(JSON.parse(setupRes.body).bootStartedAt).toBe(bootStartedAtSetupMode);
+      expect(JSON.parse(normalRes.body).bootStartedAt).toBe(bootStartedAtNormalMode);
+    });
+
     it('reports principalExists=true after creating one', async () => {
       await appSetupMode.inject({
         method: 'POST',
@@ -258,6 +301,45 @@ describeIf('/api/setup/* routes', () => {
         url: '/api/setup/status',
       });
       expect(res.statusCode).toBe(401);
+    });
+  });
+
+  describe('POST /api/setup/restart', () => {
+    it('schedules a process exit in setup-required mode', async () => {
+      const res = await appSetupMode.inject({
+        method: 'POST',
+        url: '/api/setup/restart',
+        headers: AUTH_HEADER,
+      });
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.restarting).toBe(true);
+      expect(typeof body.exitDelayMs).toBe('number');
+      // Asserting on the captured spy rather than the wall clock so the test
+      // doesn't have to actually wait for the (mocked) exit to fire.
+      expect(processExitCalls).toHaveLength(1);
+      expect(processExitCalls[0]).toBe(body.exitDelayMs);
+    });
+
+    it('returns 409 in normal mode (nothing to restart for)', async () => {
+      const res = await appNormalMode.inject({
+        method: 'POST',
+        url: '/api/setup/restart',
+        headers: AUTH_HEADER,
+      });
+      expect(res.statusCode).toBe(409);
+      // Critical safety check: a 409 must not have side-effected the exit hook.
+      // If this ever flips, the endpoint became destructive in normal mode.
+      expect(processExitCalls).toHaveLength(0);
+    });
+
+    it('returns 401 without auth and does not schedule an exit', async () => {
+      const res = await appSetupMode.inject({
+        method: 'POST',
+        url: '/api/setup/restart',
+      });
+      expect(res.statusCode).toBe(401);
+      expect(processExitCalls).toHaveLength(0);
     });
   });
 });
