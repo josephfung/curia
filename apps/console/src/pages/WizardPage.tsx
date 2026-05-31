@@ -163,6 +163,14 @@ export default function WizardPage() {
       }
       try {
         const res = await apiFetch('/api/setup/status');
+        if (res.status === 401 || res.status === 403) {
+          // Session is gone — re-auth required. No amount of polling will
+          // fix this; jump to timeout so the operator sees a recoverable
+          // state instead of waiting 60s and being told the restart took
+          // too long when the real failure is auth.
+          if (!cancelled) setRestartState({ kind: 'timeout', originalBootStartedAt });
+          return;
+        }
         if (res.ok) {
           const data = await res.json() as SetupStatusResponse;
           const restarted =
@@ -173,6 +181,8 @@ export default function WizardPage() {
             return;
           }
         }
+        // Non-2xx, non-auth: 5xx during the restart window, or transient. Fall
+        // through and retry on the next tick; the deadline above caps total wait.
       } catch {
         // Connection errors are expected while the process is restarting.
         // Swallow and re-schedule; the timeout above caps the total wait.
@@ -283,6 +293,11 @@ export default function WizardPage() {
       // below picks it up from there.
       const restartRes = await apiFetch('/api/setup/restart', { method: 'POST' });
       if (!restartRes.ok) throw new Error(await extractError(restartRes));
+      // Drop the submitting flag before swapping render states so the wizard
+      // doesn't leak a permanently-true `submitting` value into any future
+      // step view (e.g. via the retry-on-timeout path that returns the user
+      // to the wizard if we add one later).
+      setSubmitting(false);
       setRestartState({
         kind: 'waiting',
         originalBootStartedAt: status.bootStartedAt,
