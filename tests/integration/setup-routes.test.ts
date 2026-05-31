@@ -305,7 +305,30 @@ describeIf('/api/setup/* routes', () => {
   });
 
   describe('POST /api/setup/restart', () => {
-    it('schedules a process exit in setup-required mode', async () => {
+    // The restart endpoint refuses (409) unless setup prerequisites are
+    // actually complete. Seed the prerequisites for the happy-path test so
+    // the assertion exercises the success branch.
+    async function seedSetupPrerequisites() {
+      await appSetupMode.inject({
+        method: 'POST',
+        url: '/api/setup/principal',
+        headers: { ...AUTH_HEADER, 'content-type': 'application/json' },
+        payload: { name: `${TEST_LABEL_PREFIX} RestartHappy` },
+      });
+      // Write a wizard-flagged identity version so isIdentityConfigured() returns true.
+      await pool.query(
+        `INSERT INTO office_identity_versions (version, config, changed_by, note)
+         VALUES (
+           (SELECT COALESCE(MAX(version), 0) + 1 FROM office_identity_versions),
+           '{}'::jsonb,
+           'wizard',
+           'setup-routes test'
+         )`,
+      );
+    }
+
+    it('schedules a process exit when setup is complete in setup-required mode', async () => {
+      await seedSetupPrerequisites();
       const res = await appSetupMode.inject({
         method: 'POST',
         url: '/api/setup/restart',
@@ -319,6 +342,21 @@ describeIf('/api/setup/* routes', () => {
       // doesn't have to actually wait for the (mocked) exit to fire.
       expect(processExitCalls).toHaveLength(1);
       expect(processExitCalls[0]).toBe(body.exitDelayMs);
+    });
+
+    it('returns 409 in setup-required mode when prerequisites are not met', async () => {
+      // No principal, no identity — the endpoint must refuse rather than
+      // exiting into an unrecoverable churn loop.
+      const res = await appSetupMode.inject({
+        method: 'POST',
+        url: '/api/setup/restart',
+        headers: AUTH_HEADER,
+      });
+      expect(res.statusCode).toBe(409);
+      expect(processExitCalls).toHaveLength(0);
+      const body = JSON.parse(res.body);
+      expect(body.principalExists).toBe(false);
+      expect(typeof body.identityConfigured).toBe('boolean');
     });
 
     it('returns 409 in normal mode (nothing to restart for)', async () => {

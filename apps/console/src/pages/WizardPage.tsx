@@ -292,6 +292,16 @@ export default function WizardPage() {
       // switch the wizard's render into the wait state — the polling effect
       // below picks it up from there.
       const restartRes = await apiFetch('/api/setup/restart', { method: 'POST' });
+      if (restartRes.status === 409) {
+        // 409 means the backend refused: either the process is already in
+        // normal mode (a concurrent tab / earlier wizard run already restarted
+        // it between our status read and this POST) or setup prerequisites
+        // are missing. The first case is success-equivalent — channels are
+        // up — so just navigate. The second is theoretically reachable only
+        // by direct API use, since our own gating above won't allow it.
+        await navigate({ to: '/chat' });
+        return;
+      }
       if (!restartRes.ok) throw new Error(await extractError(restartRes));
       // Drop the submitting flag before swapping render states so the wizard
       // doesn't leak a permanently-true `submitting` value into any future

@@ -19,9 +19,9 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **`POST /api/setup/principal`** — name-only principal contact creation, idempotent, for the wizard's "About you" step. (#771)
 - **`GET /api/setup/status`** — reports `{ principalExists, identityConfigured, externalAdaptersPending }` so the console router can land on the correct onboarding screen. (#771)
 - **Onboarding wizard "About you" step** — new Step 1 captures the principal's name and creates the principal contact via `POST /api/setup/principal` before the assistant identity is configured; auto-skipped on deployments where a principal already exists. (#771)
-- **`POST /api/setup/restart`** — wizard-triggered process exit so the supervisor (Docker, systemd) brings Curia back in normal mode after first-time setup; refused (409) when the process is not in setup-required mode. (#771)
-- **`bootStartedAt` on `GET /api/setup/status`** — ISO timestamp captured at process boot; the wizard's post-setup polling loop watches it to detect a successful restart. (#771)
-- **Wizard restart-and-wait flow** — after Step 5 save, the wizard triggers `/api/setup/restart` when needed, shows a "Setting up channels…" wait UI, polls `/api/setup/status` for the new boot, then lands the user on `/chat`. Timeout shows a retry card with dev-mode guidance. (#771)
+- **`POST /api/setup/restart`** — wizard-triggered process exit so a supervisor brings Curia back in normal mode. (#771)
+- **`bootStartedAt` on `GET /api/setup/status`** — boot timestamp the wizard polls to detect a successful restart. (#771)
+- **Wizard restart-and-wait flow** — Step 5 save triggers the restart, polls for the new boot, lands on `/chat`. (#771)
 
 ### Removed
 
