@@ -184,8 +184,39 @@ export async function setupRoutes(
     if (!setupRequiredAtBoot) {
       // The process was not started in setup-required mode, so there is
       // nothing to "come back into" — a restart here would just be downtime.
+      // The wizard sees this 409 and treats it as "another tab / earlier run
+      // already completed setup" → it navigates to /chat instead of erroring.
       return reply.status(409).send({
         error: 'Curia is already running in normal mode; no restart is needed.',
+      });
+    }
+
+    // Refuse a restart unless the setup prerequisites are actually satisfied.
+    // Without this check, an authenticated caller could trigger an exit before
+    // creating the principal / saving the identity; the supervisor brings the
+    // process back into setup-required mode (still missing prerequisites), and
+    // the cycle can repeat — pure churn that the operator can't escape via the
+    // UI. The 409 is informational; the wizard does its own gating before
+    // calling this endpoint, so a healthy frontend never sees this branch.
+    try {
+      const principalRow = await pool.query<{ exists: boolean }>(
+        `SELECT EXISTS (
+           SELECT 1 FROM contacts WHERE system_role = 'principal'
+         ) AS exists`,
+      );
+      const principalExists = principalRow.rows[0]?.exists ?? false;
+      const identityConfigured = await isIdentityConfigured(pool);
+      if (!principalExists || !identityConfigured) {
+        return reply.status(409).send({
+          error: 'Setup is incomplete — create the principal and save the identity before restarting.',
+          principalExists,
+          identityConfigured,
+        });
+      }
+    } catch (err) {
+      logger.error({ err }, 'POST /api/setup/restart: failed to verify setup prerequisites');
+      return reply.status(500).send({
+        error: 'Failed to verify setup state before restart. Check server logs.',
       });
     }
 
