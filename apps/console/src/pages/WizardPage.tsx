@@ -115,10 +115,11 @@ export default function WizardPage() {
     }
   }, [principalExists, currentStep, navigate]);
 
-  function goTo(step: number) {
-    // Step navigation is non-critical — if the router rejects, the user stays on
-    // the current step. Void the promise explicitly rather than using an empty catch.
-    void navigate({ to: '/setup', search: { step } });
+  // Returns the navigation promise so callers that need to know whether the
+  // route change succeeded (handlePrincipalContinue) can await it and surface
+  // an error if the router rejects after a server-side write already landed.
+  function goTo(step: number): Promise<void> {
+    return navigate({ to: '/setup', search: { step } });
   }
 
   // Step 1 ("About you") writes through to the backend before advancing so the
@@ -141,7 +142,10 @@ export default function WizardPage() {
       });
       if (!res.ok) throw new Error(await extractError(res));
       setPrincipalExists(true);
-      goTo(2);
+      // Await goTo so a router rejection (extremely unlikely, but possible
+      // under route-guard changes) doesn't leave the user looking at Step 1
+      // with no feedback after the write already succeeded.
+      await goTo(2);
     } catch (err) {
       setPrincipalError(err instanceof Error ? err.message : 'Could not save your name.');
     } finally {
@@ -242,7 +246,17 @@ export default function WizardPage() {
     );
   }
 
-  if (!existingIdentity) {
+  // Wait for BOTH the identity prefill AND the setup-status snapshot before
+  // rendering any step. Without this gate:
+  //   - Step 1 was reachable before principalExists resolved, so the auto-skip
+  //     effect couldn't decide whether to bounce the user forward — they could
+  //     fill in their name and submit before the wizard knew they shouldn't be
+  //     on this step in the first place.
+  //   - The Step 2 Back button rendered with `principalExists === null` (falsy),
+  //     so a Back click went to Step 1 and immediately bounced back, producing
+  //     a flicker.
+  // Both go away once we hold the render until both pieces of state are known.
+  if (!existingIdentity || principalExists === null) {
     return (
       <div className="wizard-page">
         {header}
@@ -277,9 +291,13 @@ export default function WizardPage() {
           placeholder="Jane Doe"
           maxLength={PRINCIPAL_NAME_MAX_LENGTH}
           autoFocus
+          disabled={principalSubmitting}
           onChange={e => {
             setState(s => ({ ...s, principalName: e.target.value }));
-            if (principalError) setPrincipalError('');
+            // Guard the error-clear on submit: if a keystroke and an in-flight
+            // POST rejection land in the same tick, an unguarded clear would
+            // wipe the about-to-arrive error before the user sees it.
+            if (principalError && !principalSubmitting) setPrincipalError('');
           }}
         />
         {principalError && <div className="wizard-step1-error">{principalError}</div>}
