@@ -239,8 +239,11 @@ export async function bootstrapCeoContact(
  * concurrent startup or from email-based contact extraction that ran before bootstrap.
  * Without this, a blind INSERT would 23505 outside the contact-identity recovery block
  * and propagate as an unhandled error.
+ *
+ * Exported so ensure-principal.ts can reuse the exact same node-creation semantics
+ * for the wizard's no-channel principal-creation path.
  */
-async function insertKgPersonNode(displayName: string, pool: DbPool): Promise<string> {
+export async function insertKgPersonNode(displayName: string, pool: DbPool): Promise<string> {
   const result = await pool.query<{ id: string }>(
     `INSERT INTO kg_nodes (type, label, properties, confidence, decay_class, source, created_at, last_confirmed_at)
      VALUES ('person', $1, '{}', 1.0, 'permanent', 'bootstrap', now(), now())
@@ -260,8 +263,10 @@ async function insertKgPersonNode(displayName: string, pool: DbPool): Promise<st
  * Create a KG person node and link it to an existing contact that has kg_node_id = NULL.
  * Returns the actual kg_node_id that ended up on the contact (which may differ from the
  * newly-created node if a concurrent process already set kg_node_id before our UPDATE).
+ *
+ * Exported so ensure-principal.ts can reuse the same backfill semantics.
  */
-async function createAndLinkKgNode(contactId: string, displayName: string, pool: DbPool): Promise<string> {
+export async function createAndLinkKgNode(contactId: string, displayName: string, pool: DbPool): Promise<string> {
   const newKgNodeId = await insertKgPersonNode(displayName, pool);
   await pool.query(
     `UPDATE contacts SET kg_node_id = $1, updated_at = now() WHERE id = $2 AND kg_node_id IS NULL`,

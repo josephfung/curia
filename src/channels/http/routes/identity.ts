@@ -16,6 +16,23 @@ import type { OfficeIdentityService } from '../../../identity/service.js';
 import type { OfficeIdentity } from '../../../identity/types.js';
 import { assertSecret, type SessionStore } from '../session-auth.js';
 
+/**
+ * Returns true if the office identity has ever been explicitly configured via the
+ * wizard or API. A fresh deployment only has file_load versions and returns false.
+ *
+ * Shared with the /api/setup/status route so both endpoints answer the same question
+ * the same way; "configured" is a single concept, not a per-route opinion.
+ */
+export async function isIdentityConfigured(pool: Pool): Promise<boolean> {
+  const result = await pool.query<{ configured: boolean }>(
+    `SELECT EXISTS (
+       SELECT 1 FROM office_identity_versions
+       WHERE changed_by IN ('wizard', 'api')
+     ) AS configured`,
+  );
+  return result.rows[0]?.configured ?? false;
+}
+
 export interface IdentityRouteOptions {
   identityService: OfficeIdentityService;
   webAppBootstrapSecret: string;
@@ -53,13 +70,7 @@ export async function identityRoutes(
       // Determine whether the identity has ever been explicitly configured via the wizard
       // or API. A fresh deployment (only file_load versions) returns configured: false,
       // which triggers the first-run wizard in the browser.
-      const configuredResult = await pool.query<{ configured: boolean }>(
-        `SELECT EXISTS (
-           SELECT 1 FROM office_identity_versions
-           WHERE changed_by IN ('wizard', 'api')
-         ) AS configured`,
-      );
-      const configured = configuredResult.rows[0]?.configured ?? false;
+      const configured = await isIdentityConfigured(pool);
 
       return reply.send({ identity, configured });
     } catch (err) {
