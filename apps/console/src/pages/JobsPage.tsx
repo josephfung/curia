@@ -52,6 +52,10 @@ function utcToLocal(utcIso: string | null): string {
   return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
 }
 
+function formatOutcome(outcome: NonNullable<LastRunOutcome>): string {
+  return outcome.replace(/_/g, ' ');
+}
+
 function formatSchedule(job: Job): string {
   if (job.cronExpr) return job.cronExpr;
   if (job.runAt) return formatDate(job.runAt);
@@ -362,7 +366,7 @@ function JobEditDrawer({ job, creating, onClose, onSaved, onDeleted }: DrawerPro
                       <label>Outcome</label>
                       <div className="form-field-readonly">
                         {job.lastRunOutcome
-                          ? <span className={`status-pill ${job.lastRunOutcome}`}>{job.lastRunOutcome}</span>
+                          ? <span className={`status-pill ${job.lastRunOutcome}`}>{formatOutcome(job.lastRunOutcome)}</span>
                           : '—'
                         }
                       </div>
@@ -690,7 +694,7 @@ export default function JobsPage() {
                             <td className="cell-mono col-updated">{formatDate(j.nextRunAt)}</td>
                             <td>
                               {j.lastRunOutcome
-                                ? <span className={`status-pill ${j.lastRunOutcome}`}>{j.lastRunOutcome}</span>
+                                ? <span className={`status-pill ${j.lastRunOutcome}`}>{formatOutcome(j.lastRunOutcome)}</span>
                                 : <span className="cell-muted">—</span>
                               }
                             </td>
