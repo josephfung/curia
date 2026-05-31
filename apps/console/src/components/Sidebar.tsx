@@ -28,7 +28,7 @@ const ROUTES: Record<string, string> = {
   contacts: '/contacts',
   tasks:    '/tasks',
   jobs:     '/jobs',
-  settings: '/settings/autonomy',
+  settings: '/settings/workspace',
   wizard:   '/setup',
 };
 
@@ -70,6 +70,8 @@ export function Sidebar({ activeView, theme, onThemeChange }: SidebarProps) {
       navigate({ to }).catch((err: unknown) => {
         console.error(`[Sidebar] navigation to ${to} failed:`, err);
       });
+    } else {
+      console.error(`[Sidebar] go() called with unknown view key: "${view}"`);
     }
     setOpen(false);
   };
