@@ -65,8 +65,11 @@ const setupRoute = createRoute({
   getParentRoute: () => authedRoute,
   path: '/setup',
   validateSearch: (search: Record<string, unknown>) => ({
+    // Wizard now has 5 steps after the "About you" principal step was added at
+    // step 1 (issue #771). Clamp incoming ?step= values so a stale link from
+    // before the renumbering doesn't blow up route rendering.
     step: typeof search['step'] === 'number'
-      ? Math.max(1, Math.min(4, Math.round(search['step'] as number)))
+      ? Math.max(1, Math.min(5, Math.round(search['step'] as number)))
       : 1,
   }),
   component: WizardPage,

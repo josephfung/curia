@@ -18,6 +18,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Setup-required boot mode** — a missing principal contact no longer crash-loops the process; the dispatcher and HTTP adapter stay up while email + Signal are skipped, so the onboarding wizard can be reached at `/setup`. Restart picks up the new principal and brings external channels online. (#766, #771)
 - **`POST /api/setup/principal`** — name-only principal contact creation, idempotent, for the wizard's "About you" step. (#771)
 - **`GET /api/setup/status`** — reports `{ principalExists, identityConfigured, externalAdaptersPending }` so the console router can land on the correct onboarding screen. (#771)
+- **Onboarding wizard "About you" step** — new Step 1 captures the principal's name and creates the principal contact via `POST /api/setup/principal` before the assistant identity is configured; auto-skipped on deployments where a principal already exists. (#771)
 
 ### Removed
 

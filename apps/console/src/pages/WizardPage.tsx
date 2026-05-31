@@ -3,6 +3,7 @@ import { useNavigate, useSearch } from '@tanstack/react-router';
 import { apiFetch } from '../api.js';
 import {
   DEFAULT_WIZARD_STATE,
+  PRINCIPAL_NAME_MAX_LENGTH,
   TONE_OPTIONS,
   toggleToneSelection,
   verbosityBand,
@@ -11,19 +12,26 @@ import {
   verbosityReviewDesc,
   directnessReviewDesc,
   postureReviewDesc,
-  validateStep1,
+  validateNonEmptyName,
+  validatePrincipalName,
   buildIdentityPayload,
   type WizardState,
   type LocalIdentity,
 } from './wizard-utils.js';
 
-const TOTAL_STEPS = 4;
+const TOTAL_STEPS = 5;
 
 // ── Identity API types ────────────────────────────────────────────────────────
 
 interface IdentityResponse {
   identity: LocalIdentity;
   configured: boolean;
+}
+
+interface SetupStatusResponse {
+  principalExists: boolean;
+  identityConfigured: boolean;
+  externalAdaptersPending: boolean;
 }
 
 // ── Safe error extraction ─────────────────────────────────────────────────────
@@ -49,21 +57,35 @@ export default function WizardPage() {
 
   const [state, setState] = useState<WizardState>(DEFAULT_WIZARD_STATE);
   const [existingIdentity, setExistingIdentity] = useState<LocalIdentity | null>(null);
+  const [principalExists, setPrincipalExists] = useState<boolean | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [step1Error, setStep1Error] = useState('');
+  const [principalError, setPrincipalError] = useState('');
+  const [principalSubmitting, setPrincipalSubmitting] = useState(false);
+  const [assistantNameError, setAssistantNameError] = useState('');
   const [submitError, setSubmitError] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
-  // Pre-populate form from current identity on mount.
+  // Pre-populate form from current identity and check setup status on mount.
+  // Run both fetches in parallel; setup status drives the Step 1 auto-skip
+  // (deployments that already have a principal — e.g. CEO_PRIMARY_EMAIL — go
+  // straight to step 2). identity drives the form's pre-fill so a wizard
+  // re-run shows the existing values instead of defaults.
   useEffect(() => {
     async function load() {
       try {
-        const res = await apiFetch('/api/identity');
-        if (!res.ok) throw new Error(await extractError(res));
-        const data = await res.json() as IdentityResponse;
+        const [identityRes, statusRes] = await Promise.all([
+          apiFetch('/api/identity'),
+          apiFetch('/api/setup/status'),
+        ]);
+        if (!identityRes.ok) throw new Error(await extractError(identityRes));
+        if (!statusRes.ok) throw new Error(await extractError(statusRes));
+        const data = await identityRes.json() as IdentityResponse;
+        const status = await statusRes.json() as SetupStatusResponse;
         const id = data.identity;
         setExistingIdentity(id);
+        setPrincipalExists(status.principalExists);
         setState({
+          principalName: DEFAULT_WIZARD_STATE.principalName,
           name: id.assistant.name || DEFAULT_WIZARD_STATE.name,
           title: id.assistant.title || DEFAULT_WIZARD_STATE.title,
           signature: id.assistant.emailSignature || '',
@@ -83,24 +105,68 @@ export default function WizardPage() {
     void load();
   }, []);
 
+  // Auto-skip Step 1 when the principal already exists. Runs after the mount
+  // fetch sets principalExists and on any subsequent step change. The route
+  // navigation updates `currentStep`, which re-runs this effect; the guard
+  // (`principalExists && currentStep === 1`) keeps it from looping.
+  useEffect(() => {
+    if (principalExists && currentStep === 1) {
+      void navigate({ to: '/setup', search: { step: 2 } });
+    }
+  }, [principalExists, currentStep, navigate]);
+
   function goTo(step: number) {
     // Step navigation is non-critical — if the router rejects, the user stays on
     // the current step. Void the promise explicitly rather than using an empty catch.
     void navigate({ to: '/setup', search: { step } });
   }
 
+  // Step 1 ("About you") writes through to the backend before advancing so the
+  // principal contact exists by the time the assistant identity is saved at
+  // step 5. The endpoint is idempotent — a retry after a transient failure is
+  // safe and will return alreadyExisted=true on success.
+  async function handlePrincipalContinue() {
+    const validationError = validatePrincipalName(state.principalName);
+    if (validationError) {
+      setPrincipalError(validationError);
+      return;
+    }
+    setPrincipalError('');
+    setPrincipalSubmitting(true);
+    try {
+      const res = await apiFetch('/api/setup/principal', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: state.principalName.trim() }),
+      });
+      if (!res.ok) throw new Error(await extractError(res));
+      setPrincipalExists(true);
+      goTo(2);
+    } catch (err) {
+      setPrincipalError(err instanceof Error ? err.message : 'Could not save your name.');
+    } finally {
+      setPrincipalSubmitting(false);
+    }
+  }
+
   function handleContinue() {
-    if (currentStep === 1) {
-      if (!validateStep1(state.name)) {
-        setStep1Error('Assistant name is required.');
+    // Step 2 is the assistant identity form (formerly step 1). Same non-empty
+    // assertion as before — the renamed validator is the only difference.
+    if (currentStep === 2) {
+      if (!validateNonEmptyName(state.name)) {
+        setAssistantNameError('Assistant name is required.');
         return;
       }
-      setStep1Error('');
+      setAssistantNameError('');
     }
     if (currentStep < TOTAL_STEPS) goTo(currentStep + 1);
   }
 
   function handleBack() {
+    // When the principal already exists, Step 1 is auto-skipped; going Back from
+    // Step 2 would bounce back to Step 2 via the auto-skip effect, so just no-op
+    // for clarity instead of flickering.
+    if (currentStep === 2 && principalExists) return;
     if (currentStep > 1) goTo(currentStep - 1);
   }
 
@@ -189,9 +255,52 @@ export default function WizardPage() {
     );
   }
 
-  // ── Step 1: Identity ─────────────────────────────────────────────────────────
+  // ── Step 1: About you (principal identity) ─────────────────────────────────
+  //
+  // Captures the operator's own name and POSTs it to /api/setup/principal so
+  // the principal contact exists before the assistant identity is saved on
+  // step 5. Auto-skipped (via the effect above) when a principal is already
+  // present — typically CEO_PRIMARY_EMAIL deployments that bootstrapped one.
 
   const step1 = (
+    <div className="wizard-content">
+      <div className="wizard-heading">Tell us about yourself</div>
+      <div className="wizard-subheading">
+        Your name is how your assistant will address you and identify you in messages.
+      </div>
+      <div className="wizard-field">
+        <label htmlFor="w-principal-name">Your name *</label>
+        <input
+          id="w-principal-name"
+          type="text"
+          value={state.principalName}
+          placeholder="Jane Doe"
+          maxLength={PRINCIPAL_NAME_MAX_LENGTH}
+          autoFocus
+          onChange={e => {
+            setState(s => ({ ...s, principalName: e.target.value }));
+            if (principalError) setPrincipalError('');
+          }}
+        />
+        {principalError && <div className="wizard-step1-error">{principalError}</div>}
+      </div>
+      <div className="wizard-nav">
+        <span />
+        <button
+          type="button"
+          className="btn-wizard-next"
+          onClick={() => void handlePrincipalContinue()}
+          disabled={principalSubmitting}
+        >
+          {principalSubmitting ? 'Saving…' : 'Next →'}
+        </button>
+      </div>
+    </div>
+  );
+
+  // ── Step 2: Assistant identity ─────────────────────────────────────────────
+
+  const step2Identity = (
     <div className="wizard-content">
       <div className="wizard-heading">What should your assistant be called?</div>
       <div className="wizard-subheading">
@@ -206,10 +315,10 @@ export default function WizardPage() {
           placeholder="Alex Curia"
           onChange={e => {
             setState(s => ({ ...s, name: e.target.value }));
-            if (step1Error) setStep1Error('');
+            if (assistantNameError) setAssistantNameError('');
           }}
         />
-        {step1Error && <div className="wizard-step1-error">{step1Error}</div>}
+        {assistantNameError && <div className="wizard-step1-error">{assistantNameError}</div>}
       </div>
       <div className="wizard-field">
         <label htmlFor="w-title">Title</label>
@@ -231,7 +340,13 @@ export default function WizardPage() {
         />
       </div>
       <div className="wizard-nav">
-        <span />
+        {principalExists ? (
+          <span />
+        ) : (
+          <button type="button" className="btn-wizard-back" onClick={handleBack}>
+            ← Back
+          </button>
+        )}
         <button type="button" className="btn-wizard-next" onClick={handleContinue}>
           Next →
         </button>
@@ -239,11 +354,11 @@ export default function WizardPage() {
     </div>
   );
 
-  // ── Step 2: Tone ─────────────────────────────────────────────────────────────
+  // ── Step 3: Tone ───────────────────────────────────────────────────────────
 
   const atToneMax = state.toneBaseline.length >= 3;
 
-  const step2 = (
+  const step3Tone = (
     <div className="wizard-content">
       <div className="wizard-heading">How should your assistant communicate?</div>
       <div className="wizard-subheading">Pick 1–3 words that describe the tone you want.</div>
@@ -310,7 +425,7 @@ export default function WizardPage() {
     </div>
   );
 
-  // ── Step 3: Posture & preferences ────────────────────────────────────────────
+  // ── Step 4: Posture & preferences ──────────────────────────────────────────
 
   const POSTURE_OPTIONS: Array<{
     value: WizardState['posture'];
@@ -322,7 +437,7 @@ export default function WizardPage() {
     { value: 'proactive',    title: 'Proactive',    desc: 'Bias toward action; less checking in' },
   ];
 
-  const step3 = (
+  const step4Posture = (
     <div className="wizard-content">
       <div className="wizard-heading">How should your assistant decide?</div>
       <div className="wizard-subheading">
@@ -370,7 +485,7 @@ export default function WizardPage() {
     </div>
   );
 
-  // ── Step 4: Review ───────────────────────────────────────────────────────────
+  // ── Step 5: Review ─────────────────────────────────────────────────────────
 
   const words = state.toneBaseline;
   const tonePhrase =
@@ -394,7 +509,7 @@ export default function WizardPage() {
     reviewRows.push({ label: 'Preference', value: `"${state.preferences.trim()}"` });
   }
 
-  const step4 = (
+  const step5Review = (
     <div className="wizard-content">
       <div className="wizard-heading">Does everything look right?</div>
       <div className="wizard-subheading">Go back to change anything, or save to get started.</div>
@@ -425,7 +540,13 @@ export default function WizardPage() {
 
   // ── Render ───────────────────────────────────────────────────────────────────
 
-  const steps: Record<number, JSX.Element> = { 1: step1, 2: step2, 3: step3, 4: step4 };
+  const steps: Record<number, JSX.Element> = {
+    1: step1,
+    2: step2Identity,
+    3: step3Tone,
+    4: step4Posture,
+    5: step5Review,
+  };
 
   return (
     <div className="wizard-page">
