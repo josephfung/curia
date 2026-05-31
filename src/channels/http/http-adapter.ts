@@ -142,13 +142,18 @@ export class HttpAdapter {
       if (!isApiPath(routeUrl) && !isApiPath(requestPath)) return;
 
       // These API routes use session-cookie auth and bypass bearer token enforcement.
+      // /api/setup/* is included because the onboarding wizard runs in the browser
+      // with the same curia_session cookie / x-web-bootstrap-secret pair as the
+      // identity routes; without this entry, requests get rejected at this hook
+      // before assertSecret ever runs.
       if (
         routeUrl === '/api/health' ||
         routeUrl.startsWith('/api/kg') ||
         routeUrl.startsWith('/api/identity') ||
         routeUrl.startsWith('/api/executive') ||
         routeUrl.startsWith('/api/jobs') ||
-        routeUrl.startsWith('/api/autonomy')
+        routeUrl.startsWith('/api/autonomy') ||
+        routeUrl.startsWith('/api/setup')
       ) return;
 
       if (!validateBearerToken(request.headers.authorization, apiToken)) {

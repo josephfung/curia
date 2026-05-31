@@ -33,6 +33,20 @@ describeIf('ensurePrincipalContact', () => {
     pool = new Pool({ connectionString: DATABASE_URL });
     await pool.query('SELECT 1 FROM contacts LIMIT 0');
     await pool.query('SELECT 1 FROM kg_nodes LIMIT 0');
+
+    // Other test files (notably ceo-bootstrap.test.ts) may leave a principal contact
+    // behind. The partial unique index `idx_contacts_system_role_principal` would
+    // then cause every "create" test here to 23505. Clear any pre-existing principal
+    // so this file owns that slot for the duration of its run.
+    //
+    // Destructive against a working operator DB by design — the file header documents
+    // that these integration tests must point at an empty test database, never at
+    // production or a developer's local dev environment with real data.
+    await pool.query(
+      `DELETE FROM contact_channel_identities WHERE contact_id IN
+         (SELECT id FROM contacts WHERE system_role = 'principal')`,
+    );
+    await pool.query(`DELETE FROM contacts WHERE system_role = 'principal'`);
   });
 
   afterAll(async () => {
