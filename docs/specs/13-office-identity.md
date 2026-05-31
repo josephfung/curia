@@ -1,7 +1,16 @@
 # 13 — Office Identity
 
 **Date:** 2026-04-04
-**Status:** Draft
+**Status:** Draft — partially superseded; see note below
+
+> **Note (May 2026):** The YAML-file load path (`config/office-identity.yaml`) and
+> its chokidar file watcher have been removed. Defaults now live in
+> `src/identity/defaults.ts` and are seeded into the DB on first boot with
+> `changed_by='system_default'`. All edits go through the wizard or
+> `PUT /api/identity`; the DB is the single source of truth. The `'file_load'`
+> changedBy literal is retained as a legacy value for pre-existing rows.
+> The rest of this spec (system prompt compilation, audit trail, hot reload
+> via `POST /api/identity/reload`, versioning) still applies.
 
 ## Overview
 

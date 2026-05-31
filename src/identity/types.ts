@@ -1,7 +1,7 @@
 // types.ts — Office Identity types for the Curia instance.
 //
 // These types define the shape of the identity config that is stored in the DB,
-// loaded from config/office-identity.yaml on first startup, and injected into
+// seeded from src/identity/defaults.ts on first startup, and injected into
 // the coordinator system prompt via the ${office_identity_block} token.
 
 export interface OfficeIdentity {
