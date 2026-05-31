@@ -13,6 +13,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Removed
+
+- **Legacy `/old` dev proxy** — removed dead proxy entries and stale comment now that the old hand-rolled SPA is fully replaced by the React console.
+
 ### Fixed
 
 - **Console static asset auth** — `@fastify/static` v9 with `wildcard:false` registers an individual Fastify route per file in `consoleDist`, so `routeOptions.url` returns the exact asset path (e.g. `/assets/index-CU1g6HdR.js`) rather than `/*`; the old bypass list missed these routes and every static asset returned 401. Auth hook now skips bearer auth for all non-`/api/` routes.

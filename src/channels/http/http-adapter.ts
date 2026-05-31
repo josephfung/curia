@@ -271,7 +271,7 @@ export class HttpAdapter {
       });
     }
 
-    // Console app — registered last so all explicit API/KG/old routes above take priority
+    // Console app — registered last so all explicit API/KG routes above take priority
     // over its /* wildcard. The React app handles auth client-side via session cookie.
     await this.app.register(consoleRoutes);
 
