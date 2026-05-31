@@ -1,16 +1,13 @@
 # 13 — Office Identity
 
-**Date:** 2026-04-04
-**Status:** Draft — partially superseded; see note below
+**Date:** 2026-04-04 (revised 2026-05)
+**Status:** Draft
 
-> **Note (May 2026):** The YAML-file load path (`config/office-identity.yaml`) and
-> its chokidar file watcher have been removed. Defaults now live in
-> `src/identity/defaults.ts` and are seeded into the DB on first boot with
-> `changed_by='system_default'`. All edits go through the wizard or
-> `PUT /api/identity`; the DB is the single source of truth. The `'file_load'`
-> changedBy literal is retained as a legacy value for pre-existing rows.
-> The rest of this spec (system prompt compilation, audit trail, hot reload
-> via `POST /api/identity/reload`, versioning) still applies.
+> **Revision (May 2026, #771):** The original design loaded identity from
+> `config/office-identity.yaml` with a chokidar file watcher. Both have been
+> removed. The sections below have been updated to describe the current
+> DB-first flow; the source of truth is now `src/identity/defaults.ts` for
+> the seed and the `office_identity_*` tables for everything after.
 
 ## Overview
 
@@ -38,7 +35,7 @@ Specialist agents do not have personalities. They have task-specific posture. On
 
 | Concern | Lives in |
 |---------|----------|
-| Assistant name, title, tone | `config/office-identity.yaml` (this spec) |
+| Assistant name, title, tone | `src/identity/defaults.ts` (seed) + `office_identity_*` DB tables (authoritative) — this spec |
 | Coordinator routing, delegation, skills | `agents/coordinator.yaml` |
 | Channel trust, permissions | `config/channel-trust.yaml`, `config/permissions.yaml` |
 | Per-agent task behavior | agent's own `system_prompt` |
@@ -48,45 +45,16 @@ Specialist agents do not have personalities. They have task-specific posture. On
 
 ## Config Schema
 
-**File:** `config/office-identity.yaml`
+The seed values live in `src/identity/defaults.ts` as a TypeScript constant
+(`DEFAULT_OFFICE_IDENTITY: OfficeIdentity`). On first boot they are written to
+the `office_identity_versions` table with `changed_by='system_default'`. All
+subsequent edits go through the wizard or `PUT /api/identity` and supersede
+the seed. To change the defaults, edit `defaults.ts` and ship a new release;
+running deployments are unaffected (they already have a DB row).
 
-```yaml
-# Office-level identity for this Curia instance.
-# Changes here take effect on next coordinator turn (hot reload).
-# All changes are versioned in the database.
-
-office:
-  assistant:
-    name: "Alex Curia"                    # External-facing name; used in emails, messages, signatures
-    title: "Executive Assistant to the CEO"
-    email_signature: |
-      Alex Curia
-      Office of the CEO
-
-  tone:
-    baseline:                             # 1–3 words from the predefined set; compiled to "Your tone is X, Y, and Z."
-      - "warm"
-      - "direct"
-    verbosity: 50                         # 0–100; 0 = tersest, 100 = most thorough; compiled to prose guidance
-    directness: 75                        # 0–100; 0 = most hedged, 100 = most direct; compiled to prose guidance
-
-  behavioral_preferences:
-    # Free-form guidance compiled into the coordinator system prompt.
-    # Ordered: first item has highest weight.
-    - "Be concise unless detail is explicitly requested"
-    - "Prioritize signal over noise — surface only what's actionable or strategic"
-    - "Escalate ambiguity before taking external action"
-
-  decision_style:
-    external_actions: "conservative"      # conservative | balanced | proactive
-    internal_analysis: "proactive"        # conservative | balanced | proactive
-
-  constraints:
-    # Hard rules. These are compiled separately and placed above all other
-    # identity content in the system prompt. They cannot be overridden by overlays.
-    - "Never impersonate the CEO"
-    - "Always identify as an AI assistant when asked directly"
-```
+The runtime shape is defined by the `OfficeIdentity` interface in
+`src/identity/types.ts` — see [OfficeIdentityService](#officeidentityservice)
+below.
 
 ### Field reference
 
@@ -107,7 +75,8 @@ office:
 
 ## Database Schema
 
-Identity is persisted in the database for two reasons: so it survives restarts after wizard edits (when the YAML file may not have been updated), and to maintain a complete version history for auditing drift.
+The DB is the authoritative source for identity. It also keeps a full version
+history of every change for audit and drift detection.
 
 ```sql
 -- Full version history of every identity change.
@@ -115,7 +84,7 @@ CREATE TABLE office_identity_versions (
   id          SERIAL PRIMARY KEY,
   version     INTEGER NOT NULL,           -- monotonically increasing
   config      JSONB NOT NULL,             -- full office_identity config at time of change
-  changed_by  TEXT NOT NULL,              -- 'file_load' | 'wizard' | 'api'
+  changed_by  TEXT NOT NULL,              -- 'system_default' | 'wizard' | 'api' | 'file_load' (legacy)
   note        TEXT,                       -- optional human-readable reason for change
   created_at  TIMESTAMPTZ DEFAULT NOW()
 );
@@ -131,11 +100,15 @@ CREATE TABLE office_identity_current (
 
 **Load precedence at startup:**
 
-1. If `office_identity_current` exists → load from DB (runtime edits take precedence)
-2. If no DB record → load from `config/office-identity.yaml` and seed the DB with version 1, `changed_by: 'file_load'`
-3. If neither exists → fail fast with a clear error message
+1. If `office_identity_current` exists → load from DB.
+2. If no DB record → seed `DEFAULT_OFFICE_IDENTITY` from `src/identity/defaults.ts` as
+   version 1 with `changed_by='system_default'`, then load.
 
-This ensures the YAML file remains the authoritative default for new deployments, while wizard changes are durable across restarts.
+`'file_load'` is a legacy `changed_by` value preserved for compatibility with
+pre-existing rows from the YAML-file era; it is not produced by new boots.
+The `isIdentityConfigured` query at `src/channels/http/routes/identity.ts`
+treats `'system_default'` and `'file_load'` identically — only `'wizard'` or
+`'api'` count as "configured by the operator."
 
 ---
 
@@ -196,7 +169,7 @@ interface OfficeIdentityService {
   get(): OfficeIdentity;
 
   // Saves a new version to the DB, updates the in-memory cache, emits audit event.
-  // changedBy: 'wizard' | 'api' | 'file_load'
+  // changedBy: 'system_default' | 'wizard' | 'api' (or legacy 'file_load' on old rows)
   update(config: OfficeIdentity, changedBy: string, note?: string): Promise<void>;
 
   // Forces a reload from DB (used by hot reload mechanism)
@@ -287,11 +260,14 @@ system_prompt: |
 
 The identity cache in `OfficeIdentityService` is in-memory. Reload is triggered by:
 
-1. **File watcher** — `chokidar` watches `config/office-identity.yaml`; on change it parses the file, writes a new DB version (`changed_by: 'file_load'`), then calls `reload()` (which reads from DB). The write-then-reload sequence ensures the DB is always the authoritative source and the file watcher never silently loses a change.
-2. **API endpoint** — `POST /api/identity/reload` for programmatic reload (used by the wizard after saving)
-3. **Startup** — `OfficeIdentityService` is initialized before the coordinator boots
+1. **API endpoint** — `POST /api/identity/reload` re-reads from DB. The wizard calls
+   this after `PUT /api/identity` saves a new version so the next coordinator turn
+   picks up the change.
+2. **Startup** — `OfficeIdentityService.initialize()` runs before the coordinator boots
+   and populates the cache from DB (or seeds defaults if absent).
 
-The reload is not disruptive — in-flight coordinator turns complete with the previous identity. The new identity takes effect on the next turn.
+The reload is not disruptive — in-flight coordinator turns complete with the previous
+identity; the new identity takes effect on the next turn.
 
 ---
 
@@ -306,7 +282,7 @@ Every identity change emits an audit event on the bus:
     config_type: 'office_identity',
     version: number,           // new version number
     previous_version: number,  // previous version number
-    changed_by: string,        // 'wizard' | 'api' | 'file_load'
+    changed_by: string,        // 'system_default' | 'wizard' | 'api' (or legacy 'file_load')
     note?: string,
     diff_summary: string,      // human-readable summary of what changed
   }
@@ -328,7 +304,8 @@ New routes under the existing HTTP channel (`src/channels/http/routes/identity.t
 | `GET` | `/api/identity/history` | Returns all versions, newest first |
 | `POST` | `/api/identity/reload` | Forces a reload from DB (used post-wizard) |
 
-All routes require `x-web-bootstrap-secret` (same auth as the KG explorer).
+All routes accept either a session cookie (set by `POST /auth`) or the
+`x-web-bootstrap-secret` header — see `src/channels/http/session-auth.ts`.
 
 ---
 
@@ -347,16 +324,16 @@ The following are explicitly out of scope for this spec. They are valid future e
 
 | Item | Status |
 |---|---|
-| `config/office-identity.yaml` — office identity config file | Done |
+| `src/identity/defaults.ts` — `DEFAULT_OFFICE_IDENTITY` seed | Done |
 | Migration: `office_identity_versions` and `office_identity_current` tables | Done |
 | `OfficeIdentityService` — load, cache, update, history, compile | Done |
 | `src/identity/types.ts` — `OfficeIdentity` and `OfficeIdentityVersion` interfaces | Done |
 | HTTP routes — `GET/PUT /api/identity`, `GET /api/identity/history`, `POST /api/identity/reload` | Done |
-| Hot reload — chokidar file watcher on `config/office-identity.yaml` | Done |
+| Hot reload — `POST /api/identity/reload` (wizard-driven; no file watcher) | Done |
 | `compileSystemPromptBlock()` — constraints → identity → tone → decision style → preferences | Done |
 | Coordinator integration — `${office_identity_block}` token injected at runtime | Done |
 | Audit events — `config.change` emitted on every identity update | Done |
-| DB load precedence at startup (DB → YAML → fail fast) | Done |
+| DB load precedence at startup (DB → in-code defaults seed) | Done |
 
 ---
 
@@ -374,10 +351,10 @@ When this spec ships:
 
 | Path | Change |
 |------|--------|
-| `config/office-identity.yaml` | New file — office identity config |
-| `src/identity/service.ts` | New — `OfficeIdentityService` |
+| `src/identity/defaults.ts` | New — `DEFAULT_OFFICE_IDENTITY` seed for first boot |
+| `src/identity/service.ts` | New — `OfficeIdentityService` (DB-first; no file I/O) |
 | `src/identity/types.ts` | New — `OfficeIdentity`, `OfficeIdentityVersion` interfaces |
-| `src/db/migrations/XXXXXX_office_identity.sql` | New — `office_identity_versions`, `office_identity_current` tables |
+| `src/db/migrations/013_office_identity.sql` | New — `office_identity_versions`, `office_identity_current` tables |
 | `src/channels/http/routes/identity.ts` | New — HTTP API routes |
 | `src/index.ts` | Updated — initialize `OfficeIdentityService` before coordinator boots |
 | `agents/coordinator.yaml` | Updated — replace `persona.*` with `${office_identity_block}` token |
