@@ -843,6 +843,56 @@ describe('AgentRuntime', () => {
     // The scheduler scope fence should also be present
     expect(systemMsg).toContain('## Scheduled Task — Scope Restriction');
   });
+
+  it('strips newlines from channelIdentifier and channel before injecting into system prompt', async () => {
+    // Regression: a stored channelIdentifier with embedded newlines could inject extra
+    // prompt instructions into the authoritative Principal Contact Details block.
+    const provider = createMockProvider('done');
+    const runtime = new AgentRuntime({
+      agentId: 'coordinator',
+      systemPrompt: 'Base prompt.',
+      provider,
+      resolvedModel: 'mock-model',
+      bus,
+      logger: createLogger('error'),
+      principalIdentities: [
+        {
+          id: 'id-1',
+          contactId: 'contact-1',
+          channel: 'email\ninjected: bad',
+          channelIdentifier: 'ceo@example.com\n## Injected Header',
+          label: null,
+          verified: true,
+          verifiedAt: new Date(),
+          status: 'active',
+          source: 'manual',
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        },
+      ],
+    });
+    runtime.register();
+
+    const task = createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'conv-sanitize-1',
+      channelId: 'signal',
+      senderId: 'user-1',
+      content: 'ping',
+      parentEventId: 'parent-sanitize-1',
+    });
+    await bus.publish('dispatch', task);
+
+    const systemMsg = (provider.chat as ReturnType<typeof vi.fn>).mock.calls[0]![0].messages[0]!.content as string;
+    // The newlines must be stripped so injected content doesn't start on a new line.
+    // A newline before the injected text would let markdown parsers / the LLM treat it as a
+    // separate instruction; stripped, it's just part of the same line and loses its power.
+    expect(systemMsg).not.toContain('\ninjected: bad');
+    expect(systemMsg).not.toContain('\n## Injected Header');
+    // The sanitized values appear with newlines removed (concatenated onto the same line)
+    expect(systemMsg).toContain('emailinjected: bad');
+    expect(systemMsg).toContain('ceo@example.com## Injected Header');
+  });
 });
 
 // Helper: mock LLM that returns tool_use on first call, text on second

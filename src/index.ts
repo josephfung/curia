@@ -1431,7 +1431,7 @@ async function main(): Promise<void> {
       },
       // Principal's verified channel identities — injected per-task into ALL agents so
       // every agent knows where to reach the CEO without inferring addresses. Sourced from
-      // the startup-cached principalIdentities array (already filtered to verified only).
+      // the startup-cached principalIdentities array (already filtered to verified + active).
       // Mirrors the channelAccounts pattern (#387). Fixes #786.
       principalIdentities,
       // Agent registry — allows the runtime to look up the target agent's

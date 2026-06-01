@@ -327,16 +327,20 @@ export class AgentRuntime {
     // Append the principal's verified contact details so agents have an authoritative source
     // for reaching the CEO without inferring or guessing addresses. Injected into ALL agents
     // (coordinator + specialists) following the same rationale as channelAccounts (#387).
-    // Only verified identities reach this array (filtered at startup). The block labels
-    // them as authoritative to prevent the LLM from substituting inferred alternatives.
+    // Only verified and active identities reach this array (filtered at startup). The block
+    // labels them as authoritative to prevent the LLM from substituting inferred alternatives.
     const { principalIdentities } = this.config;
     if (principalIdentities && principalIdentities.length > 0) {
       const lines: string[] = ['## Principal Contact Details'];
       lines.push('These are the verified channel addresses for the principal you serve.');
       lines.push('Use them when you need to reach the principal. Do not infer or substitute — these are authoritative.');
       lines.push('');
+      // Strip newlines from DB-sourced strings before interpolating into the system prompt.
+      // Prevents stored prompt injection: a channelIdentifier with embedded newlines could
+      // break out of the current line and inject markdown headers or instructions.
+      const stripNewlines = (s: string): string => s.replace(/[\r\n]/g, '');
       for (const identity of principalIdentities) {
-        lines.push(`- ${identity.channel}: ${identity.channelIdentifier}`);
+        lines.push(`- ${stripNewlines(identity.channel)}: ${stripNewlines(identity.channelIdentifier)}`);
       }
       effectiveSystemPrompt += '\n\n' + lines.join('\n');
     }
