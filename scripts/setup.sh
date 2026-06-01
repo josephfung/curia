@@ -111,7 +111,12 @@ generate_secrets() {
     DB_PASSWORD=$(openssl rand -hex 32)
     API_TOKEN=$(openssl rand -hex 32)
     WEB_APP_BOOTSTRAP_SECRET=$(openssl rand -hex 32)
-    DATABASE_URL="postgres://curia:${DB_PASSWORD}@localhost:5432/curia"
+    # DATABASE_URL is consumed by host-side `pnpm migrate` (against the postgres
+    # container's published port), so the port here must match POSTGRES_PORT.
+    # When unset, both default to 5432. Keep this in lockstep with the postgres
+    # service's `ports:` line in docker-compose.yml.
+    local pg_host_port="${POSTGRES_PORT:-5432}"
+    DATABASE_URL="postgres://curia:${DB_PASSWORD}@localhost:${pg_host_port}/curia"
 }
 
 # Templates ENV_EXAMPLE into ENV_FILE, substituting generated secrets.
