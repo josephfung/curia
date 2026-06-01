@@ -21,6 +21,11 @@ import {
 
 const TOTAL_STEPS = 5;
 
+// localStorage key consumed by useChatSession to fire the auto-kickoff message
+// on the first chat mount after the wizard completes. Must match the constant
+// in useChatSession.ts exactly.
+const ONBOARDING_KICKOFF_KEY = 'curia:onboarding:welcome-banner-pending';
+
 // ── Identity API types ────────────────────────────────────────────────────────
 
 interface IdentityResponse {
@@ -177,7 +182,10 @@ export default function WizardPage() {
             data.bootStartedAt !== originalBootStartedAt &&
             !data.externalAdaptersPending;
           if (restarted) {
-            if (!cancelled) await navigate({ to: '/chat' });
+            if (!cancelled) {
+              try { localStorage.setItem(ONBOARDING_KICKOFF_KEY, '1'); } catch { /* best-effort */ }
+              await navigate({ to: '/chat' });
+            }
             return;
           }
         }
@@ -283,6 +291,7 @@ export default function WizardPage() {
       const status = await statusRes.json() as SetupStatusResponse;
 
       if (!status.externalAdaptersPending) {
+        try { localStorage.setItem(ONBOARDING_KICKOFF_KEY, '1'); } catch { /* best-effort */ }
         await navigate({ to: '/chat' });
         return;
       }
@@ -299,6 +308,7 @@ export default function WizardPage() {
         // are missing. The first case is success-equivalent — channels are
         // up — so just navigate. The second is theoretically reachable only
         // by direct API use, since our own gating above won't allow it.
+        try { localStorage.setItem(ONBOARDING_KICKOFF_KEY, '1'); } catch { /* best-effort */ }
         await navigate({ to: '/chat' });
         return;
       }

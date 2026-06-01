@@ -43,7 +43,7 @@ export class BehavioralPreferencesUpdateHandler implements SkillHandler {
       let changes: string;
 
       if (operation === 'append') {
-        const newEntries = (entries as string[]).filter((e) => !existing.includes(e));
+        const newEntries = [...new Set((entries as string[]).filter((e) => !existing.includes(e)))];
         if (newEntries.length === 0) {
           // Nothing to write — return current state without a DB round-trip.
           return {
