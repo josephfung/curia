@@ -194,6 +194,9 @@ export interface SkillContext {
   /** Executive profile service — available to skills declaring 'executiveProfileService' in capabilities.
    *  Manages the CEO's writing voice profile. */
   executiveProfileService?: import('../executive/service.js').ExecutiveProfileService;
+  /** Office identity service — available to skills declaring 'officeIdentityService' in capabilities.
+   *  Manages the Curia instance identity including behavioral preferences. */
+  officeIdentityService?: import('../identity/service.js').OfficeIdentityService;
   /** Browser service — available to skills declaring 'browserService' in capabilities.
    *  Provides a warm Playwright Chromium instance with session management.
    *  Skills use this to interact with JS-rendered pages and web forms. */
