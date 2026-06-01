@@ -19,7 +19,7 @@
 
 import * as path from 'node:path';
 import { runner } from 'node-pg-migrate';
-import { loadConfig, loadYamlConfig, resolveChannelAccounts } from './config.js';
+import { ceoPrimaryEmailIsPlaceholder, loadConfig, loadYamlConfig, resolveChannelAccounts } from './config.js';
 import { createLogger } from './logger.js';
 import { HttpAdapter } from './channels/http/http-adapter.js';
 import { createPool } from './db/connection.js';
@@ -121,6 +121,17 @@ async function main(): Promise<void> {
   const yamlConfig = loadYamlConfig(configDir);
   const logger = createLogger(config.logLevel);
   logger.info('Curia starting...');
+
+  // Surface the `.env.example` placeholder case so it's obvious in logs why
+  // CEO_PRIMARY_EMAIL appears to be ignored. loadConfig() normalized the value
+  // to undefined silently because the logger doesn't exist yet at that point;
+  // warn here once the logger is available.
+  if (ceoPrimaryEmailIsPlaceholder()) {
+    logger.warn(
+      'CEO_PRIMARY_EMAIL is the literal .env.example placeholder ("you@yourdomain.com") — treating as unset. ' +
+        'Comment the line out or set a real address; fresh installs should rely on the /setup wizard to create the principal.',
+    );
+  }
 
   // Compile the security context block from config at startup.
   // runStartupValidation (below) enforces the JSON schema, which requires trust_thresholds
@@ -521,6 +532,10 @@ async function main(): Promise<void> {
   // provisional (the extractParticipants default), causing their messages to be held.
   // Also creates (or backfills) a KG person node so entity context enrichment works
   // for the CEO. See issue #380.
+  //
+  // Note: `config.ceoPrimaryEmail` is normalized in loadConfig() so the literal
+  // `.env.example` placeholder `you@yourdomain.com` reads as undefined here — this
+  // block is therefore a no-op for fresh installs that didn't customize that line.
   let ceoContactId: string | undefined;
   if (config.ceoPrimaryEmail) {
     try {
@@ -557,7 +572,13 @@ async function main(): Promise<void> {
       }
     }
   } else {
-    logger.warn('CEO_PRIMARY_EMAIL not set — CEO contact bootstrap skipped. Set this to prevent CEO emails from being held on first contact.');
+    // No CEO_PRIMARY_EMAIL configured (or it was the .env.example placeholder, which
+    // loadConfig() normalizes to undefined). This is the normal path for fresh
+    // installs post-#771 — the in-app onboarding wizard creates the principal without
+    // an email channel binding; per-channel verification flows attach identities later.
+    // Only operators running the historical email-channel back-compat path need to
+    // set CEO_PRIMARY_EMAIL.
+    logger.info('CEO_PRIMARY_EMAIL not set — CEO contact bootstrap skipped (principal will be created via the onboarding wizard at /setup).');
   }
 
   // Look up the CEO's display name from the contact system for the executive voice

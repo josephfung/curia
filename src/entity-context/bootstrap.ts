@@ -72,11 +72,18 @@ export async function bootstrapAgentIdentity(
     // The partial unique index idx_contacts_kg_node_unique (migration 010) ensures
     // ON CONFLICT fires when a concurrent INSERT tries to create a second contact for
     // the same KG node.
+    //
+    // display_name is included in DO UPDATE so renames made via the wizard
+    // (PUT /api/identity → version bump → process restart → bootstrap re-runs with
+    // the new name) actually reach the contacts row. Without this, the contact
+    // would stay frozen at whatever name was first inserted (typically the
+    // DEFAULT_OFFICE_IDENTITY seed) even after the operator changes it. The KG
+    // node label clause above already does the same thing for the same reason.
     const contactResult = await pool.query<{ id: string }>(
       `INSERT INTO contacts (kg_node_id, display_name, role, status, system_role, created_at, updated_at)
        VALUES ($1, $2, 'agent', 'confirmed', 'agent', now(), now())
        ON CONFLICT (kg_node_id) WHERE kg_node_id IS NOT NULL
-       DO UPDATE SET role = 'agent', system_role = 'agent', updated_at = now()
+       DO UPDATE SET display_name = EXCLUDED.display_name, role = 'agent', system_role = 'agent', updated_at = now()
        RETURNING id`,
       [kgNodeId, displayName],
     );

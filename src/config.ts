@@ -778,6 +778,33 @@ export function resolveChannelAccounts(yamlConfig: YamlConfig, config: Config): 
   return [];
 }
 
+/**
+ * The literal placeholder shipped in `.env.example`. If the operator runs
+ * `pnpm run setup` and never edits the generated `.env`, this string ends up
+ * as a real env value at boot. Treat it as unset — the in-app wizard handles
+ * principal creation now, so no boot-time bootstrap is needed for fresh installs.
+ *
+ * Exported for use by `loadConfig`'s telemetry hook below.
+ */
+export const CEO_PRIMARY_EMAIL_PLACEHOLDER = 'you@yourdomain.com';
+
+function normalizeCeoPrimaryEmail(raw: string | undefined): string | undefined {
+  const trimmed = raw?.trim().toLowerCase();
+  if (!trimmed) return undefined;
+  if (trimmed === CEO_PRIMARY_EMAIL_PLACEHOLDER) return undefined;
+  return trimmed;
+}
+
+/**
+ * Returns true if the raw `CEO_PRIMARY_EMAIL` env var was set to the literal
+ * `.env.example` placeholder. Callers use this to log a warning once the
+ * logger has been initialized — `loadConfig` itself runs before the logger
+ * exists and cannot warn directly.
+ */
+export function ceoPrimaryEmailIsPlaceholder(): boolean {
+  return process.env.CEO_PRIMARY_EMAIL?.trim().toLowerCase() === CEO_PRIMARY_EMAIL_PLACEHOLDER;
+}
+
 export function loadConfig(): Config {
   const databaseUrl = process.env.DATABASE_URL;
   if (!databaseUrl) {
@@ -818,7 +845,13 @@ export function loadConfig(): Config {
     nylasGrantId: process.env.NYLAS_GRANT_ID,
     nylasPollingIntervalMs,
     nylasSelfEmail: process.env.NYLAS_SELF_EMAIL ?? '',
-    ceoPrimaryEmail: process.env.CEO_PRIMARY_EMAIL?.trim().toLowerCase() || undefined,
+    // Reject the literal `.env.example` placeholder so a user who runs
+    // `pnpm run setup` and never edits the generated .env doesn't get a phantom
+    // CEO contact named "CEO" bound to `you@yourdomain.com` created at boot —
+    // which then trips the wizard's principal-exists auto-skip and prevents the
+    // "About you" step from being shown. Lowercase comparison matches the
+    // .toLowerCase() normalization on real values.
+    ceoPrimaryEmail: normalizeCeoPrimaryEmail(process.env.CEO_PRIMARY_EMAIL),
     ceoSignalNumber: process.env.CEO_SIGNAL_NUMBER?.trim() || undefined,
     // .trim() prevents a whitespace-only value (e.g. "  ") from activating the
     // Signal adapter with a bogus socket path or phone number.
