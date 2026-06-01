@@ -9,6 +9,7 @@ import type { ContactStatus, TrustLevel } from '../../../contacts/types.js';
 import { MessageRejectedError, type EventRouter } from '../event-router.js';
 import { assertSecret, compareSecrets, hashToken, type SessionStore } from '../session-auth.js';
 import { markdownToHtml } from '../../../utils/markdown-to-html.js';
+import { stripOutboundContextPreamble } from '../../../dispatch/outbound-context.js';
 
 export interface KnowledgeGraphRouteOptions {
   pool: Pool;
@@ -934,9 +935,15 @@ export async function knowledgeGraphRoutes(
       const messages = rows.map((row) => {
         // Per-row try/catch so one bad message doesn't fail the whole page.
         let html: string | null = null;
+        // Strip dispatcher-injected outbound context preambles from user messages
+        // before serving them — the preamble is coordinator-internal and looks
+        // confusing inside the user's chat bubble.
+        const content = row.role === 'user'
+          ? stripOutboundContextPreamble(row.content)
+          : row.content;
         if (row.role === 'assistant') {
           try {
-            html = markdownToHtml(row.content);
+            html = markdownToHtml(content);
           } catch (convErr) {
             logger.warn({ err: convErr, messageId: row.id }, 'markdownToHtml failed for history row; falling back to plain text');
           }
@@ -944,7 +951,7 @@ export async function knowledgeGraphRoutes(
         return {
           id: row.id,
           role: row.role as 'user' | 'assistant',
-          content: row.content,
+          content,
           html,
           timestamp: row.created_at.toISOString(),
         };
