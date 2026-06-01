@@ -80,6 +80,7 @@ export class ExecutionLayer {
   private entityContextAssembler?: EntityContextAssembler;
   private autonomyService?: AutonomyService;
   private executiveProfileService?: import('../executive/service.js').ExecutiveProfileService;
+  private officeIdentityService?: import('../identity/service.js').OfficeIdentityService;
   private browserService?: BrowserService;
   private bullpenService?: import('../memory/bullpen.js').BullpenService;
   private approvalTrigger?: ApprovalTriggerService;
@@ -112,6 +113,7 @@ export class ExecutionLayer {
     entityContextAssembler?: EntityContextAssembler;
     autonomyService?: AutonomyService;
     executiveProfileService?: import('../executive/service.js').ExecutiveProfileService;
+    officeIdentityService?: import('../identity/service.js').OfficeIdentityService;
     browserService?: BrowserService;
     bullpenService?: import('../memory/bullpen.js').BullpenService;
     approvalTrigger?: ApprovalTriggerService;
@@ -140,6 +142,7 @@ export class ExecutionLayer {
     this.entityContextAssembler = options?.entityContextAssembler;
     this.autonomyService = options?.autonomyService;
     this.executiveProfileService = options?.executiveProfileService;
+    this.officeIdentityService = options?.officeIdentityService;
     this.browserService = options?.browserService;
     this.bullpenService = options?.bullpenService;
     this.approvalTrigger = options?.approvalTrigger;
@@ -574,6 +577,7 @@ export class ExecutionLayer {
       browserService: this.browserService,
       bullpenService: this.bullpenService,
       executiveProfileService: this.executiveProfileService,
+      officeIdentityService: this.officeIdentityService,
       actionLogRepo: this.actionLogRepo,
       confidencePipeline: this.confidencePipeline,
       // tempFileStore is handled as a special case in the injection loop (writeTempFile closure).

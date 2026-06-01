@@ -27,7 +27,7 @@ import type { Logger } from '../logger.js';
 export const VALID_CAPABILITIES: ReadonlySet<string> = new Set([
   'bus', 'agentRegistry', 'outboundGateway', 'heldMessages',
   'schedulerService', 'entityMemory', 'nylasCalendarClient',
-  'autonomyService', 'executiveProfileService', 'browserService', 'bullpenService', 'skillSearch',
+  'autonomyService', 'executiveProfileService', 'officeIdentityService', 'browserService', 'bullpenService', 'skillSearch',
   'actionLogRepo', 'executionLayer', 'confidencePipeline', 'tempFileStore',
   'infraLlm', 'outboundContext',
 ]);
