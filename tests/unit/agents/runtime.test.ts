@@ -637,6 +637,212 @@ describe('AgentRuntime', () => {
     // No securityContextBlock provided, so no security block should appear
     expect(systemMsg).not.toContain('## Security');
   });
+
+  it('injects ## Principal Contact Details block when principalIdentities is non-empty', async () => {
+    const provider = createMockProvider('OK');
+    const runtime = new AgentRuntime({
+      agentId: 'coordinator',
+      systemPrompt: 'Base prompt.',
+      provider,
+      resolvedModel: 'mock-model',
+      bus,
+      logger: createLogger('error'),
+      principalIdentities: [
+        {
+          id: 'id-1',
+          contactId: 'contact-ceo',
+          channel: 'email',
+          channelIdentifier: 'ceo@example.com',
+          label: null,
+          verified: true,
+          verifiedAt: new Date(),
+          status: 'active',
+          source: 'ceo_stated',
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        },
+        {
+          id: 'id-2',
+          contactId: 'contact-ceo',
+          channel: 'signal',
+          channelIdentifier: '+15550001234',
+          label: null,
+          verified: true,
+          verifiedAt: new Date(),
+          status: 'active',
+          source: 'ceo_stated',
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        },
+      ],
+    });
+    runtime.register();
+
+    const task = createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'conv-principal-1',
+      channelId: 'cli',
+      senderId: 'user',
+      content: 'Hello',
+      parentEventId: 'parent-principal-1',
+    });
+    await bus.publish('dispatch', task);
+
+    const systemMsg = (provider.chat as ReturnType<typeof vi.fn>).mock.calls[0]![0].messages[0]!.content as string;
+    expect(systemMsg).toContain('## Principal Contact Details');
+    expect(systemMsg).toContain('- email: ceo@example.com');
+    expect(systemMsg).toContain('- signal: +15550001234');
+    expect(systemMsg).toContain('Do not infer or substitute — these are authoritative.');
+    // Block appended after base prompt with correct separator
+    expect(systemMsg).toContain('Base prompt.\n\n## Principal Contact Details');
+  });
+
+  it('omits ## Principal Contact Details block when principalIdentities is empty', async () => {
+    const provider = createMockProvider('OK');
+    const runtime = new AgentRuntime({
+      agentId: 'coordinator',
+      systemPrompt: 'Base prompt.',
+      provider,
+      resolvedModel: 'mock-model',
+      bus,
+      logger: createLogger('error'),
+      principalIdentities: [],
+    });
+    runtime.register();
+
+    const task = createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'conv-principal-2',
+      channelId: 'cli',
+      senderId: 'user',
+      content: 'Hello',
+      parentEventId: 'parent-principal-2',
+    });
+    await bus.publish('dispatch', task);
+
+    const systemMsg = (provider.chat as ReturnType<typeof vi.fn>).mock.calls[0]![0].messages[0]!.content as string;
+    expect(systemMsg).not.toContain('## Principal Contact Details');
+  });
+
+  it('omits ## Principal Contact Details block when principalIdentities is not provided', async () => {
+    const provider = createMockProvider('OK');
+    const runtime = new AgentRuntime({
+      agentId: 'coordinator',
+      systemPrompt: 'Base prompt.',
+      provider,
+      resolvedModel: 'mock-model',
+      bus,
+      logger: createLogger('error'),
+      // principalIdentities intentionally omitted
+    });
+    runtime.register();
+
+    const task = createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'conv-principal-3',
+      channelId: 'cli',
+      senderId: 'user',
+      content: 'Hello',
+      parentEventId: 'parent-principal-3',
+    });
+    await bus.publish('dispatch', task);
+
+    const systemMsg = (provider.chat as ReturnType<typeof vi.fn>).mock.calls[0]![0].messages[0]!.content as string;
+    expect(systemMsg).not.toContain('## Principal Contact Details');
+  });
+
+  it('injects ## Your Contact Details before ## Principal Contact Details when both are configured', async () => {
+    // Validates the ordering of the two identity blocks — channelAccounts always comes first.
+    const provider = createMockProvider('OK');
+    const runtime = new AgentRuntime({
+      agentId: 'coordinator',
+      systemPrompt: 'Base prompt.',
+      provider,
+      resolvedModel: 'mock-model',
+      bus,
+      logger: createLogger('error'),
+      channelAccounts: { email: 'agent@example.com' },
+      principalIdentities: [
+        {
+          id: 'id-ord-1',
+          contactId: 'contact-ceo',
+          channel: 'email',
+          channelIdentifier: 'ceo@example.com',
+          label: null,
+          verified: true,
+          verifiedAt: new Date(),
+          status: 'active',
+          source: 'ceo_stated',
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        },
+      ],
+    });
+    runtime.register();
+
+    const task = createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'conv-order-1',
+      channelId: 'cli',
+      senderId: 'user',
+      content: 'Hello',
+      parentEventId: 'parent-order-1',
+    });
+    await bus.publish('dispatch', task);
+
+    const systemMsg = (provider.chat as ReturnType<typeof vi.fn>).mock.calls[0]![0].messages[0]!.content as string;
+    const ownDetailsPos = systemMsg.indexOf('## Your Contact Details');
+    const principalDetailsPos = systemMsg.indexOf('## Principal Contact Details');
+    expect(ownDetailsPos).toBeGreaterThan(-1);
+    expect(principalDetailsPos).toBeGreaterThan(-1);
+    expect(ownDetailsPos).toBeLessThan(principalDetailsPos);
+  });
+
+  it('injects ## Principal Contact Details block on scheduler-dispatched tasks', async () => {
+    const provider = createMockProvider('OK');
+    const runtime = new AgentRuntime({
+      agentId: 'coordinator',
+      systemPrompt: 'Base prompt.',
+      provider,
+      resolvedModel: 'mock-model',
+      bus,
+      logger: createLogger('error'),
+      principalIdentities: [
+        {
+          id: 'id-sched-1',
+          contactId: 'contact-ceo',
+          channel: 'email',
+          channelIdentifier: 'ceo@example.com',
+          label: null,
+          verified: true,
+          verifiedAt: new Date(),
+          status: 'active',
+          source: 'ceo_stated',
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        },
+      ],
+    });
+    runtime.register();
+
+    // Scheduler-dispatched tasks use channelId 'scheduler' — verify the principal
+    // contact block is present in the effective prompt on these tasks too.
+    const task = createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'conv-sched-principal',
+      channelId: 'scheduler',
+      senderId: 'system',
+      content: 'Run weekly summary',
+      parentEventId: 'parent-sched-1',
+    });
+    await bus.publish('dispatch', task);
+
+    const systemMsg = (provider.chat as ReturnType<typeof vi.fn>).mock.calls[0]![0].messages[0]!.content as string;
+    expect(systemMsg).toContain('## Principal Contact Details');
+    expect(systemMsg).toContain('- email: ceo@example.com');
+    // The scheduler scope fence should also be present
+    expect(systemMsg).toContain('## Scheduled Task — Scope Restriction');
+  });
 });
 
 // Helper: mock LLM that returns tool_use on first call, text on second

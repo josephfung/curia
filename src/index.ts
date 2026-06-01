@@ -910,9 +910,12 @@ async function main(): Promise<void> {
     principalContact = await contactService.findContactBySystemRole('principal');
     if (principalContact) {
       const withIdentities = await contactService.getContactWithIdentities(principalContact.id);
-      // Only use verified identities for the autonomy-bypass check — an unverified
-      // identity should not grant principal-bypass to an unverified address.
-      principalIdentities = (withIdentities?.identities ?? []).filter((id) => id.verified);
+      // Only use verified, active identities. Defunct/bounced addresses remain verified
+      // in the DB but are no longer reachable — presenting them as authoritative in the
+      // runtime prompt would cause agents to send to stale addresses with no fallback.
+      principalIdentities = (withIdentities?.identities ?? []).filter(
+        (id) => id.verified && id.status === 'active',
+      );
     }
   } catch (err) {
     logger.fatal(
@@ -1426,6 +1429,11 @@ async function main(): Promise<void> {
         email: resolvedEmailAccounts[0]?.selfEmail || undefined,
         phone: config.signalPhoneNumber || undefined,
       },
+      // Principal's verified channel identities — injected per-task into ALL agents so
+      // every agent knows where to reach the CEO without inferring addresses. Sourced from
+      // the startup-cached principalIdentities array (already filtered to verified only).
+      // Mirrors the channelAccounts pattern (#387). Fixes #786.
+      principalIdentities,
       // Agent registry — allows the runtime to look up the target agent's
       // expected_duration_seconds when injecting delegate timeouts (#387).
       agentRegistry,
