@@ -1,0 +1,16 @@
+{
+  "name": "behavioral-preferences-update",
+  "description": "Append or replace entries in the assistant's behavioral-preferences list. Use 'append' to add new preferences without discarding existing ones (idempotent — safe to call repeatedly); use 'replace' to overwrite the full list. Requires CEO authorization. Use after capturing a preference in conversation.",
+  "version": "1.0.0",
+  "sensitivity": "elevated",
+  "capabilities": ["officeIdentityService"],
+  "inputs": {
+    "operation": "string",
+    "entries": "string[] (list of preference strings to append or replace with)"
+  },
+  "outputs": { "preferences": "string[]", "summary": "string", "changes": "string" },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 15000,
+  "action_risk": "low"
+}
