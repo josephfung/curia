@@ -17,7 +17,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 - **Contacts page** — default filter tab changed from "All" to "Confirmed". (#670)
 - **Tasks page** — default filter tab changed from "All" to "Active". (#670)
-- **Chat history** — outbound context preambles injected by the dispatcher are now stripped from user messages before being served to the UI; the CEO's actual message is shown cleanly in their chat bubble. (#670)
+- **Chat history** — dispatcher-injected outbound context preambles stripped from user messages before display. (#670)
 - **Sidebar user info** — user avatar and name are now fetched from the principal contact record instead of being hardcoded. (#670)
 - **Sidebar version** — "Curia · admin" replaced with the app's version number (`v0.0.1`). (#670)
 - **Favicon** — Curia mark SVG added as the browser tab favicon. (#670)
