@@ -256,6 +256,38 @@ system_prompt: |
 
 ---
 
+## Populating `behavioralPreferences`
+
+The `behavioralPreferences` array is populated through two paths:
+
+1. **Form wizard at `/setup`** — step 3 ("Posture") includes a free-form
+   textarea. Submitting step 4 calls `PUT /api/identity` with the wizard's
+   compiled identity payload, including any new preferences appended to
+   the existing array. See [spec 18 — Onboarding](18-onboarding.md#layer-2--form-wizard-at-setup).
+
+2. **`behavioral-preferences-update` skill** — invoked by the `setup-wizard`
+   specialist agent during the in-chat onboarding conversation (and any
+   later "remember that I…" turn the coordinator delegates to it). The
+   skill calls `OfficeIdentityService.update(...)` with `'skill'` as the
+   `changedBy` value, producing a versioned row per change.
+
+   | Property | Value |
+   |----------|-------|
+   | `operation` | `'append'` (default, idempotent — deduplicates by exact string match) or `'replace'` |
+   | `entries` | non-empty `string[]` |
+   | `action_risk` | `low` (internal state write; min autonomy score 60) |
+   | `capabilities` | `['officeIdentityService']` |
+
+   The `officeIdentityService` capability is wired into the execution
+   layer in `src/skills/types.ts`, `src/skills/loader.ts`,
+   `src/skills/execution.ts`, and bootstrapped from `src/index.ts` —
+   mirroring the `executiveProfileService` pattern.
+
+   See [spec 18 — Onboarding](18-onboarding.md#layer-3--setup-wizard-specialist-agent)
+   for the conversational flow that drives this skill.
+
+---
+
 ## Hot Reload
 
 The identity cache in `OfficeIdentityService` is in-memory. Reload is triggered by:
@@ -334,6 +366,7 @@ The following are explicitly out of scope for this spec. They are valid future e
 | Coordinator integration — `${office_identity_block}` token injected at runtime | Done |
 | Audit events — `config.change` emitted on every identity update | Done |
 | DB load precedence at startup (DB → in-code defaults seed) | Done |
+| `behavioral-preferences-update` skill — append/replace via `officeIdentityService` capability | Done |
 
 ---
 

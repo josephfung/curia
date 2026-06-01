@@ -34,6 +34,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **Spec 18 — Onboarding** — consolidates the v0.32 onboarding stack (host bootstrap script, `/setup` form wizard, `setup-wizard` specialist) into a single spec; promotes the shipped `docs/wip/` design docs.
+- **Spec 13 — `behavioralPreferences` populating** — documents the two paths that populate the array (form wizard, `behavioral-preferences-update` skill) and cross-links spec 18.
 - **`setup-wizard` specialist** — first-conversation agent that interviews the principal, captures behavioral preferences, and guides feature setup.
 - **`behavioral-preferences-update` skill** — appends or replaces entries in `OfficeIdentity.behavioralPreferences` via `OfficeIdentityService` (`action_risk: low`).
 - **Chat auto-kickoff** — auto-sends a kickoff message on first chat mount when the onboarding flag is set.
