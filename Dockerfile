@@ -67,6 +67,12 @@ COPY --from=build /app/apps/console/dist ./apps/console/dist
 COPY agents/ ./agents/
 COPY skills/ ./skills/
 COPY config/ ./config/
+# JSON Schemas consumed by src/startup/validator.ts at boot. tsup bundles every
+# source file into a single dist/index.js, so the file-relative path that used
+# to compute schemasDir from `import.meta.dirname` would land at /schemas in
+# the container. The validator now takes schemasDir as an explicit parameter
+# computed from src/index.ts (../schemas), which resolves to /app/schemas here.
+COPY schemas/ ./schemas/
 COPY src/ ./src/
 
 # node_modules were installed as root above, so we chown the entire /app tree
@@ -89,8 +95,12 @@ RUN mkdir -p /tmp/.google_workspace_mcp \
 
 EXPOSE 3000
 
-# Health check matches the Fastify /api/health route
-HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+# Health check matches the Fastify /api/health route.
+# start_period bumped 15s → 60s to cover the realistic cold-boot cost:
+# JIT, agent loading, KG migrations check, scheduler init can take 20-30s
+# on small hosts. The previous 15s window flapped the container as "unhealthy"
+# before it had finished starting up.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
   CMD curl -f http://localhost:3000/api/health || exit 1
 
 # Drop to non-root before starting the process.
@@ -99,12 +109,36 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
 # a missing home they would get ENOENT. /tmp is world-writable and always exists.
 # USER and LOGNAME are not set automatically by Docker when using exec-form CMD
 # (no shell login), so we set them explicitly for MCP subprocess environments.
+#
+# NODE_ENV=production switches the pino logger to stdout JSON (default branch in
+# src/logger.ts). Without it, pino-pretty writes to `curia.log` *inside* the
+# container — invisible to `docker logs` and lost when the container exits.
+# That made #805 bug 3 effectively undebuggable: every fatal startup error
+# vanished before anyone could see it. File-based logging is an anti-pattern
+# inside containers; production-mode logging is the only sane default for the
+# Docker image.
+#
+# COREPACK_ENABLE_DOWNLOAD_PROMPT=0 is defence-in-depth: the CMD below invokes
+# tsx directly (no pnpm/corepack at runtime), but if anyone changes CMD back to
+# go through pnpm, modern corepack would prompt non-interactively and exit 1
+# silently. Keeping the env var means future corepack invocations don't block.
 ENV HOME=/tmp \
     USER=curia \
-    LOGNAME=curia
+    LOGNAME=curia \
+    NODE_ENV=production \
+    COREPACK_ENABLE_DOWNLOAD_PROMPT=0
 USER curia
 
-# tsx handles dynamic .ts skill imports with ESM .js→.ts extension resolution.
-# The compiled dist/index.js is the entrypoint, but it dynamically imports
-# raw .ts skill handlers at runtime.
-CMD ["pnpm", "exec", "tsx", "dist/index.js"]
+# Invoke tsx directly rather than going through `pnpm exec tsx ...`. The pnpm
+# route triggers corepack at runtime, which in turn looks for a pnpm tarball
+# in /tmp/.cache/corepack (HOME=/tmp for the curia user). That cache is empty
+# at runtime because the build-stage pnpm install ran as root and populated
+# /root/.cache/corepack, and corepack then prompts before downloading. In a
+# non-TTY container the prompt sees EOF and the process exits 1 silently —
+# exactly the failure mode that took two hours to debug in #805.
+#
+# tsx is needed because dist/index.js dynamically imports raw .ts skill handlers
+# at runtime via ESM .js→.ts extension resolution. node alone cannot do that.
+# The .bin shim is created by `pnpm add tsx` above and is the documented way
+# to call tsx without a package manager wrapper.
+CMD ["./node_modules/.bin/tsx", "dist/index.js"]

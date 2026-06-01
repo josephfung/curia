@@ -185,6 +185,14 @@ async function main(): Promise<void> {
       configDir,
       agentsDir: path.resolve(import.meta.dirname, '../agents'),
       skillsDir: path.resolve(import.meta.dirname, '../skills'),
+      // `schemasDir` is computed here (the entrypoint) — not inside the validator —
+      // because tsup bundles every source file into a single `dist/index.js`,
+      // collapsing `import.meta.dirname` to `dist/` regardless of which source file
+      // referenced it. Computing the offset here means `../schemas` resolves to the
+      // repo root under tsx (src/) and to `/app/schemas` under the bundled image
+      // (dist/), both correct. See docs/specs/06-audit-and-security.md (Input Validation)
+      // and the Dockerfile's `COPY schemas/ ./schemas/` line.
+      schemasDir: path.resolve(import.meta.dirname, '../schemas'),
       logger,
     });
   } catch (err) {

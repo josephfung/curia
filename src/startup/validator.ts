@@ -16,13 +16,16 @@ import { Ajv, type ErrorObject } from 'ajv';
 import yaml from 'js-yaml';
 import type { Logger } from '../logger.js';
 
-// Schemas live at the project root in schemas/, sibling of config/ and agents/.
-// Resolving two levels up from src/startup/ reaches the project root.
-// This works from both tsx (src/startup/) and compiled dist (dist/startup/).
-const SCHEMAS_DIR = path.resolve(import.meta.dirname, '../../schemas');
-
-function loadSchema(name: string): object {
-  const schemaPath = path.join(SCHEMAS_DIR, name);
+// loadSchema takes the schemas dir as a parameter rather than computing it from
+// `import.meta.dirname`. The tsup bundle collapses every source file into a single
+// `dist/index.js`, so a file-local relative path that resolves correctly under tsx
+// (src/startup/ → ../../schemas → repo root) resolves *wrong* in the bundle
+// (dist/ → ../../schemas → filesystem root /schemas — ENOENT). Callers compute
+// `schemasDir` from `src/index.ts` (the entrypoint), where `../schemas` lands at
+// the right place under both tsx and the bundle. Tests pass an explicit fixture
+// or the real repo schemas dir.
+function loadSchema(schemasDir: string, name: string): object {
+  const schemaPath = path.join(schemasDir, name);
   return JSON.parse(fs.readFileSync(schemaPath, 'utf-8')) as object;
 }
 
@@ -60,19 +63,20 @@ export async function runStartupValidation(opts: {
   configDir: string;
   agentsDir: string;
   skillsDir: string;
+  schemasDir: string;
   logger: Logger;
   /** Override config filename for testing. Defaults to 'default.yaml'. */
   configFileName?: string;
 }): Promise<void> {
-  const { configDir, agentsDir, skillsDir, logger } = opts;
+  const { configDir, agentsDir, skillsDir, schemasDir, logger } = opts;
   const configFileName = opts.configFileName ?? 'default.yaml';
 
   // Compile schemas once — Ajv compilation is expensive; reuse across files.
   const ajv = new Ajv({ allErrors: true });
-  const validateConfig = ajv.compile(loadSchema('default-config.schema.json'));
-  const validateSkillsConfig = ajv.compile(loadSchema('skills-config.json'));
-  const validateAgent = ajv.compile(loadSchema('agent-config.schema.json'));
-  const validateSkill = ajv.compile(loadSchema('skill-manifest.schema.json'));
+  const validateConfig = ajv.compile(loadSchema(schemasDir, 'default-config.schema.json'));
+  const validateSkillsConfig = ajv.compile(loadSchema(schemasDir, 'skills-config.json'));
+  const validateAgent = ajv.compile(loadSchema(schemasDir, 'agent-config.schema.json'));
+  const validateSkill = ajv.compile(loadSchema(schemasDir, 'skill-manifest.schema.json'));
 
   // 1. Validate config/default.yaml (absent file is OK — all fields are optional)
   const configPath = path.join(configDir, configFileName);
