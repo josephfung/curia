@@ -546,21 +546,26 @@ export async function knowledgeGraphRoutes(
 
   app.get('/api/kg/contacts', KG_RATE, async (request, reply) => {
     if (!assertSecret(request, reply, webAppBootstrapSecret, sessions)) return;
-    const contacts = await contactService.listContacts();
-    return reply.send({
-      contacts: contacts.map((contact) => ({
-        id: contact.id,
-        kgNodeId: contact.kgNodeId,
-        displayName: contact.displayName,
-        role: contact.role,
-        status: contact.status,
-        trustLevel: contact.trustLevel,
-        systemRole: contact.systemRole,
-        notes: contact.notes,
-        createdAt: contact.createdAt.toISOString(),
-        updatedAt: contact.updatedAt.toISOString(),
-      })),
-    });
+    try {
+      const contacts = await contactService.listContacts();
+      return reply.send({
+        contacts: contacts.map((contact) => ({
+          id: contact.id,
+          kgNodeId: contact.kgNodeId,
+          displayName: contact.displayName,
+          role: contact.role,
+          status: contact.status,
+          trustLevel: contact.trustLevel,
+          systemRole: contact.systemRole,
+          notes: contact.notes,
+          createdAt: contact.createdAt.toISOString(),
+          updatedAt: contact.updatedAt.toISOString(),
+        })),
+      });
+    } catch (err) {
+      logger.error({ err }, 'GET /api/kg/contacts failed');
+      return reply.status(500).send({ error: 'Failed to load contacts' });
+    }
   });
 
   app.post('/api/kg/contacts', KG_RATE, async (request, reply) => {

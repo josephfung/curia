@@ -74,14 +74,18 @@ export function Sidebar({ activeView, theme, onThemeChange }: SidebarProps) {
   useEffect(() => {
     const controller = new AbortController();
     apiFetch('/api/kg/contacts', { signal: controller.signal })
-      .then(r => r.json())
+      .then(r => {
+        if (!r.ok) throw new Error(`/api/kg/contacts returned ${r.status}`);
+        return r.json();
+      })
       .then((data: { contacts: Array<{ displayName: string; systemRole?: string | null }> }) => {
         const principal = data.contacts.find(c => c.systemRole === 'principal');
         if (principal) setPrincipalName(principal.displayName);
       })
       .catch((err: unknown) => {
-        // Ignore abort errors (component unmounted); swallow others — sidebar renders with placeholders.
         if (err instanceof DOMException && err.name === 'AbortError') return;
+        // Non-fatal: sidebar degrades to placeholders, but log so the cause is visible.
+        console.error('[Sidebar] Failed to load principal contact:', err);
       });
     return () => controller.abort();
   }, []);

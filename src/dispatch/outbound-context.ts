@@ -270,7 +270,11 @@ export class OutboundContextService {
 export function stripOutboundContextPreamble(content: string): string {
   if (!content.startsWith('[ACTIVE OUTBOUND CONTEXT')) return content;
   const sep = '\n---\n\n';
-  const idx = content.lastIndexOf(sep);
+  // Use indexOf (first occurrence) — the preamble's entry blocks always end with
+  // '---' on its own line, so the FIRST '\n---\n\n' is always the boundary between
+  // the last block and the original content. lastIndexOf would incorrectly split
+  // at a markdown horizontal rule ('---') inside the user's own message.
+  const idx = content.indexOf(sep);
   if (idx === -1) return content;
   return content.slice(idx + sep.length);
 }
