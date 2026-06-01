@@ -11,6 +11,11 @@ import type { OfficeIdentity } from '../../src/identity/types.js';
 export class BehavioralPreferencesUpdateHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {
     if (!ctx.officeIdentityService) {
+      // Missing capability = deployment misconfiguration. Log at error so it surfaces in traces.
+      ctx.log.error(
+        'behavioral-preferences-update: officeIdentityService not in context — ' +
+        'check that officeIdentityService is passed to ExecutionLayer constructor',
+      );
       return {
         success: false,
         error: 'behavioral-preferences-update requires officeIdentityService in context.',
