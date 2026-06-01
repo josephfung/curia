@@ -96,6 +96,24 @@ describe('ModelRegistry', () => {
   });
 
   describe('OpenRouter models', () => {
+    it('resolves google/gemini-3.1-flash-lite with provider openrouter', () => {
+      const meta = registry.getModel('google/gemini-3.1-flash-lite');
+      expect(meta).toBeDefined();
+      expect(meta!.provider).toBe('openrouter');
+      expect(meta!.contextWindow).toBe(1_000_000);
+      expect(meta!.capabilities).toContain('vision');
+      expect(meta!.capabilities).toContain('coding');
+    });
+
+    it('returns correct pricing for google/gemini-3.1-flash-lite', () => {
+      const pricing = registry.getPricing('google/gemini-3.1-flash-lite');
+      expect(pricing).toBeDefined();
+      expect(pricing!.inputPerMToken).toBe(0.25);
+      expect(pricing!.outputPerMToken).toBe(1.50);
+      expect(pricing!.cacheCreationPerMToken).toBeUndefined();
+      expect(pricing!.cacheReadPerMToken).toBeUndefined();
+    });
+
     it('resolves google/gemini-2.0-flash-001 with provider openrouter', () => {
       const meta = registry.getModel('google/gemini-2.0-flash-001');
       expect(meta).toBeDefined();
