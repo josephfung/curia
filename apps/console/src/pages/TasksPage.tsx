@@ -367,6 +367,8 @@ export default function TasksPage() {
         next[idx] = task;
         return next;
       }
+      // New task: switch filter so it's immediately visible.
+      setStatusFilter(task.status);
       return [...prev, task];
     });
     setEditing(task);

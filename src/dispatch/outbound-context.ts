@@ -236,7 +236,7 @@ export class OutboundContextService {
         '---',
         `entry_id: ${e.id}`,
         `[sent ${timeAgo(e.createdAt)} via ${e.channelId}, on behalf of ${e.agentId}, expires in ${timeUntil(e.expiresAt)}]`,
-        `preview: "${e.contentPreview}"`,
+        `preview: "${e.contentPreview.replace(/\n/g, ' ')}"`,
       ];
       if (e.expectedReply) lines.push(`expected reply: ${e.expectedReply}`);
       if (e.delegationHint) lines.push(`delegation: ${e.delegationHint}`);

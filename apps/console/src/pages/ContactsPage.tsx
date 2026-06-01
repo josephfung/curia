@@ -335,6 +335,8 @@ export default function ContactsPage() {
         next[idx] = contact;
         return next;
       }
+      // New contact: switch filter so it's immediately visible.
+      setStatusFilter(contact.status);
       return [...prev, contact];
     });
     setEditing(contact);
