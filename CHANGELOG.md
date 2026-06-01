@@ -14,7 +14,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 ## [Unreleased]
 
 ### Fixed
-- **`fast` model tier** — repointed from `google/gemini-2.0-flash-001` (removed from OpenRouter ~2026-05-31) to `google/gemini-3.1-flash-lite`; restores contacts, calendar, research-analyst, and digest agents. (#812)
+- **`fast` model tier** — repointed to `google/gemini-3.1-flash-lite` after OpenRouter removed `gemini-2.0-flash-001`; unblocks contacts, calendar, research-analyst, digest. (#812)
 
 ## [0.32.0] — 2026-06-01 — "Ariadne"
 
