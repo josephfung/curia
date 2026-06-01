@@ -72,14 +72,21 @@ export function useChatSession(): ChatSession {
   const pendingKickoff = useRef(
     (() => {
       if (typeof window === 'undefined') return false;
+      let flag: string | null;
       try {
-        const flag = localStorage.getItem(ONBOARDING_KICKOFF_KEY);
-        if (flag !== null && !conversationId.current) {
-          localStorage.removeItem(ONBOARDING_KICKOFF_KEY);
-          return true;
-        }
-        return false;
+        // Guard getItem separately — throws SecurityError in restricted contexts (e.g. Safari private mode).
+        flag = localStorage.getItem(ONBOARDING_KICKOFF_KEY);
       } catch { return false; }
+      if (flag === null || conversationId.current) return false;
+      try {
+        localStorage.removeItem(ONBOARDING_KICKOFF_KEY);
+      } catch (err) {
+        // removeItem failed after reading the flag. Log it but still fire the kickoff —
+        // the worst case is a double-send on the next mount (harmless; conversationId
+        // will exist by then and the flag check above will guard against it).
+        console.error('[useChatSession] failed to clear onboarding kickoff flag:', err);
+      }
+      return true;
     })(),
   );
   // ISO timestamp of the oldest loaded message — used as the pagination cursor.
