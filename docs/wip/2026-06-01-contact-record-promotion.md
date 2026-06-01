@@ -51,7 +51,24 @@ Persist canonical attributes on the Contact record. Backfill from KG once. Stop 
 
 **Migration (new):**
 - `src/db/migrations/0NN_add_contact_canonical_attributes.sql` — `ALTER TABLE contacts ADD COLUMN` for each field listed above, plus CHECK constraints
-- `src/db/migrations/0NN+1_backfill_contact_attributes_from_kg.sql` — one-shot data migration: for each contact with a `kg_node_id`, read linked `type='fact'` nodes whose `label` matches a known attribute key (case-insensitive: `email`, `phone`, `title`, `organization`/`employer`/`company`, `timezone`/`tz`, `pronouns`, `linkedin`, `location`/`city`, `birthday`/`birthdate`, `bio`) and write into the corresponding column when the column is NULL. Leave the KG fact nodes in place for audit (do not delete).
+- `src/db/migrations/0NN+1_backfill_contact_attributes_from_kg.sql` — one-shot data migration. For each contact with a `kg_node_id`, read linked `type='fact'` nodes and pull the structured key/value from `properties->>'attribute'` and `properties->>'value'` (NOT from the `label` column — fact writers in `skills/extract-facts/handler.ts` and `skills/memory-store/handler.ts` format `label` as `"<attribute>: <value>"`, so matching on `label` would miss most data). Map known snake_case attribute keys to columns, case-insensitive:
+
+  | Contact column | `properties->>'attribute'` keys to match |
+  |---|---|
+  | `preferred_name` | `preferred_name`, `nickname` |
+  | `title` | `job_title`, `title`, `role` (use only when `system_role` is null) |
+  | `organization` | `organization`, `employer`, `company`, `current_employer` |
+  | `primary_email` | `email`, `primary_email` |
+  | `primary_phone` | `phone`, `phone_number`, `mobile` |
+  | `timezone` | `timezone`, `tz` |
+  | `locale` | `locale`, `language` |
+  | `location` | `home_city`, `current_location`, `location`, `city` |
+  | `pronouns` | `pronouns` |
+  | `linkedin_url` | `linkedin`, `linkedin_url` |
+  | `bio` | `bio`, `biography` |
+  | `birthday` | `birthday`, `birthdate`, `dob` |
+
+  Write into the corresponding column only when it is currently NULL. If multiple matching facts exist for the same column, pick the one with the highest `confidence` (tiebreak: most recent `last_confirmed_at`). Leave the KG fact nodes in place for audit (do not delete).
 
 **Backend types & service:**
 - [src/contacts/types.ts](../../src/contacts/types.ts) — extend the `Contact` interface with the new fields (all nullable)
@@ -103,7 +120,7 @@ Make `EntityContextAssembler` surface these attributes as structured Contact pro
 - Email composition skills — use `contact.primaryEmail` and `contact.preferredName` directly
 
 **Memory-store skill / write paths:**
-- [skills/memory-store/handler.ts](../../skills/memory-store/handler.ts) (or wherever fact nodes are written) — add a deny-list of canonical labels. When an agent tries to write a fact with one of these labels for a contact, redirect to `ContactService.updateContact` instead of creating a KG fact node. Audit-log the redirect.
+- [skills/memory-store/handler.ts](../../skills/memory-store/handler.ts) and [skills/extract-facts/handler.ts](../../skills/extract-facts/handler.ts) — add a deny-list of canonical attribute keys, matched against the **`attribute` field** that callers already pass in (the same value that ends up in `properties.attribute`), not the rendered `label`. The deny-list must use the same key set as the backfill table in Issue A (`job_title`, `home_city`, `current_location`, `email`, `phone`, `pronouns`, `linkedin`, `birthday`, `bio`, `organization`/`employer`/`company`, `timezone`/`tz`, `locale`, `preferred_name`, `nickname`, etc.). When an agent tries to write a fact whose `attribute` is in the deny-list **and** the subject is a contact, redirect to `ContactService.updateContact` instead of creating a KG fact node. Audit-log the redirect.
 
 **Agent prompts:**
 - [agents/research-analyst.yaml](../../agents/research-analyst.yaml) and other agent configs — document that canonical attributes live on the Contact record. Update prompts to call `update-contact` (or equivalent skill) for these fields rather than `memory-store`.
