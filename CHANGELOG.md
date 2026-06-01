@@ -13,119 +13,77 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
-### Fixed
+## [0.32.0] — 2026-06-01 — "Ariadne"
 
-- **Contacts page** — default filter tab changed from "All" to "Confirmed". (#670)
-- **Tasks page** — default filter tab changed from "All" to "Active". (#670)
-- **Chat history** — dispatcher-injected outbound context preambles stripped from user messages before display. (#670)
-- **Sidebar user info** — user avatar and name are now fetched from the principal contact record instead of being hardcoded. (#670)
-- **Sidebar version** — "Curia · admin" replaced with the app's version number (`v0.0.1`). (#670)
-- **Favicon** — Curia mark SVG added as the browser tab favicon. (#670)
-
-- **Docker fresh-install path** — `pnpm run setup` now produces a working install on a clean host. (#805)
-- **`schemasDir` threading** — schemas resolved from the entrypoint so the tsup bundle finds `/app/schemas`. (#805)
-- **`NODE_ENV=production` in image** — pino logs to stdout; `docker compose logs curia` now shows fatal startup errors. (#805)
-- **Dockerfile CMD** — invokes `tsx` directly, skipping the runtime `pnpm exec` corepack roundtrip. (#805)
-- **Compose parallelism** — `container_name: curia` dropped, Postgres host port parameterized via `POSTGRES_PORT`. (#805)
-- **`pnpm run setup` health gate** — polls the curia healthcheck before printing the success banner. (#805)
-- **`.env.example` `CEO_PRIMARY_EMAIL`** — commented out by default; literal `you@yourdomain.com` treated as unset, preventing a phantom CEO principal.
-- **`bootstrapAgentIdentity`** — agent contact `display_name` now updates via `ON CONFLICT` so wizard renames stick across restarts.
-- **Agent runtime** — empty-response recovery failure now publishes `agent.error` in addition to `agent.response(isError: true)`, giving the scheduler the completion signal it needs to mark the job failed instead of waiting for the watchdog timeout. (#801)
+> **Ariadne** *(Inception, 2010, Christopher Nolan)* — the architect Cobb recruits to design the dream worlds: her first job is to walk a newcomer through the rules of the place, ask what they want to build, and shape the structure to fit. v0.32 does the same — one command brings Curia up, a five-step wizard captures who you are, and a new specialist meets you in your first chat to ask what kind of assistant you actually want.
 
 ### Added
 
-- **Spec 18 — Onboarding** — consolidates the v0.32 onboarding stack (host bootstrap script, `/setup` form wizard, `setup-wizard` specialist) into a single spec; promotes the shipped `docs/wip/` design docs.
-- **Spec 13 — `behavioralPreferences` populating** — documents the two paths that populate the array (form wizard, `behavioral-preferences-update` skill) and cross-links spec 18.
-- **`setup-wizard` specialist** — first-conversation agent that interviews the principal, captures behavioral preferences, and guides feature setup.
-- **`behavioral-preferences-update` skill** — appends or replaces entries in `OfficeIdentity.behavioralPreferences` via `OfficeIdentityService` (`action_risk: low`).
-- **Chat auto-kickoff** — auto-sends a kickoff message on first chat mount when the onboarding flag is set.
-- **Setup-required boot mode** — a missing principal contact no longer crash-loops the process; the dispatcher and HTTP adapter stay up while email + Signal are skipped, so the onboarding wizard can be reached at `/setup`. Restart picks up the new principal and brings external channels online. (#766, #771)
-- **`POST /api/setup/principal`** — name-only principal contact creation, idempotent, for the wizard's "About you" step. (#771)
-- **`GET /api/setup/status`** — reports `{ principalExists, identityConfigured, externalAdaptersPending }` so the console router can land on the correct onboarding screen. (#771)
-- **Onboarding wizard "About you" step** — new Step 1 captures the principal's name and creates the principal contact via `POST /api/setup/principal` before the assistant identity is configured; auto-skipped on deployments where a principal already exists. (#771)
-- **`POST /api/setup/restart`** — wizard-triggered process exit so a supervisor brings Curia back in normal mode. (#771)
-- **`bootStartedAt` on `GET /api/setup/status`** — boot timestamp the wizard polls to detect a successful restart. (#771)
-- **Wizard restart-and-wait flow** — Step 5 save triggers the restart, polls for the new boot, lands on `/chat`. (#771)
+#### Onboarding flow
 
-### Removed
+- **`pnpm run setup`** — single-command host bootstrap: prereq checks, secret generation, Anthropic key prompt, Postgres start, migrations, healthcheck-gated banner. (#755, #805)
+- **Form wizard at `/setup`** — 5-step React onboarding flow (About you → Identity → Tone → Posture → Review). Step 1 captures the principal name and writes the contact via `POST /api/setup/principal`; auto-skipped when a principal already exists. Submitting step 5 saves the identity, restarts external channels if needed, and lands the user directly in `/chat`. (#751, #771)
+- **`setup-wizard` specialist agent** — first-conversation specialist invoked by the coordinator. Greets the principal, asks about priorities and working hours, offers to schedule a debrief, and handles later "help me set up X" requests. (spec 18)
+- **`behavioral-preferences-update` skill** — appends or replaces entries in `OfficeIdentity.behavioralPreferences` via the new `officeIdentityService` capability. (`action_risk: low`)
+- **Chat auto-kickoff** — chat page auto-sends a single onboarding kickoff message on first mount when the wizard left the flag set; coordinator routes it to the setup-wizard specialist.
+- **Setup-required boot mode** — a missing principal contact no longer crash-loops the process. The dispatcher and HTTP adapter stay up while email and Signal are skipped, so `/setup` is reachable. Restart picks up the new principal and brings external channels online. (#766, #771)
+- **Setup API surface** — `POST /api/setup/principal`, `GET /api/setup/status` (with `bootStartedAt`), `POST /api/setup/restart` — the backend the wizard polls and drives. (#771)
 
-- **`config/office-identity.yaml` + file watcher** — defaults moved to `src/identity/defaults.ts` and seeded into the DB on first boot with `changed_by='system_default'`. The DB is now the single source of truth; the wizard / `PUT /api/identity` is the only edit path. Pre-existing `'file_load'` rows in production DBs remain valid (the `configured` query treats them the same as `'system_default'`). (#771)
-- **Scheduled jobs — last run outcome and summary** — Jobs page now shows `last_run_outcome` as a colour-coded badge (green/red/amber) in the table and edit drawer, and surfaces the agent-written `last_run_summary` in the detail panel when present. (#241)
+#### Console app
 
-### Changed
+The legacy hand-rolled SPA has been fully replaced by a Vite + React + TanStack Router console at `apps/console/`. The legacy UI is gone from `/old/*`; `/` now serves the console.
 
-- **Scheduled jobs — default filter** — Jobs page opens on the "Pending" filter instead of "All", reducing noise on instances with a long job history.
+- **Console scaffold** — Vite + React + TanStack Router; Fastify serves the static bundle at `/` with SPA fallback; auth-gated dashboard; shared design system. `pnpm dev` runs both the backend and Vite dev server concurrently. (#750)
+- **Chat view** — single-stream `/chat` with live SSE status events, optimistic UI, server-rendered markdown in agent replies, message timestamps, working-memory history hydration with infinite scroll. (#175, #779)
+- **Knowledge Graph view** — `/kg` with Cytoscape/fcose canvas, node search, in-place neighborhood expansion, color-by-type/sensitivity/decay toggle, node detail drawer, URL-persisted state. (#780)
+- **Tasks, Contacts, Scheduled Jobs views** — full-CRUD console pages at `/tasks`, `/contacts`, `/jobs`. Contacts includes editable trust level; Jobs shows `last_run_outcome` and agent-written `last_run_summary`. (#781, #782, #783, #241)
+- **Autonomy view** — `/settings/autonomy` ported to the console: score display, live-preview slider, reason field, paginated history. (#752)
+- **Sidebar user info, version badge, favicon** — sidebar avatar and name now come from the principal contact, version badge replaces the hardcoded `Curia · admin` label, Curia mark added as the browser favicon. (#670)
 
-### Removed
+#### Specs and docs
 
-- **Legacy `/old` dev proxy** — removed dead proxy entries and stale comment now that the old hand-rolled SPA is fully replaced by the React console.
-- **Spec 12** — updated to reflect the React console replacing the Cytoscape SPA; corrected entry point (`GET /` not `GET /kg`) and removed outdated Cytoscape serving notes.
-
-### Fixed
-
-- **Console static asset auth** — `@fastify/static` v9 with `wildcard:false` registers an individual Fastify route per file in `consoleDist`, so `routeOptions.url` returns the exact asset path (e.g. `/assets/index-CU1g6HdR.js`) rather than `/*`; the old bypass list missed these routes and every static asset returned 401. Auth hook now skips bearer auth for all non-`/api/` routes.
-- **Chat max-width** — thread and composer are now constrained to an 800px column on wide desktop screens, eliminating the large empty side margins.
-- **Sidebar navigation routing** — each page had its own copy of the sidebar route map, causing silent drift (Tasks routed to `/` on three pages; chat/kg/jobs wrong on Tasks page; Workspace sub-item routed to `/settings/autonomy` instead of `/settings/workspace`). Route map is now centralized in `Sidebar.tsx`.
-
-### Added
-
-- **Knowledge Graph view** — new `/kg` console page with Cytoscape/fcose canvas, node search sidebar, in-place neighborhood expansion, color-by-type/sensitivity/decay toggle, node detail drawer, and URL-persisted `?q=`/`?node=` state; removes legacy `createUiHtml()` and `/old` routes. (#780)
-- **Chat view improvements** — agent replies now render markdown (bold, lists, code, italics) via server-side conversion; messages show timestamps; history hydrates from `working_memory` on reload (persisted via localStorage); scrolling up loads older pages. (#175)
-- **Scheduled Jobs view** — new `/jobs` console page with CRUD, status filters, and resume action for suspended jobs; removes legacy nav item. (#782)
-- **Tasks view** — new console page at `/tasks` with full CRUD, sortable columns, and status filter chips; legacy `/old/tasks` removed. (#783)
-- **Contacts view** — new console page at `/contacts` with full CRUD and editable trust level; legacy `/old/contacts` removed. (#781)
+- **Spec 18 — Onboarding** — new consolidated spec covering the three onboarding layers (host bootstrap, form wizard, in-chat specialist). Promoted from `docs/wip/`.
+- **Spec 13 — Office Identity** — extended with a "Populating `behavioralPreferences`" section covering both write paths (form wizard append, `behavioral-preferences-update` skill).
 
 ### Changed
 
-- **`/api/kg/contacts`** — GET and PATCH responses now include `trustLevel`; PATCH accepts `trustLevel` to update it via `ContactService.setTrustLevel`.
+- **Legacy web UI** — moved from `/` to `/old`, then removed entirely once the console reached feature parity. (#749)
+- **Office identity source of truth** — `config/office-identity.yaml` and its file watcher are gone. Defaults live in `src/identity/defaults.ts` and seed the DB on first boot (`changed_by='system_default'`); the wizard and `PUT /api/identity` are the only edit paths. Pre-existing `'file_load'` rows in production DBs are treated as `'system_default'` by the `configured` query. (#771, spec 13 revision)
+- **Spec 12 — Knowledge Graph Web Explorer** — rewritten to reflect the React console replacing the Cytoscape SPA; corrects entry point (`GET /`) and drops outdated serving notes.
+- **`/api/kg/contacts`** — GET and PATCH responses include `trustLevel`; PATCH accepts `trustLevel` updates via `ContactService.setTrustLevel`.
+- **Scheduled Jobs page** — opens on the "Pending" filter instead of "All".
+- **Contacts page, Tasks page, chat history** — default filters tightened ("Confirmed" / "Active"); dispatcher-injected outbound preambles stripped from chat-history user messages. (#670)
+- **`ceo-inbox` polling** — restricted to 6am–11pm local time, reducing idle LLM calls during dead hours.
 
 ### Fixed
 
-- **Migration 015 collision** — merged `015_create_bullpen` and `015_scheduler_resilience` into a single `015_bullpen_and_scheduler_resilience` to resolve a duplicate-prefix conflict.
+- **Docker fresh-install path** — `pnpm run setup` produces a working install on a clean host. Bundled fixes: `schemasDir` resolved from the entrypoint, `NODE_ENV=production` in the image so fatal startup errors hit `docker compose logs`, Dockerfile `CMD` invokes `tsx` directly, `container_name: curia` dropped and Postgres host port parameterized via `POSTGRES_PORT`, setup script polls the Curia healthcheck before printing success. (#805)
+- **`.env.example` `CEO_PRIMARY_EMAIL`** — commented out by default; the literal placeholder `you@yourdomain.com` is treated as unset, preventing a phantom CEO principal on fresh installs.
+- **`bootstrapAgentIdentity`** — agent contact `display_name` updates via `ON CONFLICT` so wizard renames stick across restarts.
+- **Console static asset auth** — `@fastify/static` v9 with `wildcard:false` registers a route per file, so the old `/*` bypass missed every asset and returned 401. The auth hook now skips bearer auth on all non-`/api/` routes. Also fixed: `GET /` auth bypass, Vite dev-proxy for `/old` and cytoscape assets.
+- **Chat max-width** — thread and composer constrained to an 800px column on wide desktops.
+- **Sidebar navigation routing** — per-page sidebar route maps drifted (Tasks routed to `/`, Workspace routed to `/settings/autonomy`). Route map centralized in `Sidebar.tsx`.
+- **Agent runtime** — empty-response recovery failure now publishes `agent.error` alongside `agent.response(isError: true)`, so the scheduler marks the job failed immediately instead of waiting for the watchdog timeout. (#801)
+- **Declarative scheduler jobs** — `source_agent_id` is included in the persisted identity so two specialists declaring identical schedules don't silently collapse into one row. (#231)
+- **`bullpen` `post`** — idempotent when `source_message_id` is provided; returns the existing thread on duplicate. (#708)
 - **HTTP session persistence** — hashed tokens written to Postgres and restored on startup; browser auth survives restarts. (#748)
-- **`bullpen`** — `post` is now idempotent when `source_message_id` is provided; returns existing thread on duplicate. (#708)
-
-### Changed
-
-- **`ceo-inbox`** — restricted polling schedule from 24/7 to 6am–11pm local time, reducing idle LLM calls during dead hours.
-
-### Added
-
-- **Wizard console port** — onboarding wizard at `/setup` with first-run redirect; removes legacy KG wizard overlay. (#751)
-
-- **Autonomy console view** — Autonomy settings ported to the new console app at `/settings/autonomy`; includes the score display, live-preview slider, reason field, save, and paginated history. Removed the Autonomy view from the legacy `/old` UI. (#752)
-
-- **Chat view** — single-stream `/chat` route with live SSE status events, optimistic UI, and `/old/chat` redirect. (#779)
-
-- **Console app scaffold** — new `apps/console/` Vite + React + TanStack Router app; Fastify serves the static bundle at `/` with SPA fallback; auth-gated dashboard placeholder; design-system components (Sidebar, Topbar, Icons) copied and converted to TypeScript. `pnpm dev` starts both the backend and the Vite dev server concurrently. (#750)
-
-### Fixed
-
-- **Console root path auth bypass** — `GET /` now skips bearer auth; `@fastify/static` registers it as a distinct route when `wildcard: false`, so the `/*` bypass added in #769 did not cover it.
-- **`file-parse` PDF extraction** — call the v2 `PDFParse` class; the v1 API was throwing on every PDF, misreported as "image-only". (#770)
-- **Migration `016_kg_node_uniqueness`** — Step 4 now checks for pre-existing contacts on canonical KG nodes before re-pointing, preventing a duplicate-key violation on `idx_contacts_kg_node_unique` when a canonical node already had its own contact row.
-- **Console Vite dev proxy** — `/old` and the four cytoscape assets (`cytoscape.min.js`, `layout-base.js`, `cose-base.js`, `cytoscape-fcose.js`) are now proxied to Fastify in the Vite dev server; without this the Vite SPA intercepted `/old` requests and the legacy UI was unreachable in dev. (#750)
-
-### Changed
-
-- **Legacy web UI** — moved from `/` to `/old` and `/old/*`; `/` now returns a 404 placeholder pending the new console app. (#749)
+- **`file-parse` PDF extraction** — calls the v2 `PDFParse` class; the v1 API was throwing on every PDF and misreporting as "image-only". (#770)
+- **Migration `015` collision** — merged `015_create_bullpen` and `015_scheduler_resilience` into one migration to resolve the duplicate prefix.
+- **Migration `016_kg_node_uniqueness`** — Step 4 checks for pre-existing contacts before re-pointing, preventing a duplicate-key violation on `idx_contacts_kg_node_unique`.
+- **Docker image build** — `onlyBuiltDependencies: ["esbuild"]` added to satisfy pnpm 11's build-script approval; `pnpm-workspace.yaml` included in the build-stage `COPY` so `allowBuilds` reaches pnpm inside Docker.
 
 ### Security
 
 - **HTML sanitization** — hardened `htmlToText`, `stripHtmlTags`, and `htmlToPlainText` closing-tag regexes and tag-strip loops against bypass attacks; added `<script>`/`<style>` content stripping to `ceo-nylas-client.ts`. (CodeQL #55, #61–68)
-- **Insecure temp file** — `file-parse` tests now create a unique `mkdtemp` subdirectory under `/tmp/curia-tempfiles/` instead of a fixed path. (CodeQL #69, #70)
-- **ip-address XSS** — bumped transitive `ip-address` from 10.1.0 to 10.2.0 via lockfile refresh and added a defensive `>=10.1.1` override. (CodeQL #54)
-- **CodeQL false-positive** — disabled `js/incomplete-multi-character-sanitization` in `codeql-config.yml`; all flagged sites use a loop-until-stable pattern the rule cannot model, making every alert a false positive; inline suppression comments were ineffective. (CodeQL #71–92)
+- **`file-parse` temp files** — tests now create a unique `mkdtemp` subdirectory under `/tmp/curia-tempfiles/` instead of a fixed path. (CodeQL #69, #70)
+- **`ip-address` transitive bump** — 10.1.0 → 10.2.0 via lockfile refresh with a defensive `>=10.1.1` override. (CodeQL #54)
+- **CodeQL config** — disabled `js/incomplete-multi-character-sanitization`; the affected sites use a loop-until-stable pattern the rule can't model. (CodeQL #71–92)
 
-### Added
+### Release haiku
 
-- **`pnpm run setup`** — single-command setup for fresh clones; run `pnpm run setup`, not `pnpm setup`. (#755)
-
-### Fixed
-
-- **Declarative scheduler jobs** — include `source_agent_id` in the persisted identity so two specialist agents can declare identical schedules targeting the same agent without silently collapsing into one row. (#231)
-- **Trivy Docker Image Scan** — add `onlyBuiltDependencies: ["esbuild"]` to `package.json` so pnpm 11's build-script approval check doesn't abort the Docker build cold.
-- **Dockerfile esbuild build** — include `pnpm-workspace.yaml` in the build-stage `COPY` so `allowBuilds` reaches pnpm inside Docker.
+> One command. The house
+> wakes up, opens its door, asks:
+> "What shall I call you?"
 
 ## [0.31.1] — 2026-05-26 — "Janet"
 
