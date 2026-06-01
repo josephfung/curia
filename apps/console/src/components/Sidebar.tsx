@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from '@tanstack/react-router';
 import { useMobileMenu } from '../context/MobileMenu';
+import { apiFetch } from '../api.js';
 import {
   CuriaWordmark,
   IconChat,
@@ -54,11 +55,36 @@ function ThemeToggle({ theme, onChange }: { theme: Theme; onChange: (t: Theme) =
   );
 }
 
+function getInitials(name: string | null): string {
+  if (!name) return '···';
+  const trimmed = name.trim();
+  if (!trimmed) return '···';
+  const parts = trimmed.split(/\s+/);
+  if (parts.length === 1) return (parts[0] ?? '').slice(0, 2).toUpperCase();
+  return ((parts[0] ?? '')[0] ?? '').toUpperCase() + ((parts[parts.length - 1] ?? '')[0] ?? '').toUpperCase();
+}
+
 export function Sidebar({ activeView, theme, onThemeChange }: SidebarProps) {
   const [memoryOpen, setMemoryOpen] = useState(true);
   const [settingsOpen, setSettingsOpen] = useState(activeView === 'settings');
+  const [principalName, setPrincipalName] = useState<string | null>(null);
   const { setOpen } = useMobileMenu();
   const navigate = useNavigate();
+
+  useEffect(() => {
+    const controller = new AbortController();
+    apiFetch('/api/kg/contacts', { signal: controller.signal })
+      .then(r => r.json())
+      .then((data: { contacts: Array<{ displayName: string; systemRole?: string | null }> }) => {
+        const principal = data.contacts.find(c => c.systemRole === 'principal');
+        if (principal) setPrincipalName(principal.displayName);
+      })
+      .catch((err: unknown) => {
+        // Ignore abort errors (component unmounted); swallow others — sidebar renders with placeholders.
+        if (err instanceof DOMException && err.name === 'AbortError') return;
+      });
+    return () => controller.abort();
+  }, []);
 
   const go = (view: string) => {
     const to = ROUTES[view];
@@ -151,10 +177,10 @@ export function Sidebar({ activeView, theme, onThemeChange }: SidebarProps) {
       <div className="sidebar-footer">
         <ThemeToggle theme={theme} onChange={onThemeChange} />
         <button className="sidebar-user">
-          <span className="sidebar-user-avatar">JF</span>
+          <span className="sidebar-user-avatar">{getInitials(principalName)}</span>
           <span className="sidebar-user-meta">
-            <span className="sidebar-user-name">Joseph Fung</span>
-            <span className="sidebar-user-org">Curia · admin</span>
+            <span className="sidebar-user-name">{principalName ?? 'Setting up…'}</span>
+            <span className="sidebar-user-org">v{__APP_VERSION__}</span>
           </span>
         </button>
       </div>
