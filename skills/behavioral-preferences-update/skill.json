@@ -5,7 +5,7 @@
   "sensitivity": "elevated",
   "capabilities": ["officeIdentityService"],
   "inputs": {
-    "operation": "string",
+    "operation": "string (\"append\" to add new preferences, \"replace\" to overwrite the full list)",
     "entries": "string[] (list of preference strings to append or replace with)"
   },
   "outputs": { "preferences": "string[]", "summary": "string", "changes": "string" },

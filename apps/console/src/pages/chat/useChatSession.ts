@@ -77,15 +77,18 @@ export function useChatSession(): ChatSession {
         // Guard getItem separately — throws SecurityError in restricted contexts (e.g. Safari private mode).
         flag = localStorage.getItem(ONBOARDING_KICKOFF_KEY);
       } catch { return false; }
-      if (flag === null || conversationId.current) return false;
+      if (flag === null) return false;
+      // Clear unconditionally so the flag is truly one-shot, even when we skip
+      // the kickoff below because a conversation already exists.
       try {
         localStorage.removeItem(ONBOARDING_KICKOFF_KEY);
       } catch (err) {
         // removeItem failed after reading the flag. Log it but still fire the kickoff —
         // the worst case is a double-send on the next mount (harmless; conversationId
-        // will exist by then and the flag check above will guard against it).
+        // will exist by then and the guard below will prevent it).
         console.error('[useChatSession] failed to clear onboarding kickoff flag:', err);
       }
+      if (conversationId.current) return false;
       return true;
     })(),
   );
