@@ -6,6 +6,9 @@ import type { Message } from './types.js';
 
 // localStorage key for persisting the conversationId across page reloads.
 const CONV_ID_KEY = 'curia:chat:conversationId';
+// Onboarding kickoff — set by the setup wizard page after form submission.
+const ONBOARDING_KICKOFF_KEY = 'curia:onboarding:welcome-banner-pending';
+const KICKOFF_TEXT = 'Just finished setup — say hi!';
 
 const HISTORY_PAGE_SIZE = 25;
 
@@ -64,6 +67,21 @@ export function useChatSession(): ChatSession {
       try { return localStorage.getItem(CONV_ID_KEY); } catch { return null; }
     })(),
   );
+  // One-shot kickoff: read and clear the onboarding flag synchronously so a
+  // React strict-mode double-mount cannot fire a second auto-send.
+  const pendingKickoff = useRef(
+    (() => {
+      if (typeof window === 'undefined') return false;
+      try {
+        const flag = localStorage.getItem(ONBOARDING_KICKOFF_KEY);
+        if (flag !== null && !conversationId.current) {
+          localStorage.removeItem(ONBOARDING_KICKOFF_KEY);
+          return true;
+        }
+        return false;
+      } catch { return false; }
+    })(),
+  );
   // ISO timestamp of the oldest loaded message — used as the pagination cursor.
   const oldestTimestamp = useRef<string | null>(null);
 
@@ -108,6 +126,14 @@ export function useChatSession(): ChatSession {
     void load();
   // Run once on mount; conversationId.current is a ref, not a reactive dep.
   // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Auto-send the onboarding kickoff message once on first mount.
+  // send is captured from this render; deps omitted intentionally (one-shot).
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!pendingKickoff.current) return;
+    void send(KICKOFF_TEXT);
   }, []);
 
   const loadMore = useCallback(async () => {
