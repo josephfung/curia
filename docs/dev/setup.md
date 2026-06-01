@@ -19,6 +19,8 @@ Install these before anything else:
 - **Node.js 22+** — check with `node --version`
 - **Docker and Docker Compose** — Postgres runs in Docker; install [Docker Desktop](https://www.docker.com/products/docker-desktop/) or the standalone CLI
 - **pnpm** — `npm install -g pnpm`
+- **openssl** — used by `pnpm run setup` to generate secrets; usually
+  pre-installed on macOS and Linux. Verify with `openssl version`.
 
 ---
 
@@ -26,82 +28,84 @@ Install these before anything else:
 
 Everything you need to run Curia and interact with it via the CLI and web app.
 
-### 1. Clone and install
+### 1. Clone and run setup
 
 ```bash
 git clone https://github.com/josephfung/curia.git
 cd curia
-pnpm install
+pnpm run setup
 ```
 
-### 2. Configure `.env`
+`pnpm run setup` runs `scripts/setup.sh`, which handles every Tier 1 step
+for you:
 
-```bash
-cp .env.example .env
-```
+1. Checks prerequisites (`docker`, `docker compose`, Node 22+, `pnpm`, `openssl`).
+2. Generates `DB_PASSWORD`, `API_TOKEN`, and `WEB_APP_BOOTSTRAP_SECRET`
+   with `openssl rand -hex 32`.
+3. Prompts for your **Anthropic API key** (validated against `sk-ant-...`,
+   3 retries).
+4. Writes `.env` from `.env.example`, leaving optional channel vars
+   (Nylas, OpenAI, Tavily, Signal) commented out for Tiers 2 and 3.
+5. Starts the Postgres container, waits for it to be healthy, and applies
+   all database migrations.
+6. Runs `pnpm install --frozen-lockfile` if `node_modules/` is missing
+   (skipped on re-runs).
+7. Brings up the full stack (`docker compose up -d`) and polls Curia's
+   healthcheck so the success banner only fires once the app is actually
+   responding.
+8. Appends `# SETUP_COMPLETE` to `.env` as a clean-finish marker and prints
+   a summary box with `http://localhost:3000` and your bootstrap secret.
 
-Open `.env` and fill in these values. The rest can stay as-is for now.
+**Save the bootstrap secret to a password manager** — the script will not
+show it again. If you need to recover it, it's in `.env` as
+`WEB_APP_BOOTSTRAP_SECRET=...`.
 
-**Postgres** — the database credentials for the Docker Compose container. You can use any values you like; they just need to match:
+> **Re-running `pnpm run setup`:** If `.env` already exists, the script
+> presents a menu — start the stack (default), resume an interrupted setup,
+> or do a full reset. See [spec 18 — Onboarding](../specs/18-onboarding.md#re-entry-path)
+> for what each option does.
 
-```env
-DB_USER=curia
-DB_PASSWORD=curia_dev
-DATABASE_URL=postgres://curia:curia_dev@localhost:5432/curia
-```
+### 2. Verify
 
-**Anthropic** — your API key from [console.anthropic.com](https://console.anthropic.com). Powers all agents.
+**Web app:** Open `http://localhost:3000` in your browser. You'll be
+prompted for your `WEB_APP_BOOTSTRAP_SECRET`. The next step (Tier 1, §3)
+walks through the in-app setup that finishes immediately after login.
 
-```env
-ANTHROPIC_API_KEY=sk-ant-...
-```
+**CLI:** If you want a CLI interface alongside the web app, run `pnpm local`
+in a separate terminal — it attaches a CLI channel to the running stack.
 
-**HTTP API token** — a secret for authenticating API requests. Generate any random string:
+### 3. Personalize your instance
 
-```env
-API_TOKEN=your-secret-token-here
-```
+After logging in for the first time, the app detects that the office identity
+has not been configured and redirects you to `/setup` automatically. This is
+a five-step React form wizard:
 
-**Web app** — required to access the web app at `http://localhost:3000`. Generate any long random string:
+1. **About you** — the CEO's name (the principal contact). Auto-skipped if
+   a principal already exists (e.g. you set `CEO_PRIMARY_EMAIL` before first
+   boot).
+2. **Identity** — assistant name, title, optional email signature.
+3. **Tone** — 1–3 baseline tone words + verbosity and directness sliders.
+4. **Posture** — decision-making posture + initial behavioral preferences.
+5. **Review** — confirm and save.
 
-```env
-WEB_APP_BOOTSTRAP_SECRET=replace-with-a-long-random-secret
-```
+When you submit step 5, the wizard saves the identity, hot reloads it, and
+(if the process booted in setup-required mode) asks the supervisor to
+restart so the email and Signal channels can come online. You'll see a
+brief "Setting up channels…" screen during the restart, then land directly
+in the chat view at `/chat`. The `setup-wizard` specialist agent
+automatically introduces itself and asks about your priorities, working
+hours, and debrief cadence. Reply to it like you'd talk to any agent —
+preferences captured here are appended to the same office identity the
+form wizard wrote.
 
-**Your email and timezone** — the CEO's primary email (prevents your first message from being held as an unknown sender) and IANA timezone for resolving relative dates in agent prompts:
+The whole personalization step takes a few minutes. You can come back to
+`/setup` directly any time you want to revise the identity by hand. The
+full design is documented in
+[spec 18 — Onboarding](../specs/18-onboarding.md).
 
-```env
-CEO_PRIMARY_EMAIL=you@yourdomain.com
-TIMEZONE=America/Toronto
-```
-
-### 3. Start Postgres
-
-```bash
-docker compose up -d
-```
-
-This starts the Postgres container with pgvector and pgAudit. The first run pulls the image; subsequent starts are fast. Confirm it's healthy:
-
-```bash
-docker compose ps
-```
-
-### 4. Start Curia
-
-```bash
-pnpm local
-```
-
-On first run this applies all database migrations, then starts the full stack. You should see log output as the bus, agents, and channels initialize.
-
-### 5. Verify
-
-**CLI:** In the terminal where Curia is running, type a message at the prompt to interact with it directly.
-
-**Web app:** Open `http://localhost:3000` in your browser. You'll be prompted for your `WEB_APP_BOOTSTRAP_SECRET`. Once authenticated, the knowledge graph browser is available.
-
-> **Checkpoint:** Curia is running. Agents work, the CLI is live, and the web app is accessible. Stop here or continue to Tier 2 for email and embeddings.
+> **Checkpoint:** Curia is running, your identity is configured, and the
+> coordinator is personalized. Stop here or continue to Tier 2 for email
+> and embeddings.
 
 ---
 
@@ -195,19 +199,22 @@ Restart Curia — the Signal channel activates when `SIGNAL_PHONE_NUMBER` is set
 
 ## What's Next
 
-With Curia running, the first thing to do is give it an identity. Open the web app at `http://localhost:3000`, enter your `WEB_APP_BOOTSTRAP_SECRET`, and go through the setup wizard — it walks you through naming your instance, setting its persona and voice, and configuring the CEO profile it operates on behalf of. This takes a few minutes and makes every subsequent interaction significantly more useful.
+If you walked through Tier 1, you've already configured the office identity
+and met the `setup-wizard` agent. From here:
 
-Once that's done, start a conversation. The CLI is the fastest way in:
+- **Use the chat view.** Open `http://localhost:3000/chat` and start
+  talking to the coordinator. This is the primary surface for everyday use.
+- **Or use the CLI.** Run `pnpm local` in a terminal — it attaches a CLI
+  channel to the running stack. Type a message at the prompt.
 
-```bash
-pnpm local
-```
+If you want to dig deeper, the [architecture overview](../specs/00-overview.md)
+explains how the layers fit together, and the [agent](adding-an-agent.md)
+and [skill](adding-a-skill.md) guides cover the most common extension points.
+The end-to-end onboarding flow is documented in
+[spec 18 — Onboarding](../specs/18-onboarding.md).
 
-Type a message at the prompt. You're talking to Curia.
-
-If you want to dig deeper, the [architecture overview](../specs/00-overview.md) explains how the layers fit together, and the [agent](adding-an-agent.md) and [skill](adding-a-skill.md) guides cover the most common extension points.
-
-To enable Google Drive access (for expense trackers, job application trackers, and other persistent documents), see [google-drive.md](google-drive.md).
+To enable Google Drive access (for expense trackers, job application
+trackers, and other persistent documents), see [google-drive.md](google-drive.md).
 
 ---
 

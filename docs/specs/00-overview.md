@@ -25,6 +25,7 @@
 | 15 | [Outbound Safety](15-outbound-safety.md) | Content filter, display name sanitization, caller verification, LLM-as-judge gateway | 10 of 17 Done |
 | 16 | [Smoke Test Framework](16-smoke-test-framework.md) | Chat-based test cases, LLM-as-judge evaluation, HTML reports | 8 of 18 Done |
 | 17 | [Meeting Debrief](17-meeting-debrief.md) | Proactive debrief agent, detection pipeline, follow-up execution via Bullpen-through-coordinator | 15 of 17 Done |
+| 18 | [Onboarding](18-onboarding.md) | Single-command host bootstrap, React form wizard at `/setup`, in-chat `setup-wizard` specialist | ✅ 15 of 15 Done |
 
 ---
 
