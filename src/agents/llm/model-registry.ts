@@ -75,6 +75,17 @@ const MODEL_REGISTRY: Record<string, ModelMetadata> = {
   // OpenRouter models — non-Claude models routed via OpenRouter's OpenAI-compatible API.
   // Registry keys are the model IDs that OpenRouter's API expects.
   // Pricing should be verified against OpenRouter's pricing page periodically.
+  'google/gemini-3.1-flash-lite': {
+    provider: 'openrouter',
+    contextWindow: 1_000_000,
+    pricing: {
+      inputPerMToken: 0.25,
+      outputPerMToken: 1.50,
+    },
+    capabilities: ['vision', 'coding'],
+    maxOutputTokens: 8_192,
+  },
+  // Removed from OpenRouter ~2026-05-31. Entry retained for audit log provenance.
   'google/gemini-2.0-flash-001': {
     provider: 'openrouter',
     contextWindow: 1_000_000,
