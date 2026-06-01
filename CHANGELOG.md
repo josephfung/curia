@@ -13,6 +13,9 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Fixed
+- **`fast` model tier** — repointed from `google/gemini-2.0-flash-001` (removed from OpenRouter ~2026-05-31) to `google/gemini-3.1-flash-lite`; restores contacts, calendar, research-analyst, and digest agents. (#812)
+
 ## [0.32.0] — 2026-06-01 — "Ariadne"
 
 > **Ariadne** *(Inception, 2010, Christopher Nolan)* — in Inception, she's the architect Cobb hires to build the dream worlds. Her first job is to walk a newcomer through the rules of the place, ask what they want to build, and shape the structure to fit. v0.32 does the same: one command brings Curia up, a five-step wizard captures who you are, and a new specialist meets you in your first chat to ask what kind of assistant you actually want.
