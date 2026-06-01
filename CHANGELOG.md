@@ -15,6 +15,12 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **Docker fresh-install path** — `pnpm run setup` now produces a working install on a clean host; six bugs from #805 fixed in one cut. (#805)
+- **`schemasDir` threading** — JSON Schemas are now found via an explicit dir from the entrypoint, so the tsup-bundled image no longer ENOENTs on `/schemas`. (#805)
+- **Dockerfile `NODE_ENV=production`** — pino logs to stdout so `docker logs curia` shows fatal startup errors instead of swallowing them into `/app/curia.log`. (#805)
+- **Dockerfile CMD** — invokes `./node_modules/.bin/tsx` directly; the pnpm/corepack roundtrip at runtime no longer hangs on the silent download prompt. (#805)
+- **Docker Compose parallelism** — explicit `container_name: curia` dropped and Postgres host port parameterized via `POSTGRES_PORT`; two curia stacks can now coexist on one host. (#805)
+- **`pnpm run setup` health gate** — polls the curia healthcheck before printing the success banner; broken installs no longer report green. (#805)
 - **`.env.example` `CEO_PRIMARY_EMAIL`** — commented out by default; literal `you@yourdomain.com` treated as unset, preventing a phantom CEO principal.
 - **`bootstrapAgentIdentity`** — agent contact `display_name` now updates via `ON CONFLICT` so wizard renames stick across restarts.
 - **Agent runtime** — empty-response recovery failure now publishes `agent.error` in addition to `agent.response(isError: true)`, giving the scheduler the completion signal it needs to mark the job failed instead of waiting for the watchdog timeout. (#801)

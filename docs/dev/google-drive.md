@@ -145,7 +145,8 @@ repeat Step 5 to re-authenticate and copy fresh tokens to the VPS.
 
 `uvx` is not on the PATH inside the container. The Dockerfile installs `uv`/`uvx` into
 `/usr/local/bin/` via `COPY --from=ghcr.io/astral-sh/uv`. Verify with
-`docker exec curia which uvx` — if missing, rebuild the image.
+`docker compose exec curia which uvx` — if missing, rebuild the image.
+(The compose-service form resolves the container regardless of project name.)
 
 **`INFO MCP server tools registered {"registered":0}`**
 

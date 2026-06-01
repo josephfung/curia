@@ -5,15 +5,21 @@ import { runStartupValidation } from '../../../src/startup/validator.js';
 import { createSilentLogger } from '../../../src/logger.js';
 
 const F = path.resolve(import.meta.dirname, 'fixtures');
+// The real repo schemas dir — four levels up from this file
+// (tests/unit/startup/validator.test.ts → tests/unit/startup → tests/unit → tests → repo root).
+// Tests use the real schemas because they're the source of truth and are stable;
+// fixturing them would just duplicate the production JSON.
+const REAL_SCHEMAS = path.resolve(import.meta.dirname, '../../../schemas');
 const logger = createSilentLogger();
 
 // Shorthand: run validation with specific fixture directories.
 // For components not under test, point at a valid fixture to avoid false positives.
-function runWith(opts: { agents?: string; skills?: string; config?: string }) {
+function runWith(opts: { agents?: string; skills?: string; config?: string; schemas?: string }) {
   return runStartupValidation({
     agentsDir: opts.agents ?? path.join(F, 'agents/valid'),
     skillsDir: opts.skills ?? path.join(F, 'skills/valid-skill'),
     configDir: opts.config ?? path.join(F, 'config/empty'),
+    schemasDir: opts.schemas ?? REAL_SCHEMAS,
     logger,
   });
 }
@@ -174,6 +180,7 @@ describe('startup validator — real project files', () => {
         // Point agents/skills at valid fixtures so only the config is under test.
         agentsDir: path.join(F, 'agents/valid'),
         skillsDir: path.join(F, 'skills/valid-skill'),
+        schemasDir: REAL_SCHEMAS,
         logger,
       }),
     ).resolves.toBeUndefined();
@@ -185,6 +192,7 @@ describe('startup validator — real project files', () => {
         agentsDir: path.join(ROOT, 'agents'),
         configDir: path.join(F, 'config/empty'),
         skillsDir: path.join(F, 'skills/valid-skill'),
+        schemasDir: REAL_SCHEMAS,
         logger,
       }),
     ).resolves.toBeUndefined();
@@ -196,8 +204,29 @@ describe('startup validator — real project files', () => {
         skillsDir: path.join(ROOT, 'skills'),
         configDir: path.join(F, 'config/empty'),
         agentsDir: path.join(F, 'agents/valid'),
+        schemasDir: REAL_SCHEMAS,
         logger,
       }),
     ).resolves.toBeUndefined();
+  });
+
+  it('throws a clear ENOENT when schemasDir is wrong (regression test for #805 bug 3)', async () => {
+    // Previously the validator computed `schemasDir` from `import.meta.dirname` of
+    // validator.ts. That resolved correctly under tsx (`src/startup/` → `../../schemas`
+    // = repo root schemas) but tsup bundled all source into a single `dist/index.js`,
+    // collapsing `import.meta.dirname` to `dist/` — so the same relative path landed
+    // at filesystem root `/schemas`, which doesn't exist in the container, and the
+    // validator threw ENOENT with no useful context once pino's async transport ate
+    // the log. Threading `schemasDir` from the entrypoint avoids the bundle problem;
+    // this test pins the failure mode if someone ever passes a wrong dir again.
+    await expect(
+      runStartupValidation({
+        configDir: path.join(F, 'config/empty'),
+        agentsDir: path.join(F, 'agents/valid'),
+        skillsDir: path.join(F, 'skills/valid-skill'),
+        schemasDir: '/nonexistent/schemas/path',
+        logger,
+      }),
+    ).rejects.toThrow(/ENOENT|no such file/);
   });
 });

@@ -4,8 +4,11 @@ services:
       context: .
       dockerfile: docker/postgres.Dockerfile
     restart: unless-stopped
+    # POSTGRES_PORT is parameterized so a second stack can coexist on the same
+    # host (e.g. testing a fresh `pnpm run setup` against a sibling clone while
+    # the dev stack runs on 5432). Defaults to the standard port if unset.
     ports:
-      - "5432:5432"
+      - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
       # pgAudit init script runs on first database creation only
@@ -36,7 +39,10 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: curia
+    # No explicit container_name — Docker Compose generates `<project>-curia-1`,
+    # which is namespaced by COMPOSE_PROJECT_NAME. The previous `container_name: curia`
+    # was global to the Docker daemon and made it impossible to run a second curia
+    # stack on the same host (e.g. for testing a fresh install alongside a dev one).
     restart: unless-stopped
     ports:
       - "${HTTP_PORT:-3000}:3000"
@@ -53,7 +59,9 @@ services:
       test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
       interval: 30s
       timeout: 5s
-      start_period: 15s
+      # start_period matches the Dockerfile's HEALTHCHECK — see the Dockerfile
+      # comment for why 60s. Keep the two values in sync.
+      start_period: 60s
       retries: 3
     volumes:
       # Persist OAuth token cache for the google-workspace MCP server.
