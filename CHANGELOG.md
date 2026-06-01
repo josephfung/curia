@@ -15,6 +15,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **`.env.example` `CEO_PRIMARY_EMAIL`** — commented out by default and treated as unset at boot if left as the literal `you@yourdomain.com`; prevents a fresh `pnpm run setup` from creating a phantom "CEO" principal that auto-skips the wizard's "About you" step.
+- **`bootstrapAgentIdentity` rename propagation** — agent contact's `display_name` now updates via `ON CONFLICT` when the assistant is renamed in the wizard, instead of being frozen at the first-boot default.
 - **Agent runtime** — empty-response recovery failure now publishes `agent.error` in addition to `agent.response(isError: true)`, giving the scheduler the completion signal it needs to mark the job failed instead of waiting for the watchdog timeout. (#801)
 
 ### Added
