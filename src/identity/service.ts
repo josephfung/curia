@@ -131,7 +131,7 @@ export class OfficeIdentityService {
 
   /**
    * Saves a new version to the DB, updates the in-memory cache, emits a config.change audit event.
-   * changedBy: 'wizard' | 'api' | 'file_load'
+   * changedBy: 'wizard' | 'api' | 'file_load' | 'skill' | 'system_default'
    *
    * The DB write is fully atomic: version number computation, row insert, and current-pointer
    * upsert all happen inside a single transaction. The UNIQUE constraint on `version` provides
