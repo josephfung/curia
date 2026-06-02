@@ -203,7 +203,7 @@ export async function runBackfill(pool: pg.Pool): Promise<{
 }
 
 // CLI entry point — only runs when executed directly
-if (process.argv[1] && import.meta.url.endsWith(process.argv[1].replace(/^.*\//, ''))) {
+if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).href) {
   const databaseUrl = process.env['DATABASE_URL'];
   if (!databaseUrl) {
     console.error('[backfill] DATABASE_URL is not set');
