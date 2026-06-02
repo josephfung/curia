@@ -115,6 +115,8 @@ export interface YamlConfig {
     coordinator?: { config_path?: string };
   };
   workingMemory?: {
+    /** Days before a working memory turn expires and is purged by the nightly DreamEngine pass. Default: 30. */
+    ttlDays?: number;
     summarization?: {
       /** Active turn count that triggers a summarization pass. Default: 20. Must be >= 2. */
       threshold?: number;
@@ -447,26 +449,42 @@ export function loadYamlConfig(configDir: string): YamlConfig {
     }
   }
 
-  if (config.workingMemory?.summarization !== undefined) {
-    const summarizationThreshold = config.workingMemory.summarization.threshold;
-    if (summarizationThreshold !== undefined && (!Number.isInteger(summarizationThreshold) || summarizationThreshold < 2)) {
-      throw new Error(`workingMemory.summarization.threshold must be an integer >= 2, got: ${summarizationThreshold}`);
+  const workingMemory = config.workingMemory;
+  if (workingMemory !== undefined) {
+    if (workingMemory === null || typeof workingMemory !== 'object' || Array.isArray(workingMemory)) {
+      throw new Error('workingMemory must be a YAML mapping');
     }
 
-    const summarizationKeepWindow = config.workingMemory.summarization.keepWindow;
-    if (summarizationKeepWindow !== undefined && (!Number.isInteger(summarizationKeepWindow) || summarizationKeepWindow < 1)) {
-      throw new Error(`workingMemory.summarization.keepWindow must be a positive integer, got: ${summarizationKeepWindow}`);
+    if (workingMemory.ttlDays !== undefined) {
+      const ttlDays = workingMemory.ttlDays;
+      // Upper bound of 36500 (100 years) prevents JS date arithmetic overflow
+      // (Date.now() + ttlDays * 86_400_000 must stay within the safe Date range).
+      if (!Number.isInteger(ttlDays) || ttlDays < 1 || ttlDays > 36500) {
+        throw new Error(`workingMemory.ttlDays must be a positive integer no greater than 36500, got: ${ttlDays}`);
+      }
     }
 
-    // Cross-validate using effective values (same defaults as index.ts bootstrap) so a
-    // config like { keepWindow: 25 } (no explicit threshold) is caught here rather than
-    // silently passing validation and failing at runtime.
-    const effectiveThreshold = summarizationThreshold ?? 20;
-    const effectiveKeepWindow = summarizationKeepWindow ?? 10;
-    if (effectiveKeepWindow >= effectiveThreshold) {
-      throw new Error(
-        `workingMemory.summarization.keepWindow (${effectiveKeepWindow}) must be less than threshold (${effectiveThreshold})`,
-      );
+    if (workingMemory.summarization !== undefined) {
+      const summarizationThreshold = workingMemory.summarization.threshold;
+      if (summarizationThreshold !== undefined && (!Number.isInteger(summarizationThreshold) || summarizationThreshold < 2)) {
+        throw new Error(`workingMemory.summarization.threshold must be an integer >= 2, got: ${summarizationThreshold}`);
+      }
+
+      const summarizationKeepWindow = workingMemory.summarization.keepWindow;
+      if (summarizationKeepWindow !== undefined && (!Number.isInteger(summarizationKeepWindow) || summarizationKeepWindow < 1)) {
+        throw new Error(`workingMemory.summarization.keepWindow must be a positive integer, got: ${summarizationKeepWindow}`);
+      }
+
+      // Cross-validate using effective values (same defaults as index.ts bootstrap) so a
+      // config like { keepWindow: 25 } (no explicit threshold) is caught here rather than
+      // silently passing validation and failing at runtime.
+      const effectiveThreshold = summarizationThreshold ?? 20;
+      const effectiveKeepWindow = summarizationKeepWindow ?? 10;
+      if (effectiveKeepWindow >= effectiveThreshold) {
+        throw new Error(
+          `workingMemory.summarization.keepWindow (${effectiveKeepWindow}) must be less than threshold (${effectiveThreshold})`,
+        );
+      }
     }
   }
 
