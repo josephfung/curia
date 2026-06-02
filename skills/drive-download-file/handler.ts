@@ -118,7 +118,7 @@ export class DriveDownloadFileHandler implements SkillHandler {
     let driveMimeType: string;
     let declaredSize: number | null;
     try {
-      const res = await drive.files.get({ fileId, fields: 'name,mimeType,size' });
+      const res = await drive.files.get({ fileId, fields: 'name,mimeType,size', supportsAllDrives: true });
       driveName = res.data.name ?? fileId;
       driveMimeType = res.data.mimeType ?? 'application/octet-stream';
       declaredSize =
@@ -170,14 +170,14 @@ export class DriveDownloadFileHandler implements SkillHandler {
     try {
       if (isGoogleNative) {
         const res = await drive.files.export(
-          { fileId, mimeType: exportMime },
+          { fileId, mimeType: exportMime, supportsAllDrives: true },
           { responseType: 'stream' },
         );
         buffer = await streamToBuffer(res.data as unknown as Readable, MAX_TEMP_FILE_BYTES);
         contentType = exportMime;
       } else {
         const res = await drive.files.get(
-          { fileId, alt: 'media' },
+          { fileId, alt: 'media', supportsAllDrives: true },
           { responseType: 'stream' },
         );
         buffer = await streamToBuffer(res.data as unknown as Readable, MAX_TEMP_FILE_BYTES);

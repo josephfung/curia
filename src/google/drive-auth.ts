@@ -3,9 +3,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { google } from 'googleapis';
 
-// Cached per process — googleapis auto-refreshes the access token using the
-// long-lived refresh_token, so we only need to load from disk once.
-let cachedClient: InstanceType<typeof google.auth.OAuth2> | null = null;
+// Keyed by resolved tokenCachePath so multiple identities in the same process
+// each get their own cached client (and tests with different paths stay isolated).
+const clientCache = new Map<string, InstanceType<typeof google.auth.OAuth2>>();
 
 export interface DriveAuthOptions {
   tokenCachePath?: string;
@@ -18,8 +18,6 @@ export interface DriveAuthOptions {
 export async function getDriveClient(
   options?: DriveAuthOptions,
 ): Promise<InstanceType<typeof google.auth.OAuth2>> {
-  if (cachedClient) return cachedClient;
-
   const clientId = options?.clientId ?? process.env.GOOGLE_OAUTH_CLIENT_ID;
   const clientSecret = options?.clientSecret ?? process.env.GOOGLE_OAUTH_CLIENT_SECRET;
   const email = options?.email ?? process.env.CURIA_GOOGLE_EMAIL;
@@ -36,6 +34,9 @@ export async function getDriveClient(
       'credentials',
       `${email}.json`,
     );
+
+  const cached = clientCache.get(tokenCachePath);
+  if (cached) return cached;
 
   let tokenData: Record<string, unknown>;
   try {
@@ -63,11 +64,11 @@ export async function getDriveClient(
 
   const auth = new google.auth.OAuth2(clientId, clientSecret);
   auth.setCredentials({ refresh_token: refreshToken });
-  cachedClient = auth;
+  clientCache.set(tokenCachePath, auth);
   return auth;
 }
 
-/** Reset the cached client. For tests only. */
+/** Reset the cached clients. For tests only. */
 export function clearDriveClientCache(): void {
-  cachedClient = null;
+  clientCache.clear();
 }
