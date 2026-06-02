@@ -378,9 +378,12 @@ export class AgentRuntime {
     // Prevents the LLM from treating injected outbound-context entries (from prior human
     // conversations) as action triggers. Incident reference: #730.
     if (taskEvent.payload.channelId === 'scheduler') {
-      // Extract job UUID from conversationId (format: "scheduler:<uuid>:<run-id>") so agents
-      // can pass it directly to scheduler-report without needing to call scheduler-list.
-      const jobId = conversationId.split(':')[1] ?? '';
+      // Extract job UUID from conversationId (format: "scheduler:<uuid>:<run-id>").
+      // Must be exactly 3 colon-separated segments starting with "scheduler" — 2-part IDs
+      // (e.g. "scheduler:<jobId>") are coordinator notification events (drift, suspension),
+      // not runnable tasks, and must NOT get a Job ID line.
+      const parts = conversationId.split(':');
+      const jobId = parts.length === 3 && parts[0] === 'scheduler' ? (parts[1] ?? '') : '';
       if (!jobId) {
         logger.warn(
           { agentId, conversationId },

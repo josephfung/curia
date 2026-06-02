@@ -555,6 +555,39 @@ describe('AgentRuntime', () => {
     expect(systemMsg?.content).not.toContain('Job ID (pass to scheduler-report):');
   });
 
+  it('omits Job ID line for 2-part scheduler notification IDs (scheduler:<jobId>)', async () => {
+    // The scheduler emits coordinator notification tasks (drift, suspension) with
+    // conversationId: "scheduler:<jobId>" — 2 parts, no run-id. These must NOT get a
+    // Job ID line; they are not runnable scheduled tasks.
+    const provider = createMockProvider('Done.');
+    const runtime = new AgentRuntime({
+      agentId: 'coordinator',
+      systemPrompt: 'You are helpful.',
+      provider,
+      resolvedModel: 'mock-model',
+      bus,
+      logger: createLogger('error'),
+    });
+    runtime.register();
+
+    const task = createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'scheduler:job-abc',
+      channelId: 'scheduler',
+      senderId: 'scheduler',
+      content: JSON.stringify({ task: 'Job drifted.' }),
+      parentEventId: 'parent-sched-3',
+    });
+    await bus.publish('dispatch', task);
+
+    const chatCall = (provider.chat as ReturnType<typeof vi.fn>).mock.calls[0]![0] as { messages: Array<{ role: string; content: string }> };
+    const systemMsg = chatCall.messages.find(m => m.role === 'system');
+    // Fence block still appended
+    expect(systemMsg?.content).toContain('## Scheduled Task — Scope Restriction');
+    // No Job ID — 2-part notification IDs must be rejected
+    expect(systemMsg?.content).not.toContain('Job ID (pass to scheduler-report):');
+  });
+
   it('does not append scheduler fence when channelId is not scheduler', async () => {
     const provider = createMockProvider('Hello back!');
     const runtime = new AgentRuntime({
