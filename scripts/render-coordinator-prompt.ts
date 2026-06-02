@@ -27,6 +27,7 @@ import { AgentRegistry } from '../src/agents/agent-registry.js';
 import { OfficeIdentityService } from '../src/identity/service.js';
 import { ExecutiveProfileService, compileWritingVoiceBlock } from '../src/executive/service.js';
 import { compileSecurityContextBlock } from '../src/security/security-context.js';
+import { formatTimeContextBlock } from '../src/time/time-context.js';
 import { EventBus } from '../src/bus/bus.js';
 import { createSilentLogger } from '../src/logger.js';
 
@@ -89,7 +90,7 @@ async function main(): Promise<void> {
       );
     }
 
-    // ── Agent contact ID ───────────────────────────────────────────────────────
+    // ── Agent contact ID + channel identities ─────────────────────────────────
     const agentResult = await pool.query<{ id: string }>(
       `SELECT id FROM contacts WHERE system_role = 'agent' ORDER BY id ASC LIMIT 1`,
     );
@@ -104,7 +105,16 @@ async function main(): Promise<void> {
       );
     }
 
-    // ── Principal contact ID ───────────────────────────────────────────────────
+    // Fetch the agent's channel identities to mirror the runtime "Your Contact Details" block.
+    const agentIdentityResult = await pool.query<{ channel: string; channel_identifier: string }>(
+      `SELECT channel, channel_identifier
+       FROM contact_channel_identities
+       WHERE contact_id = $1 AND verified = true AND status = 'active'
+       ORDER BY channel ASC`,
+      [agentContactId],
+    );
+
+    // ── Principal contact ID + verified identities ────────────────────────────
     const principalResult = await pool.query<{ id: string }>(
       `SELECT id FROM contacts WHERE system_role = 'principal' ORDER BY id ASC LIMIT 1`,
     );
@@ -116,12 +126,23 @@ async function main(): Promise<void> {
       );
     }
 
+    // Fetch the principal's verified, active identities — same filter as index.ts startup.
+    const principalIdentityResult = await pool.query<{ channel: string; channel_identifier: string }>(
+      `SELECT channel, channel_identifier
+       FROM contact_channel_identities
+       WHERE contact_id = $1 AND verified = true AND status = 'active'
+       ORDER BY channel ASC`,
+      [principalContactId],
+    );
+
     // ── Available specialists ──────────────────────────────────────────────────
     // Mirror the two-pass registration in index.ts.
+    // Key off `name` (not `role`) — index.ts comment: "name: coordinator is the canonical
+    // identifier; role is optional and may differ (e.g., 'chief-of-staff')."
     const agentConfigs = loadAllAgentConfigs(AGENTS_DIR);
     const registry = new AgentRegistry();
     for (const cfg of agentConfigs) {
-      if (cfg.role !== 'coordinator') {
+      if (cfg.name !== 'coordinator') {
         registry.register(cfg.name, {
           role: cfg.role ?? 'specialist',
           description: cfg.description ?? cfg.name,
@@ -140,7 +161,8 @@ async function main(): Promise<void> {
     const securityContextBlock = compileSecurityContextBlock(thresholds);
 
     // ── Resolve the coordinator system prompt template ─────────────────────────
-    const coordinatorConfig = agentConfigs.find(cfg => cfg.role === 'coordinator');
+    // Key off `name` — see comment above on specialist registration.
+    const coordinatorConfig = agentConfigs.find(cfg => cfg.name === 'coordinator');
     if (!coordinatorConfig) {
       throw new Error('No coordinator agent found in agents/ directory.');
     }
@@ -156,43 +178,72 @@ async function main(): Promise<void> {
       principalContactId,
     });
 
-    // ${security_context_block} is not handled by interpolateRuntimeContext
-    // (it's injected by the security layer, not the runtime context path).
-    // Use a global regex to handle all occurrences, and warn if the placeholder
-    // is absent (e.g., coordinator.yaml was changed and the placeholder renamed).
-    const securityPlaceholder = /\$\{security_context_block\}/g;
-    if (!securityPlaceholder.test(coordinatorConfig.system_prompt)) {
+    // ${security_context_block} is not handled by interpolateRuntimeContext.
+    // Mirror AgentRuntime: replace the placeholder when present; append when absent
+    // (so the rendered prompt always includes the security policy regardless of
+    // whether coordinator.yaml uses the placeholder).
+    const afterReplace = systemPrompt.replace(/\$\{security_context_block\}/g, securityContextBlock);
+    if (afterReplace === systemPrompt) {
+      // Placeholder was absent — append, matching runtime fallback behavior.
       process.stderr.write(
         'render-coordinator-prompt: warning: ${security_context_block} placeholder not found ' +
-        'in coordinator.yaml. Security context block will be absent from the rendered prompt.\n',
+        'in coordinator.yaml. Appending security context block at end (mirrors runtime fallback).\n',
       );
+      systemPrompt = systemPrompt + '\n\n' + securityContextBlock;
+    } else {
+      systemPrompt = afterReplace;
     }
-    systemPrompt = systemPrompt.replace(/\$\{security_context_block\}/g, securityContextBlock);
 
     // ── Prepend representative per-turn injected blocks ────────────────────────
     // These blocks are injected fresh on every message turn by the runtime.
     // Including representative values here ensures the red team probes the full
     // effective prompt surface, including the identity and contact detail sections
     // that an adversary would see on a live instance.
-    const today = new Date().toISOString().split('T')[0]!;
-    const ceoPrimaryEmail = config.ceoPrimaryEmail ?? 'ceo@example.com';
-    const perTurnBlocks = [
-      `## Current Date & Time`,
-      `Today is ${today}. Timezone: America/Toronto (EDT, UTC-4).`,
-      ``,
-      `## Principal Contact Details`,
-      `The CEO's verified contact details:`,
-      `- Email: ${ceoPrimaryEmail}`,
-      `- Signal: +1 555-000-0001`,
-      ``,
-      `## Your Contact Details`,
-      `Your own verified contact details:`,
-      `- Email: curia-agent@example.com`,
-      `- Contact ID: ${agentContactId || '<agent-contact-id>'}`,
-      ``,
+    //
+    // Use the same formatTimeContextBlock() as the runtime so date/timezone/DST
+    // handling is identical (Luxon-based, respects TIMEZONE env var).
+    const timeBlock = formatTimeContextBlock(config.timezone, new Date());
+
+    // Mirror AgentRuntime "Your Contact Details" block (runtime.ts ~line 316):
+    // uses channel_accounts email + SIGNAL_PHONE_NUMBER. Here we use the agent
+    // contact's verified identities from the DB as the canonical source.
+    const agentIdentityLines: string[] = [];
+    for (const row of agentIdentityResult.rows) {
+      agentIdentityLines.push(`- ${row.channel}: ${row.channel_identifier}`);
+    }
+    // Also include the agent's contact ID (used by skills as "acting as").
+    agentIdentityLines.push(`- Contact ID: ${agentContactId}`);
+    // Fall back to SIGNAL_PHONE_NUMBER from env if the agent has no phone identity in DB.
+    if (config.signalPhoneNumber && !agentIdentityResult.rows.some(r => r.channel === 'signal')) {
+      agentIdentityLines.push(`- signal: ${config.signalPhoneNumber}`);
+    }
+
+    const yourContactBlock = [
+      '## Your Contact Details',
+      'These are your own accounts. Use them when tools require an email address, phone number,',
+      "or similar \"acting as\" identifier — never substitute the CEO's details.",
+      '',
+      ...agentIdentityLines,
     ].join('\n');
 
-    process.stdout.write(perTurnBlocks + '\n' + systemPrompt + '\n');
+    // Mirror AgentRuntime "Principal Contact Details" block (runtime.ts ~line 332):
+    // uses principalIdentities (verified + active) from the DB.
+    const principalLines: string[] = [];
+    for (const row of principalIdentityResult.rows) {
+      principalLines.push(`- ${row.channel}: ${row.channel_identifier}`);
+    }
+
+    const principalContactBlock = [
+      '## Principal Contact Details',
+      'These are the verified channel addresses for the principal you serve.',
+      'Use them when you need to reach the principal. Do not infer or substitute — these are authoritative.',
+      '',
+      ...principalLines,
+    ].join('\n');
+
+    const perTurnSection = [timeBlock, principalContactBlock, yourContactBlock].join('\n\n');
+
+    process.stdout.write(perTurnSection + '\n\n' + systemPrompt + '\n');
   } finally {
     await identityService?.stop();
     await profileService?.stop();

@@ -75,8 +75,8 @@ Costs are approximate at Sonnet-class pricing. The HTTP (Level 2) target doubles
 `promptfooconfig.yaml` defines:
 - **Level 1 target**: Direct LLM call with the rendered system prompt (default, no running Curia instance needed)
 - **Level 2 target**: HTTP API call to a live Curia instance (commented out — uncomment with a running test environment)
-- **Plugins**: Core injection, PII leakage, hijacking, ASCII smuggling, display name injection
-- **Strategies**: Multi-turn jailbreak and crescendo
+- **Plugins**: `cyberseceval`, `pliny`, `indirect-prompt-injection`, `ascii-smuggling`, `special-token-injection`, `pii:direct`, `pii:api-db`, `data-exfil`, `hijacking`, `contracts`
+- **Strategies**: `basic` (crescendo and jailbreak strategies require Promptfoo Cloud or a non-Claude generation model — see config comments)
 
 To add new plugins or adjust `numTests`, edit `promptfooconfig.yaml` directly.
 
