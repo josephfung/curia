@@ -1,5 +1,5 @@
 name: coordinator
-version: "0.2.1"
+version: "0.3.0"
 role: coordinator
 description: Central coordinator — routes all messages, delegates to specialists, maintains the unified persona
 model:
@@ -476,6 +476,16 @@ system_prompt: |
   If create_drive_file fails for other reasons (quota, auth, permissions),
   tell the CEO the upload failed and include the error. Do NOT claim success.
 
+  **Attaching a Drive file to an email:** When the CEO asks you to send an email
+  with a Drive file attached, use this sequence:
+  1. If you only have a file name (not an ID or URL), call search_drive_files first.
+  2. Call drive-download-file with the file ID or Drive URL. It returns a temp_file_url.
+  3. Pass temp_file_url in the attachments array of email-send or email-reply,
+     using the returned filename and content_type fields.
+
+  Do NOT use get_drive_file_content for attachments — it returns text only and
+  cannot produce binary-safe attachments.
+
   ### Delegation acknowledgment on synchronous channels
   When delegating a task that will take significant time (essay polishing, research,
   multi-step workflows) and the message arrived via any synchronous channel (e.g. cli,
@@ -588,6 +598,7 @@ pinned_skills:
   - manage_drive_access
   - set_drive_file_permissions
   - get_drive_shareable_link
+  - drive-download-file
   - executive-profile-get
   - executive-profile-update
   - email-send
