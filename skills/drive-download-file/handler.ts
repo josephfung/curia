@@ -46,6 +46,14 @@ async function streamToBuffer(stream: Readable, maxBytes: number): Promise<Buffe
     const chunks: Buffer[] = [];
     let totalBytes = 0;
     let destroyed = false;
+    let settled = false;
+
+    const settle = (fn: () => void) => {
+      if (!settled) {
+        settled = true;
+        fn();
+      }
+    };
 
     stream.on('data', (chunk: Buffer) => {
       totalBytes += chunk.length;
@@ -57,10 +65,13 @@ async function streamToBuffer(stream: Readable, maxBytes: number): Promise<Buffe
       chunks.push(chunk);
     });
 
-    stream.on('end', () => {
-      if (!destroyed) resolve(Buffer.concat(chunks));
+    stream.on('end', () => { settle(() => resolve(Buffer.concat(chunks))); });
+    stream.on('error', (err) => { settle(() => reject(err)); });
+    // Some stream implementations (Axios/http) emit 'close' instead of 'error'
+    // after destroy() — ensure the promise always settles.
+    stream.on('close', () => {
+      if (destroyed) settle(() => reject(new Error('SIZE_EXCEEDED')));
     });
-    stream.on('error', reject);
   });
 }
 

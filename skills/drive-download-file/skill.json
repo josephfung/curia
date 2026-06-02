@@ -16,7 +16,11 @@
     "size": "number (byte count after download)"
   },
   "permissions": [],
-  "secrets": [],
+  "secrets": [
+    "GOOGLE_OAUTH_CLIENT_ID",
+    "GOOGLE_OAUTH_CLIENT_SECRET",
+    "CURIA_GOOGLE_EMAIL"
+  ],
   "timeout": 60000,
   "capabilities": ["tempFileStore"]
 }
