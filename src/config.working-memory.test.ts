@@ -42,4 +42,24 @@ describe('loadYamlConfig: workingMemory.ttlDays', () => {
     const config = loadYamlConfig(dir);
     expect(config.workingMemory?.ttlDays).toBeUndefined();
   });
+
+  it('accepts ttlDays: 36500 (maximum)', () => {
+    const dir = writeTempConfig(`workingMemory:\n  ttlDays: 36500\n`);
+    expect(() => loadYamlConfig(dir)).not.toThrow();
+  });
+
+  it('rejects ttlDays > 36500 to prevent date arithmetic overflow', () => {
+    const dir = writeTempConfig(`workingMemory:\n  ttlDays: 36501\n`);
+    expect(() => loadYamlConfig(dir)).toThrow('workingMemory.ttlDays');
+  });
+
+  it('rejects workingMemory: false (non-mapping)', () => {
+    const dir = writeTempConfig(`workingMemory: false\n`);
+    expect(() => loadYamlConfig(dir)).toThrow('workingMemory must be a YAML mapping');
+  });
+
+  it('rejects workingMemory: [] (array)', () => {
+    const dir = writeTempConfig(`workingMemory: []\n`);
+    expect(() => loadYamlConfig(dir)).toThrow('workingMemory must be a YAML mapping');
+  });
 });

@@ -59,13 +59,8 @@ describe('DreamEngine — working memory purge', () => {
     expect(mockWorkingMemory.purgeExpired).toHaveBeenCalledOnce();
   });
 
-  it('does not call purgeExpired() when workingMemory is not injected', async () => {
+  it('does not throw when workingMemory is not injected', async () => {
     const { pool } = makePool();
-    const mockWorkingMemory = {
-      purgeExpired: vi.fn().mockResolvedValue(0),
-    } as unknown as WorkingMemory;
-
-    // No workingMemory passed
     const engine = new DreamEngine(
       pool as never,
       makeBus(),
@@ -73,9 +68,9 @@ describe('DreamEngine — working memory purge', () => {
       baseConfig,
     );
 
-    await engine.runDecayPass();
-
-    expect(mockWorkingMemory.purgeExpired).not.toHaveBeenCalled();
+    // Engine must complete the decay pass without error even though no
+    // workingMemory was provided — the guard skips the purge step entirely.
+    await expect(engine.runDecayPass()).resolves.toBeDefined();
   });
 
   it('logs a purge failure but does not throw', async () => {

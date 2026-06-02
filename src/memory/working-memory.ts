@@ -311,10 +311,13 @@ class PostgresBackend implements StorageBackend {
         [archiveIds],
       );
 
+      const summaryExpiresAt = this.ttlDays != null
+        ? new Date(Date.now() + this.ttlDays * 24 * 60 * 60 * 1000)
+        : null;
       await client.query(
-        `INSERT INTO working_memory (conversation_id, agent_id, role, content, created_at)
-         VALUES ($1, $2, 'system', $3, $4)`,
-        [conversationId, agentId, `[Conversation summary]\n${summaryContent}`, summaryTimestamp],
+        `INSERT INTO working_memory (conversation_id, agent_id, role, content, created_at, expires_at)
+         VALUES ($1, $2, 'system', $3, $4, $5)`,
+        [conversationId, agentId, `[Conversation summary]\n${summaryContent}`, summaryTimestamp, summaryExpiresAt],
       );
 
       await client.query('COMMIT');

@@ -6,8 +6,9 @@
  *   - expires_at is NULL in INSERT when ttlDays is omitted
  *   - purgeExpired() issues the right DELETE and returns rowCount
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { WorkingMemory } from '../../../src/memory/working-memory.js';
+import type { SummarizationConfig } from '../../../src/memory/working-memory.js';
 import type { DbPool } from '../../../src/db/connection.js';
 
 // ---------------------------------------------------------------------------
@@ -152,5 +153,105 @@ describe('WorkingMemory — TTL', () => {
       const deleted = await memory.purgeExpired();
       expect(deleted).toBe(0);
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Helpers for the summarization-path expires_at tests
+// ---------------------------------------------------------------------------
+
+function makeSummarizationPool() {
+  const client = {
+    query: vi.fn().mockImplementation(() => Promise.resolve({ rows: [], rowCount: 1 })),
+    release: vi.fn(),
+  };
+  const pool = {
+    query: vi.fn().mockImplementation((sql: string) => {
+      if (sql.includes('SELECT COUNT(*)')) {
+        // Report 3 active turns so that with threshold=2 we exceed the limit
+        return Promise.resolve({ rows: [{ count: '3' }] });
+      }
+      if (sql.includes('AND id != ALL')) {
+        // Oldest kept turn — 1ms after the archived turn
+        return Promise.resolve({ rows: [{ created_at: new Date(1_000_000) }] });
+      }
+      if (sql.includes('SELECT id, role, content')) {
+        // Old turns to archive
+        return Promise.resolve({
+          rows: [{ id: 'aaaaaaaa-0000-0000-0000-000000000001', role: 'user', content: 'old turn', created_at: new Date(0) }],
+        });
+      }
+      return Promise.resolve({ rows: [], rowCount: 1 });
+    }),
+    connect: vi.fn().mockResolvedValue(client),
+  } as unknown as DbPool;
+  return { pool, client };
+}
+
+describe('addTurn() — summarization path respects expires_at', () => {
+  const CONV = 'conv-summarization';
+  const AGENT = 'coordinator';
+
+  it('summary INSERT includes expires_at when ttlDays is set', async () => {
+    const { pool, client } = makeSummarizationPool();
+    let capturedSummarySql: string | undefined;
+    let capturedSummaryParams: unknown[] | undefined;
+
+    // Capture the summary INSERT from the transaction client
+    (client.query as ReturnType<typeof vi.fn>).mockImplementation((sql: string, params?: unknown[]) => {
+      if (sql.includes('INSERT INTO working_memory')) {
+        capturedSummarySql = sql;
+        capturedSummaryParams = params;
+      }
+      return Promise.resolve({ rows: [], rowCount: 1 });
+    });
+
+    const mockProvider = {
+      chat: vi.fn().mockResolvedValue({ type: 'text', content: 'Conversation summary.' }),
+    };
+    const summarization = {
+      threshold: 2,
+      keepWindow: 2,
+      provider: mockProvider,
+      model: 'test-model',
+    } as unknown as SummarizationConfig;
+
+    const memory = WorkingMemory.createWithPostgres(pool, silentLogger(), summarization, 30);
+    await memory.addTurn(CONV, AGENT, { role: 'user', content: 'new turn' });
+
+    expect(capturedSummarySql).toBeDefined();
+    expect(capturedSummarySql).toContain('expires_at');
+    const expiresAt = capturedSummaryParams![4] as Date;
+    expect(expiresAt).toBeInstanceOf(Date);
+    const expectedMs = 30 * 24 * 60 * 60 * 1000;
+    expect(expiresAt.getTime()).toBeGreaterThan(Date.now() - 2000 + expectedMs);
+  });
+
+  it('summary INSERT sets expires_at to NULL when ttlDays is not set', async () => {
+    const { pool, client } = makeSummarizationPool();
+    let capturedSummaryParams: unknown[] | undefined;
+
+    (client.query as ReturnType<typeof vi.fn>).mockImplementation((sql: string, params?: unknown[]) => {
+      if (sql.includes('INSERT INTO working_memory')) {
+        capturedSummaryParams = params;
+      }
+      return Promise.resolve({ rows: [], rowCount: 1 });
+    });
+
+    const mockProvider = {
+      chat: vi.fn().mockResolvedValue({ type: 'text', content: 'Conversation summary.' }),
+    };
+    const summarization = {
+      threshold: 2,
+      keepWindow: 2,
+      provider: mockProvider,
+      model: 'test-model',
+    } as unknown as SummarizationConfig;
+
+    const memory = WorkingMemory.createWithPostgres(pool, silentLogger(), summarization); // no ttlDays
+    await memory.addTurn(CONV, AGENT, { role: 'user', content: 'new turn' });
+
+    expect(capturedSummaryParams).toBeDefined();
+    expect(capturedSummaryParams![4]).toBeNull();
   });
 });
