@@ -244,6 +244,8 @@ pinned_skills:
   # to collect recipient email addresses; it never reads inbox triage state or writes messages.
   - ceo-inbox-list
   - contact-register
+  # Scheduler observability — required for all scheduled tasks.
+  - scheduler-report
 
 schedule:
   - cron: "0 9 * * 1"   # Mondays at 9 AM

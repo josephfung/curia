@@ -472,7 +472,36 @@ describe('Scheduler', () => {
         payload: { agentId: 'agent-1', conversationId: 'c1', content: 'done' },
       });
 
-      expect(schedulerService.completeJobRun).toHaveBeenCalledWith('job-1', true, undefined);
+      expect(schedulerService.completeJobRun).toHaveBeenCalledWith('job-1', true, undefined, 'done');
+    });
+
+    it('passes auto-summary truncated to 500 chars on agent.response', async () => {
+      const row = fakeDbRow();
+      pool.query.mockResolvedValueOnce({ rows: [row] });
+      pool.query.mockResolvedValueOnce({ rows: [] });
+
+      await scheduler.pollDueJobs();
+
+      const [, taskEvent] = bus.publish.mock.calls[1] as [string, { id: string }];
+      const taskEventId = taskEvent.id;
+
+      schedulerService.completeJobRun.mockResolvedValueOnce({ suspended: false });
+      scheduler.start();
+
+      const longContent = 'x'.repeat(600);
+      const responseHandler = bus.subscribe.mock.calls[0]?.[2] as (event: unknown) => Promise<void>;
+      await responseHandler({
+        id: 'resp-trunc',
+        type: 'agent.response',
+        sourceLayer: 'agent',
+        parentEventId: taskEventId,
+        timestamp: new Date(),
+        payload: { agentId: 'agent-1', conversationId: 'c1', content: longContent },
+      });
+
+      const [, , , autoSummary] = schedulerService.completeJobRun.mock.calls[0] as [string, boolean, undefined, string];
+      expect(autoSummary).toHaveLength(500);
+      expect(autoSummary).toBe('x'.repeat(500));
     });
 
     it('completes a job run on agent.error', async () => {
@@ -509,7 +538,7 @@ describe('Scheduler', () => {
         },
       });
 
-      expect(schedulerService.completeJobRun).toHaveBeenCalledWith('job-1', false, 'budget blown');
+      expect(schedulerService.completeJobRun).toHaveBeenCalledWith('job-1', false, 'budget blown', undefined);
     });
 
     it('ignores events not originating from the scheduler', async () => {
@@ -613,7 +642,7 @@ describe('Scheduler', () => {
           lastRunSummary: 'Found 5 articles on AI safety.',
         });
         expect(driftSchedulerService.pauseJobForDrift).not.toHaveBeenCalled();
-        expect(driftSchedulerService.completeJobRun).toHaveBeenCalledWith('job-1', true, undefined);
+        expect(driftSchedulerService.completeJobRun).toHaveBeenCalledWith('job-1', true, undefined, 'Here are the articles.');
       });
     });
 
@@ -701,7 +730,7 @@ describe('Scheduler', () => {
       // the response handler doesn't return a promise so we must wait for microtasks.
       await vi.waitFor(() => {
         expect(driftSchedulerService.pauseJobForDrift).not.toHaveBeenCalled();
-        expect(driftSchedulerService.completeJobRun).toHaveBeenCalledWith('job-1', true, undefined);
+        expect(driftSchedulerService.completeJobRun).toHaveBeenCalledWith('job-1', true, undefined, 'done');
       });
     });
 
@@ -737,7 +766,7 @@ describe('Scheduler', () => {
       // the response handler doesn't return a promise so we must wait for microtasks.
       await vi.waitFor(() => {
         expect(driftSchedulerService.pauseJobForDrift).not.toHaveBeenCalled();
-        expect(driftSchedulerService.completeJobRun).toHaveBeenCalledWith('job-1', true, undefined);
+        expect(driftSchedulerService.completeJobRun).toHaveBeenCalledWith('job-1', true, undefined, 'done');
       });
     });
 
@@ -774,7 +803,7 @@ describe('Scheduler', () => {
       // the response handler doesn't return a promise so we must wait for microtasks.
       await vi.waitFor(() => {
         expect(driftDetector.check).not.toHaveBeenCalled();
-        expect(driftSchedulerService.completeJobRun).toHaveBeenCalledWith('job-1', true, undefined);
+        expect(driftSchedulerService.completeJobRun).toHaveBeenCalledWith('job-1', true, undefined, 'done');
       });
     });
   });

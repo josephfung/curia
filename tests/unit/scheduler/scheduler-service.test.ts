@@ -513,19 +513,56 @@ describe('SchedulerService', () => {
       expect(params).toContain('failed');
     });
 
-    it('does not overwrite last_run_summary or last_run_context in completeJobRun', async () => {
-      const jobId = 'job-no-overwrite';
+    it('uses COALESCE for last_run_summary so agent-provided summary wins (one-shot)', async () => {
+      const jobId = 'job-coalesce';
       pool.query.mockResolvedValueOnce({
         rows: [{ id: jobId, cron_expr: null, status: 'running', consecutive_failures: 0, timezone: 'UTC' }],
       });
       pool.query.mockResolvedValueOnce({ rows: [] });
 
+      await svc.completeJobRun(jobId, true, undefined, 'auto summary');
+
+      const updateCall = pool.query.mock.calls[1];
+      const sql: string = updateCall[0];
+      const params: unknown[] = updateCall[1];
+      // Must use COALESCE so an agent-provided scheduler-report call wins
+      expect(sql).toContain('COALESCE(last_run_summary,');
+      expect(params).toContain('auto summary');
+      // Must NOT touch last_run_context — that column is only written by scheduler-report
+      expect(sql).not.toContain('last_run_context');
+    });
+
+    it('uses COALESCE for last_run_summary so agent-provided summary wins (recurring)', async () => {
+      const jobId = 'job-coalesce-recurring';
+      pool.query.mockResolvedValueOnce({
+        rows: [{ id: jobId, cron_expr: '0 9 * * *', status: 'running', consecutive_failures: 0, timezone: 'UTC' }],
+      });
+      pool.query.mockResolvedValueOnce({ rows: [] });
+
+      await svc.completeJobRun(jobId, true, undefined, 'auto summary recurring');
+
+      const updateCall = pool.query.mock.calls[1];
+      const sql: string = updateCall[0];
+      const params: unknown[] = updateCall[1];
+      expect(sql).toContain('COALESCE(last_run_summary,');
+      expect(params).toContain('auto summary recurring');
+    });
+
+    it('passes null autoSummary when not provided (no-op COALESCE)', async () => {
+      const jobId = 'job-no-summary';
+      pool.query.mockResolvedValueOnce({
+        rows: [{ id: jobId, cron_expr: null, status: 'running', consecutive_failures: 0, timezone: 'UTC' }],
+      });
+      pool.query.mockResolvedValueOnce({ rows: [] });
+
+      // No autoSummary argument — should still include the COALESCE clause with null
       await svc.completeJobRun(jobId, true);
 
       const updateCall = pool.query.mock.calls[1];
       const sql: string = updateCall[0];
-      expect(sql).not.toContain('last_run_summary');
-      expect(sql).not.toContain('last_run_context');
+      const params: unknown[] = updateCall[1];
+      expect(sql).toContain('COALESCE(last_run_summary,');
+      expect(params).toContain(null);
     });
   });
 

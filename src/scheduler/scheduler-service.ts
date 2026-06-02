@@ -642,6 +642,7 @@ export class SchedulerService {
     jobId: string,
     success: boolean,
     error?: string,
+    autoSummary?: string,
   ): Promise<{ suspended: boolean }> {
     // Fetch the current job state to decide how to handle the completion.
     // Include timezone so nextRunFromCron() uses the per-job zone, not the system default.
@@ -669,10 +670,11 @@ export class SchedulerService {
                  last_error = NULL,
                  run_started_at = NULL,
                  status = $2,
-                 last_run_outcome = $4
+                 last_run_outcome = $4,
+                 last_run_summary = COALESCE(last_run_summary, $5)
            WHERE id = $3
         `;
-        await this.pool.query(updateSql, [nextRunAt, 'pending', jobId, 'completed']);
+        await this.pool.query(updateSql, [nextRunAt, 'pending', jobId, 'completed', autoSummary ?? null]);
       } else {
         // One-shot job: mark as completed.
         const updateSql = `
@@ -682,10 +684,11 @@ export class SchedulerService {
                  consecutive_failures = 0,
                  last_error = NULL,
                  run_started_at = NULL,
-                 last_run_outcome = $3
+                 last_run_outcome = $3,
+                 last_run_summary = COALESCE(last_run_summary, $4)
            WHERE id = $2
         `;
-        await this.pool.query(updateSql, ['completed', jobId, 'completed']);
+        await this.pool.query(updateSql, ['completed', jobId, 'completed', autoSummary ?? null]);
       }
 
       this.logger.info({ jobId }, 'Job run completed successfully');

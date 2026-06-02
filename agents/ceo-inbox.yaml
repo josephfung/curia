@@ -31,6 +31,7 @@ pinned_skills:
   - memory-store
   - contact-register
   - date-resolve
+  - scheduler-report
 
 allow_discovery: false
 
