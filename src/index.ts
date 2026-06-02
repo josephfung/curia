@@ -390,17 +390,23 @@ async function main(): Promise<void> {
   // for summarization — it's a medium-complexity task that doesn't need the full
   // flagship model but benefits from better instruction-following than a fast tier.
   const summarizationModel = modelRouter.resolve('standard').model;
-  const memory = WorkingMemory.createWithPostgres(pool, logger, summarizationCfg
-    ? {
-        threshold: summarizationCfg.threshold ?? 20,
-        keepWindow: summarizationCfg.keepWindow ?? 10,
-        // Resolve the provider from the registry so that remapping 'standard' to
-        // an OpenRouter model routes summarization through OpenRouterProvider, not
-        // the hardwired Anthropic singleton. (#646)
-        provider: resolveProviderForModel(summarizationModel, 'WorkingMemory summarization'),
-        model: summarizationModel,
-      }
-    : undefined,
+  const workingMemoryTtlDays = yamlConfig.workingMemory?.ttlDays ?? 30;
+  logger.info({ ttlDays: workingMemoryTtlDays, fromConfig: yamlConfig.workingMemory?.ttlDays !== undefined }, 'Working memory TTL configured');
+  const memory = WorkingMemory.createWithPostgres(
+    pool,
+    logger,
+    summarizationCfg
+      ? {
+          threshold: summarizationCfg.threshold ?? 20,
+          keepWindow: summarizationCfg.keepWindow ?? 10,
+          // Resolve the provider from the registry so that remapping 'standard' to
+          // an OpenRouter model routes summarization through OpenRouterProvider, not
+          // the hardwired Anthropic singleton. (#646)
+          provider: resolveProviderForModel(summarizationModel, 'WorkingMemory summarization'),
+          model: summarizationModel,
+        }
+      : undefined,
+    workingMemoryTtlDays,
   );
 
   // Entity memory — optional, requires OPENAI_API_KEY for embeddings.
@@ -1151,7 +1157,7 @@ async function main(): Promise<void> {
   const scoringPass = new AutonomyScoringPass(actionLogRepo, autonomyService, scoringProvider, logger, scoringPassConfig);
   logger.info({ scoringPassConfig }, 'AutonomyScoringPass configured');
 
-  const dreamEngine = new DreamEngine(pool, bus, logger, decayConfig, scoringPass);
+  const dreamEngine = new DreamEngine(pool, bus, logger, decayConfig, scoringPass, memory);
   logger.info({ decayConfig }, 'DreamEngine configured');
 
   // Outbound context bridge — delegation-aware context registry for
