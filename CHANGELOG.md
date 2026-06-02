@@ -13,6 +13,9 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Fixed
+- **coordinator delegation hint** — `delegation_hint` in active outbound context is now treated as a binding contract; coordinator no longer handles replies directly when a specialist is named, preventing meeting debriefs from getting stuck at `"prompted"`. (#763)
+
 ### Added
 - **`ceo-inbox-draft-compose`** — compose cold-outreach drafts to CEO's Gmail Drafts via `CEO_NYLAS_GRANT_ID`. (#815)
 - **Outbound audience-leak plan** — implementation plan for Stage 2 LLM judge + structured `compose-reply` skill to prevent the coordinator from sending internal reasoning to external recipients. See `docs/wip/2026-06-02-outbound-audience-leak.md`.
