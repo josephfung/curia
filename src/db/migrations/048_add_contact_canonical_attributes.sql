@@ -18,7 +18,7 @@ ALTER TABLE contacts ADD CONSTRAINT contacts_primary_email_format_check
 ALTER TABLE contacts ADD CONSTRAINT contacts_linkedin_url_format_check
   CHECK (linkedin_url ~ '^https?://');
 ALTER TABLE contacts ADD CONSTRAINT contacts_bio_length_check
-  CHECK (length(bio) <= 500);
+  CHECK (char_length(bio) <= 500);
 ALTER TABLE contacts ADD CONSTRAINT contacts_birthday_format_check
   CHECK (birthday ~ '^\d{4}-\d{2}-\d{2}$' OR birthday ~ '^--\d{2}-\d{2}$');
 
