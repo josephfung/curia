@@ -381,6 +381,14 @@ export class AgentRuntime {
       // Extract job UUID from conversationId (format: "scheduler:<uuid>:<run-id>") so agents
       // can pass it directly to scheduler-report without needing to call scheduler-list.
       const jobId = conversationId.split(':')[1] ?? '';
+      if (!jobId) {
+        logger.warn(
+          { agentId, conversationId },
+          'Scheduler task has channelId=scheduler but conversationId is not in expected ' +
+            '"scheduler:<uuid>:<run-id>" format — job_id omitted from system prompt; ' +
+            'scheduler-report calls will fail or be skipped.',
+        );
+      }
       const jobIdLine = jobId ? `Job ID (pass to scheduler-report): ${jobId}\n` : '';
       effectiveSystemPrompt +=
         '\n\n## Scheduled Task — Scope Restriction\n' +

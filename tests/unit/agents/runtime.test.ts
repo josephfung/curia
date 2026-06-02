@@ -525,6 +525,36 @@ describe('AgentRuntime', () => {
     expect(systemMsg?.content).toContain('Job ID (pass to scheduler-report): job-abc');
   });
 
+  it('omits Job ID line when conversationId does not match scheduler format', async () => {
+    const provider = createMockProvider('Done.');
+    const runtime = new AgentRuntime({
+      agentId: 'coordinator',
+      systemPrompt: 'You are helpful.',
+      provider,
+      resolvedModel: 'mock-model',
+      bus,
+      logger: createLogger('error'),
+    });
+    runtime.register();
+
+    const task = createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'conv-non-scheduler',
+      channelId: 'scheduler',
+      senderId: 'scheduler',
+      content: JSON.stringify({ task: 'Run sweep.' }),
+      parentEventId: 'parent-sched-2',
+    });
+    await bus.publish('dispatch', task);
+
+    const chatCall = (provider.chat as ReturnType<typeof vi.fn>).mock.calls[0]![0] as { messages: Array<{ role: string; content: string }> };
+    const systemMsg = chatCall.messages.find(m => m.role === 'system');
+    // Fence block still appended — agent still gets its scope restriction
+    expect(systemMsg?.content).toContain('## Scheduled Task — Scope Restriction');
+    // But no Job ID line since conversationId isn't in "scheduler:<uuid>:<run-id>" format
+    expect(systemMsg?.content).not.toContain('Job ID (pass to scheduler-report):');
+  });
+
   it('does not append scheduler fence when channelId is not scheduler', async () => {
     const provider = createMockProvider('Hello back!');
     const runtime = new AgentRuntime({

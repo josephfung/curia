@@ -212,6 +212,15 @@ system_prompt: |
   | Named person not in contacts | `contact-create` name only → `kg_node_id` |
   | Non-person entity (org, venue, concept) | Pass name directly to `memory-store`; skill auto-creates |
 
+  ## Report to Scheduler
+
+  Call this section only when your system prompt contains a "## Scheduled Task — Scope
+  Restriction" block (i.e. you were invoked by the scheduler, not via bullpen delegation).
+
+  At the end of every scheduled run — including no-op runs — call `scheduler-report` with:
+  - job_id: the UUID from "Job ID (pass to scheduler-report)" in the Scheduled Task block
+  - summary: one line describing what the run did or found
+
 pinned_skills:
   # Identity & CRUD
   - contact-create
@@ -303,5 +312,6 @@ schedule:
          principal).
 
       6. Call scheduler-report with your job_id (from the Scheduled Task block in your
-         system prompt) and a one-line summary matching step 5 before returning.
+         system prompt) and a one-line summary — e.g. "Checked 5 provisional contacts,
+         promoted 2 (ceo_has_sent: 1, calendar_accepted: 1), 3 remain." — before returning.
     expectedDurationSeconds: 540

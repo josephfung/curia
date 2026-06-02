@@ -454,15 +454,16 @@ system_prompt: |
 
   ${available_specialists}
 
-  ## Step 7: Report to scheduler (scheduled mode only)
+  ## Step 7: Report to scheduler
+
+  Call this step only when your system prompt contains a "## Scheduled Task — Scope
+  Restriction" block (i.e. you were invoked by the scheduler, not via bullpen).
 
   After processing all messages (or immediately after the empty-inbox exit), call
   `scheduler-report` with:
   - job_id: the UUID from "Job ID (pass to scheduler-report)" in the Scheduled Task block
   - summary: one line — e.g. "Triaged 3 messages: 1 URGENT, 1 ACTIONABLE, 1 NOISE." or
     "No unread messages."
-
-  Skip this step in delegated mode (invoked via bullpen).
 
   ## Response Format
 
