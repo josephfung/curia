@@ -5,7 +5,7 @@ import type { EventBus } from '../../../bus/bus.js';
 import { createInboundMessage } from '../../../bus/events.js';
 import type { Logger } from '../../../logger.js';
 import type { ContactService } from '../../../contacts/contact-service.js';
-import type { ContactStatus, TrustLevel } from '../../../contacts/types.js';
+import type { Contact, ContactCanonicalFields, ContactStatus, TrustLevel } from '../../../contacts/types.js';
 import { MessageRejectedError, type EventRouter } from '../event-router.js';
 import { assertSecret, compareSecrets, hashToken, type SessionStore } from '../session-auth.js';
 import { markdownToHtml } from '../../../utils/markdown-to-html.js';
@@ -544,23 +544,87 @@ export async function knowledgeGraphRoutes(
     return reply.status(204).send();
   });
 
+  // Serialize a Contact object to the HTTP response shape.
+  // Returns all canonical fields so the Console UI can display them
+  // without a separate detail fetch.
+  function serializeContact(c: Contact) {
+    return {
+      id: c.id,
+      kgNodeId: c.kgNodeId,
+      displayName: c.displayName,
+      role: c.role,
+      status: c.status,
+      trustLevel: c.trustLevel,
+      systemRole: c.systemRole,
+      notes: c.notes,
+      createdAt: c.createdAt.toISOString(),
+      updatedAt: c.updatedAt.toISOString(),
+      // Canonical fields (migration 048)
+      preferredName: c.preferredName,
+      title: c.title,
+      organization: c.organization,
+      primaryEmail: c.primaryEmail,
+      primaryPhone: c.primaryPhone,
+      timezone: c.timezone,
+      locale: c.locale,
+      location: c.location,
+      pronouns: c.pronouns,
+      linkedinUrl: c.linkedinUrl,
+      bio: c.bio,
+      birthday: c.birthday,
+    };
+  }
+
+  // Validate canonical fields from a POST/PATCH body.
+  // Returns an error string if invalid, or null if all checks pass.
+  // `fields` entries are trimmed and empty-string-coerced to null.
+  function extractAndValidateCanonicalFields(body: Record<string, unknown>): {
+    error: string | null;
+    fields: ContactCanonicalFields;
+  } {
+    const str = (v: unknown): string | null =>
+      typeof v === 'string' && v.trim().length > 0 ? v.trim() : null;
+
+    const fields: ContactCanonicalFields = {};
+
+    if ('preferredName' in body) fields.preferredName = str(body.preferredName);
+    if ('title' in body) fields.title = str(body.title);
+    if ('organization' in body) fields.organization = str(body.organization);
+    if ('primaryPhone' in body) fields.primaryPhone = str(body.primaryPhone);
+    if ('timezone' in body) fields.timezone = str(body.timezone);
+    if ('locale' in body) fields.locale = str(body.locale);
+    if ('location' in body) fields.location = str(body.location);
+    if ('pronouns' in body) fields.pronouns = str(body.pronouns);
+    if ('birthday' in body) fields.birthday = str(body.birthday);
+    if ('linkedinUrl' in body) fields.linkedinUrl = str(body.linkedinUrl);
+    if ('bio' in body) fields.bio = str(body.bio);
+    if ('primaryEmail' in body) fields.primaryEmail = str(body.primaryEmail);
+
+    // Format validation
+    if (fields.primaryEmail != null && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(fields.primaryEmail)) {
+      return { error: 'Invalid primaryEmail format.', fields };
+    }
+    if (fields.linkedinUrl != null && !/^https?:\/\//.test(fields.linkedinUrl)) {
+      return { error: 'linkedinUrl must start with http:// or https://.', fields };
+    }
+    if (fields.bio != null && fields.bio.length > 500) {
+      return { error: 'bio must be 500 characters or fewer.', fields };
+    }
+    if (fields.birthday != null &&
+        !/^\d{4}-\d{2}-\d{2}$/.test(fields.birthday) &&
+        !/^--\d{2}-\d{2}$/.test(fields.birthday)) {
+      return { error: 'birthday must be YYYY-MM-DD or --MM-DD.', fields };
+    }
+
+    return { error: null, fields };
+  }
+
   app.get('/api/kg/contacts', KG_RATE, async (request, reply) => {
     if (!assertSecret(request, reply, webAppBootstrapSecret, sessions)) return;
     try {
       const contacts = await contactService.listContacts();
       return reply.send({
-        contacts: contacts.map((contact) => ({
-          id: contact.id,
-          kgNodeId: contact.kgNodeId,
-          displayName: contact.displayName,
-          role: contact.role,
-          status: contact.status,
-          trustLevel: contact.trustLevel,
-          systemRole: contact.systemRole,
-          notes: contact.notes,
-          createdAt: contact.createdAt.toISOString(),
-          updatedAt: contact.updatedAt.toISOString(),
-        })),
+        contacts: contacts.map(serializeContact),
       });
     } catch (err) {
       logger.error({ err }, 'GET /api/kg/contacts failed');
@@ -600,6 +664,11 @@ export async function knowledgeGraphRoutes(
       return reply.status(400).send({ error: 'Invalid kgNodeId: must be a valid UUID.' });
     }
 
+    const { error: canonicalError, fields: canonicalFields } = extractAndValidateCanonicalFields(body as Record<string, unknown>);
+    if (canonicalError) {
+      return reply.status(400).send({ error: canonicalError });
+    }
+
     const created = await contactService.createContact({
       displayName: body.displayName,
       role: typeof body.role === 'string' && body.role.trim().length > 0 ? body.role : undefined,
@@ -607,6 +676,7 @@ export async function knowledgeGraphRoutes(
       notes: typeof body.notes === 'string' && body.notes.trim().length > 0 ? body.notes : undefined,
       kgNodeId,
       source: 'kg_web_ui',
+      ...canonicalFields,
     });
 
     // Apply trustLevel if provided — createContact always initialises it to null.
@@ -621,17 +691,7 @@ export async function knowledgeGraphRoutes(
       return reply.status(500).send({ error: 'Contact created but could not be retrieved.' });
     }
     return reply.status(201).send({
-      contact: {
-        id: freshCreated.id,
-        kgNodeId: freshCreated.kgNodeId,
-        displayName: freshCreated.displayName,
-        role: freshCreated.role,
-        status: freshCreated.status,
-        trustLevel: freshCreated.trustLevel,
-        notes: freshCreated.notes,
-        createdAt: freshCreated.createdAt.toISOString(),
-        updatedAt: freshCreated.updatedAt.toISOString(),
-      },
+      contact: serializeContact(freshCreated),
     });
   });
 
@@ -669,6 +729,11 @@ export async function knowledgeGraphRoutes(
         : undefined;
     if (typeof normalizedKgNodeId === 'string' && !UUID_RE.test(normalizedKgNodeId)) {
       return reply.status(400).send({ error: 'Invalid kgNodeId: must be a valid UUID.' });
+    }
+
+    const { error: canonicalError, fields: canonicalFields } = extractAndValidateCanonicalFields(body as Record<string, unknown>);
+    if (canonicalError) {
+      return reply.status(400).send({ error: canonicalError });
     }
 
     if (typeof body.displayName === 'string') {
@@ -710,22 +775,27 @@ export async function knowledgeGraphRoutes(
       );
     }
 
+    // Apply canonical fields if any were included in the request body.
+    const CANONICAL_KEYS: Array<keyof typeof canonicalFields> = [
+      'preferredName', 'title', 'organization', 'primaryEmail', 'primaryPhone',
+      'timezone', 'locale', 'location', 'pronouns', 'linkedinUrl', 'bio', 'birthday',
+    ];
+    const hasCanonicalFields = CANONICAL_KEYS.some(k => k in (body as Record<string, unknown>));
+    if (hasCanonicalFields) {
+      try {
+        await contactService.updateContactFields(id, canonicalFields);
+      } catch (err) {
+        // updateContactFields throws for primaryEmail CCI mismatch
+        return reply.status(400).send({ error: (err as Error).message });
+      }
+    }
+
     const updated = await contactService.getContact(id);
     if (!updated) {
       return reply.status(404).send({ error: 'Contact not found after update.' });
     }
     return reply.send({
-      contact: {
-        id: updated.id,
-        kgNodeId: updated.kgNodeId,
-        displayName: updated.displayName,
-        role: updated.role,
-        status: updated.status,
-        trustLevel: updated.trustLevel,
-        notes: updated.notes,
-        createdAt: updated.createdAt.toISOString(),
-        updatedAt: updated.updatedAt.toISOString(),
-      },
+      contact: serializeContact(updated),
     });
   });
 
