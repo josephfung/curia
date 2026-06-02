@@ -112,6 +112,11 @@ describe('htmlToText', () => {
     expect(htmlToText('<p>Hello   World</p>')).toBe('Hello World');
   });
 
+  it('separates table cells so adjacent cells are not concatenated', () => {
+    const result = htmlToText('<table><tr><td>123</td><td>USD</td></tr></table>');
+    expect(result).not.toContain('123USD');
+  });
+
   it('returns the plain-text content of a realistic email body', () => {
     const html = `
       <html><body>

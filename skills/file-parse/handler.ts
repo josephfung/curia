@@ -396,6 +396,10 @@ export class FileParseHandler implements SkillHandler {
   }
 }
 
+const BLOCK_ELEMENTS = new Set([
+  'P', 'DIV', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'LI', 'TR', 'TD', 'TH', 'BLOCKQUOTE',
+]);
+
 /**
  * Collect raw text content from a parsed HTML node, skipping SCRIPT and STYLE
  * elements. Uses `rawText` (not decoded `.text`) so entity decoding can happen
@@ -418,7 +422,11 @@ function buildPlainText(node: Node, buf: string[]): void {
   // Drop script and style blocks entirely (tag + content)
   if (tag === 'SCRIPT' || tag === 'STYLE') return;
 
+  if (tag === 'BR') { buf.push('\n'); return; }
+
   for (const child of el.childNodes) buildPlainText(child, buf);
+
+  if (BLOCK_ELEMENTS.has(tag)) buf.push('\n');
 }
 
 /**

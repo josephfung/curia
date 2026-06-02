@@ -365,6 +365,40 @@ describe('FileParseHandler', () => {
       expect(result.success).toBe(true);
       expect(infraLlm.extract).toHaveBeenCalledOnce();
     });
+
+    it('separates block-level elements so adjacent paragraphs are not concatenated', async () => {
+      const infraLlm = makeInfraLlm('{}');
+      const html = '<p>Hello</p><p>World</p>';
+      const content = Buffer.from(html).toString('base64');
+      const handler = new FileParseHandler();
+      const result = await handler.execute(makeCtx({
+        content_base64: content,
+        mime_type: 'text/html',
+        extract_as: 'raw',
+      }, infraLlm));
+      expect(result.success).toBe(true);
+      if (result.success) {
+        const data = result.data as { raw_text: string };
+        expect(data.raw_text).not.toContain('HelloWorld');
+      }
+    });
+
+    it('separates table cells so adjacent cells are not concatenated', async () => {
+      const infraLlm = makeInfraLlm('{}');
+      const html = '<table><tr><td>123</td><td>USD</td></tr></table>';
+      const content = Buffer.from(html).toString('base64');
+      const handler = new FileParseHandler();
+      const result = await handler.execute(makeCtx({
+        content_base64: content,
+        mime_type: 'text/html',
+        extract_as: 'raw',
+      }, infraLlm));
+      expect(result.success).toBe(true);
+      if (result.success) {
+        const data = result.data as { raw_text: string };
+        expect(data.raw_text).not.toContain('123USD');
+      }
+    });
   });
 
   describe('PDF handling', () => {

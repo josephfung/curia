@@ -22,7 +22,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Provisional contact sweep** — sweep step 3 now passes `${principal_contact_id}` to `calendar-list-events` (was passing nothing, causing a UUID validation error), and treats calendar failure as best-effort so Sent-folder promotions still fire. (#816)
 
 ### Security
-- **HTML tag filtering** — replaced regex-based script/style stripping in `htmlToText` and `file-parse` with a proper HTML parser (`node-html-parser`), eliminating the CodeQL `js/bad-tag-filter` bypass where a script body containing `"</script type=text>"` caused non-greedy regex to terminate the match prematurely. (#590)
+- **HTML tag filtering** — replaced regex stripping with `node-html-parser`; eliminates the CodeQL `js/bad-tag-filter` bypass. (#590)
 
 ## [0.32.0] — 2026-06-01 — "Ariadne"
 

@@ -7,7 +7,7 @@ const _require = createRequire(import.meta.url);
 const { parse, NodeType } = _require('node-html-parser') as typeof import('node-html-parser');
 
 const BLOCK_ELEMENTS = new Set([
-  'P', 'DIV', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'LI', 'TR', 'BLOCKQUOTE',
+  'P', 'DIV', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'LI', 'TR', 'TD', 'TH', 'BLOCKQUOTE',
 ]);
 
 /**
