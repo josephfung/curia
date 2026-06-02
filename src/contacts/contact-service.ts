@@ -18,6 +18,7 @@ import { TRUST_RANK, IdentityNotFoundError } from './types.js';
 import type {
   AuthOverride,
   Contact,
+  ContactCanonicalFields,
   ContactStatus,
   ChannelIdentity,
   ContactServiceOptions,
@@ -235,6 +236,19 @@ export class ContactService {
       notes: options.notes ?? null,
       createdAt: now,
       updatedAt: now,
+      // Canonical fields (migration 048)
+      preferredName: options.preferredName ?? null,
+      title: options.title ?? null,
+      organization: options.organization ?? null,
+      primaryEmail: options.primaryEmail ?? null,
+      primaryPhone: options.primaryPhone ?? null,
+      timezone: options.timezone ?? null,
+      locale: options.locale ?? null,
+      location: options.location ?? null,
+      pronouns: options.pronouns ?? null,
+      linkedinUrl: options.linkedinUrl ?? null,
+      bio: options.bio ?? null,
+      birthday: options.birthday ?? null,
     };
 
     try {
@@ -560,6 +574,46 @@ export class ContactService {
   }
 
   /**
+   * Update canonical profile attributes on a contact.
+   *
+   * Only fields present in `fields` are changed — absent keys leave the current
+   * value untouched. If `fields.primaryEmail` is non-null, validates that the
+   * email exists in `contact_channel_identities` for this contact (channel = 'email'),
+   * case-insensitively. Throws with a descriptive message if not found.
+   */
+  async updateContactFields(
+    contactId: string,
+    fields: ContactCanonicalFields,
+  ): Promise<Contact> {
+    const contact = await this.backend.getContact(contactId);
+    if (!contact) {
+      throw new Error(`Contact not found: ${contactId}`);
+    }
+
+    // Validate primaryEmail against channel identities before writing.
+    if (fields.primaryEmail != null) {
+      const identities = await this.backend.getIdentitiesForContact(contactId);
+      const emailLower = fields.primaryEmail.toLowerCase();
+      const match = identities.find(
+        (i) => i.channel === 'email' && i.channelIdentifier.toLowerCase() === emailLower,
+      );
+      if (!match) {
+        throw new Error(
+          `primaryEmail '${fields.primaryEmail}' not found in contact_channel_identities for contact ${contactId}`,
+        );
+      }
+    }
+
+    const updated: Contact = {
+      ...contact,
+      ...fields,
+      updatedAt: new Date(),
+    };
+
+    return this.updateStoredContact(updated);
+  }
+
+  /**
    * Atomically promote a contact from provisional → confirmed.
    * Returns true if the promotion happened, false if the contact was not provisional
    * at write time (concurrent block or already confirmed). This is the preferred
@@ -847,6 +901,48 @@ export class ContactService {
   }
 }
 
+// -- Postgres-specific row shape (all 26 columns) --
+// Shared across all queries that return a full Contact record.
+// The 12 canonical fields (added in migration 048) are always
+// null-safe — they default to null when the column was added after
+// the row was first written.
+type ContactRow = {
+  id: string;
+  kg_node_id: string | null;
+  display_name: string;
+  role: string | null;
+  system_role: string | null;
+  status: string;
+  contact_confidence: string;
+  trust_level: string | null;
+  last_seen_at: Date | null;
+  inbound_message_count: string;
+  outbound_message_count: string;
+  notes: string | null;
+  created_at: Date;
+  updated_at: Date;
+  // Canonical fields (migration 048)
+  preferred_name: string | null;
+  title: string | null;
+  organization: string | null;
+  primary_email: string | null;
+  primary_phone: string | null;
+  timezone: string | null;
+  locale: string | null;
+  location: string | null;
+  pronouns: string | null;
+  linkedin_url: string | null;
+  bio: string | null;
+  birthday: string | null;
+};
+
+// Column list for all SELECT queries that return a full Contact row.
+const CONTACT_COLS =
+  'id, kg_node_id, display_name, role, system_role, status, contact_confidence, trust_level, ' +
+  'last_seen_at, inbound_message_count, outbound_message_count, notes, created_at, updated_at, ' +
+  'preferred_name, title, organization, primary_email, primary_phone, timezone, locale, location, ' +
+  'pronouns, linkedin_url, bio, birthday';
+
 // -- Postgres backend --
 
 /**
@@ -862,37 +958,29 @@ class PostgresContactBackend implements ContactServiceBackend {
   async createContact(contact: Contact): Promise<void> {
     this.logger.debug({ contactId: contact.id }, 'contacts: creating contact');
     await this.pool.query(
-      `INSERT INTO contacts (id, kg_node_id, display_name, role, system_role, status, notes, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-      [contact.id, contact.kgNodeId, contact.displayName, contact.role, contact.systemRole, contact.status, contact.notes, contact.createdAt, contact.updatedAt],
+      `INSERT INTO contacts (
+         id, kg_node_id, display_name, role, system_role, status, notes, created_at, updated_at,
+         preferred_name, title, organization, primary_email, primary_phone, timezone, locale,
+         location, pronouns, linkedin_url, bio, birthday
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9,
+                 $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)`,
+      [
+        contact.id, contact.kgNodeId, contact.displayName, contact.role, contact.systemRole,
+        contact.status, contact.notes, contact.createdAt, contact.updatedAt,
+        contact.preferredName, contact.title, contact.organization, contact.primaryEmail,
+        contact.primaryPhone, contact.timezone, contact.locale, contact.location,
+        contact.pronouns, contact.linkedinUrl, contact.bio, contact.birthday,
+      ],
     );
   }
 
   async getContact(id: string): Promise<Contact | undefined> {
-    const result = await this.pool.query<{
-      id: string;
-      kg_node_id: string | null;
-      display_name: string;
-      role: string | null;
-      system_role: string | null;
-      status: string;
-      contact_confidence: string;
-      trust_level: string | null;
-      last_seen_at: Date | null;
-      inbound_message_count: string;  // INT returned as string by node-pg
-      outbound_message_count: string;
-      notes: string | null;
-      created_at: Date;
-      updated_at: Date;
-    }>(
-      `SELECT id, kg_node_id, display_name, role, system_role, status, contact_confidence, trust_level, last_seen_at, inbound_message_count, outbound_message_count, notes, created_at, updated_at
-       FROM contacts WHERE id = $1`,
+    const result = await this.pool.query<ContactRow>(
+      `SELECT ${CONTACT_COLS} FROM contacts WHERE id = $1`,
       [id],
     );
-
     const row = result.rows[0];
     if (!row) return undefined;
-
     return this.rowToContact(row);
   }
 
@@ -901,24 +989,8 @@ class PostgresContactBackend implements ContactServiceBackend {
     // Uses ILIKE with wildcards — the idx_contacts_display_name btree index won't help here,
     // but the contacts table is small (hundreds, not millions) so a seq scan is fine.
     // For exact match, the caller can filter the results further.
-    const result = await this.pool.query<{
-      id: string;
-      kg_node_id: string | null;
-      display_name: string;
-      role: string | null;
-      system_role: string | null;
-      status: string;
-      contact_confidence: string;
-      trust_level: string | null;
-      last_seen_at: Date | null;
-      inbound_message_count: string;  // INT returned as string by node-pg
-      outbound_message_count: string;
-      notes: string | null;
-      created_at: Date;
-      updated_at: Date;
-    }>(
-      `SELECT id, kg_node_id, display_name, role, system_role, status, contact_confidence, trust_level, last_seen_at, inbound_message_count, outbound_message_count, notes, created_at, updated_at
-       FROM contacts WHERE display_name ILIKE $1`,
+    const result = await this.pool.query<ContactRow>(
+      `SELECT ${CONTACT_COLS} FROM contacts WHERE display_name ILIKE $1`,
       [`%${name}%`],
     );
 
@@ -926,24 +998,8 @@ class PostgresContactBackend implements ContactServiceBackend {
   }
 
   async findContactByRole(role: string): Promise<Contact[]> {
-    const result = await this.pool.query<{
-      id: string;
-      kg_node_id: string | null;
-      display_name: string;
-      role: string | null;
-      system_role: string | null;
-      status: string;
-      contact_confidence: string;
-      trust_level: string | null;
-      last_seen_at: Date | null;
-      inbound_message_count: string;  // INT returned as string by node-pg
-      outbound_message_count: string;
-      notes: string | null;
-      created_at: Date;
-      updated_at: Date;
-    }>(
-      `SELECT id, kg_node_id, display_name, role, system_role, status, contact_confidence, trust_level, last_seen_at, inbound_message_count, outbound_message_count, notes, created_at, updated_at
-       FROM contacts WHERE role = $1 ORDER BY created_at ASC`,
+    const result = await this.pool.query<ContactRow>(
+      `SELECT ${CONTACT_COLS} FROM contacts WHERE role = $1 ORDER BY created_at ASC`,
       [role],
     );
 
@@ -951,24 +1007,8 @@ class PostgresContactBackend implements ContactServiceBackend {
   }
 
   async findContactBySystemRole(systemRole: SystemRole): Promise<Contact | null> {
-    const result = await this.pool.query<{
-      id: string;
-      kg_node_id: string | null;
-      display_name: string;
-      role: string | null;
-      system_role: string | null;
-      status: string;
-      contact_confidence: string;
-      trust_level: string | null;
-      last_seen_at: Date | null;
-      inbound_message_count: string;
-      outbound_message_count: string;
-      notes: string | null;
-      created_at: Date;
-      updated_at: Date;
-    }>(
-      `SELECT id, kg_node_id, display_name, role, system_role, status, contact_confidence, trust_level, last_seen_at, inbound_message_count, outbound_message_count, notes, created_at, updated_at
-       FROM contacts WHERE system_role = $1 LIMIT 1`,
+    const result = await this.pool.query<ContactRow>(
+      `SELECT ${CONTACT_COLS} FROM contacts WHERE system_role = $1 LIMIT 1`,
       [systemRole],
     );
 
@@ -978,7 +1018,6 @@ class PostgresContactBackend implements ContactServiceBackend {
   }
 
   async listContacts(filters?: { status?: ContactStatus; limit?: number }): Promise<Contact[]> {
-    const cols = 'id, kg_node_id, display_name, role, system_role, status, contact_confidence, trust_level, last_seen_at, inbound_message_count, outbound_message_count, notes, created_at, updated_at';
     const conditions: string[] = [];
     const params: unknown[] = [];
 
@@ -988,29 +1027,14 @@ class PostgresContactBackend implements ContactServiceBackend {
     }
 
     const where = conditions.length > 0 ? ` WHERE ${conditions.join(' AND ')}` : '';
-    let sql = `SELECT ${cols} FROM contacts${where} ORDER BY created_at ASC`;
+    let sql = `SELECT ${CONTACT_COLS} FROM contacts${where} ORDER BY created_at ASC`;
 
     if (filters?.limit != null) {
       params.push(filters.limit);
       sql += ` LIMIT $${params.length}`;
     }
 
-    const result = await this.pool.query<{
-      id: string;
-      kg_node_id: string | null;
-      display_name: string;
-      role: string | null;
-      system_role: string | null;
-      status: string;
-      contact_confidence: string;
-      trust_level: string | null;
-      last_seen_at: Date | null;
-      inbound_message_count: string;
-      outbound_message_count: string;
-      notes: string | null;
-      created_at: Date;
-      updated_at: Date;
-    }>(sql, params);
+    const result = await this.pool.query<ContactRow>(sql, params);
 
     return result.rows.map((row) => this.rowToContact(row));
   }
@@ -1021,9 +1045,20 @@ class PostgresContactBackend implements ContactServiceBackend {
     // system_role is included so bootstrap and any future setter can persist it through the standard update path.
     // contact_confidence and last_seen_at remain scoring-owned and are not updated here.
     await this.pool.query(
-      `UPDATE contacts SET kg_node_id = $2, display_name = $3, role = $4, system_role = $5, status = $6, notes = $7, trust_level = $8, updated_at = $9
+      `UPDATE contacts SET
+         kg_node_id = $2, display_name = $3, role = $4, system_role = $5, status = $6,
+         notes = $7, trust_level = $8, updated_at = $9,
+         preferred_name = $10, title = $11, organization = $12, primary_email = $13,
+         primary_phone = $14, timezone = $15, locale = $16, location = $17,
+         pronouns = $18, linkedin_url = $19, bio = $20, birthday = $21
        WHERE id = $1`,
-      [contact.id, contact.kgNodeId, contact.displayName, contact.role, contact.systemRole, contact.status, contact.notes, contact.trustLevel, contact.updatedAt],
+      [
+        contact.id, contact.kgNodeId, contact.displayName, contact.role, contact.systemRole,
+        contact.status, contact.notes, contact.trustLevel, contact.updatedAt,
+        contact.preferredName, contact.title, contact.organization, contact.primaryEmail,
+        contact.primaryPhone, contact.timezone, contact.locale, contact.location,
+        contact.pronouns, contact.linkedinUrl, contact.bio, contact.birthday,
+      ],
     );
   }
 
@@ -1376,28 +1411,15 @@ class PostgresContactBackend implements ContactServiceBackend {
 
   // -- Row mapping helpers --
 
-  private rowToContact(row: {
-    id: string;
-    kg_node_id: string | null;
-    display_name: string;
-    role: string | null;
-    system_role: string | null;
-    status: string;
-    contact_confidence: string;  // NUMERIC returned as string by node-pg
-    trust_level: string | null;
-    last_seen_at: Date | null;
-    inbound_message_count: string;
-    outbound_message_count: string;
-    notes: string | null;
-    created_at: Date;
-    updated_at: Date;
-  }): Contact {
+  private rowToContact(row: ContactRow): Contact {
     return {
       id: row.id,
       kgNodeId: row.kg_node_id,
       displayName: row.display_name,
       role: row.role,
-      systemRole: (row.system_role === 'principal' || row.system_role === 'agent') ? row.system_role : null,
+      systemRole: (row.system_role === 'principal' || row.system_role === 'agent' || row.system_role === 'system')
+        ? row.system_role
+        : null,
       status: row.status as ContactStatus,
       // PostgreSQL returns NUMERIC as a string via node-pg.
       // Guard against NaN — if migration 020 hasn't run, the column is absent and
@@ -1415,6 +1437,19 @@ class PostgresContactBackend implements ContactServiceBackend {
       notes: row.notes,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
+      // Canonical fields (migration 048)
+      preferredName: row.preferred_name,
+      title: row.title,
+      organization: row.organization,
+      primaryEmail: row.primary_email,
+      primaryPhone: row.primary_phone,
+      timezone: row.timezone,
+      locale: row.locale,
+      location: row.location,
+      pronouns: row.pronouns,
+      linkedinUrl: row.linkedin_url,
+      bio: row.bio,
+      birthday: row.birthday,
     };
   }
 
