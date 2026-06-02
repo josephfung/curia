@@ -611,9 +611,9 @@ pinned_skills:
 allow_discovery: true
 schedule:
   - cron: "0 * * * *"
-    task: "Run the approval expiry sweep — find and expire any pending approval requests that have passed their expiry time. Before exiting, call scheduler-report with your job_id (from the Scheduled Task block in your system prompt) and a one-line summary."
+    task: "Run the approval expiry sweep — find and expire any pending approval requests that have passed their expiry time."
     expectedDurationSeconds: 360
 
   - cron: "0 8 * * *"
-    task: "Run the pending-actions digest — if any approval requests are still awaiting a decision, send a summary to the CEO. Before exiting, call scheduler-report with your job_id (from the Scheduled Task block in your system prompt) and a one-line summary."
+    task: "Run the pending-actions digest — if any approval requests are still awaiting a decision, send a summary to the CEO."
     expectedDurationSeconds: 360
