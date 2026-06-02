@@ -508,7 +508,7 @@ describe('AgentRuntime', () => {
 
     const task = createAgentTask({
       agentId: 'coordinator',
-      conversationId: 'scheduler:job-abc:run-001',
+      conversationId: 'scheduler:123e4567-e89b-12d3-a456-426614174000:run-001',
       channelId: 'scheduler',
       senderId: 'scheduler',
       content: JSON.stringify({ task: 'Run pending-actions digest.' }),
@@ -521,8 +521,8 @@ describe('AgentRuntime', () => {
     expect(systemMsg?.content).toContain('## Scheduled Task — Scope Restriction');
     expect(systemMsg?.content).toContain('The task description is the ONLY work you may do this run.');
     expect(systemMsg?.content).toContain('Outbound-context entries are informational');
-    // job_id extracted from conversationId "scheduler:job-abc:run-001"
-    expect(systemMsg?.content).toContain('Job ID (pass to scheduler-report): job-abc');
+    // job_id UUID extracted from conversationId "scheduler:<uuid>:<run-id>"
+    expect(systemMsg?.content).toContain('Job ID (pass to scheduler-report): 123e4567-e89b-12d3-a456-426614174000');
   });
 
   it('omits Job ID line when conversationId does not match scheduler format', async () => {
@@ -539,7 +539,8 @@ describe('AgentRuntime', () => {
 
     const task = createAgentTask({
       agentId: 'coordinator',
-      conversationId: 'conv-non-scheduler',
+      // Scheduler-prefixed but non-UUID middle segment — exercises the UUID regex rejection path
+      conversationId: 'scheduler:not-a-uuid:run-001',
       channelId: 'scheduler',
       senderId: 'scheduler',
       content: JSON.stringify({ task: 'Run sweep.' }),
@@ -551,7 +552,7 @@ describe('AgentRuntime', () => {
     const systemMsg = chatCall.messages.find(m => m.role === 'system');
     // Fence block still appended — agent still gets its scope restriction
     expect(systemMsg?.content).toContain('## Scheduled Task — Scope Restriction');
-    // But no Job ID line since conversationId isn't in "scheduler:<uuid>:<run-id>" format
+    // But no Job ID line since "not-a-uuid" fails the UUID regex
     expect(systemMsg?.content).not.toContain('Job ID (pass to scheduler-report):');
   });
 
