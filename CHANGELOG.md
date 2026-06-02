@@ -18,6 +18,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 - **`ceo-inbox-draft-compose`** — compose cold-outreach drafts to CEO's Gmail Drafts via `CEO_NYLAS_GRANT_ID`. (#815)
+- **Promptfoo red team runbook** — `tests/redteam/` with promptfoo config, `scripts/render-coordinator-prompt.ts` helper, and `pnpm redteam` / `pnpm redteam:report` scripts; tests prompt injection, data exfiltration, hijacking, and ASCII smuggling against the live coordinator system prompt. (#583)
 - **Outbound audience-leak plan** — implementation plan for Stage 2 LLM judge + structured `compose-reply` skill to prevent the coordinator from sending internal reasoning to external recipients. See `docs/wip/2026-06-02-outbound-audience-leak.md`.
 - **Jun 1 email incident plan** — incident reconstruction and two-PR fix plan for the 18-hour email-channel silence + triple-reply burst. See `docs/wip/2026-06-02-jun1-email-incident.md`. (#846, #847)
 - **Tasks & Backlog v1 design** — design memo for a unified task model with deferred work, CEO-visible backlog, and a 3×/day coordinator sweep. See `docs/wip/2026-06-01-tasks-and-backlog-design.md`.
