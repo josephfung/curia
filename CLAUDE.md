@@ -90,6 +90,16 @@ Two patterns that pass local checks but fail CI regularly:
 4. **Pin it to at least one agent.** Add the skill name to `pinned_skills` in the relevant agent YAML (`agents/coordinator.yaml` for most skills). A skill that isn't pinned to any agent is invisible to that agent unless dynamic discovery happens to surface it — which is unreliable. Exception: pure infrastructure skills invoked by the system (e.g. `extract-facts`, `extract-relationships`, `scheduler-report`) intentionally have no agent owner.
 5. **Timestamps:** When a skill returns timestamps for user-facing display, use `toLocalIso()` from `src/time/timestamp.ts` to convert to the user's local timezone (available as `ctx.timezone`). Never return raw UTC Z-suffix strings for times the user will see — LLMs cannot reliably perform timezone conversion. Include `displayTimezone: formatDisplayTimezone(ctx.timezone)` in the result data so the LLM can label its output.
 
+### Versioning skills and agents
+
+Bump the `version` field in `skill.json` (for skills) or the `version` field in `agents/<name>.yaml` (for agents) whenever you make a meaningful change:
+
+- New skill or agent → start at `"0.1.0"`.
+- New capability, new input/output field, new pinned skill → bump **minor** (`0.X.0`).
+- Bug fix, prompt clarification, error message improvement → bump **patch** (`0.x.Y`).
+
+The version is surfaced in structured logs and useful for correlating prod behaviour with a known config state. An unversioned file should get `"0.1.0"` as its first explicit version when you first touch it.
+
 ### Autonomy Awareness
 
 When adding a new skill, declare its action risk in `skill.json`. This field is **required** — manifests that omit it are rejected at startup, and the execution layer enforces it against the live autonomy score:

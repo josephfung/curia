@@ -189,6 +189,33 @@ export class CeoNylasClient {
     };
   }
 
+  // Create a brand-new draft (cold compose, no reply thread).
+  // Unlike createDraftReply, this omits reply_to_message_id so the draft
+  // lands in the CEO's Drafts folder as a fresh outbound email.
+  async createDraft(options: {
+    subject: string;
+    body: string;
+    to: NylasParticipant[];
+    cc?: NylasParticipant[];
+  }): Promise<NylasDraft> {
+    const url = `${this.baseUrl}/drafts`;
+    const payload: Record<string, unknown> = {
+      subject: options.subject,
+      body: options.body,
+      to: options.to,
+    };
+    if (options.cc && options.cc.length > 0) {
+      payload.cc = options.cc;
+    }
+    const data = await this.request<NylasApiDraft>('POST', url, 'createDraft', payload);
+    return {
+      id: data.id,
+      subject: data.subject ?? '',
+      to: (data.to ?? []).map(normParticipant),
+      cc: (data.cc ?? []).map(normParticipant),
+    };
+  }
+
   // ── Message updates ──────────────────────────────────────────────────────
 
   async markAsRead(messageId: string): Promise<void> {

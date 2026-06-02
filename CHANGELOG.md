@@ -14,12 +14,14 @@ bus event types) are noted explicitly even in the `0.x` range.
 ## [Unreleased]
 
 ### Added
+- **`ceo-inbox-draft-compose`** — compose cold-outreach drafts to CEO's Gmail Drafts via `CEO_NYLAS_GRANT_ID`. (#815)
 - **Outbound audience-leak plan** — implementation plan for Stage 2 LLM judge + structured `compose-reply` skill to prevent the coordinator from sending internal reasoning to external recipients. See `docs/wip/2026-06-02-outbound-audience-leak.md`.
 - **Jun 1 email incident plan** — incident reconstruction and two-PR fix plan for the 18-hour email-channel silence + triple-reply burst. See `docs/wip/2026-06-02-jun1-email-incident.md`. (#846, #847)
 - **Tasks & Backlog v1 design** — design memo for a unified task model with deferred work, CEO-visible backlog, and a 3×/day coordinator sweep. See `docs/wip/2026-06-01-tasks-and-backlog-design.md`.
 - **SBOM generation** — SPDX JSON Software Bill of Materials generated on every push to `main` and attached to each GitHub release as a release asset; failure is non-fatal. (#564)
 
 ### Fixed
+- **`email-draft-save` unknown account error** — `OutboundGateway` now lists available accounts when unknown `accountId` is passed. (#815)
 - **Working memory TTL** — 30-day expiry on inserts; nightly purge trims expired non-archived turns. (#220)
 - **Automatic scheduled run summaries** — scheduler auto-captures `agent.response.content` as `last_run_summary` via COALESCE; agents no longer need to call `scheduler-report` explicitly. (#817)
 - **Runtime job UUID injection** — valid `scheduler:<uuid>:<run-id>` conversationIds inject a `Job ID` line so agents can optionally override with a structured summary. (#817)

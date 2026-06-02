@@ -1600,7 +1600,11 @@ export class OutboundGateway {
   private async dispatchEmailDraft(request: EmailSendRequest): Promise<OutboundDraftResult> {
     const nylasClient = this.getNylasClient(request.accountId);
     if (!nylasClient) {
-      return { success: false, blockedReason: 'Email client not configured' };
+      const available = [...this.nylasClients.keys()];
+      const reason = request.accountId
+        ? `unknown account '${request.accountId}'; available: [${available.join(', ')}]`
+        : 'Email client not configured';
+      return { success: false, blockedReason: reason };
     }
 
     // htmlQuote is appended after conversion so it is not re-escaped by markdownToHtml.

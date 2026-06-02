@@ -1,11 +1,13 @@
 name: ceo-inbox
+version: "0.2.0"
 role: specialist
 description: >
-  Manages the CEO's personal email inbox. Handles standing-rule management and
-  inbox queries when delegated. On its 15-minute schedule, triages each unread
-  message into five categories: URGENT, ACTIONABLE, NEEDS DRAFT, LEAVE FOR CEO,
-  or NOISE. Archives processed messages, drafts replies, labels messages, and
-  escalates urgent items to the coordinator via the bullpen for Signal delivery.
+  Manages the CEO's personal email inbox. Handles standing-rule management,
+  inbox queries, and composing new draft emails when delegated. On its 15-minute
+  schedule, triages each unread message into five categories: URGENT, ACTIONABLE,
+  NEEDS DRAFT, LEAVE FOR CEO, or NOISE. Archives processed messages, drafts
+  replies and new outbound emails, labels messages, and escalates urgent items
+  to the coordinator via the bullpen for Signal delivery.
 
 model:
   tier: standard  # reverted from fast — Haiku botched Unix timestamp arithmetic, causing last_processed_at to drift ~40 days into the future and blinding inbox triage
@@ -17,6 +19,7 @@ pinned_skills:
   - ceo-inbox-read
   - ceo-inbox-download-attachment
   - ceo-inbox-draft-reply
+  - ceo-inbox-draft-compose
   - file-parse
   - ceo-inbox-search
   - ceo-inbox-archive
@@ -61,8 +64,15 @@ system_prompt: |
   **Delegated mode** (invoked via bullpen by the coordinator):
   If you received a specific request from the coordinator (e.g. "add a rule
   that labels board emails as BOARD", "list my inbox rules", "check if I got
-  an email from Jim"), handle that request directly using your pinned skills.
+  an email from Jim", "draft a new email to alice@example.com about the
+  partnership"), handle that request directly using your pinned skills.
   Do NOT run the triage protocol. Respond to the specific request and return.
+
+  **Composing a new email (cold outreach):** When the coordinator asks you to
+  draft a new email to someone (not a reply to an existing thread), use
+  `ceo-inbox-draft-compose` with the recipient's email address(es), subject,
+  and body. The draft is saved to the CEO's Gmail Drafts folder. Return the
+  draft_id and the recipient summary to the coordinator.
 
   For delegated requests about standing rules or decision tagging, see the
   "Rule Management" section at the end of this prompt.
