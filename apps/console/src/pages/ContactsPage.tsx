@@ -224,7 +224,7 @@ function ContactEditDrawer({ contact, creating, onClose, onSaved, onDeleted }: D
         </div>
         <h2 className="drawer-title-h2">{creating ? 'New contact' : (contact?.displayName ?? '')}</h2>
         {!creating && contact && (
-          <div className="drawer-subtitle">{[contact.role].filter(Boolean).join(' · ')}</div>
+          <div className="drawer-subtitle">{[contact.title, contact.organization].filter(Boolean).join(' · ')}</div>
         )}
       </div>
 
@@ -412,7 +412,7 @@ export default function ContactsPage() {
     if (search) {
       const q = search.toLowerCase();
       rows = rows.filter(c =>
-        (c.displayName + ' ' + (c.role ?? '')).toLowerCase().includes(q)
+        (c.displayName + ' ' + (c.title ?? '') + ' ' + (c.organization ?? '') + ' ' + (c.role ?? '')).toLowerCase().includes(q)
       );
     }
     const dir = sort.dir === 'asc' ? 1 : -1;
@@ -473,7 +473,7 @@ export default function ContactsPage() {
         <main className="main">
           <Topbar crumb="Memory" title="Contacts">
             <TopbarSearch
-              placeholder="Search name or role…"
+              placeholder="Search name, title or org…"
               value={search}
               onChange={v => { setSearch(v); setPage(1); }}
             />
@@ -494,7 +494,7 @@ export default function ContactsPage() {
               <div className="contacts-mobile-search">
                 <input
                   type="text"
-                  placeholder="Search name or role…"
+                  placeholder="Search name, title or org…"
                   value={search}
                   onChange={e => { setSearch(e.target.value); setPage(1); }}
                 />
