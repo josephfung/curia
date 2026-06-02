@@ -21,6 +21,9 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **`fast` model tier** — repointed to `google/gemini-3.1-flash-lite` after OpenRouter removed `gemini-2.0-flash-001`; unblocks contacts, calendar, research-analyst, digest. (#812)
 - **Provisional contact sweep** — sweep step 3 now passes `${principal_contact_id}` to `calendar-list-events` (was passing nothing, causing a UUID validation error), and treats calendar failure as best-effort so Sent-folder promotions still fire. (#816)
 
+### Security
+- **HTML tag filtering** — replaced regex-based script/style stripping in `htmlToText` and `file-parse` with a proper HTML parser (`node-html-parser`), eliminating the CodeQL `js/bad-tag-filter` bypass where a script body containing `"</script type=text>"` caused non-greedy regex to terminate the match prematurely. (#590)
+
 ## [0.32.0] — 2026-06-01 — "Ariadne"
 
 > **Ariadne** *(Inception, 2010, Christopher Nolan)* — in Inception, she's the architect Cobb hires to build the dream worlds. Her first job is to walk a newcomer through the rules of the place, ask what they want to build, and shape the structure to fit. v0.32 does the same: one command brings Curia up, a five-step wizard captures who you are, and a new specialist meets you in your first chat to ask what kind of assistant you actually want.
