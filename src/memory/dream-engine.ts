@@ -188,7 +188,11 @@ export class DreamEngine {
           const purgedTurns = await this.workingMemory.purgeExpired();
           this.logger.info({ purgedTurns }, 'DreamEngine: working memory purge complete');
         } catch (purgeErr) {
-          this.logger.error({ err: purgeErr }, 'DreamEngine: working memory purge failed — will retry on next pass');
+          this.logger.error(
+            { err: purgeErr },
+            'DreamEngine: working memory purge failed — will retry on next pass. ' +
+            'To check backlog: SELECT COUNT(*) FROM working_memory WHERE expires_at IS NOT NULL AND expires_at < now() AND archived = false',
+          );
         }
       }
 

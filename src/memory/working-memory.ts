@@ -157,8 +157,13 @@ class PostgresBackend implements StorageBackend {
 
   async purgeExpired(): Promise<number> {
     // The idx_wm_expires partial index (WHERE expires_at IS NOT NULL) covers this query.
+    // Archived rows are excluded: they are retained for audit even after their TTL
+    // has passed (the summarization path marks originals archived = true).
     const result = await this.pool.query(
-      `DELETE FROM working_memory WHERE expires_at IS NOT NULL AND expires_at < now()`,
+      `DELETE FROM working_memory
+       WHERE expires_at IS NOT NULL
+         AND expires_at < now()
+         AND archived = false`,
     );
     return result.rowCount ?? 0;
   }

@@ -100,7 +100,7 @@ describe('WorkingMemory — TTL', () => {
   });
 
   describe('purgeExpired()', () => {
-    it('issues DELETE WHERE expires_at IS NOT NULL AND expires_at < now()', async () => {
+    it('issues DELETE WHERE expires_at IS NOT NULL AND expires_at < now() AND archived = false', async () => {
       let capturedSql: string | undefined;
 
       const pool = buildSimplePool((sql) => {
@@ -118,6 +118,8 @@ describe('WorkingMemory — TTL', () => {
       expect(normalized).toContain('DELETE FROM working_memory');
       expect(normalized).toContain('expires_at IS NOT NULL');
       expect(normalized).toContain('expires_at < now()');
+      // Archived rows must not be purged — they are retained for audit
+      expect(normalized).toContain('archived = false');
     });
 
     it('returns the number of rows deleted', async () => {

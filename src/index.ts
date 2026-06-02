@@ -390,6 +390,8 @@ async function main(): Promise<void> {
   // for summarization — it's a medium-complexity task that doesn't need the full
   // flagship model but benefits from better instruction-following than a fast tier.
   const summarizationModel = modelRouter.resolve('standard').model;
+  const workingMemoryTtlDays = yamlConfig.workingMemory?.ttlDays ?? 30;
+  logger.info({ ttlDays: workingMemoryTtlDays, fromConfig: yamlConfig.workingMemory?.ttlDays !== undefined }, 'Working memory TTL configured');
   const memory = WorkingMemory.createWithPostgres(
     pool,
     logger,
@@ -404,7 +406,7 @@ async function main(): Promise<void> {
           model: summarizationModel,
         }
       : undefined,
-    yamlConfig.workingMemory?.ttlDays ?? 30,
+    workingMemoryTtlDays,
   );
 
   // Entity memory — optional, requires OPENAI_API_KEY for embeddings.
