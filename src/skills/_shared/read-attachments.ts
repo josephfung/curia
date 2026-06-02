@@ -7,6 +7,7 @@
 
 import { readFile } from 'node:fs/promises';
 import * as path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 /** Per-attachment metadata as supplied by the LLM via a skill input. */
 export interface OutboundAttachmentInput {
@@ -77,8 +78,10 @@ export async function readAttachmentFiles(
       throw new Error(`Attachment "${att.filename}" must have a non-empty content_type`);
     }
 
-    // Use URL parsing so percent-encoded characters are decoded before path resolution.
-    const filePath = new URL(att.fileUrl).pathname;
+    // fileURLToPath decodes percent-encoded characters (e.g. %20 → space) and handles
+    // platform-specific file URL rules. URL.pathname leaves encoding in place, which
+    // breaks the startsWith boundary check when the store dir contains spaces.
+    const filePath = fileURLToPath(att.fileUrl);
 
     // Enforce that the resolved path stays within the temp store directory — prevents
     // LLM-driven prompt injection from exfiltrating arbitrary files (e.g. /etc/passwd,

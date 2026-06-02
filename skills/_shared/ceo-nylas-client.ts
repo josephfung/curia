@@ -339,7 +339,10 @@ export class CeoNylasClient {
     this.log.debug({ operation, attachmentCount: attachments.length }, `nylas: ${operation} (multipart)`);
 
     const form = new FormData();
-    form.append('message', new Blob([JSON.stringify(messagePayload)], { type: 'application/json' }));
+    // Append as a plain string (not a Blob) so the part has no filename= attribute
+    // in Content-Disposition — a Blob would produce filename="blob", causing Nylas
+    // to treat the message metadata as a file upload and reject the request.
+    form.append('message', JSON.stringify(messagePayload));
     for (let i = 0; i < attachments.length; i++) {
       const att = attachments[i]!;
       form.append(`file${i}`, new Blob([att.content], { type: att.contentType }), att.filename);
