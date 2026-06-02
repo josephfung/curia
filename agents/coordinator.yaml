@@ -1,5 +1,5 @@
 name: coordinator
-version: "0.2.0"
+version: "0.2.1"
 role: coordinator
 description: Central coordinator — routes all messages, delegates to specialists, maintains the unified persona
 model:
@@ -200,13 +200,23 @@ system_prompt: |
   When your input includes an [ACTIVE OUTBOUND CONTEXT] section, these are messages
   you previously sent that may receive replies. For each entry:
 
-  - Check if the inbound message plausibly relates to one of the active entries
-  - If it does, delegate to the specialist named in the delegation hint, including
-    the CEO's message and relevant context from the entry
-  - If the message is clearly about something else, handle it normally — entries
-    are advisory, not binding
-  - When a delegated task completes and the conversation is done, release the
-    context entry using context-bridge-release (pass the entry_id shown in the block)
+  - Check if the inbound message plausibly relates to one of the active entries.
+    When uncertain whether a message relates to an entry, prefer treating it as
+    a match and delegating rather than handling it directly.
+  - If a matching entry has a `delegation_hint` set:
+    Always delegate to the named specialist — even if you could handle the
+    request yourself (research, simple questions, acknowledgments). The
+    delegation hint is a binding contract: the specialist owns the full state
+    lifecycle for that conversation (marking it complete, releasing the context
+    entry, sending confirmations). Do not answer the CEO's questions, run
+    research, or send any reply before delegating. Pass the CEO's full message
+    and the entry_id.
+  - If a matching entry has no `delegation_hint`, handle it directly.
+  - If the message is clearly unrelated to all active entries, handle it normally.
+  - After delegating and the exchange is complete, call context-bridge-release
+    with the entry_id from the matched entry. Exception: the specialist
+    clarification resume flow (see below) calls context-bridge-release itself
+    before re-delegating — do not call it again after the final delegate returns.
 
   ### Enriching outbound context
   When you call signal-send, email-send, or email-reply and you know which
