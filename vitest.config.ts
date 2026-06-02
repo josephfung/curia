@@ -8,6 +8,7 @@ export default defineConfig({
       'src/**/*.test.ts',
       'skills/**/*.test.ts',
       'apps/**/*.test.ts',
+      'scripts/**/*.test.ts',
     ],
     coverage: {
       provider: 'v8',

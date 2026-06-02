@@ -666,6 +666,118 @@ describe('ContactService', () => {
       )).toBe(true);
     });
   });
+
+  describe('canonical fields', () => {
+    it('createContact stores canonical fields when provided', async () => {
+      const contact = await service.createContact({
+        displayName: 'Canonical Test',
+        source: 'test',
+        title: 'VP Engineering',
+        organization: 'Acme Corp',
+        timezone: 'America/New_York',
+        bio: 'A short bio.',
+      });
+      expect(contact.title).toBe('VP Engineering');
+      expect(contact.organization).toBe('Acme Corp');
+      expect(contact.timezone).toBe('America/New_York');
+      expect(contact.bio).toBe('A short bio.');
+      // Unprovided fields default to null
+      expect(contact.preferredName).toBeNull();
+      expect(contact.primaryEmail).toBeNull();
+    });
+
+    it('createContact defaults unprovided canonical fields to null', async () => {
+      const contact = await service.createContact({
+        displayName: 'No Canonical',
+        source: 'test',
+      });
+      expect(contact.preferredName).toBeNull();
+      expect(contact.title).toBeNull();
+      expect(contact.organization).toBeNull();
+      expect(contact.primaryEmail).toBeNull();
+      expect(contact.primaryPhone).toBeNull();
+      expect(contact.timezone).toBeNull();
+      expect(contact.locale).toBeNull();
+      expect(contact.location).toBeNull();
+      expect(contact.pronouns).toBeNull();
+      expect(contact.linkedinUrl).toBeNull();
+      expect(contact.bio).toBeNull();
+      expect(contact.birthday).toBeNull();
+    });
+
+    it('updateContactFields round-trip: field persists and updatedAt bumps', async () => {
+      const contact = await service.createContact({
+        displayName: 'Update Test',
+        source: 'test',
+      });
+      const before = contact.updatedAt;
+
+      // Advance time so updatedAt will differ
+      await new Promise(r => setTimeout(r, 5));
+
+      const updated = await service.updateContactFields(contact.id, {
+        title: 'Director',
+        organization: 'Globex',
+      });
+      expect(updated.title).toBe('Director');
+      expect(updated.organization).toBe('Globex');
+      expect(updated.updatedAt.getTime()).toBeGreaterThan(before.getTime());
+    });
+
+    it('updateContactFields only touches provided fields', async () => {
+      const contact = await service.createContact({
+        displayName: 'Partial Test',
+        source: 'test',
+        title: 'CEO',
+        organization: 'StartupCo',
+        timezone: 'Europe/London',
+      });
+      const updated = await service.updateContactFields(contact.id, {
+        title: 'CTO',
+        // organization and timezone NOT provided
+      });
+      expect(updated.title).toBe('CTO');
+      expect(updated.organization).toBe('StartupCo'); // unchanged
+      expect(updated.timezone).toBe('Europe/London'); // unchanged
+    });
+
+    it('updateContactFields throws when contact not found', async () => {
+      await expect(
+        service.updateContactFields('non-existent-id', { title: 'X' }),
+      ).rejects.toThrow('not found');
+    });
+
+    it('updateContactFields with primaryEmail validates against CCI', async () => {
+      const contact = await service.createContact({
+        displayName: 'Email Test',
+        source: 'test',
+      });
+      // No CCI row exists — should throw
+      await expect(
+        service.updateContactFields(contact.id, { primaryEmail: 'test@example.com' }),
+      ).rejects.toThrow(/not found.*contact_channel_identities|contact_channel_identities.*not found/i);
+    });
+
+    it('updateContactFields with primaryEmail succeeds when CCI row exists', async () => {
+      const contact = await service.createContact({
+        displayName: 'Email Match Test',
+        source: 'test',
+      });
+      // Add the matching CCI row
+      await service.linkIdentity({
+        contactId: contact.id,
+        channel: 'email',
+        channelIdentifier: 'match@example.com',
+        source: 'ceo_stated',
+      });
+      // Case-insensitive comparison — provide uppercase
+      const updated = await service.updateContactFields(contact.id, {
+        primaryEmail: 'MATCH@EXAMPLE.COM',
+      });
+      // Normalized to lowercase on write
+      expect(updated.primaryEmail).toBe('match@example.com');
+    });
+  });
 });
 
 describe('EntityMemory.mergeEntities', () => {

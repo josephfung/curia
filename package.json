@@ -25,7 +25,8 @@
     "inspect-prompts": "tsx --env-file=.env scripts/inspect-prompts.ts",
     "render-coordinator-prompt": "tsx --env-file=.env scripts/render-coordinator-prompt.ts",
     "redteam": "promptfoo redteam run --config tests/redteam/promptfooconfig.yaml --env-file .env",
-    "redteam:report": "promptfoo view"
+    "redteam:report": "promptfoo view",
+    "backfill:contact-attributes": "tsx --env-file=.env scripts/backfill-contact-attributes.ts"
   },
   "license": "MIT",
   "dependencies": {

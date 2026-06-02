@@ -280,4 +280,85 @@ describeIf('Contacts Integration', () => {
       expect(found?.confidence).toBe('certain'); // "c white" variant matches exactly → 1.0
     });
   });
+
+  describe('canonical fields — service layer', () => {
+    it('createContact stores and retrieves canonical fields', async () => {
+      const contact = await contactService.createContact({
+        displayName: 'Integration Canonical',
+        source: 'integration-test',
+        title: 'Principal Engineer',
+        organization: 'Acme Corp',
+        timezone: 'America/Chicago',
+        bio: 'Integration bio.',
+      });
+
+      const fetched = await contactService.getContact(contact.id);
+      expect(fetched).toBeDefined();
+      expect(fetched!.title).toBe('Principal Engineer');
+      expect(fetched!.organization).toBe('Acme Corp');
+      expect(fetched!.timezone).toBe('America/Chicago');
+      expect(fetched!.bio).toBe('Integration bio.');
+    });
+
+    it('updateContactFields round-trips through Postgres', async () => {
+      const contact = await contactService.createContact({
+        displayName: 'Update Integration',
+        source: 'integration-test',
+      });
+
+      const updated = await contactService.updateContactFields(contact.id, {
+        title: 'Senior Engineer',
+        linkedinUrl: 'https://linkedin.com/in/testperson',
+        birthday: '1990-04-15',
+      });
+
+      const fetched = await contactService.getContact(updated.id);
+      expect(fetched!.title).toBe('Senior Engineer');
+      expect(fetched!.linkedinUrl).toBe('https://linkedin.com/in/testperson');
+      expect(fetched!.birthday).toBe('1990-04-15');
+    });
+
+    it('listContacts returns canonical fields for all contacts', async () => {
+      const contact = await contactService.createContact({
+        displayName: 'List Canonical',
+        source: 'integration-test',
+        organization: 'TestOrg',
+      });
+
+      const all = await contactService.listContacts();
+      const found = all.find(c => c.id === contact.id);
+      expect(found).toBeDefined();
+      expect(found!.organization).toBe('TestOrg');
+      // Unprovided fields are null
+      expect(found!.preferredName).toBeNull();
+    });
+
+    it('updateContactFields primaryEmail validation rejects unknown email', async () => {
+      const contact = await contactService.createContact({
+        displayName: 'Email Reject',
+        source: 'integration-test',
+      });
+      await expect(
+        contactService.updateContactFields(contact.id, { primaryEmail: 'nobody@example.com' }),
+      ).rejects.toThrow(/not found.*contact_channel_identities|contact_channel_identities.*not found/i);
+    });
+
+    it('updateContactFields primaryEmail accepts email that exists in CCI', async () => {
+      const contact = await contactService.createContact({
+        displayName: 'Email Accept',
+        source: 'integration-test',
+      });
+      await contactService.linkIdentity({
+        contactId: contact.id,
+        channel: 'email',
+        channelIdentifier: 'cci-test@example.com',
+        source: 'ceo_stated',
+      });
+      const updated = await contactService.updateContactFields(contact.id, {
+        primaryEmail: 'CCI-TEST@EXAMPLE.COM',
+      });
+      // Normalized to lowercase on write
+      expect(updated.primaryEmail).toBe('cci-test@example.com');
+    });
+  });
 });

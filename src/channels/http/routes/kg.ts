@@ -5,7 +5,8 @@ import type { EventBus } from '../../../bus/bus.js';
 import { createInboundMessage } from '../../../bus/events.js';
 import type { Logger } from '../../../logger.js';
 import type { ContactService } from '../../../contacts/contact-service.js';
-import type { ContactStatus, TrustLevel } from '../../../contacts/types.js';
+import { ContactValidationError } from '../../../contacts/contact-service.js';
+import type { Contact, ContactCanonicalFields, ContactStatus, TrustLevel } from '../../../contacts/types.js';
 import { MessageRejectedError, type EventRouter } from '../event-router.js';
 import { assertSecret, compareSecrets, hashToken, type SessionStore } from '../session-auth.js';
 import { markdownToHtml } from '../../../utils/markdown-to-html.js';
@@ -544,23 +545,106 @@ export async function knowledgeGraphRoutes(
     return reply.status(204).send();
   });
 
+  // Serialize a Contact object to the HTTP response shape.
+  // Returns all canonical fields so the Console UI can display them
+  // without a separate detail fetch.
+  function serializeContact(c: Contact) {
+    return {
+      id: c.id,
+      kgNodeId: c.kgNodeId,
+      displayName: c.displayName,
+      role: c.role,
+      status: c.status,
+      trustLevel: c.trustLevel,
+      systemRole: c.systemRole,
+      notes: c.notes,
+      createdAt: c.createdAt.toISOString(),
+      updatedAt: c.updatedAt.toISOString(),
+      // Canonical fields (migration 048)
+      preferredName: c.preferredName,
+      title: c.title,
+      organization: c.organization,
+      primaryEmail: c.primaryEmail,
+      primaryPhone: c.primaryPhone,
+      timezone: c.timezone,
+      locale: c.locale,
+      location: c.location,
+      pronouns: c.pronouns,
+      linkedinUrl: c.linkedinUrl,
+      bio: c.bio,
+      birthday: c.birthday,
+    };
+  }
+
+  // Validate canonical fields from a POST/PATCH body.
+  // Returns an error string if invalid, or null if all checks pass.
+  // `fields` entries are trimmed and empty-string-coerced to null.
+  function extractAndValidateCanonicalFields(body: Record<string, unknown>): {
+    error: string | null;
+    fields: ContactCanonicalFields;
+  } {
+    const str = (v: unknown): string | null =>
+      typeof v === 'string' && v.trim().length > 0 ? v.trim() : null;
+
+    const fields: ContactCanonicalFields = {};
+
+    // Reject non-string, non-nullish values — the str() helper would silently coerce
+    // them to null, which would erase existing data on PATCH.
+    const CANONICAL_STRING_KEYS = [
+      'preferredName', 'title', 'organization', 'primaryPhone', 'timezone', 'locale',
+      'location', 'pronouns', 'birthday', 'linkedinUrl', 'bio', 'primaryEmail',
+    ] as const;
+    const badKey = CANONICAL_STRING_KEYS.find(
+      k => k in body && body[k] !== null && body[k] !== undefined && typeof body[k] !== 'string',
+    );
+    if (badKey) {
+      return { error: `${badKey} must be a string or null.`, fields };
+    }
+
+    if ('preferredName' in body) fields.preferredName = str(body.preferredName);
+    if ('title' in body) fields.title = str(body.title);
+    if ('organization' in body) fields.organization = str(body.organization);
+    if ('primaryPhone' in body) fields.primaryPhone = str(body.primaryPhone);
+    if ('timezone' in body) fields.timezone = str(body.timezone);
+    if ('locale' in body) fields.locale = str(body.locale);
+    if ('location' in body) fields.location = str(body.location);
+    if ('pronouns' in body) fields.pronouns = str(body.pronouns);
+    if ('birthday' in body) fields.birthday = str(body.birthday);
+    if ('linkedinUrl' in body) fields.linkedinUrl = str(body.linkedinUrl);
+    if ('bio' in body) fields.bio = str(body.bio);
+    if ('primaryEmail' in body) fields.primaryEmail = str(body.primaryEmail);
+
+    // Format validation
+    if (fields.primaryEmail != null && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(fields.primaryEmail)) {
+      return { error: 'Invalid primaryEmail format.', fields };
+    }
+    if (fields.linkedinUrl != null && !/^https?:\/\/(www\.)?linkedin\.com\//.test(fields.linkedinUrl)) {
+      return { error: 'linkedinUrl must be a linkedin.com URL (e.g. https://linkedin.com/in/…).', fields };
+    }
+    if (fields.primaryPhone != null && !/^\+[1-9]\d{6,14}$/.test(fields.primaryPhone)) {
+      return { error: 'primaryPhone must be in E.164 format (e.g. +15551234567).', fields };
+    }
+    if (fields.locale != null && !/^[a-z]{2,3}(-[A-Z]{2,4})?$/.test(fields.locale)) {
+      return { error: 'locale must be a BCP 47 code (e.g. en-US, fr, zh-Hans).', fields };
+    }
+    if (fields.bio != null && fields.bio.length > 500) {
+      return { error: 'bio must be 500 characters or fewer.', fields };
+    }
+    if (fields.birthday != null &&
+        !/^\d{4}-\d{2}-\d{2}$/.test(fields.birthday) &&
+        !/^--\d{2}-\d{2}$/.test(fields.birthday)) {
+      return { error: 'birthday must be YYYY-MM-DD or --MM-DD.', fields };
+    }
+
+    return { error: null, fields };
+  }
+
   app.get('/api/kg/contacts', KG_RATE, async (request, reply) => {
     if (!assertSecret(request, reply, webAppBootstrapSecret, sessions)) return;
     try {
       const contacts = await contactService.listContacts();
       return reply.send({
-        contacts: contacts.map((contact) => ({
-          id: contact.id,
-          kgNodeId: contact.kgNodeId,
-          displayName: contact.displayName,
-          role: contact.role,
-          status: contact.status,
-          trustLevel: contact.trustLevel,
-          systemRole: contact.systemRole,
-          notes: contact.notes,
-          createdAt: contact.createdAt.toISOString(),
-          updatedAt: contact.updatedAt.toISOString(),
-        })),
+        contacts: contacts.map(serializeContact),
       });
     } catch (err) {
       logger.error({ err }, 'GET /api/kg/contacts failed');
@@ -600,6 +684,11 @@ export async function knowledgeGraphRoutes(
       return reply.status(400).send({ error: 'Invalid kgNodeId: must be a valid UUID.' });
     }
 
+    const { error: canonicalError, fields: canonicalFields } = extractAndValidateCanonicalFields(body as Record<string, unknown>);
+    if (canonicalError) {
+      return reply.status(400).send({ error: canonicalError });
+    }
+
     const created = await contactService.createContact({
       displayName: body.displayName,
       role: typeof body.role === 'string' && body.role.trim().length > 0 ? body.role : undefined,
@@ -607,6 +696,7 @@ export async function knowledgeGraphRoutes(
       notes: typeof body.notes === 'string' && body.notes.trim().length > 0 ? body.notes : undefined,
       kgNodeId,
       source: 'kg_web_ui',
+      ...canonicalFields,
     });
 
     // Apply trustLevel if provided — createContact always initialises it to null.
@@ -621,17 +711,7 @@ export async function knowledgeGraphRoutes(
       return reply.status(500).send({ error: 'Contact created but could not be retrieved.' });
     }
     return reply.status(201).send({
-      contact: {
-        id: freshCreated.id,
-        kgNodeId: freshCreated.kgNodeId,
-        displayName: freshCreated.displayName,
-        role: freshCreated.role,
-        status: freshCreated.status,
-        trustLevel: freshCreated.trustLevel,
-        notes: freshCreated.notes,
-        createdAt: freshCreated.createdAt.toISOString(),
-        updatedAt: freshCreated.updatedAt.toISOString(),
-      },
+      contact: serializeContact(freshCreated),
     });
   });
 
@@ -671,62 +751,94 @@ export async function knowledgeGraphRoutes(
       return reply.status(400).send({ error: 'Invalid kgNodeId: must be a valid UUID.' });
     }
 
-    if (typeof body.displayName === 'string') {
-      await contactService.updateDisplayName(id, body.displayName);
-    }
-    if (typeof body.role === 'string') {
-      await contactService.setRole(id, body.role);
-    } else if (body.role === null) {
-      // Explicit null means "clear the role field" — setRole doesn't accept null so go direct.
-      await pool.query(`UPDATE contacts SET role = NULL, updated_at = $2 WHERE id = $1`, [
-        id,
-        new Date().toISOString(),
-      ]);
-    }
-    if (typeof body.status === 'string') {
-      await contactService.setStatus(id, body.status as ContactStatus);
-    }
-    if ('trustLevel' in body) {
-      await contactService.setTrustLevel(id, (body.trustLevel as TrustLevel | null));
+    const { error: canonicalError, fields: canonicalFields } = extractAndValidateCanonicalFields(body as Record<string, unknown>);
+    if (canonicalError) {
+      return reply.status(400).send({ error: canonicalError });
     }
 
-    // Notes and kgNodeId are updated directly by preserving the rest of the contact.
-    // This route exists only for the web UI and does not expose generic backend mutation.
-    if (typeof body.notes === 'string' || typeof body.kgNodeId === 'string' || body.notes === null || body.kgNodeId === null) {
-      const refreshed = await contactService.getContact(id);
-      if (!refreshed) {
-        return reply.status(404).send({ error: 'Contact not found.' });
+    // Validate primaryEmail against CCI before any mutations so a bad value can never
+    // produce partial writes (other fields committed, response still 400).
+    if (canonicalFields.primaryEmail != null) {
+      try {
+        await contactService.validatePrimaryEmail(id, canonicalFields.primaryEmail);
+      } catch (err) {
+        if (err instanceof ContactValidationError) {
+          return reply.status(400).send({ error: err.message });
+        }
+        throw err;
       }
-      await pool.query(
-        `UPDATE contacts
-         SET notes = $2, kg_node_id = $3, updated_at = $4
-         WHERE id = $1`,
-        [
-          id,
-          typeof body.notes === 'string' ? body.notes : body.notes === null ? null : refreshed.notes,
-          normalizedKgNodeId !== undefined ? normalizedKgNodeId : refreshed.kgNodeId,
-          new Date().toISOString(),
-        ],
-      );
     }
 
-    const updated = await contactService.getContact(id);
-    if (!updated) {
-      return reply.status(404).send({ error: 'Contact not found after update.' });
+    try {
+      if (typeof body.displayName === 'string' && body.displayName.trim().length > 0) {
+        await contactService.updateDisplayName(id, body.displayName);
+      }
+      if (typeof body.role === 'string') {
+        await contactService.setRole(id, body.role);
+      } else if (body.role === null) {
+        // Explicit null means "clear the role field" — setRole doesn't accept null so go direct.
+        await pool.query(`UPDATE contacts SET role = NULL, updated_at = $2 WHERE id = $1`, [
+          id,
+          new Date().toISOString(),
+        ]);
+      }
+      if (typeof body.status === 'string') {
+        await contactService.setStatus(id, body.status as ContactStatus);
+      }
+      if ('trustLevel' in body) {
+        await contactService.setTrustLevel(id, (body.trustLevel as TrustLevel | null));
+      }
+
+      // Notes and kgNodeId are updated directly by preserving the rest of the contact.
+      // This route exists only for the web UI and does not expose generic backend mutation.
+      if (typeof body.notes === 'string' || typeof body.kgNodeId === 'string' || body.notes === null || body.kgNodeId === null) {
+        const refreshed = await contactService.getContact(id);
+        if (!refreshed) {
+          return reply.status(404).send({ error: 'Contact not found.' });
+        }
+        await pool.query(
+          `UPDATE contacts
+           SET notes = $2, kg_node_id = $3, updated_at = $4
+           WHERE id = $1`,
+          [
+            id,
+            typeof body.notes === 'string' ? body.notes : body.notes === null ? null : refreshed.notes,
+            normalizedKgNodeId !== undefined ? normalizedKgNodeId : refreshed.kgNodeId,
+            new Date().toISOString(),
+          ],
+        );
+      }
+
+      // Apply canonical fields if any were included in the request body.
+      const CANONICAL_KEYS: Array<keyof typeof canonicalFields> = [
+        'preferredName', 'title', 'organization', 'primaryEmail', 'primaryPhone',
+        'timezone', 'locale', 'location', 'pronouns', 'linkedinUrl', 'bio', 'birthday',
+      ];
+      const hasCanonicalFields = CANONICAL_KEYS.some(k => k in (body as Record<string, unknown>));
+      if (hasCanonicalFields) {
+        try {
+          await contactService.updateContactFields(id, canonicalFields);
+        } catch (err) {
+          if (err instanceof ContactValidationError) {
+            // Client sent invalid data (e.g., primaryEmail not linked to this contact)
+            return reply.status(400).send({ error: err.message });
+          }
+          // All other errors (DB failures, etc.) propagate to the outer catch → 500
+          throw err;
+        }
+      }
+
+      const updated = await contactService.getContact(id);
+      if (!updated) {
+        return reply.status(404).send({ error: 'Contact not found after update.' });
+      }
+      return reply.send({
+        contact: serializeContact(updated),
+      });
+    } catch (err) {
+      request.log.error({ err }, 'contacts: PATCH mutation failed');
+      return reply.status(500).send({ error: 'An error occurred while updating the contact.' });
     }
-    return reply.send({
-      contact: {
-        id: updated.id,
-        kgNodeId: updated.kgNodeId,
-        displayName: updated.displayName,
-        role: updated.role,
-        status: updated.status,
-        trustLevel: updated.trustLevel,
-        notes: updated.notes,
-        createdAt: updated.createdAt.toISOString(),
-        updatedAt: updated.updatedAt.toISOString(),
-      },
-    });
   });
 
   app.delete('/api/kg/contacts/:id', KG_RATE, async (request, reply) => {

@@ -14,6 +14,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 ## [Unreleased]
 
 ### Added
+- **Contact canonical attributes** — 12 structured profile fields (`title`, `organization`, `primary_email`, etc.) persisted directly on the `contacts` row; backfill script populates from KG facts. (#829)
 - **File attachments in outbound email** — all five email skills (`email-send`, `email-reply`, `email-draft-save`, `ceo-inbox-draft-compose`, `ceo-inbox-draft-reply`) now accept an `attachments` input field. Attachments are read from `file://` URLs (TempFileStore), validated, and forwarded to Nylas. The CEO inbox path uses multipart FormData; the Curia outbound path passes `Buffer` content via the Nylas SDK. 20 MB total / 10 attachment limit enforced. (#818)
 
 ### Fixed

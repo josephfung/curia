@@ -15,8 +15,38 @@ export interface Contact {
   inboundMessageCount: number;
   outboundMessageCount: number;
   notes: string | null;
+  // Canonical profile attributes (migration 048). All nullable — populated by
+  // backfill script or via updateContactFields(). Source of truth for specialists.
+  preferredName: string | null;
+  title: string | null;
+  organization: string | null;
+  primaryEmail: string | null;
+  primaryPhone: string | null;
+  timezone: string | null;
+  locale: string | null;
+  location: string | null;
+  pronouns: string | null;
+  linkedinUrl: string | null;
+  bio: string | null;
+  birthday: string | null;
   createdAt: Date;
   updatedAt: Date;
+}
+
+/** Subset of Contact fields that can be written via updateContactFields(). */
+export interface ContactCanonicalFields {
+  preferredName?: string | null;
+  title?: string | null;
+  organization?: string | null;
+  primaryEmail?: string | null;
+  primaryPhone?: string | null;
+  timezone?: string | null;
+  locale?: string | null;
+  location?: string | null;
+  pronouns?: string | null;
+  linkedinUrl?: string | null;
+  bio?: string | null;
+  birthday?: string | null;
 }
 
 export interface ChannelIdentity {
@@ -83,6 +113,19 @@ export interface CreateContactOptions {
   /** If provided, links to this existing KG node. Otherwise auto-creates one. */
   kgNodeId?: string;
   source: string;
+  // Canonical profile attributes — optional on create, used by CRM import paths.
+  preferredName?: string | null;
+  title?: string | null;
+  organization?: string | null;
+  primaryEmail?: string | null;
+  primaryPhone?: string | null;
+  timezone?: string | null;
+  locale?: string | null;
+  location?: string | null;
+  pronouns?: string | null;
+  linkedinUrl?: string | null;
+  bio?: string | null;
+  birthday?: string | null;
 }
 
 /** Options for adding a channel identity to a contact */
