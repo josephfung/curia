@@ -93,3 +93,65 @@ describe('EmailDraftSaveHandler — baseline', () => {
     expect((result as { error: string }).error).toContain('Failed to save draft');
   });
 });
+
+describe('EmailDraftSaveHandler — attachments', () => {
+  it('passes attachments to the gateway when provided', async () => {
+    const mockCreate = vi.fn().mockResolvedValue({ success: true, draftId: 'draft-with-attach' });
+    const handler = new EmailDraftSaveHandler();
+    const result = await handler.execute(makeCtx({
+      input: {
+        ...BASE_INPUT,
+        attachments: [
+          { file_url: 'file:///tmp/report.pdf', filename: 'report.pdf', content_type: 'application/pdf' },
+        ],
+      },
+      outboundGateway: makeMockGateway({ createEmailDraft: mockCreate }),
+    }));
+
+    expect(result.success).toBe(true);
+    const callArg = mockCreate.mock.calls[0]![0] as Record<string, unknown>;
+    expect(callArg.attachments).toEqual([
+      { fileUrl: 'file:///tmp/report.pdf', filename: 'report.pdf', contentType: 'application/pdf' },
+    ]);
+  });
+
+  it('does not include attachments key when attachments is absent', async () => {
+    const mockCreate = vi.fn().mockResolvedValue({ success: true, draftId: 'draft-no-attach' });
+    const handler = new EmailDraftSaveHandler();
+    await handler.execute(makeCtx({
+      outboundGateway: makeMockGateway({ createEmailDraft: mockCreate }),
+    }));
+
+    const callArg = mockCreate.mock.calls[0]![0] as Record<string, unknown>;
+    expect(callArg.attachments).toBeUndefined();
+  });
+
+  it('returns error when attachments is not an array', async () => {
+    const mockCreate = vi.fn();
+    const handler = new EmailDraftSaveHandler();
+    const result = await handler.execute(makeCtx({
+      input: { ...BASE_INPUT, attachments: 'not-an-array' },
+      outboundGateway: makeMockGateway({ createEmailDraft: mockCreate }),
+    }));
+
+    expect(result.success).toBe(false);
+    expect((result as { error: string }).error).toContain('array');
+    expect(mockCreate).not.toHaveBeenCalled();
+  });
+
+  it('returns error when an attachment entry is missing filename', async () => {
+    const mockCreate = vi.fn();
+    const handler = new EmailDraftSaveHandler();
+    const result = await handler.execute(makeCtx({
+      input: {
+        ...BASE_INPUT,
+        attachments: [{ file_url: 'file:///tmp/a.pdf', content_type: 'application/pdf' }],
+      },
+      outboundGateway: makeMockGateway({ createEmailDraft: mockCreate }),
+    }));
+
+    expect(result.success).toBe(false);
+    expect((result as { error: string }).error).toContain('filename');
+    expect(mockCreate).not.toHaveBeenCalled();
+  });
+});

@@ -60,6 +60,16 @@ export interface EmailAttachmentMeta {
   size: number;
 }
 
+/**
+ * A resolved outbound attachment ready to include in a draft.
+ * Content is raw bytes — callers must read the file before constructing this.
+ */
+export interface DraftAttachment {
+  filename: string;
+  contentType: string;
+  content: Buffer;
+}
+
 // ── List options ────────────────────────────────────────────────────────────
 
 export interface ListMessagesOptions {
@@ -169,18 +179,19 @@ export class CeoNylasClient {
     body: string;
     to: NylasParticipant[];
     cc?: NylasParticipant[];
+    attachments?: DraftAttachment[];
   }): Promise<NylasDraft> {
     const url = `${this.baseUrl}/drafts`;
-    const payload: Record<string, unknown> = {
+    const messagePayload: Record<string, unknown> = {
       reply_to_message_id: options.replyToMessageId,
       subject: options.subject,
       body: options.body,
       to: options.to,
     };
     if (options.cc && options.cc.length > 0) {
-      payload.cc = options.cc;
+      messagePayload.cc = options.cc;
     }
-    const data = await this.request<NylasApiDraft>('POST', url, 'createDraftReply', payload);
+    const data = await this.requestDraft(url, 'createDraftReply', messagePayload, options.attachments);
     return {
       id: data.id,
       subject: data.subject ?? '',
@@ -197,17 +208,18 @@ export class CeoNylasClient {
     body: string;
     to: NylasParticipant[];
     cc?: NylasParticipant[];
+    attachments?: DraftAttachment[];
   }): Promise<NylasDraft> {
     const url = `${this.baseUrl}/drafts`;
-    const payload: Record<string, unknown> = {
+    const messagePayload: Record<string, unknown> = {
       subject: options.subject,
       body: options.body,
       to: options.to,
     };
     if (options.cc && options.cc.length > 0) {
-      payload.cc = options.cc;
+      messagePayload.cc = options.cc;
     }
-    const data = await this.request<NylasApiDraft>('POST', url, 'createDraft', payload);
+    const data = await this.requestDraft(url, 'createDraft', messagePayload, options.attachments);
     return {
       id: data.id,
       subject: data.subject ?? '',
@@ -300,6 +312,58 @@ export class CeoNylasClient {
   }
 
   // ── Internal fetch wrapper ──────────────────────────────────────────────
+
+  /**
+   * POST a draft creation request to the Nylas REST API.
+   *
+   * When `attachments` is absent or empty, sends a plain JSON body (same as before).
+   * When attachments are present, switches to multipart/form-data:
+   *   - Part "message": JSON string of the draft metadata
+   *   - Parts "file0", "file1", …: binary attachment content
+   *
+   * Nylas v3 REST requires multipart for any draft that includes file attachments.
+   * The Node.js global `FormData` (available since Node 18) handles boundary encoding.
+   * We intentionally omit the Content-Type header when using FormData so that fetch
+   * can set it automatically with the correct multipart boundary.
+   */
+  private async requestDraft(
+    url: string,
+    operation: string,
+    messagePayload: Record<string, unknown>,
+    attachments?: DraftAttachment[],
+  ): Promise<NylasApiDraft> {
+    if (!attachments || attachments.length === 0) {
+      return this.request<NylasApiDraft>('POST', url, operation, messagePayload);
+    }
+
+    this.log.debug({ operation, attachmentCount: attachments.length }, `nylas: ${operation} (multipart)`);
+
+    const form = new FormData();
+    form.append('message', new Blob([JSON.stringify(messagePayload)], { type: 'application/json' }));
+    for (let i = 0; i < attachments.length; i++) {
+      const att = attachments[i]!;
+      form.append(`file${i}`, new Blob([att.content], { type: att.contentType }), att.filename);
+    }
+
+    // Omit Content-Type — fetch sets it automatically with the multipart boundary.
+    const { 'Content-Type': _ct, ...headersWithoutContentType } = this.headers;
+    let res: Response;
+    try {
+      res = await fetch(url, { method: 'POST', headers: headersWithoutContentType, body: form });
+    } catch (err) {
+      this.log.error({ err, operation }, `nylas: ${operation} fetch failed`);
+      throw new NylasApiError(0, operation, `Fetch failed: ${String(err)}`);
+    }
+
+    if (!res.ok) {
+      const text = await res.text().catch(() => '(unreadable body)');
+      this.log.error({ status: res.status, operation }, `nylas: ${operation} API error`);
+      throw new NylasApiError(res.status, operation, `Nylas ${operation}: HTTP ${res.status} — ${text}`);
+    }
+
+    const json = (await res.json()) as { data: NylasApiDraft };
+    return json.data;
+  }
 
   private async request<T>(
     method: string,

@@ -9,6 +9,7 @@
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
 import { registerOutboundContext } from '../../src/dispatch/context-bridge-parse.js';
 import { buildReplyQuote } from '../../src/skills/_shared/reply-quote.js';
+import { parseAttachmentInputs } from '../_shared/parse-attachments.js';
 
 const MAX_TO_LENGTH = 1000;
 const MAX_SUBJECT_LENGTH = 500;
@@ -31,12 +32,13 @@ function parseRecipients(raw: string): string[] {
 
 export class EmailSendHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {
-    const { to, cc, subject, body, reply_to_message_id: replyToMessageIdRaw, context_bridge: contextBridgeRaw } = ctx.input as {
+    const { to, cc, subject, body, reply_to_message_id: replyToMessageIdRaw, attachments: attachmentsRaw, context_bridge: contextBridgeRaw } = ctx.input as {
       to?: string;
       cc?: string;
       subject?: string;
       body?: string;
       reply_to_message_id?: string;
+      attachments?: unknown;
       context_bridge?: string;
     };
 
@@ -93,6 +95,11 @@ export class EmailSendHandler implements SkillHandler {
       ? replyToMessageIdRaw.trim()
       : undefined;
 
+    const attachmentsParsed = parseAttachmentInputs(attachmentsRaw);
+    if (typeof attachmentsParsed === 'string') {
+      return { success: false, error: attachmentsParsed };
+    }
+
     if (!ctx.outboundGateway) {
       return {
         success: false,
@@ -133,7 +140,7 @@ export class EmailSendHandler implements SkillHandler {
       }
     }
 
-    ctx.log.info({ to: toAddresses, subject }, 'Sending email via gateway');
+    ctx.log.info({ to: toAddresses, subject, attachmentCount: attachmentsParsed.length }, 'Sending email via gateway');
 
     try {
       const result = await ctx.outboundGateway.send({
@@ -144,6 +151,7 @@ export class EmailSendHandler implements SkillHandler {
         cc: ccAddresses,
         replyToMessageId,
         htmlQuote,
+        ...(attachmentsParsed.length > 0 ? { attachments: attachmentsParsed } : {}),
       }, {
         taskEventId: ctx.taskEventId,
         conversationId: ctx.conversationId,

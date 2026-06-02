@@ -1,6 +1,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { CeoInboxDraftComposeHandler } from './handler.js';
 import type { SkillContext } from '../../src/skills/types.js';
+import { readFile } from 'node:fs/promises';
+
+vi.mock('node:fs/promises', () => ({
+  readFile: vi.fn(),
+}));
+const mockReadFile = readFile as ReturnType<typeof vi.fn>;
 
 function buildCtx(input?: Record<string, unknown>): SkillContext {
   return {
@@ -42,10 +48,14 @@ describe('CeoInboxDraftComposeHandler', () => {
   beforeEach(() => {
     handler = new CeoInboxDraftComposeHandler();
     mockFetch = vi.spyOn(globalThis, 'fetch');
+    mockReadFile.mockReset();
+    // readAttachmentFiles reads CURIA_TEMPFILE_DIR lazily; stub so file:///tmp/... passes the boundary check.
+    vi.stubEnv('CURIA_TEMPFILE_DIR', '/tmp');
   });
 
   afterEach(() => {
     mockFetch.mockRestore();
+    vi.unstubAllEnvs();
   });
 
   it('Case 1: Happy path — creates draft and returns draft_id', async () => {
@@ -255,5 +265,77 @@ describe('CeoInboxDraftComposeHandler', () => {
     expect((result as { error: string }).error).toContain('configured');
     // No Nylas call should have been made
     expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  describe('attachments', () => {
+    it('uses multipart FormData when attachments are provided', async () => {
+      mockReadFile.mockResolvedValue(Buffer.from('pdf content'));
+      mockFetch.mockResolvedValue(
+        new Response(JSON.stringify(DRAFT_RESPONSE), { status: 200 }),
+      );
+
+      const ctx = buildCtx({
+        to: ['alice@example.com'],
+        subject: 'See attached',
+        body: 'Please review.',
+        attachments: [
+          { file_url: 'file:///tmp/report.pdf', filename: 'report.pdf', content_type: 'application/pdf' },
+        ],
+      });
+
+      const result = await handler.execute(ctx);
+
+      expect(result.success).toBe(true);
+      // The fetch body must be FormData (not a JSON string) when attachments are present
+      const [, init] = mockFetch.mock.calls[0]!;
+      expect((init as RequestInit).body).toBeInstanceOf(FormData);
+    });
+
+    it('uses plain JSON when no attachments are provided', async () => {
+      mockFetch.mockResolvedValue(
+        new Response(JSON.stringify(DRAFT_RESPONSE), { status: 200 }),
+      );
+
+      const ctx = buildCtx();
+      await handler.execute(ctx);
+
+      const [, init] = mockFetch.mock.calls[0]!;
+      // Without attachments, body is a JSON string (not FormData)
+      expect(typeof (init as RequestInit).body).toBe('string');
+    });
+
+    it('returns error when attachments input is malformed', async () => {
+      const ctx = buildCtx({
+        to: ['alice@example.com'],
+        subject: 'Hello',
+        body: 'Hi',
+        attachments: 'not-an-array',
+      });
+
+      const result = await handler.execute(ctx);
+
+      expect(result.success).toBe(false);
+      expect((result as { error: string }).error).toContain('array');
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('returns error when attachment file cannot be read', async () => {
+      mockReadFile.mockRejectedValue(new Error('ENOENT: no such file'));
+
+      const ctx = buildCtx({
+        to: ['alice@example.com'],
+        subject: 'Hello',
+        body: 'Hi',
+        attachments: [
+          { file_url: 'file:///tmp/missing.pdf', filename: 'missing.pdf', content_type: 'application/pdf' },
+        ],
+      });
+
+      const result = await handler.execute(ctx);
+
+      expect(result.success).toBe(false);
+      expect((result as { error: string }).error).toContain('Attachment error');
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
   });
 });

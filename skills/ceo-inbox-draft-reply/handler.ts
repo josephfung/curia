@@ -1,13 +1,25 @@
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
-import { CeoNylasClient, type NylasParticipant } from '../_shared/ceo-nylas-client.js';
+import { CeoNylasClient, type NylasParticipant, type DraftAttachment } from '../_shared/ceo-nylas-client.js';
 import { buildReplyQuote } from '../../src/skills/_shared/reply-quote.js';
 import { markdownToHtml } from '../../src/channels/email/markdown-to-html.js';
+import { parseAttachmentInputs } from '../_shared/parse-attachments.js';
+import { readAttachmentFiles } from '../../src/skills/_shared/read-attachments.js';
+
+const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;
 
 export class CeoInboxDraftReplyHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {
-    const apiKey = ctx.secret('nylas_api_key');
-    const grantId = ctx.secret('ceo_nylas_grant_id');
-    const selfEmail = ctx.secret('ceo_self_email').toLowerCase();
+    let apiKey: string;
+    let grantId: string;
+    let selfEmail: string;
+    try {
+      apiKey = ctx.secret('nylas_api_key');
+      grantId = ctx.secret('ceo_nylas_grant_id');
+      selfEmail = ctx.secret('ceo_self_email').toLowerCase();
+    } catch (err) {
+      ctx.log.error({ err }, 'ceo-inbox-draft-reply: required secret not available');
+      return { success: false, error: 'CEO inbox is not configured (missing credentials)' };
+    }
 
     // Guard: selfEmail must be set — without it we cannot filter the CEO's own address
     // from reply recipients, which would cause self-addressed drafts.
@@ -33,8 +45,23 @@ export class CeoInboxDraftReplyHandler implements SkillHandler {
       return { success: false, error: 'body is required' };
     }
 
+    const attachmentInputsParsed = parseAttachmentInputs(input.attachments);
+    if (typeof attachmentInputsParsed === 'string') {
+      return { success: false, error: attachmentInputsParsed };
+    }
+
+    let attachments: DraftAttachment[] = [];
+    if (attachmentInputsParsed.length > 0) {
+      try {
+        attachments = await readAttachmentFiles(attachmentInputsParsed, MAX_ATTACHMENT_BYTES);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return { success: false, error: `Attachment error: ${message}` };
+      }
+    }
+
     ctx.log.info(
-      { replyToMessageId, bodyLength: body.length },
+      { replyToMessageId, bodyLength: body.length, attachmentCount: attachments.length },
       'ceo-inbox-draft-reply: creating reply-all draft',
     );
 
@@ -110,6 +137,7 @@ export class CeoInboxDraftReplyHandler implements SkillHandler {
         body: draftBody,
         to,
         cc,
+        ...(attachments.length > 0 ? { attachments } : {}),
       });
 
       ctx.log.info(

@@ -22,6 +22,7 @@ import type {
   MessageFields,
   Draft as NylasDraft,
   CreateDraftRequest,
+  CreateAttachmentRequest,
 } from 'nylas';
 import type { Logger } from '../../logger.js';
 
@@ -144,12 +145,25 @@ export interface NylasFolder {
   name: string;
 }
 
+/**
+ * A resolved attachment ready to include in an outbound send or draft.
+ * Content is raw bytes — the caller is responsible for reading the file
+ * before constructing this object (see readAttachmentFiles in read-attachments.ts).
+ */
+export interface AttachmentContent {
+  filename: string;
+  contentType: string;
+  content: Buffer;
+}
+
 export interface SendEmailOptions {
   to: Array<{ name?: string; email: string }>;
   cc?: Array<{ name?: string; email: string }>;
   subject: string;
   body: string;
   replyToMessageId?: string;
+  /** File attachments to include. Each entry's content is passed as-is to Nylas. */
+  attachments?: AttachmentContent[];
 }
 
 export interface ListMessagesOptions {
@@ -299,6 +313,11 @@ export class NylasClient {
     );
 
     try {
+      const attachments: CreateAttachmentRequest[] | undefined = options.attachments?.map((a) => ({
+        filename: a.filename,
+        contentType: a.contentType,
+        content: a.content,
+      }));
       const response = await this.nylas.messages.send({
         identifier: this.grantId,
         requestBody: {
@@ -307,6 +326,7 @@ export class NylasClient {
           subject: options.subject,
           body: options.body,
           replyToMessageId: options.replyToMessageId,
+          ...(attachments && attachments.length > 0 ? { attachments } : {}),
         },
       });
       return this.normalizeMessage(response.data);
@@ -336,6 +356,11 @@ export class NylasClient {
     );
 
     try {
+      const attachments: CreateAttachmentRequest[] | undefined = options.attachments?.map((a) => ({
+        filename: a.filename,
+        contentType: a.contentType,
+        content: a.content,
+      }));
       const response = await this.nylas.drafts.create({
         identifier: this.grantId,
         requestBody: {
@@ -344,6 +369,7 @@ export class NylasClient {
           subject: options.subject,
           body: options.body,
           replyToMessageId: options.replyToMessageId,
+          ...(attachments && attachments.length > 0 ? { attachments } : {}),
         },
       });
       // Draft and NylasSdkMessage (Message) both extend BaseMessage — the fields we

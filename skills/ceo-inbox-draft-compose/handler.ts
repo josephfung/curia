@@ -1,8 +1,11 @@
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
-import { CeoNylasClient, type NylasParticipant } from '../_shared/ceo-nylas-client.js';
+import { CeoNylasClient, type NylasParticipant, type DraftAttachment } from '../_shared/ceo-nylas-client.js';
 import { markdownToHtml } from '../../src/channels/email/markdown-to-html.js';
+import { parseAttachmentInputs } from '../_shared/parse-attachments.js';
+import { readAttachmentFiles } from '../../src/skills/_shared/read-attachments.js';
 
 const MAX_BODY_LENGTH = 50_000;
+const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export class CeoInboxDraftComposeHandler implements SkillHandler {
@@ -64,11 +67,26 @@ export class CeoInboxDraftComposeHandler implements SkillHandler {
       }
     }
 
+    const attachmentInputsParsed = parseAttachmentInputs(input.attachments);
+    if (typeof attachmentInputsParsed === 'string') {
+      return { success: false, error: attachmentInputsParsed };
+    }
+
+    let attachments: DraftAttachment[] = [];
+    if (attachmentInputsParsed.length > 0) {
+      try {
+        attachments = await readAttachmentFiles(attachmentInputsParsed, MAX_ATTACHMENT_BYTES);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return { success: false, error: `Attachment error: ${message}` };
+      }
+    }
+
     const to: NylasParticipant[] = toStrings.map((email) => ({ email }));
     const cc: NylasParticipant[] = ccStrings.map((email) => ({ email }));
 
     ctx.log.info(
-      { toCount: to.length, ccCount: cc.length, subject },
+      { toCount: to.length, ccCount: cc.length, subject, attachmentCount: attachments.length },
       'ceo-inbox-draft-compose: creating compose draft',
     );
 
@@ -86,6 +104,7 @@ export class CeoInboxDraftComposeHandler implements SkillHandler {
         body: htmlBody,
         to,
         ...(cc.length > 0 ? { cc } : {}),
+        ...(attachments.length > 0 ? { attachments } : {}),
       });
 
       ctx.log.info(

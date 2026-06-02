@@ -103,6 +103,76 @@ describe('EmailSendHandler', () => {
     if (!result.success) expect(result.error).toMatch(/blocked/i);
   });
 
+  describe('attachments', () => {
+    it('passes attachments to the gateway when provided', async () => {
+      const ctx = makeCtx({
+        to: 'alice@example.com',
+        subject: 'See attached',
+        body: 'Please find attached.',
+        attachments: [
+          { file_url: 'file:///tmp/report.pdf', filename: 'report.pdf', content_type: 'application/pdf' },
+        ],
+      });
+      (ctx.outboundGateway!.send as ReturnType<typeof vi.fn>).mockResolvedValue({
+        success: true, messageId: 'msg-attach-1',
+      });
+
+      const result = await handler.execute(ctx);
+
+      expect(result.success).toBe(true);
+      const callArgs = (ctx.outboundGateway!.send as ReturnType<typeof vi.fn>).mock.calls[0]![0] as Record<string, unknown>;
+      expect(callArgs.attachments).toEqual([
+        { fileUrl: 'file:///tmp/report.pdf', filename: 'report.pdf', contentType: 'application/pdf' },
+      ]);
+    });
+
+    it('does not include attachments key when attachments is undefined', async () => {
+      const ctx = makeCtx({
+        to: 'alice@example.com',
+        subject: 'Hello',
+        body: 'Hi there',
+      });
+      (ctx.outboundGateway!.send as ReturnType<typeof vi.fn>).mockResolvedValue({
+        success: true, messageId: 'msg-1',
+      });
+
+      await handler.execute(ctx);
+
+      const callArgs = (ctx.outboundGateway!.send as ReturnType<typeof vi.fn>).mock.calls[0]![0] as Record<string, unknown>;
+      expect(callArgs.attachments).toBeUndefined();
+    });
+
+    it('returns error when attachments is not an array', async () => {
+      const ctx = makeCtx({
+        to: 'alice@example.com',
+        subject: 'Hello',
+        body: 'Hi',
+        attachments: 'not-an-array',
+      });
+
+      const result = await handler.execute(ctx);
+
+      expect(result.success).toBe(false);
+      if (!result.success) expect(result.error).toContain('array');
+      expect(ctx.outboundGateway!.send).not.toHaveBeenCalled();
+    });
+
+    it('returns error when an attachment entry is missing file_url', async () => {
+      const ctx = makeCtx({
+        to: 'alice@example.com',
+        subject: 'Hello',
+        body: 'Hi',
+        attachments: [{ filename: 'a.pdf', content_type: 'application/pdf' }],
+      });
+
+      const result = await handler.execute(ctx);
+
+      expect(result.success).toBe(false);
+      if (!result.success) expect(result.error).toContain('file_url');
+      expect(ctx.outboundGateway!.send).not.toHaveBeenCalled();
+    });
+  });
+
   describe('context_bridge', () => {
     it('registers a context bridge entry after successful send', async () => {
       const ctx = makeCtx({

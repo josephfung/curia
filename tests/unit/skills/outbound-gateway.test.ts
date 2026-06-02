@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { OutboundGateway } from '../../../src/skills/outbound-gateway.js';
 import { createLogger } from '../../../src/logger.js';
 import type { NylasClient } from '../../../src/channels/email/nylas-client.js';
@@ -9,6 +9,12 @@ import type { BusEvent } from '../../../src/bus/events.js';
 import type { AutonomyService, AutonomyConfig } from '../../../src/autonomy/autonomy-service.js';
 import type { PiiRedactor } from '../../../src/dispatch/pii-redactor.js';
 import type { ActionLogRepo } from '../../../src/autonomy/action-log-repo.js';
+import { readFile } from 'node:fs/promises';
+
+vi.mock('node:fs/promises', () => ({
+  readFile: vi.fn(),
+}));
+const mockReadFile = readFile as ReturnType<typeof vi.fn>;
 
 /**
  * Build fresh vi.fn() mocks for each test. Using beforeEach + createMocks()
@@ -663,6 +669,151 @@ describe('OutboundGateway.createEmailDraft', () => {
     expect(result.blockedReason).toContain('Contact resolution failed');
     expect(nylasClient.createDraft).not.toHaveBeenCalled();
     expect(nylasClient.sendMessage).not.toHaveBeenCalled();
+  });
+});
+
+describe('OutboundGateway — attachment support', () => {
+  function makeGatewayWithAttachments(nylasClientOverrides: Partial<NylasClient> = {}) {
+    const logger = createLogger('error');
+    const nylasClient = {
+      sendMessage: vi.fn().mockResolvedValue({ id: 'msg-attach-1' }),
+      createDraft: vi.fn().mockResolvedValue({ id: 'draft-attach-1' }),
+      getMessage: vi.fn().mockResolvedValue({ id: 'm1', from: [{ email: 's@example.com' }], subject: 'S' }),
+      listMessages: vi.fn().mockResolvedValue([]),
+      ...nylasClientOverrides,
+    } as unknown as NylasClient;
+    const gateway = new OutboundGateway({
+      nylasClients: new Map([['curia', nylasClient]]),
+      contactService: {
+        resolveByChannelIdentity: vi.fn().mockResolvedValue(null),
+      } as unknown as ContactService,
+      contentFilter: {
+        check: vi.fn().mockResolvedValue({ passed: true, findings: [] }),
+      } as unknown as OutboundContentFilter,
+      bus: {
+        publish: vi.fn().mockResolvedValue(undefined),
+        subscribe: vi.fn(),
+      } as unknown as EventBus,
+      principalIdentities: [],
+      logger,
+    });
+    return { gateway, nylasClient };
+  }
+
+  beforeEach(() => {
+    mockReadFile.mockReset();
+    // readAttachmentFiles reads CURIA_TEMPFILE_DIR lazily; stub it so file:///tmp/... URLs pass
+    // the store-dir boundary check without needing a real tmpfs mount.
+    vi.stubEnv('CURIA_TEMPFILE_DIR', '/tmp');
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('reads attachment files and passes them to sendMessage', async () => {
+    const pdfContent = Buffer.from('fake pdf bytes');
+    mockReadFile.mockResolvedValue(pdfContent);
+
+    const { gateway, nylasClient } = makeGatewayWithAttachments();
+
+    const result = await gateway.send({
+      channel: 'email',
+      to: 'recipient@example.com',
+      subject: 'With attachment',
+      body: 'See attached.',
+      attachments: [
+        { fileUrl: 'file:///tmp/report.pdf', filename: 'report.pdf', contentType: 'application/pdf' },
+      ],
+    });
+
+    expect(result.success).toBe(true);
+    const sendArgs = (nylasClient.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0]![0] as Record<string, unknown>;
+    const attachments = sendArgs.attachments as Array<{ filename: string; contentType: string; content: Buffer }>;
+    expect(attachments).toHaveLength(1);
+    expect(attachments[0]!.filename).toBe('report.pdf');
+    expect(attachments[0]!.contentType).toBe('application/pdf');
+    expect(attachments[0]!.content).toEqual(pdfContent);
+  });
+
+  it('blocks send and returns error when attachment file cannot be read', async () => {
+    mockReadFile.mockRejectedValue(new Error('ENOENT: no such file'));
+
+    const { gateway, nylasClient } = makeGatewayWithAttachments();
+
+    const result = await gateway.send({
+      channel: 'email',
+      to: 'recipient@example.com',
+      subject: 'With attachment',
+      body: 'See attached.',
+      attachments: [
+        { fileUrl: 'file:///tmp/missing.pdf', filename: 'missing.pdf', contentType: 'application/pdf' },
+      ],
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.blockedReason).toContain('Attachment error');
+    expect(nylasClient.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('reads attachment files and passes them to createDraft', async () => {
+    const pdfContent = Buffer.from('fake pdf bytes');
+    mockReadFile.mockResolvedValue(pdfContent);
+
+    const { gateway, nylasClient } = makeGatewayWithAttachments();
+
+    const result = await gateway.createEmailDraft({
+      channel: 'email',
+      to: 'partner@example.com',
+      accountId: 'curia',
+      subject: 'Draft with attachment',
+      body: 'Please review.',
+      attachments: [
+        { fileUrl: 'file:///tmp/contract.pdf', filename: 'contract.pdf', contentType: 'application/pdf' },
+      ],
+    });
+
+    expect(result.success).toBe(true);
+    const draftArgs = (nylasClient.createDraft as ReturnType<typeof vi.fn>).mock.calls[0]![0] as Record<string, unknown>;
+    const attachments = draftArgs.attachments as Array<{ filename: string }>;
+    expect(attachments).toHaveLength(1);
+    expect(attachments[0]!.filename).toBe('contract.pdf');
+  });
+
+  it('blocks draft creation when attachment file is missing', async () => {
+    mockReadFile.mockRejectedValue(new Error('ENOENT'));
+
+    const { gateway, nylasClient } = makeGatewayWithAttachments();
+
+    const result = await gateway.createEmailDraft({
+      channel: 'email',
+      to: 'partner@example.com',
+      accountId: 'curia',
+      subject: 'Draft with attachment',
+      body: 'Please review.',
+      attachments: [
+        { fileUrl: 'file:///tmp/missing.pdf', filename: 'missing.pdf', contentType: 'application/pdf' },
+      ],
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.blockedReason).toContain('Attachment error');
+    expect(nylasClient.createDraft).not.toHaveBeenCalled();
+  });
+
+  it('does not set attachments on sendMessage when none are provided', async () => {
+    const { gateway, nylasClient } = makeGatewayWithAttachments();
+
+    await gateway.send({
+      channel: 'email',
+      to: 'recipient@example.com',
+      subject: 'No attachments',
+      body: 'Hello.',
+    });
+
+    const sendArgs = (nylasClient.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0]![0] as Record<string, unknown>;
+    expect(sendArgs.attachments).toBeUndefined();
+    expect(mockReadFile).not.toHaveBeenCalled();
   });
 });
 
