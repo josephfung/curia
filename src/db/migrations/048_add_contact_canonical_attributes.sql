@@ -21,6 +21,10 @@ ALTER TABLE contacts ADD CONSTRAINT contacts_bio_length_check
   CHECK (char_length(bio) <= 500);
 ALTER TABLE contacts ADD CONSTRAINT contacts_birthday_format_check
   CHECK (birthday ~ '^\d{4}-\d{2}-\d{2}$' OR birthday ~ '^--\d{2}-\d{2}$');
+ALTER TABLE contacts ADD CONSTRAINT contacts_primary_phone_format_check
+  CHECK (primary_phone ~ '^\+[1-9][0-9]{6,14}$');
+ALTER TABLE contacts ADD CONSTRAINT contacts_locale_format_check
+  CHECK (locale ~ '^[a-z]{2,3}(-[A-Z]{2,4})?$');
 
 -- Rollback: ALTER TABLE contacts
 --   DROP COLUMN preferred_name, DROP COLUMN title, DROP COLUMN organization,

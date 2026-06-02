@@ -618,8 +618,14 @@ export async function knowledgeGraphRoutes(
     if (fields.primaryEmail != null && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(fields.primaryEmail)) {
       return { error: 'Invalid primaryEmail format.', fields };
     }
-    if (fields.linkedinUrl != null && !/^https?:\/\//.test(fields.linkedinUrl)) {
-      return { error: 'linkedinUrl must start with http:// or https://.', fields };
+    if (fields.linkedinUrl != null && !/^https?:\/\/(www\.)?linkedin\.com\//.test(fields.linkedinUrl)) {
+      return { error: 'linkedinUrl must be a linkedin.com URL (e.g. https://linkedin.com/in/…).', fields };
+    }
+    if (fields.primaryPhone != null && !/^\+[1-9]\d{6,14}$/.test(fields.primaryPhone)) {
+      return { error: 'primaryPhone must be in E.164 format (e.g. +15551234567).', fields };
+    }
+    if (fields.locale != null && !/^[a-z]{2,3}(-[A-Z]{2,4})?$/.test(fields.locale)) {
+      return { error: 'locale must be a BCP 47 code (e.g. en-US, fr, zh-Hans).', fields };
     }
     if (fields.bio != null && fields.bio.length > 500) {
       return { error: 'bio must be 500 characters or fewer.', fields };

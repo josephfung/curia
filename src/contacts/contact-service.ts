@@ -248,7 +248,7 @@ export class ContactService {
       preferredName: options.preferredName ?? null,
       title: options.title ?? null,
       organization: options.organization ?? null,
-      primaryEmail: options.primaryEmail ?? null,
+      primaryEmail: options.primaryEmail?.toLowerCase() ?? null,
       primaryPhone: options.primaryPhone ?? null,
       timezone: options.timezone ?? null,
       locale: options.locale ?? null,
@@ -631,9 +631,20 @@ export class ContactService {
       }
     }
 
+    // Filter undefined entries — spreading undefined values would clear existing columns on
+    // a partial PATCH (Object spread copies undefined keys, which overwrite non-undefined values).
+    const definedFields = Object.fromEntries(
+      Object.entries(fields).filter(([, value]) => value !== undefined),
+    ) as ContactCanonicalFields;
+
+    // Normalize primaryEmail to lowercase for consistent storage and CCI comparison.
+    if (definedFields.primaryEmail != null) {
+      definedFields.primaryEmail = definedFields.primaryEmail.toLowerCase();
+    }
+
     const updated: Contact = {
       ...contact,
-      ...fields,
+      ...definedFields,
       updatedAt: new Date(),
     };
 

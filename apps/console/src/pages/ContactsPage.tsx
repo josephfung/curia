@@ -304,7 +304,7 @@ function ContactEditDrawer({ contact, creating, onClose, onSaved, onDeleted }: D
           </div>
           <div className="form-field">
             <label htmlFor="cf-bio">Bio</label>
-            <textarea id="cf-bio" rows={3} value={bio} onChange={e => setBio(e.target.value)} placeholder="Short narrative (max 500 chars)" />
+            <textarea id="cf-bio" rows={3} maxLength={500} value={bio} onChange={e => setBio(e.target.value)} placeholder="Short narrative (max 500 chars)" />
           </div>
           <div className="form-field">
             <label htmlFor="cf-birthday">Birthday</label>
