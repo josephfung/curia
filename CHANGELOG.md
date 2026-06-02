@@ -26,6 +26,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Jun 1 email incident plan** — incident reconstruction and two-PR fix plan for the 18-hour email-channel silence + triple-reply burst. See `docs/wip/2026-06-02-jun1-email-incident.md`. (#846, #847)
 - **Tasks & Backlog v1 design** — design memo for a unified task model with deferred work, CEO-visible backlog, and a 3×/day coordinator sweep. See `docs/wip/2026-06-01-tasks-and-backlog-design.md`.
 - **SBOM generation** — SPDX JSON Software Bill of Materials generated on every push to `main` and attached to each GitHub release as a release asset; failure is non-fatal. (#564)
+- **`drive-download-file`** — new skill that downloads a Google Drive file (native or Google-native export) to TempFileStore and returns a `file://` URL, enabling Drive files to be attached to outbound emails. Closes #857.
 
 ### Fixed
 - **`email-draft-save` unknown account error** — `OutboundGateway` now lists available accounts when unknown `accountId` is passed. (#815)

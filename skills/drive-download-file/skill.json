@@ -1,0 +1,26 @@
+{
+  "name": "drive-download-file",
+  "description": "Download a file from Google Drive to temporary storage and return a file:// URL for use with email-send or email-reply attachments. Accepts a Drive file ID or any drive.google.com / docs.google.com URL. Google Docs/Sheets/Slides are exported to PDF by default; pass export_mime_type to override. Pass the returned temp_file_url in the attachments array of email-send or email-reply.",
+  "version": "0.1.0",
+  "sensitivity": "normal",
+  "action_risk": "none",
+  "inputs": {
+    "file_id_or_url": "string (Google Drive file ID or full Drive URL — drive.google.com/file/d/<id>/..., drive.google.com/open?id=<id>, drive.google.com/uc?id=<id>, docs.google.com/document/d/<id>/..., docs.google.com/spreadsheets/d/<id>/..., docs.google.com/presentation/d/<id>/...)",
+    "filename": "string? (filename hint for the output. Falls back to the name from Drive metadata.)",
+    "export_mime_type": "string? (for Google-native formats — Docs/Sheets/Slides — the MIME type to export to. Defaults to application/pdf. Use application/vnd.openxmlformats-officedocument.wordprocessingml.document for DOCX from a Google Doc.)"
+  },
+  "outputs": {
+    "temp_file_url": "string (file:// URL of the downloaded bytes on disk — pass this as file_url in the attachments array of email-send or email-reply)",
+    "filename": "string (filename of the downloaded file, with appropriate extension)",
+    "content_type": "string (MIME type of the downloaded/exported content)",
+    "size": "number (byte count after download)"
+  },
+  "permissions": [],
+  "secrets": [
+    "GOOGLE_OAUTH_CLIENT_ID",
+    "GOOGLE_OAUTH_CLIENT_SECRET",
+    "CURIA_GOOGLE_EMAIL"
+  ],
+  "timeout": 60000,
+  "capabilities": ["tempFileStore"]
+}
