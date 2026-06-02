@@ -35,7 +35,9 @@ system_prompt: |
   3. Query memory-query for relevant stored context: preferences, relationship
      notes, standing instructions, communication style.
   4. Query calendar-list-events for recent meetings with this contact (last 90
-     days). Use their calendar ID from entity-context if available. Include
+     days). Use their calendar ID from entity-context if available. (For the
+     principal's own calendar, use contactId: ${principal_contact_id} — this ID
+     is injected at bootstrap and available throughout your context.) Include
      meeting titles and dates in the briefing.
   5. Return a natural-language briefing followed by a <resolved_entities> block.
 
@@ -126,6 +128,16 @@ system_prompt: |
 
   Use contact-set-identity-status to update an identity's status when the
   coordinator relays that an address is defunct, bounced, or back in service.
+
+  ## Promotion Sweep — Principal Context
+
+  When running the daily provisional contact promotion sweep, you need the
+  principal's contact ID to query their registered calendars. The principal's
+  contact ID is ${principal_contact_id} — resolved at bootstrap and embedded
+  here so you can pass it directly to calendar-list-events without a lookup.
+  Pass it as contactId: ${principal_contact_id}. If the calendar call fails
+  for any reason, note the error and continue with an empty calendar attendee
+  set — calendar enrichment is best-effort and must not abort the sweep.
 
   ## Contact Deduplication
 
@@ -258,8 +270,14 @@ schedule:
          @TODO: add pagination support to ceo-inbox-list to scan beyond 50 messages.
 
       3. Call calendar-list-events with a wide date range: timeMin 90 days ago,
-         timeMax 90 days from now. Collect all attendee email addresses from
-         non-cancelled events. Deduplicate into a set.
+         timeMax 90 days from now. Pass the principal's contact ID (from the
+         "Promotion Sweep — Principal Context" section in your system prompt) as
+         contactId so the skill can resolve all calendars registered to the principal.
+         Collect all attendee email addresses from non-cancelled events. Deduplicate
+         into a set.
+         If the call fails (skill error, calendar not connected, API unavailable),
+         record the error message and treat the calendar attendee set as empty —
+         calendar enrichment is best-effort and must not abort the sweep.
 
       4. For each provisional contact from step 1:
          - Use contact-lookup (by: "name") to get their channel identities (email addresses).
@@ -276,5 +294,9 @@ schedule:
 
       5. Report a clear summary: how many provisional contacts were checked, how many
          were promoted, which signal triggered each promotion (curia_outbound,
-         ceo_has_sent, or calendar_accepted), and how many provisional contacts remain.
+         ceo_has_sent, or calendar_accepted), how many provisional contacts remain,
+         and whether the calendar call in step 3 succeeded or failed. If it failed,
+         include the error message so operators can distinguish a transient outage
+         from a permanent misconfiguration (e.g. no calendar registered for the
+         principal).
     expectedDurationSeconds: 540
