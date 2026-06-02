@@ -1,50 +1,89 @@
+import { createRequire } from 'node:module';
+import type { Node, HTMLElement as HtmlElement } from 'node-html-parser';
+
+// node-html-parser is CJS-only. Load via createRequire so the CJS build is used
+// reliably under Node ESM + vitest (where Vite's ESM/CJS interop can lose named exports).
+const _require = createRequire(import.meta.url);
+const { parse, NodeType } = _require('node-html-parser') as typeof import('node-html-parser');
+
+const BLOCK_ELEMENTS = new Set([
+  'P', 'DIV', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'LI', 'TR', 'TD', 'TH', 'BLOCKQUOTE',
+]);
+
+/**
+ * Walk the parsed tree and collect raw text fragments into `buf`.
+ *
+ * SCRIPT and STYLE elements are skipped entirely — neither the tags nor their
+ * content are emitted. Using `rawText` (not decoded `.text`) preserves HTML
+ * entity encoding in text nodes so entity decoding can happen in a controlled
+ * order after remaining tag-like fragments are stripped.
+ */
+function buildText(node: Node, buf: string[]): void {
+  if (node.nodeType === NodeType.TEXT_NODE) {
+    buf.push(node.rawText);
+    return;
+  }
+  if (node.nodeType !== NodeType.ELEMENT_NODE) return;
+
+  const el = node as HtmlElement;
+  const tag = el.tagName as string | undefined;
+
+  // Root node (tagName is null) — descend without emitting anything
+  if (!tag) {
+    for (const child of el.childNodes) buildText(child, buf);
+    return;
+  }
+
+  // Drop script and style blocks entirely (tag + content)
+  if (tag === 'SCRIPT' || tag === 'STYLE') return;
+
+  if (tag === 'BR') { buf.push('\n'); return; }
+  if (tag === 'HR') { buf.push('\n---\n'); return; }
+
+  for (const child of el.childNodes) buildText(child, buf);
+
+  // Append a newline after each block-level element to preserve paragraph breaks
+  if (BLOCK_ELEMENTS.has(tag)) buf.push('\n');
+}
+
 /**
  * Convert HTML email body to plain text for LLM consumption.
- * Lightweight regex-based approach — handles common email HTML patterns
- * without pulling in a heavy dependency like turndown or html-to-text.
+ *
+ * Uses a proper HTML parser (node-html-parser) to remove <script> and <style>
+ * blocks, eliminating the regex-based tag-filtering bypass described in CodeQL
+ * rule js/bad-tag-filter. The parser correctly handles cases where the script
+ * body contains string literals that look like closing tags — e.g.,
+ * `var x = "</script type=text>"` — which naive regexes treat as end tags.
  */
 export function htmlToText(html: string | undefined | null): string {
   if (!html) return '';
 
-  let text = html;
+  // Normalize end tags that have trailing whitespace before the closing `>`.
+  // The HTML spec allows whitespace-only padding (</script >) in end tags, but
+  // node-html-parser requires `>` to immediately follow the tag name. We only
+  // strip \s+ (not arbitrary [^>]+) to avoid converting fake closing tags like
+  // </script type=text> inside script string literals into real ones.
+  const normalized = html.replace(/<\/([a-zA-Z][a-zA-Z0-9]*)\s+>/g, '</$1>');
 
-  // Remove <style> and <script> blocks entirely (content + tags). Loop until
-  // the string stops changing to prevent nested-substitution bypass: a crafted
-  // input like <scri<script>X</script>pt>…<scri<script>Y</script>pt> causes the
-  // g-flag replace to strip both inner blocks simultaneously, leaving the outer
-  // fragments to merge into <script>…</script>. A second pass catches that.
-  // [^>]* before the closing > handles padded tags like </script > and also
-  // closing tags with unexpected attributes like </script foo> that \s* misses.
+  const root = parse(normalized, { comment: false });
+  const buf: string[] = [];
+  buildText(root, buf);
+
+  let text = buf.join('');
+
+  // Strip any HTML-tag-like patterns remaining in the raw text. After the
+  // parser removes real SCRIPT/STYLE elements, malformed input may leave
+  // literal angle-bracket fragments in text nodes (e.g. the nested-substitution
+  // bypass pattern leaves `<scri` and `pt>` as separate text nodes). The loop
+  // repeats until stable.
   for (let prev = ''; prev !== text; ) {
     prev = text;
-    text = text.replace(/<style[^>]*>[\s\S]*?<\/style[^>]*>/gi, '');
-    text = text.replace(/<script[^>]*>[\s\S]*?<\/script[^>]*>/gi, '');
+    text = text.replace(/<[^>]+>/g, '');            // complete tag-like patterns
+    text = text.replace(/<[a-zA-Z][^>]{0,500}/g, ''); // incomplete trailing fragments
   }
 
-  // Convert <br> variants to newlines
-  text = text.replace(/<br\s*\/?>/gi, '\n');
-
-  // Convert block-level closing tags to newlines
-  text = text.replace(/<\/(p|div|h[1-6]|li|tr|blockquote)>/gi, '\n');
-
-  // Convert <hr> to a separator
-  text = text.replace(/<hr\s*\/?>/gi, '\n---\n');
-
-  // Strip all remaining HTML tags. Loop until stable — stripping a complete tag
-  // can expose an incomplete <tagname fragment from a nested structure (e.g.
-  // <<foo>script> → <script after removing <foo>), and stripping an incomplete
-  // fragment can in turn expose a new complete tag. {0,500} caps the incomplete-
-  // tag pattern to prevent consuming large bodies on inputs with a lone <.
-  for (let prev = ''; prev !== text; ) {
-    prev = text;
-    text = text.replace(/<[^>]+>/g, ''); // complete tags
-    text = text.replace(/<[a-zA-Z][^>]{0,500}/g, ''); // incomplete tags
-  }
-
-  // Decode common HTML entities.
-  // Order matters: &amp; must be decoded LAST to prevent double-decoding.
-  // If &amp; is decoded first, a sequence like &amp;lt; becomes &lt; and then <,
-  // which would smuggle a literal < into the output (js/double-escaping).
+  // Decode HTML entities. &amp; must come LAST to prevent double-decoding:
+  // decoded first, &amp;lt; → &lt; → < (smuggles a literal <).
   text = text.replace(/&lt;/g, '<');
   text = text.replace(/&gt;/g, '>');
   text = text.replace(/&quot;/g, '"');
@@ -52,7 +91,7 @@ export function htmlToText(html: string | undefined | null): string {
   text = text.replace(/&nbsp;/g, ' ');
   text = text.replace(/&amp;/g, '&');
 
-  // Collapse runs of whitespace (preserving paragraph breaks)
+  // Collapse whitespace runs (preserving paragraph breaks)
   text = text.replace(/[ \t]+/g, ' ');
   text = text.replace(/\n[ \t]+/g, '\n');
   text = text.replace(/[ \t]+\n/g, '\n');

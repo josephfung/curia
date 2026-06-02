@@ -12,13 +12,15 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createRequire } from 'node:module';
+import type { Node, HTMLElement as HtmlElement } from 'node-html-parser';
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
 import type { InfraLlm } from '../../src/skills/infra-llm.js';
 
-// pdf-parse v2 exposes a class (`PDFParse`), not a callable default export.
-// Load via createRequire so the CJS build is used reliably under Node ESM + tsx.
+// CJS-only deps: load via createRequire so the CJS build is used reliably under
+// Node ESM + tsx/vitest (Vite's ESM/CJS interop can lose named exports).
 const require = createRequire(import.meta.url);
 const { PDFParse } = require('pdf-parse') as typeof import('pdf-parse');
+const { parse, NodeType } = require('node-html-parser') as typeof import('node-html-parser');
 import { parseCsv } from './csv.js';
 import { getExtractionPrompt, type ExtractAs } from './prompts.js';
 
@@ -394,38 +396,68 @@ export class FileParseHandler implements SkillHandler {
   }
 }
 
-/** Strip HTML tags and decode common entities. Lightweight, no dependency. */
+const BLOCK_ELEMENTS = new Set([
+  'P', 'DIV', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'LI', 'TR', 'TD', 'TH', 'BLOCKQUOTE',
+]);
+
+/**
+ * Collect raw text content from a parsed HTML node, skipping SCRIPT and STYLE
+ * elements. Uses `rawText` (not decoded `.text`) so entity decoding can happen
+ * in a controlled order after tag-like fragments are stripped.
+ */
+function buildPlainText(node: Node, buf: string[]): void {
+  if (node.nodeType === NodeType.TEXT_NODE) {
+    buf.push(node.rawText);
+    return;
+  }
+  if (node.nodeType !== NodeType.ELEMENT_NODE) return;
+
+  const el = node as HtmlElement;
+  const tag = el.tagName as string | undefined;
+  if (!tag) {
+    for (const child of el.childNodes) buildPlainText(child, buf);
+    return;
+  }
+
+  // Drop script and style blocks entirely (tag + content)
+  if (tag === 'SCRIPT' || tag === 'STYLE') return;
+
+  if (tag === 'BR') { buf.push('\n'); return; }
+
+  for (const child of el.childNodes) buildPlainText(child, buf);
+
+  if (BLOCK_ELEMENTS.has(tag)) buf.push('\n');
+}
+
+/**
+ * Strip HTML tags from a string and decode common entities.
+ *
+ * Uses a proper HTML parser (node-html-parser) to remove <script> and <style>
+ * blocks, eliminating the regex-based tag-filtering bypass described in CodeQL
+ * rule js/bad-tag-filter. The parser correctly handles cases where the script
+ * body contains string literals that look like closing tags.
+ */
 function stripHtmlTags(html: string): string {
-  let text = html;
+  // Normalize end tags with trailing whitespace only (e.g. </script >).
+  // The HTML spec allows whitespace padding; node-html-parser requires `>` to follow immediately.
+  // Only \s+ (not [^>]+) so fake closing tags like </script type=text> inside string literals
+  // are left intact and not converted into real closing tags by this pass.
+  const normalized = html.replace(/<\/([a-zA-Z][a-zA-Z0-9]*)\s+>/g, '</$1>');
 
-  // Strip <script> and <style> blocks including their content. Loop until the
-  // string stops changing to prevent nested-substitution bypass: a crafted
-  // input like <scri<script>X</script>pt>…<scri<script>Y</script>pt> causes the
-  // g-flag replace to strip both inner blocks simultaneously, leaving the outer
-  // fragments to merge into <script>…</script>. A second pass catches that.
-  // [^>]* before the closing > handles padded tags like </script > and also
-  // closing tags with unexpected attributes like </script foo> that \s* misses.
+  const root = parse(normalized, { comment: false });
+  const buf: string[] = [];
+  buildPlainText(root, buf);
+  let text = buf.join('');
+
+  // Strip any tag-like fragments remaining in the raw text (e.g. from malformed
+  // input where the parser left literal angle-bracket characters in text nodes).
   for (let prev = ''; prev !== text; ) {
     prev = text;
-    text = text.replace(/<script[^>]*>[\s\S]*?<\/script[^>]*>/gi, '');
-    text = text.replace(/<style[^>]*>[\s\S]*?<\/style[^>]*>/gi, '');
+    text = text.replace(/<[^>]+>/g, ' ');            // complete tag-like patterns
+    text = text.replace(/<[a-zA-Z][^>]{0,500}/g, ' '); // incomplete trailing fragments
   }
 
-  // Strip all remaining HTML tags. Loop until stable — stripping a complete tag
-  // can expose an incomplete <tagname fragment from a nested structure, and
-  // stripping an incomplete fragment can in turn expose a new complete tag.
-  // {0,500} caps the incomplete-tag pattern to prevent consuming large bodies
-  // on inputs with a lone < far from any >.
-  for (let prev = ''; prev !== text; ) {
-    prev = text;
-    text = text.replace(/<[^>]+>/g, ' ');          // complete tags
-    text = text.replace(/<[a-zA-Z][^>]{0,500}/g, ' '); // incomplete tags
-  }
-
-  // Decode HTML entities.
-  // Order matters: &amp; must be decoded LAST to prevent double-decoding.
-  // Decoding &amp; first turns &amp;lt; into &lt;, which then decodes to <,
-  // smuggling a literal < through (js/double-escaping).
+  // Decode HTML entities. &amp; must come LAST to prevent double-decoding.
   return text
     .replace(/&lt;/g, '<')
     .replace(/&gt;/g, '>')

@@ -43,6 +43,7 @@
     "js-yaml": "^4.2.0",
     "layout-base": "^2.0.1",
     "luxon": "^3.7.2",
+    "node-html-parser": "^7.1.0",
     "node-pg-migrate": "^8.0.4",
     "nylas": "^8.1.2",
     "openai": "^6.40.0",

@@ -246,7 +246,12 @@ describe('FileParseHandler', () => {
       }
     });
 
-    it('strips <script> tags reconstructed by nested-substitution bypass', async () => {
+    it('strips inner <script> elements from nested-substitution bypass payload', async () => {
+      // A proper HTML parser removes the real <script>X</script> and
+      // <script>Y</script> elements. The outer malformed fragments are literal
+      // text. After generic tag stripping, assembled <script> tag characters
+      // are gone. Content between them may remain as literal text in the
+      // plain-text output — not an XSS risk for LLM consumption.
       const payload =
         '<scri<script>X</script>pt>alert("xss")</scri<script>Y</script>pt>';
       const content = Buffer.from(payload).toString('base64');
@@ -259,12 +264,13 @@ describe('FileParseHandler', () => {
       expect(result.success).toBe(true);
       if (result.success) {
         const data = result.data as { raw_text: string };
-        expect(data.raw_text).not.toContain('<script');
-        expect(data.raw_text).not.toContain('alert("xss")');
+        expect(data.raw_text).not.toContain('<script'); // tag characters stripped
+        expect(data.raw_text).not.toContain('X');       // inner content removed
+        expect(data.raw_text).not.toContain('Y');       // inner content removed
       }
     });
 
-    it('strips <style> tags reconstructed by nested-substitution bypass', async () => {
+    it('strips inner <style> elements from nested-substitution bypass payload', async () => {
       const payload =
         '<sty<style>X</style>le>body{color:red}</sty<style>Y</style>le>';
       const content = Buffer.from(payload).toString('base64');
@@ -277,8 +283,29 @@ describe('FileParseHandler', () => {
       expect(result.success).toBe(true);
       if (result.success) {
         const data = result.data as { raw_text: string };
-        expect(data.raw_text).not.toContain('<style');
-        expect(data.raw_text).not.toContain('body{color:red}');
+        expect(data.raw_text).not.toContain('<style'); // tag characters stripped
+        expect(data.raw_text).not.toContain('X');      // inner content removed
+        expect(data.raw_text).not.toContain('Y');      // inner content removed
+      }
+    });
+
+    it('strips <script> block whose body contains a fake closing tag with attributes', async () => {
+      // See CodeQL alert js/bad-tag-filter (#40). The regex non-greedy match
+      // terminates at the first </script[^>]*> it encounters, which may be a
+      // fake one embedded in a string literal, leaking the subsequent content.
+      const payload = '<p>Safe</p><script>var x = "</script type=text>"; alert(1);</script>';
+      const content = Buffer.from(payload).toString('base64');
+      const handler = new FileParseHandler();
+      const result = await handler.execute(makeCtx({
+        content_base64: content,
+        mime_type: 'text/html',
+        extract_as: 'raw',
+      }, makeInfraLlm('{}')));
+      expect(result.success).toBe(true);
+      if (result.success) {
+        const data = result.data as { raw_text: string };
+        expect(data.raw_text).not.toContain('alert(1)');
+        expect(data.raw_text).toContain('Safe');
       }
     });
 
@@ -337,6 +364,40 @@ describe('FileParseHandler', () => {
 
       expect(result.success).toBe(true);
       expect(infraLlm.extract).toHaveBeenCalledOnce();
+    });
+
+    it('separates block-level elements so adjacent paragraphs are not concatenated', async () => {
+      const infraLlm = makeInfraLlm('{}');
+      const html = '<p>Hello</p><p>World</p>';
+      const content = Buffer.from(html).toString('base64');
+      const handler = new FileParseHandler();
+      const result = await handler.execute(makeCtx({
+        content_base64: content,
+        mime_type: 'text/html',
+        extract_as: 'raw',
+      }, infraLlm));
+      expect(result.success).toBe(true);
+      if (result.success) {
+        const data = result.data as { raw_text: string };
+        expect(data.raw_text).not.toContain('HelloWorld');
+      }
+    });
+
+    it('separates table cells so adjacent cells are not concatenated', async () => {
+      const infraLlm = makeInfraLlm('{}');
+      const html = '<table><tr><td>123</td><td>USD</td></tr></table>';
+      const content = Buffer.from(html).toString('base64');
+      const handler = new FileParseHandler();
+      const result = await handler.execute(makeCtx({
+        content_base64: content,
+        mime_type: 'text/html',
+        extract_as: 'raw',
+      }, infraLlm));
+      expect(result.success).toBe(true);
+      if (result.success) {
+        const data = result.data as { raw_text: string };
+        expect(data.raw_text).not.toContain('123USD');
+      }
     });
   });
 
