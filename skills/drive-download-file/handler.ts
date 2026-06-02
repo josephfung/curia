@@ -65,7 +65,10 @@ async function streamToBuffer(stream: Readable, maxBytes: number): Promise<Buffe
       chunks.push(chunk);
     });
 
-    stream.on('end', () => { settle(() => resolve(Buffer.concat(chunks))); });
+    stream.on('end', () => {
+      if (destroyed) return;
+      settle(() => resolve(Buffer.concat(chunks)));
+    });
     stream.on('error', (err) => { settle(() => reject(err)); });
     // Some stream implementations (Axios/http) emit 'close' instead of 'error'
     // after destroy() — ensure the promise always settles.
@@ -104,6 +107,7 @@ export class DriveDownloadFileHandler implements SkillHandler {
     try {
       auth = await getDriveClient();
     } catch (err) {
+      ctx.log.error({ err }, 'drive-download-file: getDriveClient failed');
       return { success: false, error: err instanceof Error ? err.message : String(err) };
     }
 
@@ -134,6 +138,7 @@ export class DriveDownloadFileHandler implements SkillHandler {
         };
       }
       const detail = err instanceof Error ? err.message : String(err);
+      ctx.log.error({ err, fileId }, 'drive-download-file: metadata fetch failed');
       return {
         success: false,
         error: `Failed to fetch Drive file metadata for ${fileId}: ${detail}`,
@@ -193,6 +198,7 @@ export class DriveDownloadFileHandler implements SkillHandler {
         };
       }
       const detail = err instanceof Error ? err.message : String(err);
+      ctx.log.error({ err, fileId, filename: outputFilename }, 'drive-download-file: download failed');
       return { success: false, error: `Failed to download Drive file "${driveName}": ${detail}` };
     }
 
