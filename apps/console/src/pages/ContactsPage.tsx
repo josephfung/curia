@@ -22,6 +22,19 @@ interface Contact {
   systemRole: SystemRole;
   createdAt: string;
   updatedAt: string;
+  // Canonical fields (migration 048)
+  preferredName: string | null;
+  title: string | null;
+  organization: string | null;
+  primaryEmail: string | null;
+  primaryPhone: string | null;
+  timezone: string | null;
+  locale: string | null;
+  location: string | null;
+  pronouns: string | null;
+  linkedinUrl: string | null;
+  bio: string | null;
+  birthday: string | null;
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -107,6 +120,18 @@ function ContactEditDrawer({ contact, creating, onClose, onSaved, onDeleted }: D
   const [trustLevel, setTrustLevel] = useState<TrustLevel>(contact?.trustLevel ?? null);
   const [kgNodeId, setKgNodeId] = useState(contact?.kgNodeId ?? '');
   const [notes, setNotes] = useState(contact?.notes ?? '');
+  const [preferredName, setPreferredName] = useState(contact?.preferredName ?? '');
+  const [pronouns, setPronouns] = useState(contact?.pronouns ?? '');
+  const [title, setTitle] = useState(contact?.title ?? '');
+  const [organization, setOrganization] = useState(contact?.organization ?? '');
+  const [primaryEmail, setPrimaryEmail] = useState(contact?.primaryEmail ?? '');
+  const [primaryPhone, setPrimaryPhone] = useState(contact?.primaryPhone ?? '');
+  const [timezone, setTimezone] = useState(contact?.timezone ?? '');
+  const [locale, setLocale] = useState(contact?.locale ?? '');
+  const [location, setLocation] = useState(contact?.location ?? '');
+  const [linkedinUrl, setLinkedinUrl] = useState(contact?.linkedinUrl ?? '');
+  const [bio, setBio] = useState(contact?.bio ?? '');
+  const [birthday, setBirthday] = useState(contact?.birthday ?? '');
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -126,6 +151,19 @@ function ContactEditDrawer({ contact, creating, onClose, onSaved, onDeleted }: D
         trustLevel: trustLevel ?? null,
         notes: notes.trim() || null,
         kgNodeId: kgNodeId.trim() || null,
+        // Canonical fields
+        preferredName: preferredName.trim() || null,
+        pronouns: pronouns.trim() || null,
+        title: title.trim() || null,
+        organization: organization.trim() || null,
+        primaryEmail: primaryEmail.trim() || null,
+        primaryPhone: primaryPhone.trim() || null,
+        timezone: timezone.trim() || null,
+        locale: locale.trim() || null,
+        location: location.trim() || null,
+        linkedinUrl: linkedinUrl.trim() || null,
+        bio: bio.trim() || null,
+        birthday: birthday.trim() || null,
       };
 
       let res: Response;
@@ -194,15 +232,88 @@ function ContactEditDrawer({ contact, creating, onClose, onSaved, onDeleted }: D
         <div className="edit-drawer-form">
           {error && <p style={{ color: 'var(--app-destructive)', margin: 0, fontSize: 13 }}>{error}</p>}
 
+          {/* Section: Identity */}
+          <p style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--app-fg-muted)', margin: '0 0 6px' }}>Identity</p>
           <div className="form-grid">
             <div className="form-field">
               <label htmlFor="cf-name">Display name</label>
               <input id="cf-name" type="text" value={displayName} onChange={e => setDisplayName(e.target.value)} placeholder="Full name" />
             </div>
             <div className="form-field">
-              <label htmlFor="cf-role">Role</label>
-              <input id="cf-role" type="text" value={role} onChange={e => setRole(e.target.value)} placeholder="Title" />
+              <label htmlFor="cf-preferred-name">Preferred name</label>
+              <input id="cf-preferred-name" type="text" value={preferredName} onChange={e => setPreferredName(e.target.value)} placeholder="Nickname or short form" />
             </div>
+            <div className="form-field">
+              <label htmlFor="cf-pronouns">Pronouns</label>
+              <input id="cf-pronouns" type="text" value={pronouns} onChange={e => setPronouns(e.target.value)} placeholder="they/them" />
+            </div>
+          </div>
+
+          {/* Section: Work */}
+          <p style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--app-fg-muted)', margin: '16px 0 6px' }}>Work</p>
+          <div className="form-grid">
+            <div className="form-field">
+              <label htmlFor="cf-role">Role</label>
+              <input id="cf-role" type="text" value={role} onChange={e => setRole(e.target.value)} placeholder="Internal role label" />
+            </div>
+            <div className="form-field">
+              <label htmlFor="cf-title">Title</label>
+              <input id="cf-title" type="text" value={title} onChange={e => setTitle(e.target.value)} placeholder="Current job title" />
+            </div>
+            <div className="form-field">
+              <label htmlFor="cf-org">Organization</label>
+              <input id="cf-org" type="text" value={organization} onChange={e => setOrganization(e.target.value)} placeholder="Employer" />
+            </div>
+          </div>
+
+          {/* Section: Contact info */}
+          <p style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--app-fg-muted)', margin: '16px 0 6px' }}>Contact info</p>
+          <div className="form-grid">
+            <div className="form-field">
+              <label htmlFor="cf-email">Primary email</label>
+              <input id="cf-email" type="text" value={primaryEmail} onChange={e => setPrimaryEmail(e.target.value)} placeholder="Lowercased on save" />
+            </div>
+            <div className="form-field">
+              <label htmlFor="cf-phone">Primary phone</label>
+              <input id="cf-phone" type="text" value={primaryPhone} onChange={e => setPrimaryPhone(e.target.value)} placeholder="+1 555 000 0000" />
+            </div>
+          </div>
+
+          {/* Section: Location & locale */}
+          <p style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--app-fg-muted)', margin: '16px 0 6px' }}>Location &amp; locale</p>
+          <div className="form-grid">
+            <div className="form-field">
+              <label htmlFor="cf-tz">Timezone</label>
+              <input id="cf-tz" type="text" value={timezone} onChange={e => setTimezone(e.target.value)} placeholder="America/New_York" />
+            </div>
+            <div className="form-field">
+              <label htmlFor="cf-locale">Locale</label>
+              <input id="cf-locale" type="text" value={locale} onChange={e => setLocale(e.target.value)} placeholder="en-US" />
+            </div>
+            <div className="form-field">
+              <label htmlFor="cf-location">Location</label>
+              <input id="cf-location" type="text" value={location} onChange={e => setLocation(e.target.value)} placeholder="City, region" />
+            </div>
+          </div>
+
+          {/* Section: Links & bio */}
+          <p style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--app-fg-muted)', margin: '16px 0 6px' }}>Links &amp; bio</p>
+          <div className="form-field">
+            <label htmlFor="cf-linkedin">LinkedIn URL</label>
+            <input id="cf-linkedin" type="text" value={linkedinUrl} onChange={e => setLinkedinUrl(e.target.value)} placeholder="https://linkedin.com/in/…" />
+          </div>
+          <div className="form-field">
+            <label htmlFor="cf-bio">Bio</label>
+            <textarea id="cf-bio" rows={3} value={bio} onChange={e => setBio(e.target.value)} placeholder="Short narrative (max 500 chars)" />
+          </div>
+          <div className="form-field">
+            <label htmlFor="cf-birthday">Birthday</label>
+            <input id="cf-birthday" type="text" value={birthday} onChange={e => setBirthday(e.target.value)} placeholder="YYYY-MM-DD or --MM-DD" />
+          </div>
+
+          {/* Section: System */}
+          <p style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--app-fg-muted)', margin: '16px 0 6px' }}>System</p>
+          <div className="form-grid">
             <div className="form-field">
               <label htmlFor="cf-status">Status</label>
               <select id="cf-status" value={status} onChange={e => setStatus(e.target.value as ContactStatus)}>
@@ -222,7 +333,6 @@ function ContactEditDrawer({ contact, creating, onClose, onSaved, onDeleted }: D
               </select>
             </div>
           </div>
-
           <div className="form-field">
             <label htmlFor="cf-kg">KG node ID</label>
             <input id="cf-kg" type="text" value={kgNodeId} onChange={e => setKgNodeId(e.target.value)} placeholder="UUID — optional" />
@@ -421,9 +531,14 @@ export default function ContactsPage() {
                               Name <span className="sort-arrow">{sortArrow('displayName')}</span>
                             </button>
                           </th>
-                          <th className="sortable" aria-sort={sort.key === 'role' ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none'}>
-                            <button className="sort-btn" onClick={() => toggleSort('role')}>
-                              Role <span className="sort-arrow">{sortArrow('role')}</span>
+                          <th className="sortable" aria-sort={sort.key === 'title' ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none'}>
+                            <button className="sort-btn" onClick={() => toggleSort('title')}>
+                              Title <span className="sort-arrow">{sortArrow('title')}</span>
+                            </button>
+                          </th>
+                          <th className="sortable" aria-sort={sort.key === 'organization' ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none'}>
+                            <button className="sort-btn" onClick={() => toggleSort('organization')}>
+                              Org <span className="sort-arrow">{sortArrow('organization')}</span>
                             </button>
                           </th>
                           <th className="sortable" aria-sort={sort.key === 'status' ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none'}>
@@ -458,7 +573,8 @@ export default function ContactsPage() {
                                 )}
                               </div>
                             </td>
-                            <td>{c.role ?? ''}</td>
+                            <td>{c.title ?? ''}</td>
+                            <td>{c.organization ?? ''}</td>
                             <td><span className={`status-pill ${c.status}`}>{c.status}</span></td>
                             <td className="cell-mono col-updated">{formatDate(c.updatedAt)}</td>
                             <td>
@@ -478,7 +594,7 @@ export default function ContactsPage() {
                         ))}
                         {pageRows.length === 0 && (
                           <tr>
-                            <td colSpan={5} style={{ textAlign: 'center', padding: 40, color: 'var(--app-fg-muted)' }}>
+                            <td colSpan={6} style={{ textAlign: 'center', padding: 40, color: 'var(--app-fg-muted)' }}>
                               No contacts match.
                             </td>
                           </tr>
