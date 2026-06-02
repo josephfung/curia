@@ -15,6 +15,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 - **Tasks & Backlog v1 design** — design memo for a unified task model with deferred work, CEO-visible backlog, and a 3×/day coordinator sweep. See `docs/wip/2026-06-01-tasks-and-backlog-design.md`.
+- **SBOM generation** — SPDX JSON Software Bill of Materials generated on every push to `main` and attached to each GitHub release as a release asset; failure is non-fatal. (#564)
 
 ### Fixed
 - **Automatic scheduled run summaries** — scheduler auto-captures `agent.response.content` as `last_run_summary` via COALESCE; agents no longer need to call `scheduler-report` explicitly. (#817)

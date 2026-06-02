@@ -1,0 +1,47 @@
+name: SBOM
+
+on:
+  push:
+    branches: [main]
+  release:
+    types: [published]
+
+# Default read-only. The sbom job overrides to write because GitHub Actions
+# doesn't allow per-event permission scoping within a single job, and the
+# release upload step requires contents:write.
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  sbom:
+    name: Generate SBOM
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Generate SPDX SBOM
+        id: sbom
+        # Non-fatal: SBOM generation must never block CI or a release.
+        continue-on-error: true
+        uses: anchore/sbom-action@v0
+        with:
+          format: spdx-json
+          output-file: sbom.spdx.json
+          path: .
+          artifact-name: sbom-${{ github.sha }}.spdx.json
+          upload-artifact: true
+          upload-artifact-retention: 90
+
+      - name: Attach SBOM to release
+        if: github.event_name == 'release' && steps.sbom.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: gh release upload "$RELEASE_TAG" sbom.spdx.json --clobber
