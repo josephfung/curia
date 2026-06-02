@@ -4,6 +4,7 @@ import { createMemoryDecayWarning } from '../bus/events.js';
 import type { MemoryDecayWarningPayload } from '../bus/events.js';
 import type { Logger } from '../logger.js';
 import type { AutonomyScoringPass } from '../autonomy/scoring-pass.js';
+import type { WorkingMemory } from './working-memory.js';
 
 // Config shape mirrors YamlConfig.dreaming.decay — all fields required at construction
 // time (caller resolves defaults before passing in).
@@ -58,18 +59,20 @@ export class DreamEngine {
   private intervalHandle: ReturnType<typeof setInterval> | null = null;
   private scoringIntervalHandle: ReturnType<typeof setInterval> | null = null;
   private scoringPass?: AutonomyScoringPass;
+  private workingMemory?: WorkingMemory;
   // Guard flag: prevents a new scoring pass from starting while the previous one
   // is still awaiting LLM responses. Without this, a slow judge call (e.g. rate
   // limit backoff) could let two passes read the same unscored rows concurrently,
   // wasting LLM spend and applying the adjustment formula twice.
   private scoringPassInFlight = false;
 
-  constructor(pool: Pool, bus: EventBus, logger: Logger, config: DecayConfig, scoringPass?: AutonomyScoringPass) {
+  constructor(pool: Pool, bus: EventBus, logger: Logger, config: DecayConfig, scoringPass?: AutonomyScoringPass, workingMemory?: WorkingMemory) {
     this.pool = pool;
     this.bus = bus;
     this.logger = logger;
     this.config = config;
     this.scoringPass = scoringPass;
+    this.workingMemory = workingMemory;
   }
 
   /**
@@ -175,6 +178,17 @@ export class DreamEngine {
             { err, nodeId: row.id },
             'DreamEngine: failed to emit memory.decay_warning — node is warned in DB but audit event was not delivered',
           );
+        }
+      }
+
+      // Working memory purge runs after the KG transaction so a purge failure
+      // can never roll back committed decay state. Best-effort: log and continue.
+      if (this.workingMemory) {
+        try {
+          const purgedTurns = await this.workingMemory.purgeExpired();
+          this.logger.info({ purgedTurns }, 'DreamEngine: working memory purge complete');
+        } catch (purgeErr) {
+          this.logger.error({ err: purgeErr }, 'DreamEngine: working memory purge failed — will retry on next pass');
         }
       }
 

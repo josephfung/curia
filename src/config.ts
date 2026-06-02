@@ -115,6 +115,8 @@ export interface YamlConfig {
     coordinator?: { config_path?: string };
   };
   workingMemory?: {
+    /** Days before a working memory turn expires and is purged by the nightly DreamEngine pass. Default: 30. */
+    ttlDays?: number;
     summarization?: {
       /** Active turn count that triggers a summarization pass. Default: 20. Must be >= 2. */
       threshold?: number;
@@ -444,6 +446,13 @@ export function loadYamlConfig(configDir: string): YamlConfig {
       throw new Error(
         `dispatch.rate_limit.max_global (${effectiveMaxGlobal}) must be >= max_per_sender (${effectiveMaxPerSender})`,
       );
+    }
+  }
+
+  if (config.workingMemory?.ttlDays !== undefined) {
+    const ttlDays = config.workingMemory.ttlDays;
+    if (!Number.isInteger(ttlDays) || ttlDays < 1) {
+      throw new Error(`workingMemory.ttlDays must be a positive integer, got: ${ttlDays}`);
     }
   }
 

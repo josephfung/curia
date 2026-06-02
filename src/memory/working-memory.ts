@@ -26,6 +26,8 @@ export interface SummarizationConfig {
 interface StorageBackend {
   add(conversationId: string, agentId: string, turn: ConversationTurn): Promise<void>;
   get(conversationId: string, agentId: string, maxTurns?: number): Promise<ConversationTurn[]>;
+  /** Delete all turns whose expires_at is in the past. Returns the number of rows deleted. */
+  purgeExpired(): Promise<number>;
 }
 
 /**
@@ -52,8 +54,9 @@ export class WorkingMemory {
     pool: DbPool,
     logger: Logger,
     summarization?: SummarizationConfig,
+    ttlDays?: number,
   ): WorkingMemory {
-    return new WorkingMemory(new PostgresBackend(pool, logger, summarization));
+    return new WorkingMemory(new PostgresBackend(pool, logger, summarization, ttlDays));
   }
 
   /** Create an in-memory instance for testing */
@@ -76,6 +79,11 @@ export class WorkingMemory {
   ): Promise<ConversationTurn[]> {
     return this.backend.get(conversationId, agentId, options?.maxTurns);
   }
+
+  /** Delete all turns whose expires_at is in the past. Called by DreamEngine nightly. */
+  async purgeExpired(): Promise<number> {
+    return this.backend.purgeExpired();
+  }
 }
 
 /**
@@ -91,14 +99,18 @@ class PostgresBackend implements StorageBackend {
     private pool: DbPool,
     private logger: Logger,
     private summarization?: SummarizationConfig,
+    private ttlDays?: number,
   ) {}
 
   async add(conversationId: string, agentId: string, turn: ConversationTurn): Promise<void> {
     this.logger.debug({ conversationId, agentId, role: turn.role }, 'working_memory: adding turn');
+    const expiresAt = this.ttlDays != null
+      ? new Date(Date.now() + this.ttlDays * 24 * 60 * 60 * 1000)
+      : null;
     await this.pool.query(
-      `INSERT INTO working_memory (conversation_id, agent_id, role, content)
-       VALUES ($1, $2, $3, $4)`,
-      [conversationId, agentId, turn.role, turn.content],
+      `INSERT INTO working_memory (conversation_id, agent_id, role, content, expires_at)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [conversationId, agentId, turn.role, turn.content, expiresAt],
     );
 
     // After writing, check whether we've crossed the summarization threshold.
@@ -141,6 +153,14 @@ class PostgresBackend implements StorageBackend {
       role: row.role as ConversationTurn['role'],
       content: row.content,
     }));
+  }
+
+  async purgeExpired(): Promise<number> {
+    // The idx_wm_expires partial index (WHERE expires_at IS NOT NULL) covers this query.
+    const result = await this.pool.query(
+      `DELETE FROM working_memory WHERE expires_at IS NOT NULL AND expires_at < now()`,
+    );
+    return result.rowCount ?? 0;
   }
 
   /**
@@ -351,5 +371,9 @@ class InMemoryBackend implements StorageBackend {
       return turns.slice(-maxTurns);
     }
     return [...turns];
+  }
+
+  async purgeExpired(): Promise<number> {
+    return 0; // No expiry mechanism in in-memory backend
   }
 }

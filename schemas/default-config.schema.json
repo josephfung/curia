@@ -80,6 +80,7 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "ttlDays": { "type": "integer", "minimum": 1 },
         "summarization": {
           "type": "object",
           "additionalProperties": false,

@@ -88,6 +88,12 @@ dispatch:
     max_global: 100         # total messages per window across all senders
 
 workingMemory:
+  # TTL for working memory turns. Rows are expired by DreamEngine's nightly purge
+  # pass (DELETE WHERE expires_at < now()). The idx_wm_expires partial index makes
+  # this efficient. 30 days is long enough that re-opening a conversation after a
+  # week still has full context; tune downward for high-volume deployments.
+  ttlDays: 30
+
   # Rolling context summarization (spec §01-memory-system.md).
   # When the active turn count for a conversation exceeds `threshold`, the oldest
   # (count - keepWindow) turns are condensed into a synthetic summary turn via an

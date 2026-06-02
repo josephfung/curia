@@ -18,6 +18,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **SBOM generation** — SPDX JSON Software Bill of Materials generated on every push to `main` and attached to each GitHub release as a release asset; failure is non-fatal. (#564)
 
 ### Fixed
+- **Working memory TTL** — `expires_at` is now populated on every `working_memory` INSERT (30-day default); DreamEngine purges expired rows nightly after the decay pass. Prevents unbounded table growth on long-running deployments. (#220)
 - **Automatic scheduled run summaries** — scheduler auto-captures `agent.response.content` as `last_run_summary` via COALESCE; agents no longer need to call `scheduler-report` explicitly. (#817)
 - **Runtime job UUID injection** — valid `scheduler:<uuid>:<run-id>` conversationIds inject a `Job ID` line so agents can optionally override with a structured summary. (#817)
 - **`scheduler-report` pinned to contacts** — contacts agent `pinned_skills` now includes `scheduler-report`. (#817)
