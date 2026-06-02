@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import { google } from 'googleapis';
 
@@ -10,6 +11,7 @@ export interface DriveAuthOptions {
   tokenCachePath?: string;
   clientId?: string;
   clientSecret?: string;
+  /** Used to locate the token cache file, not passed to OAuth. */
   email?: string;
 }
 
@@ -29,7 +31,7 @@ export async function getDriveClient(
   const tokenCachePath =
     options?.tokenCachePath ??
     path.join(
-      process.env.HOME ?? '/root',
+      os.homedir(),
       '.google_workspace_mcp',
       'credentials',
       `${email}.json`,
