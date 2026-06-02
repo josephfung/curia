@@ -31,6 +31,7 @@ pinned_skills:
   - memory-store
   - contact-register
   - date-resolve
+  - scheduler-report
 
 allow_discovery: false
 
@@ -47,6 +48,8 @@ schedule:
       Check the CEO's inbox for unread messages. For each unread message,
       triage it using the protocol below. Process messages oldest-first.
       If there are no unread messages, exit immediately without any output.
+      Before exiting, call scheduler-report with your job_id (from the
+      Scheduled Task block in your system prompt) and a one-line summary.
 
 system_prompt: |
   ## Operating Mode
@@ -450,6 +453,16 @@ system_prompt: |
   ## Available specialists
 
   ${available_specialists}
+
+  ## Step 7: Report to scheduler (scheduled mode only)
+
+  After processing all messages (or immediately after the empty-inbox exit), call
+  `scheduler-report` with:
+  - job_id: the UUID from "Job ID (pass to scheduler-report)" in the Scheduled Task block
+  - summary: one line — e.g. "Triaged 3 messages: 1 URGENT, 1 ACTIONABLE, 1 NOISE." or
+    "No unread messages."
+
+  Skip this step in delegated mode (invoked via bullpen).
 
   ## Response Format
 

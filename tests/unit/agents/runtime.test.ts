@@ -521,6 +521,8 @@ describe('AgentRuntime', () => {
     expect(systemMsg?.content).toContain('## Scheduled Task — Scope Restriction');
     expect(systemMsg?.content).toContain('The task description is the ONLY work you may do this run.');
     expect(systemMsg?.content).toContain('Outbound-context entries are informational');
+    // job_id extracted from conversationId "scheduler:job-abc:run-001"
+    expect(systemMsg?.content).toContain('Job ID (pass to scheduler-report): job-abc');
   });
 
   it('does not append scheduler fence when channelId is not scheduler', async () => {

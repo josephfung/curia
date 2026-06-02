@@ -244,10 +244,12 @@ pinned_skills:
   # to collect recipient email addresses; it never reads inbox triage state or writes messages.
   - ceo-inbox-list
   - contact-register
+  # Scheduler observability — required for all scheduled tasks.
+  - scheduler-report
 
 schedule:
   - cron: "0 9 * * 1"   # Mondays at 9 AM
-    task: "Run your weekly contacts dedup scan — find probable and certain duplicate contact pairs, present them to the CEO for review one pair at a time, and merge confirmed pairs."
+    task: "Run your weekly contacts dedup scan — find probable and certain duplicate contact pairs, present them to the CEO for review one pair at a time, and merge confirmed pairs. Before exiting, call scheduler-report with your job_id (from the Scheduled Task block in your system prompt) and a one-line summary."
     expectedDurationSeconds: 900
 
   - cron: "0 8 * * *"   # Daily at 8 AM
@@ -299,4 +301,7 @@ schedule:
          include the error message so operators can distinguish a transient outage
          from a permanent misconfiguration (e.g. no calendar registered for the
          principal).
+
+      6. Call scheduler-report with your job_id (from the Scheduled Task block in your
+         system prompt) and a one-line summary matching step 5 before returning.
     expectedDurationSeconds: 540
