@@ -588,6 +588,19 @@ export async function knowledgeGraphRoutes(
 
     const fields: ContactCanonicalFields = {};
 
+    // Reject non-string, non-nullish values — the str() helper would silently coerce
+    // them to null, which would erase existing data on PATCH.
+    const CANONICAL_STRING_KEYS = [
+      'preferredName', 'title', 'organization', 'primaryPhone', 'timezone', 'locale',
+      'location', 'pronouns', 'birthday', 'linkedinUrl', 'bio', 'primaryEmail',
+    ] as const;
+    const badKey = CANONICAL_STRING_KEYS.find(
+      k => k in body && body[k] !== null && body[k] !== undefined && typeof body[k] !== 'string',
+    );
+    if (badKey) {
+      return { error: `${badKey} must be a string or null.`, fields };
+    }
+
     if ('preferredName' in body) fields.preferredName = str(body.preferredName);
     if ('title' in body) fields.title = str(body.title);
     if ('organization' in body) fields.organization = str(body.organization);
@@ -735,6 +748,19 @@ export async function knowledgeGraphRoutes(
     const { error: canonicalError, fields: canonicalFields } = extractAndValidateCanonicalFields(body as Record<string, unknown>);
     if (canonicalError) {
       return reply.status(400).send({ error: canonicalError });
+    }
+
+    // Validate primaryEmail against CCI before any mutations so a bad value can never
+    // produce partial writes (other fields committed, response still 400).
+    if (canonicalFields.primaryEmail != null) {
+      try {
+        await contactService.validatePrimaryEmail(id, canonicalFields.primaryEmail);
+      } catch (err) {
+        if (err instanceof ContactValidationError) {
+          return reply.status(400).send({ error: err.message });
+        }
+        throw err;
+      }
     }
 
     try {

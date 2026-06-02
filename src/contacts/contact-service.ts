@@ -582,6 +582,25 @@ export class ContactService {
   }
 
   /**
+   * Validate that `primaryEmail` is present in `contact_channel_identities` for this
+   * contact (channel = 'email', case-insensitive). Throws `ContactValidationError` if not.
+   * Call this before any writes when the PATCH handler needs to reject invalid emails
+   * without producing partial mutations.
+   */
+  async validatePrimaryEmail(contactId: string, primaryEmail: string): Promise<void> {
+    const identities = await this.backend.getIdentitiesForContact(contactId);
+    const emailLower = primaryEmail.toLowerCase();
+    const match = identities.find(
+      (i) => i.channel === 'email' && i.channelIdentifier.toLowerCase() === emailLower,
+    );
+    if (!match) {
+      throw new ContactValidationError(
+        `primaryEmail '${primaryEmail}' not found in contact_channel_identities for contact ${contactId}`,
+      );
+    }
+  }
+
+  /**
    * Update canonical profile attributes on a contact.
    *
    * Only fields present in `fields` are changed — absent keys leave the current
