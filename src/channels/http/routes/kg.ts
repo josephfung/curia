@@ -736,67 +736,72 @@ export async function knowledgeGraphRoutes(
       return reply.status(400).send({ error: canonicalError });
     }
 
-    if (typeof body.displayName === 'string') {
-      await contactService.updateDisplayName(id, body.displayName);
-    }
-    if (typeof body.role === 'string') {
-      await contactService.setRole(id, body.role);
-    } else if (body.role === null) {
-      // Explicit null means "clear the role field" — setRole doesn't accept null so go direct.
-      await pool.query(`UPDATE contacts SET role = NULL, updated_at = $2 WHERE id = $1`, [
-        id,
-        new Date().toISOString(),
-      ]);
-    }
-    if (typeof body.status === 'string') {
-      await contactService.setStatus(id, body.status as ContactStatus);
-    }
-    if ('trustLevel' in body) {
-      await contactService.setTrustLevel(id, (body.trustLevel as TrustLevel | null));
-    }
-
-    // Notes and kgNodeId are updated directly by preserving the rest of the contact.
-    // This route exists only for the web UI and does not expose generic backend mutation.
-    if (typeof body.notes === 'string' || typeof body.kgNodeId === 'string' || body.notes === null || body.kgNodeId === null) {
-      const refreshed = await contactService.getContact(id);
-      if (!refreshed) {
-        return reply.status(404).send({ error: 'Contact not found.' });
+    try {
+      if (typeof body.displayName === 'string' && body.displayName.trim().length > 0) {
+        await contactService.updateDisplayName(id, body.displayName);
       }
-      await pool.query(
-        `UPDATE contacts
-         SET notes = $2, kg_node_id = $3, updated_at = $4
-         WHERE id = $1`,
-        [
+      if (typeof body.role === 'string') {
+        await contactService.setRole(id, body.role);
+      } else if (body.role === null) {
+        // Explicit null means "clear the role field" — setRole doesn't accept null so go direct.
+        await pool.query(`UPDATE contacts SET role = NULL, updated_at = $2 WHERE id = $1`, [
           id,
-          typeof body.notes === 'string' ? body.notes : body.notes === null ? null : refreshed.notes,
-          normalizedKgNodeId !== undefined ? normalizedKgNodeId : refreshed.kgNodeId,
           new Date().toISOString(),
-        ],
-      );
-    }
-
-    // Apply canonical fields if any were included in the request body.
-    const CANONICAL_KEYS: Array<keyof typeof canonicalFields> = [
-      'preferredName', 'title', 'organization', 'primaryEmail', 'primaryPhone',
-      'timezone', 'locale', 'location', 'pronouns', 'linkedinUrl', 'bio', 'birthday',
-    ];
-    const hasCanonicalFields = CANONICAL_KEYS.some(k => k in (body as Record<string, unknown>));
-    if (hasCanonicalFields) {
-      try {
-        await contactService.updateContactFields(id, canonicalFields);
-      } catch (err) {
-        // updateContactFields throws for primaryEmail CCI mismatch
-        return reply.status(400).send({ error: (err as Error).message });
+        ]);
       }
-    }
+      if (typeof body.status === 'string') {
+        await contactService.setStatus(id, body.status as ContactStatus);
+      }
+      if ('trustLevel' in body) {
+        await contactService.setTrustLevel(id, (body.trustLevel as TrustLevel | null));
+      }
 
-    const updated = await contactService.getContact(id);
-    if (!updated) {
-      return reply.status(404).send({ error: 'Contact not found after update.' });
+      // Notes and kgNodeId are updated directly by preserving the rest of the contact.
+      // This route exists only for the web UI and does not expose generic backend mutation.
+      if (typeof body.notes === 'string' || typeof body.kgNodeId === 'string' || body.notes === null || body.kgNodeId === null) {
+        const refreshed = await contactService.getContact(id);
+        if (!refreshed) {
+          return reply.status(404).send({ error: 'Contact not found.' });
+        }
+        await pool.query(
+          `UPDATE contacts
+           SET notes = $2, kg_node_id = $3, updated_at = $4
+           WHERE id = $1`,
+          [
+            id,
+            typeof body.notes === 'string' ? body.notes : body.notes === null ? null : refreshed.notes,
+            normalizedKgNodeId !== undefined ? normalizedKgNodeId : refreshed.kgNodeId,
+            new Date().toISOString(),
+          ],
+        );
+      }
+
+      // Apply canonical fields if any were included in the request body.
+      const CANONICAL_KEYS: Array<keyof typeof canonicalFields> = [
+        'preferredName', 'title', 'organization', 'primaryEmail', 'primaryPhone',
+        'timezone', 'locale', 'location', 'pronouns', 'linkedinUrl', 'bio', 'birthday',
+      ];
+      const hasCanonicalFields = CANONICAL_KEYS.some(k => k in (body as Record<string, unknown>));
+      if (hasCanonicalFields) {
+        try {
+          await contactService.updateContactFields(id, canonicalFields);
+        } catch (err) {
+          // updateContactFields throws for primaryEmail CCI mismatch — return 400, not 500.
+          return reply.status(400).send({ error: (err as Error).message });
+        }
+      }
+
+      const updated = await contactService.getContact(id);
+      if (!updated) {
+        return reply.status(404).send({ error: 'Contact not found after update.' });
+      }
+      return reply.send({
+        contact: serializeContact(updated),
+      });
+    } catch (err) {
+      request.log.error({ err }, 'contacts: PATCH mutation failed');
+      return reply.status(500).send({ error: 'An error occurred while updating the contact.' });
     }
-    return reply.send({
-      contact: serializeContact(updated),
-    });
   });
 
   app.delete('/api/kg/contacts/:id', KG_RATE, async (request, reply) => {
