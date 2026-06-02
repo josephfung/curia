@@ -22,7 +22,7 @@ describe('runBackfill', () => {
 
     const result = await runBackfill(pool);
     expect(result.processed).toBe(0);
-    expect(result.written).toBe(0);
+    expect(result.columnsWritten).toBe(0);
   });
 
   it('populates columns from matching KG fact nodes', async () => {
@@ -50,7 +50,7 @@ describe('runBackfill', () => {
 
     const result = await runBackfill(pool);
     expect(result.processed).toBe(1);
-    expect(result.written).toBeGreaterThan(0);
+    expect(result.columnsWritten).toBeGreaterThan(0);
 
     // Verify the UPDATE was called with expected values
     const updateCall = (pool.query as ReturnType<typeof vi.fn>).mock.calls[2]!;

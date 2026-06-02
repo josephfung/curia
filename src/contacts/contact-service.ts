@@ -38,6 +38,14 @@ import type {
 import type { DedupService } from './dedup-service.js';
 import type { ContactCalendar, CreateCalendarLinkOptions, ResolvedCalendar } from './calendar-types.js';
 
+/** Thrown when a caller provides invalid data for a contact field (e.g., primaryEmail not in CCI). */
+export class ContactValidationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ContactValidationError';
+  }
+}
+
 // -- Backend interface --
 
 interface ContactServiceBackend {
@@ -598,7 +606,7 @@ export class ContactService {
         (i) => i.channel === 'email' && i.channelIdentifier.toLowerCase() === emailLower,
       );
       if (!match) {
-        throw new Error(
+        throw new ContactValidationError(
           `primaryEmail '${fields.primaryEmail}' not found in contact_channel_identities for contact ${contactId}`,
         );
       }

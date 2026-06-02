@@ -84,9 +84,10 @@ type FactRow = {
 
 export async function runBackfill(pool: pg.Pool): Promise<{
   processed: number;
-  written: number;
+  columnsWritten: number;
   skipped: number;
   errors: number;
+  failedContactIds: string[];
 }> {
   // Fetch all contacts that have a KG node linked.
   const contactsResult = await pool.query<ContactRowForBackfill>(
@@ -98,9 +99,11 @@ export async function runBackfill(pool: pg.Pool): Promise<{
 
   const contacts = contactsResult.rows;
   let processed = 0;
-  let written = 0;
+  let columnsWritten = 0;
+  // skipped counts columns that already had a non-null value and were left untouched
   let skipped = 0;
   let errors = 0;
+  const failedContactIds: string[] = [];
 
   for (const contact of contacts) {
     // Guard against null kg_node_id entries (defensive — the query filters these,
@@ -114,11 +117,13 @@ export async function runBackfill(pool: pg.Pool): Promise<{
         `SELECT n.id, n.properties, n.confidence, n.last_confirmed_at
          FROM kg_nodes n
          JOIN kg_edges e ON (
-           (e.source_id = $1 AND e.target_id = n.id)
-           OR (e.target_id = $1 AND e.source_id = n.id)
+           (e.source_node_id = $1 AND e.target_node_id = n.id)
+           OR (e.target_node_id = $1 AND e.source_node_id = n.id)
          )
-         WHERE e.relationship = 'relates_to'
-           AND n.type = 'fact'`,
+         WHERE e.type = 'relates_to'
+           AND e.archived_at IS NULL
+           AND n.type = 'fact'
+           AND n.archived_at IS NULL`,
         [contact.kg_node_id],
       );
 
@@ -193,17 +198,18 @@ export async function runBackfill(pool: pg.Pool): Promise<{
         params,
       );
 
-      written += Object.keys(updates).length;
+      columnsWritten += Object.keys(updates).length;
       processed++;
       logger.info({ contactId: contact.id, columns: Object.keys(updates) }, 'backfill: wrote columns');
     } catch (err) {
       logger.error({ contactId: contact.id, err }, 'backfill: contact failed');
       errors++;
+      failedContactIds.push(contact.id);
     }
   }
 
-  logger.info({ processed, written, skipped, errors }, 'backfill: done');
-  return { processed, written, skipped, errors };
+  logger.info({ processed, columnsWritten, skipped, errors, failedContactIds }, 'backfill: done');
+  return { processed, columnsWritten, skipped, errors, failedContactIds };
 }
 
 // CLI entry point — only runs when executed directly
@@ -215,13 +221,13 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).
   }
   const pool = new Pool({ connectionString: databaseUrl });
   runBackfill(pool)
-    .then(({ errors }) => {
-      void pool.end();
+    .then(async ({ errors }) => {
+      await pool.end();
       process.exit(errors > 0 ? 1 : 0);
     })
-    .catch(err => {
+    .catch(async (err) => {
       logger.error({ err }, 'backfill: fatal error');
-      void pool.end();
+      await pool.end();
       process.exit(1);
     });
 }

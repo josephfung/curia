@@ -5,6 +5,7 @@ import type { EventBus } from '../../../bus/bus.js';
 import { createInboundMessage } from '../../../bus/events.js';
 import type { Logger } from '../../../logger.js';
 import type { ContactService } from '../../../contacts/contact-service.js';
+import { ContactValidationError } from '../../../contacts/contact-service.js';
 import type { Contact, ContactCanonicalFields, ContactStatus, TrustLevel } from '../../../contacts/types.js';
 import { MessageRejectedError, type EventRouter } from '../event-router.js';
 import { assertSecret, compareSecrets, hashToken, type SessionStore } from '../session-auth.js';
@@ -786,8 +787,12 @@ export async function knowledgeGraphRoutes(
         try {
           await contactService.updateContactFields(id, canonicalFields);
         } catch (err) {
-          // updateContactFields throws for primaryEmail CCI mismatch — return 400, not 500.
-          return reply.status(400).send({ error: (err as Error).message });
+          if (err instanceof ContactValidationError) {
+            // Client sent invalid data (e.g., primaryEmail not linked to this contact)
+            return reply.status(400).send({ error: err.message });
+          }
+          // All other errors (DB failures, etc.) propagate to the outer catch → 500
+          throw err;
         }
       }
 
