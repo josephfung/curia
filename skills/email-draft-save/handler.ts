@@ -8,6 +8,7 @@
 
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
 import { buildReplyQuote } from '../../src/skills/_shared/reply-quote.js';
+import { parseAttachmentInputs } from '../_shared/parse-attachments.js';
 
 export class EmailDraftSaveHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {
@@ -18,13 +19,19 @@ export class EmailDraftSaveHandler implements SkillHandler {
     // Handlers must never throw — destructuring a non-object ctx.input would.
     const input =
       ctx.input && typeof ctx.input === 'object' ? (ctx.input as Record<string, unknown>) : {};
-    const { to: rawTo, subject, body, account, reply_to_message_id } = input as {
+    const { to: rawTo, subject, body, account, reply_to_message_id, attachments: attachmentsRaw } = input as {
       to?: string;
       subject?: string;
       body?: string;
       account?: string;
       reply_to_message_id?: string;
+      attachments?: unknown;
     };
+
+    const attachmentsParsed = parseAttachmentInputs(attachmentsRaw);
+    if (typeof attachmentsParsed === 'string') {
+      return { success: false, error: attachmentsParsed };
+    }
 
     const to = typeof rawTo === 'string' ? rawTo.trim() : undefined;
     if (!to) return { success: false, error: 'Missing required input: to (string)' };
@@ -84,6 +91,7 @@ export class EmailDraftSaveHandler implements SkillHandler {
         body: quotedBody,
         accountId,
         replyToMessageId,
+        ...(attachmentsParsed.length > 0 ? { attachments: attachmentsParsed } : {}),
       });
     } catch (err) {
       ctx.log.error({ err, to, accountId }, 'email-draft-save: unexpected error saving draft');

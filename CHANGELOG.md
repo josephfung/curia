@@ -13,6 +13,9 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Added
+- **File attachments in outbound email** — all five email skills (`email-send`, `email-reply`, `email-draft-save`, `ceo-inbox-draft-compose`, `ceo-inbox-draft-reply`) now accept an `attachments` input field. Attachments are read from `file://` URLs (TempFileStore), validated, and forwarded to Nylas. The CEO inbox path uses multipart FormData; the Curia outbound path passes `Buffer` content via the Nylas SDK. 20 MB total / 10 attachment limit enforced. (#818)
+
 ### Fixed
 - **coordinator delegation hint** — `delegation_hint` in active outbound context is now treated as a binding contract; coordinator no longer handles replies directly when a specialist is named, preventing meeting debriefs from getting stuck at `"prompted"`. (#763)
 

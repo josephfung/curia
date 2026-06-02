@@ -1,16 +1,27 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { CeoInboxDraftReplyHandler } from './handler.js';
 import type { SkillContext } from '../../src/skills/types.js';
+import { readFile, realpath } from 'node:fs/promises';
+
+vi.mock('node:fs/promises', () => ({
+  readFile: vi.fn(),
+  realpath: vi.fn(),
+}));
+
+const mockReadFile = readFile as ReturnType<typeof vi.fn>;
+const mockRealpath = realpath as ReturnType<typeof vi.fn>;
 
 // Helper to build a minimal mock SkillContext
 function buildCtx(overrides: Partial<{
   reply_to_message_id: string;
   body: string;
+  attachments: unknown;
 }>= {}): SkillContext {
-  const input = {
+  const input: Record<string, unknown> = {
     reply_to_message_id: overrides.reply_to_message_id ?? 'msg-001',
     body: overrides.body ?? 'Thanks for reaching out.',
   };
+  if ('attachments' in overrides) input.attachments = overrides.attachments;
 
   return {
     input,
@@ -29,7 +40,7 @@ function buildCtx(overrides: Partial<{
       error: vi.fn(),
       debug: vi.fn(),
     },
-  };
+  } as unknown as SkillContext;
 }
 
 // Helper to build a Nylas API message response
@@ -74,10 +85,17 @@ describe('CeoInboxDraftReplyHandler', () => {
   beforeEach(() => {
     handler = new CeoInboxDraftReplyHandler();
     mockFetch = vi.spyOn(globalThis, 'fetch');
+    mockReadFile.mockReset();
+    mockRealpath.mockReset();
+    // Default: realpath is identity (no symlinks to resolve).
+    mockRealpath.mockImplementation(async (p: string) => p);
+    // readAttachmentFiles reads CURIA_TEMPFILE_DIR lazily; stub so file:///tmp/... passes the boundary check.
+    vi.stubEnv('CURIA_TEMPFILE_DIR', '/tmp');
   });
 
   afterEach(() => {
     mockFetch.mockRestore();
+    vi.unstubAllEnvs();
   });
 
   it('Case 1: Happy path — reply-all with correct to and cc', async () => {
@@ -425,5 +443,97 @@ describe('CeoInboxDraftReplyHandler', () => {
       (call) => String(call[0]).includes('/drafts'),
     );
     expect(draftCall).toBeUndefined();
+  });
+
+  describe('attachments', () => {
+    it('uses multipart FormData when attachments are provided', async () => {
+      mockReadFile.mockResolvedValue(Buffer.from('pdf content'));
+
+      const messageResponse = buildNylasMessage({
+        from: [{ email: 'alice@external.com', name: 'Alice' }],
+        to: [{ email: 'ceo@example.com' }],
+        cc: [],
+      });
+
+      mockFetch.mockImplementation(async (url) => {
+        const urlStr = String(url);
+        if (urlStr.includes('/messages/msg-001')) {
+          return new Response(JSON.stringify(messageResponse), { status: 200 });
+        }
+        if (urlStr.includes('/drafts')) {
+          return new Response(JSON.stringify(DRAFT_RESPONSE), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch: ${urlStr}`);
+      });
+
+      const ctx = buildCtx({
+        attachments: [
+          { file_url: 'file:///tmp/report.pdf', filename: 'report.pdf', content_type: 'application/pdf' },
+        ],
+      });
+      const result = await handler.execute(ctx);
+
+      expect(result.success).toBe(true);
+      const draftCall = mockFetch.mock.calls.find(
+        (call) => String(call[0]).includes('/drafts'),
+      );
+      expect(draftCall).toBeDefined();
+      // Body must be FormData (not a JSON string) when attachments are present
+      expect((draftCall![1] as RequestInit).body).toBeInstanceOf(FormData);
+    });
+
+    it('uses plain JSON when no attachments are provided', async () => {
+      const messageResponse = buildNylasMessage({
+        from: [{ email: 'alice@external.com' }],
+        to: [{ email: 'ceo@example.com' }],
+        cc: [],
+      });
+
+      mockFetch.mockImplementation(async (url) => {
+        const urlStr = String(url);
+        if (urlStr.includes('/messages/msg-001')) {
+          return new Response(JSON.stringify(messageResponse), { status: 200 });
+        }
+        if (urlStr.includes('/drafts')) {
+          return new Response(JSON.stringify(DRAFT_RESPONSE), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch: ${urlStr}`);
+      });
+
+      const ctx = buildCtx();
+      await handler.execute(ctx);
+
+      const draftCall = mockFetch.mock.calls.find(
+        (call) => String(call[0]).includes('/drafts'),
+      );
+      expect(draftCall).toBeDefined();
+      // Without attachments, body is a JSON string (not FormData)
+      expect(typeof (draftCall![1] as RequestInit).body).toBe('string');
+    });
+
+    it('returns error when attachments input is malformed', async () => {
+      const ctx = buildCtx({ attachments: 'not-an-array' });
+      const result = await handler.execute(ctx);
+
+      expect(result.success).toBe(false);
+      expect((result as { error: string }).error).toContain('array');
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('returns error when attachment file cannot be read', async () => {
+      // readAttachmentFiles is called before getMessage, so no fetch is issued
+      mockReadFile.mockRejectedValue(new Error('ENOENT: no such file'));
+
+      const ctx = buildCtx({
+        attachments: [
+          { file_url: 'file:///tmp/missing.pdf', filename: 'missing.pdf', content_type: 'application/pdf' },
+        ],
+      });
+      const result = await handler.execute(ctx);
+
+      expect(result.success).toBe(false);
+      expect((result as { error: string }).error).toContain('Attachment error');
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
   });
 });

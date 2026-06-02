@@ -20,7 +20,8 @@
 //   run for all channels before dispatch.
 
 import { randomUUID } from 'node:crypto';
-import type { NylasClient, NylasMessage, NylasFolder, ListMessagesOptions, SendEmailOptions } from '../channels/email/nylas-client.js';
+import type { NylasClient, NylasMessage, NylasFolder, ListMessagesOptions, SendEmailOptions, AttachmentContent } from '../channels/email/nylas-client.js';
+import { readAttachmentFiles, MAX_ATTACHMENT_BYTES, type OutboundAttachmentInput } from './_shared/read-attachments.js';
 import type { SignalRpcClient } from '../channels/signal/signal-rpc-client.js';
 import type { ContactService } from '../contacts/contact-service.js';
 import type { TrustLevel, ChannelIdentity } from '../contacts/types.js';
@@ -57,7 +58,14 @@ export interface EmailSendRequest {
    *  Used for the quoted original message block: the HTML quote must not pass
    *  through markdownToHtml because that converter escapes < and > characters. */
   htmlQuote?: string;
+  /** File attachments to include. Each entry must have a file:// URL pointing
+   *  to a temp file (from email-download-attachment or similar). The gateway
+   *  reads the files from disk before passing them to Nylas. */
+  attachments?: OutboundAttachmentInput[];
 }
+
+// Re-export so callers can construct attachment lists without importing from read-attachments directly.
+export type { OutboundAttachmentInput };
 
 export interface SignalOutboundRequest {
   channel: 'signal';
@@ -192,6 +200,10 @@ export interface OutboundGatewayConfig {
    */
   confidencePipeline?: import('../contacts/confidence-pipeline.js').ConfidencePipeline;
 }
+
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -1610,6 +1622,16 @@ export class OutboundGateway {
     // htmlQuote is appended after conversion so it is not re-escaped by markdownToHtml.
     const htmlBody = markdownToHtml(request.body) + (request.htmlQuote ?? '');
 
+    let attachments: AttachmentContent[] | undefined;
+    if (request.attachments && request.attachments.length > 0) {
+      try {
+        attachments = await readAttachmentFiles(request.attachments, MAX_ATTACHMENT_BYTES);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return { success: false, blockedReason: `Attachment error: ${message}` };
+      }
+    }
+
     try {
       const sendOptions: SendEmailOptions = {
         to: [{ email: request.to }],
@@ -1617,6 +1639,7 @@ export class OutboundGateway {
         subject: request.subject ?? '',
         body: htmlBody,
         replyToMessageId: request.replyToMessageId,
+        attachments,
       };
 
       const draft = await nylasClient.createDraft(sendOptions);
@@ -1653,6 +1676,16 @@ export class OutboundGateway {
     // htmlQuote is appended after conversion so it is not re-escaped by markdownToHtml.
     const htmlBody = markdownToHtml(request.body) + (request.htmlQuote ?? '');
 
+    let attachments: AttachmentContent[] | undefined;
+    if (request.attachments && request.attachments.length > 0) {
+      try {
+        attachments = await readAttachmentFiles(request.attachments, MAX_ATTACHMENT_BYTES);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return { success: false, blockedReason: `Attachment error: ${message}` };
+      }
+    }
+
     try {
       const sendOptions: SendEmailOptions = {
         to: [{ email: request.to }],
@@ -1660,6 +1693,7 @@ export class OutboundGateway {
         subject: request.subject ?? '',
         body: htmlBody,
         replyToMessageId: request.replyToMessageId,
+        attachments,
       };
 
       const sent = await nylasClient.sendMessage(sendOptions);

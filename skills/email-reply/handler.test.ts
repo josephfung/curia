@@ -307,4 +307,86 @@ describe('EmailReplyHandler', () => {
       expect(result.success).toBe(true);
     });
   });
+
+  describe('attachments', () => {
+    it('passes attachments to the gateway when provided', async () => {
+      const ctx = makeCtx({
+        reply_to_message_id: 'nylas-msg-1',
+        body: 'See attached.',
+        attachments: [
+          { file_url: 'file:///tmp/report.pdf', filename: 'report.pdf', content_type: 'application/pdf' },
+        ],
+      });
+      (ctx.outboundGateway!.getEmailMessage as ReturnType<typeof vi.fn>).mockResolvedValue({
+        from: [{ email: 'alice@example.com' }],
+        to: [],
+        cc: [],
+        subject: 'Project',
+        body: '',
+        date: 0,
+      });
+      (ctx.outboundGateway!.send as ReturnType<typeof vi.fn>).mockResolvedValue({
+        success: true, messageId: 'reply-attach-1',
+      });
+
+      const result = await handler.execute(ctx);
+
+      expect(result.success).toBe(true);
+      const callArg = (ctx.outboundGateway!.send as ReturnType<typeof vi.fn>).mock.calls[0]![0] as Record<string, unknown>;
+      expect(callArg.attachments).toEqual([
+        { fileUrl: 'file:///tmp/report.pdf', filename: 'report.pdf', contentType: 'application/pdf' },
+      ]);
+    });
+
+    it('does not include attachments key when attachments is undefined', async () => {
+      const ctx = makeCtx({
+        reply_to_message_id: 'nylas-msg-1',
+        body: 'Thanks.',
+      });
+      (ctx.outboundGateway!.getEmailMessage as ReturnType<typeof vi.fn>).mockResolvedValue({
+        from: [{ email: 'alice@example.com' }],
+        to: [],
+        cc: [],
+        subject: 'Hi',
+        body: '',
+        date: 0,
+      });
+      (ctx.outboundGateway!.send as ReturnType<typeof vi.fn>).mockResolvedValue({
+        success: true, messageId: 'reply-1',
+      });
+
+      await handler.execute(ctx);
+
+      const callArg = (ctx.outboundGateway!.send as ReturnType<typeof vi.fn>).mock.calls[0]![0] as Record<string, unknown>;
+      expect(callArg.attachments).toBeUndefined();
+    });
+
+    it('returns error when attachments is not an array', async () => {
+      const ctx = makeCtx({
+        reply_to_message_id: 'nylas-msg-1',
+        body: 'Hi',
+        attachments: 'not-an-array',
+      });
+
+      const result = await handler.execute(ctx);
+
+      expect(result.success).toBe(false);
+      if (!result.success) expect(result.error).toContain('array');
+      expect(ctx.outboundGateway!.send).not.toHaveBeenCalled();
+    });
+
+    it('returns error when an attachment entry is missing file_url', async () => {
+      const ctx = makeCtx({
+        reply_to_message_id: 'nylas-msg-1',
+        body: 'Hi',
+        attachments: [{ filename: 'a.pdf', content_type: 'application/pdf' }],
+      });
+
+      const result = await handler.execute(ctx);
+
+      expect(result.success).toBe(false);
+      if (!result.success) expect(result.error).toContain('file_url');
+      expect(ctx.outboundGateway!.send).not.toHaveBeenCalled();
+    });
+  });
 });

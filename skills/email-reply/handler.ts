@@ -16,17 +16,24 @@
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
 import { registerOutboundContext } from '../../src/dispatch/context-bridge-parse.js';
 import { buildReplyQuote } from '../../src/skills/_shared/reply-quote.js';
+import { parseAttachmentInputs } from '../_shared/parse-attachments.js';
 
 const MAX_BODY_LENGTH = 50000;
 
 export class EmailReplyHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {
-    const { reply_to_message_id: replyToMessageId, body, cc: ccInput, context_bridge: contextBridgeRaw } = ctx.input as {
+    const { reply_to_message_id: replyToMessageId, body, cc: ccInput, attachments: attachmentsRaw, context_bridge: contextBridgeRaw } = ctx.input as {
       reply_to_message_id?: string;
       body?: string;
       cc?: string;
+      attachments?: unknown;
       context_bridge?: string;
     };
+
+    const attachmentsParsed = parseAttachmentInputs(attachmentsRaw);
+    if (typeof attachmentsParsed === 'string') {
+      return { success: false, error: attachmentsParsed };
+    }
 
     if (!replyToMessageId || typeof replyToMessageId !== 'string') {
       return { success: false, error: 'Missing required input: reply_to_message_id (string)' };
@@ -137,6 +144,7 @@ export class EmailReplyHandler implements SkillHandler {
         replyToMessageId,
         htmlQuote,
         ...(ccAddresses ? { cc: ccAddresses } : {}),
+        ...(attachmentsParsed.length > 0 ? { attachments: attachmentsParsed } : {}),
       }, {
         taskEventId: ctx.taskEventId,
         conversationId: ctx.conversationId,

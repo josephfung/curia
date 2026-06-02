@@ -1,7 +1,7 @@
 {
   "name": "email-send",
   "description": "Send a new email. Provide comma-separated recipient email addresses, subject, and body. Emails are sent from the agent's configured email address.",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "sensitivity": "normal",
   "action_risk": "medium",
   "inputs": {
@@ -10,6 +10,7 @@
     "subject": "string",
     "body": "string",
     "reply_to_message_id": "string? (Nylas message ID — when set, the original message is quoted below the reply and the send is threaded)",
+    "attachments": "object[]? (file attachments — array of {file_url: string, filename: string, content_type: string}. file_url must be a file:// URL from email-download-attachment or similar. Max 10 attachments, 20 MB total.)",
     "context_bridge": "string? (JSON — optional context bridge registration: {agent_id, expected_reply?, delegation_hint?, metadata?, expires_in_hours?})"
   },
   "outputs": {
