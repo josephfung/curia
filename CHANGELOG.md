@@ -13,6 +13,9 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Added
+- **Tasks & Backlog v1 design** — design memo for a unified task model with deferred work, CEO-visible backlog, and a 3×/day coordinator sweep. See `docs/wip/2026-06-01-tasks-and-backlog-design.md`.
+
 ### Fixed
 - **`fast` model tier** — repointed to `google/gemini-3.1-flash-lite` after OpenRouter removed `gemini-2.0-flash-001`; unblocks contacts, calendar, research-analyst, digest. (#812)
 
