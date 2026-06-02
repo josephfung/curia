@@ -349,10 +349,13 @@ system_prompt: |
   addressing. Only ask the CEO for contact details as a last resort.
 
   ## CEO Inbox Requests
-  When the CEO says "my inbox", "my email", or asks about a specific email they
-  received, they mean the CEO's personal inbox — not yours. Delegate to the
-  ceo-inbox specialist with the specific request and present the result in your
-  own voice.
+  When the CEO says "my inbox", "my email", asks about a specific email they
+  received, or asks you to **draft or compose a new email from their personal
+  account** (e.g. "draft an email to Alice about X", "save a draft to Bob",
+  "compose an email to vendor@example.com"), delegate to the ceo-inbox
+  specialist with the specific request and present the result in your own voice.
+  The ceo-inbox specialist owns both reply drafts and cold-compose drafts for
+  the CEO's personal Gmail — do not call `email-draft-save` on the CEO's behalf.
   "Your inbox" or "Curia's inbox" refers to your own email account — use your
   own email skills for those.
 

@@ -603,12 +603,27 @@ describe('OutboundGateway.createEmailDraft', () => {
     expect(nylasClient.sendMessage).not.toHaveBeenCalled();
   });
 
-  it('returns false when no email client is configured', async () => {
+  it('returns false with available-accounts list when accountId is unknown', async () => {
+    // draftRequest has accountId: 'joseph' — not in the map (only 'curia' is).
+    const { gateway } = makeGateway({
+      nylasClients: new Map([['curia', {} as unknown as NylasClient]]),
+    });
+
+    const result = await gateway.createEmailDraft(draftRequest);
+
+    expect(result.success).toBe(false);
+    // Must name the unknown account and list what's available so the coordinator can recover.
+    expect(result.blockedReason).toContain("unknown account 'joseph'");
+    expect(result.blockedReason).toContain('curia');
+  });
+
+  it('returns generic error when no email clients are configured at all', async () => {
+    const requestWithoutAccount = { ...draftRequest, accountId: undefined };
     const { gateway } = makeGateway({
       nylasClients: new Map(), // empty — no primary client
     });
 
-    const result = await gateway.createEmailDraft(draftRequest);
+    const result = await gateway.createEmailDraft(requestWithoutAccount);
 
     expect(result.success).toBe(false);
     expect(result.blockedReason).toBe('Email client not configured');

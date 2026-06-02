@@ -1,0 +1,23 @@
+{
+  "name": "ceo-inbox-draft-compose",
+  "description": "Compose a brand-new draft email in the CEO's personal inbox for cold outreach (no existing thread). The draft is saved to Gmail Drafts — the CEO reviews and sends it from their email client. Use when the CEO wants to initiate a new email to someone, not reply to an existing message. Intended for use by the ceo-inbox agent — accesses the CEO's personal email via dedicated secrets, do not call from other agents.",
+  "version": "0.1.0",
+  "sensitivity": "normal",
+  "action_risk": "low",
+  "inputs": {
+    "to": "string[] (recipient email addresses)",
+    "cc": "string[]? (CC email addresses)",
+    "subject": "string (email subject line)",
+    "body": "string (email body; markdown supported, converted to HTML automatically)"
+  },
+  "outputs": {
+    "draft_id": "string (Nylas draft ID)",
+    "subject": "string (subject as saved)",
+    "to": "array of { name?, email }",
+    "cc": "array of { name?, email }"
+  },
+  "permissions": [],
+  "secrets": ["nylas_api_key", "ceo_nylas_grant_id"],
+  "timeout": 15000,
+  "capabilities": []
+}
