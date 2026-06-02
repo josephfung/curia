@@ -17,6 +17,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Tasks & Backlog v1 design** — design memo for a unified task model with deferred work, CEO-visible backlog, and a 3×/day coordinator sweep. See `docs/wip/2026-06-01-tasks-and-backlog-design.md`.
 
 ### Fixed
+- **`scheduler-report` pinned to all scheduled agents** — contacts, ceo-inbox, and coordinator now have `scheduler-report` in `pinned_skills`; the runtime injects the job UUID into the Scheduled Task block so agents can call it reliably. Fixes empty `last_run_summary` on every specialist-run scheduled job. (#817)
 - **Principal contact injection** — runtime now injects a `## Principal Contact Details` block (verified email, Signal, phone) into every agent's system prompt per-task, preventing the coordinator from hallucinating the principal's address when composing outbound messages. (#786)
 - **`fast` model tier** — repointed to `google/gemini-3.1-flash-lite` after OpenRouter removed `gemini-2.0-flash-001`; unblocks contacts, calendar, research-analyst, digest. (#812)
 - **Provisional contact sweep** — sweep step 3 now passes `${principal_contact_id}` to `calendar-list-events` (was passing nothing, causing a UUID validation error), and treats calendar failure as best-effort so Sent-folder promotions still fire. (#816)
