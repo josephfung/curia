@@ -10,7 +10,7 @@ import type { WorkingMemory } from '../memory/working-memory.js';
 import type { EntityMemory } from '../memory/entity-memory.js';
 import type { ExecutionLayer } from '../skills/execution.js';
 import type { CallerContext } from '../skills/types.js';
-import type { TaskOriginator } from '../contacts/types.js';
+import type { ChannelIdentity, TaskOriginator } from '../contacts/types.js';
 import { sanitizeOutput } from '../skills/sanitize.js';
 import { classifySkillError, formatTaskError } from '../errors/classify.js';
 import { DEFAULT_ERROR_BUDGET, type AgentError, type ErrorBudget } from '../errors/types.js';
@@ -73,6 +73,13 @@ export interface AgentConfig {
     email?: string;
     phone?: string;
   };
+  /** The principal's verified channel identities (email, phone, Signal), loaded from
+   *  contact_channel_identities at startup. When provided and non-empty, a
+   *  "## Principal Contact Details" block is appended to the system prompt on every task
+   *  so agents have an authoritative source for reaching the principal without inferring
+   *  or hallucinating addresses. Injected into all agents — specialists need this too.
+   *  See #786. */
+  principalIdentities?: ChannelIdentity[];
   /** Agent registry — used to look up target agent's expectedDurationSeconds when a delegate
    *  call is made, so the runtime can inject an appropriate timeout_ms. See #387. */
   agentRegistry?: AgentRegistry;
@@ -314,6 +321,27 @@ export class AgentRuntime {
       lines.push('');
       if (channelAccounts.email) lines.push(`- Email: ${channelAccounts.email}`);
       if (channelAccounts.phone) lines.push(`- Phone: ${channelAccounts.phone}`);
+      effectiveSystemPrompt += '\n\n' + lines.join('\n');
+    }
+
+    // Append the principal's verified contact details so agents have an authoritative source
+    // for reaching the CEO without inferring or guessing addresses. Injected into ALL agents
+    // (coordinator + specialists) following the same rationale as channelAccounts (#387).
+    // Only verified and active identities reach this array (filtered at startup). The block
+    // labels them as authoritative to prevent the LLM from substituting inferred alternatives.
+    const { principalIdentities } = this.config;
+    if (principalIdentities && principalIdentities.length > 0) {
+      const lines: string[] = ['## Principal Contact Details'];
+      lines.push('These are the verified channel addresses for the principal you serve.');
+      lines.push('Use them when you need to reach the principal. Do not infer or substitute — these are authoritative.');
+      lines.push('');
+      // Strip newlines from DB-sourced strings before interpolating into the system prompt.
+      // Prevents stored prompt injection: a channelIdentifier with embedded newlines could
+      // break out of the current line and inject markdown headers or instructions.
+      const stripNewlines = (s: string): string => s.replace(/[\r\n]/g, '');
+      for (const identity of principalIdentities) {
+        lines.push(`- ${stripNewlines(identity.channel)}: ${stripNewlines(identity.channelIdentifier)}`);
+      }
       effectiveSystemPrompt += '\n\n' + lines.join('\n');
     }
 
