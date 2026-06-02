@@ -1,0 +1,71 @@
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import { google } from 'googleapis';
+
+// Cached per process — googleapis auto-refreshes the access token using the
+// long-lived refresh_token, so we only need to load from disk once.
+let cachedClient: InstanceType<typeof google.auth.OAuth2> | null = null;
+
+export interface DriveAuthOptions {
+  tokenCachePath?: string;
+  clientId?: string;
+  clientSecret?: string;
+  email?: string;
+}
+
+export async function getDriveClient(
+  options?: DriveAuthOptions,
+): Promise<InstanceType<typeof google.auth.OAuth2>> {
+  if (cachedClient) return cachedClient;
+
+  const clientId = options?.clientId ?? process.env.GOOGLE_OAUTH_CLIENT_ID;
+  const clientSecret = options?.clientSecret ?? process.env.GOOGLE_OAUTH_CLIENT_SECRET;
+  const email = options?.email ?? process.env.CURIA_GOOGLE_EMAIL;
+
+  if (!clientId) throw new Error('GOOGLE_OAUTH_CLIENT_ID is not set');
+  if (!clientSecret) throw new Error('GOOGLE_OAUTH_CLIENT_SECRET is not set');
+  if (!email) throw new Error('CURIA_GOOGLE_EMAIL is not set');
+
+  const tokenCachePath =
+    options?.tokenCachePath ??
+    path.join(
+      process.env.HOME ?? '/root',
+      '.google_workspace_mcp',
+      'credentials',
+      `${email}.json`,
+    );
+
+  let tokenData: Record<string, unknown>;
+  try {
+    const raw = await fs.readFile(tokenCachePath, 'utf-8');
+    tokenData = JSON.parse(raw) as Record<string, unknown>;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+      throw new Error(
+        `Google OAuth token cache not found at ${tokenCachePath}. ` +
+          `Complete the Drive auth setup (docs/dev/google-drive.md).`,
+      );
+    }
+    throw new Error(
+      `Failed to read Google OAuth token cache at ${tokenCachePath}: ${String(err)}`,
+    );
+  }
+
+  const refreshToken =
+    typeof tokenData['refresh_token'] === 'string' ? tokenData['refresh_token'] : undefined;
+  if (!refreshToken) {
+    throw new Error(
+      `Google OAuth token cache at ${tokenCachePath} is missing refresh_token. Re-run the OAuth flow.`,
+    );
+  }
+
+  const auth = new google.auth.OAuth2(clientId, clientSecret);
+  auth.setCredentials({ refresh_token: refreshToken });
+  cachedClient = auth;
+  return auth;
+}
+
+/** Reset the cached client. For tests only. */
+export function clearDriveClientCache(): void {
+  cachedClient = null;
+}
