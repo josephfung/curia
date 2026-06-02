@@ -45,17 +45,21 @@ async function streamToBuffer(stream: Readable, maxBytes: number): Promise<Buffe
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     let totalBytes = 0;
+    let destroyed = false;
 
     stream.on('data', (chunk: Buffer) => {
       totalBytes += chunk.length;
       if (totalBytes > maxBytes) {
+        destroyed = true;
         stream.destroy(new Error('SIZE_EXCEEDED'));
         return;
       }
       chunks.push(chunk);
     });
 
-    stream.on('end', () => resolve(Buffer.concat(chunks)));
+    stream.on('end', () => {
+      if (!destroyed) resolve(Buffer.concat(chunks));
+    });
     stream.on('error', reject);
   });
 }
