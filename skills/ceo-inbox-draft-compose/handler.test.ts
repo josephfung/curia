@@ -1,12 +1,14 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { CeoInboxDraftComposeHandler } from './handler.js';
 import type { SkillContext } from '../../src/skills/types.js';
-import { readFile } from 'node:fs/promises';
+import { readFile, realpath } from 'node:fs/promises';
 
 vi.mock('node:fs/promises', () => ({
   readFile: vi.fn(),
+  realpath: vi.fn(),
 }));
 const mockReadFile = readFile as ReturnType<typeof vi.fn>;
+const mockRealpath = realpath as ReturnType<typeof vi.fn>;
 
 function buildCtx(input?: Record<string, unknown>): SkillContext {
   return {
@@ -49,6 +51,9 @@ describe('CeoInboxDraftComposeHandler', () => {
     handler = new CeoInboxDraftComposeHandler();
     mockFetch = vi.spyOn(globalThis, 'fetch');
     mockReadFile.mockReset();
+    mockRealpath.mockReset();
+    // Default: realpath is identity (no symlinks to resolve).
+    mockRealpath.mockImplementation(async (p: string) => p);
     // readAttachmentFiles reads CURIA_TEMPFILE_DIR lazily; stub so file:///tmp/... passes the boundary check.
     vi.stubEnv('CURIA_TEMPFILE_DIR', '/tmp');
   });
@@ -328,6 +333,49 @@ describe('CeoInboxDraftComposeHandler', () => {
         body: 'Hi',
         attachments: [
           { file_url: 'file:///tmp/missing.pdf', filename: 'missing.pdf', content_type: 'application/pdf' },
+        ],
+      });
+
+      const result = await handler.execute(ctx);
+
+      expect(result.success).toBe(false);
+      expect((result as { error: string }).error).toContain('Attachment error');
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('returns error when more than 10 attachments are provided', async () => {
+      const ctx = buildCtx({
+        to: ['alice@example.com'],
+        subject: 'Hello',
+        body: 'Hi',
+        attachments: Array.from({ length: 11 }, (_, i) => ({
+          file_url: `file:///tmp/file${i}.pdf`,
+          filename: `file${i}.pdf`,
+          content_type: 'application/pdf',
+        })),
+      });
+
+      const result = await handler.execute(ctx);
+
+      expect(result.success).toBe(false);
+      expect((result as { error: string }).error).toContain('Attachment error');
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('returns error when attachments exceed the 20 MB total size limit', async () => {
+      // Two 11 MB buffers = 22 MB > 20 MB limit
+      mockReadFile.mockResolvedValue(Buffer.alloc(11 * 1024 * 1024));
+      mockFetch.mockResolvedValue(
+        new Response(JSON.stringify(DRAFT_RESPONSE), { status: 200 }),
+      );
+
+      const ctx = buildCtx({
+        to: ['alice@example.com'],
+        subject: 'Hello',
+        body: 'Hi',
+        attachments: [
+          { file_url: 'file:///tmp/a.pdf', filename: 'a.pdf', content_type: 'application/pdf' },
+          { file_url: 'file:///tmp/b.pdf', filename: 'b.pdf', content_type: 'application/pdf' },
         ],
       });
 

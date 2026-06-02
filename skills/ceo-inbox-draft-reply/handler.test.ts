@@ -1,13 +1,15 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { CeoInboxDraftReplyHandler } from './handler.js';
 import type { SkillContext } from '../../src/skills/types.js';
-import { readFile } from 'node:fs/promises';
+import { readFile, realpath } from 'node:fs/promises';
 
 vi.mock('node:fs/promises', () => ({
   readFile: vi.fn(),
+  realpath: vi.fn(),
 }));
 
 const mockReadFile = readFile as ReturnType<typeof vi.fn>;
+const mockRealpath = realpath as ReturnType<typeof vi.fn>;
 
 // Helper to build a minimal mock SkillContext
 function buildCtx(overrides: Partial<{
@@ -38,7 +40,7 @@ function buildCtx(overrides: Partial<{
       error: vi.fn(),
       debug: vi.fn(),
     },
-  };
+  } as unknown as SkillContext;
 }
 
 // Helper to build a Nylas API message response
@@ -84,6 +86,9 @@ describe('CeoInboxDraftReplyHandler', () => {
     handler = new CeoInboxDraftReplyHandler();
     mockFetch = vi.spyOn(globalThis, 'fetch');
     mockReadFile.mockReset();
+    mockRealpath.mockReset();
+    // Default: realpath is identity (no symlinks to resolve).
+    mockRealpath.mockImplementation(async (p: string) => p);
     // readAttachmentFiles reads CURIA_TEMPFILE_DIR lazily; stub so file:///tmp/... passes the boundary check.
     vi.stubEnv('CURIA_TEMPFILE_DIR', '/tmp');
   });

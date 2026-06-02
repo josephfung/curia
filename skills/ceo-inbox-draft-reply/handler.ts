@@ -3,9 +3,7 @@ import { CeoNylasClient, type NylasParticipant, type DraftAttachment } from '../
 import { buildReplyQuote } from '../../src/skills/_shared/reply-quote.js';
 import { markdownToHtml } from '../../src/channels/email/markdown-to-html.js';
 import { parseAttachmentInputs } from '../_shared/parse-attachments.js';
-import { readAttachmentFiles } from '../../src/skills/_shared/read-attachments.js';
-
-const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;
+import { readAttachmentFiles, MAX_ATTACHMENT_BYTES } from '../../src/skills/_shared/read-attachments.js';
 
 export class CeoInboxDraftReplyHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {

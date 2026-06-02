@@ -21,7 +21,7 @@
 
 import { randomUUID } from 'node:crypto';
 import type { NylasClient, NylasMessage, NylasFolder, ListMessagesOptions, SendEmailOptions, AttachmentContent } from '../channels/email/nylas-client.js';
-import { readAttachmentFiles, type OutboundAttachmentInput } from './_shared/read-attachments.js';
+import { readAttachmentFiles, MAX_ATTACHMENT_BYTES, type OutboundAttachmentInput } from './_shared/read-attachments.js';
 import type { SignalRpcClient } from '../channels/signal/signal-rpc-client.js';
 import type { ContactService } from '../contacts/contact-service.js';
 import type { TrustLevel, ChannelIdentity } from '../contacts/types.js';
@@ -204,9 +204,6 @@ export interface OutboundGatewayConfig {
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
-
-/** Maximum combined size of all attachments on a single outbound email (20 MB). */
-const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;
 
 // ---------------------------------------------------------------------------
 // Helpers

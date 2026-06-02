@@ -9,12 +9,14 @@ import type { BusEvent } from '../../../src/bus/events.js';
 import type { AutonomyService, AutonomyConfig } from '../../../src/autonomy/autonomy-service.js';
 import type { PiiRedactor } from '../../../src/dispatch/pii-redactor.js';
 import type { ActionLogRepo } from '../../../src/autonomy/action-log-repo.js';
-import { readFile } from 'node:fs/promises';
+import { readFile, realpath } from 'node:fs/promises';
 
 vi.mock('node:fs/promises', () => ({
   readFile: vi.fn(),
+  realpath: vi.fn(),
 }));
 const mockReadFile = readFile as ReturnType<typeof vi.fn>;
+const mockRealpath = realpath as ReturnType<typeof vi.fn>;
 
 /**
  * Build fresh vi.fn() mocks for each test. Using beforeEach + createMocks()
@@ -702,6 +704,9 @@ describe('OutboundGateway — attachment support', () => {
 
   beforeEach(() => {
     mockReadFile.mockReset();
+    mockRealpath.mockReset();
+    // Default: realpath is identity (no symlinks to resolve).
+    mockRealpath.mockImplementation(async (p: string) => p);
     // readAttachmentFiles reads CURIA_TEMPFILE_DIR lazily; stub it so file:///tmp/... URLs pass
     // the store-dir boundary check without needing a real tmpfs mount.
     vi.stubEnv('CURIA_TEMPFILE_DIR', '/tmp');
@@ -774,10 +779,17 @@ describe('OutboundGateway — attachment support', () => {
     });
 
     expect(result.success).toBe(true);
-    const draftArgs = (nylasClient.createDraft as ReturnType<typeof vi.fn>).mock.calls[0]![0] as Record<string, unknown>;
-    const attachments = draftArgs.attachments as Array<{ filename: string }>;
-    expect(attachments).toHaveLength(1);
-    expect(attachments[0]!.filename).toBe('contract.pdf');
+    expect(nylasClient.createDraft).toHaveBeenCalledWith(
+      expect.objectContaining({
+        attachments: [
+          expect.objectContaining({
+            filename: 'contract.pdf',
+            contentType: 'application/pdf',
+            content: pdfContent,
+          }),
+        ],
+      }),
+    );
   });
 
   it('blocks draft creation when attachment file is missing', async () => {

@@ -1,13 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { readAttachmentFiles } from './read-attachments.js';
 import type { OutboundAttachmentInput } from './read-attachments.js';
-import { readFile } from 'node:fs/promises';
+import { readFile, realpath } from 'node:fs/promises';
 
 vi.mock('node:fs/promises', () => ({
   readFile: vi.fn(),
+  realpath: vi.fn(),
 }));
 
 const mockReadFile = readFile as ReturnType<typeof vi.fn>;
+const mockRealpath = realpath as ReturnType<typeof vi.fn>;
 
 const MAX_20MB = 20 * 1024 * 1024;
 
@@ -18,6 +20,9 @@ const STORE_DIR = '/tmp';
 describe('readAttachmentFiles', () => {
   beforeEach(() => {
     mockReadFile.mockReset();
+    mockRealpath.mockReset();
+    // Default: realpath is identity (no symlinks to resolve).
+    mockRealpath.mockImplementation(async (p: string) => p);
   });
 
   it('returns empty array for empty input', async () => {
@@ -72,12 +77,44 @@ describe('readAttachmentFiles', () => {
     await expect(readAttachmentFiles(input, MAX_20MB, STORE_DIR)).rejects.toThrow('must start with file://');
   });
 
-  it('throws on path traversal in file_url', async () => {
+  it('throws when file_url path traversal resolves outside the store directory', async () => {
+    // file:///tmp/../etc/passwd resolves to /etc/passwd after realpath (identity mock),
+    // which is outside /tmp — caught by the path.relative boundary check.
     const input: OutboundAttachmentInput[] = [
       { fileUrl: 'file:///tmp/../etc/passwd', filename: 'passwd', contentType: 'text/plain' },
     ];
 
-    await expect(readAttachmentFiles(input, MAX_20MB, STORE_DIR)).rejects.toThrow('path traversal not allowed');
+    await expect(readAttachmentFiles(input, MAX_20MB, STORE_DIR)).rejects.toThrow('outside the allowed temp store directory');
+  });
+
+  it('allows filenames containing ".." that resolve safely inside the store', async () => {
+    // A filename like "weird..name.txt" is benign — the URL resolves to a path
+    // inside STORE_DIR and the boundary check passes.
+    const buf = Buffer.from('content');
+    mockReadFile.mockResolvedValue(buf);
+
+    const input: OutboundAttachmentInput[] = [
+      { fileUrl: 'file:///tmp/weird..name.txt', filename: 'weird..name.txt', contentType: 'text/plain' },
+    ];
+
+    const result = await readAttachmentFiles(input, MAX_20MB, STORE_DIR);
+    expect(result).toHaveLength(1);
+    expect(mockReadFile).toHaveBeenCalledWith('/tmp/weird..name.txt');
+  });
+
+  it('throws when a symlink inside the store resolves to a path outside it', async () => {
+    // Simulate a symlink at /tmp/evil-link that realpath resolves to /etc/passwd.
+    mockRealpath.mockImplementation(async (p: string) => {
+      if (p === '/tmp/evil-link') return '/etc/passwd';
+      return p;
+    });
+
+    const input: OutboundAttachmentInput[] = [
+      { fileUrl: 'file:///tmp/evil-link', filename: 'evil-link', contentType: 'text/plain' },
+    ];
+
+    await expect(readAttachmentFiles(input, MAX_20MB, STORE_DIR)).rejects.toThrow('outside the allowed temp store directory');
+    expect(mockReadFile).not.toHaveBeenCalled();
   });
 
   it('throws when path is outside the allowed store directory', async () => {

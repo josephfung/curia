@@ -48,8 +48,8 @@ describe('parseAttachmentInputs', () => {
     expect(Array.isArray(result)).toBe(true);
     if (Array.isArray(result)) {
       expect(result).toHaveLength(2);
-      expect(result[0]).toEqual({ fileUrl: 'file:///tmp/a.pdf', filename: 'a.pdf', contentType: 'application/pdf' });
-      expect(result[1]).toEqual({ fileUrl: 'file:///tmp/b.png', filename: 'b.png', contentType: 'image/png' });
+      expect(result[0]!).toEqual({ fileUrl: 'file:///tmp/a.pdf', filename: 'a.pdf', contentType: 'application/pdf' });
+      expect(result[1]!).toEqual({ fileUrl: 'file:///tmp/b.png', filename: 'b.png', contentType: 'image/png' });
     }
   });
 

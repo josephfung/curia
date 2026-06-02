@@ -2,10 +2,9 @@ import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/t
 import { CeoNylasClient, type NylasParticipant, type DraftAttachment } from '../_shared/ceo-nylas-client.js';
 import { markdownToHtml } from '../../src/channels/email/markdown-to-html.js';
 import { parseAttachmentInputs } from '../_shared/parse-attachments.js';
-import { readAttachmentFiles } from '../../src/skills/_shared/read-attachments.js';
+import { readAttachmentFiles, MAX_ATTACHMENT_BYTES } from '../../src/skills/_shared/read-attachments.js';
 
 const MAX_BODY_LENGTH = 50_000;
-const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export class CeoInboxDraftComposeHandler implements SkillHandler {

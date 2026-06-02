@@ -5,7 +5,7 @@
 // validates the URLs, reads the Buffers from disk, and enforces size limits
 // before the content is handed to a transport (NylasClient or CeoNylasClient).
 
-import { readFile } from 'node:fs/promises';
+import { readFile, realpath } from 'node:fs/promises';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -27,6 +27,9 @@ export interface AttachmentContent {
 }
 
 const MAX_ATTACHMENTS = 10;
+
+/** Maximum combined size of all attachments on a single outbound email (20 MB). */
+export const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;
 
 /**
  * Validate and read attachment files from disk.
@@ -58,18 +61,16 @@ export async function readAttachmentFiles(
     storeDir ?? process.env['CURIA_TEMPFILE_DIR'] ?? '/run/curia-tempfiles',
   );
 
+  // Canonicalise the store dir once so the boundary check works even when the
+  // store dir path itself contains symlinks.
+  const canonicalStoreDir = await realpath(resolvedStoreDir);
+
   const results: AttachmentContent[] = [];
   let totalBytes = 0;
 
   for (const att of attachments) {
     if (!att.fileUrl.startsWith('file://')) {
       throw new Error(`Invalid attachment file_url "${att.fileUrl}": must start with file://`);
-    }
-    // Defense-in-depth: reject literal .. before URL-parsing so URL-encoded
-    // variants don't bypass this check. The storeDir boundary below catches
-    // anything that makes it through URL decoding.
-    if (att.fileUrl.includes('..')) {
-      throw new Error(`Invalid attachment file_url "${att.fileUrl}": path traversal not allowed`);
     }
     if (!att.filename || typeof att.filename !== 'string') {
       throw new Error('Each attachment must have a non-empty filename');
@@ -79,15 +80,26 @@ export async function readAttachmentFiles(
     }
 
     // fileURLToPath decodes percent-encoded characters (e.g. %20 → space) and handles
-    // platform-specific file URL rules. URL.pathname leaves encoding in place, which
-    // breaks the startsWith boundary check when the store dir contains spaces.
-    const filePath = fileURLToPath(att.fileUrl);
+    // platform-specific file URL rules. Wrap in try/catch so a malformed file:// URL
+    // surfaces a clear attachment error rather than a raw Node internal.
+    let resolvedPath: string;
+    try {
+      // realpath resolves the canonical path including any symlinks, so a symlink
+      // inside the temp store that points outside it is caught by the boundary
+      // check below rather than slipping through. Matches TempFileStore.delete().
+      resolvedPath = await realpath(fileURLToPath(att.fileUrl));
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      throw new Error(`Invalid attachment file_url "${att.fileUrl}": ${detail}`);
+    }
 
     // Enforce that the resolved path stays within the temp store directory — prevents
     // LLM-driven prompt injection from exfiltrating arbitrary files (e.g. /etc/passwd,
-    // .env) as email attachments. Matches the same boundary check in TempFileStore.delete().
-    const resolvedPath = path.resolve(filePath);
-    if (!resolvedPath.startsWith(resolvedStoreDir + path.sep)) {
+    // .env, symlink targets) as email attachments.
+    // path.relative() returns a relative path; if it starts with '..' or is absolute,
+    // the target is outside the allowed directory.
+    const relativePath = path.relative(canonicalStoreDir, resolvedPath);
+    if (relativePath.startsWith('..') || path.isAbsolute(relativePath)) {
       throw new Error(
         `Attachment path is outside the allowed temp store directory: ${att.fileUrl}`,
       );
