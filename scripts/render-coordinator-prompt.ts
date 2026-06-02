@@ -74,7 +74,19 @@ async function main(): Promise<void> {
       );
       if (nameResult.rows[0]?.display_name) {
         executiveDisplayName = nameResult.rows[0].display_name;
+      } else {
+        // Warn rather than fail — name is cosmetic; a fallback won't invalidate red-team results.
+        process.stderr.write(
+          `render-coordinator-prompt: warning: CEO contact not found for ${config.ceoPrimaryEmail}.\n` +
+          '  Executive display name will be "the executive" in the rendered prompt.\n' +
+          '  Has the wizard been completed on this instance?\n',
+        );
       }
+    } else {
+      process.stderr.write(
+        'render-coordinator-prompt: warning: CEO_PRIMARY_EMAIL is not set.\n' +
+        '  Executive display name will be "the executive" in the rendered prompt.\n',
+      );
     }
 
     // ── Agent contact ID ───────────────────────────────────────────────────────
@@ -83,10 +95,24 @@ async function main(): Promise<void> {
     );
     const agentContactId = agentResult.rows[0]?.id ?? '';
     if (!agentContactId) {
+      // Hard failure: a prompt without the agent contact ID is not representative
+      // of a live instance and would produce misleading red-team results.
+      throw new Error(
+        'No agent contact found (system_role=agent). ' +
+        'Has Curia been started at least once? ' +
+        'Run the server at least once to seed the agent contact, then re-run this script.',
+      );
+    }
+
+    // ── Principal contact ID ───────────────────────────────────────────────────
+    const principalResult = await pool.query<{ id: string }>(
+      `SELECT id FROM contacts WHERE system_role = 'principal' ORDER BY id ASC LIMIT 1`,
+    );
+    const principalContactId = principalResult.rows[0]?.id ?? '';
+    if (!principalContactId) {
       process.stderr.write(
-        'Warning: no agent contact found (system_role=agent). ' +
-        'Has Curia been started at least once?\n' +
-        '         agent_contact_id will be empty in the rendered prompt.\n',
+        'render-coordinator-prompt: warning: no principal contact found (system_role=principal).\n' +
+        '  principal_contact_id will be empty in the rendered prompt.\n',
       );
     }
 
@@ -127,11 +153,21 @@ async function main(): Promise<void> {
       executiveVoiceBlock:   compileWritingVoiceBlock(profileService.get(), executiveDisplayName),
       availableSpecialists:  registry.specialistSummary(),
       agentContactId,
+      principalContactId,
     });
 
     // ${security_context_block} is not handled by interpolateRuntimeContext
     // (it's injected by the security layer, not the runtime context path).
-    systemPrompt = systemPrompt.replace('${security_context_block}', securityContextBlock);
+    // Use a global regex to handle all occurrences, and warn if the placeholder
+    // is absent (e.g., coordinator.yaml was changed and the placeholder renamed).
+    const securityPlaceholder = /\$\{security_context_block\}/g;
+    if (!securityPlaceholder.test(coordinatorConfig.system_prompt)) {
+      process.stderr.write(
+        'render-coordinator-prompt: warning: ${security_context_block} placeholder not found ' +
+        'in coordinator.yaml. Security context block will be absent from the rendered prompt.\n',
+      );
+    }
+    systemPrompt = systemPrompt.replace(/\$\{security_context_block\}/g, securityContextBlock);
 
     // ── Prepend representative per-turn injected blocks ────────────────────────
     // These blocks are injected fresh on every message turn by the runtime.
@@ -160,7 +196,12 @@ async function main(): Promise<void> {
   } finally {
     await identityService?.stop();
     await profileService?.stop();
-    await pool.end();
+    try {
+      await pool.end();
+    } catch (err: unknown) {
+      // Don't let pool teardown shadow a real error — the prompt may already be written.
+      process.stderr.write(`render-coordinator-prompt: warning: pool.end() failed: ${String(err)}\n`);
+    }
   }
 }
 
