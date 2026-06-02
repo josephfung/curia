@@ -9,6 +9,9 @@
 // Safety: idempotent — only writes to NULL columns.
 
 import pg from 'pg';
+import pino from 'pino';
+
+const logger = pino({ name: 'backfill-contact-attributes' });
 
 const { Pool } = pg;
 
@@ -74,7 +77,8 @@ type ContactRowForBackfill = {
 type FactRow = {
   id: string;
   properties: { attribute?: string; value?: string };
-  confidence: number;
+  // node-pg returns NUMERIC as string at runtime; Number() coercion is applied at use site
+  confidence: string;
   last_confirmed_at: string | null;
 };
 
@@ -176,6 +180,10 @@ export async function runBackfill(pool: pg.Pool): Promise<{
       const setClauses: string[] = [];
       const params: unknown[] = [contact.id];
       for (const [col, val] of Object.entries(updates)) {
+        // col is always a CANONICAL_COLUMNS member by construction; guard against future drift
+        if (!CANONICAL_COLUMNS.includes(col)) {
+          throw new Error(`[backfill] refusing to interpolate unknown column: ${col}`);
+        }
         params.push(val);
         setClauses.push(`${col} = $${params.length}`);
       }
@@ -187,18 +195,14 @@ export async function runBackfill(pool: pg.Pool): Promise<{
 
       written += Object.keys(updates).length;
       processed++;
-      console.log(
-        `[backfill] contact ${contact.id}: wrote ${Object.keys(updates).join(', ')}`,
-      );
+      logger.info({ contactId: contact.id, columns: Object.keys(updates) }, 'backfill: wrote columns');
     } catch (err) {
-      console.error(`[backfill] contact ${contact.id} failed:`, err);
+      logger.error({ contactId: contact.id, err }, 'backfill: contact failed');
       errors++;
     }
   }
 
-  console.log(
-    `[backfill] done — processed: ${processed}, written: ${written}, skipped: ${skipped}, errors: ${errors}`,
-  );
+  logger.info({ processed, written, skipped, errors }, 'backfill: done');
   return { processed, written, skipped, errors };
 }
 
@@ -206,7 +210,7 @@ export async function runBackfill(pool: pg.Pool): Promise<{
 if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).href) {
   const databaseUrl = process.env['DATABASE_URL'];
   if (!databaseUrl) {
-    console.error('[backfill] DATABASE_URL is not set');
+    logger.error('backfill: DATABASE_URL is not set');
     process.exit(1);
   }
   const pool = new Pool({ connectionString: databaseUrl });
@@ -216,7 +220,7 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).
       process.exit(errors > 0 ? 1 : 0);
     })
     .catch(err => {
-      console.error('[backfill] fatal error:', err);
+      logger.error({ err }, 'backfill: fatal error');
       void pool.end();
       process.exit(1);
     });
