@@ -13,5 +13,12 @@ blockExoticSubdeps: true
 
 # esbuild requires a postinstall step to download the platform binary.
 # Both versions (used by vite and tsup) are approved here.
+# promptfoo brings in several native-module packages; only esbuild actually needs
+# to run its build script for this project. The others are blocked.
 allowBuilds:
   esbuild: true
+  '@playwright/browser-chromium': false
+  '@swc/core': false
+  onnxruntime-node: false
+  protobufjs: false
+  sharp: false

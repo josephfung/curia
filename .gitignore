@@ -41,3 +41,9 @@ tests/smoke/reports/*.html
 
 # Claude Code local skills (managed by trimkit, not committed)
 .claude/skills/
+
+# Red team artifacts (rendered system prompt, generated test cases, and run
+# outputs — may contain production identity details and security test content)
+tests/redteam/coordinator-system-prompt.txt
+tests/redteam/redteam.yaml
+tests/redteam/results/
