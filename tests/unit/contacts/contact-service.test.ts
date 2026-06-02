@@ -774,8 +774,8 @@ describe('ContactService', () => {
       const updated = await service.updateContactFields(contact.id, {
         primaryEmail: 'MATCH@EXAMPLE.COM',
       });
-      // Stored as-is (lowercasing is app responsibility, not enforced here)
-      expect(updated.primaryEmail).toBe('MATCH@EXAMPLE.COM');
+      // Normalized to lowercase on write
+      expect(updated.primaryEmail).toBe('match@example.com');
     });
   });
 });

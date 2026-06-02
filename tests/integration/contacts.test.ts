@@ -357,7 +357,8 @@ describeIf('Contacts Integration', () => {
       const updated = await contactService.updateContactFields(contact.id, {
         primaryEmail: 'CCI-TEST@EXAMPLE.COM',
       });
-      expect(updated.primaryEmail).toBe('CCI-TEST@EXAMPLE.COM');
+      // Normalized to lowercase on write
+      expect(updated.primaryEmail).toBe('cci-test@example.com');
     });
   });
 });
