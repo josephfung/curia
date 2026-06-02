@@ -40,7 +40,7 @@
     "cytoscape": "^3.33.4",
     "cytoscape-fcose": "^2.2.0",
     "fastify": "^5.8.5",
-    "js-yaml": "^4.1.1",
+    "js-yaml": "^4.2.0",
     "layout-base": "^2.0.1",
     "luxon": "^3.7.2",
     "node-pg-migrate": "^8.0.4",
