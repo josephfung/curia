@@ -2,6 +2,9 @@ import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/t
 import { CeoNylasClient, type NylasParticipant } from '../_shared/ceo-nylas-client.js';
 import { markdownToHtml } from '../../src/channels/email/markdown-to-html.js';
 
+const MAX_BODY_LENGTH = 50_000;
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
 export class CeoInboxDraftComposeHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {
     let apiKey: string;
@@ -45,6 +48,20 @@ export class CeoInboxDraftComposeHandler implements SkillHandler {
     }
     if (!body) {
       return { success: false, error: 'body is required' };
+    }
+    if (body.length > MAX_BODY_LENGTH) {
+      return { success: false, error: `body must be ${MAX_BODY_LENGTH} characters or fewer` };
+    }
+
+    for (const email of toStrings) {
+      if (!EMAIL_REGEX.test(email)) {
+        return { success: false, error: `Invalid email address in to: ${email}` };
+      }
+    }
+    for (const email of ccStrings) {
+      if (!EMAIL_REGEX.test(email)) {
+        return { success: false, error: `Invalid email address in cc: ${email}` };
+      }
     }
 
     const to: NylasParticipant[] = toStrings.map((email) => ({ email }));

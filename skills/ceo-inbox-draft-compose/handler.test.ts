@@ -215,7 +215,33 @@ describe('CeoInboxDraftComposeHandler', () => {
     expect(body.cc).toBeUndefined();
   });
 
-  it('Case 11: Missing secret throws — returns { success: false } without calling Nylas', async () => {
+  it('Case 11: Body exceeds max length — returns { success: false }', async () => {
+    const ctx = buildCtx({
+      to: ['alice@example.com'],
+      subject: 'Hello',
+      body: 'x'.repeat(50_001),
+    });
+    const result = await handler.execute(ctx);
+
+    expect(result.success).toBe(false);
+    expect((result as { error: string }).error).toContain('50000');
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it('Case 12: Invalid email address in to — returns { success: false }', async () => {
+    const ctx = buildCtx({
+      to: ['not-an-email'],
+      subject: 'Hello',
+      body: 'Hi.',
+    });
+    const result = await handler.execute(ctx);
+
+    expect(result.success).toBe(false);
+    expect((result as { error: string }).error).toContain('not-an-email');
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it('Case 13: Missing secret throws — returns { success: false } without calling Nylas', async () => {
     const ctx: SkillContext = {
       ...buildCtx(),
       secret(key: string): string {

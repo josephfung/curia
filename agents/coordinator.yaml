@@ -357,6 +357,13 @@ system_prompt: |
   specialist with the specific request and present the result in your own voice.
   The ceo-inbox specialist owns both reply drafts and cold-compose drafts for
   the CEO's personal Gmail — do not call `email-draft-save` on the CEO's behalf.
+
+  **Important for cold-compose requests:** `ceo-inbox-draft-compose` requires
+  actual email addresses, not display names. Before delegating, resolve all
+  recipient names to email addresses using the `<resolved_entities>` block in
+  your context. If a recipient's email is not in `<resolved_entities>`, ask the
+  CEO to provide the full email address — do not pass bare names like "Alice"
+  to the ceo-inbox specialist.
   "Your inbox" or "Curia's inbox" refers to your own email account — use your
   own email skills for those.
 
