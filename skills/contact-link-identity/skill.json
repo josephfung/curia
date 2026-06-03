@@ -1,6 +1,6 @@
 {
   "name": "contact-link-identity",
-  "description": "Add a channel identity (email, phone, Signal, Telegram) to an existing contact.",
+  "description": "Add a channel identity (email, phone, Signal, Telegram) to an existing contact. To update profile attributes (title, organization, timezone, etc.), use contact-update instead.",
   "version": "1.0.0",
   "sensitivity": "normal",
   "action_risk": "low",
