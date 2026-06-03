@@ -1,5 +1,5 @@
 name: ceo-inbox
-version: "0.2.0"
+version: "0.2.1"
 role: specialist
 description: >
   Manages the CEO's personal email inbox. Handles standing-rule management,
@@ -131,8 +131,15 @@ system_prompt: |
   One fact per call. Do not store trivial or transient details (e.g. "sent
   an email on May 5").
 
+  **Canonical contact attributes** (`current_role`, `job_title`, `company`,
+  `organization`, `phone`, `email`, `timezone`, `location`, etc.) are
+  automatically redirected by `memory-store` to the Contact record — no
+  special handling needed. Expect `action: "redirected_to_contact"` in the
+  result; treat it the same as `stored: true`.
+
   After each call, check the outcome:
   - `stored: true` — proceed.
+  - `redirected_to_contact` — attribute saved to the Contact record, proceed normally.
   - `conflict` — do not overwrite; note the conflict in the Response Format
     so the coordinator can surface it to the CEO.
   - `ambiguous` — do not store; note the ambiguity in the Response Format.

@@ -52,6 +52,7 @@ interface ContactServiceBackend {
   createContact(contact: Contact): Promise<void>;
   getContact(id: string): Promise<Contact | undefined>;
   findContactByName(name: string): Promise<Contact[]>;
+  findContactByKgNodeId(kgNodeId: string): Promise<Contact | null>;
   findContactByRole(role: string): Promise<Contact[]>;
   findContactBySystemRole(systemRole: SystemRole): Promise<Contact | null>;
   listContacts(filters?: { status?: ContactStatus; limit?: number }): Promise<Contact[]>;
@@ -330,6 +331,11 @@ export class ContactService {
   /** Find contacts by display name (case-insensitive exact match). */
   async findContactByName(name: string): Promise<Contact[]> {
     return this.backend.findContactByName(name);
+  }
+
+  /** Find a contact by the KG node ID it is linked to. Returns null if not found. */
+  async findContactByKgNodeId(kgNodeId: string): Promise<Contact | null> {
+    return this.backend.findContactByKgNodeId(kgNodeId);
   }
 
   /** Find contacts by role. */
@@ -1035,6 +1041,16 @@ class PostgresContactBackend implements ContactServiceBackend {
     return result.rows.map((row) => this.rowToContact(row));
   }
 
+  async findContactByKgNodeId(kgNodeId: string): Promise<Contact | null> {
+    const result = await this.pool.query<ContactRow>(
+      `SELECT ${CONTACT_COLS} FROM contacts WHERE kg_node_id = $1 LIMIT 1`,
+      [kgNodeId],
+    );
+    const row = result.rows[0];
+    if (!row) return null;
+    return this.rowToContact(row);
+  }
+
   async findContactByRole(role: string): Promise<Contact[]> {
     const result = await this.pool.query<ContactRow>(
       `SELECT ${CONTACT_COLS} FROM contacts WHERE role = $1 ORDER BY created_at ASC`,
@@ -1598,6 +1614,13 @@ class InMemoryContactBackend implements ContactServiceBackend {
       }
     }
     return results;
+  }
+
+  async findContactByKgNodeId(kgNodeId: string): Promise<Contact | null> {
+    for (const contact of this.contacts.values()) {
+      if (contact.kgNodeId === kgNodeId) return contact;
+    }
+    return null;
   }
 
   async findContactByRole(role: string): Promise<Contact[]> {

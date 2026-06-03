@@ -24,6 +24,7 @@
 import type { DbPool } from '../db/connection.js';
 import type { Logger } from '../logger.js';
 import type { EntityContext, EntityFact, ConnectedAccount, EntityRelationship } from './types.js';
+import { CANONICAL_ATTRIBUTE_MAP } from '../contacts/canonical-attribute-guard.js';
 
 // TTL for cached entity context payloads (5 minutes per spec).
 const CACHE_TTL_MS = 5 * 60 * 1000;
@@ -134,14 +135,41 @@ export class EntityContextAssembler {
         ? await this.getRelationships(kgNodeId)
         : [];
 
+      // Filter out KG facts whose properties.attribute matches a canonical contact
+      // column when we have a contact record. These values now live on the contacts
+      // row and are surfaced via EntityContext.contact — keeping them in the facts
+      // array would double-up the information and invite the LLM to reason about which
+      // source to trust. Facts without properties.attribute are left untouched.
+      const facts = contactRow
+        ? factsResult
+            .filter(({ attributeKey }) => attributeKey === null || !CANONICAL_ATTRIBUTE_MAP.has(attributeKey))
+            .map(({ attributeKey: _dropped, ...fact }) => fact)
+        : factsResult.map(({ attributeKey: _dropped, ...fact }) => fact);
+
       const ctx: EntityContext = {
         entityId: kgNodeId,
         entityType: nodeRow.type,
         label: nodeRow.label,
         contact: contactRow
-          ? { contactId: contactRow.id, displayName: contactRow.display_name, role: contactRow.role }
+          ? {
+              contactId: contactRow.id,
+              displayName: contactRow.display_name,
+              role: contactRow.role,
+              preferredName: contactRow.preferred_name,
+              title: contactRow.title,
+              organization: contactRow.organization,
+              primaryEmail: contactRow.primary_email,
+              primaryPhone: contactRow.primary_phone,
+              timezone: contactRow.timezone,
+              locale: contactRow.locale,
+              location: contactRow.location,
+              pronouns: contactRow.pronouns,
+              linkedinUrl: contactRow.linkedin_url,
+              bio: contactRow.bio,
+              birthday: contactRow.birthday,
+            }
           : null,
-        facts: factsResult,
+        facts,
         connectedAccounts,
         relationships,
       };
@@ -349,9 +377,11 @@ export class EntityContextAssembler {
 
   /**
    * Get all fact nodes linked to the entity via 'relates_to' edges.
-   * Fact nodes have type = 'fact' and carry value/category in their properties.
+   * Returns an internal type that includes the raw properties.attribute key so
+   * assembleOne() can filter out canonical contact facts before returning. The
+   * attribute key is stripped from the public EntityFact shape.
    */
-  private async getFacts(entityNodeId: string): Promise<EntityFact[]> {
+  private async getFacts(entityNodeId: string): Promise<FactWithAttribute[]> {
     const result = await this.pool.query<FactRow>(
       `SELECT n.label, n.properties, n.confidence, n.last_confirmed_at
        FROM kg_edges e
@@ -379,6 +409,10 @@ export class EntityContextAssembler {
           'entity-context: fact node missing properties.value',
         );
       }
+      // Lowercase for case-insensitive deny-list lookup in assembleOne().
+      const attributeKey = typeof props.attribute === 'string'
+        ? props.attribute.toLowerCase()
+        : null;
       return {
         label: row.label,
         value: factValue ?? null,
@@ -387,13 +421,17 @@ export class EntityContextAssembler {
         lastConfirmedAt: row.last_confirmed_at instanceof Date
           ? row.last_confirmed_at.toISOString()
           : String(row.last_confirmed_at),
+        attributeKey,
       };
     });
   }
 
   private async getContactByKgNodeId(kgNodeId: string): Promise<ContactRow | undefined> {
     const result = await this.pool.query<ContactRow>(
-      'SELECT id, display_name, role FROM contacts WHERE kg_node_id = $1',
+      `SELECT id, display_name, role,
+              preferred_name, title, organization, primary_email, primary_phone,
+              timezone, locale, location, pronouns, linkedin_url, bio, birthday
+       FROM contacts WHERE kg_node_id = $1`,
       [kgNodeId],
     );
     return result.rows[0];
@@ -479,10 +517,28 @@ interface FactRow {
   last_confirmed_at: Date | string;
 }
 
+// Internal type returned by getFacts() before the canonical-attribute filter is applied.
+// attributeKey is the lowercase properties.attribute value (null for legacy facts that
+// predate structured fact writes). Stripped before the EntityFact[] is returned.
+type FactWithAttribute = EntityFact & { attributeKey: string | null };
+
 interface ContactRow {
   id: string;
   display_name: string;
   role: string | null;
+  // Canonical profile attributes (migration 048)
+  preferred_name: string | null;
+  title: string | null;
+  organization: string | null;
+  primary_email: string | null;
+  primary_phone: string | null;
+  timezone: string | null;
+  locale: string | null;
+  location: string | null;
+  pronouns: string | null;
+  linkedin_url: string | null;
+  bio: string | null;
+  birthday: string | null;
 }
 
 interface CalendarRow {

@@ -7,15 +7,17 @@
 //   - Otherwise → entityMemory.resolveOrCreate() which finds or auto-creates the entity.
 //
 // Possible outcomes:
-//   created       — new fact node created and linked to the entity
-//   updated       — near-duplicate found; existing node merged in place
-//   conflict      — contradicts an existing attribute fact; agent should surface to CEO
-//   entity_not_found — UUID entity no longer exists, or entity gone between resolution and write
-//   rate_limited  — write limit (50 per task) exceeded
+//   created               — new fact node created and linked to the entity
+//   updated               — near-duplicate found; existing node merged in place
+//   conflict              — contradicts an existing attribute fact; agent should surface to CEO
+//   entity_not_found      — UUID entity no longer exists, or entity gone between resolution and write
+//   rate_limited          — write limit (50 per task) exceeded
+//   redirected_to_contact — attribute is canonical; write went to ContactService instead of KG
 
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
 import { DECAY_CLASSES, SENSITIVITY_LEVELS, NODE_TYPES } from '../../src/memory/types.js';
 import type { DecayClass, Sensitivity, NodeType, KgNode } from '../../src/memory/types.js';
+import { buildCanonicalPatch } from '../../src/contacts/canonical-attribute-guard.js';
 
 const DECAY_CLASSES_SET: ReadonlySet<string> = new Set(DECAY_CLASSES);
 const SENSITIVITY_LEVELS_SET: ReadonlySet<string> = new Set(SENSITIVITY_LEVELS);
@@ -168,6 +170,55 @@ export class MemoryStoreHandler implements SkillHandler {
         // string — the variant the CEO actually said — so it needs explicit learning here.
         if (alias_for && typeof alias_for === 'string' && resolved.kind === 'found') {
           await ctx.entityMemory.addAlias(entityNode.id, alias_for);
+        }
+      }
+
+      // --- Canonical contact attribute guard ---
+      //
+      // If the entity is a person node linked to a contact record, and the field
+      // being written is a canonical contact attribute (timezone, title, etc.),
+      // redirect the write to ContactService.updateContactFields() instead of the KG.
+      // This prevents the contacts table and the KG from diverging after migration 048.
+      if (entityNode.type === 'person' && ctx.contactService) {
+        const patch = buildCanonicalPatch(field, value);
+        if (patch !== null) {
+          if (patch.fallbackToKg) {
+            // Normalization failed (e.g. unparseable phone number) — let the KG write through.
+            ctx.log.warn(
+              { entity, field, reason: patch.reason },
+              'memory-store: canonical attribute normalization failed — falling back to KG write',
+            );
+          } else {
+            // Found a contact for this KG node — redirect the write.
+            const contact = await ctx.contactService.findContactByKgNodeId(entityNode.id);
+            if (contact) {
+              try {
+                await ctx.contactService.updateContactFields(contact.id, patch.fields);
+                ctx.log.info(
+                  { entity, field, contactId: contact.id },
+                  'memory-store: canonical attribute redirected to ContactService',
+                );
+                return {
+                  success: true,
+                  data: {
+                    stored: false,
+                    action: 'redirected_to_contact',
+                    contact_id: contact.id,
+                  },
+                };
+              } catch (err) {
+                // Validation errors (e.g. primaryEmail not in CCI) are surfaced as
+                // a skill error rather than silently swallowed.
+                const msg = err instanceof Error ? err.message : String(err);
+                ctx.log.warn(
+                  { entity, field, contactId: contact.id, err },
+                  'memory-store: canonical attribute redirect to ContactService failed',
+                );
+                return { success: false, error: `Could not update contact field "${field}": ${msg}` };
+              }
+            }
+            // No contact record for this person node — fall through to normal KG write.
+          }
         }
       }
 

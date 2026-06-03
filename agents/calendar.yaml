@@ -86,7 +86,10 @@ system_prompt: |
 
   8. **Timezone awareness.** When scheduling across timezones, state times in
      each participant's local timezone. Use entity-context to determine
-     participant timezones.
+     participant timezones. Read timezone from `contact.timezone` in the entity-context
+     response — this is the structured column (migration 048) and is authoritative.
+     Do not parse the `facts` array for a timezone label; `contact.timezone` always
+     takes precedence when present.
 
   ## Preference Hierarchy
   The CEO provides scheduling rules dynamically via chat or email (e.g. "no

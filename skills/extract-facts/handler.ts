@@ -13,6 +13,7 @@
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
 import { DECAY_CLASSES, NODE_TYPES } from '../../src/memory/types.js';
 import type { DecayClass, NodeType } from '../../src/memory/types.js';
+import { buildCanonicalPatch } from '../../src/contacts/canonical-attribute-guard.js';
 
 // Shape of each fact returned by the LLM extraction prompt.
 interface ExtractedFact {
@@ -71,7 +72,7 @@ export class ExtractFactsHandler implements SkillHandler {
 
       if (!classifierAnswer.startsWith('yes')) {
         ctx.log.debug({ textPreview: text.slice(0, 80) }, 'extract-facts: classifier gate — no facts, skipping');
-        return { success: true, data: { stored: 0, skipped: true, failed: 0 } };
+        return { success: true, data: { stored: 0, redirected: 0, skipped: true, failed: 0 } };
       }
 
       // -- Step 2: Extraction prompt --
@@ -130,6 +131,7 @@ ${text}`,
 
       // -- Steps 3 & 4: Entity resolution + fact storage --
       let stored = 0;
+      let redirected = 0;
       // failed counts: malformed LLM output (guard below), rate-limited facts (loop
       // breaks immediately on first hit), and infrastructure errors from storeFact.
       // Contradictions (action:'conflict') are NOT counted as failed — they are expected
@@ -211,6 +213,44 @@ ${text}`,
             entityNode = resolved.node;
           }
 
+          // --- Canonical contact attribute guard ---
+          //
+          // If the entity is a person node linked to a contact record, redirect
+          // canonical attribute writes (timezone, title, organization, etc.) to
+          // ContactService.updateContactFields() rather than the KG.
+          if (entityNode.type === 'person' && ctx.contactService) {
+            const patch = buildCanonicalPatch(attribute, value);
+            if (patch !== null) {
+              if (patch.fallbackToKg) {
+                ctx.log.warn(
+                  { subject, attribute, reason: patch.reason },
+                  'extract-facts: canonical attribute normalization failed — falling back to KG write',
+                );
+              } else {
+                const contact = await ctx.contactService.findContactByKgNodeId(entityNode.id);
+                if (contact) {
+                  try {
+                    await ctx.contactService.updateContactFields(contact.id, patch.fields);
+                    ctx.log.info(
+                      { subject, attribute, contactId: contact.id },
+                      'extract-facts: canonical attribute redirected to ContactService',
+                    );
+                    redirected++;
+                    continue;
+                  } catch (err) {
+                    // Validation error (e.g. primaryEmail not in CCI) — log and fall
+                    // through to the KG write so the information is not lost entirely.
+                    ctx.log.warn(
+                      { subject, attribute, contactId: contact.id, err },
+                      'extract-facts: canonical attribute redirect failed — falling back to KG write',
+                    );
+                  }
+                }
+                // No contact record for this person node — fall through to KG write.
+              }
+            }
+          }
+
           // Label format: "<attribute>: <value>" — human-readable and dedup-stable.
           // The validator uses semantic similarity on this label for near-duplicate detection.
           const label = `${attribute}: ${value}`;
@@ -281,8 +321,8 @@ ${text}`,
         }
       }
 
-      ctx.log.info({ stored, failed }, 'extract-facts: complete');
-      return { success: true, data: { stored, skipped: false, failed } };
+      ctx.log.info({ stored, redirected, failed }, 'extract-facts: complete');
+      return { success: true, data: { stored, redirected, skipped: false, failed } };
     } catch (err) {
       // Two categories of errors reach here:
       // 1. LLMProvider errors (rate limits, auth, timeouts, 5xx) — these are returned as

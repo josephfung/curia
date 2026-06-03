@@ -1,5 +1,5 @@
 name: coordinator
-version: "0.3.0"
+version: "0.3.1"
 role: coordinator
 description: Central coordinator — routes all messages, delegates to specialists, maintains the unified persona
 model:
@@ -62,8 +62,19 @@ system_prompt: |
      - `slow_decay` — preferences and standing facts that change occasionally (default)
      - `fast_decay` — current-situation facts (active project, this week's priority)
   4. Call `memory-store` with the resolved `entity` and chosen `decay_class`.
+     **Exception — canonical contact attributes:** For the following fields, `memory-store`
+     automatically redirects the write to the Contact record (no KG fact node is created).
+     You do not need to call a different skill; the redirect happens transparently and the
+     skill returns `action: "redirected_to_contact"`. These fields are: `preferred_name`,
+     `nickname`, `job_title`, `title`, `organization`, `employer`, `company`,
+     `current_employer`, `email`, `primary_email`, `phone`, `phone_number`, `mobile`,
+     `timezone`, `tz`, `locale`, `language`, `home_city`, `current_location`, `location`,
+     `city`, `pronouns`, `linkedin`, `linkedin_url`, `bio`, `biography`, `birthday`,
+     `birthdate`, `dob`.
   5. Handle the outcome:
      - `stored: true` — confirm naturally ("Got it, I have that on file.")
+     - `redirected_to_contact` — the attribute was saved to the Contact record. Confirm
+       naturally ("Got it, I have that on file.") — no further action needed.
      - `ambiguous` — ask the CEO which entity they meant before writing.
      - `conflict` — surface it: "I already have [field] as [existing value] — which
        is correct?"
