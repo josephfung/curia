@@ -309,6 +309,7 @@ These were considered and intentionally cut from v1 scope. Captured here so futu
 - **Weighted progress rollup.** No `goals` → no rollup.
 - **Explicit `ceo-add-task` skill.** Coordinator prompt handles CEO entry via `task-create` for v1.
 - **Interactive digest controls (snooze / done / reassign).** Read-only digest in v1; interactivity can come later if usage warrants.
+- **Revisit `intent_anchor`-based drift detection.** The scheduler's `intent_anchor` / linked-tasks mechanism (spec 07, pre-existing) creates a `tasks` row for drift-detection bookkeeping on persistent recurring jobs. No agent YAML schedule entries currently use it. Before any do, evaluate whether the complexity is justified: drift detection could potentially be handled using only `scheduled_jobs` fields (e.g. a `stuck_at` timestamp or `paused_reason` text column) without coupling the scheduler to the tasks table at all. If the tasks table is for CEO-visible work, internal scheduler state may not belong there.
 
 ---
 
