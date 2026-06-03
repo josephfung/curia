@@ -13,6 +13,14 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Added
+- **`task-create` skill** — creates a new task in the backlog with owner, priority, due date, tags, parent/blocked-by links, and optional `wake_at` (creates a linked one-shot `scheduled_jobs` row atomically). (Tasks v1, issue 2 of 7, closes #835)
+- **`task-list` skill** — lists tasks with filters (status, owner, tag, parent, due-before); returns priority-sorted results with last progress note and next wake-up time. (Tasks v1, #835)
+- **`task-update` skill** — updates task fields; enforces terminal-state guard (done/cancelled → no exit); replacing `wake_at` cancels the old scheduled wake-up and creates a new one atomically. (Tasks v1, #835)
+- **`task-complete` skill** — sets a task to done and auto-cancels pending wake-up jobs in one CTE. Kept separate from `task-update` for coordinator prompt clarity and audit-log differentiation. (Tasks v1, #835)
+- **`TaskRepo` service** — new capability-gated service (`capabilities: ["taskRepo"]`) providing all task CRUD and wake-up job management; publishes `task.created`, `task.updated`, `task.completed` bus events.
+- **`task.created`, `task.updated`, `task.completed` bus events** — three new event types added to the `BusEvent` discriminated union (breaking: exhaustive switch statements must add cases). (Tasks v1, #835)
+
 ### Changed
 - **`agent_tasks` → `tasks` migration** — promotes the scheduler's persistent-task table to a first-class tasks table with CEO-visible columns (`title`, `owner`, `priority`, `due_at`, `tags`, etc.); flips the `scheduled_job_id` back-FK to a forward `scheduled_jobs.task_id`; adds a status CHECK accepting both legacy and new task-lifecycle values. No behavior change for existing scheduler and persistent-task callers. (Tasks v1, issue 1 of 7, closes #834)
 - **Console tasks view** — updated to match the migrated `tasks` schema: drops `scheduled_job_id`, adds all new columns (`title`, `owner`, `priority`, `due_at`, `source`, `tags`, `description`, FK references), extends status filters with new task-lifecycle values, and updates the scheduled-jobs view to display the linked `task_id`. (#869)

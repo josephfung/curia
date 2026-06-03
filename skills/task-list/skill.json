@@ -1,0 +1,24 @@
+{
+  "name": "task-list",
+  "description": "List tasks from the backlog. Filter by status (comma-separated: open,in_progress,blocked,waiting,done,cancelled), owner (curia/ceo/external), tag, parent task, or due-before date. Returns up to 25 tasks by default, sorted by priority then due date. Each result includes the next scheduled wake-up time if any.",
+  "version": "0.1.0",
+  "sensitivity": "normal",
+  "action_risk": "none",
+  "inputs": {
+    "status": "string?",
+    "owner": "string?",
+    "tag": "string?",
+    "parent_task_id": "string?",
+    "due_before": "timestamp?",
+    "limit": "number?"
+  },
+  "outputs": {
+    "tasks": "object[]",
+    "count": "number",
+    "displayTimezone": "string"
+  },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 30000,
+  "capabilities": ["taskRepo"]
+}

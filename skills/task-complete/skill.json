@@ -1,0 +1,22 @@
+{
+  "name": "task-complete",
+  "description": "Mark a task as done. Optionally provide a completion_note to record what was accomplished. Auto-cancels any pending wake-up jobs for this task. Tasks already in 'done' or 'cancelled' state will return an error.",
+  "version": "0.1.0",
+  "sensitivity": "normal",
+  "action_risk": "low",
+  "inputs": {
+    "task_id": "string",
+    "completion_note": "string?"
+  },
+  "outputs": {
+    "task_id": "string",
+    "title": "string",
+    "status": "string",
+    "completed_at": "string",
+    "displayTimezone": "string"
+  },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 30000,
+  "capabilities": ["taskRepo"]
+}

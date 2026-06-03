@@ -85,6 +85,7 @@ import { bootstrapAgentIdentity } from './entity-context/bootstrap.js';
 import { bootstrapCeoContact } from './contacts/ceo-bootstrap.js';
 import { AutonomyService } from './autonomy/autonomy-service.js';
 import { ActionLogRepo } from './autonomy/action-log-repo.js';
+import { TaskRepo } from './db/task-repo.js';
 import { ApprovalTriggerService } from './autonomy/approval-trigger.js';
 import { AutonomyScoringPass } from './autonomy/scoring-pass.js';
 import type { ScoringPassConfig } from './autonomy/scoring-pass.js';
@@ -907,6 +908,9 @@ async function main(): Promise<void> {
   // can be passed to the gateway at construction time.
   const actionLogRepo = new ActionLogRepo(pool, logger);
 
+  // TaskRepo — used by task-create, task-list, task-update, task-complete skills.
+  const taskRepo = new TaskRepo(pool, bus, logger, config.timezone);
+
   // Load principal's channel identities for the outbound gateway recipient check.
   // Cached for the lifetime of the process — restart picks up changes.
   // Load principal contact reference and cache it for the readiness check below (avoid a redundant DB query).
@@ -1259,7 +1263,7 @@ async function main(): Promise<void> {
   // entityContextAssembler enables entity_enrichment pre-enrichment and the
   // entity-context skill. agentContactId enables entity_enrichment default='agent'.
   // infraLlmService provides constrained LLM access (classify/extract) with telemetry.
-  const executionLayer = new ExecutionLayer(skillRegistry, logger, { bus, agentRegistry, contactService, outboundGateway, heldMessages, schedulerService, entityMemory, agentPersona, nylasCalendarClient, entityContextAssembler, agentContactId: agentIdentityContactId, autonomyService, executiveProfileService, officeIdentityService, browserService, bullpenService, approvalTrigger, actionLogRepo, confidencePipeline, tempFileStore, infraLlmService, outboundContextService, timezone: config.timezone, selfEmail: resolvedEmailAccounts[0]?.selfEmail, skillOutputMaxLength: yamlConfig.skillOutput?.maxLength, defaultDelegateTimeoutMs: yamlConfig.delegate?.defaultTimeoutMs });
+  const executionLayer = new ExecutionLayer(skillRegistry, logger, { bus, agentRegistry, contactService, outboundGateway, heldMessages, schedulerService, entityMemory, agentPersona, nylasCalendarClient, entityContextAssembler, agentContactId: agentIdentityContactId, autonomyService, executiveProfileService, officeIdentityService, browserService, bullpenService, approvalTrigger, actionLogRepo, taskRepo, confidencePipeline, tempFileStore, infraLlmService, outboundContextService, timezone: config.timezone, selfEmail: resolvedEmailAccounts[0]?.selfEmail, skillOutputMaxLength: yamlConfig.skillOutput?.maxLength, defaultDelegateTimeoutMs: yamlConfig.delegate?.defaultTimeoutMs });
 
   // Two-pass agent registration:
   // Pass 1: Register all agents in the registry so specialistSummary() is complete

@@ -85,6 +85,7 @@ export class ExecutionLayer {
   private bullpenService?: import('../memory/bullpen.js').BullpenService;
   private approvalTrigger?: ApprovalTriggerService;
   private actionLogRepo?: import('../autonomy/action-log-repo.js').ActionLogRepo;
+  private taskRepo?: import('../db/task-repo.js').TaskRepo;
   private confidencePipeline?: import('../contacts/confidence-pipeline.js').ConfidencePipeline;
   private tempFileStore?: TempFileStore;
   private readonly infraLlmService?: InfraLlmService;
@@ -118,6 +119,7 @@ export class ExecutionLayer {
     bullpenService?: import('../memory/bullpen.js').BullpenService;
     approvalTrigger?: ApprovalTriggerService;
     actionLogRepo?: import('../autonomy/action-log-repo.js').ActionLogRepo;
+    taskRepo?: import('../db/task-repo.js').TaskRepo;
     confidencePipeline?: import('../contacts/confidence-pipeline.js').ConfidencePipeline;
     tempFileStore?: TempFileStore;
     infraLlmService?: InfraLlmService;
@@ -147,6 +149,7 @@ export class ExecutionLayer {
     this.bullpenService = options?.bullpenService;
     this.approvalTrigger = options?.approvalTrigger;
     this.actionLogRepo = options?.actionLogRepo;
+    this.taskRepo = options?.taskRepo;
     this.confidencePipeline = options?.confidencePipeline;
     this.tempFileStore = options?.tempFileStore;
     this.infraLlmService = options?.infraLlmService;
@@ -579,6 +582,7 @@ export class ExecutionLayer {
       executiveProfileService: this.executiveProfileService,
       officeIdentityService: this.officeIdentityService,
       actionLogRepo: this.actionLogRepo,
+      taskRepo: this.taskRepo,
       confidencePipeline: this.confidencePipeline,
       // tempFileStore is handled as a special case in the injection loop (writeTempFile closure).
       // Listed here so the missing-cap guard knows it's configured when this.tempFileStore is set.
