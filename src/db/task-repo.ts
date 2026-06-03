@@ -15,6 +15,15 @@ import {
 import type { DbTaskRow, TaskRow } from './queries/tasks.js';
 import { mapTaskRow } from './queries/tasks.js';
 
+// All SELECT / RETURNING clauses use this column list. Centralised so a schema
+// change only needs updating in one place.
+const TASK_COLUMNS = `
+  id, agent_id, intent_anchor, title, description, status, progress, error_budget,
+  conversation_id, created_at, updated_at, owner, waiting_on_contact_id,
+  waiting_on_text, parent_task_id, blocked_by_task_id, priority, due_at,
+  source, source_agent_id, created_by, tags
+`;
+
 // -- Public types --
 
 export interface CreateTaskParams {
@@ -110,10 +119,7 @@ export class TaskRepo {
       )
       VALUES ($1, $2, $3, $4, 'open', '{"notes":[]}'::jsonb, '{}'::jsonb,
               $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
-      RETURNING id, agent_id, intent_anchor, title, description, status, progress, error_budget,
-                conversation_id, created_at, updated_at, owner, waiting_on_contact_id,
-                waiting_on_text, parent_task_id, blocked_by_task_id, priority, due_at,
-                source, source_agent_id, created_by, tags
+      RETURNING ${TASK_COLUMNS}
     `;
     const taskParams: unknown[] = [
       agentId,
@@ -148,10 +154,7 @@ export class TaskRepo {
           )
           VALUES ($1, $2, $3, $4, 'open', '{"notes":[]}'::jsonb, '{}'::jsonb,
                   $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
-          RETURNING id, agent_id, intent_anchor, title, description, status, progress, error_budget,
-                    conversation_id, created_at, updated_at, owner, waiting_on_contact_id,
-                    waiting_on_text, parent_task_id, blocked_by_task_id, priority, due_at,
-                    source, source_agent_id, created_by, tags
+          RETURNING ${TASK_COLUMNS}
         ),
         _wake_job AS (
           INSERT INTO scheduled_jobs (agent_id, run_at, task_payload, status, next_run_at, created_by, timezone, task_id)
@@ -195,11 +198,7 @@ export class TaskRepo {
    */
   async getTask(taskId: string): Promise<TaskRow | null> {
     const { rows } = await this.pool.query(
-      `SELECT id, agent_id, intent_anchor, title, description, status, progress, error_budget,
-              conversation_id, created_at, updated_at, owner, waiting_on_contact_id,
-              waiting_on_text, parent_task_id, blocked_by_task_id, priority, due_at,
-              source, source_agent_id, created_by, tags
-         FROM tasks WHERE id = $1`,
+      `SELECT ${TASK_COLUMNS} FROM tasks WHERE id = $1`,
       [taskId],
     );
     const row = rows[0] as DbTaskRow | undefined;
@@ -338,21 +337,23 @@ export class TaskRepo {
     const updateSql = `
       UPDATE tasks SET ${setClauses.join(', ')}
       WHERE id = $${whereIdx}
-      RETURNING id, agent_id, intent_anchor, title, description, status, progress, error_budget,
-                conversation_id, created_at, updated_at, owner, waiting_on_contact_id,
-                waiting_on_text, parent_task_id, blocked_by_task_id, priority, due_at,
-                source, source_agent_id, created_by, tags
+      RETURNING ${TASK_COLUMNS}
     `;
+
+    // Terminal-status transitions (cancelled / done) always cancel pending wake-up jobs.
+    // When wakeAt is also provided the cancel+create is already atomic; the extra
+    // _cancel_wake arm here handles the bare status-only path.
+    const cancelOnTerminal = (updates.status === 'cancelled' || updates.status === 'done')
+      && !updates.wakeAt;
 
     let updatedRow: DbTaskRow;
 
-    if (updates.wakeAt) {
-      // Atomic CTE: update task + cancel old wake-up jobs + insert new one.
-      // updateParams already ends with taskId at position $whereIdx.
+    if (updates.wakeAt || cancelOnTerminal) {
+      // Atomic CTE: update task + cancel old wake-up jobs + optionally insert new one.
       const wakeAgentIdx = whereIdx + 1;
-      const wakeRunAtIdx = whereIdx + 2;
-      const wakeCreatedByIdx = whereIdx + 3;
-      const wakeTzIdx = whereIdx + 4;
+      const wakeRunAtIdx = updates.wakeAt ? whereIdx + 2 : null;
+      const wakeCreatedByIdx = updates.wakeAt ? whereIdx + 3 : null;
+      const wakeTzIdx = updates.wakeAt ? whereIdx + 4 : null;
 
       const cteSql = `
         WITH updated_task AS (
@@ -361,21 +362,23 @@ export class TaskRepo {
         _cancel_wake AS (
           UPDATE scheduled_jobs SET status = 'cancelled'
           WHERE task_id = $${whereIdx} AND status = 'pending'
-        ),
+        )${updates.wakeAt ? `,
         _new_wake AS (
           INSERT INTO scheduled_jobs (agent_id, run_at, task_payload, status, next_run_at, created_by, timezone, task_id)
           VALUES ($${wakeAgentIdx}, $${wakeRunAtIdx}, '{"type":"task-wake"}'::jsonb, 'pending',
                   $${wakeRunAtIdx}, $${wakeCreatedByIdx}, $${wakeTzIdx}, $${whereIdx})
-        )
+        )` : ''}
         SELECT * FROM updated_task
       `;
-      const allParams = [
-        ...updateParams,
-        callerAgentId ?? current.agentId, // $wakeAgentIdx
-        updates.wakeAt,                   // $wakeRunAtIdx
-        callerAgentId ?? current.agentId, // $wakeCreatedByIdx
-        this.timezone,                    // $wakeTzIdx
-      ];
+      const allParams: unknown[] = [...updateParams];
+      if (updates.wakeAt) {
+        allParams.push(
+          callerAgentId ?? current.agentId, // $wakeAgentIdx
+          updates.wakeAt,                   // $wakeRunAtIdx
+          callerAgentId ?? current.agentId, // $wakeCreatedByIdx
+          this.timezone,                    // $wakeTzIdx
+        );
+      }
       const { rows } = await this.pool.query(cteSql, allParams);
       updatedRow = rows[0] as DbTaskRow | undefined
         ?? (() => { throw new Error(`task-repo: updateTask CTE returned no row for ${taskId}`); })();
@@ -434,10 +437,7 @@ export class TaskRepo {
         UPDATE tasks
         SET status = 'done', progress = $1::jsonb, updated_at = now()
         WHERE id = $2
-        RETURNING id, agent_id, intent_anchor, title, description, status, progress, error_budget,
-                  conversation_id, created_at, updated_at, owner, waiting_on_contact_id,
-                  waiting_on_text, parent_task_id, blocked_by_task_id, priority, due_at,
-                  source, source_agent_id, created_by, tags
+        RETURNING ${TASK_COLUMNS}
       ),
       _cancel_wake AS (
         UPDATE scheduled_jobs SET status = 'cancelled'

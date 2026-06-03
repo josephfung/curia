@@ -643,6 +643,10 @@ pinned_skills:
   - approval-expiry-sweep
   - pending-actions-digest
   - scheduler-report
+  - task-create
+  - task-list
+  - task-update
+  - task-complete
 allow_discovery: true
 schedule:
   - cron: "0 * * * *"
