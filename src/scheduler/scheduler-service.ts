@@ -567,8 +567,10 @@ export class SchedulerService {
     // The CTE surfaces both outcomes via a SELECT at the end:
     //   - rows = [] (empty): WHERE NOT EXISTS fired — existing task preserved (idempotent)
     //   - rows = [{ task_id, job_id }]: new task created and job linked
-    //   - rows = [{ task_id, job_id: null }]: orphan — INSERT succeeded but UPDATE failed
-    //     (scheduled_jobs row disappeared in a race); treated as a hard error.
+    //   - rows = [{ task_id, job_id: null }]: INSERT succeeded but link_job UPDATE returned
+    //     no rows — either the job was deleted concurrently, or a parallel startup already
+    //     set task_id (AND task_id IS NULL guard prevents overwriting). The cleanup_orphan
+    //     CTE deletes the just-inserted task so no orphan accumulates; treated as a hard error.
     if (schedule.intent_anchor) {
       const taskSql = `
         WITH new_task AS (
@@ -582,7 +584,13 @@ export class SchedulerService {
              SET task_id = new_task.id
             FROM new_task
            WHERE scheduled_jobs.id = $7
+             AND task_id IS NULL
           RETURNING scheduled_jobs.id AS job_id
+        ),
+        cleanup_orphan AS (
+          DELETE FROM tasks
+           WHERE id = (SELECT id FROM new_task)
+             AND NOT EXISTS (SELECT 1 FROM link_job)
         )
         SELECT new_task.id AS task_id, link_job.job_id
           FROM new_task
@@ -694,11 +702,13 @@ export class SchedulerService {
       );
     }
 
-    // TODO: if declarative schedules ever use intent_anchor, cancelling the scheduled_jobs rows
-    // here leaves the linked tasks rows in 'active' status with no job pointing at them.
-    // At that point this method should also set status = 'cancelled' on any tasks whose
-    // linked scheduled_jobs row was just cancelled — mirror the cleanup in cancelJob().
-    // No declarative schedules use intent_anchor today, so this is safe to defer.
+    // TODO: this method only cancels scheduled_jobs rows. When a stale declarative schedule has
+    // an intent_anchor, upsertDeclarativeJob creates a linked tasks row (via scheduled_jobs.task_id).
+    // Cancelling the scheduled_jobs row here leaves that tasks row in 'active' status with no job
+    // pointing at it. When agent YAML schedules start using intent_anchor, add a mirror cleanup here
+    // (UPDATE tasks SET status='cancelled' WHERE id IN (SELECT task_id FROM ... cancelled rows))
+    // to match the cancelJob() pattern. No agent YAML schedule entries use intent_anchor today,
+    // so this is safe to defer until they do.
     return rows.length;
   }
 
