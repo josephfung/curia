@@ -8,6 +8,9 @@ import { toLocalIso, formatDisplayTimezone } from '../../src/time/timestamp.js';
 import type { TaskListRow } from '../../src/db/task-repo.js';
 
 const VALID_STATUSES = new Set(['open', 'in_progress', 'blocked', 'waiting', 'done', 'cancelled']);
+
+// Strict ISO-8601 datetime with timezone offset. Rejects loose strings that new Date() would accept.
+const ISO_DATETIME_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/;
 const VALID_OWNERS = new Set(['curia', 'ceo', 'external']);
 const MAX_LIMIT = 100;
 
@@ -25,6 +28,9 @@ export class TaskListHandler implements SkillHandler {
     // Parse comma-separated status filter.
     let statuses: string[] | undefined;
     if (input.status) {
+      if (typeof input.status !== 'string') {
+        return { success: false, error: 'status must be a comma-separated string' };
+      }
       statuses = input.status.split(',').map(s => s.trim()).filter(Boolean);
       for (const s of statuses) {
         if (!VALID_STATUSES.has(s)) {
@@ -42,6 +48,9 @@ export class TaskListHandler implements SkillHandler {
 
     let dueBefore: Date | undefined;
     if (input.due_before) {
+      if (!ISO_DATETIME_RE.test(input.due_before)) {
+        return { success: false, error: 'due_before must be a valid ISO 8601 date string' };
+      }
       dueBefore = new Date(input.due_before);
       if (isNaN(dueBefore.getTime())) {
         return { success: false, error: 'due_before must be a valid ISO 8601 date string' };
@@ -91,12 +100,12 @@ export class TaskListHandler implements SkillHandler {
           status: row.status,
           owner: row.owner,
           priority: row.priority,
-          due_at: row.dueAt ? toLocalIso(new Date(row.dueAt).getTime() / 1000, tz) : null,
+          due_at: row.dueAt ? toLocalIso(Math.floor(new Date(row.dueAt).getTime() / 1000), tz) : null,
           tags: row.tags,
           age,
           last_progress_note: lastNote,
           next_wake_at: row.nextWakeAt
-            ? toLocalIso(new Date(row.nextWakeAt).getTime() / 1000, tz)
+            ? toLocalIso(Math.floor(new Date(row.nextWakeAt).getTime() / 1000), tz)
             : null,
           source_agent_id: row.sourceAgentId,
           blocked_by_task_id: row.blockedByTaskId,

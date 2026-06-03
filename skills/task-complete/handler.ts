@@ -22,8 +22,13 @@ export class TaskCompleteHandler implements SkillHandler {
     if (!UUID_RE.test(input.task_id)) {
       return { success: false, error: 'task_id must be a valid UUID' };
     }
-    if (input.completion_note && input.completion_note.length > 2000) {
-      return { success: false, error: 'completion_note must be 2000 characters or fewer' };
+    if (input.completion_note !== undefined) {
+      if (typeof input.completion_note !== 'string') {
+        return { success: false, error: 'completion_note must be a string' };
+      }
+      if (input.completion_note.length > 2000) {
+        return { success: false, error: 'completion_note must be 2000 characters or fewer' };
+      }
     }
 
     if (!ctx.taskRepo) {
@@ -53,7 +58,7 @@ export class TaskCompleteHandler implements SkillHandler {
           task_id: completed.id,
           title: completed.title,
           status: completed.status,
-          completed_at: toLocalIso(new Date(completed.updatedAt).getTime() / 1000, tz) ?? completed.updatedAt,
+          completed_at: toLocalIso(Math.floor(new Date(completed.updatedAt).getTime() / 1000), tz) ?? completed.updatedAt,
           displayTimezone: tz ? formatDisplayTimezone(tz, new Date()) : 'UTC',
         },
       };

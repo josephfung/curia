@@ -341,9 +341,13 @@ export class TaskRepo {
     updateParams.push(taskId); // $N — WHERE id = $N
     const whereIdx = idx;
 
+    // WHERE clause includes the terminal-state guard. If a concurrent write moved
+    // the task to 'done' or 'cancelled' between our pre-check and this UPDATE,
+    // the guard here ensures we don't overwrite the terminal state. An empty
+    // RETURNING is then handled below with a follow-up SELECT.
     const updateSql = `
       UPDATE tasks SET ${setClauses.join(', ')}
-      WHERE id = $${whereIdx}
+      WHERE id = $${whereIdx} AND status NOT IN ('done', 'cancelled')
       RETURNING ${TASK_COLUMNS}
     `;
 
@@ -387,12 +391,16 @@ export class TaskRepo {
         );
       }
       const { rows } = await this.pool.query(cteSql, allParams);
-      updatedRow = rows[0] as DbTaskRow | undefined
-        ?? (() => { throw new Error(`task-repo: updateTask CTE returned no row for ${taskId}`); })();
+      if (!rows[0]) {
+        return await this.resolveEmptyUpdateReturning(taskId);
+      }
+      updatedRow = rows[0] as DbTaskRow;
     } else {
       const { rows } = await this.pool.query(updateSql, updateParams);
-      updatedRow = rows[0] as DbTaskRow | undefined
-        ?? (() => { throw new Error(`task-repo: updateTask returned no row for ${taskId}`); })();
+      if (!rows[0]) {
+        return await this.resolveEmptyUpdateReturning(taskId);
+      }
+      updatedRow = rows[0] as DbTaskRow;
     }
 
     const updated = mapTaskRow(updatedRow);
@@ -416,6 +424,23 @@ export class TaskRepo {
       'task-repo: updated task',
     );
     return updated;
+  }
+
+  /**
+   * Called when an UPDATE...RETURNING returns no rows after a confirmed pre-check.
+   * Distinguishes "task was deleted concurrently" (return null) from "task reached a
+   * terminal state concurrently and the WHERE guard blocked the write" (throw).
+   */
+  private async resolveEmptyUpdateReturning(taskId: string): Promise<null> {
+    const { rows } = await this.pool.query(
+      `SELECT id, status FROM tasks WHERE id = $1`,
+      [taskId],
+    );
+    if (!rows[0]) return null;
+    const { status } = rows[0] as { status: string };
+    throw new Error(
+      `task-repo: update rejected — task ${taskId} reached terminal state '${status}' concurrently`,
+    );
   }
 
   /**
@@ -443,11 +468,13 @@ export class TaskRepo {
     }
     const newProgress = { ...current.progress, notes };
 
+    // The WHERE guard prevents a concurrent write from moving the task to a terminal
+    // state between our pre-check read and this UPDATE.
     const cteSql = `
       WITH done_task AS (
         UPDATE tasks
         SET status = 'done', progress = $1::jsonb, updated_at = now()
-        WHERE id = $2
+        WHERE id = $2 AND status NOT IN ('done', 'cancelled')
         RETURNING ${TASK_COLUMNS}
       ),
       _cancel_wake AS (
@@ -460,10 +487,9 @@ export class TaskRepo {
     const { rows } = await this.pool.query(cteSql, [JSON.stringify(newProgress), taskId]);
     const row = rows[0] as DbTaskRow | undefined;
     if (!row) {
-      // Task existed at getTask time and was not terminal — if RETURNING is empty,
-      // the row was deleted or mutated by a concurrent write. Throw so callers
-      // get a distinct signal rather than a misleading "not found" error.
-      throw new Error(`task-repo: completeTask CTE returned no row for ${taskId} — possible concurrent modification`);
+      // Task existed at pre-check time and was not terminal — if RETURNING is empty,
+      // the row was either deleted or moved to a terminal state concurrently.
+      return await this.resolveEmptyUpdateReturning(taskId);
     }
 
     const updated = mapTaskRow(row);

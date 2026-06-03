@@ -9,6 +9,10 @@ import { toLocalIso, formatDisplayTimezone } from '../../src/time/timestamp.js';
 const VALID_OWNERS = new Set(['curia', 'ceo', 'external']);
 const VALID_SOURCES = new Set(['ceo', 'agent', 'scheduler', 'coordinator']);
 
+// Strict ISO-8601 datetime with timezone offset. Rejects loose strings like
+// "June 10 2026" or "2026/06/10" that new Date() would silently accept.
+const ISO_DATETIME_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/;
+
 export class TaskCreateHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {
     const input = ctx.input as {
@@ -64,6 +68,9 @@ export class TaskCreateHandler implements SkillHandler {
 
     let dueAt: Date | undefined;
     if (input.due_at) {
+      if (!ISO_DATETIME_RE.test(input.due_at)) {
+        return { success: false, error: 'due_at must be a valid ISO 8601 date string' };
+      }
       dueAt = new Date(input.due_at);
       if (isNaN(dueAt.getTime())) {
         return { success: false, error: 'due_at must be a valid ISO 8601 date string' };
@@ -71,6 +78,9 @@ export class TaskCreateHandler implements SkillHandler {
     }
     let wakeAt: Date | undefined;
     if (input.wake_at) {
+      if (!ISO_DATETIME_RE.test(input.wake_at)) {
+        return { success: false, error: 'wake_at must be a valid ISO 8601 date string' };
+      }
       wakeAt = new Date(input.wake_at);
       if (isNaN(wakeAt.getTime())) {
         return { success: false, error: 'wake_at must be a valid ISO 8601 date string' };
@@ -101,9 +111,12 @@ export class TaskCreateHandler implements SkillHandler {
 
       const tz = ctx.timezone;
       const dueAtDisplay = task.dueAt
-        ? toLocalIso(new Date(task.dueAt).getTime() / 1000, tz)
+        ? toLocalIso(Math.floor(new Date(task.dueAt).getTime() / 1000), tz)
         : null;
-      const createdAtDisplay = toLocalIso(new Date(task.createdAt).getTime() / 1000, tz);
+      const createdAtDisplay = toLocalIso(
+        Math.floor(new Date(task.createdAt).getTime() / 1000),
+        tz,
+      );
 
       return {
         success: true,

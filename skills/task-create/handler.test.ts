@@ -101,6 +101,34 @@ describe('TaskCreateHandler', () => {
     expect((result as { success: false; error: string }).error).toMatch(/owner/);
   });
 
+  it('returns error for non-ISO due_at (permissive date strings)', async () => {
+    const taskRepo = makeTaskRepo();
+    const ctx = makeCtx({ input: { title: 'Task', due_at: '2026/06/10 09:00:00' }, taskRepo });
+
+    const result = await new TaskCreateHandler().execute(ctx);
+
+    expect(result.success).toBe(false);
+    expect((result as { success: false; error: string }).error).toMatch(/due_at/);
+  });
+
+  it('accepts and formats due_at with millisecond precision from DB', async () => {
+    const taskRepo = makeTaskRepo({
+      createTask: vi.fn().mockResolvedValue(
+        makeTaskRow({ dueAt: '2026-06-10T09:00:00.123Z' }),
+      ),
+    });
+    const ctx = makeCtx({
+      input: { title: 'Task', due_at: '2026-06-10T09:00:00.000Z' },
+      taskRepo,
+    });
+
+    const result = await new TaskCreateHandler().execute(ctx);
+
+    expect(result.success).toBe(true);
+    const data = (result as { success: true; data: { due_at: string | null } }).data;
+    expect(data.due_at).not.toBeNull();
+  });
+
   it('returns error for priority out of range', async () => {
     const taskRepo = makeTaskRepo();
     const ctx = makeCtx({ input: { title: 'Do a thing', priority: 150 }, taskRepo });
