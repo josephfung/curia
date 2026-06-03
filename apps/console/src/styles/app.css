@@ -887,10 +887,14 @@ input:focus, textarea:focus, select:focus {
 .badge-event        { background: var(--app-green); }
 .badge-concept      { background: #888; }
 .badge-fact         { background: #444; }
-/* Task owner badges — use filled bg with dark text for WCAG 1.4.3 contrast */
+/* Task owner badges — use filled bg with white text for WCAG 1.4.3 contrast */
+/* Contrast checks (light/dark): curia 6.35/4.4:1, ceo 4.61:1, external 2.98:1 */
+/* badge-external uses dark text (#111) since amber (#C9874A) only reaches 2.98:1 with white */
+/* dark-mode badge-curia overrides to #1A6B5E (same as light --app-teal) to hit 6.35:1 */
 .badge-curia    { background: var(--app-teal);   color: #fff; }
 .badge-ceo      { background: var(--app-violet); color: #fff; }
-.badge-external { background: var(--app-amber);  color: #fff; }
+.badge-external { background: var(--app-amber);  color: #111; }
+[data-theme="dark"] .badge-curia { background: #1A6B5E; }
 
 /* Status pills — outlined, subtle, with a colored leading dot */
 .status-pill {
