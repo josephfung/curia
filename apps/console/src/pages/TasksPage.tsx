@@ -261,7 +261,7 @@ function TaskEditDrawer({ task, creating, onClose, onSaved, onDeleted }: DrawerP
             </svg>
           </button>
         </div>
-        <h2 className="drawer-title-h2">{creating ? 'New task' : (task?.title || task?.agentId ?? '')}</h2>
+        <h2 className="drawer-title-h2">{creating ? 'New task' : (task?.title || task?.agentId) ?? ''}</h2>
         {!creating && task && (
           <div className="drawer-subtitle">{task.status}</div>
         )}
@@ -425,7 +425,8 @@ export default function TasksPage() {
     const c: Record<string, number> = { all: tasks.length };
     for (const s of STATUS_FILTERS.slice(1)) c[s] = 0;
     for (const t of tasks) {
-      if (c[t.status] !== undefined) c[t.status]++;
+      const cur = c[t.status];
+      if (cur !== undefined) c[t.status] = cur + 1;
     }
     return c;
   }, [tasks]);

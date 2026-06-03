@@ -350,12 +350,17 @@ export async function knowledgeGraphRoutes(
 
   app.get('/api/kg/tasks', KG_RATE, async (request, reply) => {
     if (!assertSecret(request, reply, webAppBootstrapSecret, sessions)) return;
-    const result = await pool.query(
-      `SELECT ${TASK_SELECT} FROM tasks ORDER BY updated_at DESC LIMIT 500`,
-    );
-    return reply.send({
-      tasks: result.rows.map((row) => serializeTask(row as DbTaskRow)),
-    });
+    try {
+      const result = await pool.query(
+        `SELECT ${TASK_SELECT} FROM tasks ORDER BY updated_at DESC LIMIT 500`,
+      );
+      return reply.send({
+        tasks: result.rows.map((row) => serializeTask(row as DbTaskRow)),
+      });
+    } catch (err) {
+      logger.error({ err }, 'kg: GET /api/kg/tasks failed');
+      return reply.status(500).send({ error: 'Failed to load tasks.' });
+    }
   });
 
   app.post('/api/kg/tasks', KG_RATE, async (request, reply) => {
@@ -381,14 +386,17 @@ export async function knowledgeGraphRoutes(
     if (typeof body.intentAnchor !== 'string' || body.intentAnchor.trim().length === 0) {
       return reply.status(400).send({ error: 'intentAnchor is required.' });
     }
-    const status = typeof body.status === 'string' ? body.status : 'active';
+    const status = typeof body.status === 'string' ? body.status : 'open';
     if (!validTaskStatuses.includes(status)) {
       return reply.status(400).send({ error: 'Invalid status.' });
     }
-    if (body.owner !== undefined && !validOwners.includes(body.owner as string)) {
+    // Resolve with defaults first, then validate — avoids dual-layer guard maintenance trap.
+    const owner = typeof body.owner === 'string' ? body.owner : 'curia';
+    const source = typeof body.source === 'string' ? body.source : 'agent';
+    if (!validOwners.includes(owner)) {
       return reply.status(400).send({ error: 'Invalid owner. Must be curia, ceo, or external.' });
     }
-    if (body.source !== undefined && !validSources.includes(body.source as string)) {
+    if (!validSources.includes(source)) {
       return reply.status(400).send({ error: 'Invalid source. Must be ceo, agent, scheduler, or coordinator.' });
     }
     if (body.priority !== undefined && (typeof body.priority !== 'number' || !Number.isInteger(body.priority) || body.priority < 0 || body.priority > 100)) {
@@ -415,42 +423,45 @@ export async function knowledgeGraphRoutes(
     const intentAnchor = body.intentAnchor.trim();
     const title = typeof body.title === 'string' && body.title.trim() ? body.title.trim() : intentAnchor;
     const description = typeof body.description === 'string' ? body.description.trim() || null : null;
-    const owner = typeof body.owner === 'string' ? body.owner : 'curia';
     const priority = typeof body.priority === 'number' ? body.priority : 50;
     const dueAt = typeof body.dueAt === 'string' && body.dueAt.trim() ? body.dueAt.trim() : null;
-    const source = typeof body.source === 'string' ? body.source : 'agent';
     const tags = Array.isArray(body.tags) ? (body.tags as string[]) : [];
 
-    const inserted = await pool.query(
-      `INSERT INTO tasks (
-         agent_id, title, intent_anchor, description, status, owner, priority,
-         due_at, source, tags, progress, error_budget, conversation_id, updated_at
-       )
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12::jsonb, $13, now())
-       RETURNING ${TASK_SELECT}`,
-      [
-        body.agentId.trim(),
-        title,
-        intentAnchor,
-        description,
-        status,
-        owner,
-        priority,
-        dueAt,
-        source,
-        tags,
-        JSON.stringify((body.progress as Record<string, unknown> | undefined) ?? {}),
-        JSON.stringify((body.errorBudget as Record<string, unknown> | undefined) ?? {}),
-        conversationId,
-      ],
-    );
-    if (!inserted.rowCount) {
-      logger.error('kg: INSERT tasks returned no rows');
+    try {
+      const inserted = await pool.query(
+        `INSERT INTO tasks (
+           agent_id, title, intent_anchor, description, status, owner, priority,
+           due_at, source, tags, progress, error_budget, conversation_id, updated_at
+         )
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12::jsonb, $13, now())
+         RETURNING ${TASK_SELECT}`,
+        [
+          body.agentId.trim(),
+          title,
+          intentAnchor,
+          description,
+          status,
+          owner,
+          priority,
+          dueAt,
+          source,
+          tags,
+          JSON.stringify((body.progress as Record<string, unknown> | undefined) ?? {}),
+          JSON.stringify((body.errorBudget as Record<string, unknown> | undefined) ?? {}),
+          conversationId,
+        ],
+      );
+      if (!inserted.rowCount) {
+        logger.error('kg: INSERT tasks returned no rows');
+        return reply.status(500).send({ error: 'Failed to create task.' });
+      }
+      return reply.status(201).send({
+        task: serializeTask(inserted.rows[0]! as DbTaskRow),
+      });
+    } catch (err) {
+      logger.error({ err }, 'kg: POST /api/kg/tasks failed');
       return reply.status(500).send({ error: 'Failed to create task.' });
     }
-    return reply.status(201).send({
-      task: serializeTask(inserted.rows[0]! as DbTaskRow),
-    });
   });
 
   app.patch('/api/kg/tasks/:id', KG_RATE, async (request, reply) => {
@@ -509,8 +520,8 @@ export async function knowledgeGraphRoutes(
     if (!agentId) return reply.status(400).send({ error: 'agentId is required.' });
     if (!intentAnchor) return reply.status(400).send({ error: 'intentAnchor is required.' });
     if (!validTaskStatuses.includes(status)) return reply.status(400).send({ error: 'Invalid status.' });
-    if (!validOwners.includes(owner)) return reply.status(400).send({ error: 'Invalid owner.' });
-    if (!validSources.includes(source)) return reply.status(400).send({ error: 'Invalid source.' });
+    if (!validOwners.includes(owner)) return reply.status(400).send({ error: 'Invalid owner. Must be curia, ceo, or external.' });
+    if (!validSources.includes(source)) return reply.status(400).send({ error: 'Invalid source. Must be ceo, agent, scheduler, or coordinator.' });
     if (!Number.isInteger(priority) || priority < 0 || priority > 100) return reply.status(400).send({ error: 'priority must be an integer 0–100.' });
     if (body.tags !== undefined && (!Array.isArray(body.tags) || (body.tags as unknown[]).some(t => typeof t !== 'string'))) {
       return reply.status(400).send({ error: 'tags must be an array of strings.' });
@@ -532,51 +543,56 @@ export async function knowledgeGraphRoutes(
       return reply.status(400).send({ error: 'Invalid conversationId: must be a valid UUID.' });
     }
 
-    const updated = await pool.query(
-      `UPDATE tasks
-       SET agent_id        = $2,
-           title           = $3,
-           intent_anchor   = $4,
-           description     = $5,
-           status          = $6,
-           owner           = $7,
-           priority        = $8,
-           due_at          = $9,
-           source          = $10,
-           tags            = $11,
-           waiting_on_text = $12,
-           progress        = $13::jsonb,
-           error_budget    = $14::jsonb,
-           conversation_id = $15,
-           updated_at      = now()
-       WHERE id = $1
-       RETURNING ${TASK_SELECT}`,
-      [
-        id,
-        agentId,
-        title,
-        intentAnchor,
-        description,
-        status,
-        owner,
-        priority,
-        dueAt,
-        source,
-        tags,
-        waitingOnText,
-        JSON.stringify((body.progress as Record<string, unknown> | undefined) ?? row.progress ?? {}),
-        JSON.stringify((body.errorBudget as Record<string, unknown> | undefined) ?? row.error_budget ?? {}),
-        conversationId,
-      ],
-    );
-    // Guard against concurrent deletes between the existence check and the UPDATE.
-    if (!updated.rowCount) {
-      logger.warn({ taskId: id }, 'kg: PATCH tasks matched 0 rows — likely concurrent delete');
-      return reply.status(404).send({ error: 'Task not found.' });
+    try {
+      const updated = await pool.query(
+        `UPDATE tasks
+         SET agent_id        = $2,
+             title           = $3,
+             intent_anchor   = $4,
+             description     = $5,
+             status          = $6,
+             owner           = $7,
+             priority        = $8,
+             due_at          = $9,
+             source          = $10,
+             tags            = $11,
+             waiting_on_text = $12,
+             progress        = $13::jsonb,
+             error_budget    = $14::jsonb,
+             conversation_id = $15,
+             updated_at      = now()
+         WHERE id = $1
+         RETURNING ${TASK_SELECT}`,
+        [
+          id,
+          agentId,
+          title,
+          intentAnchor,
+          description,
+          status,
+          owner,
+          priority,
+          dueAt,
+          source,
+          tags,
+          waitingOnText,
+          JSON.stringify((body.progress as Record<string, unknown> | undefined) ?? row.progress ?? {}),
+          JSON.stringify((body.errorBudget as Record<string, unknown> | undefined) ?? row.error_budget ?? {}),
+          conversationId,
+        ],
+      );
+      // Guard against concurrent deletes between the existence check and the UPDATE.
+      if (!updated.rowCount) {
+        logger.warn({ taskId: id }, 'kg: PATCH tasks matched 0 rows — likely concurrent delete');
+        return reply.status(404).send({ error: 'Task not found.' });
+      }
+      return reply.send({
+        task: serializeTask(updated.rows[0]! as DbTaskRow),
+      });
+    } catch (err) {
+      logger.error({ err, taskId: id }, 'kg: PATCH /api/kg/tasks/:id failed');
+      return reply.status(500).send({ error: 'Failed to update task.' });
     }
-    return reply.send({
-      task: serializeTask(updated.rows[0]! as DbTaskRow),
-    });
   });
 
   app.delete('/api/kg/tasks/:id', KG_RATE, async (request, reply) => {
@@ -585,11 +601,16 @@ export async function knowledgeGraphRoutes(
     if (!UUID_RE.test(id)) {
       return reply.status(400).send({ error: 'Invalid task id.' });
     }
-    const deleted = await pool.query('DELETE FROM tasks WHERE id = $1', [id]);
-    if (deleted.rowCount === 0) {
-      return reply.status(404).send({ error: 'Agent task not found.' });
+    try {
+      const deleted = await pool.query('DELETE FROM tasks WHERE id = $1', [id]);
+      if (deleted.rowCount === 0) {
+        return reply.status(404).send({ error: 'Task not found.' });
+      }
+      return reply.status(204).send();
+    } catch (err) {
+      logger.error({ err, taskId: id }, 'kg: DELETE /api/kg/tasks/:id failed');
+      return reply.status(500).send({ error: 'Failed to delete task.' });
     }
-    return reply.status(204).send();
   });
 
   // Serialize a Contact object to the HTTP response shape.
