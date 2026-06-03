@@ -246,11 +246,11 @@ export class Scheduler {
     try {
       const sql = `
         SELECT sj.*,
-               at.id AS agent_task_id,
-               at.intent_anchor,
-               at.progress
+               t.id AS agent_task_id,
+               t.intent_anchor,
+               t.progress
           FROM scheduled_jobs sj
-          LEFT JOIN agent_tasks at ON at.scheduled_job_id = sj.id
+          LEFT JOIN tasks t ON sj.task_id = t.id
          WHERE sj.status IN ('pending', 'failed')
            AND sj.next_run_at <= now()
          ORDER BY sj.next_run_at ASC

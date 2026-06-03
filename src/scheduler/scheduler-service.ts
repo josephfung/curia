@@ -36,7 +36,7 @@ export interface CreateJobResult {
   agentTaskId?: string;
 }
 
-/** Full job row with optional linked agent_task fields (from a LEFT JOIN). */
+/** Full job row with optional linked task fields (from a LEFT JOIN on tasks). */
 export interface JobRow {
   id: string;
   agentId: string;
@@ -52,7 +52,7 @@ export interface JobRow {
   createdAt: string;
   /** IANA timezone used for cron wall-clock interpretation. */
   timezone: string;
-  // Linked agent_task fields (null when no task is linked)
+  // Linked task fields (null when no task is linked via scheduled_jobs.task_id)
   agentTaskId: string | null;
   intentAnchor: string | null;
   progress: Record<string, unknown> | null;
@@ -221,19 +221,30 @@ export class SchedulerService {
     const { rows } = await this.pool.query(insertSql, insertParams);
     const jobId = (rows[0] as { id: string }).id;
 
-    // If an intentAnchor is provided, create a linked agent_task for persistent state tracking.
+    // If an intentAnchor is provided, create a linked task row and bind it to the job.
+    // The FK direction is scheduled_jobs.task_id → tasks.id, so we INSERT the task
+    // first and then UPDATE the job row with the new task's id.
     let agentTaskId: string | undefined;
     if (intentAnchor) {
+      // Single round-trip: INSERT task and UPDATE scheduled_jobs.task_id atomically.
       const taskSql = `
-        INSERT INTO agent_tasks (agent_id, intent_anchor, status, error_budget, scheduled_job_id)
-        VALUES ($1, $2, $3, $4, $5)
-        RETURNING id
+        WITH new_task AS (
+          INSERT INTO tasks (agent_id, title, intent_anchor, status, error_budget, source_agent_id)
+          VALUES ($1, $2, $3, $4, $5::jsonb, $6)
+          RETURNING id
+        ),
+        link_job AS (
+          UPDATE scheduled_jobs SET task_id = (SELECT id FROM new_task) WHERE id = $7
+        )
+        SELECT id FROM new_task
       `;
       const taskParams = [
         agentId,
+        intentAnchor,   // use intentAnchor as the task title
         intentAnchor,
         'active',
         JSON.stringify(errorBudget ?? {}),
+        agentId,        // source_agent_id
         jobId,
       ];
       const taskResult = await this.pool.query(taskSql, taskParams);
@@ -259,11 +270,11 @@ export class SchedulerService {
   async getJob(jobId: string): Promise<JobRow | null> {
     const sql = `
       SELECT sj.*,
-             at.id AS agent_task_id,
-             at.intent_anchor,
-             at.progress
+             t.id AS agent_task_id,
+             t.intent_anchor,
+             t.progress
         FROM scheduled_jobs sj
-        LEFT JOIN agent_tasks at ON at.scheduled_job_id = sj.id
+        LEFT JOIN tasks t ON sj.task_id = t.id
        WHERE sj.id = $1
     `;
     const { rows } = await this.pool.query(sql, [jobId]);
@@ -296,11 +307,11 @@ export class SchedulerService {
 
     const sql = `
       SELECT sj.*,
-             at.id AS agent_task_id,
-             at.intent_anchor,
-             at.progress
+             t.id AS agent_task_id,
+             t.intent_anchor,
+             t.progress
         FROM scheduled_jobs sj
-        LEFT JOIN agent_tasks at ON at.scheduled_job_id = sj.id
+        LEFT JOIN tasks t ON sj.task_id = t.id
        ${whereClause}
        ORDER BY sj.created_at DESC
     `;
@@ -313,32 +324,37 @@ export class SchedulerService {
       `UPDATE scheduled_jobs SET status = $1 WHERE id = $2`,
       ['cancelled', jobId],
     );
-    // Also cancel linked agent_task if any
+    // Also cancel the linked task if any (FK is now on scheduled_jobs.task_id → tasks.id).
     await this.pool.query(
-      `UPDATE agent_tasks SET status = 'cancelled', updated_at = now() WHERE scheduled_job_id = $1`,
+      `UPDATE tasks t
+          SET status = 'cancelled', updated_at = now()
+         FROM scheduled_jobs sj
+        WHERE sj.id = $1 AND t.id = sj.task_id`,
       [jobId],
     );
     this.logger.info({ jobId }, 'Scheduled job cancelled');
   }
 
   /**
-   * Pause a job and its linked agent_task due to intent drift detection.
+   * Pause a job and its linked task due to intent drift detection.
    * Sets status = 'paused' on both tables in a single query.
    * The CEO must review and resume or cancel the job manually.
    */
   async pauseJobForDrift(jobId: string): Promise<void> {
-    // Update both tables atomically: pause the job and its linked agent_task.
+    // Update both tables atomically: pause the job and its linked task.
     // Uses a CTE so both updates happen in one round-trip and stay consistent.
+    // The FK is now scheduled_jobs.task_id → tasks.id, so we join through scheduled_jobs.
     await this.pool.query(
       `WITH paused_job AS (
          UPDATE scheduled_jobs
             SET status = 'paused'
           WHERE id = $1
        )
-       UPDATE agent_tasks
+       UPDATE tasks t
           SET status     = 'paused',
               updated_at = now()
-        WHERE scheduled_job_id = $1`,
+         FROM scheduled_jobs sj
+        WHERE sj.id = $1 AND t.id = sj.task_id`,
       [jobId],
     );
 
@@ -376,13 +392,14 @@ export class SchedulerService {
       [jobId, nextRunAt],
     );
 
-    // Also resume any agent_tasks that were paused by the drift-detection path.
-    // Suspended jobs (failure-threshold path) don't set agent_tasks.status, so this
+    // Also resume any tasks that were paused by the drift-detection path.
+    // Suspended jobs (failure-threshold path) don't set tasks.status, so this
     // UPDATE is a no-op for them — it only affects drift-paused jobs.
     await this.pool.query(
-      `UPDATE agent_tasks
+      `UPDATE tasks t
           SET status = 'active', updated_at = now()
-        WHERE scheduled_job_id = $1 AND status = 'paused'`,
+         FROM scheduled_jobs sj
+        WHERE sj.id = $1 AND t.id = sj.task_id AND t.status = 'paused'`,
       [jobId],
     );
 
@@ -448,9 +465,11 @@ export class SchedulerService {
    * Note: ON CONFLICT ON CONSTRAINT only works with named CONSTRAINTS, not named indexes —
    * so we use the column-based syntax here to match the CREATE UNIQUE INDEX definition.
    *
-   * When schedule.intent_anchor is present, also creates a linked agent_tasks row so the
+   * When schedule.intent_anchor is present, also creates a linked tasks row so the
    * drift detector can fire for this job. The INSERT is guarded by WHERE NOT EXISTS to
-   * preserve the existing agent_task row (and its accumulated progress) across restarts.
+   * preserve the existing task row (and its accumulated progress) across restarts.
+   * The FK direction is scheduled_jobs.task_id → tasks.id, so after inserting the task
+   * we UPDATE scheduled_jobs.task_id. Both operations are in one CTE for atomicity.
    */
   async upsertDeclarativeJob(
     sourceAgentId: string,
@@ -520,32 +539,45 @@ export class SchedulerService {
     const { rows } = await this.pool.query(sql, params);
     const jobId = (rows[0] as { id: string }).id;
 
-    // If intent_anchor is set, create a linked agent_tasks row so the drift detector can
+    // If intent_anchor is set, create a linked tasks row so the drift detector can
     // fire for this job — same pattern as createJob(). The WHERE NOT EXISTS guard ensures
     // this is a no-op on restart (preserving accumulated progress in the existing row).
+    //
+    // Both the INSERT into tasks and the UPDATE of scheduled_jobs.task_id happen in one
+    // CTE so the operation is atomic. rowCount of the UPDATE tells us whether a new task
+    // was created (1) or the guard fired and the existing row was preserved (0).
     if (schedule.intent_anchor) {
       const taskSql = `
-        INSERT INTO agent_tasks (agent_id, intent_anchor, status, error_budget, scheduled_job_id)
-        SELECT $1, $2, $3, $4, $5
-        WHERE NOT EXISTS (SELECT 1 FROM agent_tasks WHERE scheduled_job_id = $5)
+        WITH new_task AS (
+          INSERT INTO tasks (agent_id, title, intent_anchor, status, error_budget, source_agent_id)
+          SELECT $1, $2, $3, $4, $5::jsonb, $6
+          WHERE NOT EXISTS (SELECT 1 FROM scheduled_jobs WHERE id = $7 AND task_id IS NOT NULL)
+          RETURNING id
+        )
+        UPDATE scheduled_jobs
+           SET task_id = new_task.id
+          FROM new_task
+         WHERE scheduled_jobs.id = $7
       `;
       let taskResult: { rowCount: number | null };
       try {
         taskResult = await this.pool.query(taskSql, [
           agentId,
-          schedule.intent_anchor,
+          schedule.intent_anchor,   // title
+          schedule.intent_anchor,   // intent_anchor
           'active',
           JSON.stringify({}),
+          agentId,                  // source_agent_id
           jobId,
         ]);
       } catch (err) {
         // Re-throw so loadDeclarativeJobs treats the whole upsert as failed.
-        // The scheduled_jobs row was already written, but without the agent_tasks
+        // The scheduled_jobs row was already written, but without the tasks
         // link the drift detector cannot fire — running silently in a degraded state
         // is worse than a loud failure that prompts operator attention.
         this.logger.error(
           { err, agentId, jobId, intentAnchor: schedule.intent_anchor },
-          'upsertDeclarativeJob: failed to create agent_tasks row — job will run without drift detection until this is resolved',
+          'upsertDeclarativeJob: failed to create tasks row — job will run without drift detection until this is resolved',
         );
         throw err;
       }
@@ -554,8 +586,8 @@ export class SchedulerService {
       this.logger.info(
         { agentId, jobId, intentAnchor: schedule.intent_anchor, anchorCreated },
         anchorCreated
-          ? 'upsertDeclarativeJob: agent_tasks row created for intent_anchor (drift detection enabled)'
-          : 'upsertDeclarativeJob: agent_tasks row already exists — skipped (restart idempotency)',
+          ? 'upsertDeclarativeJob: tasks row created for intent_anchor (drift detection enabled)'
+          : 'upsertDeclarativeJob: tasks row already exists — skipped (restart idempotency)',
       );
     }
 
@@ -624,11 +656,11 @@ export class SchedulerService {
       );
     }
 
-    // TODO: if declarative schedules ever use intent_anchor, cancelling the scheduled_jobs row
-    // here leaves the linked agent_tasks row orphaned (scheduled_job_id becomes NULL). At that
-    // point this method should also cancel any agent_tasks rows whose scheduled_job_id was
-    // just cleared — mirror the cleanup in cancelJob(). No declarative schedules use
-    // intent_anchor today, so this is safe to defer.
+    // TODO: if declarative schedules ever use intent_anchor, cancelling the scheduled_jobs rows
+    // here leaves the linked tasks rows in 'active' status with no job pointing at them.
+    // At that point this method should also set status = 'cancelled' on any tasks whose
+    // linked scheduled_jobs row was just cancelled — mirror the cleanup in cancelJob().
+    // No declarative schedules use intent_anchor today, so this is safe to defer.
     return rows.length;
   }
 

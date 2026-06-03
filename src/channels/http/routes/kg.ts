@@ -278,7 +278,12 @@ export async function knowledgeGraphRoutes(
   });
 
   const validContactStatuses: ContactStatus[] = ['confirmed', 'provisional', 'blocked'];
-  const validTaskStatuses = ['active', 'pending', 'paused', 'completed', 'failed', 'cancelled'];
+  const validTaskStatuses = [
+    // Legacy values used by the scheduler before task skills shipped
+    'active', 'pending', 'paused', 'completed', 'failed',
+    // Task-lifecycle values introduced by migration 049
+    'open', 'in_progress', 'blocked', 'waiting', 'done', 'cancelled',
+  ];
   // Reused across contacts endpoints — Postgres UUID columns throw cast errors on bad input
   // so we reject at the API boundary with a 400 instead.
   const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -291,7 +296,6 @@ export async function knowledgeGraphRoutes(
     progress: Record<string, unknown> | null;
     error_budget: Record<string, unknown> | null;
     conversation_id: string | null;
-    scheduled_job_id: string | null;
     created_at: string;
     updated_at: string;
   }) {
@@ -303,7 +307,6 @@ export async function knowledgeGraphRoutes(
       progress: row.progress ?? {},
       errorBudget: row.error_budget ?? {},
       conversationId: row.conversation_id,
-      scheduledJobId: row.scheduled_job_id,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     };
@@ -312,8 +315,8 @@ export async function knowledgeGraphRoutes(
   app.get('/api/kg/tasks', KG_RATE, async (request, reply) => {
     if (!assertSecret(request, reply, webAppBootstrapSecret, sessions)) return;
     const result = await pool.query(
-      `SELECT id, agent_id, intent_anchor, status, progress, error_budget, conversation_id, scheduled_job_id, created_at, updated_at
-       FROM agent_tasks
+      `SELECT id, agent_id, intent_anchor, status, progress, error_budget, conversation_id, created_at, updated_at
+       FROM tasks
        ORDER BY updated_at DESC
        LIMIT 500`,
     );
@@ -327,7 +330,6 @@ export async function knowledgeGraphRoutes(
           progress: Record<string, unknown> | null;
           error_budget: Record<string, unknown> | null;
           conversation_id: string | null;
-          scheduled_job_id: string | null;
           created_at: string;
           updated_at: string;
         }),
@@ -344,7 +346,6 @@ export async function knowledgeGraphRoutes(
       progress?: unknown;
       errorBudget?: unknown;
       conversationId?: unknown;
-      scheduledJobId?: unknown;
     };
     if (typeof body.agentId !== 'string' || body.agentId.trim().length === 0) {
       return reply.status(400).send({ error: 'agentId is required.' });
@@ -367,33 +368,27 @@ export async function knowledgeGraphRoutes(
       typeof body.conversationId === 'string' && body.conversationId.trim().length > 0
         ? body.conversationId.trim()
         : null;
-    const scheduledJobId =
-      typeof body.scheduledJobId === 'string' && body.scheduledJobId.trim().length > 0
-        ? body.scheduledJobId.trim()
-        : null;
     if (conversationId && !UUID_RE.test(conversationId)) {
       return reply.status(400).send({ error: 'Invalid conversationId: must be a valid UUID.' });
     }
-    if (scheduledJobId && !UUID_RE.test(scheduledJobId)) {
-      return reply.status(400).send({ error: 'Invalid scheduledJobId: must be a valid UUID.' });
-    }
 
+    const intentAnchor = body.intentAnchor.trim();
     const inserted = await pool.query(
-      `INSERT INTO agent_tasks (agent_id, intent_anchor, status, progress, error_budget, conversation_id, scheduled_job_id, updated_at)
-       VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6, $7, now())
-       RETURNING id, agent_id, intent_anchor, status, progress, error_budget, conversation_id, scheduled_job_id, created_at, updated_at`,
+      `INSERT INTO tasks (agent_id, title, intent_anchor, status, progress, error_budget, conversation_id, updated_at)
+       VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7, now())
+       RETURNING id, agent_id, intent_anchor, status, progress, error_budget, conversation_id, created_at, updated_at`,
       [
         body.agentId.trim(),
-        body.intentAnchor.trim(),
+        intentAnchor,   // use intentAnchor as the task title
+        intentAnchor,
         status,
         JSON.stringify((body.progress as Record<string, unknown> | undefined) ?? {}),
         JSON.stringify((body.errorBudget as Record<string, unknown> | undefined) ?? {}),
         conversationId,
-        scheduledJobId,
       ],
     );
     if (!inserted.rowCount) {
-      logger.error('kg: INSERT agent_tasks returned no rows');
+      logger.error('kg: INSERT tasks returned no rows');
       return reply.status(500).send({ error: 'Failed to create task.' });
     }
     return reply.status(201).send({
@@ -406,7 +401,6 @@ export async function knowledgeGraphRoutes(
           progress: Record<string, unknown> | null;
           error_budget: Record<string, unknown> | null;
           conversation_id: string | null;
-          scheduled_job_id: string | null;
           created_at: string;
           updated_at: string;
         },
@@ -427,12 +421,11 @@ export async function knowledgeGraphRoutes(
       progress?: unknown;
       errorBudget?: unknown;
       conversationId?: unknown;
-      scheduledJobId?: unknown;
     };
 
     const existing = await pool.query(
-      `SELECT id, agent_id, intent_anchor, status, progress, error_budget, conversation_id, scheduled_job_id, created_at, updated_at
-       FROM agent_tasks
+      `SELECT id, agent_id, intent_anchor, status, progress, error_budget, conversation_id, created_at, updated_at
+       FROM tasks
        WHERE id = $1`,
       [id],
     );
@@ -447,7 +440,6 @@ export async function knowledgeGraphRoutes(
       progress: Record<string, unknown> | null;
       error_budget: Record<string, unknown> | null;
       conversation_id: string | null;
-      scheduled_job_id: string | null;
       created_at: string;
       updated_at: string;
     };
@@ -473,31 +465,21 @@ export async function knowledgeGraphRoutes(
         : body.conversationId === null
         ? null
         : row.conversation_id;
-    const scheduledJobId =
-      typeof body.scheduledJobId === 'string'
-        ? body.scheduledJobId.trim() || null
-        : body.scheduledJobId === null
-        ? null
-        : row.scheduled_job_id;
     if (conversationId && !UUID_RE.test(conversationId)) {
       return reply.status(400).send({ error: 'Invalid conversationId: must be a valid UUID.' });
     }
-    if (scheduledJobId && !UUID_RE.test(scheduledJobId)) {
-      return reply.status(400).send({ error: 'Invalid scheduledJobId: must be a valid UUID.' });
-    }
 
     const updated = await pool.query(
-      `UPDATE agent_tasks
+      `UPDATE tasks
        SET agent_id = $2,
            intent_anchor = $3,
            status = $4,
            progress = $5::jsonb,
            error_budget = $6::jsonb,
            conversation_id = $7,
-           scheduled_job_id = $8,
            updated_at = now()
        WHERE id = $1
-       RETURNING id, agent_id, intent_anchor, status, progress, error_budget, conversation_id, scheduled_job_id, created_at, updated_at`,
+       RETURNING id, agent_id, intent_anchor, status, progress, error_budget, conversation_id, created_at, updated_at`,
       [
         id,
         agentId,
@@ -506,12 +488,11 @@ export async function knowledgeGraphRoutes(
         JSON.stringify((body.progress as Record<string, unknown> | undefined) ?? row.progress ?? {}),
         JSON.stringify((body.errorBudget as Record<string, unknown> | undefined) ?? row.error_budget ?? {}),
         conversationId,
-        scheduledJobId,
       ],
     );
     // Guard against concurrent deletes between the existence check and the UPDATE.
     if (!updated.rowCount) {
-      logger.warn({ taskId: id }, 'kg: PATCH agent_tasks matched 0 rows — likely concurrent delete');
+      logger.warn({ taskId: id }, 'kg: PATCH tasks matched 0 rows — likely concurrent delete');
       return reply.status(404).send({ error: 'Agent task not found.' });
     }
     return reply.send({
@@ -524,7 +505,6 @@ export async function knowledgeGraphRoutes(
           progress: Record<string, unknown> | null;
           error_budget: Record<string, unknown> | null;
           conversation_id: string | null;
-          scheduled_job_id: string | null;
           created_at: string;
           updated_at: string;
         },
@@ -538,7 +518,7 @@ export async function knowledgeGraphRoutes(
     if (!UUID_RE.test(id)) {
       return reply.status(400).send({ error: 'Invalid task id.' });
     }
-    const deleted = await pool.query('DELETE FROM agent_tasks WHERE id = $1', [id]);
+    const deleted = await pool.query('DELETE FROM tasks WHERE id = $1', [id]);
     if (deleted.rowCount === 0) {
       return reply.status(404).send({ error: 'Agent task not found.' });
     }
