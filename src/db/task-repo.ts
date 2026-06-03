@@ -180,14 +180,21 @@ export class TaskRepo {
 
     const task = mapTaskRow(row);
 
-    await this.bus.publish('execution', createTaskCreated({
-      taskId: task.id,
-      title: task.title,
-      owner: task.owner,
-      source: task.source,
-      sourceAgentId: task.sourceAgentId,
-      agentId: task.agentId,
-    }));
+    // The DB write has committed. A bus-publish failure is an observability gap,
+    // not a data-integrity failure — log it but do not surface it as a task-creation
+    // failure (which would cause the caller to retry and create a duplicate row).
+    try {
+      await this.bus.publish('execution', createTaskCreated({
+        taskId: task.id,
+        title: task.title,
+        owner: task.owner,
+        source: task.source,
+        sourceAgentId: task.sourceAgentId,
+        agentId: task.agentId,
+      }));
+    } catch (busErr) {
+      this.logger.error({ busErr, taskId: task.id }, 'task-repo: bus publish failed after createTask');
+    }
 
     this.logger.info({ taskId: task.id, title: task.title }, 'task-repo: created task');
     return task;
@@ -390,15 +397,19 @@ export class TaskRepo {
 
     const updated = mapTaskRow(updatedRow);
 
-    await this.bus.publish('execution', createTaskUpdated({
-      taskId: updated.id,
-      previousStatus: current.status,
-      newStatus: updates.status !== undefined && updates.status !== current.status
-        ? updates.status
-        : undefined,
-      progressNote: updates.progressNote,
-      agentId: callerAgentId ?? null,
-    }));
+    try {
+      await this.bus.publish('execution', createTaskUpdated({
+        taskId: updated.id,
+        previousStatus: current.status,
+        newStatus: updates.status !== undefined && updates.status !== current.status
+          ? updates.status
+          : undefined,
+        progressNote: updates.progressNote,
+        agentId: callerAgentId ?? null,
+      }));
+    } catch (busErr) {
+      this.logger.error({ busErr, taskId: updated.id }, 'task-repo: bus publish failed after updateTask');
+    }
 
     this.logger.info(
       { taskId: updated.id, previousStatus: current.status, newStatus: updated.status },
@@ -448,15 +459,24 @@ export class TaskRepo {
 
     const { rows } = await this.pool.query(cteSql, [JSON.stringify(newProgress), taskId]);
     const row = rows[0] as DbTaskRow | undefined;
-    if (!row) return null;
+    if (!row) {
+      // Task existed at getTask time and was not terminal — if RETURNING is empty,
+      // the row was deleted or mutated by a concurrent write. Throw so callers
+      // get a distinct signal rather than a misleading "not found" error.
+      throw new Error(`task-repo: completeTask CTE returned no row for ${taskId} — possible concurrent modification`);
+    }
 
     const updated = mapTaskRow(row);
 
-    await this.bus.publish('execution', createTaskCompleted({
-      taskId: updated.id,
-      completionNote,
-      agentId: callerAgentId ?? null,
-    }));
+    try {
+      await this.bus.publish('execution', createTaskCompleted({
+        taskId: updated.id,
+        completionNote,
+        agentId: callerAgentId ?? null,
+      }));
+    } catch (busErr) {
+      this.logger.error({ busErr, taskId: updated.id }, 'task-repo: bus publish failed after completeTask');
+    }
 
     this.logger.info({ taskId: updated.id }, 'task-repo: completed task');
     return updated;
@@ -464,12 +484,15 @@ export class TaskRepo {
 
   /**
    * Cancel all pending wake-up jobs for a task without changing the task itself.
-   * Used when status transitions to 'cancelled' via updateTask with status='cancelled'.
+   * Available as an explicit hook for callers that need to cancel wake-ups independently
+   * of a status transition (e.g. external cleanup). For status='cancelled' and status='done'
+   * transitions via updateTask, the cancellation is handled atomically in the CTE.
    */
   async cancelWakeUpJobs(taskId: string): Promise<void> {
-    await this.pool.query(
+    const result = await this.pool.query(
       `UPDATE scheduled_jobs SET status = 'cancelled' WHERE task_id = $1 AND status = 'pending'`,
       [taskId],
     );
+    this.logger.info({ taskId, rowsAffected: result.rowCount }, 'task-repo: cancelled wake-up jobs');
   }
 }

@@ -40,6 +40,14 @@ export class TaskListHandler implements SkillHandler {
       return { success: false, error: `owner must be one of: curia, ceo, external` };
     }
 
+    let dueBefore: Date | undefined;
+    if (input.due_before) {
+      dueBefore = new Date(input.due_before);
+      if (isNaN(dueBefore.getTime())) {
+        return { success: false, error: 'due_before must be a valid ISO 8601 date string' };
+      }
+    }
+
     const limit = input.limit !== undefined
       ? Math.min(Math.max(1, Math.floor(input.limit)), MAX_LIMIT)
       : 25;
@@ -59,7 +67,7 @@ export class TaskListHandler implements SkillHandler {
         owner: input.owner,
         tag: input.tag,
         parentTaskId: input.parent_task_id,
-        dueBefore: input.due_before ? new Date(input.due_before) : undefined,
+        dueBefore,
         limit,
       });
 
@@ -106,7 +114,7 @@ export class TaskListHandler implements SkillHandler {
       };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      ctx.log.error({ err }, 'Failed to list tasks');
+      ctx.log.error({ err, statuses, owner: input.owner, limit }, 'Failed to list tasks');
       return { success: false, error: `Failed to list tasks: ${message}` };
     }
   }

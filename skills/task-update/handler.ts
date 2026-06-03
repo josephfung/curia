@@ -65,6 +65,21 @@ export class TaskUpdateHandler implements SkillHandler {
       return { success: false, error: 'At least one field to update must be provided' };
     }
 
+    let dueAt: Date | undefined;
+    if (input.due_at) {
+      dueAt = new Date(input.due_at);
+      if (isNaN(dueAt.getTime())) {
+        return { success: false, error: 'due_at must be a valid ISO 8601 date string' };
+      }
+    }
+    let wakeAt: Date | undefined;
+    if (input.wake_at) {
+      wakeAt = new Date(input.wake_at);
+      if (isNaN(wakeAt.getTime())) {
+        return { success: false, error: 'wake_at must be a valid ISO 8601 date string' };
+      }
+    }
+
     if (!ctx.taskRepo) {
       return {
         success: false,
@@ -81,8 +96,8 @@ export class TaskUpdateHandler implements SkillHandler {
           status: input.status,
           priority: input.priority,
           owner: input.owner,
-          dueAt: input.due_at ? new Date(input.due_at) : undefined,
-          wakeAt: input.wake_at ? new Date(input.wake_at) : undefined,
+          dueAt,
+          wakeAt,
           tags: input.tags,
           progressNote: input.progress_note,
           blockedByTaskId: input.blocked_by_task_id,
