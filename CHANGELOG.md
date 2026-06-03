@@ -14,12 +14,9 @@ bus event types) are noted explicitly even in the `0.x` range.
 ## [Unreleased]
 
 ### Added
+- **Coordinator task integration** — pins `task-create`, `task-list`, `task-update`, `task-complete` to the coordinator; adds a 3×/day backlog-sweep scheduled job; adds backlog-awareness, defer-or-do, and natural-language-entry prompt sections so the CEO can manage tasks conversationally. (Tasks v1, issue 3 of 7, closes #836)
+- **`tasks` config block** — optional `tasks.backlogSweepCron` and `tasks.sweepBatchSize` keys in `config/default.yaml` with startup validation; defaults baked in as `"0 7,13,19 * * *"` / `3`. (#836)
 - **Tasks v1 CRUD skills** — `task-create`, `task-list`, `task-update`, `task-complete` skills backed by a new capability-gated `TaskRepo`; promotes `agent_tasks` to a first-class `tasks` table with CEO-visible columns; adds `task.created`, `task.updated`, `task.completed` bus events. (#834, #835)
-
-### Changed
-- **Console tasks view** — updated to match the migrated `tasks` schema: drops `scheduled_job_id`, adds all new columns (`title`, `owner`, `priority`, `due_at`, `source`, `tags`, `description`, FK references), extends status filters with new task-lifecycle values, and updates the scheduled-jobs view to display the linked `task_id`. (#869)
-
-### Added
 - **`contact-update` skill** — direct write path for canonical contact attributes (title, organization, phone, timezone, etc.) with E.164 phone normalization. Pinned to coordinator, ceo-inbox, research-analyst, and contacts. (#863)
 - **Contact canonical attributes** — 12 structured profile fields (`title`, `organization`, `primary_email`, etc.) persisted directly on the `contacts` row; backfill script populates from KG facts. (#829)
 - **Entity context enrichment** — `EntityContext.contact` now exposes all 12 canonical fields; canonical-attribute writes via `memory-store` and `extract-facts` redirect to `ContactService` with E.164 phone normalization; `context-for-email` prefers `contact.primaryEmail` and surfaces `contact.preferredName` for salutations. (#830)

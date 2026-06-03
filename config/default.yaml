@@ -142,6 +142,21 @@ contextBridge:
   defaultExpiryHours: 6      # auto-registered entries (proactive sends without metadata)
   explicitExpiryHours: 24    # entries with explicit context_bridge JSON
 
+# Task management configuration (Tasks v1, §4 and §8 of the design doc).
+# The coordinator runs a backlog-sweep job three times a day (7am / 1pm / 7pm) to
+# advance open tasks. Both values default to the sensible v1 behaviour; override in
+# config/local.yaml to tune for your deployment.
+tasks:
+  # Cron schedule for the coordinator's backlog-sweep job.
+  # Default matches the three-daily sweep declared in agents/coordinator.yaml.
+  # If you change this, also update the matching cron entry in that file.
+  backlogSweepCron: "0 7,13,19 * * *"
+
+  # Maximum number of tasks the coordinator may advance in a single sweep run.
+  # The prompt caps at this value; raise it cautiously — larger batches can cause
+  # unintended bursts of outbound messages and specialist delegations.
+  sweepBatchSize: 3
+
 # Meeting debrief agent configuration (spec §17-meeting-debrief.md).
 # Controls the proactive debrief prompt sent after external meetings end.
 # The agent itself is defined in agents/meeting-debrief.yaml.
