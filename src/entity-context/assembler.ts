@@ -25,6 +25,7 @@ import type { DbPool } from '../db/connection.js';
 import type { Logger } from '../logger.js';
 import type { EntityContext, EntityFact, ConnectedAccount, EntityRelationship } from './types.js';
 import { CANONICAL_ATTRIBUTE_MAP } from '../contacts/canonical-attribute-guard.js';
+import type { ContactCanonicalFields } from '../contacts/types.js';
 
 // TTL for cached entity context payloads (5 minutes per spec).
 const CACHE_TTL_MS = 5 * 60 * 1000;
@@ -136,13 +137,19 @@ export class EntityContextAssembler {
         : [];
 
       // Filter out KG facts whose properties.attribute matches a canonical contact
-      // column when we have a contact record. These values now live on the contacts
-      // row and are surfaced via EntityContext.contact — keeping them in the facts
-      // array would double-up the information and invite the LLM to reason about which
-      // source to trust. Facts without properties.attribute are left untouched.
+      // column, BUT only when the corresponding column on the contact row is actually
+      // populated. This prevents data loss when a write fell through to the KG (e.g.
+      // validation failure, DB transient error) and the canonical column stayed null —
+      // suppressing the fact would make the value invisible to all consumers.
       const facts = contactRow
         ? factsResult
-            .filter(({ attributeKey }) => attributeKey === null || !CANONICAL_ATTRIBUTE_MAP.has(attributeKey))
+            .filter(({ attributeKey }) => {
+              if (attributeKey === null) return true; // legacy fact, no structured key
+              const canonicalField = CANONICAL_ATTRIBUTE_MAP.get(attributeKey);
+              if (!canonicalField) return true; // not a canonical attribute
+              // Only suppress when the column is populated — de-duplication without loss.
+              return !isContactRowColumnPopulated(contactRow, canonicalField);
+            })
             .map(({ attributeKey: _dropped, ...fact }) => fact)
         : factsResult.map(({ attributeKey: _dropped, ...fact }) => fact);
 
@@ -413,6 +420,14 @@ export class EntityContextAssembler {
       const attributeKey = typeof props.attribute === 'string'
         ? props.attribute.toLowerCase()
         : null;
+      // Log when a fact has no structured attribute key — it will bypass the canonical
+      // filter even if its label matches a canonical attribute (legacy write path).
+      if (attributeKey === null && Object.keys(props).length > 0) {
+        this.logger.debug(
+          { label: row.label, entityNodeId },
+          'entity-context: fact node missing properties.attribute — canonical filter cannot apply',
+        );
+      }
       return {
         label: row.label,
         value: factValue ?? null,
@@ -555,4 +570,31 @@ interface RelationshipRow {
   related_id: string;
   related_label: string;
   related_type: string;
+}
+
+/**
+ * Returns true when the ContactRow column that backs the given ContactCanonicalFields key
+ * is non-null (i.e., the value has been persisted on the contact record).
+ * Used by the fact filter: only suppress a canonical-keyed KG fact when its corresponding
+ * column is populated — otherwise a write that fell through to the KG (e.g. validation
+ * failure, transient DB error) would make the data invisible to all consumers.
+ */
+function isContactRowColumnPopulated(
+  row: ContactRow,
+  field: keyof ContactCanonicalFields,
+): boolean {
+  switch (field) {
+    case 'preferredName': return row.preferred_name != null;
+    case 'title':         return row.title != null;
+    case 'organization':  return row.organization != null;
+    case 'primaryEmail':  return row.primary_email != null;
+    case 'primaryPhone':  return row.primary_phone != null;
+    case 'timezone':      return row.timezone != null;
+    case 'locale':        return row.locale != null;
+    case 'location':      return row.location != null;
+    case 'pronouns':      return row.pronouns != null;
+    case 'linkedinUrl':   return row.linkedin_url != null;
+    case 'bio':           return row.bio != null;
+    case 'birthday':      return row.birthday != null;
+  }
 }

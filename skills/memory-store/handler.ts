@@ -189,8 +189,19 @@ export class MemoryStoreHandler implements SkillHandler {
               'memory-store: canonical attribute normalization failed — falling back to KG write',
             );
           } else {
-            // Found a contact for this KG node — redirect the write.
-            const contact = await ctx.contactService.findContactByKgNodeId(entityNode.id);
+            // Look up the contact linked to this KG person node.
+            // If the DB call fails, fall through to the normal KG write rather than
+            // propagating — a transient DB error here shouldn't block the fact write.
+            let contact;
+            try {
+              contact = await ctx.contactService.findContactByKgNodeId(entityNode.id);
+            } catch (lookupErr) {
+              ctx.log.warn(
+                { entity, field, entityNodeId: entityNode.id, err: lookupErr },
+                'memory-store: findContactByKgNodeId failed — falling back to KG write',
+              );
+            }
+
             if (contact) {
               try {
                 await ctx.contactService.updateContactFields(contact.id, patch.fields);
@@ -207,8 +218,8 @@ export class MemoryStoreHandler implements SkillHandler {
                   },
                 };
               } catch (err) {
-                // Validation errors (e.g. primaryEmail not in CCI) are surfaced as
-                // a skill error rather than silently swallowed.
+                // Validation errors (e.g. primaryEmail not in CCI) or infra errors
+                // are surfaced as a skill error — the agent can retry or adjust.
                 const msg = err instanceof Error ? err.message : String(err);
                 ctx.log.warn(
                   { entity, field, contactId: contact.id, err },
@@ -217,7 +228,7 @@ export class MemoryStoreHandler implements SkillHandler {
                 return { success: false, error: `Could not update contact field "${field}": ${msg}` };
               }
             }
-            // No contact record for this person node — fall through to normal KG write.
+            // No contact record for this person node, or lookup failed — fall through.
           }
         }
       }

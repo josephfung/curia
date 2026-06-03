@@ -18,7 +18,7 @@
 // before writing. If normalization fails, we fall back to letting the KG write through
 // (logged as a warning so the gap is observable).
 
-import { parsePhoneNumber, isValidPhoneNumber } from 'libphonenumber-js';
+import { parsePhoneNumber, isValidPhoneNumber, ParseError } from 'libphonenumber-js';
 import type { ContactCanonicalFields } from './types.js';
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -102,8 +102,14 @@ export function normalizePhone(value: string): string | null {
     }
 
     return null;
-  } catch {
-    return null;
+  } catch (err) {
+    // Only swallow ParseError (expected "invalid input" path from libphonenumber-js).
+    // Re-throw everything else so programming errors in this function are not masked
+    // as "failed to normalize" — they'd silently fall through to KG writes everywhere.
+    if (err instanceof ParseError) {
+      return null;
+    }
+    throw err;
   }
 }
 

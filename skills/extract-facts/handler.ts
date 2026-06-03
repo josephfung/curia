@@ -14,6 +14,7 @@ import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/t
 import { DECAY_CLASSES, NODE_TYPES } from '../../src/memory/types.js';
 import type { DecayClass, NodeType } from '../../src/memory/types.js';
 import { buildCanonicalPatch } from '../../src/contacts/canonical-attribute-guard.js';
+import { ContactValidationError } from '../../src/contacts/contact-service.js';
 
 // Shape of each fact returned by the LLM extraction prompt.
 interface ExtractedFact {
@@ -227,7 +228,19 @@ ${text}`,
                   'extract-facts: canonical attribute normalization failed — falling back to KG write',
                 );
               } else {
-                const contact = await ctx.contactService.findContactByKgNodeId(entityNode.id);
+                // findContactByKgNodeId is called outside the inner try/catch deliberately:
+                // if it throws (DB error), we fall through to the KG write rather than
+                // propagating. A transient lookup failure should not abort the fact write.
+                let contact;
+                try {
+                  contact = await ctx.contactService.findContactByKgNodeId(entityNode.id);
+                } catch (lookupErr) {
+                  ctx.log.warn(
+                    { subject, attribute, entityNodeId: entityNode.id, err: lookupErr },
+                    'extract-facts: findContactByKgNodeId failed — falling back to KG write',
+                  );
+                }
+
                 if (contact) {
                   try {
                     await ctx.contactService.updateContactFields(contact.id, patch.fields);
@@ -238,15 +251,26 @@ ${text}`,
                     redirected++;
                     continue;
                   } catch (err) {
-                    // Validation error (e.g. primaryEmail not in CCI) — log and fall
-                    // through to the KG write so the information is not lost entirely.
-                    ctx.log.warn(
-                      { subject, attribute, contactId: contact.id, err },
-                      'extract-facts: canonical attribute redirect failed — falling back to KG write',
-                    );
+                    if (err instanceof ContactValidationError) {
+                      // Validation failure (e.g. primaryEmail not in CCI) — this is expected
+                      // for some inputs; fall through so the information is preserved in the KG.
+                      ctx.log.warn(
+                        { subject, attribute, contactId: contact.id, reason: err.message },
+                        'extract-facts: canonical attribute validation failed — falling back to KG write',
+                      );
+                    } else {
+                      // Infrastructure or programming error — do not silently diverge the
+                      // contacts table from the KG. Increment failed and skip the KG write.
+                      ctx.log.error(
+                        { subject, attribute, contactId: contact.id, err },
+                        'extract-facts: canonical attribute redirect failed with unexpected error — skipping fact',
+                      );
+                      failed++;
+                      continue;
+                    }
                   }
                 }
-                // No contact record for this person node — fall through to KG write.
+                // No contact record for this person node, or lookup failed — fall through.
               }
             }
           }

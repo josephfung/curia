@@ -511,6 +511,37 @@ describe('MemoryStoreHandler', () => {
       expect(mockMem.storeFact).toHaveBeenCalledTimes(1);
     });
 
+    it('falls back to KG write when findContactByKgNodeId throws (DB error)', async () => {
+      const mockMem = {
+        ...makeMockEntityMemory({}),
+        resolveOrCreate: vi.fn().mockResolvedValue({
+          kind: 'found',
+          node: { id: 'kg-1', label: 'Jane Doe', type: 'person' },
+        }),
+        storeFact: vi.fn().mockResolvedValue({ stored: true, action: 'created', nodeId: 'fact-1', sensitivity: 'internal' }),
+      };
+      const contactService = {
+        findContactByKgNodeId: vi.fn().mockRejectedValue(new Error('connection timeout')),
+        updateContactFields: vi.fn().mockRejectedValue(new Error('should not be called')),
+      };
+      const ctx = {
+        input: { entity: 'Jane Doe', field: 'timezone', value: 'America/Toronto', source: 'test' },
+        secret: () => 'test-key',
+        log: pino({ level: 'silent' }),
+        entityMemory: mockMem,
+        contactService,
+      } as unknown as SkillContext;
+
+      const result = await handler.execute(ctx);
+
+      // DB error during contact lookup → falls through to KG write, not a skill error
+      expect(result.success).toBe(true);
+      const data = (result as { success: true; data: Record<string, unknown> }).data;
+      expect(data.stored).toBe(true);
+      expect(mockMem.storeFact).toHaveBeenCalledTimes(1);
+      expect(contactService.updateContactFields).not.toHaveBeenCalled();
+    });
+
     it('falls through to KG write when person node has no contact record', async () => {
       const mockMem = {
         ...makeMockEntityMemory({}),

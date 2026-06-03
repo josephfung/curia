@@ -170,28 +170,34 @@ export class ContextForEmailHandler implements SkillHandler {
       let email: string | undefined;
       let identityStatus: string | undefined;
 
+      // Always fetch identities — needed both for email resolution (when primaryEmail
+      // is null) and to resolve the actual identity status (even when primaryEmail is
+      // set, the identity could be bounced or defunct since it was pinned as primary).
+      const withIdentities = await ctx.contactService.getContactWithIdentities(contact.id);
+
       if (contact.primaryEmail) {
-        // Canonical column is populated — use it directly, no identity scan needed.
+        // Canonical column is populated — use it as the email address.
+        // Resolve the actual status from contact_channel_identities so the LLM gets
+        // a correct bounce/defunct warning instead of a spurious 'active'.
         email = contact.primaryEmail;
-        identityStatus = 'active';
-      } else {
-        // Fallback: scan contact_channel_identities for an email address.
-        const withIdentities = await ctx.contactService.getContactWithIdentities(contact.id);
-        if (withIdentities) {
-          // Prefer active identities over defunct/bounced ones. If no active
-          // identity exists, fall back to the first by creation order (the sort
-          // is stable). The LLM receives identity_status and can warn accordingly.
-          const emailIdentity = withIdentities.identities
-            .filter((id) => id.channel === 'email')
-            .sort((a, b) => {
-              if (a.status === 'active' && b.status !== 'active') return -1;
-              if (a.status !== 'active' && b.status === 'active') return 1;
-              return 0;
-            })[0];
-          if (emailIdentity) {
-            email = emailIdentity.channelIdentifier;
-            identityStatus = emailIdentity.status;
-          }
+        const primaryIdentity = withIdentities?.identities.find(
+          (id) => id.channel === 'email' &&
+                  id.channelIdentifier.toLowerCase() === contact.primaryEmail!.toLowerCase(),
+        );
+        identityStatus = primaryIdentity?.status ?? 'active';
+      } else if (withIdentities) {
+        // No canonical email — scan all email identities, preferring active ones.
+        // The LLM receives identity_status and can warn accordingly.
+        const emailIdentity = withIdentities.identities
+          .filter((id) => id.channel === 'email')
+          .sort((a, b) => {
+            if (a.status === 'active' && b.status !== 'active') return -1;
+            if (a.status !== 'active' && b.status === 'active') return 1;
+            return 0;
+          })[0];
+        if (emailIdentity) {
+          email = emailIdentity.channelIdentifier;
+          identityStatus = emailIdentity.status;
         }
       }
 
