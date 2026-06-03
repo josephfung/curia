@@ -13,6 +13,9 @@ const VALID_OWNERS = new Set(['curia', 'ceo', 'external']);
 // Patterns that look like UUIDs — lightweight check before sending to DB.
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+// Strict ISO-8601 datetime with timezone offset. Rejects loose strings that new Date() would accept.
+const ISO_DATETIME_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/;
+
 export class TaskUpdateHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {
     const input = ctx.input as {
@@ -54,6 +57,11 @@ export class TaskUpdateHandler implements SkillHandler {
     if (input.progress_note && input.progress_note.length > 2000) {
       return { success: false, error: 'progress_note must be 2000 characters or fewer' };
     }
+    if (input.blocked_by_task_id !== undefined && input.blocked_by_task_id !== null) {
+      if (typeof input.blocked_by_task_id !== 'string' || !UUID_RE.test(input.blocked_by_task_id)) {
+        return { success: false, error: 'blocked_by_task_id must be a valid UUID' };
+      }
+    }
 
     // Require at least one field to update.
     const hasUpdate = input.status !== undefined || input.priority !== undefined
@@ -67,6 +75,9 @@ export class TaskUpdateHandler implements SkillHandler {
 
     let dueAt: Date | undefined;
     if (input.due_at) {
+      if (!ISO_DATETIME_RE.test(input.due_at)) {
+        return { success: false, error: 'due_at must be a valid ISO 8601 date string' };
+      }
       dueAt = new Date(input.due_at);
       if (isNaN(dueAt.getTime())) {
         return { success: false, error: 'due_at must be a valid ISO 8601 date string' };
@@ -74,6 +85,9 @@ export class TaskUpdateHandler implements SkillHandler {
     }
     let wakeAt: Date | undefined;
     if (input.wake_at) {
+      if (!ISO_DATETIME_RE.test(input.wake_at)) {
+        return { success: false, error: 'wake_at must be a valid ISO 8601 date string' };
+      }
       wakeAt = new Date(input.wake_at);
       if (isNaN(wakeAt.getTime())) {
         return { success: false, error: 'wake_at must be a valid ISO 8601 date string' };
@@ -119,10 +133,10 @@ export class TaskUpdateHandler implements SkillHandler {
           owner: updated.owner,
           priority: updated.priority,
           due_at: updated.dueAt
-            ? toLocalIso(new Date(updated.dueAt).getTime() / 1000, tz)
+            ? toLocalIso(Math.floor(new Date(updated.dueAt).getTime() / 1000), tz)
             : null,
           tags: updated.tags,
-          updated_at: toLocalIso(new Date(updated.updatedAt).getTime() / 1000, tz) ?? updated.updatedAt,
+          updated_at: toLocalIso(Math.floor(new Date(updated.updatedAt).getTime() / 1000), tz) ?? updated.updatedAt,
           displayTimezone: tz ? formatDisplayTimezone(tz, new Date()) : 'UTC',
         },
       };
