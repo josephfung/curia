@@ -14,6 +14,7 @@ import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/t
 import { DECAY_CLASSES, NODE_TYPES } from '../../src/memory/types.js';
 import type { DecayClass, NodeType } from '../../src/memory/types.js';
 import { buildCanonicalPatch } from '../../src/contacts/canonical-attribute-guard.js';
+import type { Contact } from '../../src/contacts/types.js';
 import { ContactValidationError } from '../../src/contacts/contact-service.js';
 
 // Shape of each fact returned by the LLM extraction prompt.
@@ -145,6 +146,11 @@ ${text}`,
         NODE_TYPES.filter(t => t !== 'fact'),
       );
 
+      // Cache contact lookups by KG node ID within a single execute() call.
+      // A transcript may assert several canonical attributes about the same person,
+      // which would otherwise trigger an N+1 DB query per fact.
+      const contactLookupCache = new Map<string, Contact | null>();
+
       for (const fact of facts) {
         // Declared before try so the catch block can always reference them,
         // even if an exception fires before the assignments inside try would run.
@@ -231,14 +237,22 @@ ${text}`,
                 // findContactByKgNodeId is called outside the inner try/catch deliberately:
                 // if it throws (DB error), we fall through to the KG write rather than
                 // propagating. A transient lookup failure should not abort the fact write.
-                let contact;
-                try {
-                  contact = await ctx.contactService.findContactByKgNodeId(entityNode.id);
-                } catch (lookupErr) {
-                  ctx.log.warn(
-                    { subject, attribute, entityNodeId: entityNode.id, err: lookupErr },
-                    'extract-facts: findContactByKgNodeId failed — falling back to KG write',
-                  );
+                // Result is cached per execute() call — multiple canonical facts about the
+                // same person would otherwise cause an N+1 DB query.
+                let contact: Contact | null | undefined;
+                if (contactLookupCache.has(entityNode.id)) {
+                  contact = contactLookupCache.get(entityNode.id);
+                } else {
+                  try {
+                    contact = await ctx.contactService.findContactByKgNodeId(entityNode.id);
+                    contactLookupCache.set(entityNode.id, contact ?? null);
+                  } catch (lookupErr) {
+                    ctx.log.warn(
+                      { subject, attribute, entityNodeId: entityNode.id, err: lookupErr },
+                      'extract-facts: findContactByKgNodeId failed — falling back to KG write',
+                    );
+                    // Leave contact undefined — the guard below treats undefined the same as null.
+                  }
                 }
 
                 if (contact) {

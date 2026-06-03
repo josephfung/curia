@@ -18,11 +18,12 @@
   },
   "outputs": {
     "stored": "boolean — true when the fact was persisted (created or updated)",
-    "action": "string — one of: created, updated, conflict, entity_not_found, rate_limited",
+    "action": "string — one of: created, updated, conflict, entity_not_found, rate_limited, redirected_to_contact",
     "node_id": "string — ID of the persisted or existing fact node (present when stored is true)",
     "sensitivity": "string — the sensitivity level actually assigned to the node (present when stored is true)",
     "reason": "string — human-readable explanation when action is conflict, entity_not_found, or rate_limited",
     "existing_node_id": "string — ID of the contradicting fact node (present when action is conflict)",
+    "contact_id": "string — ID of the contact record that was updated (present when action is redirected_to_contact)",
     "ambiguous": "boolean — true when multiple entities matched the given name with no type winner",
     "candidates": "array of {id, label, type} — populated when ambiguous is true"
   },

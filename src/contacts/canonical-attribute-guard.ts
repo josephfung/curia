@@ -69,7 +69,7 @@ export const CANONICAL_ATTRIBUTE_MAP: ReadonlyMap<string, keyof ContactCanonical
 export function resolveCanonicalField(
   attribute: string,
 ): keyof ContactCanonicalFields | undefined {
-  return CANONICAL_ATTRIBUTE_MAP.get(attribute.toLowerCase());
+  return CANONICAL_ATTRIBUTE_MAP.get(attribute.trim().toLowerCase());
 }
 
 /**
