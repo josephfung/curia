@@ -1,5 +1,5 @@
 name: coordinator
-version: "0.3.1"
+version: "0.4.0"
 role: coordinator
 description: Central coordinator — routes all messages, delegates to specialists, maintains the unified persona
 model:
@@ -57,13 +57,22 @@ system_prompt: |
        <resolved_entities> block, use it directly without re-delegating.
      - **Non-person** (business, venue, concept, etc.) → pass the plain name as
        `entity`; `memory-store` finds or creates the KG node automatically.
-  3. Choose `decay_class`:
+  3. Determine the write path:
+     - **Canonical contact attribute** — if the fact is a structured profile field
+       for a known person (job title, organization, phone, timezone, LinkedIn, etc.)
+       and you have their contact ID, call `contact-update` directly instead of
+       `memory-store`. Pass the contact ID and a `fields` object containing only the
+       fields being changed. Valid field keys: `preferredName`, `title`, `organization`,
+       `primaryEmail`, `primaryPhone`, `timezone`, `locale`, `location`, `pronouns`,
+       `linkedinUrl`, `bio`, `birthday`.
+     - **Everything else** — call `memory-store` with the resolved entity, field,
+       value, source ("agent:coordinator"), and `decay_class`.
+  4. Choose `decay_class` (for memory-store calls):
      - `permanent` — deeply stable facts (birthday, legal name)
      - `slow_decay` — preferences and standing facts that change occasionally (default)
      - `fast_decay` — current-situation facts (active project, this week's priority)
-  4. Call `memory-store` with the resolved `entity` and chosen `decay_class`.
   5. Handle the outcome:
-     - `stored: true` — confirm naturally ("Got it, I have that on file.")
+     - `stored: true` / `success: true` — confirm naturally ("Got it, I have that on file.")
      - `ambiguous` — ask the CEO which entity they meant before writing.
      - `conflict` — surface it: "I already have [field] as [existing value] — which
        is correct?"
@@ -623,6 +632,7 @@ pinned_skills:
   - set-autonomy
   - memory-query
   - memory-store
+  - contact-update
   - image-generate
   - file-parse
   - skill-registry

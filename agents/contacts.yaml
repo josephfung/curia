@@ -1,4 +1,5 @@
 name: contacts
+version: "0.1.0"
 role: specialist
 description: >
   Contact domain specialist — briefings, CRUD, deduplication, relationship management,
@@ -222,6 +223,7 @@ pinned_skills:
   - contact-set-role
   - contact-set-trust
   - contact-rename
+  - contact-update
   - contact-list
   # Lifecycle
   - contact-merge
