@@ -62,6 +62,21 @@ export class TaskCreateHandler implements SkillHandler {
     const derivedSource = (input.source as 'ceo' | 'agent' | 'scheduler' | 'coordinator' | undefined)
       ?? (ctx.agentId === 'coordinator' ? 'coordinator' : 'agent');
 
+    let dueAt: Date | undefined;
+    if (input.due_at) {
+      dueAt = new Date(input.due_at);
+      if (isNaN(dueAt.getTime())) {
+        return { success: false, error: 'due_at must be a valid ISO 8601 date string' };
+      }
+    }
+    let wakeAt: Date | undefined;
+    if (input.wake_at) {
+      wakeAt = new Date(input.wake_at);
+      if (isNaN(wakeAt.getTime())) {
+        return { success: false, error: 'wake_at must be a valid ISO 8601 date string' };
+      }
+    }
+
     ctx.log.info({ title: input.title, owner: input.owner ?? 'curia' }, 'Creating task');
 
     try {
@@ -73,8 +88,8 @@ export class TaskCreateHandler implements SkillHandler {
         parentTaskId: input.parent_task_id,
         blockedByTaskId: input.blocked_by_task_id,
         priority: input.priority,
-        dueAt: input.due_at ? new Date(input.due_at) : undefined,
-        wakeAt: input.wake_at ? new Date(input.wake_at) : undefined,
+        dueAt,
+        wakeAt,
         tags: input.tags,
         waitingOnContactId: input.waiting_on_contact_id,
         waitingOnText: input.waiting_on_text,
