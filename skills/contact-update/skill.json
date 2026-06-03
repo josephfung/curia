@@ -1,0 +1,18 @@
+{
+  "name": "contact-update",
+  "description": "Update canonical profile attributes (job title, organization, timezone, phone, LinkedIn, etc.) on an existing contact. contact_id must be a UUID from contact-lookup or entity-context — do not invent IDs. Call this directly when a canonical attribute is learned about a known contact; do not route through memory-store.",
+  "version": "0.1.0",
+  "sensitivity": "elevated",
+  "action_risk": "low",
+  "inputs": {
+    "contact_id": "string (UUID from contact-lookup or entity-context)",
+    "fields": "object (canonical fields to write — include only the fields being changed. Valid keys: preferredName, title, organization, primaryEmail, primaryPhone, timezone, locale, location, pronouns, linkedinUrl, bio, birthday. Pass null to clear a field.)"
+  },
+  "outputs": {
+    "contact_id": "string",
+    "updated_fields": "string[] (list of field keys written)"
+  },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 15000
+}
