@@ -288,24 +288,55 @@ export async function knowledgeGraphRoutes(
   // so we reject at the API boundary with a 400 instead.
   const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-  function serializeTask(row: {
+  // Full DB row shape for the tasks table (all columns post-migration-049).
+  type DbTaskRow = {
     id: string;
     agent_id: string;
     title: string;
     intent_anchor: string;
+    description: string | null;
     status: string;
+    owner: string;
+    priority: number;
+    due_at: string | null;
+    source: string;
+    source_agent_id: string | null;
+    tags: string[];
+    waiting_on_contact_id: string | null;
+    waiting_on_text: string | null;
+    parent_task_id: string | null;
+    blocked_by_task_id: string | null;
     progress: Record<string, unknown> | null;
     error_budget: Record<string, unknown> | null;
     conversation_id: string | null;
     created_at: string;
     updated_at: string;
-  }) {
+  };
+
+  const TASK_SELECT = `
+    id, agent_id, title, intent_anchor, description, status, owner, priority,
+    due_at, source, source_agent_id, tags, waiting_on_contact_id, waiting_on_text,
+    parent_task_id, blocked_by_task_id, progress, error_budget, conversation_id,
+    created_at, updated_at`;
+
+  function serializeTask(row: DbTaskRow) {
     return {
       id: row.id,
       agentId: row.agent_id,
       title: row.title,
       intentAnchor: row.intent_anchor,
+      description: row.description,
       status: row.status,
+      owner: row.owner,
+      priority: row.priority,
+      dueAt: row.due_at,
+      source: row.source,
+      sourceAgentId: row.source_agent_id,
+      tags: row.tags ?? [],
+      waitingOnContactId: row.waiting_on_contact_id,
+      waitingOnText: row.waiting_on_text,
+      parentTaskId: row.parent_task_id,
+      blockedByTaskId: row.blocked_by_task_id,
       progress: row.progress ?? {},
       errorBudget: row.error_budget ?? {},
       conversationId: row.conversation_id,
@@ -314,29 +345,16 @@ export async function knowledgeGraphRoutes(
     };
   }
 
+  const validOwners = ['curia', 'ceo', 'external'];
+  const validSources = ['ceo', 'agent', 'scheduler', 'coordinator'];
+
   app.get('/api/kg/tasks', KG_RATE, async (request, reply) => {
     if (!assertSecret(request, reply, webAppBootstrapSecret, sessions)) return;
     const result = await pool.query(
-      `SELECT id, agent_id, title, intent_anchor, status, progress, error_budget, conversation_id, created_at, updated_at
-       FROM tasks
-       ORDER BY updated_at DESC
-       LIMIT 500`,
+      `SELECT ${TASK_SELECT} FROM tasks ORDER BY updated_at DESC LIMIT 500`,
     );
     return reply.send({
-      tasks: result.rows.map((row) =>
-        serializeTask(row as {
-          id: string;
-          agent_id: string;
-          title: string;
-          intent_anchor: string;
-          status: string;
-          progress: Record<string, unknown> | null;
-          error_budget: Record<string, unknown> | null;
-          conversation_id: string | null;
-          created_at: string;
-          updated_at: string;
-        }),
-      ),
+      tasks: result.rows.map((row) => serializeTask(row as DbTaskRow)),
     });
   });
 
@@ -344,8 +362,15 @@ export async function knowledgeGraphRoutes(
     if (!assertSecret(request, reply, webAppBootstrapSecret, sessions)) return;
     const body = request.body as {
       agentId?: unknown;
+      title?: unknown;
       intentAnchor?: unknown;
+      description?: unknown;
       status?: unknown;
+      owner?: unknown;
+      priority?: unknown;
+      dueAt?: unknown;
+      source?: unknown;
+      tags?: unknown;
       progress?: unknown;
       errorBudget?: unknown;
       conversationId?: unknown;
@@ -359,6 +384,18 @@ export async function knowledgeGraphRoutes(
     const status = typeof body.status === 'string' ? body.status : 'active';
     if (!validTaskStatuses.includes(status)) {
       return reply.status(400).send({ error: 'Invalid status.' });
+    }
+    if (body.owner !== undefined && !validOwners.includes(body.owner as string)) {
+      return reply.status(400).send({ error: 'Invalid owner. Must be curia, ceo, or external.' });
+    }
+    if (body.source !== undefined && !validSources.includes(body.source as string)) {
+      return reply.status(400).send({ error: 'Invalid source. Must be ceo, agent, scheduler, or coordinator.' });
+    }
+    if (body.priority !== undefined && (typeof body.priority !== 'number' || !Number.isInteger(body.priority) || body.priority < 0 || body.priority > 100)) {
+      return reply.status(400).send({ error: 'priority must be an integer 0–100.' });
+    }
+    if (body.tags !== undefined && (!Array.isArray(body.tags) || (body.tags as unknown[]).some(t => typeof t !== 'string'))) {
+      return reply.status(400).send({ error: 'tags must be an array of strings.' });
     }
     if (body.errorBudget !== undefined && (typeof body.errorBudget !== 'object' || body.errorBudget === null || Array.isArray(body.errorBudget))) {
       return reply.status(400).send({ error: 'errorBudget must be a JSON object.' });
@@ -376,15 +413,32 @@ export async function knowledgeGraphRoutes(
     }
 
     const intentAnchor = body.intentAnchor.trim();
+    const title = typeof body.title === 'string' && body.title.trim() ? body.title.trim() : intentAnchor;
+    const description = typeof body.description === 'string' ? body.description.trim() || null : null;
+    const owner = typeof body.owner === 'string' ? body.owner : 'curia';
+    const priority = typeof body.priority === 'number' ? body.priority : 50;
+    const dueAt = typeof body.dueAt === 'string' && body.dueAt.trim() ? body.dueAt.trim() : null;
+    const source = typeof body.source === 'string' ? body.source : 'agent';
+    const tags = Array.isArray(body.tags) ? (body.tags as string[]) : [];
+
     const inserted = await pool.query(
-      `INSERT INTO tasks (agent_id, title, intent_anchor, status, progress, error_budget, conversation_id, updated_at)
-       VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7, now())
-       RETURNING id, agent_id, title, intent_anchor, status, progress, error_budget, conversation_id, created_at, updated_at`,
+      `INSERT INTO tasks (
+         agent_id, title, intent_anchor, description, status, owner, priority,
+         due_at, source, tags, progress, error_budget, conversation_id, updated_at
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12::jsonb, $13, now())
+       RETURNING ${TASK_SELECT}`,
       [
         body.agentId.trim(),
-        intentAnchor,   // use intentAnchor as the task title
+        title,
         intentAnchor,
+        description,
         status,
+        owner,
+        priority,
+        dueAt,
+        source,
+        tags,
         JSON.stringify((body.progress as Record<string, unknown> | undefined) ?? {}),
         JSON.stringify((body.errorBudget as Record<string, unknown> | undefined) ?? {}),
         conversationId,
@@ -395,20 +449,7 @@ export async function knowledgeGraphRoutes(
       return reply.status(500).send({ error: 'Failed to create task.' });
     }
     return reply.status(201).send({
-      task: serializeTask(
-        inserted.rows[0]! as {
-          id: string;
-          agent_id: string;
-          title: string;
-          intent_anchor: string;
-          status: string;
-          progress: Record<string, unknown> | null;
-          error_budget: Record<string, unknown> | null;
-          conversation_id: string | null;
-          created_at: string;
-          updated_at: string;
-        },
-      ),
+      task: serializeTask(inserted.rows[0]! as DbTaskRow),
     });
   });
 
@@ -420,42 +461,59 @@ export async function knowledgeGraphRoutes(
     }
     const body = request.body as {
       agentId?: unknown;
+      title?: unknown;
       intentAnchor?: unknown;
+      description?: unknown;
       status?: unknown;
+      owner?: unknown;
+      priority?: unknown;
+      dueAt?: unknown;
+      source?: unknown;
+      tags?: unknown;
+      waitingOnText?: unknown;
       progress?: unknown;
       errorBudget?: unknown;
       conversationId?: unknown;
     };
 
     const existing = await pool.query(
-      `SELECT id, agent_id, title, intent_anchor, status, progress, error_budget, conversation_id, created_at, updated_at
-       FROM tasks
-       WHERE id = $1`,
+      `SELECT ${TASK_SELECT} FROM tasks WHERE id = $1`,
       [id],
     );
     if (existing.rowCount === 0) {
-      return reply.status(404).send({ error: 'Agent task not found.' });
+      return reply.status(404).send({ error: 'Task not found.' });
     }
-    const row = existing.rows[0] as {
-      id: string;
-      agent_id: string;
-      title: string;
-      intent_anchor: string;
-      status: string;
-      progress: Record<string, unknown> | null;
-      error_budget: Record<string, unknown> | null;
-      conversation_id: string | null;
-      created_at: string;
-      updated_at: string;
-    };
+    const row = existing.rows[0]! as DbTaskRow;
 
     const agentId = typeof body.agentId === 'string' ? body.agentId.trim() : row.agent_id;
+    const title = typeof body.title === 'string' ? body.title.trim() : row.title;
     const intentAnchor = typeof body.intentAnchor === 'string' ? body.intentAnchor.trim() : row.intent_anchor;
+    const description = body.description === undefined ? row.description
+      : body.description === null || body.description === '' ? null
+      : typeof body.description === 'string' ? body.description.trim()
+      : row.description;
     const status = typeof body.status === 'string' ? body.status : row.status;
+    const owner = typeof body.owner === 'string' ? body.owner : row.owner;
+    const priority = typeof body.priority === 'number' ? body.priority : row.priority;
+    const dueAt = body.dueAt === undefined ? row.due_at
+      : body.dueAt === null || body.dueAt === '' ? null
+      : typeof body.dueAt === 'string' ? body.dueAt
+      : row.due_at;
+    const source = typeof body.source === 'string' ? body.source : row.source;
+    const tags = Array.isArray(body.tags) ? (body.tags as string[]) : row.tags;
+    const waitingOnText = body.waitingOnText === undefined ? row.waiting_on_text
+      : body.waitingOnText === null || body.waitingOnText === '' ? null
+      : typeof body.waitingOnText === 'string' ? body.waitingOnText
+      : row.waiting_on_text;
+
     if (!agentId) return reply.status(400).send({ error: 'agentId is required.' });
     if (!intentAnchor) return reply.status(400).send({ error: 'intentAnchor is required.' });
-    if (!validTaskStatuses.includes(status)) {
-      return reply.status(400).send({ error: 'Invalid status.' });
+    if (!validTaskStatuses.includes(status)) return reply.status(400).send({ error: 'Invalid status.' });
+    if (!validOwners.includes(owner)) return reply.status(400).send({ error: 'Invalid owner.' });
+    if (!validSources.includes(source)) return reply.status(400).send({ error: 'Invalid source.' });
+    if (!Number.isInteger(priority) || priority < 0 || priority > 100) return reply.status(400).send({ error: 'priority must be an integer 0–100.' });
+    if (body.tags !== undefined && (!Array.isArray(body.tags) || (body.tags as unknown[]).some(t => typeof t !== 'string'))) {
+      return reply.status(400).send({ error: 'tags must be an array of strings.' });
     }
     if (body.errorBudget !== undefined && (typeof body.errorBudget !== 'object' || body.errorBudget === null || Array.isArray(body.errorBudget))) {
       return reply.status(400).send({ error: 'errorBudget must be a JSON object.' });
@@ -476,21 +534,36 @@ export async function knowledgeGraphRoutes(
 
     const updated = await pool.query(
       `UPDATE tasks
-       SET agent_id = $2,
-           title = $3,
-           intent_anchor = $3,
-           status = $4,
-           progress = $5::jsonb,
-           error_budget = $6::jsonb,
-           conversation_id = $7,
-           updated_at = now()
+       SET agent_id        = $2,
+           title           = $3,
+           intent_anchor   = $4,
+           description     = $5,
+           status          = $6,
+           owner           = $7,
+           priority        = $8,
+           due_at          = $9,
+           source          = $10,
+           tags            = $11,
+           waiting_on_text = $12,
+           progress        = $13::jsonb,
+           error_budget    = $14::jsonb,
+           conversation_id = $15,
+           updated_at      = now()
        WHERE id = $1
-       RETURNING id, agent_id, title, intent_anchor, status, progress, error_budget, conversation_id, created_at, updated_at`,
+       RETURNING ${TASK_SELECT}`,
       [
         id,
         agentId,
+        title,
         intentAnchor,
+        description,
         status,
+        owner,
+        priority,
+        dueAt,
+        source,
+        tags,
+        waitingOnText,
         JSON.stringify((body.progress as Record<string, unknown> | undefined) ?? row.progress ?? {}),
         JSON.stringify((body.errorBudget as Record<string, unknown> | undefined) ?? row.error_budget ?? {}),
         conversationId,
@@ -499,23 +572,10 @@ export async function knowledgeGraphRoutes(
     // Guard against concurrent deletes between the existence check and the UPDATE.
     if (!updated.rowCount) {
       logger.warn({ taskId: id }, 'kg: PATCH tasks matched 0 rows — likely concurrent delete');
-      return reply.status(404).send({ error: 'Agent task not found.' });
+      return reply.status(404).send({ error: 'Task not found.' });
     }
     return reply.send({
-      task: serializeTask(
-        updated.rows[0]! as {
-          id: string;
-          agent_id: string;
-          title: string;
-          intent_anchor: string;
-          status: string;
-          progress: Record<string, unknown> | null;
-          error_budget: Record<string, unknown> | null;
-          conversation_id: string | null;
-          created_at: string;
-          updated_at: string;
-        },
-      ),
+      task: serializeTask(updated.rows[0]! as DbTaskRow),
     });
   });
 

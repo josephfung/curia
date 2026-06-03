@@ -15,6 +15,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 - **`agent_tasks` → `tasks` migration** — promotes the scheduler's persistent-task table to a first-class tasks table with CEO-visible columns (`title`, `owner`, `priority`, `due_at`, `tags`, etc.); flips the `scheduled_job_id` back-FK to a forward `scheduled_jobs.task_id`; adds a status CHECK accepting both legacy and new task-lifecycle values. No behavior change for existing scheduler and persistent-task callers. (Tasks v1, issue 1 of 7, closes #834)
+- **Console tasks view** — updated to match the migrated `tasks` schema: drops `scheduled_job_id`, adds all new columns (`title`, `owner`, `priority`, `due_at`, `source`, `tags`, `description`, FK references), extends status filters with new task-lifecycle values, and updates the scheduled-jobs view to display the linked `task_id`. (#869)
 
 ### Added
 - **`contact-update` skill** — direct write path for canonical contact attributes (title, organization, phone, timezone, etc.) with E.164 phone normalization. Pinned to coordinator, ceo-inbox, research-analyst, and contacts. (#863)
