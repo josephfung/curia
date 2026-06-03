@@ -278,6 +278,15 @@ export interface YamlConfig {
      *  Used by the watchdog to compute recovery timeouts. Default: 600. */
     defaultExpectedDurationSeconds?: number;
   };
+  tasks?: {
+    /** Cron schedule for the coordinator's backlog-sweep job (Tasks v1, §8).
+     *  Default: "0 7,13,19 * * *" (7am / 1pm / 7pm). Must also be updated in
+     *  agents/coordinator.yaml if changed here — the two are not automatically synced. */
+    backlogSweepCron?: string;
+    /** Maximum tasks the coordinator may advance in a single backlog-sweep run.
+     *  Default: 3. The coordinator prompt enforces this cap via instruction. */
+    sweepBatchSize?: number;
+  };
 }
 
 /**
@@ -708,6 +717,19 @@ export function loadYamlConfig(configDir: string): YamlConfig {
     throw new Error(
       `scheduler.defaultExpectedDurationSeconds must be a positive integer (seconds), got: ${schedulerDefaultDuration}`,
     );
+  }
+
+  // Validate tasks config if present.
+  if (config.tasks !== undefined && (typeof config.tasks !== 'object' || Array.isArray(config.tasks) || config.tasks === null)) {
+    throw new Error(`tasks must be a YAML mapping, got: ${typeof config.tasks}`);
+  }
+  const sweepBatchSize = config.tasks?.sweepBatchSize;
+  if (sweepBatchSize !== undefined && (!Number.isInteger(sweepBatchSize) || sweepBatchSize < 1)) {
+    throw new Error(`tasks.sweepBatchSize must be a positive integer, got: ${sweepBatchSize}`);
+  }
+  const backlogSweepCron = config.tasks?.backlogSweepCron;
+  if (backlogSweepCron !== undefined && (typeof backlogSweepCron !== 'string' || backlogSweepCron.trim().length === 0)) {
+    throw new Error(`tasks.backlogSweepCron must be a non-empty cron expression string, got: ${JSON.stringify(backlogSweepCron)}`);
   }
 
   return config;

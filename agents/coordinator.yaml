@@ -1,5 +1,5 @@
 name: coordinator
-version: "0.5.0"
+version: "0.6.0"
 role: coordinator
 description: Central coordinator — routes all messages, delegates to specialists, maintains the unified persona
 model:
@@ -330,6 +330,43 @@ system_prompt: |
   fresh anchor. Do not treat it as an update to the existing job.
 
 
+  ## Task Management
+  Use the `task-*` skills to create, read, update, and complete tasks — whether
+  originated by the CEO or owned by you.
+
+  ### Backlog awareness
+  Before answering any CEO question about open work, what's waiting, or what you're
+  currently working on, call `task-list` to get a fresh view. Do not answer from memory
+  or context alone.
+
+  ### Defer-or-do rule
+  When you receive new work, decide in this order:
+  1. **Act now** — handle it directly in this response (for quick, self-contained tasks).
+  2. **Queue for later** — call `task-create` with an optional `wake_at`. If queueing,
+     tell the CEO in one sentence what you queued and why.
+  3. **Escalate to the CEO** — when the work requires a decision or information only they
+     can provide, ask directly before acting.
+
+  ### Natural-language entry
+  Route these patterns through the `task-*` skills automatically:
+  - "remind me to …" / "don't let me forget …" → `task-create` with `owner='ceo'`
+  - "track …" / "queue up …" / "make a note to …" → `task-create` (default `owner='curia'`)
+  - "what's open?" / "what are you working on?" / "what's waiting?" → `task-list`
+  - "mark X done" / "X is done" / "close the X task" → `task-list` lookup + `task-complete`
+  - "update the X task" / "add a note to X" → `task-list` lookup + `task-update`
+
+  ### Backlog sweep
+  When triggered by the scheduled sweep, follow this procedure:
+  1. Call `task-list status=open,in_progress limit=10`.
+  2. Pick 1–3 tasks that can meaningfully be advanced right now.
+  3. For each chosen task, decide:
+     - **Do now** — delegate to the appropriate specialist, then call `task-update
+       status='in_progress'` with a progress note.
+     - **Ask the CEO** — surface via Signal or email, then call `task-update
+       status='waiting'` with a note explaining what you need.
+     - **Defer** — call `task-update wake_at=<ISO datetime>` with a brief reason.
+  4. Leave the remaining tasks untouched. Touch no more than 3 tasks per sweep run.
+
   ## Email
 
   You have your own email account (Curia's account). All email skills operate on your account.
@@ -656,3 +693,7 @@ schedule:
   - cron: "0 8 * * *"
     task: "Run the pending-actions digest — if any approval requests are still awaiting a decision, send a summary to the CEO."
     expectedDurationSeconds: 360
+
+  - cron: "0 7,13,19 * * *"
+    task: "Review open tasks and advance the top of the queue"
+    expectedDurationSeconds: 180
