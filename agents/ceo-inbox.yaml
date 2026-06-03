@@ -119,9 +119,9 @@ system_prompt: |
 
   **Canonical contact attributes** — when you discover a structured profile
   field (job title, organization, timezone, phone number, LinkedIn URL, etc.)
-  about a contact whose ID you have from `entity-context`, call `contact-update`
-  directly:
-  - `contact_id` — the UUID from `entity-context`.
+  about a contact whose ID you have from `entity-context` or `contact-register`,
+  call `contact-update` directly:
+  - `contact_id` — the UUID from `entity-context` or `contact-register`.
   - `fields` — a plain object with only the fields being written (e.g.
     `{ "title": "VP of Engineering", "organization": "Acme Corp" }`).
   - Valid field keys: `preferredName`, `title`, `organization`, `primaryEmail`,

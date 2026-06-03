@@ -141,6 +141,14 @@ export class ContactUpdateHandler implements SkillHandler {
           error: `${err.message} Use contact-link-identity to register the address for this contact before setting it as primary.`,
         };
       }
+      // Map contact-service's not-found error to the same structured message as the
+      // pre-check above, so callers see a consistent response regardless of race timing.
+      if (err instanceof Error && err.message.startsWith('Contact not found:')) {
+        return {
+          success: false,
+          error: `No contact exists with id ${contact_id}. Use contact-lookup to verify the UUID.`,
+        };
+      }
       const message = err instanceof Error ? err.message : String(err);
       ctx.log.error({ err, contact_id, fields: Object.keys(patch) }, 'Failed to update contact canonical fields');
       return { success: false, error: `Failed to update contact: ${message}` };
