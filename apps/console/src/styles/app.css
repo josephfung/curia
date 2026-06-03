@@ -887,6 +887,10 @@ input:focus, textarea:focus, select:focus {
 .badge-event        { background: var(--app-green); }
 .badge-concept      { background: #888; }
 .badge-fact         { background: #444; }
+/* Task owner badges — use filled bg with dark text for WCAG 1.4.3 contrast */
+.badge-curia    { background: var(--app-teal);   color: #fff; }
+.badge-ceo      { background: var(--app-violet); color: #fff; }
+.badge-external { background: var(--app-amber);  color: #fff; }
 
 /* Status pills — outlined, subtle, with a colored leading dot */
 .status-pill {
