@@ -217,6 +217,10 @@ export interface SkillContext {
    *  Provides read/write access to the autonomy_action_log table for approval lifecycle
    *  management. Used by approve-action, deny-action, dismiss-action, list-pending-actions. */
   actionLogRepo?: import('../autonomy/action-log-repo.js').ActionLogRepo;
+  /** Task repo — available to skills declaring 'taskRepo' in capabilities.
+   *  Provides CRUD access to the tasks table and manages linked wake-up scheduled_jobs rows.
+   *  Used by task-create, task-list, task-update, task-complete. */
+  taskRepo?: import('../db/task-repo.js').TaskRepo;
   /** Execution layer — available to skills declaring 'executionLayer' in capabilities.
    *  Allows re-invocation of skills with humanApproved bypass. Only approve-action (#428)
    *  should declare this capability; it is sensitivity: "elevated" (CEO-only). */

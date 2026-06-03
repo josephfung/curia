@@ -1,0 +1,37 @@
+{
+  "name": "task-create",
+  "description": "Create a new task in the backlog. Provide a title and optionally description, owner (curia/ceo/external), priority (0-100), due date, tags, parent task, blocked-by task, waiting-on contact, and an intent anchor. When wake_at is set, schedules a one-shot wake-up for this task at that time.",
+  "version": "0.1.0",
+  "sensitivity": "normal",
+  "action_risk": "low",
+  "inputs": {
+    "title": "string",
+    "description": "string?",
+    "owner": "string?",
+    "parent_task_id": "string?",
+    "blocked_by_task_id": "string?",
+    "priority": "number?",
+    "due_at": "timestamp?",
+    "wake_at": "timestamp?",
+    "tags": "string[]?",
+    "waiting_on_contact_id": "string?",
+    "waiting_on_text": "string?",
+    "intent_anchor": "string?",
+    "source": "string?"
+  },
+  "outputs": {
+    "task_id": "string",
+    "title": "string",
+    "status": "string",
+    "owner": "string",
+    "priority": "number",
+    "due_at": "string?",
+    "tags": "string[]",
+    "created_at": "string",
+    "displayTimezone": "string"
+  },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 30000,
+  "capabilities": ["taskRepo"]
+}

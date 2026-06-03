@@ -503,6 +503,36 @@ interface HumanDecisionPayload {
 }
 
 
+// Task event payloads — emitted by TaskRepo (execution layer) when task lifecycle
+// operations complete. Breaking change: these types expand the BusEvent union.
+
+// task.created — published when a new task is inserted via task-create skill.
+interface TaskCreatedPayload {
+  taskId: string;
+  title: string;
+  owner: string;
+  source: string;
+  sourceAgentId: string | null;
+  agentId: string;
+}
+
+// task.updated — published when a task's fields are changed via task-update skill.
+// previousStatus and newStatus are both included when a status transition occurred.
+interface TaskUpdatedPayload {
+  taskId: string;
+  previousStatus: string;
+  newStatus?: string;          // present when the status field changed
+  progressNote?: string;       // present when a progress_note was appended
+  agentId: string | null;
+}
+
+// task.completed — published when a task is set to done via task-complete skill.
+interface TaskCompletedPayload {
+  taskId: string;
+  completionNote?: string;
+  agentId: string | null;
+}
+
 // -- Discriminated union --
 // The `type` field is the discriminant; `sourceLayer` records which layer emitted the event.
 
@@ -802,6 +832,25 @@ export interface ConversationCheckpointEvent extends BaseEvent {
   payload: ConversationCheckpointPayload;
 }
 
+// Task lifecycle events — emitted by TaskRepo (execution layer).
+export interface TaskCreatedEvent extends BaseEvent {
+  type: 'task.created';
+  sourceLayer: 'execution';
+  payload: TaskCreatedPayload;
+}
+
+export interface TaskUpdatedEvent extends BaseEvent {
+  type: 'task.updated';
+  sourceLayer: 'execution';
+  payload: TaskUpdatedPayload;
+}
+
+export interface TaskCompletedEvent extends BaseEvent {
+  type: 'task.completed';
+  sourceLayer: 'execution';
+  payload: TaskCompletedPayload;
+}
+
 export type BusEvent =
   | InboundMessageEvent
   | AgentTaskEvent
@@ -837,7 +886,10 @@ export type BusEvent =
   | SecretAccessedEvent      // Spec 06: secrets isolation audit trail (name only, never value)
   | AutonomySkillBlockedEvent  // Autonomy Phase 2: skill blocked by action_risk gate
   | AutonomySendBlockedEvent   // Autonomy Phase 2: outbound send blocked by score < 70 gate
-  | EmbeddingCallEvent;        // #654: embedding API call cost telemetry
+  | EmbeddingCallEvent         // #654: embedding API call cost telemetry
+  | TaskCreatedEvent           // Tasks v1: task created via task-create skill (#835)
+  | TaskUpdatedEvent           // Tasks v1: task fields updated via task-update skill (#835)
+  | TaskCompletedEvent;        // Tasks v1: task set to done via task-complete skill (#835)
 
 // Convenience alias for use in handler maps / switch statements.
 export type EventType = BusEvent['type'];
@@ -1355,6 +1407,48 @@ export function createEmbeddingCall(
     timestamp: new Date(),
     type: 'embedding.call',
     sourceLayer: 'system',
+    payload: rest,
+    parentEventId,
+  };
+}
+
+export function createTaskCreated(
+  payload: TaskCreatedPayload & { parentEventId?: string },
+): TaskCreatedEvent {
+  const { parentEventId, ...rest } = payload;
+  return {
+    id: randomUUID(),
+    timestamp: new Date(),
+    type: 'task.created',
+    sourceLayer: 'execution',
+    payload: rest,
+    parentEventId,
+  };
+}
+
+export function createTaskUpdated(
+  payload: TaskUpdatedPayload & { parentEventId?: string },
+): TaskUpdatedEvent {
+  const { parentEventId, ...rest } = payload;
+  return {
+    id: randomUUID(),
+    timestamp: new Date(),
+    type: 'task.updated',
+    sourceLayer: 'execution',
+    payload: rest,
+    parentEventId,
+  };
+}
+
+export function createTaskCompleted(
+  payload: TaskCompletedPayload & { parentEventId?: string },
+): TaskCompletedEvent {
+  const { parentEventId, ...rest } = payload;
+  return {
+    id: randomUUID(),
+    timestamp: new Date(),
+    type: 'task.completed',
+    sourceLayer: 'execution',
     payload: rest,
     parentEventId,
   };
