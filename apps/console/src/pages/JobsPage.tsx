@@ -391,6 +391,15 @@ function JobEditDrawer({ job, creating, onClose, onSaved, onDeleted }: DrawerPro
                   </div>
                 </div>
               )}
+
+              {job?.agentTaskId && (
+                <div className="form-field">
+                  <label>Task ID</label>
+                  <div className="form-field-readonly cell-mono" style={{ fontSize: 11, wordBreak: 'break-all' }}>
+                    {job.agentTaskId}
+                  </div>
+                </div>
+              )}
             </>
           )}
 
@@ -655,6 +664,7 @@ export default function JobsPage() {
                               Created <span className="sort-arrow">{sortArrow('createdAt')}</span>
                             </button>
                           </th>
+                          <th>Task ID</th>
                           <th style={{ textAlign: 'right' }}>Actions</th>
                         </tr>
                       </thead>
@@ -680,6 +690,9 @@ export default function JobsPage() {
                               }
                             </td>
                             <td className="cell-mono col-updated">{formatDate(j.createdAt)}</td>
+                            <td className="cell-mono" style={{ fontSize: 11 }}>
+                              {j.agentTaskId ? j.agentTaskId.slice(0, 8) + '…' : <span className="cell-muted">—</span>}
+                            </td>
                             <td>
                               <div className="cell-actions" onClick={e => e.stopPropagation()}>
                                 <button
@@ -697,7 +710,7 @@ export default function JobsPage() {
                         ))}
                         {pageRows.length === 0 && (
                           <tr>
-                            <td colSpan={7} style={{ textAlign: 'center', padding: 40, color: 'var(--app-fg-muted)' }}>
+                            <td colSpan={8} style={{ textAlign: 'center', padding: 40, color: 'var(--app-fg-muted)' }}>
                               No jobs match.
                             </td>
                           </tr>

@@ -7,25 +7,49 @@ import { useTheme } from '../hooks/useTheme.js';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-type TaskStatus = 'active' | 'pending' | 'paused' | 'completed' | 'failed' | 'cancelled';
+type TaskStatus =
+  // Task-lifecycle values (migration 049)
+  | 'open' | 'in_progress' | 'blocked' | 'waiting' | 'done' | 'cancelled'
+  // Legacy scheduler values retained for existing rows
+  | 'active' | 'pending' | 'paused' | 'completed' | 'failed';
+
+type TaskOwner = 'curia' | 'ceo' | 'external';
+type TaskSource = 'ceo' | 'agent' | 'scheduler' | 'coordinator';
 
 interface Task {
   id: string;
   agentId: string;
+  title: string;
   intentAnchor: string;
+  description: string | null;
   status: TaskStatus;
+  owner: TaskOwner;
+  priority: number;
+  dueAt: string | null;
+  source: TaskSource;
+  sourceAgentId: string | null;
+  tags: string[];
+  waitingOnContactId: string | null;
+  waitingOnText: string | null;
+  parentTaskId: string | null;
+  blockedByTaskId: string | null;
   progress: Record<string, unknown>;
   errorBudget: Record<string, unknown>;
   conversationId: string | null;
-  scheduledJobId: string | null;
   createdAt: string;
   updatedAt: string;
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-function formatDate(iso: string): string {
-  return iso.slice(0, 10); // YYYY-MM-DD
+function formatDate(iso: string | null): string {
+  if (!iso) return '—';
+  return iso.slice(0, 10);
+}
+
+function formatDateTime(iso: string | null): string {
+  if (!iso) return '—';
+  return iso.slice(0, 16).replace('T', ' ');
 }
 
 function prettyJson(value: Record<string, unknown>): string {
@@ -108,12 +132,24 @@ interface DrawerProps {
   onDeleted: (id: string) => void;
 }
 
+const ALL_STATUSES: TaskStatus[] = [
+  'open', 'in_progress', 'blocked', 'waiting', 'done', 'cancelled',
+  'active', 'pending', 'paused', 'completed', 'failed',
+];
+
 function TaskEditDrawer({ task, creating, onClose, onSaved, onDeleted }: DrawerProps) {
   const [agentId, setAgentId] = useState(task?.agentId ?? '');
+  const [title, setTitle] = useState(task?.title ?? '');
   const [intentAnchor, setIntentAnchor] = useState(task?.intentAnchor ?? '');
-  const [status, setStatus] = useState<TaskStatus>(task?.status ?? 'pending');
+  const [description, setDescription] = useState(task?.description ?? '');
+  const [status, setStatus] = useState<TaskStatus>(task?.status ?? 'open');
+  const [owner, setOwner] = useState<TaskOwner>(task?.owner ?? 'curia');
+  const [priority, setPriority] = useState(String(task?.priority ?? 50));
+  const [dueAt, setDueAt] = useState(task?.dueAt ? task.dueAt.slice(0, 10) : '');
+  const [source, setSource] = useState<TaskSource>(task?.source ?? 'agent');
+  const [tags, setTags] = useState((task?.tags ?? []).join(', '));
   const [conversationId, setConversationId] = useState(task?.conversationId ?? '');
-  const [scheduledJobId, setScheduledJobId] = useState(task?.scheduledJobId ?? '');
+  const [waitingOnText, setWaitingOnText] = useState(task?.waitingOnText ?? '');
   const [errorBudget, setErrorBudget] = useState(prettyJson(task?.errorBudget ?? {}));
   const [progress, setProgress] = useState(prettyJson(task?.progress ?? {}));
   const [saving, setSaving] = useState(false);
@@ -121,12 +157,12 @@ function TaskEditDrawer({ task, creating, onClose, onSaved, onDeleted }: DrawerP
   const [error, setError] = useState<string | null>(null);
 
   async function handleSave() {
-    if (!agentId.trim()) {
-      setError('Agent ID is required.');
-      return;
-    }
-    if (!intentAnchor.trim()) {
-      setError('Intent anchor is required.');
+    if (!agentId.trim()) { setError('Agent ID is required.'); return; }
+    if (!intentAnchor.trim()) { setError('Intent anchor is required.'); return; }
+
+    const parsedPriority = parseInt(priority, 10);
+    if (isNaN(parsedPriority) || parsedPriority < 0 || parsedPriority > 100) {
+      setError('Priority must be an integer 0–100.');
       return;
     }
 
@@ -143,12 +179,20 @@ function TaskEditDrawer({ task, creating, onClose, onSaved, onDeleted }: DrawerP
     setSaving(true);
     setError(null);
     try {
+      const parsedTags = tags.split(',').map(t => t.trim()).filter(Boolean);
       const body = {
         agentId: agentId.trim(),
+        title: title.trim() || intentAnchor.trim(),
         intentAnchor: intentAnchor.trim(),
+        description: description.trim() || null,
         status,
+        owner,
+        priority: parsedPriority,
+        dueAt: dueAt || null,
+        source,
+        tags: parsedTags,
         conversationId: conversationId.trim() || null,
-        scheduledJobId: scheduledJobId.trim() || null,
+        waitingOnText: waitingOnText.trim() || null,
         errorBudget: parsedErrorBudget,
         progress: parsedProgress,
       };
@@ -168,10 +212,7 @@ function TaskEditDrawer({ task, creating, onClose, onSaved, onDeleted }: DrawerP
         });
       }
 
-      if (!res.ok) {
-        throw new Error(await errorMessage(res));
-      }
-
+      if (!res.ok) throw new Error(await errorMessage(res));
       const data = await res.json() as { task: Task };
       onSaved(data.task);
     } catch (err) {
@@ -198,6 +239,17 @@ function TaskEditDrawer({ task, creating, onClose, onSaved, onDeleted }: DrawerP
     }
   }
 
+  // Read-only UUID display for system-managed FK fields.
+  function uuidField(label: string, value: string | null) {
+    if (!value) return null;
+    return (
+      <div className="form-field">
+        <label>{label}</label>
+        <div className="form-field-readonly cell-mono" style={{ fontSize: 11, wordBreak: 'break-all' }}>{value}</div>
+      </div>
+    );
+  }
+
   return (
     <aside className="drawer">
       <div className="drawer-header">
@@ -209,7 +261,7 @@ function TaskEditDrawer({ task, creating, onClose, onSaved, onDeleted }: DrawerP
             </svg>
           </button>
         </div>
-        <h2 className="drawer-title-h2">{creating ? 'New task' : (task?.agentId ?? '')}</h2>
+        <h2 className="drawer-title-h2">{creating ? 'New task' : (task?.title || task?.agentId ?? '')}</h2>
         {!creating && task && (
           <div className="drawer-subtitle">{task.status}</div>
         )}
@@ -227,28 +279,71 @@ function TaskEditDrawer({ task, creating, onClose, onSaved, onDeleted }: DrawerP
             <div className="form-field">
               <label htmlFor="tf-status">Status</label>
               <select id="tf-status" value={status} onChange={e => setStatus(e.target.value as TaskStatus)}>
-                <option value="active">active</option>
-                <option value="pending">pending</option>
-                <option value="paused">paused</option>
-                <option value="completed">completed</option>
-                <option value="failed">failed</option>
-                <option value="cancelled">cancelled</option>
+                {ALL_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
               </select>
             </div>
             <div className="form-field">
-              <label htmlFor="tf-conv-id">Conversation ID (UUID)</label>
-              <input id="tf-conv-id" type="text" value={conversationId} onChange={e => setConversationId(e.target.value)} placeholder="UUID — optional" />
+              <label htmlFor="tf-owner">Owner</label>
+              <select id="tf-owner" value={owner} onChange={e => setOwner(e.target.value as TaskOwner)}>
+                <option value="curia">curia</option>
+                <option value="ceo">ceo</option>
+                <option value="external">external</option>
+              </select>
             </div>
             <div className="form-field">
-              <label htmlFor="tf-job-id">Scheduled Job ID (UUID)</label>
-              <input id="tf-job-id" type="text" value={scheduledJobId} onChange={e => setScheduledJobId(e.target.value)} placeholder="UUID — optional" />
+              <label htmlFor="tf-priority">Priority (0–100)</label>
+              <input id="tf-priority" type="number" min="0" max="100" value={priority} onChange={e => setPriority(e.target.value)} />
+            </div>
+            <div className="form-field">
+              <label htmlFor="tf-due-at">Due date</label>
+              <input id="tf-due-at" type="date" value={dueAt} onChange={e => setDueAt(e.target.value)} />
+            </div>
+            <div className="form-field">
+              <label htmlFor="tf-source">Source</label>
+              <select id="tf-source" value={source} onChange={e => setSource(e.target.value as TaskSource)}>
+                <option value="agent">agent</option>
+                <option value="ceo">ceo</option>
+                <option value="scheduler">scheduler</option>
+                <option value="coordinator">coordinator</option>
+              </select>
             </div>
           </div>
 
           <div className="form-field">
+            <label htmlFor="tf-title">Title</label>
+            <input id="tf-title" type="text" value={title} onChange={e => setTitle(e.target.value)} placeholder="Short task title" />
+          </div>
+          <div className="form-field">
+            <label htmlFor="tf-description">Description</label>
+            <textarea id="tf-description" rows={2} value={description} onChange={e => setDescription(e.target.value)} placeholder="Optional longer description…" />
+          </div>
+          <div className="form-field">
             <label htmlFor="tf-intent">Intent anchor</label>
             <textarea id="tf-intent" rows={3} value={intentAnchor} onChange={e => setIntentAnchor(e.target.value)} placeholder="Persistent task goal/context…" />
           </div>
+          <div className="form-field">
+            <label htmlFor="tf-tags">Tags (comma-separated)</label>
+            <input id="tf-tags" type="text" value={tags} onChange={e => setTags(e.target.value)} placeholder="e.g. follow-up, finance" />
+          </div>
+          <div className="form-field">
+            <label htmlFor="tf-waiting-text">Waiting on (text)</label>
+            <textarea id="tf-waiting-text" rows={2} value={waitingOnText} onChange={e => setWaitingOnText(e.target.value)} placeholder="Who or what are we waiting on?" />
+          </div>
+          <div className="form-field">
+            <label htmlFor="tf-conv-id">Conversation ID (UUID)</label>
+            <input id="tf-conv-id" type="text" value={conversationId} onChange={e => setConversationId(e.target.value)} placeholder="UUID — optional" />
+          </div>
+
+          {/* Read-only system-managed FK fields */}
+          {!creating && (
+            <>
+              {uuidField('Source agent ID', task?.sourceAgentId ?? null)}
+              {uuidField('Waiting on contact ID', task?.waitingOnContactId ?? null)}
+              {uuidField('Parent task ID', task?.parentTaskId ?? null)}
+              {uuidField('Blocked by task ID', task?.blockedByTaskId ?? null)}
+            </>
+          )}
+
           <div className="form-field">
             <label htmlFor="tf-budget">Error budget JSON</label>
             <textarea id="tf-budget" rows={4} value={errorBudget} onChange={e => setErrorBudget(e.target.value)} placeholder='{"maxTurns": 12, "maxConsecutiveErrors": 3}' style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 12 }} />
@@ -282,9 +377,15 @@ function TaskEditDrawer({ task, creating, onClose, onSaved, onDeleted }: DrawerP
 
 // ── Main page ─────────────────────────────────────────────────────────────────
 
-type SortKey = 'agentId' | 'intentAnchor' | 'status' | 'updatedAt';
+type SortKey = 'title' | 'agentId' | 'owner' | 'priority' | 'status' | 'dueAt' | 'updatedAt';
 
-const STATUS_FILTERS = ['all', 'active', 'pending', 'paused', 'completed', 'failed', 'cancelled'] as const;
+const STATUS_FILTERS = [
+  'all',
+  // Primary task-lifecycle values
+  'open', 'in_progress', 'blocked', 'waiting', 'done', 'cancelled',
+  // Legacy scheduler values
+  'active', 'pending', 'paused', 'completed', 'failed',
+] as const;
 type StatusFilter = typeof STATUS_FILTERS[number];
 
 export default function TasksPage() {
@@ -294,7 +395,7 @@ export default function TasksPage() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>('active');
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
   const [sort, setSort] = useState<{ key: SortKey; dir: 'asc' | 'desc' }>({ key: 'updatedAt', dir: 'desc' });
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
@@ -321,8 +422,11 @@ export default function TasksPage() {
   useEffect(() => { void load(); }, [load]);
 
   const counts = useMemo(() => {
-    const c: Record<StatusFilter, number> = { all: tasks.length, active: 0, pending: 0, paused: 0, completed: 0, failed: 0, cancelled: 0 };
-    for (const t of tasks) c[t.status]++;
+    const c: Record<string, number> = { all: tasks.length };
+    for (const s of STATUS_FILTERS.slice(1)) c[s] = 0;
+    for (const t of tasks) {
+      if (c[t.status] !== undefined) c[t.status]++;
+    }
     return c;
   }, [tasks]);
 
@@ -332,13 +436,13 @@ export default function TasksPage() {
     if (search) {
       const q = search.toLowerCase();
       rows = rows.filter(t =>
-        (t.agentId + ' ' + t.intentAnchor).toLowerCase().includes(q)
+        (t.title + ' ' + t.agentId + ' ' + t.intentAnchor + ' ' + t.tags.join(' ')).toLowerCase().includes(q)
       );
     }
     const dir = sort.dir === 'asc' ? 1 : -1;
     rows = [...rows].sort((a, b) => {
-      const av = (a[sort.key] ?? '') as string;
-      const bv = (b[sort.key] ?? '') as string;
+      const av = (a[sort.key] ?? '') as string | number;
+      const bv = (b[sort.key] ?? '') as string | number;
       if (av < bv) return -1 * dir;
       if (av > bv) return  1 * dir;
       return 0;
@@ -367,8 +471,7 @@ export default function TasksPage() {
         next[idx] = task;
         return next;
       }
-      // New task: switch filter so it's immediately visible.
-      setStatusFilter(task.status);
+      setStatusFilter('all');
       return [...prev, task];
     });
     setEditing(task);
@@ -395,7 +498,7 @@ export default function TasksPage() {
         <main className="main tasks-page">
           <Topbar crumb="Memory" title="Tasks">
             <TopbarSearch
-              placeholder="Search agent or intent…"
+              placeholder="Search title, agent, tags…"
               value={search}
               onChange={v => { setSearch(v); setPage(1); }}
             />
@@ -416,7 +519,7 @@ export default function TasksPage() {
               <div className="tasks-mobile-search">
                 <input
                   type="text"
-                  placeholder="Search agent or intent…"
+                  placeholder="Search title, agent, tags…"
                   value={search}
                   onChange={e => { setSearch(e.target.value); setPage(1); }}
                 />
@@ -430,9 +533,9 @@ export default function TasksPage() {
                       className={`records-filter-chip${statusFilter === v ? ' active' : ''}`}
                       onClick={() => { setStatusFilter(v); setPage(1); }}
                     >
-                      {v === 'all' ? 'All' : v.charAt(0).toUpperCase() + v.slice(1)}
+                      {v === 'all' ? 'All' : v.replace('_', ' ')}
                       <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 11, opacity: 0.7 }}>
-                        {counts[v]}
+                        {counts[v] ?? 0}
                       </span>
                     </button>
                   ))}
@@ -448,19 +551,34 @@ export default function TasksPage() {
                     <table className="records-table">
                       <thead>
                         <tr>
+                          <th className="sortable" aria-sort={ariaSort('title')}>
+                            <button className="sort-btn" onClick={() => toggleSort('title')}>
+                              Title <span className="sort-arrow">{sortArrow('title')}</span>
+                            </button>
+                          </th>
                           <th className="sortable" aria-sort={ariaSort('agentId')}>
                             <button className="sort-btn" onClick={() => toggleSort('agentId')}>
                               Agent <span className="sort-arrow">{sortArrow('agentId')}</span>
                             </button>
                           </th>
-                          <th className="sortable" aria-sort={ariaSort('intentAnchor')}>
-                            <button className="sort-btn" onClick={() => toggleSort('intentAnchor')}>
-                              Intent anchor <span className="sort-arrow">{sortArrow('intentAnchor')}</span>
+                          <th className="sortable" aria-sort={ariaSort('owner')}>
+                            <button className="sort-btn" onClick={() => toggleSort('owner')}>
+                              Owner <span className="sort-arrow">{sortArrow('owner')}</span>
                             </button>
                           </th>
                           <th className="sortable" aria-sort={ariaSort('status')}>
                             <button className="sort-btn" onClick={() => toggleSort('status')}>
                               Status <span className="sort-arrow">{sortArrow('status')}</span>
+                            </button>
+                          </th>
+                          <th className="sortable" aria-sort={ariaSort('priority')}>
+                            <button className="sort-btn" onClick={() => toggleSort('priority')}>
+                              Pri <span className="sort-arrow">{sortArrow('priority')}</span>
+                            </button>
+                          </th>
+                          <th className="sortable col-updated" aria-sort={ariaSort('dueAt')}>
+                            <button className="sort-btn" onClick={() => toggleSort('dueAt')}>
+                              Due <span className="sort-arrow">{sortArrow('dueAt')}</span>
                             </button>
                           </th>
                           <th className="sortable col-updated" aria-sort={ariaSort('updatedAt')}>
@@ -479,11 +597,19 @@ export default function TasksPage() {
                             onClick={() => { setCreating(false); setEditing(t); }}
                           >
                             <td>
-                              <span className="cell-primary">{t.agentId}</span>
+                              <span className="cell-primary">{t.title || t.intentAnchor}</span>
+                              {t.tags.length > 0 && (
+                                <span style={{ marginLeft: 6, fontSize: 11, color: 'var(--app-fg-muted)' }}>
+                                  {t.tags.join(', ')}
+                                </span>
+                              )}
                             </td>
-                            <td className="cell-intent">{t.intentAnchor}</td>
-                            <td><span className={`status-pill ${t.status}`}>{t.status}</span></td>
-                            <td className="cell-mono col-updated">{formatDate(t.updatedAt)}</td>
+                            <td className="cell-mono" style={{ fontSize: 12 }}>{t.agentId}</td>
+                            <td><span className={`badge badge-${t.owner}`}>{t.owner}</span></td>
+                            <td><span className={`status-pill ${t.status}`}>{t.status.replace('_', ' ')}</span></td>
+                            <td className="cell-mono" style={{ textAlign: 'center' }}>{t.priority}</td>
+                            <td className="cell-mono col-updated">{formatDate(t.dueAt)}</td>
+                            <td className="cell-mono col-updated">{formatDateTime(t.updatedAt)}</td>
                             <td>
                               <div className="cell-actions" onClick={e => e.stopPropagation()}>
                                 <button
@@ -501,7 +627,7 @@ export default function TasksPage() {
                         ))}
                         {pageRows.length === 0 && (
                           <tr>
-                            <td colSpan={5} style={{ textAlign: 'center', padding: 40, color: 'var(--app-fg-muted)' }}>
+                            <td colSpan={8} style={{ textAlign: 'center', padding: 40, color: 'var(--app-fg-muted)' }}>
                               No tasks match.
                             </td>
                           </tr>
