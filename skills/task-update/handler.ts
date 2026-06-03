@@ -94,13 +94,6 @@ export class TaskUpdateHandler implements SkillHandler {
         return { success: false, error: `Task not found: ${input.task_id}` };
       }
 
-      // If status was set to 'cancelled', also cancel any pending wake-ups
-      // (updateTask handles this when wakeAt is provided, but a bare status='cancelled'
-      // without wakeAt still needs to cancel them).
-      if (input.status === 'cancelled' && !input.wake_at) {
-        await ctx.taskRepo.cancelWakeUpJobs(input.task_id);
-      }
-
       const tz = ctx.timezone;
       return {
         success: true,

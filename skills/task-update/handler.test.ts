@@ -164,26 +164,20 @@ describe('TaskUpdateHandler', () => {
     expect(data.task_id).toBe(VALID_UUID);
   });
 
-  it('cancels wake-up jobs when status is set to cancelled', async () => {
+  it('passes status=cancelled to TaskRepo.updateTask (atomically cancels wake-ups in repo)', async () => {
+    // Wake-up job cancellation is now handled atomically inside TaskRepo.updateTask.
+    // The handler simply passes the status; no separate cancelWakeUpJobs call.
     const taskRepo = makeTaskRepo({
       updateTask: vi.fn().mockResolvedValue(makeTaskRow({ status: 'cancelled' })),
     });
     const ctx = makeCtx({ input: { task_id: VALID_UUID, status: 'cancelled' }, taskRepo });
 
-    await new TaskUpdateHandler().execute(ctx);
+    const result = await new TaskUpdateHandler().execute(ctx);
 
-    expect((taskRepo.cancelWakeUpJobs as ReturnType<typeof vi.fn>).mock.calls.length).toBe(1);
-    expect((taskRepo.cancelWakeUpJobs as ReturnType<typeof vi.fn>).mock.calls[0]![0]).toBe(VALID_UUID);
-  });
-
-  it('does not call cancelWakeUpJobs for non-cancelled status updates', async () => {
-    const taskRepo = makeTaskRepo({
-      updateTask: vi.fn().mockResolvedValue(makeTaskRow({ status: 'in_progress' })),
-    });
-    const ctx = makeCtx({ input: { task_id: VALID_UUID, status: 'in_progress' }, taskRepo });
-
-    await new TaskUpdateHandler().execute(ctx);
-
+    expect(result.success).toBe(true);
+    const calls = (taskRepo.updateTask as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls[0]![1].status).toBe('cancelled');
+    // cancelWakeUpJobs is NOT called from the handler — repo handles it
     expect((taskRepo.cancelWakeUpJobs as ReturnType<typeof vi.fn>).mock.calls.length).toBe(0);
   });
 
