@@ -375,7 +375,9 @@ export async function knowledgeGraphRoutes(
       priority?: unknown;
       dueAt?: unknown;
       source?: unknown;
+      sourceAgentId?: unknown;
       tags?: unknown;
+      waitingOnText?: unknown;
       progress?: unknown;
       errorBudget?: unknown;
       conversationId?: unknown;
@@ -425,15 +427,28 @@ export async function knowledgeGraphRoutes(
     const description = typeof body.description === 'string' ? body.description.trim() || null : null;
     const priority = typeof body.priority === 'number' ? body.priority : 50;
     const dueAt = typeof body.dueAt === 'string' && body.dueAt.trim() ? body.dueAt.trim() : null;
+    if (dueAt !== null && isNaN(new Date(dueAt).getTime())) {
+      return reply.status(400).send({ error: 'Invalid dueAt: must be a valid ISO 8601 date string.' });
+    }
     const tags = Array.isArray(body.tags) ? (body.tags as string[]) : [];
+    const sourceAgentId = typeof body.sourceAgentId === 'string' && body.sourceAgentId.trim()
+      ? body.sourceAgentId.trim()
+      : null;
+    if (sourceAgentId && !UUID_RE.test(sourceAgentId)) {
+      return reply.status(400).send({ error: 'Invalid sourceAgentId: must be a valid UUID.' });
+    }
+    const waitingOnText = typeof body.waitingOnText === 'string' && body.waitingOnText.trim()
+      ? body.waitingOnText.trim()
+      : null;
 
     try {
       const inserted = await pool.query(
         `INSERT INTO tasks (
            agent_id, title, intent_anchor, description, status, owner, priority,
-           due_at, source, tags, progress, error_budget, conversation_id, updated_at
+           due_at, source, source_agent_id, tags, waiting_on_text,
+           progress, error_budget, conversation_id, updated_at
          )
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12::jsonb, $13, now())
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb, $14::jsonb, $15, now())
          RETURNING ${TASK_SELECT}`,
         [
           body.agentId.trim(),
@@ -445,7 +460,9 @@ export async function knowledgeGraphRoutes(
           priority,
           dueAt,
           source,
+          sourceAgentId,
           tags,
+          waitingOnText,
           JSON.stringify((body.progress as Record<string, unknown> | undefined) ?? {}),
           JSON.stringify((body.errorBudget as Record<string, unknown> | undefined) ?? {}),
           conversationId,
@@ -508,7 +525,7 @@ export async function knowledgeGraphRoutes(
     const priority = typeof body.priority === 'number' ? body.priority : row.priority;
     const dueAt = body.dueAt === undefined ? row.due_at
       : body.dueAt === null || body.dueAt === '' ? null
-      : typeof body.dueAt === 'string' ? body.dueAt
+      : typeof body.dueAt === 'string' ? body.dueAt.trim() || null
       : row.due_at;
     const source = typeof body.source === 'string' ? body.source : row.source;
     const tags = Array.isArray(body.tags) ? (body.tags as string[]) : row.tags;
@@ -523,6 +540,9 @@ export async function knowledgeGraphRoutes(
     if (!validOwners.includes(owner)) return reply.status(400).send({ error: 'Invalid owner. Must be curia, ceo, or external.' });
     if (!validSources.includes(source)) return reply.status(400).send({ error: 'Invalid source. Must be ceo, agent, scheduler, or coordinator.' });
     if (!Number.isInteger(priority) || priority < 0 || priority > 100) return reply.status(400).send({ error: 'priority must be an integer 0–100.' });
+    if (dueAt !== null && isNaN(new Date(dueAt).getTime())) {
+      return reply.status(400).send({ error: 'Invalid dueAt: must be a valid ISO 8601 date string.' });
+    }
     if (body.tags !== undefined && (!Array.isArray(body.tags) || (body.tags as unknown[]).some(t => typeof t !== 'string'))) {
       return reply.status(400).send({ error: 'tags must be an array of strings.' });
     }
