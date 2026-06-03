@@ -104,8 +104,8 @@ describe('SchedulerService', () => {
       const taskId = 'task-aaa';
       // First call: INSERT into scheduled_jobs
       pool.query.mockResolvedValueOnce({ rows: [{ id: jobId }] });
-      // Second call: CTE that INSERTs into tasks and UPDATEs scheduled_jobs.task_id
-      pool.query.mockResolvedValueOnce({ rows: [{ id: taskId }] });
+      // Second call: CTE returns { task_id, job_id } confirming both INSERT and UPDATE succeeded
+      pool.query.mockResolvedValueOnce({ rows: [{ task_id: taskId, job_id: jobId }] });
 
       const params: CreateJobParams = {
         agentId: 'agent-3',
@@ -790,10 +790,10 @@ describe('SchedulerService', () => {
     });
 
     it('creates a tasks row when intent_anchor is provided', async () => {
-      // First query: the scheduled_jobs upsert; second query: CTE that INSERTs tasks row
-      // and UPDATEs scheduled_jobs.task_id atomically (rowCount=1 means row was created).
+      // First query: the scheduled_jobs upsert; second query: CTE returns { task_id, job_id }
+      // confirming both the tasks INSERT and scheduled_jobs UPDATE succeeded.
       pool.query.mockResolvedValueOnce({ rows: [{ id: 'job-anchor' }] });
-      pool.query.mockResolvedValueOnce({ rows: [], rowCount: 1 });
+      pool.query.mockResolvedValueOnce({ rows: [{ task_id: 'task-new', job_id: 'job-anchor' }] });
 
       await svc.upsertDeclarativeJob('coordinator', 'coordinator', {
         cron: '0 9 * * 1',
@@ -803,11 +803,14 @@ describe('SchedulerService', () => {
 
       expect(pool.query).toHaveBeenCalledTimes(2);
 
-      // Second call must be the CTE: INSERT INTO tasks WHERE NOT EXISTS + UPDATE scheduled_jobs.
+      // Second call must be the CTE: INSERT INTO tasks WHERE NOT EXISTS + UPDATE scheduled_jobs
+      // + SELECT new_task.id AS task_id, link_job.job_id.
       const [taskSql, taskParams] = pool.query.mock.calls[1] as [string, unknown[]];
       expect(taskSql).toContain('INSERT INTO tasks');
       expect(taskSql).toContain('WHERE NOT EXISTS');
       expect(taskSql).toContain('UPDATE scheduled_jobs');
+      expect(taskSql).toContain('task_id');
+      expect(taskSql).toContain('job_id');
       expect(taskParams).toContain('coordinator');
       expect(taskParams).toContain('Produce a weekly summary of key business metrics');
       expect(taskParams).toContain('active');
