@@ -13,6 +13,9 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Changed
+- **`agent_tasks` → `tasks` migration** — promotes the scheduler's persistent-task table to a first-class tasks table with CEO-visible columns (`title`, `owner`, `priority`, `due_at`, `tags`, etc.); flips the `scheduled_job_id` back-FK to a forward `scheduled_jobs.task_id`; adds a status CHECK accepting both legacy and new task-lifecycle values. No behavior change for existing scheduler and persistent-task callers. (Tasks v1, issue 1 of 7, closes #834)
+
 ### Added
 - **`contact-update` skill** — direct write path for canonical contact attributes (title, organization, phone, timezone, etc.) with E.164 phone normalization. Pinned to coordinator, ceo-inbox, research-analyst, and contacts. (#863)
 - **Contact canonical attributes** — 12 structured profile fields (`title`, `organization`, `primary_email`, etc.) persisted directly on the `contacts` row; backfill script populates from KG facts. (#829)

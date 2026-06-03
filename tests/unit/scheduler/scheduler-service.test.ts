@@ -104,7 +104,7 @@ describe('SchedulerService', () => {
       const taskId = 'task-aaa';
       // First call: INSERT into scheduled_jobs
       pool.query.mockResolvedValueOnce({ rows: [{ id: jobId }] });
-      // Second call: INSERT into agent_tasks
+      // Second call: CTE that INSERTs into tasks and UPDATEs scheduled_jobs.task_id
       pool.query.mockResolvedValueOnce({ rows: [{ id: taskId }] });
 
       const params: CreateJobParams = {
@@ -120,10 +120,10 @@ describe('SchedulerService', () => {
       expect(result.jobId).toBe(jobId);
       expect(result.agentTaskId).toBe(taskId);
 
-      // Two queries: job insert + task insert
+      // Two queries: job insert + task CTE (INSERT tasks + UPDATE scheduled_jobs.task_id)
       expect(pool.query).toHaveBeenCalledTimes(2);
       const taskSql = pool.query.mock.calls[1]?.[0] as string;
-      expect(taskSql).toContain('INSERT INTO agent_tasks');
+      expect(taskSql).toContain('INSERT INTO tasks');
     });
 
     it('rejects when neither cronExpr nor runAt is provided', async () => {
@@ -202,15 +202,15 @@ describe('SchedulerService', () => {
       expect(params).toContain('job-cancel');
     });
 
-    it('also cancels the linked agent_task', async () => {
+    it('also cancels the linked task', async () => {
       pool.query.mockResolvedValue({ rows: [] });
 
       await svc.cancelJob('job-cancel');
 
-      // Second query should update agent_tasks
+      // Second query should update tasks via JOIN through scheduled_jobs
       expect(pool.query).toHaveBeenCalledTimes(2);
       const [sql2] = pool.query.mock.calls[1] as [string, unknown[]];
-      expect(sql2).toContain('agent_tasks');
+      expect(sql2).toContain('tasks');
       expect(sql2).toContain('cancelled');
     });
   });
@@ -218,7 +218,7 @@ describe('SchedulerService', () => {
   // -- pauseJobForDrift --
 
   describe('pauseJobForDrift', () => {
-    it('sets scheduled_jobs.status to paused and agent_tasks.status to paused', async () => {
+    it('sets scheduled_jobs.status to paused and tasks.status to paused', async () => {
       pool.query.mockResolvedValue({ rows: [] });
 
       await svc.pauseJobForDrift('job-drift-1');
@@ -227,7 +227,7 @@ describe('SchedulerService', () => {
       const [sql, params] = pool.query.mock.calls[0] as [string, unknown[]];
       expect(sql).toContain("status = 'paused'");
       expect(sql).toContain('scheduled_jobs');
-      expect(sql).toContain('agent_tasks');
+      expect(sql).toContain('tasks');
       expect(params).toContain('job-drift-1');
     });
   });
@@ -242,7 +242,7 @@ describe('SchedulerService', () => {
       });
       // Second query: UPDATE scheduled_jobs
       pool.query.mockResolvedValueOnce({ rows: [] });
-      // Third query: UPDATE agent_tasks (resume drift-paused tasks; no-op for suspended jobs)
+      // Third query: UPDATE tasks (resume drift-paused tasks; no-op for suspended jobs)
       pool.query.mockResolvedValueOnce({ rows: [] });
 
       await svc.unsuspendJob('job-unsuspend');
@@ -259,9 +259,9 @@ describe('SchedulerService', () => {
       expect(params2[0]).toBe('job-unsuspend');
       // params2[1] should be a Date (the recalculated next_run_at)
       expect(params2[1]).toBeInstanceOf(Date);
-      // Third call resumes any drift-paused agent_tasks
+      // Third call resumes any drift-paused tasks (via JOIN through scheduled_jobs)
       const [sql3, params3] = pool.query.mock.calls[2] as [string, unknown[]];
-      expect(sql3).toContain('agent_tasks');
+      expect(sql3).toContain('tasks');
       expect(sql3).toContain('active');
       expect(params3[0]).toBe('job-unsuspend');
     });
@@ -789,8 +789,9 @@ describe('SchedulerService', () => {
       }
     });
 
-    it('creates an agent_tasks row when intent_anchor is provided', async () => {
-      // First query: the scheduled_jobs upsert; second query: the agent_tasks INSERT (row created).
+    it('creates a tasks row when intent_anchor is provided', async () => {
+      // First query: the scheduled_jobs upsert; second query: CTE that INSERTs tasks row
+      // and UPDATEs scheduled_jobs.task_id atomically (rowCount=1 means row was created).
       pool.query.mockResolvedValueOnce({ rows: [{ id: 'job-anchor' }] });
       pool.query.mockResolvedValueOnce({ rows: [], rowCount: 1 });
 
@@ -802,10 +803,11 @@ describe('SchedulerService', () => {
 
       expect(pool.query).toHaveBeenCalledTimes(2);
 
-      // Second call must be the agent_tasks INSERT with WHERE NOT EXISTS guard.
+      // Second call must be the CTE: INSERT INTO tasks WHERE NOT EXISTS + UPDATE scheduled_jobs.
       const [taskSql, taskParams] = pool.query.mock.calls[1] as [string, unknown[]];
-      expect(taskSql).toContain('INSERT INTO agent_tasks');
+      expect(taskSql).toContain('INSERT INTO tasks');
       expect(taskSql).toContain('WHERE NOT EXISTS');
+      expect(taskSql).toContain('UPDATE scheduled_jobs');
       expect(taskParams).toContain('coordinator');
       expect(taskParams).toContain('Produce a weekly summary of key business metrics');
       expect(taskParams).toContain('active');
@@ -818,8 +820,8 @@ describe('SchedulerService', () => {
       );
     });
 
-    it('is idempotent on restart — skips agent_tasks INSERT when row already exists', async () => {
-      // rowCount: 0 means WHERE NOT EXISTS fired — the existing row was preserved.
+    it('is idempotent on restart — skips tasks INSERT when row already exists', async () => {
+      // rowCount: 0 means the WHERE NOT EXISTS guard fired — the existing row was preserved.
       pool.query.mockResolvedValueOnce({ rows: [{ id: 'job-anchor-2' }] });
       pool.query.mockResolvedValueOnce({ rows: [], rowCount: 0 });
 
@@ -838,7 +840,7 @@ describe('SchedulerService', () => {
       );
     });
 
-    it('does not create an agent_tasks row when intent_anchor is absent', async () => {
+    it('does not create a tasks row when intent_anchor is absent', async () => {
       pool.query.mockResolvedValueOnce({ rows: [{ id: 'job-no-anchor' }] });
 
       await svc.upsertDeclarativeJob('coordinator', 'coordinator', {
