@@ -291,6 +291,7 @@ export async function knowledgeGraphRoutes(
   function serializeTask(row: {
     id: string;
     agent_id: string;
+    title: string;
     intent_anchor: string;
     status: string;
     progress: Record<string, unknown> | null;
@@ -302,6 +303,7 @@ export async function knowledgeGraphRoutes(
     return {
       id: row.id,
       agentId: row.agent_id,
+      title: row.title,
       intentAnchor: row.intent_anchor,
       status: row.status,
       progress: row.progress ?? {},
@@ -315,7 +317,7 @@ export async function knowledgeGraphRoutes(
   app.get('/api/kg/tasks', KG_RATE, async (request, reply) => {
     if (!assertSecret(request, reply, webAppBootstrapSecret, sessions)) return;
     const result = await pool.query(
-      `SELECT id, agent_id, intent_anchor, status, progress, error_budget, conversation_id, created_at, updated_at
+      `SELECT id, agent_id, title, intent_anchor, status, progress, error_budget, conversation_id, created_at, updated_at
        FROM tasks
        ORDER BY updated_at DESC
        LIMIT 500`,
@@ -325,6 +327,7 @@ export async function knowledgeGraphRoutes(
         serializeTask(row as {
           id: string;
           agent_id: string;
+          title: string;
           intent_anchor: string;
           status: string;
           progress: Record<string, unknown> | null;
@@ -376,7 +379,7 @@ export async function knowledgeGraphRoutes(
     const inserted = await pool.query(
       `INSERT INTO tasks (agent_id, title, intent_anchor, status, progress, error_budget, conversation_id, updated_at)
        VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7, now())
-       RETURNING id, agent_id, intent_anchor, status, progress, error_budget, conversation_id, created_at, updated_at`,
+       RETURNING id, agent_id, title, intent_anchor, status, progress, error_budget, conversation_id, created_at, updated_at`,
       [
         body.agentId.trim(),
         intentAnchor,   // use intentAnchor as the task title
@@ -396,6 +399,7 @@ export async function knowledgeGraphRoutes(
         inserted.rows[0]! as {
           id: string;
           agent_id: string;
+          title: string;
           intent_anchor: string;
           status: string;
           progress: Record<string, unknown> | null;
@@ -424,7 +428,7 @@ export async function knowledgeGraphRoutes(
     };
 
     const existing = await pool.query(
-      `SELECT id, agent_id, intent_anchor, status, progress, error_budget, conversation_id, created_at, updated_at
+      `SELECT id, agent_id, title, intent_anchor, status, progress, error_budget, conversation_id, created_at, updated_at
        FROM tasks
        WHERE id = $1`,
       [id],
@@ -435,6 +439,7 @@ export async function knowledgeGraphRoutes(
     const row = existing.rows[0] as {
       id: string;
       agent_id: string;
+      title: string;
       intent_anchor: string;
       status: string;
       progress: Record<string, unknown> | null;
@@ -479,7 +484,7 @@ export async function knowledgeGraphRoutes(
            conversation_id = $7,
            updated_at = now()
        WHERE id = $1
-       RETURNING id, agent_id, intent_anchor, status, progress, error_budget, conversation_id, created_at, updated_at`,
+       RETURNING id, agent_id, title, intent_anchor, status, progress, error_budget, conversation_id, created_at, updated_at`,
       [
         id,
         agentId,
@@ -500,6 +505,7 @@ export async function knowledgeGraphRoutes(
         updated.rows[0]! as {
           id: string;
           agent_id: string;
+          title: string;
           intent_anchor: string;
           status: string;
           progress: Record<string, unknown> | null;
