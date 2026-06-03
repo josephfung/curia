@@ -855,6 +855,26 @@ describe('SchedulerService', () => {
       expect(pool.query).toHaveBeenCalledTimes(1);
     });
 
+    it('throws when tasks INSERT succeeds but scheduled_jobs UPDATE fails (orphan race)', async () => {
+      // Simulate the race where the scheduled_jobs row disappears between the upsert
+      // and the task-link CTE: INSERT returns a task_id but job_id is null.
+      pool.query.mockResolvedValueOnce({ rows: [{ id: 'job-race' }] });
+      pool.query.mockResolvedValueOnce({ rows: [{ task_id: 'task-orphan', job_id: null }] });
+
+      await expect(
+        svc.upsertDeclarativeJob('coordinator', 'coordinator', {
+          cron: '0 9 * * 1',
+          task: 'weekly digest',
+          intent_anchor: 'Produce a weekly summary',
+        }),
+      ).rejects.toThrow(/scheduled_jobs row.*not found when linking task/);
+
+      expect(logger.error).toHaveBeenCalledWith(
+        expect.objectContaining({ jobId: 'job-race', taskId: 'task-orphan' }),
+        expect.stringContaining('orphaned task'),
+      );
+    });
+
     it('stamps a system originator with systemRole system and channel declarative', async () => {
       pool.query.mockResolvedValueOnce({ rows: [{ id: 'job-orig' }] });
 
