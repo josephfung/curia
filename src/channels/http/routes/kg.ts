@@ -477,6 +477,7 @@ export async function knowledgeGraphRoutes(
     const updated = await pool.query(
       `UPDATE tasks
        SET agent_id = $2,
+           title = $3,
            intent_anchor = $3,
            status = $4,
            progress = $5::jsonb,

@@ -804,11 +804,13 @@ describe('SchedulerService', () => {
       expect(pool.query).toHaveBeenCalledTimes(2);
 
       // Second call must be the CTE: INSERT INTO tasks WHERE NOT EXISTS + UPDATE scheduled_jobs
-      // + SELECT new_task.id AS task_id, link_job.job_id.
+      // (guarded by AND task_id IS NULL) + cleanup_orphan DELETE + SELECT.
       const [taskSql, taskParams] = pool.query.mock.calls[1] as [string, unknown[]];
       expect(taskSql).toContain('INSERT INTO tasks');
       expect(taskSql).toContain('WHERE NOT EXISTS');
       expect(taskSql).toContain('UPDATE scheduled_jobs');
+      expect(taskSql).toContain('AND task_id IS NULL');
+      expect(taskSql).toContain('cleanup_orphan');
       expect(taskSql).toContain('task_id');
       expect(taskSql).toContain('job_id');
       expect(taskParams).toContain('coordinator');
@@ -856,8 +858,10 @@ describe('SchedulerService', () => {
     });
 
     it('throws when tasks INSERT succeeds but scheduled_jobs UPDATE fails (orphan race)', async () => {
-      // Simulate the race where the scheduled_jobs row disappears between the upsert
-      // and the task-link CTE: INSERT returns a task_id but job_id is null.
+      // Simulate the race where the scheduled_jobs row disappears (or was already linked
+      // by a concurrent startup) between the upsert and the task-link CTE.
+      // The cleanup_orphan CTE deletes the orphan task (DB-side); INSERT returns task_id
+      // but job_id is null, indicating the link failed.
       pool.query.mockResolvedValueOnce({ rows: [{ id: 'job-race' }] });
       pool.query.mockResolvedValueOnce({ rows: [{ task_id: 'task-orphan', job_id: null }] });
 

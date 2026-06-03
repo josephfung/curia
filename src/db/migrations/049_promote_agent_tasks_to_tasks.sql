@@ -9,6 +9,30 @@ ALTER TABLE agent_tasks RENAME TO tasks;
 ALTER TABLE scheduled_jobs
   ADD COLUMN task_id UUID REFERENCES tasks(id) ON DELETE SET NULL;
 
+-- Preflight: the old schema used a non-unique index on scheduled_job_id, so
+-- application logic (not the DB) enforced one-task-per-job. If duplicates exist
+-- the UPDATE...FROM below would pick one arbitrarily and silently drop the
+-- other links. Fail loudly instead so the operator can investigate before data
+-- is permanently lost.
+DO $$
+DECLARE dup_count INT;
+BEGIN
+  SELECT COUNT(*) INTO dup_count
+  FROM (
+    SELECT scheduled_job_id
+    FROM tasks
+    WHERE scheduled_job_id IS NOT NULL
+    GROUP BY scheduled_job_id
+    HAVING COUNT(*) > 1
+  ) dups;
+  IF dup_count > 0 THEN
+    RAISE EXCEPTION
+      'Migration 049 preflight: % scheduled_job_id value(s) are referenced by more than one '
+      'tasks row. Resolve duplicates before re-running this migration.',
+      dup_count;
+  END IF;
+END $$;
+
 -- Backfill scheduled_jobs.task_id from the existing tasks.scheduled_job_id.
 -- Every tasks row that linked to a scheduled_job gets the forward FK populated.
 UPDATE scheduled_jobs sj
