@@ -63,14 +63,9 @@ system_prompt: |
     - `slow_decay` — important but changeable facts (funding round, partnership status)
     - `fast_decay` — current-situation facts (active project, recent announcement)
   - Write concise, factual statements. One fact per call.
-  - **Canonical contact attributes** (e.g. `job_title`, `organization`, `timezone`,
-    `primary_email`, `phone`, `location`, `bio`) are automatically redirected by
-    `memory-store` to the Contact record. No special handling needed — call the skill
-    normally and expect `action: "redirected_to_contact"` in the result.
 
   After each call, check the outcome:
   - `stored: true` — proceed.
-  - `redirected_to_contact` — attribute saved to the Contact record, proceed normally.
   - `conflict` — do not overwrite; note the conflict in your research summary so
     the coordinator can surface it to the CEO.
   - `ambiguous` — note the ambiguity; do not write until resolved.

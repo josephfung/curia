@@ -15,7 +15,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 - **Contact canonical attributes** — 12 structured profile fields (`title`, `organization`, `primary_email`, etc.) persisted directly on the `contacts` row; backfill script populates from KG facts. (#829)
-- **Entity context enrichment — integration** — `EntityContext.contact` now exposes all 12 canonical fields; the assembler filters duplicate KG facts for those attributes. `memory-store` and `extract-facts` redirect canonical-attribute writes (timezone, title, organization, phone, etc.) to `ContactService` instead of the KG, with E.164 normalization for phone values via `libphonenumber-js`. `context-for-email` prefers `contact.primaryEmail` and surfaces `contact.preferredName` for salutations. Agent prompts (coordinator, research-analyst, ceo-inbox, calendar) updated with canonical-attribute guidance. (#830)
+- **Entity context enrichment** — `EntityContext.contact` now exposes all 12 canonical fields; canonical-attribute writes via `memory-store` and `extract-facts` redirect to `ContactService` with E.164 phone normalization; `context-for-email` prefers `contact.primaryEmail` and surfaces `contact.preferredName` for salutations. (#830)
 - **File attachments in outbound email** — all five email skills (`email-send`, `email-reply`, `email-draft-save`, `ceo-inbox-draft-compose`, `ceo-inbox-draft-reply`) now accept an `attachments` input field. Attachments are read from `file://` URLs (TempFileStore), validated, and forwarded to Nylas. The CEO inbox path uses multipart FormData; the Curia outbound path passes `Buffer` content via the Nylas SDK. 20 MB total / 10 attachment limit enforced. (#818)
 
 ### Fixed
