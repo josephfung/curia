@@ -15,9 +15,13 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 - **Contact canonical attributes** — 12 structured profile fields (`title`, `organization`, `primary_email`, etc.) persisted directly on the `contacts` row; backfill script populates from KG facts. (#829)
+- **Entity context enrichment** — `EntityContext.contact` now exposes all 12 canonical fields; canonical-attribute writes via `memory-store` and `extract-facts` redirect to `ContactService` with E.164 phone normalization; `context-for-email` prefers `contact.primaryEmail` and surfaces `contact.preferredName` for salutations. (#830)
 - **File attachments in outbound email** — all five email skills (`email-send`, `email-reply`, `email-draft-save`, `ceo-inbox-draft-compose`, `ceo-inbox-draft-reply`) now accept an `attachments` input field. Attachments are read from `file://` URLs (TempFileStore), validated, and forwarded to Nylas. The CEO inbox path uses multipart FormData; the Curia outbound path passes `Buffer` content via the Nylas SDK. 20 MB total / 10 attachment limit enforced. (#818)
 
 ### Fixed
+- **`extract-facts` canonical lookup N+1** — contact lookups are now cached by KG node ID within a single `execute()` call; multiple canonical facts about the same person no longer each trigger a separate DB query. (#830)
+- **`extract-facts` + `memory-store` skill.json contracts** — output schemas now document the `redirected` counter and `redirected_to_contact` action (with `contact_id`) introduced by the canonical attribute guard. (#830)
+- **`canonical-attribute-guard` whitespace handling** — `resolveCanonicalField` now trims leading/trailing whitespace before lookup; LLM-generated attribute keys like `" timezone "` now match correctly instead of falling through to KG writes.
 - **coordinator delegation hint** — `delegation_hint` in active outbound context is now treated as a binding contract; coordinator no longer handles replies directly when a specialist is named, preventing meeting debriefs from getting stuck at `"prompted"`. (#763)
 
 ### Added

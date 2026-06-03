@@ -69,7 +69,7 @@ describe('ExtractFactsHandler', () => {
 
     const result = await handler.execute(ctx);
 
-    expect(result).toEqual({ success: true, data: { stored: 0, skipped: true, failed: 0 } });
+    expect(result).toEqual({ success: true, data: { stored: 0, redirected: 0, skipped: true, failed: 0 } });
     // Classifier was called; extraction was not
     expect(infraLlm.classify).toHaveBeenCalledTimes(1);
     expect(infraLlm.extract).not.toHaveBeenCalled();
@@ -89,7 +89,7 @@ describe('ExtractFactsHandler', () => {
 
     const result = await handler.execute(ctx);
 
-    expect(result).toEqual({ success: true, data: { stored: 1, skipped: false, failed: 0 } });
+    expect(result).toEqual({ success: true, data: { stored: 1, redirected: 0, skipped: false, failed: 0 } });
 
     // Fact node exists in the KG
     const josephNodes = await entityMemory.findEntities('Jane Doe');
@@ -173,14 +173,14 @@ describe('ExtractFactsHandler', () => {
     const handler1 = new ExtractFactsHandler();
     const ctx1 = makeCtx(entityMemory, { text: 'Bob lives in Toronto.', source: 'test' }, infraLlm1);
     const result1 = await handler1.execute(ctx1);
-    expect(result1).toEqual({ success: true, data: { stored: 1, skipped: false, failed: 0 } });
+    expect(result1).toEqual({ success: true, data: { stored: 1, redirected: 0, skipped: false, failed: 0 } });
 
     // Second invocation with semantically identical fact — storeFact deduplicates internally
     const infraLlm2 = makeMockInfraLlm(['yes', facts]);
     const handler2 = new ExtractFactsHandler();
     const ctx2 = makeCtx(entityMemory, { text: 'Bob lives in Toronto.', source: 'test' }, infraLlm2);
     const result2 = await handler2.execute(ctx2);
-    expect(result2).toEqual({ success: true, data: { stored: 1, skipped: false, failed: 0 } });
+    expect(result2).toEqual({ success: true, data: { stored: 1, redirected: 0, skipped: false, failed: 0 } });
 
     // Only one fact node should exist — storeFact merged the second call into the first
     const josephNodes = await entityMemory.findEntities('Jane Doe');
@@ -234,7 +234,7 @@ describe('ExtractFactsHandler', () => {
     const result = await handler.execute(ctx);
 
     // conflict is a semantic outcome — not counted as failed
-    expect(result).toEqual({ success: true, data: { stored: 0, skipped: false, failed: 0 } });
+    expect(result).toEqual({ success: true, data: { stored: 0, redirected: 0, skipped: false, failed: 0 } });
     expect(storeFact).toHaveBeenCalledOnce();
   });
 
@@ -260,7 +260,7 @@ describe('ExtractFactsHandler', () => {
 
     const result = await handler.execute(ctx);
 
-    expect(result).toEqual({ success: true, data: { stored: 1, skipped: false, failed: 0 } });
+    expect(result).toEqual({ success: true, data: { stored: 1, redirected: 0, skipped: false, failed: 0 } });
     // storeFact should use memoryWriteSource (task-scoped), not the LLM-provided 'agent:ceo-inbox'
     expect(storeFact.mock.calls[0]![0].source).toBe(memoryWriteSource);
   });
@@ -284,7 +284,7 @@ describe('ExtractFactsHandler', () => {
     const result = await handler.execute(ctx);
 
     // first fact stored, rate-limit counted as failed, loop stopped before fact 3
-    expect(result).toEqual({ success: true, data: { stored: 1, skipped: false, failed: 1 } });
+    expect(result).toEqual({ success: true, data: { stored: 1, redirected: 0, skipped: false, failed: 1 } });
     expect(storeFact).toHaveBeenCalledTimes(2);
   });
 
@@ -320,7 +320,7 @@ describe('ExtractFactsHandler', () => {
 
     const result = await handler.execute(ctx);
 
-    expect(result).toEqual({ success: true, data: { stored: 0, skipped: false, failed: 1 } });
+    expect(result).toEqual({ success: true, data: { stored: 0, redirected: 0, skipped: false, failed: 1 } });
 
     const malformedCall = warnSpy.mock.calls.find(
       (args) => typeof args[args.length - 1] === 'string' && (args[args.length - 1] as string).includes('skipping malformed fact'),
@@ -347,7 +347,7 @@ describe('ExtractFactsHandler', () => {
     const ctx = makeCtx(entityMemory, { text: 'Jane Doe lives in Toronto.', source: 'test' }, infraLlm);
     const result = await handler.execute(ctx);
 
-    expect(result).toEqual({ success: true, data: { stored: 0, skipped: false, failed: 1 } });
+    expect(result).toEqual({ success: true, data: { stored: 0, redirected: 0, skipped: false, failed: 1 } });
     expect(storeFact).toHaveBeenCalledTimes(1);
   });
 

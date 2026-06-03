@@ -1,4 +1,5 @@
 name: calendar
+version: "0.1.0"
 role: specialist
 description: >
   Calendar domain specialist — scheduling, free/busy, conflict resolution,
@@ -86,7 +87,10 @@ system_prompt: |
 
   8. **Timezone awareness.** When scheduling across timezones, state times in
      each participant's local timezone. Use entity-context to determine
-     participant timezones.
+     participant timezones. Read timezone from `contact.timezone` in the entity-context
+     response — this is the authoritative canonical column.
+     Do not parse the `facts` array for a timezone label; `contact.timezone` always
+     takes precedence when present.
 
   ## Preference Hierarchy
   The CEO provides scheduling rules dynamically via chat or email (e.g. "no

@@ -117,6 +117,9 @@ export class ContextForEmailHandler implements SkillHandler {
     const recipient: Record<string, unknown> = {};
     if (recipientResult) {
       recipient.display_name = recipientResult.displayName;
+      // preferred_name is the short/familiar form for salutations (e.g. "Dave" vs "David Chen").
+      // Falls back to display_name if not set — the LLM can use whichever is more natural.
+      if (recipientResult.preferredName) recipient.preferred_name = recipientResult.preferredName;
       if (recipientResult.role) recipient.role = recipientResult.role;
       if (recipientResult.email) recipient.email = recipientResult.email;
       if (recipientResult.identityStatus) recipient.identity_status = recipientResult.identityStatus;
@@ -146,14 +149,16 @@ export class ContextForEmailHandler implements SkillHandler {
 
   /**
    * Look up recipient contact info via the contact service.
-   * Uses findContactByName for partial name matching, then fetches
-   * identities to find their email address.
+   * Uses findContactByName for partial name matching. If contact.primaryEmail is
+   * populated, uses it directly (canonical column, migration 048). Otherwise falls
+   * back to scanning contact_channel_identities for an active email address.
+   * Also surfaces contact.preferredName for personalising salutations.
    * Returns null if not found or contact service is unavailable.
    */
   private async lookupRecipient(
     ctx: SkillContext,
     recipientName: string,
-  ): Promise<{ displayName: string; role?: string; email?: string; identityStatus?: string } | null> {
+  ): Promise<{ displayName: string; preferredName?: string; role?: string; email?: string; identityStatus?: string } | null> {
     if (!ctx.contactService) return null;
 
     try {
@@ -161,14 +166,28 @@ export class ContextForEmailHandler implements SkillHandler {
       if (contacts.length === 0) return null;
 
       const contact = contacts[0]!;
-      // Fetch identities to find their email address
-      const withIdentities = await ctx.contactService.getContactWithIdentities(contact.id);
+
       let email: string | undefined;
       let identityStatus: string | undefined;
-      if (withIdentities) {
-        // Prefer active identities over defunct/bounced ones. If no active
-        // identity exists, fall back to the first by creation order (the sort
-        // is stable). The LLM receives identity_status and can warn accordingly.
+
+      // Always fetch identities — needed both for email resolution (when primaryEmail
+      // is null) and to resolve the actual identity status (even when primaryEmail is
+      // set, the identity could be bounced or defunct since it was pinned as primary).
+      const withIdentities = await ctx.contactService.getContactWithIdentities(contact.id);
+
+      if (contact.primaryEmail) {
+        // Canonical column is populated — use it as the email address.
+        // Resolve the actual status from contact_channel_identities so the LLM gets
+        // a correct bounce/defunct warning instead of a spurious 'active'.
+        email = contact.primaryEmail;
+        const primaryIdentity = withIdentities?.identities.find(
+          (id) => id.channel === 'email' &&
+                  id.channelIdentifier.toLowerCase() === contact.primaryEmail!.toLowerCase(),
+        );
+        identityStatus = primaryIdentity?.status ?? 'active';
+      } else if (withIdentities) {
+        // No canonical email — scan all email identities, preferring active ones.
+        // The LLM receives identity_status and can warn accordingly.
         const emailIdentity = withIdentities.identities
           .filter((id) => id.channel === 'email')
           .sort((a, b) => {
@@ -184,6 +203,7 @@ export class ContextForEmailHandler implements SkillHandler {
 
       return {
         displayName: contact.displayName,
+        preferredName: contact.preferredName ?? undefined,
         role: contact.role ?? undefined,
         email,
         identityStatus,

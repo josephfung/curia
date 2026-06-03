@@ -21,11 +21,28 @@ export interface EntityContext {
   /** Human-readable label from the KG node */
   label: string;
 
-  /** Contact record — only populated for person entities that have a contact record */
+  /** Contact record — only populated for person entities that have a contact record.
+   *  Canonical profile attributes (migration 048) are sourced directly from the
+   *  contacts table row; they are NOT in the facts array (filtered out by the assembler
+   *  to avoid duplication). All canonical fields are nullable. */
   contact: {
     contactId: string;
     displayName: string;
     role: string | null;
+    // Canonical profile attributes (migration 048). Read these directly — do not
+    // parse the facts array for these values; the assembler filters them out.
+    preferredName: string | null;
+    title: string | null;
+    organization: string | null;
+    primaryEmail: string | null;
+    primaryPhone: string | null;
+    timezone: string | null;
+    locale: string | null;
+    location: string | null;
+    pronouns: string | null;
+    linkedinUrl: string | null;
+    bio: string | null;
+    birthday: string | null;
   } | null;
 
   /** Known facts from the KG, grouped by category.

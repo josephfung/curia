@@ -1,5 +1,5 @@
 name: ceo-inbox
-version: "0.2.0"
+version: "0.2.1"
 role: specialist
 description: >
   Manages the CEO's personal email inbox. Handles standing-rule management,

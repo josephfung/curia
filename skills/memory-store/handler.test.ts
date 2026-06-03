@@ -411,6 +411,238 @@ describe('MemoryStoreHandler', () => {
     });
   });
 
+  // ── Canonical contact attribute redirect ─────────────────────────────────
+
+  describe('action: redirected_to_contact', () => {
+    function makeCtxWithContact(
+      entityMemory: ReturnType<typeof makeMockEntityMemory>,
+      contact: { id: string } | null,
+      input: Record<string, unknown>,
+    ): SkillContext {
+      const contactService = {
+        findContactByKgNodeId: vi.fn().mockResolvedValue(contact),
+        updateContactFields: vi.fn().mockResolvedValue({ id: contact?.id ?? 'c1' }),
+      };
+      return {
+        input,
+        secret: () => 'test-key',
+        log: pino({ level: 'silent' }),
+        entityMemory,
+        contactService,
+      } as unknown as SkillContext;
+    }
+
+    it('redirects a canonical attribute write to ContactService when entity is a person with a contact', async () => {
+      const mockMem = {
+        ...makeMockEntityMemory({}),
+        resolveOrCreate: vi.fn().mockResolvedValue({
+          kind: 'found',
+          node: { id: 'kg-1', label: 'Jane Doe', type: 'person' },
+        }),
+        // storeFact should NOT be called — the guard short-circuits
+        storeFact: vi.fn().mockRejectedValue(new Error('storeFact should not be called')),
+      };
+      const ctx = makeCtxWithContact(
+        mockMem,
+        { id: 'contact-1' },
+        { entity: 'Jane Doe', field: 'timezone', value: 'America/Toronto', source: 'test' },
+      );
+
+      const result = await handler.execute(ctx);
+
+      expect(result.success).toBe(true);
+      const data = (result as { success: true; data: Record<string, unknown> }).data;
+      expect(data.stored).toBe(false);
+      expect(data.action).toBe('redirected_to_contact');
+      expect(data.contact_id).toBe('contact-1');
+      // storeFact must not have been called
+      expect(mockMem.storeFact).not.toHaveBeenCalled();
+      // updateContactFields should have been called with the canonical field
+      const cs = (ctx as unknown as { contactService: { updateContactFields: ReturnType<typeof vi.fn> } }).contactService;
+      expect(cs.updateContactFields).toHaveBeenCalledWith('contact-1', { timezone: 'America/Toronto' });
+    });
+
+    it('normalizes phone numbers to E.164 before redirecting', async () => {
+      const mockMem = {
+        ...makeMockEntityMemory({}),
+        resolveOrCreate: vi.fn().mockResolvedValue({
+          kind: 'found',
+          node: { id: 'kg-1', label: 'Jane Doe', type: 'person' },
+        }),
+        storeFact: vi.fn().mockRejectedValue(new Error('storeFact should not be called')),
+      };
+      const ctx = makeCtxWithContact(
+        mockMem,
+        { id: 'contact-1' },
+        { entity: 'Jane Doe', field: 'phone', value: '(416) 555-1234', source: 'test' },
+      );
+
+      const result = await handler.execute(ctx);
+
+      expect(result.success).toBe(true);
+      const data = (result as { success: true; data: Record<string, unknown> }).data;
+      expect(data.action).toBe('redirected_to_contact');
+      const cs = (ctx as unknown as { contactService: { updateContactFields: ReturnType<typeof vi.fn> } }).contactService;
+      expect(cs.updateContactFields).toHaveBeenCalledWith('contact-1', { primaryPhone: '+14165551234' });
+    });
+
+    it('falls back to KG write when phone cannot be normalized to E.164', async () => {
+      const mockMem = {
+        ...makeMockEntityMemory({}),
+        resolveOrCreate: vi.fn().mockResolvedValue({
+          kind: 'found',
+          node: { id: 'kg-1', label: 'Jane Doe', type: 'person' },
+        }),
+        storeFact: vi.fn().mockResolvedValue({ stored: true, action: 'created', nodeId: 'fact-1', sensitivity: 'internal' }),
+      };
+      const ctx = makeCtxWithContact(
+        mockMem,
+        { id: 'contact-1' },
+        { entity: 'Jane Doe', field: 'phone', value: 'not-a-phone-number', source: 'test' },
+      );
+
+      const result = await handler.execute(ctx);
+
+      // Falls through to KG write because normalization failed
+      expect(result.success).toBe(true);
+      const data = (result as { success: true; data: Record<string, unknown> }).data;
+      expect(data.stored).toBe(true);
+      expect(data.action).toBe('created');
+      expect(mockMem.storeFact).toHaveBeenCalledTimes(1);
+    });
+
+    it('falls back to KG write when findContactByKgNodeId throws (DB error)', async () => {
+      const mockMem = {
+        ...makeMockEntityMemory({}),
+        resolveOrCreate: vi.fn().mockResolvedValue({
+          kind: 'found',
+          node: { id: 'kg-1', label: 'Jane Doe', type: 'person' },
+        }),
+        storeFact: vi.fn().mockResolvedValue({ stored: true, action: 'created', nodeId: 'fact-1', sensitivity: 'internal' }),
+      };
+      const contactService = {
+        findContactByKgNodeId: vi.fn().mockRejectedValue(new Error('connection timeout')),
+        updateContactFields: vi.fn().mockRejectedValue(new Error('should not be called')),
+      };
+      const ctx = {
+        input: { entity: 'Jane Doe', field: 'timezone', value: 'America/Toronto', source: 'test' },
+        secret: () => 'test-key',
+        log: pino({ level: 'silent' }),
+        entityMemory: mockMem,
+        contactService,
+      } as unknown as SkillContext;
+
+      const result = await handler.execute(ctx);
+
+      // DB error during contact lookup → falls through to KG write, not a skill error
+      expect(result.success).toBe(true);
+      const data = (result as { success: true; data: Record<string, unknown> }).data;
+      expect(data.stored).toBe(true);
+      expect(mockMem.storeFact).toHaveBeenCalledTimes(1);
+      expect(contactService.updateContactFields).not.toHaveBeenCalled();
+    });
+
+    it('falls through to KG write when person node has no contact record', async () => {
+      const mockMem = {
+        ...makeMockEntityMemory({}),
+        resolveOrCreate: vi.fn().mockResolvedValue({
+          kind: 'found',
+          node: { id: 'kg-1', label: 'Jane Doe', type: 'person' },
+        }),
+        storeFact: vi.fn().mockResolvedValue({ stored: true, action: 'created', nodeId: 'fact-1', sensitivity: 'internal' }),
+      };
+      // contact is null — person KG node with no linked contact row
+      const ctx = makeCtxWithContact(
+        mockMem,
+        null,
+        { entity: 'Jane Doe', field: 'timezone', value: 'America/Toronto', source: 'test' },
+      );
+
+      const result = await handler.execute(ctx);
+
+      // No contact → falls through to KG write
+      expect(result.success).toBe(true);
+      const data = (result as { success: true; data: Record<string, unknown> }).data;
+      expect(data.stored).toBe(true);
+      expect(mockMem.storeFact).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not redirect non-person entity types', async () => {
+      const mockMem = {
+        ...makeMockEntityMemory({}),
+        resolveOrCreate: vi.fn().mockResolvedValue({
+          kind: 'found',
+          node: { id: 'kg-org-1', label: 'Acme Corp', type: 'organization' },
+        }),
+        storeFact: vi.fn().mockResolvedValue({ stored: true, action: 'created', nodeId: 'fact-1', sensitivity: 'internal' }),
+      };
+      const ctx = makeCtxWithContact(
+        mockMem,
+        { id: 'contact-1' },
+        { entity: 'Acme Corp', field: 'timezone', value: 'America/Toronto', source: 'test' },
+      );
+
+      const result = await handler.execute(ctx);
+
+      // organization entity → no redirect
+      expect(result.success).toBe(true);
+      const data = (result as { success: true; data: Record<string, unknown> }).data;
+      expect(data.stored).toBe(true);
+      expect(mockMem.storeFact).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not redirect non-canonical attributes', async () => {
+      const mockMem = {
+        ...makeMockEntityMemory({}),
+        resolveOrCreate: vi.fn().mockResolvedValue({
+          kind: 'found',
+          node: { id: 'kg-1', label: 'Jane Doe', type: 'person' },
+        }),
+        storeFact: vi.fn().mockResolvedValue({ stored: true, action: 'created', nodeId: 'fact-1', sensitivity: 'internal' }),
+      };
+      const ctx = makeCtxWithContact(
+        mockMem,
+        { id: 'contact-1' },
+        { entity: 'Jane Doe', field: 'preferred_airline', value: 'Air Canada', source: 'test' },
+      );
+
+      const result = await handler.execute(ctx);
+
+      // preferred_airline is not canonical → goes to KG
+      expect(result.success).toBe(true);
+      const data = (result as { success: true; data: Record<string, unknown> }).data;
+      expect(data.stored).toBe(true);
+      expect(mockMem.storeFact).toHaveBeenCalledTimes(1);
+    });
+
+    it('returns success:false when ContactService.updateContactFields throws a validation error', async () => {
+      const mockMem = {
+        ...makeMockEntityMemory({}),
+        resolveOrCreate: vi.fn().mockResolvedValue({
+          kind: 'found',
+          node: { id: 'kg-1', label: 'Jane Doe', type: 'person' },
+        }),
+        storeFact: vi.fn().mockRejectedValue(new Error('should not be called')),
+      };
+      const contactService = {
+        findContactByKgNodeId: vi.fn().mockResolvedValue({ id: 'contact-1' }),
+        updateContactFields: vi.fn().mockRejectedValue(new Error("primaryEmail not found in contact_channel_identities")),
+      };
+      const ctx = {
+        input: { entity: 'Jane Doe', field: 'primary_email', value: 'jane@example.com', source: 'test' },
+        secret: () => 'test-key',
+        log: pino({ level: 'silent' }),
+        entityMemory: mockMem,
+        contactService,
+      } as unknown as SkillContext;
+
+      const result = await handler.execute(ctx);
+
+      expect(result.success).toBe(false);
+      expect((result as { success: false; error: string }).error).toMatch(/primaryEmail/i);
+    });
+  });
+
   // ── Infrastructure error handling ─────────────────────────────────────────
 
   describe('error handling', () => {

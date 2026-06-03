@@ -13,6 +13,9 @@
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
 import { DECAY_CLASSES, NODE_TYPES } from '../../src/memory/types.js';
 import type { DecayClass, NodeType } from '../../src/memory/types.js';
+import { buildCanonicalPatch } from '../../src/contacts/canonical-attribute-guard.js';
+import type { Contact } from '../../src/contacts/types.js';
+import { ContactValidationError } from '../../src/contacts/contact-service.js';
 
 // Shape of each fact returned by the LLM extraction prompt.
 interface ExtractedFact {
@@ -71,7 +74,7 @@ export class ExtractFactsHandler implements SkillHandler {
 
       if (!classifierAnswer.startsWith('yes')) {
         ctx.log.debug({ textPreview: text.slice(0, 80) }, 'extract-facts: classifier gate — no facts, skipping');
-        return { success: true, data: { stored: 0, skipped: true, failed: 0 } };
+        return { success: true, data: { stored: 0, redirected: 0, skipped: true, failed: 0 } };
       }
 
       // -- Step 2: Extraction prompt --
@@ -130,6 +133,7 @@ ${text}`,
 
       // -- Steps 3 & 4: Entity resolution + fact storage --
       let stored = 0;
+      let redirected = 0;
       // failed counts: malformed LLM output (guard below), rate-limited facts (loop
       // breaks immediately on first hit), and infrastructure errors from storeFact.
       // Contradictions (action:'conflict') are NOT counted as failed — they are expected
@@ -141,6 +145,11 @@ ${text}`,
       const ENTITY_NODE_TYPES: ReadonlySet<string> = new Set(
         NODE_TYPES.filter(t => t !== 'fact'),
       );
+
+      // Cache contact lookups by KG node ID within a single execute() call.
+      // A transcript may assert several canonical attributes about the same person,
+      // which would otherwise trigger an N+1 DB query per fact.
+      const contactLookupCache = new Map<string, Contact | null>();
 
       for (const fact of facts) {
         // Declared before try so the catch block can always reference them,
@@ -209,6 +218,75 @@ ${text}`,
             );
           } else {
             entityNode = resolved.node;
+          }
+
+          // --- Canonical contact attribute guard ---
+          //
+          // If the entity is a person node linked to a contact record, redirect
+          // canonical attribute writes (timezone, title, organization, etc.) to
+          // ContactService.updateContactFields() rather than the KG.
+          if (entityNode.type === 'person' && ctx.contactService) {
+            const patch = buildCanonicalPatch(attribute, value);
+            if (patch !== null) {
+              if (patch.fallbackToKg) {
+                ctx.log.warn(
+                  { subject, attribute, reason: patch.reason },
+                  'extract-facts: canonical attribute normalization failed — falling back to KG write',
+                );
+              } else {
+                // findContactByKgNodeId is called outside the inner try/catch deliberately:
+                // if it throws (DB error), we fall through to the KG write rather than
+                // propagating. A transient lookup failure should not abort the fact write.
+                // Result is cached per execute() call — multiple canonical facts about the
+                // same person would otherwise cause an N+1 DB query.
+                let contact: Contact | null | undefined;
+                if (contactLookupCache.has(entityNode.id)) {
+                  contact = contactLookupCache.get(entityNode.id);
+                } else {
+                  try {
+                    contact = await ctx.contactService.findContactByKgNodeId(entityNode.id);
+                    contactLookupCache.set(entityNode.id, contact ?? null);
+                  } catch (lookupErr) {
+                    ctx.log.warn(
+                      { subject, attribute, entityNodeId: entityNode.id, err: lookupErr },
+                      'extract-facts: findContactByKgNodeId failed — falling back to KG write',
+                    );
+                    // Leave contact undefined — the guard below treats undefined the same as null.
+                  }
+                }
+
+                if (contact) {
+                  try {
+                    await ctx.contactService.updateContactFields(contact.id, patch.fields);
+                    ctx.log.info(
+                      { subject, attribute, contactId: contact.id },
+                      'extract-facts: canonical attribute redirected to ContactService',
+                    );
+                    redirected++;
+                    continue;
+                  } catch (err) {
+                    if (err instanceof ContactValidationError) {
+                      // Validation failure (e.g. primaryEmail not in CCI) — this is expected
+                      // for some inputs; fall through so the information is preserved in the KG.
+                      ctx.log.warn(
+                        { subject, attribute, contactId: contact.id, reason: err.message },
+                        'extract-facts: canonical attribute validation failed — falling back to KG write',
+                      );
+                    } else {
+                      // Infrastructure or programming error — do not silently diverge the
+                      // contacts table from the KG. Increment failed and skip the KG write.
+                      ctx.log.error(
+                        { subject, attribute, contactId: contact.id, err },
+                        'extract-facts: canonical attribute redirect failed with unexpected error — skipping fact',
+                      );
+                      failed++;
+                      continue;
+                    }
+                  }
+                }
+                // No contact record for this person node, or lookup failed — fall through.
+              }
+            }
           }
 
           // Label format: "<attribute>: <value>" — human-readable and dedup-stable.
@@ -281,8 +359,8 @@ ${text}`,
         }
       }
 
-      ctx.log.info({ stored, failed }, 'extract-facts: complete');
-      return { success: true, data: { stored, skipped: false, failed } };
+      ctx.log.info({ stored, redirected, failed }, 'extract-facts: complete');
+      return { success: true, data: { stored, redirected, skipped: false, failed } };
     } catch (err) {
       // Two categories of errors reach here:
       // 1. LLMProvider errors (rate limits, auth, timeouts, 5xx) — these are returned as
