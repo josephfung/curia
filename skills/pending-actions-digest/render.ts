@@ -33,8 +33,13 @@ export function formatDueDate(dueIso: string | null, timezone: string): string {
   if (dueIso === null) return '—';
   const ms = Date.parse(dueIso);
   if (!Number.isFinite(ms)) return '—';
-  const local = toLocalIso(Math.floor(ms / 1000), timezone);
-  return local ? local.slice(0, 10) : '—';
+  try {
+    const local = toLocalIso(Math.floor(ms / 1000), timezone);
+    return local ? local.slice(0, 10) : '—';
+  } catch {
+    // toLocalIso throws on invalid IANA timezone strings; degrade gracefully.
+    return '—';
+  }
 }
 
 // Approval line shape — the handler maps ActionLogRow → ApprovalInput.
