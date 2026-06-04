@@ -384,11 +384,13 @@ export class TaskRepo {
       const allParams: unknown[] = [...updateParams];
       if (updates.wakeAt) {
         allParams.push(
-          // Route the new wake-up job to the task's source agent (the specialist best
-          // positioned to resume it). Fall back to the caller, then the task's original
-          // creator. This ensures coordinator-reschedules (e.g. backlog sweep) still
-          // fire at the right specialist rather than coordinator.
-          current.sourceAgentId ?? callerAgentId ?? current.agentId, // $wakeAgentIdx
+          // Route the new wake-up job to the correct specialist, in priority order:
+          // 1. source_agent_id — explicit specialist set at task-create time
+          // 2. tasks.agent_id  — stable task ownership (covers legacy/manual tasks where
+          //                      source_agent_id is NULL but agent_id names a specialist)
+          // 3. callerAgentId   — last resort; avoids routing to coordinator when the
+          //                      task has no agent assignment at all
+          current.sourceAgentId ?? current.agentId ?? callerAgentId, // $wakeAgentIdx
           updates.wakeAt,                                             // $wakeRunAtIdx
           callerAgentId ?? current.agentId,                          // $wakeCreatedByIdx
           this.timezone,                                             // $wakeTzIdx
