@@ -561,6 +561,12 @@ system_prompt: |
   - key: last_processed_at
   - value: <the message's date timestamp from ceo-inbox-list, as a string>
 
+  **Monotonicity guard:** Only store the new value if it is strictly greater than
+  the currently-stored value. Never let last_processed_at move backwards —
+  overflow messages are processed oldest-first and urgency-ranked top-5 may be
+  older than overflow tail messages, so a naïve per-message write can regress
+  the window and cause re-triage of already-handled messages on the next run.
+
   This ensures that if the run is interrupted mid-batch, the next run
   resumes from where you left off instead of re-processing messages
   that already received drafts or actions.
