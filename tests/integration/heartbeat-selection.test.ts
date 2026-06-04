@@ -37,7 +37,16 @@ async function seedTask(
       opts.updatedAt,
     ],
   );
-  return (rows[0] as { id: string }).id;
+  const [row] = rows as Array<{ id: string }>;
+  if (!row) throw new Error('seedTask: INSERT INTO tasks returned no rows');
+  return row.id;
+}
+
+async function getAnyContactId(pool: pg.Pool): Promise<string> {
+  const { rows } = await pool.query<{ id: string }>('SELECT id FROM contacts LIMIT 1');
+  const [row] = rows;
+  if (!row) throw new Error('getAnyContactId: contacts table is empty — seed a contact before running this test');
+  return row.id;
 }
 
 async function cleanup(pool: pg.Pool): Promise<void> {
@@ -138,8 +147,9 @@ describeIf('selectHeartbeatCandidates', () => {
     // Tasks blocked on a specific human (waiting_on_contact_id IS NOT NULL) are genuinely
     // waiting on them — the heartbeat should not interrupt that wait.
     const id = await seedTask(pool, { status: 'waiting', owner: 'curia', sourceAgentId: 'ceo-inbox', updatedAt: hoursAgo(60) });
-    // Set waiting_on_contact_id to a placeholder UUID
-    await pool.query(`UPDATE tasks SET waiting_on_contact_id = gen_random_uuid() WHERE id = $1`, [id]);
+    // Use a real contact ID to satisfy the FK constraint on waiting_on_contact_id.
+    const contactId = await getAnyContactId(pool);
+    await pool.query(`UPDATE tasks SET waiting_on_contact_id = $1 WHERE id = $2`, [contactId, id]);
     const got = await selectHeartbeatCandidates(pool, opts);
     expect(got.map((c) => c.id)).not.toContain(id);
   });

@@ -765,14 +765,14 @@ export function loadYamlConfig(configDir: string): YamlConfig {
       throw new Error(`tasks.heartbeatMaxWakesPerTick must be a positive integer, got: ${String(t.heartbeatMaxWakesPerTick)}`);
     }
     if (t.idleThresholdHours !== undefined && (
-      typeof t.idleThresholdHours !== 'number' || t.idleThresholdHours < 0
+      !Number.isFinite(t.idleThresholdHours) || t.idleThresholdHours < 0
     )) {
-      throw new Error(`tasks.idleThresholdHours must be a non-negative number, got: ${String(t.idleThresholdHours)}`);
+      throw new Error(`tasks.idleThresholdHours must be a non-negative finite number, got: ${String(t.idleThresholdHours)}`);
     }
     if (t.staleWaitThresholdHours !== undefined && (
-      typeof t.staleWaitThresholdHours !== 'number' || t.staleWaitThresholdHours < 0
+      !Number.isFinite(t.staleWaitThresholdHours) || t.staleWaitThresholdHours < 0
     )) {
-      throw new Error(`tasks.staleWaitThresholdHours must be a non-negative number, got: ${String(t.staleWaitThresholdHours)}`);
+      throw new Error(`tasks.staleWaitThresholdHours must be a non-negative finite number, got: ${String(t.staleWaitThresholdHours)}`);
     }
   }
 
