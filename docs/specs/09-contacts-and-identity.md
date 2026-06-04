@@ -270,20 +270,22 @@ Both placeholders are **opt-in**: only agents that reference the placeholder pay
 
 If `findContactBySystemRole('principal')` returns nothing (fresh deployment, before bootstrap), the placeholder resolves to an empty string and a one-time warning is logged. The same defense-in-depth UUID-format check used for `${agent_contact_id}` applies — any non-UUID value resolves to an empty string, so a future change to the ID source can't accidentally inject arbitrary text into the system prompt.
 
-### What is pre-resolved and what is not
+### What is injected and what is fetched on demand
 
-The platform pre-resolves (caches at bootstrap) only the principal's `contacts.id`. It does **not** bootstrap-inject verified email addresses, Signal numbers, calendar IDs, timezone, or any other attribute — those can change within a deployment lifetime, so bootstrap-time injection would go stale.
+Three distinct things, with three distinct rules:
 
-Agents that need any of those values call `entity-context` with `${principal_contact_id}` at the start of their run. As of v0.33 the canonical attributes (including `timezone`, `primary_email`, `title`, `organization`) come back as structured fields on `EntityContext.contact` rather than as confidence-scored KG facts (see the Canonical Attributes section above) — so the agent reads a typed value instead of reasoning over a fact list. This keeps the live values fresh and consolidates the "who is the principal and how do I reach them?" question into a single skill call per agent run, instead of multiple `contact-lookup`-by-role calls scattered across the agent's pipeline.
+1. **The principal's `contacts.id`** — resolved once at bootstrap and cached. Exposed to agents as the opt-in `${principal_contact_id}` placeholder (above).
+2. **The principal's verified channel identities** (email, phone, Signal, loaded from `contact_channel_identities` at startup) — appended to **every** agent's system prompt on each task as a `## Principal Contact Details` block (`principalIdentities` in `src/agents/runtime.ts`, wired in `src/index.ts`; #786). This is an authoritative, always-present source for *reaching* the principal, added precisely because relying on opt-in plus convention let the coordinator hallucinate the principal's address. It is the one piece of principal data the platform does inject universally — see the note in the next section.
+3. **Everything else** — calendar IDs, `timezone`, and the other canonical/mutable [contact attributes](#canonical-attributes) — is **not** injected. It can change within a deployment lifetime, so an agent that needs it calls `entity-context` with `${principal_contact_id}` at the start of its run. As of v0.33 the canonical attributes come back as structured fields on `EntityContext.contact` rather than confidence-scored KG facts, so the agent reads a typed value instead of reasoning over a fact list. This keeps the live values fresh and consolidates "how do I reach the principal and what do I know about them?" into a single skill call per run.
 
-### Why not auto-injection?
+### Why the contact-ID *handle* is opt-in
 
-The platform deliberately does *not* auto-inject the principal contact ID into every agent prompt. Two reasons:
+The `${principal_contact_id}` placeholder (the UUID handle, item 1 above) is deliberately **not** auto-injected into every agent prompt. Two reasons:
 
-1. **Attack surface.** Agents that have no business contacting the principal directly (specialist agents like research-analyst that should report through the coordinator) would be invited to do so. The opt-in pattern keeps the surface narrow.
-2. **Consistency.** The same opt-in pattern is established for `${agent_contact_id}`. Two placeholders with two different injection rules would be confusing.
+1. **Attack surface.** Agents that have no business resolving the principal's calendar or attributes (specialist agents like research-analyst that should report through the coordinator) are not handed a key to do so. The opt-in pattern keeps the surface narrow.
+2. **Consistency.** The same opt-in pattern is established for `${agent_contact_id}`. Two handles with two different injection rules would be confusing.
 
-The durable countermeasure to poorly-written agents that hardcode the principal's addresses is the `Reaching the principal` convention documented in `CLAUDE.md`, plus reviewer discipline — not silent injection.
+This is distinct from the `## Principal Contact Details` block (item 2 above), which **is** injected universally. The split is deliberate: the *reach-the-principal* channel identities are injected everywhere because hallucinated addresses are a correctness-and-safety problem the `Reaching the principal` convention alone did not prevent (#786), whereas the *contact-ID handle* that unlocks calendar lookups and arbitrary attribute reads stays opt-in to keep each agent's capability surface minimal.
 
 ---
 
