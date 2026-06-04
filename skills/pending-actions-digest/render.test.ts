@@ -40,6 +40,10 @@ describe('formatDueDate', () => {
     // 00:30 UTC on the 7th is still 20:30 on the 6th in Toronto (UTC-4 in June).
     expect(formatDueDate('2026-06-07T00:30:00.000Z', 'America/Toronto')).toBe('2026-06-06');
   });
+
+  it('renders an em-dash for an invalid IANA timezone', () => {
+    expect(formatDueDate('2026-06-06T13:00:00.000Z', 'Invalid/Zone')).toBe('—');
+  });
 });
 
 import { renderDigestBody, type ApprovalInput } from './render.js';

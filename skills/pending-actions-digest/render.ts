@@ -25,21 +25,29 @@ export function humanizeAge(sinceIso: string, nowMs: number): string {
   return `${Math.floor(diff / MS_WEEK)}w`;
 }
 
+// Pre-validate an IANA timezone string. Intl.DateTimeFormat throws on invalid
+// zone identifiers — we rely on that as the check so toLocalIso never throws.
+function isValidIanaTimezone(tz: string): boolean {
+  try {
+    new Intl.DateTimeFormat('en', { timeZone: tz });
+    return true;
+  } catch {
+    // intentional: Intl.DateTimeFormat throws on invalid IANA zone strings
+    return false;
+  }
+}
+
 /**
  * Render a task's CEO-facing due date (date only) in the user's timezone.
- * Returns '—' for a null due date or an unrepresentable timestamp.
+ * Returns '—' for a null due date, an unrepresentable timestamp, or an invalid timezone.
  */
 export function formatDueDate(dueIso: string | null, timezone: string): string {
   if (dueIso === null) return '—';
   const ms = Date.parse(dueIso);
   if (!Number.isFinite(ms)) return '—';
-  try {
-    const local = toLocalIso(Math.floor(ms / 1000), timezone);
-    return local ? local.slice(0, 10) : '—';
-  } catch {
-    // toLocalIso throws on invalid IANA timezone strings; degrade gracefully.
-    return '—';
-  }
+  if (!isValidIanaTimezone(timezone)) return '—';
+  const local = toLocalIso(Math.floor(ms / 1000), timezone);
+  return local ? local.slice(0, 10) : '—';
 }
 
 // Approval line shape — the handler maps ActionLogRow → ApprovalInput.
