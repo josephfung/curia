@@ -15,7 +15,9 @@ async function seedTask(pool: pg.Pool, o: { status: string; owner?: string; sour
      VALUES ($1,$2,'seeded',$3,'{}'::jsonb,'{}'::jsonb,$4,50,'agent',$5,'test','{}',$6) RETURNING id`,
     [o.sourceAgentId ?? 'coordinator', `${PREFIX} ${o.status}`, o.status, o.owner ?? 'curia', o.sourceAgentId ?? null, o.updatedAt],
   );
-  return (rows[0] as unknown as { id: string }).id;
+  const [row] = rows as Array<{ id: string }>;
+  if (!row) throw new Error('seedTask: INSERT INTO tasks returned no rows');
+  return row.id;
 }
 
 async function cleanup(pool: pg.Pool): Promise<void> {
@@ -33,7 +35,7 @@ describeIf('BacklogHeartbeat end-to-end', () => {
   it('enqueues exactly one pending wake per eligible agent, routed correctly', async () => {
     const hoursAgo = (h: number) => new Date(Date.now() - h * 3600_000);
     const idA = await seedTask(pool, { status: 'open', sourceAgentId: 'ceo-inbox', updatedAt: hoursAgo(5) });
-    await seedTask(pool, { status: 'open', sourceAgentId: 'ceo-inbox', updatedAt: hoursAgo(6) }); // second for same agent — should NOT also wake
+    const idB = await seedTask(pool, { status: 'open', sourceAgentId: 'ceo-inbox', updatedAt: hoursAgo(6) }); // second for same agent — should NOT also wake
     const idC = await seedTask(pool, { status: 'open', sourceAgentId: 'coordinator', updatedAt: hoursAgo(5) });
 
     const schedulerService = new SchedulerService(pool, { publish: vi.fn(), subscribe: vi.fn() } as never, logger, 'UTC');
@@ -58,10 +60,13 @@ describeIf('BacklogHeartbeat end-to-end', () => {
       expect(row.status).toBe('pending');
       expect(row.cron_expr).toBeNull(); // one-shot
     }
-    // The two waked tasks are idA (or its sibling) and idC; a wake exists for ceo-inbox + coordinator.
+    // One of the two ceo-inbox tasks (idA or idB) must be woken; idC must be woken.
     const wakedTaskIds = rows.map((r) => (r as unknown as { task_id: string }).task_id);
     expect(wakedTaskIds).toContain(idC);
-    expect(wakedTaskIds.some((t) => t === idA || t !== idC)).toBe(true);
+    // DISTINCT ON (effective_agent) picks the oldest ceo-inbox task — idB (6h) beats idA (5h).
+    expect(wakedTaskIds).toContain(idB);
+    // Paranoia: idA should NOT also be woken (only one wake per agent per tick).
+    expect(wakedTaskIds).not.toContain(idA);
   });
 
   it('does not re-enqueue on a second tick (pending wake dedup)', async () => {

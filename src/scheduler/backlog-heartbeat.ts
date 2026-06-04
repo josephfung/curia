@@ -22,6 +22,8 @@ export interface BacklogHeartbeatOptions {
  *  domain reasoning. The conductor, never an instrument. */
 export class BacklogHeartbeat {
   private intervalHandle: NodeJS.Timeout | null = null;
+  // Prevents a slow tick from overlapping with the next interval fire.
+  private tickInFlight = false;
 
   constructor(private readonly opts: BacklogHeartbeatOptions) {}
 
@@ -29,9 +31,18 @@ export class BacklogHeartbeat {
     if (this.intervalHandle) return;
     const ms = this.opts.intervalMinutes * 60_000;
     this.intervalHandle = setInterval(() => {
-      this.tick().catch((err) => {
-        this.opts.logger.error({ err }, 'BacklogHeartbeat: unhandled error in tick');
-      });
+      if (this.tickInFlight) {
+        this.opts.logger.warn('BacklogHeartbeat: previous tick still in flight — skipping this interval');
+        return;
+      }
+      this.tickInFlight = true;
+      this.tick()
+        .catch((err) => {
+          this.opts.logger.error({ err }, 'BacklogHeartbeat: unhandled error in tick');
+        })
+        .finally(() => {
+          this.tickInFlight = false;
+        });
     }, ms);
     this.opts.logger.info({ intervalMinutes: this.opts.intervalMinutes }, 'BacklogHeartbeat started');
   }
