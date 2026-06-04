@@ -80,13 +80,32 @@ These were settled with the CEO during brainstorming:
    task tag the agent creates is `debrief-pending` (plus `debrief-followup` children).
    Tasks now *only ever* represent real debrief work.
 
+6. **`owner` flips `curia` → `ceo` across the lifecycle.** `owner` means *who must act
+   next* (todo-list semantics), and a debrief task has two phases:
+   - **Before the prompt is sent** (scheduled → meeting-end wake): the pending work is
+     "Curia must deliver the debrief prompt" → `owner='curia'`.
+   - **After the prompt is sent** (awaiting takeaways): the pending work is "the CEO must
+     reply" → `owner='ceo'`.
+
+   So at the prompt wake the agent flips `owner` to `ceo`. This also fixes a digest bug:
+   creating with `owner='ceo'` would surface a debrief in the CEO's "For you to do"
+   *before the meeting ended and before they were ever asked*. With the flip it appears
+   in "For you to do" only once actually prompted — which is the AC's intent.
+
+   | Phase | `owner` | `status` | digest section |
+   |---|---|---|---|
+   | created (scheduled) | `curia` | open | "What I'm working on" |
+   | prompted / reminded | `ceo` | open | "For you to do" |
+   | CEO replies | — | done | — |
+   | expires | — | cancelled | — |
+
 ---
 
 ## State mapping
 
 | Today (maps in `progress` JSONB) | New |
 |---|---|
-| `pendingDebriefs[eventId]` | one task: `tag=['debrief-pending']`, `owner='ceo'`, `title="Debrief: <meeting>"`. `wake_at` drives the lifecycle (see below). `progress` holds `{ eventId, attendees, scheduledEnd, title, threadId, phase }`. |
+| `pendingDebriefs[eventId]` | one task: `tag=['debrief-pending']`, `owner` flips `curia`→`ceo` at the prompt wake (see decision 6), `title="Debrief: <meeting>"`. `wake_at` drives the lifecycle (see below). `progress` holds `{ eventId, attendees, scheduledEnd, title, threadId, phase }`. |
 | `judgedEvents` (NO) | **no task.** config-store `seen:<eventId>` guard only. |
 | `judgedEvents` (defer) | **removed** (DEFER no longer exists). |
 | `deferredEvents` | **removed.** |
@@ -126,9 +145,10 @@ The agent distinguishes modes by its invocation payload:
 4. Enrich remaining candidates (`entity-context` per external attendee; `memory-query`
    for stored debrief preferences).
 5. **Judge each (binary YES/NO, lean YES on the fence — criteria preserved):**
-   - **YES** → `task-create` `{ title:"Debrief: <meeting>", owner:'ceo',
+   - **YES** → `task-create` `{ title:"Debrief: <meeting>", owner:'curia',
      tags:['debrief-pending'], wake_at: <meeting end>, description/progress: event
-     metadata + phase:'scheduled' }`. Then set `seen:<eventId>`.
+     metadata + phase:'scheduled' }`. (owner='curia' — the pending work is "Curia must
+     prompt"; it flips to 'ceo' at the prompt wake.) Then set `seen:<eventId>`.
    - **NO** → set `seen:<eventId>` only. No task, no prompt.
 6. Exit. No `scheduler-report`.
 
@@ -146,8 +166,9 @@ Read `progress.phase` from the delivered task context and branch:
      Bullpen post to the coordinator (the pinned `## Step 6` block, unchanged in
      structure: check `prompted:<eventId>` → post → store key with `thread_id` → no
      retry on store failure).
-  3. `task-update wake_at=<now + reminderDelayMinutes>`, set `progress.phase='prompted'`
-     (and `promptedAt`, `threadId`).
+  3. `task-update owner='ceo' wake_at=<now + reminderDelayMinutes>`, set
+     `progress.phase='prompted'` (and `promptedAt`, `threadId`). The owner flip moves the
+     task into the CEO's "For you to do" now that the ball is in their court.
 - **`prompted`** (reminder wake): send one gentle reminder via Bullpen.
   `task-update wake_at=<promptedAt + contextBridgeTtlHours>`, `progress.phase='reminded'`.
 - **`reminded`** (expiry wake): `task-update status='cancelled'`
@@ -196,6 +217,25 @@ fact via `memory-store`; queried during enrichment (Mode 1 step 4).
   description to "scan the rest of today's meetings and schedule debriefs".
 - **Bump** `version` (minor — new capability surface).
 
+## Documentation changes (in this PR)
+
+- **Rewrite `docs/specs/17-meeting-debrief.md` §3 (State Management)** to describe the
+  tasks model: `debrief-pending` tasks, the wake-up lifecycle, the `owner` flip, and the
+  two config-store guards (`seen:` / `prompted:`). Update the detection-pipeline section
+  to reflect the 3×/day pre-scheduling cadence and binary YES/NO judgment. Keep the
+  cross-tick idempotency (`prompted:`) subsection. (Per CEO direction, spec 17 is updated
+  here, not punted to a later doc PR.)
+- **CHANGELOG.md** — entry under `[Unreleased] → Changed`.
+
+## Follow-ups (separate issues, not this PR)
+
+- **Explicit target `agent_id` on `task-create`** so the coordinator / ceo-inbox can
+  schedule wake-ups *into* a specialist (not just self-routing). Includes the
+  permission/gating design question (should any agent inject wakes into any other?).
+  Draft a new issue.
+- *(Optional, low priority)* add `description` to `task-list` output to make single-row
+  reads first-class without a `task-get` skill. Not needed for this migration.
+
 ---
 
 ## Verification
@@ -229,9 +269,9 @@ file-parsing pattern as the idempotency test):
 
 ## Out of scope
 
-- Changes to spec 17 itself (a follow-up doc PR updates it once this is proven in prod).
 - The digest "For you to do" rendering (issue 5, already landed) — debrief-pending tasks
-  with `owner='ceo'` flow into it automatically.
+  flow into it automatically once their `owner` flips to `ceo`.
+- Changes to the `task-*` skill APIs (see Follow-ups).
 - Backfill/migration of any in-flight `pendingDebriefs` state in prod. Debriefs are
   short-lived; existing in-flight prompts age out under the old code before/with this
   change. No data migration step.
