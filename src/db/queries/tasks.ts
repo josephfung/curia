@@ -109,9 +109,11 @@ export interface SelectHeartbeatOptions {
  *
  *  Two eligibility paths:
  *  1. Idle path: owner='curia', status in (open, in_progress), not blocked,
- *     no pending wake, updated_at older than idleThresholdHours.
- *  2. Stale-wait path: status in (waiting, blocked), blocker done/cancelled or
- *     no blocker, no pending wake, updated_at older than staleWaitThresholdHours.
+ *     no pending/running wake, updated_at older than idleThresholdHours.
+ *  2. Stale-wait path: owner='curia', status in (waiting, blocked),
+ *     waiting_on_contact_id IS NULL (not blocked on a specific human),
+ *     blocker done/cancelled or no blocker, no pending/running wake,
+ *     updated_at older than staleWaitThresholdHours.
  *
  *  Results are deduplicated to one task per effective agent (most-overdue first).
  */
@@ -137,11 +139,12 @@ export async function selectHeartbeatCandidates(
                WHERE b.id = t.blocked_by_task_id AND b.status IN ('done','cancelled')))
          AND NOT EXISTS (
                SELECT 1 FROM scheduled_jobs sj
-               WHERE sj.task_id = t.id AND sj.status = 'pending')
+               WHERE sj.task_id = t.id AND sj.status IN ('pending', 'running'))
          AND (
                (t.owner = 'curia' AND t.status IN ('open','in_progress')
                   AND t.updated_at < now() - make_interval(hours => $2))
-            OR (t.status IN ('waiting','blocked')
+            OR (t.owner = 'curia' AND t.status IN ('waiting','blocked')
+                  AND t.waiting_on_contact_id IS NULL
                   AND t.updated_at < now() - make_interval(hours => $3))
              )
      ),
