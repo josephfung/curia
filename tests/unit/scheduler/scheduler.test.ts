@@ -64,6 +64,7 @@ function fakeDbRow(overrides: Record<string, unknown> = {}) {
     agent_task_id: null,
     intent_anchor: null,
     progress: null,
+    task_title: null,
     run_started_at: null,
     expected_duration_seconds: null,
     ...overrides,
@@ -404,6 +405,88 @@ describe('Scheduler', () => {
 
       const content: string = (taskEvent as { payload: { content: string } }).payload.content;
       expect(content).not.toContain('[Prior run context');
+    });
+  });
+
+  // -- task-bound dispatch routing (issue 4) --
+
+  describe('task-bound dispatch routing', () => {
+    it('routes task-bound fire to agentId (which is source_agent_id for task-wake jobs)', async () => {
+      // task-create stores source_agent_id as scheduled_jobs.agent_id, so job.agentId
+      // already carries the correct routing target for task-wake jobs.
+      const row = fakeDbRow({
+        agent_id: 'meeting-debrief',
+        agent_task_id: 'task-abc',
+        task_title: 'Board prep follow-up',
+        progress: { notes: [] },
+      });
+      pool.query.mockResolvedValueOnce({ rows: [row] });
+      pool.query.mockResolvedValueOnce({ rowCount: 1, rows: [] });
+
+      await scheduler.pollDueJobs();
+
+      const [, taskEvent] = bus.publish.mock.calls[1] as [string, { payload: { agentId: string } }];
+      expect(taskEvent.payload.agentId).toBe('meeting-debrief');
+    });
+
+    it('includes task_id and title in content bundle for task-bound fires', async () => {
+      const row = fakeDbRow({
+        agent_id: 'meeting-debrief',
+        agent_task_id: 'task-abc',
+        task_title: 'Board prep follow-up',
+        progress: { notes: [{ at: '2026-06-01', note: 'started' }] },
+        task_payload: { type: 'task-wake' },
+      });
+      pool.query.mockResolvedValueOnce({ rows: [row] });
+      pool.query.mockResolvedValueOnce({ rowCount: 1, rows: [] });
+
+      await scheduler.pollDueJobs();
+
+      const [, taskEvent] = bus.publish.mock.calls[1] as [string, { payload: { content: string } }];
+      const content = JSON.parse(taskEvent.payload.content) as Record<string, unknown>;
+      expect(content.task_id).toBe('task-abc');
+      expect(content.title).toBe('Board prep follow-up');
+      expect(content.progress).toEqual({ notes: [{ at: '2026-06-01', note: 'started' }] });
+      expect(content.task_payload).toEqual({ type: 'task-wake' });
+      // intent_anchor stays in the event payload, not content
+      expect(content.intent_anchor).toBeUndefined();
+    });
+
+    it('omits title from content bundle when task_title is null', async () => {
+      const row = fakeDbRow({
+        agent_task_id: 'task-def',
+        task_title: null,
+        progress: { notes: [] },
+      });
+      pool.query.mockResolvedValueOnce({ rows: [row] });
+      pool.query.mockResolvedValueOnce({ rowCount: 1, rows: [] });
+
+      await scheduler.pollDueJobs();
+
+      const [, taskEvent] = bus.publish.mock.calls[1] as [string, { payload: { content: string } }];
+      const content = JSON.parse(taskEvent.payload.content) as Record<string, unknown>;
+      expect(content.task_id).toBe('task-def');
+      expect(content.title).toBeUndefined();
+    });
+
+    it('uses raw task_payload as content for non-task-bound jobs (no task_id or title)', async () => {
+      const row = fakeDbRow({
+        agent_id: 'coordinator',
+        agent_task_id: null,
+        task_title: null,
+        task_payload: { skill: 'morning-brief' },
+      });
+      pool.query.mockResolvedValueOnce({ rows: [row] });
+      pool.query.mockResolvedValueOnce({ rowCount: 1, rows: [] });
+
+      await scheduler.pollDueJobs();
+
+      const [, taskEvent] = bus.publish.mock.calls[1] as [string, { payload: { content: string; agentId: string } }];
+      expect(taskEvent.payload.agentId).toBe('coordinator');
+      const content = JSON.parse(taskEvent.payload.content) as Record<string, unknown>;
+      // Non-task-bound: raw payload, no task_id
+      expect(content.task_id).toBeUndefined();
+      expect(content.skill).toBe('morning-brief');
     });
   });
 

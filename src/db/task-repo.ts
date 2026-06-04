@@ -384,10 +384,14 @@ export class TaskRepo {
       const allParams: unknown[] = [...updateParams];
       if (updates.wakeAt) {
         allParams.push(
-          callerAgentId ?? current.agentId, // $wakeAgentIdx
-          updates.wakeAt,                   // $wakeRunAtIdx
-          callerAgentId ?? current.agentId, // $wakeCreatedByIdx
-          this.timezone,                    // $wakeTzIdx
+          // Route the new wake-up job to the task's source agent (the specialist best
+          // positioned to resume it). Fall back to the caller, then the task's original
+          // creator. This ensures coordinator-reschedules (e.g. backlog sweep) still
+          // fire at the right specialist rather than coordinator.
+          current.sourceAgentId ?? callerAgentId ?? current.agentId, // $wakeAgentIdx
+          updates.wakeAt,                                             // $wakeRunAtIdx
+          callerAgentId ?? current.agentId,                          // $wakeCreatedByIdx
+          this.timezone,                                             // $wakeTzIdx
         );
       }
       const { rows } = await this.pool.query(cteSql, allParams);
