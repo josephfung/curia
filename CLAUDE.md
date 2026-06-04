@@ -66,6 +66,12 @@ Two patterns that pass local checks but fail CI regularly:
 - Integration tests use real Postgres (via Docker), not mocks
 - Tests live next to the code they test, or in `tests/unit/` and `tests/integration/`
 
+### pnpm-workspace.yaml — do not edit during worktree setup
+
+**Never edit `pnpm-workspace.yaml` to resolve `pnpm install` output about build script approvals.** The `allowBuilds` values are already correct in the repo. When `pnpm install` warns about packages needing build approval, those warnings are informational — the existing entries handle them. If pnpm adds a new entry for a genuinely new dependency, set its value explicitly to `true` or `false` (never placeholder text). A pre-commit hook enforces this: any `allowBuilds` value that is not a boolean will block the commit.
+
+If you need to approve new build scripts interactively, use `pnpm approve-builds` — do not hand-edit this file.
+
 ## Key Files
 
 - `src/index.ts` — bootstrap orchestrator, wires everything in dependency order
