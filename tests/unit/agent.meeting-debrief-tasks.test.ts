@@ -30,7 +30,13 @@ beforeAll(() => {
     throw new Error('meeting-debrief.yaml is missing a system_prompt string field');
   }
   prompt = parsed.system_prompt;
-  pinnedSkills = (parsed.pinned_skills as string[]) ?? [];
+  const rawPinnedSkills = parsed.pinned_skills;
+  if (!Array.isArray(rawPinnedSkills) || !rawPinnedSkills.every((s) => typeof s === 'string')) {
+    throw new Error(
+      `meeting-debrief.yaml pinned_skills must be an array of strings; got: ${JSON.stringify(rawPinnedSkills)}`,
+    );
+  }
+  pinnedSkills = rawPinnedSkills;
 });
 
 describe('meeting-debrief tasks migration (#839)', () => {
@@ -65,7 +71,8 @@ describe('meeting-debrief tasks migration (#839)', () => {
   it('runs detection 3x/day via cron', () => {
     const schedule = parsed.schedule as Array<{ cron?: string }> | undefined;
     expect(schedule).toBeDefined();
-    expect(schedule!.length).toBeGreaterThan(0);
+    // Exactly one cron entry: extra entries would violate the 3x/day contract
+    expect(schedule).toHaveLength(1);
     expect(schedule![0]!.cron).toBe('0 7,12,16 * * *');
   });
 

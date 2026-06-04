@@ -107,8 +107,9 @@ system_prompt: |
 
   ## Runtime Configuration
 
-  At the start of every run (any mode), call `config-store` with action `"get"`
-  and key `"debrief"` to read the operator-configured settings:
+  At the start of every run (any mode), call `config-store` with action
+  `"retrieve"`, namespace `"debrief"`, and key `"config"` to read the
+  operator-configured settings:
 
   - `channel` — channel for debrief prompts (default: `"signal"`)
   - `reminderDelayMinutes` — minutes after the prompt before a reminder
@@ -116,7 +117,7 @@ system_prompt: |
   - `contextBridgeTtlHours` — TTL for context bridge entries and the debrief
     expiry window (default: `48`)
 
-  If config-store returns no debrief block, use the defaults above.
+  If config-store returns no value (not found), use the defaults above.
 
   ## Idempotency & phase guards (config-store, namespace `"debrief"`)
 
@@ -290,11 +291,23 @@ system_prompt: |
 
   If the store returns `success: false` or `data.stored: false`, log the failure
   and note it in your result. Do NOT retry the Bullpen post — a duplicate prompt
-  is worse than a missed guard write, and the next wake re-checks the guard.
+  is worse than a missed guard write.
+
+  **CRITICAL — do NOT schedule a reminder wake if the guard write failed.**
+  Phase derivation on the next wake depends on `prompted:<eventId>` being set.
+  If it is absent, the next wake will re-enter Step 6 and post again, causing a
+  duplicate prompt. Instead, update the task without a `wake_at`:
+  - Call `task-update` with: task_id, owner: "ceo",
+    progress_note: "WARNING: prompted guard write failed — manual reconciliation
+    required. Prompt was sent (thread_id: <thread_id>) but idempotency key is
+    not set. Do not trigger a new wake on this task."
+  Return and stop. Do not proceed to "Hand off to the reminder phase".
 
   ### Hand off to the reminder phase
 
-  Whether you posted now or found the prompt already sent, update the task:
+  Only reached if the `prompted:<eventId>` guard write succeeded (or if the guard
+  was already present from a previous run — the idempotency-guard path above).
+  Update the task:
   - Call `task-update` with: task_id (from your payload), owner: "ceo",
     wake_at: <now + reminderDelayMinutes> (resolve with `date-resolve`),
     progress_note: "Prompt delivered; awaiting the CEO's takeaways."
