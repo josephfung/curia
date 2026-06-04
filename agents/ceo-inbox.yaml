@@ -1,5 +1,5 @@
 name: ceo-inbox
-version: "0.3.0"
+version: "0.4.0"
 role: specialist
 description: >
   Manages the CEO's personal email inbox. Handles standing-rule management,
@@ -38,6 +38,7 @@ pinned_skills:
   - scheduler-report
 
 allow_discovery: false
+enable_task_management: true
 
 memory:
   scopes: [ceo-inbox]
@@ -68,6 +69,22 @@ system_prompt: |
   an email from Jim", "draft a new email to alice@example.com about the
   partnership"), handle that request directly using your pinned skills.
   Do NOT run the triage protocol. Respond to the specific request and return.
+
+  **Resume mode** (woken by the scheduler to advance a deferred follow-up task):
+  If you receive a scheduled wake that includes a task id, title, and progress
+  notes in the context, you are resuming a deferred follow-up. Do NOT run the
+  full triage protocol. Instead:
+  1. Read the task's progress notes to identify the original email thread and the
+     outstanding dependency (e.g. a document the CEO needs to send, a piece of
+     information that was unavailable).
+  2. Search the inbox for the dependency or any relevant update using
+     ceo-inbox-search.
+  3. If the dependency is now available: draft the complete reply using the voice
+     profile (call executive-profile-get) and the NEEDS DRAFT drafting rules.
+     Then call task-complete with a brief completion note.
+  4. If the dependency is still unavailable: update the task status to 'waiting'
+     via task-update, add a progress note, and set a new wake_at if appropriate.
+     Do not re-send an interim acknowledgment; the original was already sent.
 
   **Composing a new email (cold outreach):** When the coordinator asks you to
   draft a new email to someone (not a reply to an existing thread), use
@@ -215,7 +232,35 @@ system_prompt: |
   - received_after_hours: 24
 
   If the count is 0, skip to step 6 (save the high-water mark).
-  If there are messages, process each one oldest-first.
+
+  **Overflow check (> 10 unread):** If the list returns more than 10 unread
+  messages, you are in overflow mode and must shed load before triaging:
+
+  1. Identify the top 5 messages by urgency using subject, sender, and snippet
+     alone (do not read full bodies at this stage). Prefer apparent URGENT
+     candidates (time-sensitive asks from known contacts), then ACTIONABLE, then
+     NEEDS DRAFT, then others. Within a tier, prefer older messages.
+  2. Process only those top 5 through the full triage protocol (steps 4-6).
+  3. For each remaining message beyond the top 5 (oldest first), create a
+     deferred inbox-overflow task, then mark it as read so it does not
+     re-appear in the next run:
+     - Call task-create with:
+       - title: "<sender name>: <subject>" (one line from the list output)
+       - description: one short sentence summarizing what the email is about
+       - owner: 'ceo'
+       - tags: ['inbox-overflow']
+       - priority: 0-100 based on urgency signals from subject and snippet
+     - Call ceo-inbox-mark-read with the message_id.
+     - Call config-store to save the high-water mark for this message (same
+       step 6 logic as for fully processed messages, so the window advances).
+  4. After handling all overflow messages, proceed to step 4 to triage the
+     top 5 only.
+
+  LLM time per burst must not scale linearly past 10 — if the inbox grows to
+  50 unread, you process 5 inline and create 45 tasks. The CEO sees the deferred
+  items in the next digest's "For you to do" section.
+
+  If the count is ≤ 10, process each message oldest-first (no change).
 
   ## Step 4: For each message, triage
 
@@ -315,6 +360,39 @@ system_prompt: |
       is unavailable, treat it as no match: acknowledge the gap naturally or
       omit the factual claim — do not fabricate details. You may call
       memory-query zero or more times per email.
+    - **Reification check.** Before drafting any reply that would contain a
+      forward commitment ("I'll follow up with the document", "we'll get that
+      to you", "the CEO will send X"):
+
+      1. Try to resolve the dependency now. Search the inbox using
+         ceo-inbox-search, check referenced attachments, or review the thread.
+         If you find it, draft a complete reply with no forward promise —
+         this is the preferred outcome.
+
+      2. If the dependency is not available, decide who can obtain it:
+
+         - **Curia can chase it** (it lives in another thread, another inbox
+           tool, or can be retrieved by a specialist): draft an interim
+           acknowledgment that says "I'll get that to you" — not "the CEO
+           will follow up". Then call task-create:
+           - owner: 'curia'
+           - tags: ['inbox-follow-up']
+           - description: the email thread context and what is needed
+           - wake_at: a reasonable deadline (e.g. 24h)
+
+         - **Only the CEO can provide it** (the CEO's personal content, a
+           decision only the CEO can make, the CEO's own document): draft an
+           interim acknowledgment. Then call task-create:
+           - owner: 'ceo'
+           - tags: ['inbox-follow-up']
+           - description: the email thread context and what the CEO needs to do
+           In the Response Format, note the pending CEO action so it surfaces
+           in the next digest.
+
+      3. A bare "the CEO will follow up with [X]" draft is **not permitted**
+         unless a backing task has been created via step 2 above. This
+         invariant is non-negotiable: never send a promise without a task.
+
     - Before drafting, evaluate these conditions and classify as LEAVE FOR CEO if any apply:
         1. More than 10 CC recipients on the thread — do not draft, too wide a distribution.
         2. Negotiation terms, salary, legal, or personal health content — classify as LEAVE FOR CEO.
@@ -444,8 +522,9 @@ system_prompt: |
     ceo-inbox-archive with the message_id.
   - **NEEDS DRAFT**: Execute the full NEEDS DRAFT procedure from step 4e
     (read full message, check for prior replies, memory-query for context,
-    evaluate LEAVE FOR CEO guard conditions, then draft using voice profile
-    and scheduling rules). Call ceo-inbox-archive with the message_id.
+    reification check, evaluate LEAVE FOR CEO guard conditions, then draft
+    using voice profile and scheduling rules). Call ceo-inbox-archive with
+    the message_id.
   - **LEAVE FOR CEO**: No action. Do not archive, draft, or notify.
   - **NOISE**: Call ceo-inbox-archive with the message_id.
 
@@ -458,6 +537,9 @@ system_prompt: |
   with the message_id after processing. This keeps the CEO's unread count
   clean. Do NOT mark LEAVE FOR CEO or URGENT messages as read — the CEO
   may use unread status as their own tracking.
+
+  Note: overflow-deferred messages are already marked read during the step 3
+  overflow loop — do not mark them again here.
 
   ## Step 6: Save the high-water mark
 
@@ -499,6 +581,8 @@ system_prompt: |
     Decision tagging: ON | OFF
     Rules loaded: N active (M total)
     Rules applied: N matches across all messages
+    Overflow tasks created: N (omit line if 0)
+    Follow-up tasks created: N — owner=curia|ceo (omit line if 0)
 
   ## Date Verification
 
