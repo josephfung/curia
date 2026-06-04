@@ -13,14 +13,12 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
-### Changed
-- **`ceo-inbox`** — joins the task system (`enable_task_management: true`): reification in the NEEDS DRAFT path prevents bare forward commitments without a backing task; resume mode drafts the complete reply when a deferred follow-up task wakes; overflow load-shedding above 10 unread defers the tail as `inbox-overflow` tasks so LLM time per burst no longer scales linearly. (#840, design 2026-06-04 §8)
-
 ### Added
 - **`enable_task_management`** — declarative agent capability that auto-pins the task skills, injects the executor/reification discipline block, and marks an agent heartbeat-eligible. (design 2026-06-04 §6)
 - **`BacklogHeartbeat`** — deterministic hourly System component that wakes idle/stale tasks by enqueuing one-shot scheduler jobs, one per owning agent, globally capped. (design 2026-06-04 §3)
 
 ### Changed
+- **`ceo-inbox`** — joins the task system (`enable_task_management: true`): reification in the NEEDS DRAFT path prevents bare forward commitments without a backing task; resume mode drafts the complete reply when a deferred follow-up task wakes; overflow load-shedding above 10 unread defers the tail as `inbox-overflow` tasks so LLM time per burst no longer scales linearly. (#840, design 2026-06-04 §8)
 - **coordinator** — task management now arrives via `enable_task_management: true` (replacing manual `task-*` pins); added a bounded `error_budget` for project bursts.
 - **coordinator** — replaced the `intent_anchor`-for-cron-jobs instruction with the new task/scheduling split: `task-create` for deferred CEO-visible work, `scheduler-create` (no `intent_anchor`) for operational sweeps. Adds backlog-awareness and defer-don't-drop rules. (#)
 - **`meeting-debrief`** — migrated from bespoke `pendingDebriefs`/`judgedEvents` state maps to platform tasks; detection now runs 3×/day and pre-schedules a per-meeting debrief task driven by wake-ups. (#839)
