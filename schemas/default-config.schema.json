@@ -282,6 +282,14 @@
         "explicitExpiryHours": { "type": "integer", "minimum": 1 }
       }
     },
+    "tasks": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "backlogSweepCron": { "type": "string", "minLength": 1 },
+        "sweepBatchSize":   { "type": "integer", "minimum": 1 }
+      }
+    },
     "debrief": {
       "type": "object",
       "additionalProperties": false,
