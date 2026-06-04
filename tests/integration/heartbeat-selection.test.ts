@@ -114,4 +114,33 @@ describeIf('selectHeartbeatCandidates', () => {
     const got = await selectHeartbeatCandidates(pool, opts);
     expect(got).toHaveLength(0);
   });
+
+  it('skips a task whose scheduled_jobs row is already running (Fix 1: running dedup)', async () => {
+    const id = await seedTask(pool, { status: 'open', sourceAgentId: 'ceo-inbox', updatedAt: hoursAgo(10) });
+    await pool.query(
+      `INSERT INTO scheduled_jobs (agent_id, cron_expr, run_at, task_payload, status, next_run_at, created_by, task_id)
+       VALUES ('ceo-inbox', NULL, now(), '{}'::jsonb, 'running', now(), 'test', $1)`,
+      [id],
+    );
+    const got = await selectHeartbeatCandidates(pool, opts);
+    expect(got.map((c) => c.id)).not.toContain(id);
+  });
+
+  it('does not wake a stale-wait task owned by ceo (Fix 2: owner scope)', async () => {
+    // A ceo-owned waiting task past the stale-wait threshold should not be selected —
+    // waking it would produce spurious agent invocations on CEO-managed work.
+    await seedTask(pool, { status: 'waiting', owner: 'ceo', sourceAgentId: 'ceo-inbox', updatedAt: hoursAgo(60) });
+    const got = await selectHeartbeatCandidates(pool, opts);
+    expect(got).toHaveLength(0);
+  });
+
+  it('does not wake a stale-wait task that is waiting on a specific contact (Fix 2: contact scope)', async () => {
+    // Tasks blocked on a specific human (waiting_on_contact_id IS NOT NULL) are genuinely
+    // waiting on them — the heartbeat should not interrupt that wait.
+    const id = await seedTask(pool, { status: 'waiting', owner: 'curia', sourceAgentId: 'ceo-inbox', updatedAt: hoursAgo(60) });
+    // Set waiting_on_contact_id to a placeholder UUID
+    await pool.query(`UPDATE tasks SET waiting_on_contact_id = gen_random_uuid() WHERE id = $1`, [id]);
+    const got = await selectHeartbeatCandidates(pool, opts);
+    expect(got.map((c) => c.id)).not.toContain(id);
+  });
 });

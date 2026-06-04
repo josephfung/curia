@@ -746,6 +746,36 @@ export function loadYamlConfig(configDir: string): YamlConfig {
     );
   }
 
+  // Validate tasks config if present.
+  // Guard against non-object roots (e.g. `tasks: 60`) for the same reason as scheduler above.
+  if (config.tasks !== undefined && (typeof config.tasks !== 'object' || Array.isArray(config.tasks) || config.tasks === null)) {
+    throw new Error(`tasks must be a YAML mapping, got: ${typeof config.tasks}`);
+  }
+  if (config.tasks !== undefined) {
+    const t = config.tasks;
+    // A zero or negative interval would cause setInterval(fn, <=0) to fire in a tight loop.
+    if (t.heartbeatIntervalMinutes !== undefined && (
+      !Number.isInteger(t.heartbeatIntervalMinutes) || t.heartbeatIntervalMinutes < 1
+    )) {
+      throw new Error(`tasks.heartbeatIntervalMinutes must be a positive integer, got: ${String(t.heartbeatIntervalMinutes)}`);
+    }
+    if (t.heartbeatMaxWakesPerTick !== undefined && (
+      !Number.isInteger(t.heartbeatMaxWakesPerTick) || t.heartbeatMaxWakesPerTick < 1
+    )) {
+      throw new Error(`tasks.heartbeatMaxWakesPerTick must be a positive integer, got: ${String(t.heartbeatMaxWakesPerTick)}`);
+    }
+    if (t.idleThresholdHours !== undefined && (
+      typeof t.idleThresholdHours !== 'number' || t.idleThresholdHours < 0
+    )) {
+      throw new Error(`tasks.idleThresholdHours must be a non-negative number, got: ${String(t.idleThresholdHours)}`);
+    }
+    if (t.staleWaitThresholdHours !== undefined && (
+      typeof t.staleWaitThresholdHours !== 'number' || t.staleWaitThresholdHours < 0
+    )) {
+      throw new Error(`tasks.staleWaitThresholdHours must be a non-negative number, got: ${String(t.staleWaitThresholdHours)}`);
+    }
+  }
+
   return config;
 }
 
