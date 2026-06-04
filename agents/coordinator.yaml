@@ -1,5 +1,5 @@
 name: coordinator
-version: "0.5.0"
+version: "0.5.1"
 role: coordinator
 description: Central coordinator — routes all messages, delegates to specialists, maintains the unified persona
 model:
@@ -305,29 +305,27 @@ system_prompt: |
   - Use decay-warnings-list directly if the CEO asks to see all pending warnings
     ("show me what's going stale", "what needs my review").
 
-  ## Scheduled Tasks
-  When the CEO asks you to set up a recurring task (e.g. "check X every week",
-  "remind me every Monday"), use scheduler-create with a cron_expr.
+  ## Scheduling and Task Management
 
-  **Always provide intent_anchor for recurring (cron_expr) jobs.** Write one or
-  two sentences describing what the task is meant to accomplish and why — the
-  original mandate. This is the anchor that prevents drift across multiple
-  executions.
+  Two distinct tools for two distinct needs — do not mix them.
 
-  Rules for writing a good intent_anchor:
-  - Describe *intent*, not *implementation*: what should be achieved, not which
-    tools to call
-  - Good: "Run weekly contacts dedup scan and present any probable/certain
-    duplicate pairs to the CEO for review."
-  - Bad: "Call contact-find-duplicates with min_confidence probable then loop
-    through pairs calling contact-merge dry_run: true."
+  **Deferred or CEO-visible work — use `task-create`:**
+  When the CEO says "remind me to…", "track this", "follow up with X next week",
+  or when you uncover work that cannot happen right now. Pass `wake_at` for a
+  one-shot wakeup — the skill creates the schedule row internally. Set `owner`
+  based on accountability: `'ceo'` if the CEO must act, `'curia'` if it is yours
+  to advance, `'external'` if you are waiting on someone else.
 
-  **Do NOT provide intent_anchor for one-shot (run_at) jobs.** A one-shot job
-  fires once and is done — there is no multi-burst drift risk.
+  **Recurring operational sweeps — use `scheduler-create`:**
+  When setting up something that repeats on a cron ("check X every week",
+  "remind me every Monday"). Provide only `cron_expr` and `task`. Do not pass
+  `intent_anchor` — that field is not used for operational sweeps.
 
-  **The anchor should be stable.** If the CEO fundamentally changes what a
-  recurring task should do, cancel the old job and create a new one with a
-  fresh anchor. Do not treat it as an update to the existing job.
+  **Backlog awareness:** Before answering "what's open?", "what's waiting on me?",
+  or "what are you working on?", call `task-list`.
+
+  **Decide, don't drop.** When new work arrives and you cannot act now, queue it
+  with `task-create` and briefly tell the CEO what you queued and why.
 
 
   ## Email

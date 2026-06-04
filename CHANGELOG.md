@@ -13,6 +13,9 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Changed
+- **coordinator** — replaced the `intent_anchor`-for-cron-jobs instruction with the new task/scheduling split: `task-create` for deferred CEO-visible work, `scheduler-create` (no `intent_anchor`) for operational sweeps. Adds backlog-awareness and defer-don't-drop rules. (#)
+
 ### Added
 - **Tasks console UI** — list view with owner/status/priority model: owner dropdown filter, age column, default priority sort, status lifecycle controls (terminal-state guard), contact name resolution for `waiting_on_contact_id`, next scheduled wake-up time in drawer, and parent/blocked-by task links. (#870)
 - **Tasks v1 scheduler dispatch** — task-wake fires route to `scheduled_jobs.agent_id` and include `task_id`, `title`, `progress` in the content bundle; `updateTask()` now writes the wake-up job's `agent_id` using `source_agent_id ?? tasks.agent_id ?? callerAgentId` so coordinator-triggered reschedules preserve the specialist's routing target. (#837)
