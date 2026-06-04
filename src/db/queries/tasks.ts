@@ -82,6 +82,86 @@ export function mapTaskRow(row: DbTaskRow): TaskRow {
   };
 }
 
+// -- Heartbeat candidate selection --
+
+export interface HeartbeatCandidate {
+  /** The task to wake. */
+  id: string;
+  /** The agent that will receive the wake — the task's source_agent_id, or the
+   *  fallback agent when source_agent_id is null or not heartbeat-eligible. */
+  agentId: string;
+}
+
+export interface SelectHeartbeatOptions {
+  /** Heartbeat-eligible agent names (enable_task_management: true). */
+  eligibleAgents: string[];
+  idleThresholdHours: number;
+  staleWaitThresholdHours: number;
+  /** Global cap on candidates returned per call. */
+  maxWakes: number;
+  /** Agent that receives wakes for null / non-eligible owners. Default 'coordinator'. */
+  fallbackAgentId?: string;
+}
+
+/** Select the heartbeat's wake candidates: one entry-point task per effective owner
+ *  agent (idle-unblocked curia work, or orphaned waits past their threshold), globally
+ *  capped, most-overdue first. Deterministic — no domain reasoning.
+ *
+ *  Two eligibility paths:
+ *  1. Idle path: owner='curia', status in (open, in_progress), not blocked,
+ *     no pending wake, updated_at older than idleThresholdHours.
+ *  2. Stale-wait path: status in (waiting, blocked), blocker done/cancelled or
+ *     no blocker, no pending wake, updated_at older than staleWaitThresholdHours.
+ *
+ *  Results are deduplicated to one task per effective agent (most-overdue first).
+ */
+export async function selectHeartbeatCandidates(
+  pool: Pool,
+  opts: SelectHeartbeatOptions,
+): Promise<HeartbeatCandidate[]> {
+  if (opts.eligibleAgents.length === 0) return [];
+  const fallback = opts.fallbackAgentId ?? 'coordinator';
+  // $1 = eligibleAgents array, $2 = idleThresholdHours, $3 = staleWaitThresholdHours,
+  // $4 = fallbackAgentId, $5 = maxWakes
+  // make_interval(hours => $N) binds $N as a numeric parameter — fully parameterized.
+  const { rows } = await pool.query(
+    `WITH candidates AS (
+       SELECT
+         t.id,
+         CASE WHEN t.source_agent_id = ANY($1::text[]) THEN t.source_agent_id ELSE $4 END AS effective_agent,
+         t.updated_at
+       FROM tasks t
+       WHERE t.status IN ('open','in_progress','waiting','blocked')
+         AND (t.blocked_by_task_id IS NULL OR EXISTS (
+               SELECT 1 FROM tasks b
+               WHERE b.id = t.blocked_by_task_id AND b.status IN ('done','cancelled')))
+         AND NOT EXISTS (
+               SELECT 1 FROM scheduled_jobs sj
+               WHERE sj.task_id = t.id AND sj.status = 'pending')
+         AND (
+               (t.owner = 'curia' AND t.status IN ('open','in_progress')
+                  AND t.updated_at < now() - make_interval(hours => $2))
+            OR (t.status IN ('waiting','blocked')
+                  AND t.updated_at < now() - make_interval(hours => $3))
+             )
+     ),
+     per_agent AS (
+       SELECT DISTINCT ON (effective_agent) id, effective_agent, updated_at
+       FROM candidates
+       ORDER BY effective_agent, updated_at ASC
+     )
+     SELECT id, effective_agent
+     FROM per_agent
+     ORDER BY updated_at ASC
+     LIMIT $5`,
+    [opts.eligibleAgents, opts.idleThresholdHours, opts.staleWaitThresholdHours, fallback, opts.maxWakes],
+  );
+  return rows.map((r) => {
+    const row = r as unknown as { id: string; effective_agent: string };
+    return { id: row.id, agentId: row.effective_agent };
+  });
+}
+
 // Fetch a single task row by ID. Returns null if not found.
 export async function getTaskById(pool: Pool, taskId: string): Promise<TaskRow | null> {
   const { rows } = await pool.query(
