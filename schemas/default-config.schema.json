@@ -304,6 +304,16 @@
       "properties": {
         "defaultExpectedDurationSeconds": { "type": "integer", "minimum": 1 }
       }
+    },
+    "tasks": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "heartbeatIntervalMinutes": { "type": "number", "minimum": 1 },
+        "heartbeatMaxWakesPerTick": { "type": "number", "minimum": 1 },
+        "idleThresholdHours": { "type": "number", "minimum": 0 },
+        "staleWaitThresholdHours": { "type": "number", "minimum": 0 }
+      }
     }
   },
   "definitions": {

@@ -437,3 +437,10 @@ sensitivity_rules:
       - medical record
       - home address
       - personal phone
+
+# Autonomous task execution — BacklogHeartbeat tuning (design 2026-06-04 §3, §9.1).
+tasks:
+  heartbeatIntervalMinutes: 60
+  heartbeatMaxWakesPerTick: 5
+  idleThresholdHours: 4
+  staleWaitThresholdHours: 48
