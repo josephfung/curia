@@ -58,7 +58,7 @@ export function applyTaskManagement(
   pinnedSkills: string[],
 ): TaskManagementResult {
   if (!config.enable_task_management) {
-    return { systemPrompt, pinnedSkills, heartbeatEligible: false };
+    return { systemPrompt, pinnedSkills: [...pinnedSkills], heartbeatEligible: false };
   }
   // Keep the author's explicit pins; append any task skills not already present.
   const merged = [...pinnedSkills];

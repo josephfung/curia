@@ -48,4 +48,9 @@ describe('applyTaskManagement', () => {
   it('exposes exactly the four task skills', () => {
     expect([...TASK_MANAGEMENT_SKILLS]).toEqual(['task-create', 'task-list', 'task-update', 'task-complete']);
   });
+
+  it('produces exactly the four task skills when starting from an empty pinned list', () => {
+    const r = applyTaskManagement(cfg({ enable_task_management: true }), 'P', []);
+    expect(r.pinnedSkills).toEqual([...TASK_MANAGEMENT_SKILLS]);
+  });
 });
