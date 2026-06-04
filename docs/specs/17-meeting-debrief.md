@@ -197,15 +197,16 @@ The prompt is:
 - Short — one or two sentences max
 
 After sending, the agent:
-1. Registers a conversation claim for the response thread (via `claim-conversation` skill)
-2. Records the debrief in scheduler task progress (status: `awaiting_response`)
-3. Creates a one-shot reminder job
+1. Writes the `prompted:<eventId>` guard to `config-store` (namespace `"debrief"`) with the Bullpen thread_id and timestamp
+2. Flips the debrief task to `owner: "ceo"` and schedules the reminder via `wake_at` (task-update)
+
+> **Note (tasks migration, #839):** The earlier design used `claim-conversation` + scheduler-report task progress here. These are superseded — see the Historical appendix.
 
 ---
 
 ## 6. Response Processing & Follow-Up Actions
 
-When the CEO responds (routed via conversation claim), the agent processes the raw notes with full context.
+When the CEO responds (routed via context bridge delegation to meeting-debrief), the agent processes the raw notes with full context.
 
 **Context available:**
 - The meeting that triggered the prompt (title, attendees, duration)
@@ -233,51 +234,34 @@ When the CEO responds (routed via conversation claim), the agent processes the r
 > 4. Kicked off research on Meridian's competitor landscape — I'll send findings when ready
 > Anything to adjust?"
 
-The CEO can reply with corrections — the conversation claim keeps the thread routed to the meeting-debrief agent.
+The CEO can reply with corrections — the context bridge delegation keeps the thread routed to the meeting-debrief agent.
 
-**Debrief completion:** When the CEO confirms or stops responding (claim expires), the agent:
-1. Releases the conversation claim
-2. Updates status in scheduler task progress to `completed` (with action summary)
-3. Publishes an `audit.event` recording the debrief outcome
-4. Stores any durable knowledge as KG facts (commitments, outcomes, preferences learned)
-5. Stores a completed follow-up summary fact on relevant entities (enables "what follow-ups happened with X?" queries)
-6. Prunes the entry from progress on the next cycle
+**Debrief completion:** When the CEO confirms (or the debrief expires without a response), the agent:
+1. Calls `task-complete` on the debrief task (auto-cancels any pending reminder/expiry wake)
+2. Stores any durable knowledge as KG facts (commitments, outcomes, preferences learned) on relevant contact/org entities
+
+> **Note (tasks migration, #839):** The earlier design released a conversation claim and updated scheduler-report progress here. These are superseded — see the Historical appendix.
 
 ---
 
-## 7. Debrief Status Skill
+## 7. Debrief Status Queries
 
-**New skill:** `debrief-status`
-
-A read-only skill available to the coordinator that queries the meeting-debrief agent's state. This enables the CEO to ask questions like:
-
-- "What meetings from yesterday still need follow-up?"
-- "What follow-ups are outstanding?"
-- "Were there any meetings I missed giving takeaways for?"
-
-**How it works:**
-1. Reads the meeting-debrief agent's `agent_tasks.progress` JSON for pending and recently completed debriefs
-2. For historical debriefs (beyond the progress TTL), queries KG facts for completed follow-up summaries on contact/org entities
-3. Returns a structured summary the coordinator can relay to the CEO
-
-This keeps the debrief state accessible without needing the coordinator to understand the meeting-debrief agent's internals.
+> **Superseded by tasks migration (#839).** No separate `debrief-status` skill was built. The coordinator handles status queries ("What meetings still need debrief?") by delegating directly to the meeting-debrief agent, which reads its own open tasks via `task-list` (tag: `debrief-pending`). This is consistent with the general specialist-delegation pattern. See the Historical appendix for the original `debrief-status` skill design.
 
 ---
 
 ## 8. Configuration
 
-New top-level block in `config/default.yaml`:
+Runtime settings are stored in `config-store` under namespace `"debrief"`, key `"config"`. The agent reads them on every run with `action: "retrieve"`. Defaults apply if the key is not found:
 
 ```yaml
-debrief:
-  enabled: true
-  channel: signal
-  detectionCron: "0 7,12,16 * * *"
-  reminderDelayMinutes: 120
-  claimTtlHours: 48
+# config-store namespace "debrief", key "config" (stored as JSON)
+channel: signal                 # channel for debrief prompts
+reminderDelayMinutes: 120       # minutes after prompt before sending reminder
+contextBridgeTtlHours: 48       # TTL for context bridge entries and debrief expiry window
 ```
 
-All values have sensible defaults. The LLM judgment handles nuance — config handles mechanics. `internalDomains` and `scanWindowMinutes` are removed; the forward-scan window is end-of-day and attendee classification is handled by the LLM from KG-enriched context rather than rigid domain matching.
+The detection cron (`0 7,12,16 * * *`) is declared in the agent YAML `schedule` block, not in config. `internalDomains`, `scanWindowMinutes`, `detectionCron`, and `claimTtlHours` are removed — the forward-scan window is end-of-day and attendee classification uses LLM judgment from KG-enriched context.
 
 **Note — separate issue:** The `research-analyst` agent currently has no `enabled` config option in its YAML. All specialist agents should have an enable/disable toggle. This is a pre-existing gap, not specific to this feature, but worth tracking as a follow-up.
 
@@ -336,9 +320,8 @@ These are out of scope for this feature but identified during design:
 
 | File | Purpose |
 |---|---|
-| `agents/meeting-debrief.yaml` | Agent config: prompt, skills, schedule (no outbound skills pinned) |
-| `skills/debrief-status/` | Skill for coordinator to query debrief state |
-| Config additions to `config/default.yaml` | `debrief:` top-level block |
+| `agents/meeting-debrief.yaml` | Agent config: prompt, skills, 3×/day schedule |
+| `config-store` namespace `"debrief"`, key `"config"` | Runtime operator settings (channel, reminder delay, TTL) |
 
 **Prerequisite infrastructure (delivered by #615 — context bridging v2; see [spec 11 §Outbound Context Bridge](11-entity-context-enrichment.md#outbound-context-bridge)):**
 
@@ -356,10 +339,10 @@ These are out of scope for this feature but identified during design:
 
 ## Implementation Status
 
-> **Note:** Sections 1–10 above describe the original design intent. The
-> implementation made several revisions documented in the design notes below.
-> When sections above conflict with the design notes, the design notes and
-> the implementation (agent YAML, config, tests) are authoritative.
+> **Note:** Sections 1–10 were updated to reflect the current implementation
+> (tasks migration, #839). Superseded content has been moved to the Historical
+> appendix at the bottom of this document. The implementation (agent YAML,
+> config, tests) is authoritative; this spec tracks its normative contract.
 
 | Number | Item | Status |
 |---|---|---|
@@ -394,3 +377,52 @@ These are out of scope for this feature but identified during design:
 - Judgment simplified to binary YES/NO; DEFER outcome removed.
 - `scanWindowMinutes` config key removed; forward scan window is always end-of-day.
 - Item 7 updated: reminder is now the second `wake_at` re-schedule on the debrief task row, not a cron-tick scan of in-memory state.
+- Sections 5, 6, 7, 8, 11 updated to reflect current implementation. Superseded content in Historical appendix below.
+
+---
+
+## Appendix: Historical Design (Pre-Tasks Migration)
+
+> The following content describes the original design that was **superseded by the tasks migration (#839, 2026-06-04)**. It is preserved here for context only — the agent YAML and §3 state management section above describe the current authoritative contract.
+
+### Historical §5 — After sending
+
+In the original design, after sending the debrief prompt the agent:
+1. Registered a conversation claim for the response thread (via `claim-conversation` skill)
+2. Recorded the debrief in `agent_tasks.progress` JSON (status: `awaiting_response`)
+3. Created a one-shot reminder job via the scheduler
+
+These steps were replaced by: writing the `prompted:<eventId>` config-store guard + updating the debrief task (`owner: "ceo"`, `wake_at: +reminderDelayMinutes`).
+
+### Historical §6 — Debrief completion
+
+In the original design, debrief completion:
+1. Released the conversation claim (`context-bridge-release`)
+2. Updated scheduler task progress to `completed`
+3. Published an `audit.event`
+4. Stored KG facts
+5. Stored a completed follow-up summary fact on relevant entities
+6. Pruned the entry from progress on the next cycle
+
+These steps were replaced by: `task-complete` on the debrief task (which auto-cancels the pending wake) plus targeted KG fact storage.
+
+### Historical §7 — Debrief Status Skill
+
+The original design called for a `debrief-status` skill (read-only, coordinator-pinned) that read `agent_tasks.progress` JSON for pending debriefs and KG facts for historical debriefs.
+
+**Superseded:** No separate skill was built. The coordinator delegates status queries directly to meeting-debrief, which reads its own open tasks via `task-list`.
+
+### Historical §8 — Configuration
+
+The original config block in `config/default.yaml`:
+
+```yaml
+debrief:
+  enabled: true
+  channel: signal
+  detectionCron: "0 7,12,16 * * *"
+  reminderDelayMinutes: 120
+  claimTtlHours: 48
+```
+
+**Superseded:** Runtime settings are now stored in `config-store` (namespace `"debrief"`, key `"config"`). `detectionCron` moved to the agent YAML `schedule` block. `claimTtlHours` renamed to `contextBridgeTtlHours` to match the context bridge TTL semantics.
