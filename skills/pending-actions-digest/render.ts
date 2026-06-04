@@ -35,3 +35,82 @@ export function formatDueDate(dueIso: string | null, timezone: string): string {
   const local = toLocalIso(Math.floor(ms / 1000), timezone);
   return local ? local.slice(0, 10) : '—';
 }
+
+import type { TaskListRow } from '../../src/db/task-repo.js';
+
+// Approval line shape — the handler maps ActionLogRow → ApprovalInput.
+export interface ApprovalInput {
+  description: string | null;
+  skillName: string;
+  shortRef: string | null;
+  expiresAt: Date | null;
+}
+
+export interface RenderDigestInput {
+  approvals: ApprovalInput[];
+  ceo: TaskListRow[];
+  external: TaskListRow[];
+  curia: TaskListRow[];
+  /** Resolve a contact id to a display name; undefined if unknown/unresolved. */
+  resolveName: (contactId: string) => string | undefined;
+  nowMs: number;
+  timezone: string;
+}
+
+/**
+ * Time remaining until an approval expires. Preserves the legacy thresholds
+ * exactly: <=0 or <1h both render '<1h remaining'.
+ */
+export function formatTimeRemaining(expiresAt: Date | null, nowMs: number): string {
+  const ms = expiresAt != null ? expiresAt.getTime() - nowMs : 0;
+  if (ms <= 0 || ms < MS_HOUR) return '<1h remaining';
+  return `${Math.floor(ms / MS_HOUR)}h remaining`;
+}
+
+function approvalLine(a: ApprovalInput, nowMs: number): string {
+  return `• ${a.description ?? '(no description)'} [${a.skillName}] — ${formatTimeRemaining(a.expiresAt, nowMs)} [${a.shortRef ?? '—'}]`;
+}
+
+// Render a backlog section: heading, up to 5 bullets, optional "+N more" footer.
+// `lines` are pre-formatted bullet bodies (without the leading "• ").
+function section(heading: string, lines: string[]): string {
+  const shown = lines.slice(0, 5).map((l) => `• ${l}`);
+  if (lines.length > 5) shown.push(`+${lines.length - 5} more`);
+  return `${heading}:\n${shown.join('\n')}`;
+}
+
+/**
+ * Build the full digest email body: the approvals block (byte-identical to the
+ * legacy format) followed by each non-empty backlog section. Sections are
+ * separated by a blank line. Returns '' when there is nothing to render.
+ */
+export function renderDigestBody(input: RenderDigestInput): string {
+  const { approvals, ceo, external, curia, resolveName, nowMs, timezone } = input;
+  const blocks: string[] = [];
+
+  if (approvals.length > 0) {
+    blocks.push(approvals.map((a) => approvalLine(a, nowMs)).join('\n'));
+  }
+
+  if (ceo.length > 0) {
+    blocks.push(section('For you to do', ceo.map((t) =>
+      `${t.title} · due ${formatDueDate(t.dueAt, timezone)} · age ${humanizeAge(t.createdAt, nowMs)}`,
+    )));
+  }
+
+  if (external.length > 0) {
+    blocks.push(section('Waiting on others', external.map((t) => {
+      const name = (t.waitingOnContactId ? resolveName(t.waitingOnContactId) : undefined)
+        ?? t.waitingOnText ?? '(unknown)';
+      return `${t.title} · waiting on ${name} · since ${humanizeAge(t.createdAt, nowMs)}`;
+    })));
+  }
+
+  if (curia.length > 0) {
+    blocks.push(section("What I'm working on", curia.map((t) =>
+      `${t.title} · age ${humanizeAge(t.createdAt, nowMs)}`,
+    )));
+  }
+
+  return blocks.join('\n\n');
+}
