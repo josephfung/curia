@@ -335,9 +335,9 @@ export async function knowledgeGraphRoutes(
       t.blocked_by_task_id, t.progress, t.error_budget, t.conversation_id,
       t.created_at, t.updated_at,
       c.display_name AS waiting_on_contact_name,
-      (SELECT sj.run_at FROM scheduled_jobs sj
+      (SELECT sj.next_run_at FROM scheduled_jobs sj
        WHERE sj.task_id = t.id AND sj.status = 'pending'
-       ORDER BY sj.run_at ASC LIMIT 1) AS next_wake_at
+       ORDER BY sj.next_run_at ASC LIMIT 1) AS next_wake_at
     FROM tasks t
     LEFT JOIN contacts c ON c.id = t.waiting_on_contact_id
     ORDER BY t.updated_at DESC
@@ -633,6 +633,7 @@ export async function knowledgeGraphRoutes(
              conversation_id = $15,
              updated_at      = now()
          WHERE id = $1
+           AND ($6 = status OR status NOT IN ('done', 'cancelled'))
          RETURNING ${TASK_SELECT}`,
         [
           id,
@@ -652,10 +653,26 @@ export async function knowledgeGraphRoutes(
           conversationId,
         ],
       );
-      // Guard against concurrent deletes between the existence check and the UPDATE.
+      // Zero rows updated: either a concurrent delete or a concurrent terminal transition
+      // slipped in after our pre-check. Re-read to distinguish the two cases.
       if (!updated.rowCount) {
-        logger.warn({ taskId: id }, 'kg: PATCH tasks matched 0 rows — likely concurrent delete');
-        return reply.status(404).send({ error: 'Task not found.' });
+        const current = await pool.query<{ status: string }>(
+          `SELECT status FROM tasks WHERE id = $1`,
+          [id],
+        );
+        if (!current.rowCount) {
+          logger.warn({ taskId: id }, 'kg: PATCH tasks matched 0 rows — likely concurrent delete');
+          return reply.status(404).send({ error: 'Task not found.' });
+        }
+        const currentStatus = current.rows[0]!.status;
+        if (['done', 'cancelled'].includes(currentStatus) && typeof body.status === 'string' && body.status !== currentStatus) {
+          return reply.status(400).send({
+            error: `Cannot transition task from '${currentStatus}' — it is a terminal state.`,
+          });
+        }
+        // Neither delete nor terminal: unexpected. Surface a 500 rather than silently dropping.
+        logger.error({ taskId: id, currentStatus }, 'kg: PATCH UPDATE matched 0 rows for non-terminal task');
+        return reply.status(500).send({ error: 'Update failed unexpectedly.' });
       }
       // Re-fetch with enriched JOIN so the response includes contact name and
       // next wake-up time, keeping parity with the GET list response shape.
@@ -667,9 +684,9 @@ export async function knowledgeGraphRoutes(
           t.blocked_by_task_id, t.progress, t.error_budget, t.conversation_id,
           t.created_at, t.updated_at,
           c.display_name AS waiting_on_contact_name,
-          (SELECT sj.run_at FROM scheduled_jobs sj
+          (SELECT sj.next_run_at FROM scheduled_jobs sj
            WHERE sj.task_id = t.id AND sj.status = 'pending'
-           ORDER BY sj.run_at ASC LIMIT 1) AS next_wake_at
+           ORDER BY sj.next_run_at ASC LIMIT 1) AS next_wake_at
          FROM tasks t
          LEFT JOIN contacts c ON c.id = t.waiting_on_contact_id
          WHERE t.id = $1`,
