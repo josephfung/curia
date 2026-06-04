@@ -28,6 +28,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Tasks & Backlog v1 design** — design memo for a unified task model with deferred work, CEO-visible backlog, and a 3×/day coordinator sweep. See `docs/wip/2026-06-01-tasks-and-backlog-design.md`.
 - **SBOM generation** — SPDX JSON Software Bill of Materials generated on every push to `main` and attached to each GitHub release as a release asset; failure is non-fatal. (#564)
 - **`drive-download-file`** — new skill that downloads a Google Drive file (native or Google-native export) to TempFileStore and returns a `file://` URL, enabling Drive files to be attached to outbound emails. Closes #857.
+- **`pending-actions-digest`** — daily digest now surfaces the task backlog: for-you-to-do, waiting-on-others, and what-I'm-working-on. (#838)
 
 ### Changed
 - **Console tasks view** — updated to match the migrated `tasks` schema: drops `scheduled_job_id`, adds all new columns (`title`, `owner`, `priority`, `due_at`, `source`, `tags`, `description`, FK references), extends status filters with new task-lifecycle values, and updates the scheduled-jobs view to display the linked `task_id`. (#869)
