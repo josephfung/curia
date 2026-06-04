@@ -42,16 +42,21 @@ async function seedTask(
   return row.id;
 }
 
-async function getAnyContactId(pool: pg.Pool): Promise<string> {
-  const { rows } = await pool.query<{ id: string }>('SELECT id FROM contacts LIMIT 1');
+async function seedContact(pool: pg.Pool): Promise<string> {
+  const { rows } = await pool.query<{ id: string }>(
+    `INSERT INTO contacts (display_name) VALUES ($1) RETURNING id`,
+    [`${PREFIX} contact`],
+  );
   const [row] = rows;
-  if (!row) throw new Error('getAnyContactId: contacts table is empty — seed a contact before running this test');
+  if (!row) throw new Error('seedContact: INSERT INTO contacts returned no rows');
   return row.id;
 }
 
 async function cleanup(pool: pg.Pool): Promise<void> {
   await pool.query(`DELETE FROM scheduled_jobs WHERE task_id IN (SELECT id FROM tasks WHERE title LIKE $1)`, [`${PREFIX}%`]);
+  // Delete tasks before contacts to avoid FK violation (tasks.waiting_on_contact_id → contacts.id).
   await pool.query(`DELETE FROM tasks WHERE title LIKE $1`, [`${PREFIX}%`]);
+  await pool.query(`DELETE FROM contacts WHERE display_name LIKE $1`, [`${PREFIX}%`]);
 }
 
 describeIf('selectHeartbeatCandidates', () => {
@@ -148,7 +153,7 @@ describeIf('selectHeartbeatCandidates', () => {
     // waiting on them — the heartbeat should not interrupt that wait.
     const id = await seedTask(pool, { status: 'waiting', owner: 'curia', sourceAgentId: 'ceo-inbox', updatedAt: hoursAgo(60) });
     // Use a real contact ID to satisfy the FK constraint on waiting_on_contact_id.
-    const contactId = await getAnyContactId(pool);
+    const contactId = await seedContact(pool);
     await pool.query(`UPDATE tasks SET waiting_on_contact_id = $1 WHERE id = $2`, [contactId, id]);
     const got = await selectHeartbeatCandidates(pool, opts);
     expect(got.map((c) => c.id)).not.toContain(id);
