@@ -67,6 +67,9 @@ function fakeDbRow(overrides: Record<string, unknown> = {}) {
     task_title: null,
     run_started_at: null,
     expected_duration_seconds: null,
+    last_run_outcome: null,
+    last_run_summary: null,
+    last_run_context: null,
     ...overrides,
   };
 }

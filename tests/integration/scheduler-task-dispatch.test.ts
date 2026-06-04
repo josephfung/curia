@@ -10,7 +10,7 @@ import { EventBus } from '../../src/bus/bus.js';
 import { AgentRuntime } from '../../src/agents/runtime.js';
 import { Scheduler } from '../../src/scheduler/scheduler.js';
 import type { LLMProvider } from '../../src/agents/llm/provider.js';
-import pino from 'pino';
+import { createLogger } from '../../src/logger.js';
 
 const MOCK_PROVENANCE = {
   requestedModel: 'mock-model',
@@ -62,7 +62,7 @@ function fakeTaskWakeRow(overrides: Record<string, unknown> = {}) {
 
 describe('Scheduler task-bound dispatch integration', () => {
   it('delivers task-wake fire to the specialist agent with task context in content', async () => {
-    const logger = pino({ level: 'silent' });
+    const logger = createLogger('silent');
     const bus = new EventBus(logger);
     const schedulerService = mockSchedulerService();
 
@@ -156,7 +156,7 @@ describe('Scheduler task-bound dispatch integration', () => {
   });
 
   it('falls back to coordinator when agent_id is coordinator (CEO-created task with no specialist)', async () => {
-    const logger = pino({ level: 'silent' });
+    const logger = createLogger('silent');
     const bus = new EventBus(logger);
     const schedulerService = mockSchedulerService();
 
@@ -223,7 +223,7 @@ describe('Scheduler task-bound dispatch integration', () => {
   });
 
   it('non-task-bound jobs fire without task context in content', async () => {
-    const logger = pino({ level: 'silent' });
+    const logger = createLogger('silent');
     const bus = new EventBus(logger);
     const schedulerService = mockSchedulerService();
 
