@@ -105,6 +105,7 @@ import { runStartupValidation } from './startup/validator.js';
 import { runReadinessChecks } from './startup/readiness.js';
 import { compileSecurityContextBlock } from './security/security-context.js';
 import { OutboundContextService } from './dispatch/outbound-context.js';
+import { applyTaskManagement } from './agents/task-management.js';
 
 async function main(): Promise<void> {
   // Captured at the very start of main() so the wizard's post-setup polling
@@ -1296,6 +1297,10 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
+  // Agents with enable_task_management: true — read by the BacklogHeartbeat to
+  // know which source_agent_ids it may wake (and as the fallback target list).
+  const taskManagementAgents = new Set<string>();
+
   // Pass 2: Create AgentRuntime for each config (now all specialists are known)
   for (const agentConfig of agentConfigs) {
     // Build tool definitions from pinned skills
@@ -1308,25 +1313,6 @@ async function main(): Promise<void> {
         );
       }
     }
-    const agentToolDefs = skillRegistry.toToolDefinitions(agentPinnedSkills);
-
-    // allow_discovery: true → inject the skill-registry discovery tool into the agent's
-    // tool list. Skipped if already pinned to avoid duplicate tool definitions.
-    // The skill-registry handler is loaded by the standard file loader like any other
-    // skill; this only controls whether it appears in the LLM's tool list for this agent.
-    if (agentConfig.allow_discovery && !agentPinnedSkills.includes('skill-registry')) {
-      const discoveryToolDefs = skillRegistry.toToolDefinitions(['skill-registry']);
-      if (discoveryToolDefs.length === 0) {
-        // skill-registry is not in the registry — it either failed to load (bad manifest,
-        // missing handler) or was never registered. Error-level: a declared capability is
-        // unavailable for this agent's entire lifetime. Root cause will be in the earlier
-        // skill-loader error log; this connects the agent-level consequence to it.
-        logger.error({ agent: agentConfig.name }, 'allow_discovery is true but skill-registry is not registered — discovery unavailable; check startup logs for skill load errors');
-      } else {
-        agentToolDefs.push(...discoveryToolDefs);
-      }
-    }
-
     // For the coordinator, interpolate runtime context (specialist list, agent contact ID).
     // Date and timezone are no longer baked in here — they are appended fresh on every
     // task turn via AgentRuntime using formatTimeContextBlock() so they never go stale.
@@ -1372,6 +1358,35 @@ async function main(): Promise<void> {
       });
     }
 
+    // Apply the enable_task_management capability: auto-pin task skills, append the
+    // discipline block, and register heartbeat-eligibility. No-op when the flag is off.
+    const taskMgmt = applyTaskManagement(agentConfig, systemPrompt, agentPinnedSkills);
+    systemPrompt = taskMgmt.systemPrompt;
+    const effectivePinnedSkills = taskMgmt.pinnedSkills;
+    if (taskMgmt.heartbeatEligible) {
+      taskManagementAgents.add(agentConfig.name);
+    }
+
+    // was: const agentToolDefs = skillRegistry.toToolDefinitions(agentPinnedSkills);
+    const agentToolDefs = skillRegistry.toToolDefinitions(effectivePinnedSkills);
+
+    // allow_discovery: true → inject the skill-registry discovery tool into the agent's
+    // tool list. Skipped if already pinned to avoid duplicate tool definitions.
+    // The skill-registry handler is loaded by the standard file loader like any other
+    // skill; this only controls whether it appears in the LLM's tool list for this agent.
+    if (agentConfig.allow_discovery && !effectivePinnedSkills.includes('skill-registry')) {
+      const discoveryToolDefs = skillRegistry.toToolDefinitions(['skill-registry']);
+      if (discoveryToolDefs.length === 0) {
+        // skill-registry is not in the registry — it either failed to load (bad manifest,
+        // missing handler) or was never registered. Error-level: a declared capability is
+        // unavailable for this agent's entire lifetime. Root cause will be in the earlier
+        // skill-loader error log; this connects the agent-level consequence to it.
+        logger.error({ agent: agentConfig.name }, 'allow_discovery is true but skill-registry is not registered — discovery unavailable; check startup logs for skill load errors');
+      } else {
+        agentToolDefs.push(...discoveryToolDefs);
+      }
+    }
+
     // Resolve this agent's capability tier to a concrete model, then look up
     // the provider from the model registry. This decouples tier→model from
     // model→provider: the registry is the single source of truth for which
@@ -1400,7 +1415,7 @@ async function main(): Promise<void> {
       memory,
       entityMemory,
       executionLayer,
-      pinnedSkills: agentPinnedSkills,
+      pinnedSkills: effectivePinnedSkills,
       skillToolDefs: agentToolDefs,
       // Registry-backed context window lookups and cost estimation (DI so runtime is testable).
       modelRegistry,
