@@ -105,23 +105,33 @@ These were settled with the CEO during brainstorming:
 
 | Today (maps in `progress` JSONB) | New |
 |---|---|
-| `pendingDebriefs[eventId]` | one task: `tag=['debrief-pending']`, `owner` flips `curia`→`ceo` at the prompt wake (see decision 6), `title="Debrief: <meeting>"`. `wake_at` drives the lifecycle (see below). `progress` holds `{ eventId, attendees, scheduledEnd, title, threadId, phase }`. |
+| `pendingDebriefs[eventId]` | one task: `tag=['debrief-pending']`, `owner` flips `curia`→`ceo` at the prompt wake (see decision 6), `title="Debrief: <meeting>"`. `wake_at` drives the lifecycle (see below). `intent_anchor` carries the `eventId` + scheduled end time (delivered on wake via system-prompt injection, **not** returned by `task-list`). `progress` notes stay short and human-readable (they surface as `last_progress_note` in the CEO's digest). |
 | `judgedEvents` (NO) | **no task.** config-store `seen:<eventId>` guard only. |
 | `judgedEvents` (defer) | **removed** (DEFER no longer exists). |
 | `deferredEvents` | **removed.** |
 | `lastScanTimestamp` | **removed** (no cursor; `scheduler-report` dropped). |
 | follow-up actions on CEO reply | child tasks, `parent_task_id` = the debrief task, `tag=['debrief-followup']`, `owner` per action. |
 
-### config-store guards (both invisible to the CEO, namespace `debrief`)
+### config-store guards (all invisible to the CEO, namespace `debrief`)
+
+The lifecycle phase is **derived from these guards**, not stored as data — so progress
+notes can stay human-readable for the digest and no JSON state needs round-tripping.
 
 - `seen:<eventId>` — **detection dedup.** Set for *every* judged event (YES and NO) so
   the 3 daily scans don't re-judge the same meeting. TTL ~24h (covers the day; the
   meeting ages out of the forward scan window after it occurs).
-- `prompted:<eventId>` — **prompt dedup.** The existing layer-2 idempotency guard
-  (spec 17 §3.1). Set when the Bullpen prompt actually goes out. Survives task loss and
-  prevents duplicate user-facing prompts. **This guard and its `## Step 6` placement are
-  pinned by `tests/unit/agent.meeting-debrief-idempotency.test.ts` and must be preserved
-  verbatim in structure.**
+- `prompted:<eventId>` — **prompt dedup + phase signal.** The existing layer-2 idempotency
+  guard (spec 17 §3.1). Set when the Bullpen prompt actually goes out. Absence ⇒ the wake
+  is the meeting-end (scheduled) phase; presence ⇒ the prompt already went out. Survives
+  task loss and prevents duplicate user-facing prompts. **This guard and its `## Step 6`
+  placement are pinned by `tests/unit/agent.meeting-debrief-idempotency.test.ts` and must
+  be preserved verbatim in structure.**
+- `reminded:<eventId>` — **phase signal.** Set when the single reminder has been sent.
+  With `prompted:` present: absence ⇒ this wake is the reminder phase; presence ⇒ this
+  wake is the expiry phase. TTL ~ `contextBridgeTtlHours`.
+
+**Phase derivation at a debrief wake** (eventId parsed from `intent_anchor`):
+`prompted?` no → **scheduled** · yes + `reminded?` no → **reminder** · yes + yes → **expiry**.
 
 ---
 
@@ -146,9 +156,12 @@ The agent distinguishes modes by its invocation payload:
    for stored debrief preferences).
 5. **Judge each (binary YES/NO, lean YES on the fence — criteria preserved):**
    - **YES** → `task-create` `{ title:"Debrief: <meeting>", owner:'curia',
-     tags:['debrief-pending'], wake_at: <meeting end>, description/progress: event
-     metadata + phase:'scheduled' }`. (owner='curia' — the pending work is "Curia must
-     prompt"; it flips to 'ceo' at the prompt wake.) Then set `seen:<eventId>`.
+     tags:['debrief-pending'], wake_at: <meeting end>, intent_anchor:"Debrief the CEO's
+     meeting '<title>' that ends around <ISO end> (calendar event <eventId>) — prompt at
+     meeting end, then follow up on takeaways." }`. (owner='curia' — the pending work is
+     "Curia must prompt"; it flips to 'ceo' at the prompt wake. The eventId lives in
+     `intent_anchor` so it's delivered on wake but stays out of the digest.) Then set
+     `seen:<eventId>`.
    - **NO** → set `seen:<eventId>` only. No task, no prompt.
 6. Exit. No `scheduler-report`.
 
@@ -157,22 +170,26 @@ The agent distinguishes modes by its invocation payload:
 
 ### Mode 2 — Task wake-up (debrief task fires)
 
-Read `progress.phase` from the delivered task context and branch:
+Parse the `eventId` from the injected `intent_anchor`, then derive the phase from the
+config-store guards (see above) and branch:
 
-- **`scheduled`** (meeting-end wake):
-  1. Re-fetch the event by `eventId`. If cancelled / declined / no longer present →
-     `task-complete` (note "meeting did not occur"), stop.
+- **scheduled** (`prompted:` absent — the meeting-end wake):
+  1. Re-fetch the event by `eventId` (`calendar-list-events` around its scheduled time).
+     If cancelled / declined / no longer present → `task-complete`
+     (note "meeting did not occur"), stop.
   2. Still valid → run the **config-store `prompted:` idempotency guard** then the
      Bullpen post to the coordinator (the pinned `## Step 6` block, unchanged in
      structure: check `prompted:<eventId>` → post → store key with `thread_id` → no
      retry on store failure).
-  3. `task-update owner='ceo' wake_at=<now + reminderDelayMinutes>`, set
-     `progress.phase='prompted'` (and `promptedAt`, `threadId`). The owner flip moves the
-     task into the CEO's "For you to do" now that the ball is in their court.
-- **`prompted`** (reminder wake): send one gentle reminder via Bullpen.
-  `task-update wake_at=<promptedAt + contextBridgeTtlHours>`, `progress.phase='reminded'`.
-- **`reminded`** (expiry wake): `task-update status='cancelled'`
-  (note "no CEO response — implicitly declined"). The wake chain ends.
+  3. `task-update owner='ceo' wake_at=<now + reminderDelayMinutes>
+     progress_note="Prompt delivered; awaiting the CEO's takeaways."` The owner flip moves
+     the task into the CEO's "For you to do" now that the ball is in their court.
+- **reminder** (`prompted:` present, `reminded:` absent): send one gentle reminder via
+  Bullpen; set `reminded:<eventId>`; `task-update wake_at=<now + (TTL − reminderDelay)>
+  progress_note="Reminder sent; still awaiting takeaways."`
+- **expiry** (`prompted:` and `reminded:` present): `task-update status='cancelled'
+  progress_note="No response after reminder — debrief expired (implicitly declined)."`
+  The wake chain ends.
 
 A CEO reply at any point short-circuits this chain (Mode 3 completes the task, which
 auto-cancels the pending wake-up).
