@@ -1170,7 +1170,16 @@ table.records-table tbody tr.active td { background: transparent; }
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   transition: border-color 120ms;
 }
-.task-related-link:hover { border-color: var(--app-teal); }
+.task-related-link:hover,
+.task-related-link:focus-visible {
+  border-color: var(--app-teal);
+  outline: none;
+  box-shadow: 0 0 0 3px var(--app-teal-soft);
+}
+
+/* Dark mode: --app-teal (#478189) on --app-muted (#373737) is only 2.7:1.
+   Use --app-fg instead to meet WCAG AA at 13px. */
+[data-theme="dark"] .task-related-link { color: var(--app-fg); }
 
 /* Responsive adjustments for records views */
 @media (max-width: 768px) {

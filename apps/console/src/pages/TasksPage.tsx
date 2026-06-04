@@ -54,6 +54,16 @@ function formatDateTime(iso: string | null): string {
   return iso.slice(0, 16).replace('T', ' ');
 }
 
+// Format a timestamp for wake-time display, including the user's local timezone abbreviation.
+function formatWakeAt(iso: string): string {
+  const d = new Date(iso);
+  return new Intl.DateTimeFormat(undefined, {
+    month: 'short', day: 'numeric',
+    hour: '2-digit', minute: '2-digit',
+    timeZoneName: 'short',
+  }).format(d);
+}
+
 // Returns a compact "age" string (e.g. "2d", "3h", "just now") from an ISO timestamp.
 function formatAge(iso: string): string {
   const ms = Date.now() - new Date(iso).getTime();
@@ -150,10 +160,11 @@ interface DrawerProps {
 
 const TERMINAL_STATUSES: ReadonlySet<string> = new Set(['done', 'cancelled']);
 
-const ALL_STATUSES: TaskStatus[] = [
-  'open', 'in_progress', 'blocked', 'waiting', 'done', 'cancelled',
-  'active', 'pending', 'paused', 'completed', 'failed',
-];
+// Valid task-lifecycle statuses that can be set via the UI.
+const EDITABLE_STATUSES: TaskStatus[] = ['open', 'in_progress', 'blocked', 'waiting', 'done', 'cancelled'];
+
+// Legacy scheduler statuses — only readable for old rows, not selectable as new destinations.
+const LEGACY_STATUSES = new Set<TaskStatus>(['active', 'pending', 'paused', 'completed', 'failed']);
 
 function TaskEditDrawer({ task, creating, onClose, onSaved, onDeleted, lookupTask, onNavigateTo }: DrawerProps) {
   const [agentId, setAgentId] = useState(task?.agentId ?? '');
@@ -323,7 +334,7 @@ function TaskEditDrawer({ task, creating, onClose, onSaved, onDeleted, lookupTas
             <span className={`status-pill ${task.status}`}>{task.status.replace('_', ' ')}</span>
             {task.nextWakeAt && (
               <span style={{ marginLeft: 8, fontSize: 12, color: 'var(--app-fg-muted)' }}>
-                wakes {formatDateTime(task.nextWakeAt)}
+                wakes {formatWakeAt(task.nextWakeAt)}
               </span>
             )}
           </div>
@@ -353,7 +364,12 @@ function TaskEditDrawer({ task, creating, onClose, onSaved, onDeleted, lookupTas
                 onChange={e => setStatus(e.target.value as TaskStatus)}
                 disabled={isTerminal}
               >
-                {ALL_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
+                {/* If the current value is a legacy status, show it as a read-only stub so
+                    old rows remain readable, but don't include it in the selectable list. */}
+                {LEGACY_STATUSES.has(status) && (
+                  <option value={status} disabled>{status} (legacy)</option>
+                )}
+                {EDITABLE_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
               </select>
             </div>
             <div className="form-field">
