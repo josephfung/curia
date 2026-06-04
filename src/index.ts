@@ -19,7 +19,7 @@
 
 import * as path from 'node:path';
 import { runner } from 'node-pg-migrate';
-import { ceoPrimaryEmailIsPlaceholder, loadConfig, loadYamlConfig, resolveChannelAccounts } from './config.js';
+import { ceoPrimaryEmailIsPlaceholder, loadConfig, loadYamlConfig, resolveChannelAccounts, resolveTasksConfig } from './config.js';
 import { createLogger } from './logger.js';
 import { HttpAdapter } from './channels/http/http-adapter.js';
 import { createPool } from './db/connection.js';
@@ -106,6 +106,7 @@ import { runReadinessChecks } from './startup/readiness.js';
 import { compileSecurityContextBlock } from './security/security-context.js';
 import { OutboundContextService } from './dispatch/outbound-context.js';
 import { applyTaskManagement } from './agents/task-management.js';
+import { BacklogHeartbeat } from './scheduler/backlog-heartbeat.js';
 
 async function main(): Promise<void> {
   // Captured at the very start of main() so the wizard's post-setup polling
@@ -1497,7 +1498,23 @@ async function main(): Promise<void> {
     // Non-fatal: watchdog will retry in 5 minutes.
     logger.error({ err }, 'Startup stuck-job recovery failed — watchdog will retry in 5 minutes');
   }
+  // Autonomous task execution: the deterministic hourly heartbeat that wakes idle/stale
+  // tasks. Reads the tasks table, writes one-shot scheduled_jobs rows; the scheduler
+  // dispatches them. See docs/wip/2026-06-04-task-execution-heartbeat-design.md §3.
+  const tasksConfig = resolveTasksConfig(yamlConfig.tasks);
+  const backlogHeartbeat = new BacklogHeartbeat({
+    pool,
+    logger,
+    schedulerService,
+    eligibleAgents: taskManagementAgents,
+    intervalMinutes: tasksConfig.heartbeatIntervalMinutes,
+    maxWakesPerTick: tasksConfig.heartbeatMaxWakesPerTick,
+    idleThresholdHours: tasksConfig.idleThresholdHours,
+    staleWaitThresholdHours: tasksConfig.staleWaitThresholdHours,
+  });
+
   scheduler.start();
+  backlogHeartbeat.start();
   logger.info('Scheduler started');
 
   // Log the scrubber status after the logger is available (patterns are loaded at module
@@ -1702,6 +1719,11 @@ async function main(): Promise<void> {
       scheduler.stop();
     } catch (err) {
       logger.error({ err }, 'Error stopping scheduler during shutdown');
+    }
+    try {
+      backlogHeartbeat.stop();
+    } catch (err) {
+      logger.error({ err }, 'Error stopping backlog heartbeat during shutdown');
     }
     if (browserService) {
       try {
