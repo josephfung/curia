@@ -15,6 +15,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 - **coordinator** — replaced the `intent_anchor`-for-cron-jobs instruction with the new task/scheduling split: `task-create` for deferred CEO-visible work, `scheduler-create` (no `intent_anchor`) for operational sweeps. Adds backlog-awareness and defer-don't-drop rules. (#)
+- **`meeting-debrief`** — migrated from bespoke `pendingDebriefs`/`judgedEvents` state maps to platform tasks; detection now runs 3×/day and pre-schedules a per-meeting debrief task driven by wake-ups. (#839)
 
 ### Added
 - **Tasks console UI** — list view with owner/status/priority model: owner dropdown filter, age column, default priority sort, status lifecycle controls (terminal-state guard), contact name resolution for `waiting_on_contact_id`, next scheduled wake-up time in drawer, and parent/blocked-by task links. (#870)
