@@ -266,11 +266,20 @@ function TaskEditDrawer({ task, creating, onClose, onSaved, onDeleted, lookupTas
     }
   }
 
-  // Render a related-task link: shows the task title (if locally resolvable) or the UUID.
-  // Clicking navigates the drawer to that task.
+  // Render a related-task link: shows the task title and navigates the drawer on click.
+  // If the task isn't in the loaded list (e.g. filtered out or outside LIMIT 500),
+  // renders a read-only UUID field instead of a dead-click button.
   function relatedTaskLink(label: string, id: string | null) {
     if (!id) return null;
     const related = lookupTask(id);
+    if (!related) {
+      return (
+        <div className="form-field">
+          <label>{label}</label>
+          <div className="form-field-readonly cell-mono" style={{ fontSize: 11, wordBreak: 'break-all' }}>{id}</div>
+        </div>
+      );
+    }
     return (
       <div className="form-field">
         <label>{label}</label>
@@ -280,7 +289,7 @@ function TaskEditDrawer({ task, creating, onClose, onSaved, onDeleted, lookupTas
           onClick={() => onNavigateTo(id)}
           title={id}
         >
-          {related ? related.title || id : id}
+          {related.title}
         </button>
       </div>
     );

@@ -528,14 +528,22 @@ export async function knowledgeGraphRoutes(
       conversationId?: unknown;
     };
 
-    const existing = await pool.query(
-      `SELECT ${TASK_SELECT} FROM tasks WHERE id = $1`,
-      [id],
-    );
-    if (existing.rowCount === 0) {
-      return reply.status(404).send({ error: 'Task not found.' });
+    // Wrap the entire DB interaction in one try-catch so pool errors on the
+    // existence check are handled the same way as errors from the UPDATE.
+    let row: DbTaskRow;
+    try {
+      const existing = await pool.query(
+        `SELECT ${TASK_SELECT} FROM tasks WHERE id = $1`,
+        [id],
+      );
+      if (existing.rowCount === 0) {
+        return reply.status(404).send({ error: 'Task not found.' });
+      }
+      row = existing.rows[0]! as DbTaskRow;
+    } catch (err) {
+      logger.error({ err, taskId: id }, 'kg: PATCH /api/kg/tasks/:id existence check failed');
+      return reply.status(500).send({ error: 'Failed to load task.' });
     }
-    const row = existing.rows[0]! as DbTaskRow;
 
     // Validate status value before checking transition rules so callers get
     // "Invalid status" rather than "terminal state" for nonsense status strings.
