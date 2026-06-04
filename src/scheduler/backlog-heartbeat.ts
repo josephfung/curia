@@ -47,26 +47,44 @@ export class BacklogHeartbeat {
   /** One tick: select candidates and enqueue a wake for each. Returns the number
    *  of wakes successfully enqueued. */
   async tick(): Promise<number> {
-    const candidates = await selectHeartbeatCandidates(this.opts.pool, {
-      eligibleAgents: [...this.opts.eligibleAgents],
-      idleThresholdHours: this.opts.idleThresholdHours,
-      staleWaitThresholdHours: this.opts.staleWaitThresholdHours,
-      maxWakes: this.opts.maxWakesPerTick,
-      fallbackAgentId: this.opts.fallbackAgentId ?? 'coordinator',
-    });
+    let candidates;
+    try {
+      candidates = await selectHeartbeatCandidates(this.opts.pool, {
+        eligibleAgents: [...this.opts.eligibleAgents],
+        idleThresholdHours: this.opts.idleThresholdHours,
+        staleWaitThresholdHours: this.opts.staleWaitThresholdHours,
+        maxWakes: this.opts.maxWakesPerTick,
+        fallbackAgentId: this.opts.fallbackAgentId ?? 'coordinator',
+      });
+    } catch (err) {
+      this.opts.logger.error({ err }, 'BacklogHeartbeat: candidate selection query failed — skipping tick');
+      return 0;
+    }
     if (candidates.length === 0) return 0;
 
     const runAt = new Date();
     let enqueued = 0;
     for (const c of candidates) {
       try {
-        await this.opts.schedulerService.enqueueTaskWake({ taskId: c.id, agentId: c.agentId, runAt });
+        const { jobId } = await this.opts.schedulerService.enqueueTaskWake({ taskId: c.id, agentId: c.agentId, runAt });
+        this.opts.logger.debug({ taskId: c.id, agentId: c.agentId, jobId }, 'BacklogHeartbeat: wake enqueued');
         enqueued += 1;
       } catch (err) {
-        this.opts.logger.error({ err, taskId: c.id, agentId: c.agentId }, 'BacklogHeartbeat: failed to enqueue wake');
+        // 23503 = foreign_key_violation: task was completed/deleted between selection and enqueue — benign race.
+        if ((err as { code?: string }).code === '23503') {
+          this.opts.logger.debug({ taskId: c.id, agentId: c.agentId }, 'BacklogHeartbeat: task no longer exists at enqueue time — skipped');
+        } else {
+          this.opts.logger.error({ err, taskId: c.id, agentId: c.agentId }, 'BacklogHeartbeat: failed to enqueue wake');
+        }
       }
     }
     this.opts.logger.info({ enqueued, considered: candidates.length }, 'BacklogHeartbeat: tick complete');
+    if (enqueued === 0 && candidates.length > 0) {
+      this.opts.logger.error(
+        { considered: candidates.length },
+        'BacklogHeartbeat: all wake enqueues failed — tasks will not advance until next tick',
+      );
+    }
     return enqueued;
   }
 }
