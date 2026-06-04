@@ -5,6 +5,7 @@
 // `Date.now()` at call time (which test suites pin via vi.spyOn).
 
 import { toLocalIso } from '../../src/time/timestamp.js';
+import type { TaskListRow } from '../../src/db/task-repo.js';
 
 const MS_HOUR = 3_600_000;
 const MS_DAY = 86_400_000;
@@ -35,8 +36,6 @@ export function formatDueDate(dueIso: string | null, timezone: string): string {
   const local = toLocalIso(Math.floor(ms / 1000), timezone);
   return local ? local.slice(0, 10) : '—';
 }
-
-import type { TaskListRow } from '../../src/db/task-repo.js';
 
 // Approval line shape — the handler maps ActionLogRow → ApprovalInput.
 export interface ApprovalInput {
