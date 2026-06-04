@@ -16,7 +16,7 @@
 | 06 | [Audit & Security](06-audit-and-security.md) | Audit log, redaction, tool sanitization, intent drift, security | 25 of 27 Done |
 | 07 | [Scheduler](07-scheduler.md) | Job model, cron, one-shot, persistent tasks, burst execution, stale-job cleanup | 21 of 22 Done |
 | 08 | [Operations](08-operations.md) | Config, deployment, health checks, logging, project structure, container security | 17 of 18 Done |
-| 09 | [Contacts & Identity](09-contacts-and-identity.md) | Contact resolution, identity verification, unknown sender policy, authorization, channel identity linking | 12 of 17 Done |
+| 09 | [Contacts & Identity](09-contacts-and-identity.md) | Contact resolution, identity verification, unknown sender policy, authorization, channel identity linking, canonical attributes | 12 of 17 Done |
 | 10 | [Audit Log Hardening](10-audit-log-hardening.md) | Structured audit fields, LLM provenance, tamper evidence, source attribution, HITL records | 2 of 17 Done |
 | 11 | [Entity Context Enrichment](11-entity-context-enrichment.md) | Entity model, KG-backed sender/entity profiles, context assembly, agent self-identity, skill convention, delegation-aware outbound context bridge | 23 of 30 Done |
 | 12 | [Knowledge Graph Web Explorer](12-knowledge-graph-web-explorer.md) | Knowledge graph browser, relationship visualization, entity memory viewer | ✅ 5 of 5 Done |
@@ -26,6 +26,7 @@
 | 16 | [Smoke Test Framework](16-smoke-test-framework.md) | Chat-based test cases, LLM-as-judge evaluation, HTML reports | 8 of 18 Done |
 | 17 | [Meeting Debrief](17-meeting-debrief.md) | Proactive debrief agent, detection pipeline, follow-up execution via Bullpen-through-coordinator | 15 of 17 Done |
 | 18 | [Onboarding](18-onboarding.md) | Single-command host bootstrap, React form wizard at `/setup`, in-chat `setup-wizard` specialist | ✅ 15 of 15 Done |
+| 19 | [Tasks & Backlog](19-tasks-and-backlog.md) | `tasks` table (promoted from `agent_tasks`), `task-*` skills, `enable_task_management`, BacklogHeartbeat, digest backlog sections, project decomposition | ✅ Shipped (v0.33) |
 
 ---
 

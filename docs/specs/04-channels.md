@@ -59,7 +59,8 @@ Interactive terminal for local dev and testing. Reads from stdin, writes to stdo
 - **Outbound:** Sends via Nylas Send API
 - **Conversation ID:** derived from Nylas thread ID (`email:<threadId>`)
 - **Participant extraction:** From/To/CC addresses are extracted and auto-create contacts
-- **Attachments:** parsed and passed through as `Attachment[]`
+- **Attachments (inbound):** parsed and passed through as `Attachment[]`
+- **Attachments (outbound, v0.33):** all five outbound email skills (`email-send`, `email-reply`, `email-draft-save`, `ceo-inbox-draft-compose`, `ceo-inbox-draft-reply`) accept an `attachments` input. Files are read from `file://` URLs backed by `TempFileStore`, validated, and forwarded to Nylas (multipart `FormData` on the CEO-inbox path; `Buffer` content via the Nylas SDK on the Curia-outbound path), capped at 20 MB total / 10 attachments. The `drive-download-file` skill bridges Google Drive → `TempFileStore`, returning a `file://` URL so Drive files can be attached.
 - Secrets: `NYLAS_API_KEY`, `NYLAS_GRANT_ID`, `NYLAS_SELF_EMAIL`
 - Nylas abstracts away provider differences (Gmail, Outlook, IMAP) and handles OAuth
 

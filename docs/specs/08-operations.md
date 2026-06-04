@@ -226,19 +226,15 @@ This is a conscious decision to defer retention infrastructure. The trigger to r
 
 ## Database Migrations
 
-Using `node-pg-migrate` with plain SQL migration files:
+Using `node-pg-migrate` with plain SQL migration files in `src/db/migrations/`, numbered
+sequentially with a three-digit prefix (`NNN_<description>.sql`). Run `ls src/db/migrations/`
+for the authoritative, current list rather than relying on a snapshot here — the set grows
+with every schema change (recent examples: `048_add_contact_canonical_attributes.sql`,
+`049_promote_agent_tasks_to_tasks.sql`).
 
-```
-src/db/migrations/
-  001_create_audit_log.sql
-  002_create_kg_nodes.sql
-  003_create_kg_edges.sql
-  004_create_working_memory.sql
-  005_create_bullpen.sql
-  006_create_scheduled_jobs.sql
-  007_create_agent_tasks.sql
-  008_create_skill_approvals.sql
-```
+> **Prefix uniqueness is load-bearing.** `node-pg-migrate` sorts alphabetically within a
+> prefix, so two branches landing the same number cause a `checkOrder` failure on startup.
+> See the migration-numbering note in [CLAUDE.md](../../CLAUDE.md).
 
 Migrations run automatically on startup (before the bus starts accepting events). Failed migrations prevent startup with a clear error.
 

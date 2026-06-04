@@ -39,6 +39,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **SBOM generation** — SPDX JSON Software Bill of Materials generated on every push to `main` and attached to each GitHub release as a release asset; failure is non-fatal. (#564)
 - **`drive-download-file`** — new skill that downloads a Google Drive file (native or Google-native export) to TempFileStore and returns a `file://` URL, enabling Drive files to be attached to outbound emails. Closes #857.
 - **`pending-actions-digest`** — daily digest now surfaces the task backlog: for-you-to-do, waiting-on-others, and what-I'm-working-on. (#838)
+- **Spec 19 — Tasks & Backlog** — new consolidated spec for the `tasks` table, `task-*` skills, `enable_task_management`, the BacklogHeartbeat, and digest backlog sections. Specs 02/04/07/08/09/17 and the `adding-an-agent` dev guide updated for the `agent_tasks → tasks` rename, canonical contact attributes, and outbound email attachments.
 
 ### Changed
 - **Console tasks view** — updated to match the migrated `tasks` schema: drops `scheduled_job_id`, adds all new columns (`title`, `owner`, `priority`, `due_at`, `source`, `tags`, `description`, FK references), extends status filters with new task-lifecycle values, and updates the scheduled-jobs view to display the linked `task_id`. (#869)

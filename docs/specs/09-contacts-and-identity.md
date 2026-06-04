@@ -19,6 +19,19 @@ CREATE TABLE contacts (
   display_name    TEXT NOT NULL,
   role            TEXT,
   notes           TEXT,
+  -- Canonical attributes (migration 048; see "Canonical Attributes" below)
+  preferred_name  TEXT,
+  title           TEXT,
+  organization    TEXT,
+  primary_email   TEXT,    -- CHECK: email format
+  primary_phone   TEXT,    -- CHECK: E.164 (^\+[1-9][0-9]{6,14}$)
+  timezone        TEXT,    -- IANA tz string, e.g. America/New_York
+  locale          TEXT,    -- CHECK: BCP 47, e.g. en-US
+  location        TEXT,
+  pronouns        TEXT,
+  linkedin_url    TEXT,    -- CHECK: starts with http(s)://
+  bio             TEXT,    -- CHECK: <= 500 chars
+  birthday        TEXT,    -- CHECK: YYYY-MM-DD or --MM-DD (year omitted)
   created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -31,6 +44,7 @@ CREATE INDEX idx_contacts_role ON contacts (role) WHERE role IS NOT NULL;
 - `role` — denormalized from the KG for fast access during authorization checks. Kept in sync when the KG node's role property changes.
 - `kg_node_id` — links to the `kg_nodes` person node that holds structured name fields (`given_name`, `family_name`, `preferred_name`, `pronouns`, `title`), relationships, and temporal metadata.
 - `notes` — CEO's freeform notes about the contact ("prefers text over email", "travels a lot in Q4").
+- **Canonical attributes** (`preferred_name` … `birthday`) — 12 structured profile fields persisted directly on the contact row (see the dedicated section below).
 
 ### contact_channel_identities
 
@@ -94,6 +108,59 @@ CREATE INDEX idx_cao_contact_perm ON contact_auth_overrides (contact_id, permiss
 - `revoked_at` — soft-delete timestamp. When an override is revoked, the row is preserved with `revoked_at` set for audit history. Only rows with `revoked_at IS NULL` are active.
 - `UNIQUE(contact_id, permission)` — prevents contradictory overrides for the same contact and permission. Updating an override upserts the existing row.
 - Overrides always win over role defaults.
+
+---
+
+## Canonical Attributes
+
+Historically everything the system "knew" about a person lived as `kg_nodes` of
+`type='fact'`, surfaced as confidence-scored bullet points. That invited two failures:
+agents **hallucinated** values (calendar IDs, addresses) when the fact list was thin, and
+specialists (calendar, email composition, research) each re-parsed fact bullets for the
+same handful of attributes. v0.33 promotes 12 commonly-needed attributes to first-class,
+nullable `TEXT` columns on the `contacts` row (migration `048_add_contact_canonical_attributes.sql`).
+
+| Column | Notes |
+|---|---|
+| `preferred_name` | Short/familiar form; falls back to `display_name`. |
+| `title` | Current job title. |
+| `organization` | Current employer (free-text). |
+| `primary_email` | Lowercased; app-layer validated against `contact_channel_identities`. DB CHECK enforces email format. |
+| `primary_phone` | E.164 (`^\+[1-9][0-9]{6,14}$`). |
+| `timezone` | IANA tz string (e.g. `America/New_York`). |
+| `locale` | BCP 47 (e.g. `en-US`). |
+| `location` | City/region (free-text). |
+| `pronouns` | Free-text. |
+| `linkedin_url` | Must start with `http(s)://`. |
+| `bio` | Short narrative, ≤ 500 chars. |
+| `birthday` | `YYYY-MM-DD`, or `--MM-DD` when the year is omitted. |
+
+### Writing canonical attributes
+
+There are three write paths, all converging on `ContactService`:
+
+1. **`contact-update` skill** — the direct path for an agent to set canonical attributes
+   (`action_risk: low`). Pinned to coordinator, ceo-inbox, research-analyst, and contacts.
+   Normalizes phone numbers to E.164.
+2. **Redirected fact writes** — `memory-store` and `extract-facts` detect a write whose
+   attribute key maps to a canonical field (the `canonical-attribute-guard`,
+   whitespace-trimmed) and redirect it to `ContactService` instead of creating a KG fact
+   node. The skill result reports a `redirected` counter and a `redirected_to_contact`
+   action with the `contact_id`. **New KG fact writes for these attributes are stopped** —
+   the column is the single source of truth.
+3. **One-time backfill** — `scripts/backfill-contact-attributes.ts`
+   (`npm run backfill:contact-attributes`) populates the columns from existing KG facts via
+   a 3-hop join with per-column highest-confidence tiebreaking. Safe to re-run (only touches
+   NULL columns).
+
+### Reading canonical attributes: entity-context
+
+`EntityContext.contact` exposes all 12 fields as structured values (see
+[spec 11 — Entity Context Enrichment](11-entity-context-enrichment.md)), so an agent reads
+a typed field rather than reasoning over a scored fact list. `context-for-email` prefers
+`contact.primaryEmail` and surfaces `contact.preferredName` for salutations. Rich, non-
+canonical knowledge about a person (relationships, history, preferences) continues to live
+in the knowledge graph.
 
 ---
 
@@ -205,9 +272,9 @@ If `findContactBySystemRole('principal')` returns nothing (fresh deployment, bef
 
 ### What is pre-resolved and what is not
 
-The platform pre-resolves only the principal's `contacts.id`. It does **not** pre-resolve verified email addresses, Signal numbers, calendar IDs, or timezone — those can change within a deployment lifetime, so bootstrap-time injection would go stale.
+The platform pre-resolves (caches at bootstrap) only the principal's `contacts.id`. It does **not** bootstrap-inject verified email addresses, Signal numbers, calendar IDs, timezone, or any other attribute — those can change within a deployment lifetime, so bootstrap-time injection would go stale.
 
-Agents that need any of those values call `entity-context` with `${principal_contact_id}` at the start of their run. This keeps the live values fresh and consolidates the "who is the principal and how do I reach them?" question into a single skill call per agent run, instead of multiple `contact-lookup`-by-role calls scattered across the agent's pipeline.
+Agents that need any of those values call `entity-context` with `${principal_contact_id}` at the start of their run. As of v0.33 the canonical attributes (including `timezone`, `primary_email`, `title`, `organization`) come back as structured fields on `EntityContext.contact` rather than as confidence-scored KG facts (see the Canonical Attributes section above) — so the agent reads a typed value instead of reasoning over a fact list. This keeps the live values fresh and consolidates the "who is the principal and how do I reach them?" question into a single skill call per agent run, instead of multiple `contact-lookup`-by-role calls scattered across the agent's pipeline.
 
 ### Why not auto-injection?
 

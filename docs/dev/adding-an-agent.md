@@ -65,6 +65,10 @@ allow_discovery: true          # if true, agent can search the skill registry at
                                # "normal" sensitivity skills auto-approve; "elevated" ones
                                # require one-time human approval per agent-skill pair
 
+enable_task_management: false  # if true, auto-pins the task-* skills, injects the
+                               # task-management discipline block, and makes the agent
+                               # heartbeat-eligible (see the field reference below)
+
 # ------------------------------------------------------------------
 # Memory (optional)
 # ------------------------------------------------------------------
@@ -137,7 +141,7 @@ The LLM instructions for this agent. Written in plain text. Key points:
 
 - The runtime injects additional context automatically (current date/time, autonomy band, memory context) — you do not need to add boilerplate for these
 - The Coordinator's system prompt uses `${office_identity_block}` to receive the compiled identity (name, tone, constraints, etc.) from `OfficeIdentityService`. Specialist agents do not need this — identity is a Coordinator concern.
-- Write for a single-turn task frame. For persistent tasks, the `intent_anchor` is injected separately to prevent drift.
+- Write for a single-turn task frame. For deferred or multi-step work, use the task system (`enable_task_management`, see below and [spec 19](../specs/19-tasks-and-backlog.md)) — `task-create` for CEO-visible work, `scheduler-create` for operational sweeps. When a task wakes the agent, its `intent_anchor`, title, and progress are supplied as context so the agent resumes where it left off.
 
 ### `pinned_skills` (optional)
 
@@ -156,9 +160,10 @@ Current built-in skills include (see `skills/` for the full list):
 
 | Category | Skills |
 |---|---|
-| **Email** | `email-send`, `email-reply` |
+| **Email** | `email-send`, `email-reply` (both accept `attachments`); `drive-download-file` (fetch a Drive file to a `file://` URL for attaching) |
+| **Tasks** | `task-create`, `task-list`, `task-update`, `task-complete` — usually auto-pinned via `enable_task_management` (see below); see [spec 19](../specs/19-tasks-and-backlog.md) |
 | **Calendar** | `calendar-list-events`, `calendar-create-event`, `calendar-update-event`, `calendar-delete-event`, `calendar-find-free-time`, `calendar-check-conflicts`, `calendar-list-calendars`, `calendar-register` |
-| **Contacts** | `contact-lookup`, `contact-create`, `contact-list`, `contact-link-identity`, `contact-unlink-identity`, `contact-set-role`, `contact-grant-permission`, `contact-revoke-permission` |
+| **Contacts** | `contact-lookup`, `contact-create`, `contact-list`, `contact-update` (canonical attributes), `contact-link-identity`, `contact-unlink-identity`, `contact-set-role`, `contact-grant-permission`, `contact-revoke-permission` |
 | **Web** | `web-fetch`, `web-search`, `web-browser` |
 | **Scheduling** | `scheduler-create`, `scheduler-list`, `scheduler-cancel` |
 | **Delegation** | `delegate` |
@@ -166,6 +171,8 @@ Current built-in skills include (see `skills/` for the full list):
 | **Context** | `entity-context`, `context-for-email`, `held-messages-list`, `held-messages-process` |
 | **Templates** | `template-doc-request` |
 | **Config** | `config-store` — generic key-value agent config; namespace-scoped, KG-backed, permanent decay |
+
+This table is hand-maintained — run `ls skills/` for the authoritative current set.
 
 #### Using `config-store` for persistent agent config
 
@@ -216,6 +223,26 @@ When `true`, the agent can call the skill registry at runtime to find and reques
 - `sensitivity: "elevated"` skills → requires one-time human approval per agent-skill pair, persisted in `skill_approvals` table
 
 Turn this on for general-purpose agents (like the Coordinator) that may encounter novel tasks. Keep it `false` for focused specialist agents to prevent scope creep.
+
+### `enable_task_management` (optional, default: `false`)
+
+A single declarative capability flag that bundles the platform task system onto an agent.
+When `true`, the runtime:
+
+1. **Auto-pins** `task-create`, `task-list`, `task-update`, `task-complete` (merged and
+   deduped with your explicit `pinned_skills` — you do not list them yourself).
+2. **Auto-injects** the shared `task-management` discipline block (the advance-until-blocked
+   loop, the no-dangling-commitment invariant, and the project-decomposition rule) at a
+   fixed slot in the effective system prompt. The block is platform code, so every enabled
+   agent gets the identical, current rules.
+3. **Marks the agent heartbeat-eligible** — the `BacklogHeartbeat` only wakes agents that
+   have this flag set.
+
+Enable it on agents that uncover deferrable, multi-step work (the Coordinator and
+`ceo-inbox` ship with it on). Leave it `false` for pure act-and-return specialists. An agent
+that needs only read-only `task-list` access can still pin that one skill manually without
+the flag — it just won't be heartbeat-eligible or get the injected block. See
+[spec 19 — Tasks & Backlog](../specs/19-tasks-and-backlog.md) for the full design.
 
 ### `memory` (optional)
 
