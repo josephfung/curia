@@ -65,6 +65,10 @@ export interface AgentYamlConfig {
    * know what other agents are available (e.g. to make ACTIONABLE routing decisions).
    */
   inject_specialists?: boolean;
+  /** When true, the runtime auto-pins the task-* skills, injects the shared
+   *  task-management discipline block, and marks the agent heartbeat-eligible.
+   *  See docs/wip/2026-06-04-task-execution-heartbeat-design.md §6. Default: false. */
+  enable_task_management?: boolean;
 }
 
 /**
