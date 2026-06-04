@@ -17,23 +17,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Tasks console UI** — list view with owner/status/priority model: owner dropdown filter, age column, default priority sort, status lifecycle controls (terminal-state guard), contact name resolution for `waiting_on_contact_id`, next scheduled wake-up time in drawer, and parent/blocked-by task links. (#870)
 - **Tasks v1 scheduler dispatch** — task-wake fires route to `scheduled_jobs.agent_id` and include `task_id`, `title`, `progress` in the content bundle; `updateTask()` now writes the wake-up job's `agent_id` using `source_agent_id ?? tasks.agent_id ?? callerAgentId` so coordinator-triggered reschedules preserve the specialist's routing target. (#837)
 - **Tasks v1 CRUD skills** — `task-create`, `task-list`, `task-update`, `task-complete` skills backed by a new capability-gated `TaskRepo`; promotes `agent_tasks` to a first-class `tasks` table with CEO-visible columns; adds `task.created`, `task.updated`, `task.completed` bus events. (#834, #835)
-
-### Changed
-- **Console tasks view** — updated to match the migrated `tasks` schema: drops `scheduled_job_id`, adds all new columns (`title`, `owner`, `priority`, `due_at`, `source`, `tags`, `description`, FK references), extends status filters with new task-lifecycle values, and updates the scheduled-jobs view to display the linked `task_id`. (#869)
-
-### Added
 - **`contact-update` skill** — direct write path for canonical contact attributes (title, organization, phone, timezone, etc.) with E.164 phone normalization. Pinned to coordinator, ceo-inbox, research-analyst, and contacts. (#863)
 - **Contact canonical attributes** — 12 structured profile fields (`title`, `organization`, `primary_email`, etc.) persisted directly on the `contacts` row; backfill script populates from KG facts. (#829)
 - **Entity context enrichment** — `EntityContext.contact` now exposes all 12 canonical fields; canonical-attribute writes via `memory-store` and `extract-facts` redirect to `ContactService` with E.164 phone normalization; `context-for-email` prefers `contact.primaryEmail` and surfaces `contact.preferredName` for salutations. (#830)
 - **File attachments in outbound email** — all five email skills (`email-send`, `email-reply`, `email-draft-save`, `ceo-inbox-draft-compose`, `ceo-inbox-draft-reply`) now accept an `attachments` input field. Attachments are read from `file://` URLs (TempFileStore), validated, and forwarded to Nylas. The CEO inbox path uses multipart FormData; the Curia outbound path passes `Buffer` content via the Nylas SDK. 20 MB total / 10 attachment limit enforced. (#818)
-
-### Fixed
-- **`extract-facts` canonical lookup N+1** — contact lookups are now cached by KG node ID within a single `execute()` call; multiple canonical facts about the same person no longer each trigger a separate DB query. (#830)
-- **`extract-facts` + `memory-store` skill.json contracts** — output schemas now document the `redirected` counter and `redirected_to_contact` action (with `contact_id`) introduced by the canonical attribute guard. (#830)
-- **`canonical-attribute-guard` whitespace handling** — `resolveCanonicalField` now trims leading/trailing whitespace before lookup; LLM-generated attribute keys like `" timezone "` now match correctly instead of falling through to KG writes.
-- **coordinator delegation hint** — `delegation_hint` in active outbound context is now treated as a binding contract; coordinator no longer handles replies directly when a specialist is named, preventing meeting debriefs from getting stuck at `"prompted"`. (#763)
-
-### Added
 - **`ceo-inbox-draft-compose`** — compose cold-outreach drafts to CEO's Gmail Drafts via `CEO_NYLAS_GRANT_ID`. (#815)
 - **Promptfoo red team runbook** — `tests/redteam/` with promptfoo config, `scripts/render-coordinator-prompt.ts` helper, and `pnpm redteam` / `pnpm redteam:report` scripts; tests prompt injection, data exfiltration, hijacking, and ASCII smuggling against the live coordinator system prompt. (#583)
 - **Outbound audience-leak plan** — implementation plan for Stage 2 LLM judge + structured `compose-reply` skill to prevent the coordinator from sending internal reasoning to external recipients. See `docs/wip/2026-06-02-outbound-audience-leak.md`.
@@ -42,7 +29,14 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **SBOM generation** — SPDX JSON Software Bill of Materials generated on every push to `main` and attached to each GitHub release as a release asset; failure is non-fatal. (#564)
 - **`drive-download-file`** — new skill that downloads a Google Drive file (native or Google-native export) to TempFileStore and returns a `file://` URL, enabling Drive files to be attached to outbound emails. Closes #857.
 
+### Changed
+- **Console tasks view** — updated to match the migrated `tasks` schema: drops `scheduled_job_id`, adds all new columns (`title`, `owner`, `priority`, `due_at`, `source`, `tags`, `description`, FK references), extends status filters with new task-lifecycle values, and updates the scheduled-jobs view to display the linked `task_id`. (#869)
+
 ### Fixed
+- **`extract-facts` canonical lookup N+1** — contact lookups are now cached by KG node ID within a single `execute()` call; multiple canonical facts about the same person no longer each trigger a separate DB query. (#830)
+- **`extract-facts` + `memory-store` skill.json contracts** — output schemas now document the `redirected` counter and `redirected_to_contact` action (with `contact_id`) introduced by the canonical attribute guard. (#830)
+- **`canonical-attribute-guard` whitespace handling** — `resolveCanonicalField` now trims leading/trailing whitespace before lookup; LLM-generated attribute keys like `" timezone "` now match correctly instead of falling through to KG writes.
+- **coordinator delegation hint** — `delegation_hint` in active outbound context is now treated as a binding contract; coordinator no longer handles replies directly when a specialist is named, preventing meeting debriefs from getting stuck at `"prompted"`. (#763)
 - **`email-draft-save` unknown account error** — `OutboundGateway` now lists available accounts when unknown `accountId` is passed. (#815)
 - **Working memory TTL** — 30-day expiry on inserts; nightly purge trims expired non-archived turns. (#220)
 - **Automatic scheduled run summaries** — scheduler auto-captures `agent.response.content` as `last_run_summary` via COALESCE; agents no longer need to call `scheduler-report` explicitly. (#817)
@@ -53,9 +47,6 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Principal contact injection** — runtime now injects a `## Principal Contact Details` block (verified email, Signal, phone) into every agent's system prompt per-task, preventing the coordinator from hallucinating the principal's address when composing outbound messages. (#786)
 - **`fast` model tier** — repointed to `google/gemini-3.1-flash-lite` after OpenRouter removed `gemini-2.0-flash-001`; unblocks contacts, calendar, research-analyst, digest. (#812)
 - **Provisional contact sweep** — sweep step 3 now passes `${principal_contact_id}` to `calendar-list-events` (was passing nothing, causing a UUID validation error), and treats calendar failure as best-effort so Sent-folder promotions still fire. (#816)
-
-### Changed
-- None.
 
 ### Removed
 - None.

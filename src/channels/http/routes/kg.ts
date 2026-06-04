@@ -537,6 +537,12 @@ export async function knowledgeGraphRoutes(
     }
     const row = existing.rows[0]! as DbTaskRow;
 
+    // Validate status value before checking transition rules so callers get
+    // "Invalid status" rather than "terminal state" for nonsense status strings.
+    if (typeof body.status === 'string' && !validTaskStatuses.includes(body.status)) {
+      return reply.status(400).send({ error: 'Invalid status.' });
+    }
+
     // Mirror the TaskRepo terminal-state guard: once a task is done or cancelled,
     // status cannot be changed via the console API either.
     const TERMINAL_STATUSES_KG = ['done', 'cancelled'];
@@ -661,6 +667,11 @@ export async function knowledgeGraphRoutes(
          WHERE t.id = $1`,
         [id],
       );
+      // Guard against concurrent deletes between the UPDATE and the re-fetch.
+      if (!enriched.rowCount) {
+        logger.warn({ taskId: id }, 'kg: PATCH enriched re-fetch matched 0 rows — concurrent delete');
+        return reply.status(404).send({ error: 'Task not found.' });
+      }
       return reply.send({
         task: serializeTask(enriched.rows[0]! as DbTaskRow),
       });
