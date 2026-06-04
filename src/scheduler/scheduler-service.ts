@@ -877,6 +877,33 @@ export class SchedulerService {
     return { noOp: false, suspended: shouldSuspend, consecutiveFailures: newFailures };
   }
 
+  /** Enqueue a one-shot wake for an EXISTING task. Inserts a pending scheduled_jobs
+   *  row with task_id preset so the dispatcher routes it to `agentId` with full task
+   *  context. Used by the BacklogHeartbeat. Does not create a new task. */
+  async enqueueTaskWake(params: {
+    taskId: string;
+    agentId: string;
+    runAt: Date;
+    createdBy?: string;
+  }): Promise<{ jobId: string }> {
+    const { taskId, agentId, runAt, createdBy = 'heartbeat' } = params;
+    const { rows } = await this.pool.query(
+      `INSERT INTO scheduled_jobs
+         (agent_id, cron_expr, run_at, task_payload, status, next_run_at, created_by, timezone, task_id)
+       VALUES ($1, NULL, $2, $3, 'pending', $2, $4, $5, $6)
+       RETURNING id`,
+      [
+        agentId,
+        runAt,
+        JSON.stringify({ type: 'task-wake', task_id: taskId }),
+        createdBy,
+        this.timezone,
+        taskId,
+      ],
+    );
+    return { jobId: (rows[0] as { id: string }).id };
+  }
+
   /**
    * Write an agent-authored summary and optional structured context to the job's
    * last-run record. Called by the scheduler-report skill at the end of each job
