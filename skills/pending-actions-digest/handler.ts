@@ -38,13 +38,19 @@ interface Backlog {
  * still goes out rather than failing wholesale.
  */
 async function fetchBacklog(ctx: SkillContext): Promise<Backlog> {
-  if (!ctx.taskRepo) return { ceo: [], external: [], curia: [] };
+  if (!ctx.taskRepo) {
+    ctx.log.warn({}, 'pending-actions-digest: taskRepo not available; backlog omitted from digest');
+    return { ceo: [], external: [], curia: [] };
+  }
   try {
     const [ceo, external, curia] = await Promise.all([
       ctx.taskRepo.listTasks({ owner: 'ceo', statuses: ['open', 'in_progress'], limit: SECTION_FETCH_LIMIT }),
       ctx.taskRepo.listTasks({ owner: 'external', statuses: ['waiting'], limit: SECTION_FETCH_LIMIT }),
       ctx.taskRepo.listTasks({ owner: 'curia', statuses: ['open', 'in_progress'], limit: SECTION_FETCH_LIMIT }),
     ]);
+    // Three separate checks rather than a for...of loop: TypeScript infers readonly
+    // tuple types from `as const` array literals which makes heterogeneous element
+    // access unsafe. Three explicit ifs are clearer and avoid the type gymnastics.
     // Warn if any section hit the fetch cap so truncation is visible in logs.
     if (ceo.length >= SECTION_FETCH_LIMIT) {
       ctx.log.warn({ section: 'ceo', count: ceo.length }, 'pending-actions-digest: section hit fetch cap; +N more is a floor');

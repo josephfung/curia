@@ -334,4 +334,23 @@ describe('PendingActionsDigestHandler', () => {
     if (!result.success) throw new Error('unreachable');
     expect(result.data).toEqual({ pending: 1, skipped: false, tasksForCeo: 0, tasksWaiting: 0, tasksWorking: 0 });
   });
+
+  it('degrades to an approvals-only digest when taskRepo is absent', async () => {
+    const handler = new PendingActionsDigestHandler();
+    const { ctx, sendNotificationMock, logWarnMock } = makeCtx({
+      pendingRows: [makeRow({ id: 1, shortRef: 'cal-1' })],
+      noTaskRepo: true,
+    });
+
+    const result = await handler.execute(ctx);
+
+    expect(sendNotificationMock).toHaveBeenCalledTimes(1);
+    expect(logWarnMock).toHaveBeenCalled();
+    const payload = sendNotificationMock.mock.calls[0]![0];
+    expect(payload.body).toContain('cal-1');
+    expect(payload.body).not.toContain('For you to do:');
+    expect(result.success).toBe(true);
+    if (!result.success) throw new Error('unreachable');
+    expect(result.data).toEqual({ pending: 1, skipped: false, tasksForCeo: 0, tasksWaiting: 0, tasksWorking: 0 });
+  });
 });
