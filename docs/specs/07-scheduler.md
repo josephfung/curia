@@ -102,6 +102,14 @@ The `FOR UPDATE SKIP LOCKED` pattern ensures that if the scheduler loop overlaps
 
 ## Persistent Tasks
 
+> **Superseded by [spec 19 — Tasks & Backlog](19-tasks-and-backlog.md) (v0.33).** The
+> `agent_tasks` table below was renamed and promoted to `tasks` (migration 049). The
+> back-FK `agent_tasks.scheduled_job_id` was **dropped** and replaced by a one-way forward
+> FK `scheduled_jobs.task_id`, so the scheduler now reads only `scheduled_jobs` and the
+> dispatch step routes task-bound fires to `tasks.source_agent_id`. The burst-execution
+> model described here still holds; the table name, FK direction, and column set are as
+> documented in spec 19. The original design is retained below for historical context.
+
 Long-running agent work uses the scheduler for burst execution:
 
 ```sql
@@ -211,7 +219,7 @@ Declarative job identity includes both the declaring agent (`source_agent_id`) a
 
 #### `intent_anchor` (optional)
 
-When `intent_anchor` is set on a declarative schedule entry, the scheduler creates a linked `agent_tasks` row at startup. This enables drift detection for the job — exactly the same mechanism used by runtime-created jobs with `intent_anchor`. The anchor should express the stable original goal of the recurring task in plain language.
+When `intent_anchor` is set on a declarative schedule entry, the scheduler creates a linked `tasks` row at startup (the table formerly named `agent_tasks`; see [spec 19](19-tasks-and-backlog.md)). This enables drift detection for the job — exactly the same mechanism used by runtime-created jobs with `intent_anchor`. The anchor should express the stable original goal of the recurring task in plain language.
 
 Without `intent_anchor`, the job runs normally but the drift detector never fires for it (the `agentTaskId` and `intentAnchor` fields remain `null` on the job row). Jobs without an `intent_anchor` are unaffected by this field's addition.
 
@@ -264,7 +272,7 @@ Four skills available to agents:
 | `scheduled_jobs` table (cron, one-shot, status, error tracking) | Done |
 | `scheduled_jobs` timezone column (per-job override) | Done |
 | `scheduled_jobs` prior run context columns (`last_run_outcome`, `last_run_summary`, `last_run_context`) | Done |
-| `agent_tasks` table (persistent tasks linked to `scheduled_jobs`) | Done |
+| `tasks` table (formerly `agent_tasks`; forward FK `scheduled_jobs.task_id`, see [spec 19](19-tasks-and-backlog.md)) | Done |
 | `SchedulerService` class (job CRUD, shared by loop and skills) | Done |
 | Scheduler loop (30s poll, `FOR UPDATE SKIP LOCKED`, failure tracking) | Done |
 | Declarative schedules from agent YAML config (upserted at startup) | Done |

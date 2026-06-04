@@ -71,8 +71,8 @@ The accepted trade-off of 3x/day scanning: a meeting added *and* occurring entir
 
 ## 3. State Management
 
-**No bespoke state maps.** Debrief work is tracked as platform **tasks** (spec:
-[tasks & backlog](../wip/2026-06-01-tasks-and-backlog-design.md)), not the former
+**No bespoke state maps.** Debrief work is tracked as platform **tasks**
+([spec 19 — Tasks & Backlog](19-tasks-and-backlog.md)), not the former
 `pendingDebriefs` / `judgedEvents` / `deferredEvents` maps in scheduler progress.
 
 ### Debrief tasks

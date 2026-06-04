@@ -196,7 +196,7 @@ This is everything needed to render agents as characters in a visual office: who
 Agent receives message, responds, done. Working memory for the conversation is kept for a configurable TTL (default: 1 hour of inactivity).
 
 ### Persistent Tasks
-Long-running work creates a **task record** in Postgres (`agent_tasks` table). The scheduler wakes the agent in bursts — it loads progress from working memory, does a chunk of work, saves progress, sets `next_run`. Like a cron job with state.
+Long-running work creates a **task record** in Postgres (the `tasks` table; renamed from `agent_tasks` in v0.33 — see [spec 19 — Tasks & Backlog](19-tasks-and-backlog.md)). The scheduler wakes the agent in bursts — it loads progress from working memory, does a chunk of work, saves progress, sets `next_run`. Like a cron job with state. Task management is also exposed to agents declaratively via the `enable_task_management` capability (spec 19 §4).
 
 Each persistent task carries:
 - `intent_anchor` — the original task description, included in every burst's system prompt to prevent drift
