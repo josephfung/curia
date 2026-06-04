@@ -55,6 +55,7 @@ function makeCtx(overrides: {
   listTasksError?: boolean;
   contactName?: string;
   noTaskRepo?: boolean;
+  contactLookupError?: boolean;
 } = {}) {
   const {
     pendingRows = [],
@@ -67,6 +68,7 @@ function makeCtx(overrides: {
     listTasksError = false,
     contactName = 'Steve Jobs',
     noTaskRepo = false,
+    contactLookupError = false,
   } = overrides;
 
   process.env['CEO_PRIMARY_EMAIL'] = ceoEmail;
@@ -84,7 +86,9 @@ function makeCtx(overrides: {
     if (filters.owner === 'curia') return curiaTasks;
     return [];
   });
-  const getContactMock = vi.fn().mockResolvedValue({ displayName: contactName });
+  const getContactMock = contactLookupError
+    ? vi.fn().mockRejectedValue(new Error('contact lookup failed'))
+    : vi.fn().mockResolvedValue({ displayName: contactName });
 
   const ctx: SkillContext = {
     input: {},
@@ -352,5 +356,29 @@ describe('PendingActionsDigestHandler', () => {
     expect(result.success).toBe(true);
     if (!result.success) throw new Error('unreachable');
     expect(result.data).toEqual({ pending: 1, skipped: false, tasksForCeo: 0, tasksWaiting: 0, tasksWorking: 0 });
+  });
+
+  it('still sends the digest and falls back to (unknown) when contact lookup fails', async () => {
+    const handler = new PendingActionsDigestHandler();
+    const { ctx, sendNotificationMock, logWarnMock } = makeCtx({
+      pendingRows: [],
+      ceoTasks: [],
+      externalTasks: [makeTask({ owner: 'external', status: 'waiting', title: 'Signed NDA', waitingOnContactId: 'c1', waitingOnText: null })],
+      curiaTasks: [],
+      contactLookupError: true,
+    });
+
+    const result = await handler.execute(ctx);
+
+    // Digest still sends despite the failed lookup
+    expect(sendNotificationMock).toHaveBeenCalledTimes(1);
+    // A warn must be emitted for the failed lookup
+    expect(logWarnMock).toHaveBeenCalled();
+    // Body falls back to '(unknown)' since both contact and waitingOnText are null
+    const payload = sendNotificationMock.mock.calls[0]![0];
+    expect(payload.body).toContain('• Signed NDA · waiting on (unknown) · since');
+    expect(result.success).toBe(true);
+    if (!result.success) throw new Error('unreachable');
+    expect(result.data).toEqual({ pending: 0, skipped: false, tasksForCeo: 0, tasksWaiting: 1, tasksWorking: 0 });
   });
 });

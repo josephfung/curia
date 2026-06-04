@@ -80,19 +80,23 @@ async function resolveContactNames(
   const names = new Map<string, string>();
   if (!ctx.contactService) return names;
   const ids = [...new Set(external.map((t) => t.waitingOnContactId).filter((x): x is string => x !== null))];
-  for (const id of ids) {
-    try {
-      const contact = await ctx.contactService.getContact(id);
-      if (contact) names.set(id, contact.displayName);
-    } catch (err) {
-      // Non-fatal: name lookup failed for this contact; render.ts falls back to
-      // waitingOnText or '(unknown)' rather than suppressing the digest.
-      ctx.log.warn(
-        { err, contactId: id },
-        'pending-actions-digest: contact name lookup failed; falling back to waitingOnText',
-      );
-    }
-  }
+  // Resolve all IDs concurrently; each failure is isolated so one bad lookup
+  // cannot suppress the others or the digest.
+  await Promise.all(
+    ids.map(async (id) => {
+      try {
+        const contact = await ctx.contactService!.getContact(id);
+        if (contact) names.set(id, contact.displayName);
+      } catch (err) {
+        // Non-fatal: name lookup failed for this contact; render.ts falls back to
+        // waitingOnText or '(unknown)' rather than suppressing the digest.
+        ctx.log.warn(
+          { err, contactId: id },
+          'pending-actions-digest: contact name lookup failed; falling back to waitingOnText',
+        );
+      }
+    }),
+  );
   return names;
 }
 
