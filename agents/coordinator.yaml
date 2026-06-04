@@ -1,5 +1,5 @@
 name: coordinator
-version: "0.5.1"
+version: "0.6.0"
 role: coordinator
 description: Central coordinator — routes all messages, delegates to specialists, maintains the unified persona
 model:
@@ -641,11 +641,11 @@ pinned_skills:
   - approval-expiry-sweep
   - pending-actions-digest
   - scheduler-report
-  - task-create
-  - task-list
-  - task-update
-  - task-complete
 allow_discovery: true
+enable_task_management: true
+error_budget:
+  max_turns: 40
+  max_cost_usd: 1.00
 schedule:
   - cron: "0 * * * *"
     task: "Run the approval expiry sweep — find and expire any pending approval requests that have passed their expiry time."

@@ -43,6 +43,7 @@
       "items": { "type": "string" }
     },
     "allow_discovery": { "type": "boolean" },
+    "enable_task_management": { "type": "boolean" },
     "memory": {
       "type": "object",
       "additionalProperties": false,
