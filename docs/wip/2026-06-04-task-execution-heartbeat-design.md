@@ -179,7 +179,7 @@ A "project" is a durable goal with a small dependency graph. The rule of thumb, 
 - **Cross-specialist ownership.** For a project spanning specialists, the **coordinator** owns the parent (`source_agent_id='coordinator'`). Subtasks may carry different `source_agent_id`s (a "confirm calendars" subtask → calendar specialist; "draft agenda" → coordinator) so each wakes the right owner.
 - **Parent completion.** When a subtask completes and unblocks the next, the resuming owner advances the chain. The parent task is itself heartbeat-eligible: once its children are done and it is idle-unblocked, the heartbeat wakes its owner to close it out (or advance the next wave). No special parent-rollup machinery in v1.
 
-### 5.1 Walkthrough: the sales kickoff
+### 5.1 Walkthrough: the sales kickoff example
 
 1. **Intake (synchronous):** coordinator recognizes a multi-step request → creates parent `intent_anchor:"book sales kickoff"` + first-wave subtasks → advances what it can now (messages the sales leader to plan content; pulls roster + candidate calendar windows) → parks the rest (`waiting` on the sales leader; `blocked_by` agenda) → tells the CEO "kicked it off, I'll keep moving as pieces come back."
 2. **Sales leader replies (event):** wakes the agenda subtask → finalize agenda → unblocks venue → propose/book venue (escalates if it spends money, per §7) → park on approval.
