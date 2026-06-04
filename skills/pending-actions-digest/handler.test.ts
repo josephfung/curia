@@ -49,42 +49,59 @@ function makeCtx(overrides: {
   sendResult?: boolean;
   ceoEmail?: string;
   noOutboundGateway?: boolean;
+  ceoTasks?: unknown[];
+  externalTasks?: unknown[];
+  curiaTasks?: unknown[];
+  listTasksError?: boolean;
+  contactName?: string;
+  noTaskRepo?: boolean;
 } = {}) {
   const {
     pendingRows = [],
     sendResult = true,
     ceoEmail = 'ceo@example.com',
     noOutboundGateway = false,
+    ceoTasks = [],
+    externalTasks = [],
+    curiaTasks = [],
+    listTasksError = false,
+    contactName = 'Steve Jobs',
+    noTaskRepo = false,
   } = overrides;
 
-  // The handler reads CEO_PRIMARY_EMAIL from process.env directly (not ctx.secret()),
-  // so set it here. Tests that need it absent should pass ceoEmail: ''.
   process.env['CEO_PRIMARY_EMAIL'] = ceoEmail;
 
-  // Keep explicit references so tests can assert on mock calls without casts.
   const findAllPendingMock = vi.fn().mockResolvedValue(pendingRows);
   const sendNotificationMock = vi.fn().mockResolvedValue(sendResult);
   const logWarnMock = vi.fn();
   const logErrorMock = vi.fn();
 
+  // listTasks routes by the `owner` filter so each section gets its own fixture.
+  const listTasksMock = vi.fn().mockImplementation(async (filters: { owner?: string }) => {
+    if (listTasksError) throw new Error('tasks query failed');
+    if (filters.owner === 'ceo') return ceoTasks;
+    if (filters.owner === 'external') return externalTasks;
+    if (filters.owner === 'curia') return curiaTasks;
+    return [];
+  });
+  const getContactMock = vi.fn().mockResolvedValue({ displayName: contactName });
+
   const ctx: SkillContext = {
     input: {},
-    // ctx.secret() throws in production when the var is unset — mirror that here.
-    // The handler reads CEO_PRIMARY_EMAIL via process.env directly, so this stub
-    // is present for shape correctness only.
     secret: vi.fn().mockImplementation((name: string) => {
       throw new Error(`secret ${name} not configured`);
     }),
     log: { info: vi.fn(), warn: logWarnMock, error: logErrorMock, debug: vi.fn() } as unknown as SkillContext['log'],
-    actionLogRepo: {
-      findAllPending: findAllPendingMock,
-    } as unknown as ActionLogRepo,
+    timezone: 'UTC',
+    actionLogRepo: { findAllPending: findAllPendingMock } as unknown as ActionLogRepo,
     outboundGateway: noOutboundGateway
       ? undefined
       : ({ sendNotification: sendNotificationMock } as unknown as OutboundGateway),
+    taskRepo: noTaskRepo ? undefined : ({ listTasks: listTasksMock } as unknown as SkillContext['taskRepo']),
+    contactService: { getContact: getContactMock } as unknown as SkillContext['contactService'],
   } as SkillContext;
 
-  return { ctx, findAllPendingMock, sendNotificationMock, logWarnMock, logErrorMock };
+  return { ctx, findAllPendingMock, sendNotificationMock, logWarnMock, logErrorMock, listTasksMock, getContactMock };
 }
 
 // --- Lifecycle hooks ---
@@ -111,7 +128,7 @@ describe('PendingActionsDigestHandler', () => {
 
     expect(result.success).toBe(true);
     if (!result.success) throw new Error('unreachable');
-    expect(result.data).toEqual({ pending: 0, skipped: true });
+    expect(result.data).toEqual({ pending: 0, skipped: true, tasksForCeo: 0, tasksWaiting: 0, tasksWorking: 0 });
     expect(sendNotificationMock).not.toHaveBeenCalled();
   });
 
@@ -138,7 +155,7 @@ describe('PendingActionsDigestHandler', () => {
 
     expect(result.success).toBe(true);
     if (!result.success) throw new Error('unreachable');
-    expect(result.data).toEqual({ pending: 2, skipped: false });
+    expect(result.data).toEqual({ pending: 2, skipped: false, tasksForCeo: 0, tasksWaiting: 0, tasksWorking: 0 });
   });
 
   it('each entry includes shortRef, description, skillName, and time remaining', async () => {
@@ -186,7 +203,7 @@ describe('PendingActionsDigestHandler', () => {
 
     expect(result.success).toBe(true);
     if (!result.success) throw new Error('unreachable');
-    expect(result.data).toEqual({ pending: 1, skipped: true });
+    expect(result.data).toEqual({ pending: 1, skipped: true, tasksForCeo: 0, tasksWaiting: 0, tasksWorking: 0 });
   });
 
   it('skips notification when outboundGateway is not available', async () => {
@@ -201,7 +218,7 @@ describe('PendingActionsDigestHandler', () => {
 
     expect(result.success).toBe(true);
     if (!result.success) throw new Error('unreachable');
-    expect(result.data).toEqual({ pending: 1, skipped: true });
+    expect(result.data).toEqual({ pending: 1, skipped: true, tasksForCeo: 0, tasksWaiting: 0, tasksWorking: 0 });
   });
 
   it('handles sendNotification returning false gracefully', async () => {
@@ -215,7 +232,7 @@ describe('PendingActionsDigestHandler', () => {
     // Non-fatal — skill should still succeed and report skipped:false (the send was attempted)
     expect(result.success).toBe(true);
     if (!result.success) throw new Error('unreachable');
-    expect(result.data).toEqual({ pending: 1, skipped: false });
+    expect(result.data).toEqual({ pending: 1, skipped: false, tasksForCeo: 0, tasksWaiting: 0, tasksWorking: 0 });
   });
 
   it('returns success:false on unexpected error', async () => {
@@ -230,5 +247,91 @@ describe('PendingActionsDigestHandler', () => {
     expect(result.success).toBe(false);
     if (result.success) throw new Error('unreachable');
     expect(result.error).toContain('DB error');
+  });
+
+  function makeTask(overrides: Record<string, unknown> = {}) {
+    return {
+      id: 'id', agentId: 'a', intentAnchor: 'i', status: 'open',
+      progress: {}, errorBudget: {}, conversationId: null,
+      createdAt: new Date(FIXED_NOW - 3_600_000).toISOString(),
+      updatedAt: new Date(FIXED_NOW - 3_600_000).toISOString(),
+      title: 'A task', description: null, owner: 'curia',
+      waitingOnContactId: null, waitingOnText: null, parentTaskId: null,
+      blockedByTaskId: null, priority: 50, dueAt: null, source: 'agent',
+      sourceAgentId: null, createdBy: 'system', tags: [], nextWakeAt: null,
+      ...overrides,
+    };
+  }
+
+  it('sends a backlog-only digest with an adaptive subject when there are no approvals', async () => {
+    const handler = new PendingActionsDigestHandler();
+    const { ctx, sendNotificationMock } = makeCtx({
+      pendingRows: [],
+      ceoTasks: [makeTask({ owner: 'ceo', title: 'Review the Acme deck' })],
+      externalTasks: [makeTask({ owner: 'external', status: 'waiting', title: 'Signed NDA', waitingOnContactId: 'c1' })],
+    });
+
+    const result = await handler.execute(ctx);
+
+    expect(sendNotificationMock).toHaveBeenCalledTimes(1);
+    const payload = sendNotificationMock.mock.calls[0]![0];
+    expect(payload.subject).toBe('Your daily brief — 2 item(s) need you');
+    expect(payload.body).toContain('For you to do:');
+    expect(payload.body).toContain('• Review the Acme deck');
+    expect(payload.body).toContain('Waiting on others:');
+    expect(payload.body).toContain('• Signed NDA · waiting on Steve Jobs · since');
+    expect(result.success).toBe(true);
+    if (!result.success) throw new Error('unreachable');
+    expect(result.data).toEqual({ pending: 0, skipped: false, tasksForCeo: 1, tasksWaiting: 1, tasksWorking: 0 });
+  });
+
+  it('keeps the approvals subject and appends backlog when approvals are present', async () => {
+    const handler = new PendingActionsDigestHandler();
+    const { ctx, sendNotificationMock } = makeCtx({
+      pendingRows: [makeRow({ id: 1, shortRef: 'cal-1' })],
+      curiaTasks: [makeTask({ owner: 'curia', title: 'Draft the board email' })],
+    });
+
+    await handler.execute(ctx);
+
+    const payload = sendNotificationMock.mock.calls[0]![0];
+    expect(payload.subject).toBe('Pending approvals — 1 request(s) awaiting your decision');
+    expect(payload.body).toContain('cal-1');
+    expect(payload.body).toContain("What I'm working on:");
+    expect(payload.body).toContain('• Draft the board email');
+  });
+
+  it('does NOT send when only "what I\'m working on" is non-empty', async () => {
+    const handler = new PendingActionsDigestHandler();
+    const { ctx, sendNotificationMock } = makeCtx({
+      pendingRows: [],
+      curiaTasks: [makeTask({ owner: 'curia', title: 'Internal cleanup' })],
+    });
+
+    const result = await handler.execute(ctx);
+
+    expect(sendNotificationMock).not.toHaveBeenCalled();
+    expect(result.success).toBe(true);
+    if (!result.success) throw new Error('unreachable');
+    expect(result.data).toEqual({ pending: 0, skipped: true, tasksForCeo: 0, tasksWaiting: 0, tasksWorking: 1 });
+  });
+
+  it('degrades to an approvals-only digest when the task query fails', async () => {
+    const handler = new PendingActionsDigestHandler();
+    const { ctx, sendNotificationMock, logWarnMock } = makeCtx({
+      pendingRows: [makeRow({ id: 1, shortRef: 'cal-1' })],
+      listTasksError: true,
+    });
+
+    const result = await handler.execute(ctx);
+
+    expect(sendNotificationMock).toHaveBeenCalledTimes(1);
+    expect(logWarnMock).toHaveBeenCalled();
+    const payload = sendNotificationMock.mock.calls[0]![0];
+    expect(payload.body).toContain('cal-1');
+    expect(payload.body).not.toContain('For you to do:');
+    expect(result.success).toBe(true);
+    if (!result.success) throw new Error('unreachable');
+    expect(result.data).toEqual({ pending: 1, skipped: false, tasksForCeo: 0, tasksWaiting: 0, tasksWorking: 0 });
   });
 });
