@@ -68,6 +68,30 @@ export interface Config {
   signalPhoneNumber: string | undefined;
 }
 
+export interface TasksConfig {
+  heartbeatIntervalMinutes: number;
+  heartbeatMaxWakesPerTick: number;
+  idleThresholdHours: number;
+  staleWaitThresholdHours: number;
+}
+
+export const DEFAULT_TASKS_CONFIG: TasksConfig = {
+  heartbeatIntervalMinutes: 60,
+  heartbeatMaxWakesPerTick: 5,
+  idleThresholdHours: 4,
+  staleWaitThresholdHours: 48,
+};
+
+/** Resolve the optional YAML tasks block to a fully-populated config with defaults. */
+export function resolveTasksConfig(yaml: YamlConfig['tasks']): TasksConfig {
+  return {
+    heartbeatIntervalMinutes: yaml?.heartbeatIntervalMinutes ?? DEFAULT_TASKS_CONFIG.heartbeatIntervalMinutes,
+    heartbeatMaxWakesPerTick: yaml?.heartbeatMaxWakesPerTick ?? DEFAULT_TASKS_CONFIG.heartbeatMaxWakesPerTick,
+    idleThresholdHours: yaml?.idleThresholdHours ?? DEFAULT_TASKS_CONFIG.idleThresholdHours,
+    staleWaitThresholdHours: yaml?.staleWaitThresholdHours ?? DEFAULT_TASKS_CONFIG.staleWaitThresholdHours,
+  };
+}
+
 /**
  * Typed shape for config/default.yaml.
  *
@@ -277,6 +301,18 @@ export interface YamlConfig {
     /** Default assumed duration in seconds for scheduled jobs that declare no expectedDurationSeconds.
      *  Used by the watchdog to compute recovery timeouts. Default: 600. */
     defaultExpectedDurationSeconds?: number;
+  };
+  tasks?: {
+    /** BacklogHeartbeat tick interval in minutes. Default 60. */
+    heartbeatIntervalMinutes?: number;
+    /** Max task wakes enqueued per heartbeat tick (global cap). Default 5. */
+    heartbeatMaxWakesPerTick?: number;
+    /** Hours an unblocked curia-owned task may sit untouched before the heartbeat
+     *  pokes it. Default 4. */
+    idleThresholdHours?: number;
+    /** Hours a waiting/blocked task with no pending wake may sit before the
+     *  heartbeat surfaces it as an orphaned wait. Default 48. */
+    staleWaitThresholdHours?: number;
   };
 }
 
