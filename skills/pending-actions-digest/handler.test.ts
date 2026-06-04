@@ -318,7 +318,7 @@ describe('PendingActionsDigestHandler', () => {
 
   it('degrades to an approvals-only digest when the task query fails', async () => {
     const handler = new PendingActionsDigestHandler();
-    const { ctx, sendNotificationMock, logWarnMock } = makeCtx({
+    const { ctx, sendNotificationMock, logErrorMock } = makeCtx({
       pendingRows: [makeRow({ id: 1, shortRef: 'cal-1' })],
       listTasksError: true,
     });
@@ -326,7 +326,7 @@ describe('PendingActionsDigestHandler', () => {
     const result = await handler.execute(ctx);
 
     expect(sendNotificationMock).toHaveBeenCalledTimes(1);
-    expect(logWarnMock).toHaveBeenCalled();
+    expect(logErrorMock).toHaveBeenCalled();
     const payload = sendNotificationMock.mock.calls[0]![0];
     expect(payload.body).toContain('cal-1');
     expect(payload.body).not.toContain('For you to do:');

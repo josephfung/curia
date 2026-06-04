@@ -64,7 +64,10 @@ async function fetchBacklog(ctx: SkillContext): Promise<Backlog> {
     return { ceo, external, curia };
   } catch (err) {
     // Non-fatal: log and fall back to empty backlog so approvals still send.
-    ctx.log.warn({ err }, 'pending-actions-digest: backlog fetch failed; sending approvals-only digest');
+    ctx.log.error(
+      { err, errorClass: err instanceof Error ? err.constructor.name : typeof err },
+      'pending-actions-digest: backlog fetch failed; sending approvals-only digest',
+    );
     return { ceo: [], external: [], curia: [] };
   }
 }
@@ -78,8 +81,17 @@ async function resolveContactNames(
   if (!ctx.contactService) return names;
   const ids = [...new Set(external.map((t) => t.waitingOnContactId).filter((x): x is string => x !== null))];
   for (const id of ids) {
-    const contact = await ctx.contactService.getContact(id);
-    if (contact) names.set(id, contact.displayName);
+    try {
+      const contact = await ctx.contactService.getContact(id);
+      if (contact) names.set(id, contact.displayName);
+    } catch (err) {
+      // Non-fatal: name lookup failed for this contact; render.ts falls back to
+      // waitingOnText or '(unknown)' rather than suppressing the digest.
+      ctx.log.warn(
+        { err, contactId: id },
+        'pending-actions-digest: contact name lookup failed; falling back to waitingOnText',
+      );
+    }
   }
   return names;
 }
