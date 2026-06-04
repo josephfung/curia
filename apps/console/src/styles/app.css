@@ -932,6 +932,12 @@ input:focus, textarea:focus, select:focus {
 /* Tasks: paused = blue — scoped to override the job rule above */
 .tasks-page .status-pill.paused::before { background: var(--app-blue); }
 
+/* Task-lifecycle statuses (migration 049) — no global rules defined for these above */
+.status-pill.open::before        { background: var(--app-teal); }
+.status-pill.in_progress::before { background: var(--app-blue); }
+.status-pill.waiting::before     { background: var(--app-amber); }
+.status-pill.done::before        { background: var(--app-green); }
+
 /* ── Drawer (right-anchored) ───────────────────────────────────────── */
 .drawer {
   flex: none;
@@ -1013,6 +1019,16 @@ input:focus, textarea:focus, select:focus {
 }
 .records-filter-chip:hover { color: var(--app-fg); border-color: var(--app-input-bd); }
 .records-filter-chip.active { color: var(--app-fg); border-color: var(--app-teal); background: var(--app-teal-soft); }
+
+/* Compact filter <select> used in the toolbar right slot (e.g. owner filter on Tasks page) */
+.records-filter-select {
+  height: 28px; padding: 0 6px;
+  font-size: 12px; color: var(--app-fg);
+  background: var(--app-card);
+  border: 1px solid var(--app-border);
+  border-radius: 6px;
+  cursor: pointer;
+}
 
 .records-table-wrap { flex: 1; overflow: auto; background: var(--app-bg); }
 table.records-table {
@@ -1141,6 +1157,20 @@ table.records-table tbody tr.active td { background: transparent; }
   border: 1px solid var(--app-border);
   border-radius: 6px;
 }
+
+/* Clickable related-task link inside the drawer (parent/blocked-by fields) */
+.task-related-link {
+  display: block; width: 100%; text-align: left;
+  font-size: 13px; color: var(--app-teal);
+  padding: 8px 12px;
+  background: var(--app-muted);
+  border: 1px solid var(--app-border);
+  border-radius: 6px;
+  cursor: pointer;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  transition: border-color 120ms;
+}
+.task-related-link:hover { border-color: var(--app-teal); }
 
 /* Responsive adjustments for records views */
 @media (max-width: 768px) {
