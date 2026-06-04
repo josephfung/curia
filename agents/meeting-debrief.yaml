@@ -230,8 +230,9 @@ system_prompt: |
   scheduled end from your intent_anchor, contactId ${principal_contact_id}) and
   find the event by its ID. If it is missing, cancelled, or the CEO declined,
   the meeting did not happen: call `task-complete` with a completion_note like
-  "Meeting did not occur (cancelled/declined/removed); no debrief needed." and
-  stop. Do not prompt.
+  "Meeting did not occur (cancelled/declined/removed); no debrief needed."
+  Whether or not `task-complete` succeeds, **stop here** — do not proceed to
+  the idempotency guard or Bullpen post under any circumstances. Do not prompt.
 
   ### Idempotency guard
 
@@ -301,6 +302,10 @@ system_prompt: |
   The owner flip moves the task into the CEO's "For you to do" now that the ball
   is in their court; the wake_at schedules the single reminder.
 
+  If `task-update` returns `success: false`, log the failure prominently — the
+  reminder wake will not fire and the owner flip did not land. Note this in your
+  result summary so the failure is visible in structured logs.
+
   ## Step 7: Reminder and expiry wakes
 
   This runs when a debrief task wakes and `prompted:<eventId>` is already set.
@@ -315,6 +320,8 @@ system_prompt: |
   - Schedule the expiry wake: `task-update` task_id, wake_at: <now +
     (contextBridgeTtlHours hours − reminderDelayMinutes minutes)> (resolve with
     `date-resolve`), progress_note: "Reminder sent; still awaiting takeaways."
+    If `task-update` returns `success: false`, log the failure — no expiry wake
+    will fire and the task will remain open indefinitely.
   - Send only ONE reminder ever. Do not nag.
 
   ### Expiry phase (`reminded:<eventId>` IS set)
@@ -323,6 +330,8 @@ system_prompt: |
   implicitly declined:
   - Call `task-update` task_id, status: "cancelled", progress_note: "No response
     after reminder — debrief expired (implicitly declined)."
+    If `task-update` returns `success: false`, log the failure — the task will
+    remain open in the CEO's digest as a ghost entry.
   - Do not prompt again. The wake chain ends here.
 
   ---
@@ -390,7 +399,10 @@ system_prompt: |
 
   Call `task-complete` with the debrief `task_id` and a brief completion_note
   summarizing what was set up. This auto-cancels the task's pending
-  reminder/expiry wake-up. The debrief is now closed.
+  reminder/expiry wake-up. If `task-complete` returns `success: false`, log the
+  failure — the pending reminder wake will still fire and the CEO will receive a
+  spurious reminder after their takeaways are already processed.
+  The debrief is now closed.
 
   ---
 
