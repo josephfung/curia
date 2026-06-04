@@ -19,7 +19,7 @@ The feature has two distinct phases per meeting:
 A specialist agent triggered by a scheduler cron job. It owns the full meeting follow-up lifecycle: detect → judge → prompt → process response → execute follow-up actions.
 
 - **Role:** `specialist`
-- **Trigger:** Declarative cron in agent YAML config (`*/5 * * * *`)
+- **Trigger:** Declarative cron in agent YAML config (`0 7,12,16 * * *`)
 - **Skills:** Calendar, email (draft + send), scheduler, KG/memory, `claim-conversation`, `debrief-status`, plus any future MCP tools. Can post Bullpen threads for cross-specialist work (see Section 6).
 - **Persona:** Speaks as the coordinator's voice (all outbound messages go through OutboundGateway and maintain unified persona)
 
@@ -27,27 +27,25 @@ A specialist agent triggered by a scheduler cron job. It owns the full meeting f
 
 ```yaml
 schedule:
-  - cron: "*/5 * * * *"
-    task: "Check for recently-ended meetings that may warrant follow-up"
+  - cron: "0 7,12,16 * * *"
+    task: "Scan upcoming meetings for the rest of the day and pre-schedule debrief tasks"
     expectedDurationSeconds: 120
 ```
 
-The scheduler publishes an `agent.task` event → meeting-debrief agent wakes up → checks calendar → either takes action or no-ops.
+The scheduler publishes an `agent.task` event → meeting-debrief agent wakes up → scans the calendar forward for the rest of the day → schedules a debrief task per qualifying meeting → no-ops if nothing qualifies.
 
 ---
 
 ## 2. Detection Pipeline
 
-Two-stage pipeline on each cron tick:
+Two-stage pipeline on each detection run (3x/day at `0 7,12,16`):
 
 ### Stage 1: Calendar scan (deterministic)
 
-1. Call `calendar-list-events` for events ending in the window `[now - scanWindowMinutes, now]` (default 7 minutes, overlapping with 5-minute poll to handle drift)
-2. Check scheduler task progress to skip meetings already handled:
-   - `pendingDebriefs` map — meetings already prompted, awaiting CEO response
-   - `judgedEvents` map — meetings already judged (YES, NO, or DEFER), keyed by calendar event ID with timestamp. Prevents re-evaluation on subsequent poll ticks.
-3. Extract attendee emails, classify against `debrief.internalDomains` config
-4. Pass candidates to Stage 2 with: title, description, duration, attendee list (with internal/external flags), recurrence pattern, and enriched entity context for known attendees
+1. Call `calendar-list-events` for events scheduled between now and end-of-day (forward scan, not backward)
+2. Skip events already seen: check `config-store` for a `seen:<eventId>` key (set by previous detection runs for both YES and NO judgments)
+3. Extract attendee context (names, roles, org affiliations via entity context enrichment) and recurrence pattern
+4. Pass candidates to Stage 2 with: title, description, duration, attendee list, recurrence pattern, and enriched entity context for known attendees
 
 ### Stage 2: LLM judgment (contextual)
 
@@ -56,80 +54,87 @@ For each candidate meeting, the agent's LLM decides: **does this meeting warrant
 Context available:
 - Meeting title, description, duration, recurrence
 - Attendee names, emails, roles, org affiliations (from entity context enrichment)
-- Internal vs. external classification per attendee
 - KG facts about attendees — including debrief preferences (e.g., "CEO prefers no debrief prompts for meetings with this contact")
 - General CEO preferences stored as KG facts on the CEO's entity
 
 Judgment outputs:
-- **YES** → proceed to prompt the CEO
-- **NO** → skip. Record in `judgedEvents` with timestamp so it's not re-evaluated.
-- **DEFER** → skip but record in `judgedEvents` as deferred. Also publish an `audit.event` so deferred meetings are visible in the audit log. The CEO can ask about deferred meetings via the `debrief-status` skill.
+- **YES** → schedule a debrief task (see §3) and write `seen:<eventId>` to `config-store`
+- **NO** → write `seen:<eventId>` to `config-store` only; no task created. On a genuine fence, the judgment leans YES.
 
-The LLM prompt will include guidance on what typically warrants follow-up (strategic discussions, partner meetings, board-adjacent, crisis comms) and what typically doesn't (personal appointments, routine recurring socials). But these are guidelines, not rules — the LLM makes the final call.
+There is no DEFER outcome. The LLM prompt will include guidance on what typically warrants follow-up (strategic discussions, partner meetings, board-adjacent, crisis comms) and what typically doesn't (personal appointments, routine recurring socials). But these are guidelines, not rules — the LLM makes the final call.
+
+The accepted trade-off of 3x/day scanning: a meeting added *and* occurring entirely inside a scan gap will be missed. Cancellations and reschedules of already-seen meetings are caught at the prompt wake by re-validating the event at that point.
 
 **TODO — Future work: Meeting artifact analysis.** When we know that certain meetings have artifacts (e.g., transcripts for recorded video meetings, note-keeping in a Google Drive folder, or updates to project management software), this agent should first analyze those artifacts to extract draft follow-up items before prompting the CEO. The prompt would then include: "Here's what I extracted from the meeting notes — anything to add or adjust?" This changes the interaction from open-ended to confirmatory, reducing friction. Out of scope for v1.
-
-**TODO — Future work: Variable scan window.** The current `scanWindowMinutes` works for immediate prompting, but transcript-based workflows may need a different model: wait for the transcript to become available (which could take 10–30 minutes after a meeting ends), then process it, then prompt. This could be a per-meeting-type delay or a "wait for artifact readiness" mechanism. Out of scope for v1, but the scan window is configurable to accommodate initial experimentation.
 
 ---
 
 ## 3. State Management
 
-**No bespoke database table** for follow-up state. All state uses existing Curia primitives.
+**No bespoke state maps.** Debrief work is tracked as platform **tasks** (spec:
+[tasks & backlog](../wip/2026-06-01-tasks-and-backlog-design.md)), not the former
+`pendingDebriefs` / `judgedEvents` / `deferredEvents` maps in scheduler progress.
 
-### Ephemeral state → Scheduler task progress
+### Debrief tasks
 
-The agent's `agent_tasks.progress` JSON field tracks:
+Each meeting that warrants a debrief is one task:
+- `tag = ['debrief-pending']`, `title = "Debrief: <meeting>"`.
+- `owner` starts `'curia'` (Curia owes the prompt) and flips to `'ceo'` at the
+  prompt wake (the CEO then owes takeaways). This drives the digest's three-way
+  grouping: a scheduled-but-unprompted debrief shows under "What I'm working on";
+  once prompted it moves to "For you to do".
+- `intent_anchor` carries the calendar `eventId` and the meeting's scheduled end.
+  It is delivered to the agent on each wake-up (system-prompt injection) but is
+  not returned by `task-list`, so it stays out of the CEO's digest.
+- The lifecycle is a chain of `wake_at` re-schedules on the one task row:
+  `meeting end → deliver prompt` → `+reminderDelay → one reminder` →
+  `+TTL → expire (cancel)`. A CEO reply completes the task early and auto-cancels
+  the pending wake-up.
 
-```json
-{
-  "pendingDebriefs": {
-    "nylas_event_abc": {
-      "promptedAt": "2026-04-28T14:05:00Z",
-      "conversationId": "signal:ceo:xyz",
-      "reminderJobId": "job_123",
-      "meetingTitle": "Strategy sync with Meridian",
-      "attendees": ["sarah@meridian.com", "david@meridian.com"],
-      "status": "awaiting_response"
-    }
-  },
-  "judgedEvents": {
-    "nylas_event_def": { "judgment": "no", "judgedAt": "2026-04-28T14:00:00Z" },
-    "nylas_event_ghi": { "judgment": "defer", "judgedAt": "2026-04-28T14:00:00Z", "reason": "short internal standup, unclear if action-worthy" }
-  },
-  "lastScanTimestamp": "2026-04-28T14:00:00Z"
-}
-```
+Follow-up actions discovered from a CEO reply become **child tasks**
+(`parent_task_id` = the debrief task, `tag = ['debrief-followup']`): work Curia
+does inline is recorded as a completed child; a call only the CEO can make is an
+open `owner='ceo'` child; third-party-blocked work is an open `owner='external'`
+child.
 
-- `judgedEvents` entries pruned after `scanWindowMinutes + buffer` (e.g., 15 minutes) — they only need to survive until the event falls out of the scan window
-- `pendingDebriefs` entries pruned after `claimTtlHours` (default 48 hours)
-- **Before pruning expired entries**, the agent publishes an `audit.event` recording: meeting title, attendees, whether a prompt was sent, whether a response was received, and whether follow-up actions were taken. This ensures auditability even when state is cleaned up.
+### Detection cadence
+
+Detection runs **3×/day** (`0 7,12,16`), scanning the rest of the day forward
+and scheduling a debrief task per qualifying meeting. Judgment is binary
+**YES/NO** (no DEFER); on a genuine fence it leans YES. A not-worthy meeting
+creates **no task** — only a `seen:` guard (below). The accepted trade-off is
+that a meeting added *and* occurring entirely inside a scan gap is missed;
+cancellations/reschedules of known meetings are caught by re-validating the
+event at the prompt wake.
+
+### Phase guards via `config-store` (namespace `"debrief"`)
+
+Three keys, all CEO-invisible; the lifecycle phase is derived from them rather
+than stored as data:
+
+- `seen:<eventId>` — detection dedup; set for every judged event (YES and NO).
+- `prompted:<eventId>` — set when the prompt is sent (also the layer-2 duplicate
+  guard, below). Absent at a wake ⇒ scheduled phase; present ⇒ prompted.
+- `reminded:<eventId>` — set when the one reminder is sent. With `prompted:`
+  present: absent ⇒ reminder phase; present ⇒ expiry phase.
 
 #### Cross-tick idempotency via `config-store`
 
-`pendingDebriefs` lives in `agent_tasks.progress` and is the agent's primary "have I prompted for this meeting?" state. But scheduled-job runs are stateless across crashes, pruning, or state-loss bugs — if `pendingDebriefs` is empty when a new tick starts, the agent has no protection against re-prompting for a meeting it already prompted for.
-
-The agent maintains a parallel idempotency record in `config-store` keyed by calendar event ID:
-
-- Before opening a Bullpen thread for a meeting, the agent calls `config-store get prompted:<calendarEventId>`.
-- If the key exists, the agent skips — a prompt was already sent for this event.
-- After a successful `bullpen.post`, the agent writes `config-store set prompted:<calendarEventId>` with the resulting thread ID and timestamp.
-
-The idempotency key has a longer TTL than `pendingDebriefs` (e.g. matching the configured `claimTtlHours`), so it survives a `pendingDebriefs` reset and prevents duplicate prompts during the entire window the meeting could plausibly still warrant a debrief. This is layer-2 defense, independent of [the bullpen fire-and-forget contract](03-skills-and-execution.md) — even if a future regression brings back bullpen retry storms, this guard prevents duplicate user-facing messages.
+The `prompted:<eventId>` key is the agent's layer-2 "have I prompted for this
+meeting?" guard, independent of the task representation: before posting a Bullpen
+debrief prompt the agent checks it, and after a successful post it writes the key
+(with the thread ID). Even if a future regression resends a wake or re-creates a
+task, this guard prevents a duplicate user-facing prompt. It is the same
+defense-in-depth that originally fixed the #724 duplicate-prompt incident.
 
 ### Durable knowledge → KG facts (only when worth remembering)
 
-- **Debrief preferences:** "CEO prefers no debrief prompts for meetings with Christophe" → fact on Christophe's contact KG node. Long-lived, inspectable, used by Stage 2 judgment.
-- **Meeting outcomes:** "Agreed to deliver proposal to Meridian by May 15" → fact on Meridian org node or relevant contact nodes. Only stored when the follow-up produces substantive knowledge.
-- **Completed follow-up summary:** When a follow-up is completed and has meaningful outcomes, a brief summary fact is stored on the relevant contact/org entities (e.g., "Follow-up from 2026-04-28 strategy sync: 3 actions taken — email drafted, meeting booked, commitment tracked"). This enables the CEO to ask "what follow-ups happened with Meridian recently?"
-- **No KG entry** for: meetings skipped by judgment, meetings where CEO said "nothing", follow-up machinery state.
-
-### Reminders → One-shot scheduler jobs
-
-When a debrief prompt is sent, the agent creates a one-shot scheduler job:
-- Fires after `debrief.reminderDelayMinutes` (default 120 minutes)
-- Agent checks progress — if debrief is still pending, sends a brief nudge on the same conversation
-- If debrief was already completed, the job no-ops
+- **Debrief preferences:** "CEO prefers no debrief prompts for meetings with
+  Christophe" → fact on Christophe's contact KG node. Used by judgment.
+- **Meeting outcomes / completed follow-ups:** stored on the relevant contact/org
+  entities only when the follow-up produced substantive knowledge.
+- **No KG entry** for: meetings skipped by judgment, "nothing needed" replies, or
+  task machinery state.
 
 ---
 
@@ -267,15 +272,12 @@ New top-level block in `config/default.yaml`:
 debrief:
   enabled: true
   channel: signal
-  pollIntervalCron: "*/5 * * * *"
-  internalDomains:
-    - josephfung.ca
+  detectionCron: "0 7,12,16 * * *"
   reminderDelayMinutes: 120
-  scanWindowMinutes: 7
   claimTtlHours: 48
 ```
 
-All values have sensible defaults. The LLM judgment handles nuance — config handles mechanics.
+All values have sensible defaults. The LLM judgment handles nuance — config handles mechanics. `internalDomains` and `scanWindowMinutes` are removed; the forward-scan window is end-of-day and attendee classification is handled by the LLM from KG-enriched context rather than rigid domain matching.
 
 **Note — separate issue:** The `research-analyst` agent currently has no `enabled` config option in its YAML. All specialist agents should have an enable/disable toggle. This is a pre-existing gap, not specific to this feature, but worth tracking as a follow-up.
 
@@ -302,9 +304,9 @@ These are out of scope for this feature but identified during design:
 ## 10. Verification Plan
 
 ### Unit tests
-- Detection pipeline: mock calendar responses, verify internal/external classification, verify dedup against progress (both `pendingDebriefs` and `judgedEvents`)
+- Detection pipeline: mock calendar responses, verify dedup via `seen:<eventId>` config-store key, verify YES schedules a task and NO creates only the seen guard
 - Conversation claim registry: claim lifecycle (create, check, expire, release), fallback routing, survives simulated restart
-- State management: progress JSON operations, pruning logic, audit event publication on prune
+- State management: task lifecycle (create, owner flip, child tasks, cancel on reply), config-store phase guard reads/writes
 - `debrief-status` skill: reads progress correctly, reports pending and completed
 
 ### Integration tests
@@ -366,12 +368,12 @@ These are out of scope for this feature but identified during design:
 | 2 | `debrief:` config block in `config/default.yaml` + startup validation | Done |
 | 3 | `meeting-debrief` agent YAML config (prompt, skills, schedule) | Done |
 | 4 | Detection pipeline — calendar scan, prompt-driven classification via LLM judgment | Done |
-| 5 | LLM judgment — contextual YES/NO/DEFER assessment in agent system prompt | Done |
+| 5 | LLM judgment — binary YES/NO in agent system prompt (DEFER removed) | Done |
 | 6 | Prompt delivery — Bullpen request to coordinator, context bridge registered | Done |
-| 7 | Reminder check — cron-tick timestamp check on pendingDebriefs (not one-shot jobs) | Done |
+| 7 | Reminder check — single reminder via wake_at re-schedule on debrief task | Done |
 | 8 | Response processing — coordinator delegates reply, agent executes follow-ups | Done |
 | 9 | Cross-specialist work via Bullpen — research delegation pattern | Done |
-| 10 | State persistence — `scheduler-report` context between cron runs | Done |
+| 10 | State persistence — platform tasks + config-store phase guards (replaces scheduler-report maps) | Done |
 | 11 | Status queries — coordinator delegates to meeting-debrief (no separate skill) | Done |
 | 12 | Preference learning — store CEO feedback as KG facts, wire into judgment | Done |
 | 13 | Audit events — state transitions, expired entry pruning | Done |
@@ -385,3 +387,10 @@ These are out of scope for this feature but identified during design:
 - Item 11 revised: no separate `debrief-status` skill. The coordinator delegates status queries to meeting-debrief directly (consistent with specialist delegation pattern). Agent reads its own state via `scheduler-list`.
 - Internal/external classification dropped `internalDomains` config — the LLM judges meeting worthiness from attendee context (KG enrichment) rather than rigid domain matching.
 - Integration and smoke tests deferred to follow-up — the feature is prompt-driven so the primary verification is manual smoke testing on a live deployment.
+
+**Design notes (2026-06-04 — tasks migration, #839):**
+- §3 rewritten: state moves from `pendingDebriefs`/`judgedEvents`/`deferredEvents` maps in scheduler progress to platform tasks (`debrief-pending` tag) with child tasks for follow-up actions. Config-store phase guards (`seen:`, `prompted:`, `reminded:`) replace the old map entries.
+- Detection cadence changed from `*/5 * * * *` (reactive, backward scan) to `0 7,12,16 * * *` (3×/day, forward scan to end-of-day).
+- Judgment simplified to binary YES/NO; DEFER outcome removed.
+- `scanWindowMinutes` config key removed; forward scan window is always end-of-day.
+- Item 7 updated: reminder is now the second `wake_at` re-schedule on the debrief task row, not a cron-tick scan of in-memory state.
