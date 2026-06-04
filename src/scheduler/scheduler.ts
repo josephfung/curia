@@ -248,7 +248,8 @@ export class Scheduler {
         SELECT sj.*,
                t.id AS agent_task_id,
                t.intent_anchor,
-               t.progress
+               t.progress,
+               t.title AS task_title
           FROM scheduled_jobs sj
           LEFT JOIN tasks t ON sj.task_id = t.id
          WHERE sj.status IN ('pending', 'failed')
@@ -277,6 +278,7 @@ export class Scheduler {
           agentTaskId: row.agent_task_id ?? null,
           intentAnchor: row.intent_anchor ?? null,
           progress: row.progress ?? null,
+          taskTitle: row.task_title ?? null,
           runStartedAt: row.run_started_at ?? null,
           expectedDurationSeconds: row.expected_duration_seconds ?? null,
           lastRunOutcome: row.last_run_outcome ?? null,
@@ -339,13 +341,16 @@ export class Scheduler {
       return;
     }
 
-    // Build the agent.task content. For persistent tasks, include progress and
-    // the original task payload so the agent has execution context. Intent anchor
-    // is passed in the event payload (not content) so the runtime can inject it
-    // into the system prompt as a non-negotiable behavioral instruction.
+    // Build the agent.task content. For task-bound jobs, include task_id, title,
+    // progress, and the original task payload so the receiving specialist has full
+    // context. Intent anchor is passed in the event payload (not content) so the
+    // runtime injects it into the system prompt as a non-negotiable behavioral
+    // instruction. For non-task-bound jobs the payload is used as-is.
     let content = JSON.stringify(job.taskPayload);
     if (job.agentTaskId) {
       content = JSON.stringify({
+        task_id: job.agentTaskId,
+        ...(job.taskTitle !== null && { title: job.taskTitle }),
         progress: job.progress ?? {},
         task_payload: job.taskPayload,
       });
