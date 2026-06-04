@@ -30,9 +30,11 @@ interface Task {
   sourceAgentId: string | null;
   tags: string[];
   waitingOnContactId: string | null;
+  waitingOnContactName: string | null;
   waitingOnText: string | null;
   parentTaskId: string | null;
   blockedByTaskId: string | null;
+  nextWakeAt: string | null;
   progress: Record<string, unknown>;
   errorBudget: Record<string, unknown>;
   conversationId: string | null;
@@ -50,6 +52,16 @@ function formatDate(iso: string | null): string {
 function formatDateTime(iso: string | null): string {
   if (!iso) return '—';
   return iso.slice(0, 16).replace('T', ' ');
+}
+
+// Returns a compact "age" string (e.g. "2d", "3h", "just now") from an ISO timestamp.
+function formatAge(iso: string): string {
+  const ms = Date.now() - new Date(iso).getTime();
+  if (ms < 60_000) return 'just now';
+  if (ms < 3_600_000) return `${Math.floor(ms / 60_000)}m`;
+  if (ms < 86_400_000) return `${Math.floor(ms / 3_600_000)}h`;
+  if (ms < 86_400_000 * 30) return `${Math.floor(ms / 86_400_000)}d`;
+  return `${Math.floor(ms / (86_400_000 * 30))}mo`;
 }
 
 function prettyJson(value: Record<string, unknown>): string {
@@ -130,14 +142,20 @@ interface DrawerProps {
   onClose: () => void;
   onSaved: (task: Task) => void;
   onDeleted: (id: string) => void;
+  /** Resolve a task ID to a summary for display in related-task links. */
+  lookupTask: (id: string) => { id: string; title: string } | undefined;
+  /** Navigate the drawer to a related task by ID. */
+  onNavigateTo: (id: string) => void;
 }
+
+const TERMINAL_STATUSES: ReadonlySet<string> = new Set(['done', 'cancelled']);
 
 const ALL_STATUSES: TaskStatus[] = [
   'open', 'in_progress', 'blocked', 'waiting', 'done', 'cancelled',
   'active', 'pending', 'paused', 'completed', 'failed',
 ];
 
-function TaskEditDrawer({ task, creating, onClose, onSaved, onDeleted }: DrawerProps) {
+function TaskEditDrawer({ task, creating, onClose, onSaved, onDeleted, lookupTask, onNavigateTo }: DrawerProps) {
   const [agentId, setAgentId] = useState(task?.agentId ?? '');
   const [title, setTitle] = useState(task?.title ?? '');
   const [intentAnchor, setIntentAnchor] = useState(task?.intentAnchor ?? '');
@@ -156,6 +174,9 @@ function TaskEditDrawer({ task, creating, onClose, onSaved, onDeleted }: DrawerP
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Whether the current task is in a terminal state (done/cancelled).
+  const isTerminal = !creating && task !== null && TERMINAL_STATUSES.has(task.status);
+
   async function handleSave() {
     if (!agentId.trim()) { setError('Agent ID is required.'); return; }
     if (!intentAnchor.trim()) { setError('Intent anchor is required.'); return; }
@@ -163,6 +184,12 @@ function TaskEditDrawer({ task, creating, onClose, onSaved, onDeleted }: DrawerP
     const parsedPriority = parseInt(priority, 10);
     if (isNaN(parsedPriority) || parsedPriority < 0 || parsedPriority > 100) {
       setError('Priority must be an integer 0–100.');
+      return;
+    }
+
+    // Block invalid status transitions for terminal tasks — mirrored from TaskRepo.
+    if (isTerminal && status !== task!.status) {
+      setError(`Cannot change status from '${task!.status}' — that status is final.`);
       return;
     }
 
@@ -239,7 +266,27 @@ function TaskEditDrawer({ task, creating, onClose, onSaved, onDeleted }: DrawerP
     }
   }
 
-  // Read-only UUID display for system-managed FK fields.
+  // Render a related-task link: shows the task title (if locally resolvable) or the UUID.
+  // Clicking navigates the drawer to that task.
+  function relatedTaskLink(label: string, id: string | null) {
+    if (!id) return null;
+    const related = lookupTask(id);
+    return (
+      <div className="form-field">
+        <label>{label}</label>
+        <button
+          type="button"
+          className="task-related-link"
+          onClick={() => onNavigateTo(id)}
+          title={id}
+        >
+          {related ? related.title || id : id}
+        </button>
+      </div>
+    );
+  }
+
+  // Render a read-only UUID field (for system-managed FKs with no link behaviour).
   function uuidField(label: string, value: string | null) {
     if (!value) return null;
     return (
@@ -263,13 +310,26 @@ function TaskEditDrawer({ task, creating, onClose, onSaved, onDeleted }: DrawerP
         </div>
         <h2 className="drawer-title-h2">{creating ? 'New task' : (task?.title || task?.agentId) ?? ''}</h2>
         {!creating && task && (
-          <div className="drawer-subtitle">{task.status}</div>
+          <div className="drawer-subtitle">
+            <span className={`status-pill ${task.status}`}>{task.status.replace('_', ' ')}</span>
+            {task.nextWakeAt && (
+              <span style={{ marginLeft: 8, fontSize: 12, color: 'var(--app-fg-muted)' }}>
+                wakes {formatDateTime(task.nextWakeAt)}
+              </span>
+            )}
+          </div>
         )}
       </div>
 
       <div className="drawer-body">
         <div className="edit-drawer-form">
           {error && <p style={{ color: 'var(--app-destructive)', margin: 0, fontSize: 13 }}>{error}</p>}
+
+          {isTerminal && (
+            <p style={{ color: 'var(--app-fg-muted)', margin: 0, fontSize: 12, fontStyle: 'italic' }}>
+              This task is in a terminal state. Status cannot be changed.
+            </p>
+          )}
 
           <div className="form-grid">
             <div className="form-field">
@@ -278,7 +338,12 @@ function TaskEditDrawer({ task, creating, onClose, onSaved, onDeleted }: DrawerP
             </div>
             <div className="form-field">
               <label htmlFor="tf-status">Status</label>
-              <select id="tf-status" value={status} onChange={e => setStatus(e.target.value as TaskStatus)}>
+              <select
+                id="tf-status"
+                value={status}
+                onChange={e => setStatus(e.target.value as TaskStatus)}
+                disabled={isTerminal}
+              >
                 {ALL_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
               </select>
             </div>
@@ -334,13 +399,20 @@ function TaskEditDrawer({ task, creating, onClose, onSaved, onDeleted }: DrawerP
             <input id="tf-conv-id" type="text" value={conversationId} onChange={e => setConversationId(e.target.value)} placeholder="UUID — optional" />
           </div>
 
-          {/* Read-only system-managed FK fields */}
+          {/* Read-only system-managed fields */}
           {!creating && (
             <>
+              {task?.waitingOnContactId && (
+                <div className="form-field">
+                  <label>Waiting on contact</label>
+                  <div className="form-field-readonly">
+                    {task.waitingOnContactName ?? task.waitingOnContactId}
+                  </div>
+                </div>
+              )}
+              {relatedTaskLink('Parent task', task?.parentTaskId ?? null)}
+              {relatedTaskLink('Blocked by', task?.blockedByTaskId ?? null)}
               {uuidField('Source agent ID', task?.sourceAgentId ?? null)}
-              {uuidField('Waiting on contact ID', task?.waitingOnContactId ?? null)}
-              {uuidField('Parent task ID', task?.parentTaskId ?? null)}
-              {uuidField('Blocked by task ID', task?.blockedByTaskId ?? null)}
             </>
           )}
 
@@ -377,7 +449,7 @@ function TaskEditDrawer({ task, creating, onClose, onSaved, onDeleted }: DrawerP
 
 // ── Main page ─────────────────────────────────────────────────────────────────
 
-type SortKey = 'title' | 'agentId' | 'owner' | 'priority' | 'status' | 'dueAt' | 'updatedAt';
+type SortKey = 'title' | 'agentId' | 'owner' | 'priority' | 'status' | 'dueAt' | 'updatedAt' | 'createdAt';
 
 const STATUS_FILTERS = [
   'all',
@@ -388,6 +460,8 @@ const STATUS_FILTERS = [
 ] as const;
 type StatusFilter = typeof STATUS_FILTERS[number];
 
+type OwnerFilter = 'all' | TaskOwner;
+
 export default function TasksPage() {
   const [theme, setTheme] = useTheme();
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -396,7 +470,9 @@ export default function TasksPage() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
-  const [sort, setSort] = useState<{ key: SortKey; dir: 'asc' | 'desc' }>({ key: 'updatedAt', dir: 'desc' });
+  const [ownerFilter, setOwnerFilter] = useState<OwnerFilter>('all');
+  // Default sort: priority DESC; due_at ASC is the tiebreaker in the sort comparator.
+  const [sort, setSort] = useState<{ key: SortKey; dir: 'asc' | 'desc' }>({ key: 'priority', dir: 'desc' });
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
   const [editing, setEditing] = useState<Task | null>(null);
@@ -434,6 +510,7 @@ export default function TasksPage() {
   const filtered = useMemo(() => {
     let rows = tasks;
     if (statusFilter !== 'all') rows = rows.filter(t => t.status === statusFilter);
+    if (ownerFilter !== 'all') rows = rows.filter(t => t.owner === ownerFilter);
     if (search) {
       const q = search.toLowerCase();
       rows = rows.filter(t =>
@@ -446,10 +523,18 @@ export default function TasksPage() {
       const bv = (b[sort.key] ?? '') as string | number;
       if (av < bv) return -1 * dir;
       if (av > bv) return  1 * dir;
+      // Secondary tiebreaker when sorting by priority: due_at ASC NULLS LAST,
+      // mirroring the tasks_open_priority_idx sort order from the DB.
+      if (sort.key === 'priority') {
+        const da = a.dueAt ?? '￿';
+        const db = b.dueAt ?? '￿';
+        if (da < db) return -1;
+        if (da > db) return 1;
+      }
       return 0;
     });
     return rows;
-  }, [tasks, statusFilter, search, sort]);
+  }, [tasks, statusFilter, ownerFilter, search, sort]);
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
   const safePage = Math.min(page, totalPages);
@@ -458,7 +543,7 @@ export default function TasksPage() {
   function toggleSort(key: SortKey) {
     setSort(s => s.key === key
       ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' }
-      : { key, dir: 'asc' });
+      : { key, dir: key === 'priority' ? 'desc' : 'asc' });
   }
   const sortArrow = (key: SortKey) => sort.key === key ? (sort.dir === 'asc' ? '↑' : '↓') : '';
   const ariaSort = (key: SortKey): 'ascending' | 'descending' | 'none' =>
@@ -483,6 +568,21 @@ export default function TasksPage() {
     setTasks(prev => prev.filter(t => t.id !== id));
     setEditing(null);
     setCreating(false);
+  }
+
+  /** Resolve a task ID to a lightweight summary for the drawer's related-task links. */
+  function lookupTask(id: string): { id: string; title: string } | undefined {
+    const t = tasks.find(t => t.id === id);
+    return t ? { id: t.id, title: t.title || t.intentAnchor } : undefined;
+  }
+
+  /** Navigate the drawer to a different task (parent, blocked-by). */
+  function handleNavigateTo(id: string) {
+    const target = tasks.find(t => t.id === id);
+    if (target) {
+      setCreating(false);
+      setEditing(target);
+    }
   }
 
   return (
@@ -542,6 +642,21 @@ export default function TasksPage() {
                   ))}
                 </div>
                 <div className="records-toolbar-right">
+                  {/* Owner filter — compact dropdown keeps the toolbar to one row */}
+                  <label htmlFor="tasks-owner-filter" style={{ fontSize: 12, color: 'var(--app-fg-muted)' }}>
+                    Owner
+                  </label>
+                  <select
+                    id="tasks-owner-filter"
+                    className="records-filter-select"
+                    value={ownerFilter}
+                    onChange={e => { setOwnerFilter(e.target.value as OwnerFilter); setPage(1); }}
+                  >
+                    <option value="all">All</option>
+                    <option value="curia">curia</option>
+                    <option value="ceo">ceo</option>
+                    <option value="external">external</option>
+                  </select>
                   <span className="topbar-meta">{filtered.length} of {tasks.length}</span>
                 </div>
               </div>
@@ -555,11 +670,6 @@ export default function TasksPage() {
                           <th className="sortable" aria-sort={ariaSort('title')}>
                             <button className="sort-btn" onClick={() => toggleSort('title')}>
                               Title <span className="sort-arrow">{sortArrow('title')}</span>
-                            </button>
-                          </th>
-                          <th className="sortable" aria-sort={ariaSort('agentId')}>
-                            <button className="sort-btn" onClick={() => toggleSort('agentId')}>
-                              Agent <span className="sort-arrow">{sortArrow('agentId')}</span>
                             </button>
                           </th>
                           <th className="sortable" aria-sort={ariaSort('owner')}>
@@ -582,6 +692,7 @@ export default function TasksPage() {
                               Due <span className="sort-arrow">{sortArrow('dueAt')}</span>
                             </button>
                           </th>
+                          <th className="col-updated" style={{ color: 'var(--app-fg-muted)', fontSize: 11 }}>Age</th>
                           <th className="sortable col-updated" aria-sort={ariaSort('updatedAt')}>
                             <button className="sort-btn" onClick={() => toggleSort('updatedAt')}>
                               Updated <span className="sort-arrow">{sortArrow('updatedAt')}</span>
@@ -605,11 +716,11 @@ export default function TasksPage() {
                                 </span>
                               )}
                             </td>
-                            <td className="cell-mono" style={{ fontSize: 12 }}>{t.agentId}</td>
                             <td><span className={`badge badge-${t.owner}`}>{t.owner}</span></td>
                             <td><span className={`status-pill ${t.status}`}>{t.status.replace('_', ' ')}</span></td>
                             <td className="cell-mono" style={{ textAlign: 'center' }}>{t.priority}</td>
                             <td className="cell-mono col-updated">{formatDate(t.dueAt)}</td>
+                            <td className="cell-mono col-updated" style={{ color: 'var(--app-fg-muted)' }}>{formatAge(t.createdAt)}</td>
                             <td className="cell-mono col-updated">{formatDateTime(t.updatedAt)}</td>
                             <td>
                               <div className="cell-actions" onClick={e => e.stopPropagation()}>
@@ -654,6 +765,8 @@ export default function TasksPage() {
                     onClose={() => { setEditing(null); setCreating(false); }}
                     onSaved={handleSaved}
                     onDeleted={handleDeleted}
+                    lookupTask={lookupTask}
+                    onNavigateTo={handleNavigateTo}
                   />
                 )}
               </div>

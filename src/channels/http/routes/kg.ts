@@ -289,6 +289,8 @@ export async function knowledgeGraphRoutes(
   const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
   // Full DB row shape for the tasks table (all columns post-migration-049).
+  // The enriched variant (used for GET list) includes joined fields from
+  // contacts and a correlated subquery for the next scheduled wake-up time.
   type DbTaskRow = {
     id: string;
     agent_id: string;
@@ -311,13 +313,35 @@ export async function knowledgeGraphRoutes(
     conversation_id: string | null;
     created_at: string;
     updated_at: string;
+    // Enriched fields — null on rows returned by the bare UPDATE RETURNING path.
+    waiting_on_contact_name: string | null;
+    next_wake_at: string | null;
   };
 
+  // Columns used for bare SELECT / UPDATE RETURNING (no JOIN needed).
   const TASK_SELECT = `
     id, agent_id, title, intent_anchor, description, status, owner, priority,
     due_at, source, source_agent_id, tags, waiting_on_contact_id, waiting_on_text,
     parent_task_id, blocked_by_task_id, progress, error_budget, conversation_id,
     created_at, updated_at`;
+
+  // Full enriched query for the GET list: joins contacts for display name and
+  // uses a correlated subquery to surface the next pending scheduled wake-up.
+  const TASK_ENRICHED_QUERY = `
+    SELECT
+      t.id, t.agent_id, t.title, t.intent_anchor, t.description, t.status,
+      t.owner, t.priority, t.due_at, t.source, t.source_agent_id, t.tags,
+      t.waiting_on_contact_id, t.waiting_on_text, t.parent_task_id,
+      t.blocked_by_task_id, t.progress, t.error_budget, t.conversation_id,
+      t.created_at, t.updated_at,
+      c.display_name AS waiting_on_contact_name,
+      (SELECT sj.run_at FROM scheduled_jobs sj
+       WHERE sj.task_id = t.id AND sj.status = 'pending'
+       ORDER BY sj.run_at ASC LIMIT 1) AS next_wake_at
+    FROM tasks t
+    LEFT JOIN contacts c ON c.id = t.waiting_on_contact_id
+    ORDER BY t.updated_at DESC
+    LIMIT 500`;
 
   function serializeTask(row: DbTaskRow) {
     return {
@@ -334,9 +358,11 @@ export async function knowledgeGraphRoutes(
       sourceAgentId: row.source_agent_id,
       tags: row.tags ?? [],
       waitingOnContactId: row.waiting_on_contact_id,
+      waitingOnContactName: row.waiting_on_contact_name ?? null,
       waitingOnText: row.waiting_on_text,
       parentTaskId: row.parent_task_id,
       blockedByTaskId: row.blocked_by_task_id,
+      nextWakeAt: row.next_wake_at ?? null,
       progress: row.progress ?? {},
       errorBudget: row.error_budget ?? {},
       conversationId: row.conversation_id,
@@ -351,9 +377,7 @@ export async function knowledgeGraphRoutes(
   app.get('/api/kg/tasks', KG_RATE, async (request, reply) => {
     if (!assertSecret(request, reply, webAppBootstrapSecret, sessions)) return;
     try {
-      const result = await pool.query(
-        `SELECT ${TASK_SELECT} FROM tasks ORDER BY updated_at DESC LIMIT 500`,
-      );
+      const result = await pool.query(TASK_ENRICHED_QUERY);
       return reply.send({
         tasks: result.rows.map((row) => serializeTask(row as DbTaskRow)),
       });
@@ -513,6 +537,19 @@ export async function knowledgeGraphRoutes(
     }
     const row = existing.rows[0]! as DbTaskRow;
 
+    // Mirror the TaskRepo terminal-state guard: once a task is done or cancelled,
+    // status cannot be changed via the console API either.
+    const TERMINAL_STATUSES_KG = ['done', 'cancelled'];
+    if (
+      TERMINAL_STATUSES_KG.includes(row.status) &&
+      typeof body.status === 'string' &&
+      body.status !== row.status
+    ) {
+      return reply.status(400).send({
+        error: `Cannot transition task from '${row.status}' — it is a terminal state.`,
+      });
+    }
+
     const agentId = typeof body.agentId === 'string' ? body.agentId.trim() : row.agent_id;
     const title = typeof body.title === 'string' ? body.title.trim() : row.title;
     const intentAnchor = typeof body.intentAnchor === 'string' ? body.intentAnchor.trim() : row.intent_anchor;
@@ -606,8 +643,26 @@ export async function knowledgeGraphRoutes(
         logger.warn({ taskId: id }, 'kg: PATCH tasks matched 0 rows — likely concurrent delete');
         return reply.status(404).send({ error: 'Task not found.' });
       }
+      // Re-fetch with enriched JOIN so the response includes contact name and
+      // next wake-up time, keeping parity with the GET list response shape.
+      const enriched = await pool.query(
+        `SELECT
+          t.id, t.agent_id, t.title, t.intent_anchor, t.description, t.status,
+          t.owner, t.priority, t.due_at, t.source, t.source_agent_id, t.tags,
+          t.waiting_on_contact_id, t.waiting_on_text, t.parent_task_id,
+          t.blocked_by_task_id, t.progress, t.error_budget, t.conversation_id,
+          t.created_at, t.updated_at,
+          c.display_name AS waiting_on_contact_name,
+          (SELECT sj.run_at FROM scheduled_jobs sj
+           WHERE sj.task_id = t.id AND sj.status = 'pending'
+           ORDER BY sj.run_at ASC LIMIT 1) AS next_wake_at
+         FROM tasks t
+         LEFT JOIN contacts c ON c.id = t.waiting_on_contact_id
+         WHERE t.id = $1`,
+        [id],
+      );
       return reply.send({
-        task: serializeTask(updated.rows[0]! as DbTaskRow),
+        task: serializeTask(enriched.rows[0]! as DbTaskRow),
       });
     } catch (err) {
       logger.error({ err, taskId: id }, 'kg: PATCH /api/kg/tasks/:id failed');

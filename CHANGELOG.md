@@ -14,6 +14,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 ## [Unreleased]
 
 ### Added
+- **Tasks console UI** — list view with owner/status/priority model: owner dropdown filter, age column, default priority sort, status lifecycle controls (terminal-state guard), contact name resolution for `waiting_on_contact_id`, next scheduled wake-up time in drawer, and parent/blocked-by task links. (#870)
 - **Tasks v1 scheduler dispatch** — task-wake fires route to `scheduled_jobs.agent_id` and include `task_id`, `title`, `progress` in the content bundle; `updateTask()` now writes the wake-up job's `agent_id` using `source_agent_id ?? tasks.agent_id ?? callerAgentId` so coordinator-triggered reschedules preserve the specialist's routing target. (#837)
 - **Tasks v1 CRUD skills** — `task-create`, `task-list`, `task-update`, `task-complete` skills backed by a new capability-gated `TaskRepo`; promotes `agent_tasks` to a first-class `tasks` table with CEO-visible columns; adds `task.created`, `task.updated`, `task.completed` bus events. (#834, #835)
 
