@@ -22,8 +22,9 @@ const { Pool } = pg;
 const DATABASE_URL = process.env.DATABASE_URL;
 const describeIf = DATABASE_URL ? describe : describe.skip;
 
-// Keys kept separate from production and email-adapter-persistence tests.
-const WATERMARK_NAMESPACE = 'ceo_inbox';
+// Test-scoped namespace so tests cannot corrupt the production watermark even
+// when DATABASE_URL points at a shared database.
+const WATERMARK_NAMESPACE = 'ceo_inbox_test';
 const WATERMARK_KEY = 'last_processed_at';
 
 const SEED_WATERMARK = 1_000_000;
@@ -87,7 +88,9 @@ describeIf('ceo-inbox-list watermark (#866)', () => {
     const validator = new MemoryValidator(kgStore, embeddingService);
     entityMemory = new EntityMemory(kgStore, validator, embeddingService, logger);
     configStore = new ConfigStore(entityMemory, logger);
-    handler = new CeoInboxListHandler();
+    // Pass the test namespace so the handler writes to an isolated scope and
+    // never touches the production ceo_inbox watermark.
+    handler = new CeoInboxListHandler(WATERMARK_NAMESPACE);
 
     await pool.query('SELECT 1 FROM kg_nodes LIMIT 0');
   });

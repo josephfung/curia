@@ -18,7 +18,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
-- **`ceo-inbox` watermark ownership** — `last_processed_at` is now read and written by `ceo-inbox-list` in code via `ConfigStore`, not by the LLM; model-fabricated timestamps can no longer blind inbox triage by drifting into the future. A future watermark is clamped to `now()`, the stored value is healed immediately, and the run falls back to the default 24h lookback so the backlog is recovered. (#866)
+- **`ceo-inbox` watermark ownership** — moves `last_processed_at` management to `ceo-inbox-list` via `ConfigStore`; clamps future timestamps to `now()` and falls back to 24h lookback. (#866)
 - **Email adapter watermark persistence** — `lastSeenTimestamp` is now persisted to the KG via a new `ConfigStore` service (`src/memory/config-store.ts`) and restored on restart, preventing silent message loss after a process restart during downtime. (#846)
 - **Email adapter poll observability** — each successful poll cycle now emits a `channel.poll` audit event with per-filter skip counts, message totals, watermark, and duration; a `channel.stalled` event fires (once per lifecycle) when no poll completes within 5 × the polling interval. (#846)
 

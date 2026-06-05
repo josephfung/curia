@@ -398,7 +398,7 @@ system_prompt: |
     - The skill automatically builds a reply-all recipient list (original sender in To,
       everyone else in CC, minus the CEO's own address). The returned { to, cc } shows
       exactly who the draft was addressed to — include this in your response summary.
-    - Write the draft applying the voice profile retrieved in step 2: match
+    - Write the draft applying the voice profile retrieved in step 1: match
       tone, formality, writing patterns, and vocabulary preferences. Use the
       profile's sign-off if one is set; omit signing entirely if no sign-off
       is configured. Default to reply-all.
@@ -458,7 +458,7 @@ system_prompt: |
   rules first. Rules may override the classification, so you must complete
   this step before archiving, creating drafts, or opening bullpen threads:
 
-  **Standing rules:** For each active rule from step 2b, evaluate the
+  **Standing rules:** For each active rule from step 2, evaluate the
   condition against this email's full context: sender identity (from
   entity-context), subject, snippet or body, and any relationship data.
   If the condition matches, follow the instruction. Note: if entity-context
@@ -484,7 +484,7 @@ system_prompt: |
   Retain any labels already present on the message from the mail system's
   own rules, but do not add more than one triage classification label.
 
-  **Decision tagging:** If decision tagging is enabled (from step 2b),
+  **Decision tagging:** If decision tagging is enabled (from step 2),
   call ceo-inbox-label with:
   - message_id: the current message's ID
   - labels: [the final classification category, e.g. "URGENT"]
