@@ -1,6 +1,6 @@
 import type { EventBus } from '../bus/bus.js';
-import type { InboundMessageEvent, AgentResponseEvent, AgentErrorEvent } from '../bus/events.js';
-import { createAgentTask, createOutboundMessage, createContactResolved, createContactUnknown, createMessageHeld, createMessageRejected, createConversationCheckpoint } from '../bus/events.js';
+import type { InboundMessageEvent, AgentResponseEvent, AgentErrorEvent, SkillResultEvent } from '../bus/events.js';
+import { createAgentTask, createOutboundMessage, createOutboundSuppressedDuplicate, createContactResolved, createContactUnknown, createMessageHeld, createMessageRejected, createConversationCheckpoint } from '../bus/events.js';
 import type { Logger } from '../logger.js';
 import type { ContactResolver } from '../contacts/contact-resolver.js';
 import type { ContactService } from '../contacts/contact-service.js';
@@ -119,6 +119,9 @@ export class Dispatcher {
       conversationId: string;
       senderId: string;
       accountId?: string;
+      /** Set to true when a human-facing reply skill (email-reply, email-send) succeeds
+       *  during this task. handleAgentResponse suppresses outbound.message when true. */
+      humanReplySent: boolean;
     }
   >();
   /** Key: `${conversationId}:${agentId}` — reset on every agent.response */
@@ -182,6 +185,12 @@ export class Dispatcher {
     // agent.error → log for awareness (the runtime also sends agent.response for user notification)
     this.bus.subscribe('agent.error', 'dispatch', async (event) => {
       await this.handleAgentError(event as AgentErrorEvent);
+    });
+
+    // skill.result → reply-lock: detect successful email-reply / email-send calls so
+    // handleAgentResponse can suppress the duplicate outbound.message. See #847.
+    this.bus.subscribe('skill.result', 'dispatch', async (event) => {
+      await this.handleSkillResult(event as SkillResultEvent);
     });
 
     this.logger.info(
@@ -819,6 +828,7 @@ export class Dispatcher {
       conversationId: payload.conversationId,
       senderId: payload.senderId,
       accountId: payload.accountId,
+      humanReplySent: false,
     });
 
     await this.bus.publish('dispatch', taskEvent);
@@ -833,6 +843,72 @@ export class Dispatcher {
       { agentId: event.payload.agentId, errorType: event.payload.errorType, source: event.payload.source },
       'Agent error reported',
     );
+  }
+
+  /**
+   * Reply-lock: detect when a human-facing reply skill fires successfully during a task
+   * and mark the routing entry so handleAgentResponse can suppress the duplicate outbound.
+   *
+   * The skill.result event carries conversationId but not the agent.task ID directly,
+   * so we scan the routing map for an entry with a matching conversationId and senderId.
+   * This works for both the direct-coordinator case (coordinator calls email-reply) and
+   * the delegated-specialist case (T2125 calls email-reply; coordinator's routing entry
+   * shares the same conversationId). See #847.
+   *
+   * NOTE: This relies on single-process in-order event delivery — skill.result must be
+   * delivered to all subscribers (including this handler) before agent.response is
+   * delivered. The bus processes subscribers sequentially within a single Node.js
+   * event loop; multi-process deployments would require a persistent lock instead.
+   */
+  private async handleSkillResult(event: SkillResultEvent): Promise<void> {
+    const { skillName, conversationId, result } = event.payload;
+
+    if (skillName !== 'email-reply' && skillName !== 'email-send') return;
+    if (!result.success) return;
+
+    // Extract outbound recipients from result.data.
+    // email-reply returns { to: string } (single address).
+    // email-send returns { to: string } where the value may be comma-joined for multiple recipients.
+    const data = result.data as unknown as Record<string, unknown>;
+    const toRaw = typeof data?.to === 'string' ? data.to : undefined;
+    if (!toRaw) {
+      // The skill contract (to: string) was not met — log a warning so duplicate sends are
+      // observable. The lock fails open: outbound.message will still be published.
+      this.logger.warn(
+        { skillName, conversationId },
+        'Dispatcher reply-lock: skill result missing expected { to: string } field — reply-lock NOT set, duplicate send may occur',
+      );
+      return;
+    }
+
+    // Parse comma-separated recipients and normalise to lowercase for case-insensitive matching.
+    const recipients = toRaw.split(',').map((addr) => addr.trim().toLowerCase());
+
+    // Find every routing entry for this conversation where the reply target includes the
+    // original inbound sender. Multiple entries for the same conversationId are possible
+    // but rare; we set the flag on all of them to be safe.
+    let matched = false;
+    for (const [taskId, routing] of this.taskRouting.entries()) {
+      if (
+        routing.conversationId === conversationId &&
+        recipients.includes(routing.senderId.toLowerCase())
+      ) {
+        routing.humanReplySent = true;
+        matched = true;
+        this.logger.debug(
+          { taskId, conversationId, skillName },
+          'Dispatcher reply-lock: human-facing reply detected — outbound.message will be suppressed',
+        );
+      }
+    }
+
+    if (!matched) {
+      // Expected for bullpen tasks or when the routing entry was already cleaned up.
+      this.logger.debug(
+        { skillName, conversationId, routingMapSize: this.taskRouting.size },
+        'Dispatcher reply-lock: no routing entry matched skill result — no lock set',
+      );
+    }
   }
 
   private async handleAgentResponse(event: AgentResponseEvent): Promise<void> {
@@ -852,6 +928,26 @@ export class Dispatcher {
     }
 
     this.taskRouting.delete(event.parentEventId!);
+
+    // Reply-lock: if a human-facing reply skill (email-reply, email-send) already fired
+    // successfully during this task, suppress the outbound.message to prevent a duplicate
+    // send. Emit outbound.suppressed_duplicate for the audit trail. See #847.
+    if (routing.humanReplySent) {
+      this.logger.info(
+        { agentId: event.payload.agentId, conversationId: routing.conversationId, routingTaskId: event.parentEventId },
+        'Dispatcher reply-lock: suppressing duplicate outbound.message — human-facing reply already sent',
+      );
+      const suppressed = createOutboundSuppressedDuplicate({
+        routingTaskId: event.parentEventId!,
+        agentId: event.payload.agentId,
+        conversationId: routing.conversationId,
+        reason: 'human_reply_already_sent',
+        parentEventId: event.id,
+      });
+      await this.bus.publish('dispatch', suppressed);
+      this.scheduleCheckpoint(routing.conversationId, event.payload.agentId, routing.channelId);
+      return;
+    }
 
     // Publish outbound.message to the bus — the email adapter will pick it up
     // and route it through OutboundGateway (blocked-contact check + content filter).
