@@ -276,6 +276,10 @@ schedule:
       1. Call contact-list with status: "provisional", limit: 10,
          offset: next_offset. If count is 0 (no contacts in this batch), skip
          directly to step 5 — reset the cursor to 0 for the next run.
+         @TODO: promotions during a sweep shrink the pool, so some contacts
+         may be skipped by the offset and not checked until the cursor wraps
+         back to 0. This is an accepted limitation of offset-based pagination
+         over a live set. A keyset cursor (by created_at) would be more precise.
 
       2. Call ceo-inbox-list with folder: "SENT", unread_only: false,
          received_after_hours: 2160 (90 days), limit: 50. Collect all email

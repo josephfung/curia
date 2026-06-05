@@ -1088,6 +1088,8 @@ class PostgresContactBackend implements ContactServiceBackend {
       sql += ` LIMIT $${params.length}`;
     }
 
+    // Skip OFFSET 0 — it is a no-op in Postgres and saves a parameter slot.
+    // InMemory backend uses slice(offset, end) which also handles 0 correctly.
     if (filters?.offset != null && filters.offset > 0) {
       params.push(filters.offset);
       sql += ` OFFSET $${params.length}`;

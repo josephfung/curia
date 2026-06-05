@@ -144,7 +144,7 @@ describe('ContactListHandler', () => {
   });
 
   it('offset skips leading contacts', async () => {
-    const ctx = makeCtx({ offset: 2 });
+    const ctx = makeCtx({ offset: 2, limit: 10 });
     const result = await handler.execute(ctx);
     expect(result.success).toBe(true);
     // allContacts sorted by createdAt: alice, bob, carol, dave — offset 2 skips alice+bob
@@ -155,7 +155,7 @@ describe('ContactListHandler', () => {
   });
 
   it('offset past end returns empty array', async () => {
-    const ctx = makeCtx({ offset: 10 });
+    const ctx = makeCtx({ offset: 10, limit: 10 });
     const result = await handler.execute(ctx);
     expect(result.success).toBe(true);
     expect(getContacts(result)).toHaveLength(0);
@@ -248,7 +248,7 @@ describe('ContactListHandler', () => {
   });
 
   it('rejects combining role with offset', async () => {
-    const ctx = makeCtx({ role: 'CFO', offset: 5 });
+    const ctx = makeCtx({ role: 'CFO', offset: 5, limit: 10 });
     const result = await handler.execute(ctx);
     expect(result.success).toBe(false);
     expect(result.error).toContain('Cannot combine role');
@@ -259,6 +259,20 @@ describe('ContactListHandler', () => {
     const result = await handler.execute(ctx);
     expect(result.success).toBe(false);
     expect(result.error).toContain('non-negative integer');
+  });
+
+  it('rejects offset > 0 without limit (unbounded pagination guard)', async () => {
+    const ctx = makeCtx({ offset: 5 });
+    const result = await handler.execute(ctx);
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Offset requires limit');
+  });
+
+  it('allows offset=0 without limit (same as no offset)', async () => {
+    const ctx = makeCtx({ offset: 0 });
+    const result = await handler.execute(ctx);
+    expect(result.success).toBe(true);
+    expect(getContacts(result)).toHaveLength(4);
   });
 
   it('rejects non-integer offset', async () => {

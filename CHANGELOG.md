@@ -16,9 +16,15 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Changed
 - **KG graph** — various visual improvements: physics-aware layout, better hub sizing, principal-node default view, and viewport centering on focal nodes. (#861)
 
+### Changed
+
+- **`contact-list` skill** — new `offset` input (v1.2.0) enables cursor-based pagination; `offset > 0` requires `limit` to prevent unbounded result sets. Public API surface change.
+
 ### Fixed
 
 - **`ceo-inbox` watermark ownership** — moves `last_processed_at` management to `ceo-inbox-list` via `ConfigStore`; clamps future timestamps to `now()` and falls back to 24h lookback. (#866)
+- **Provisional contact promotion sweep** — batched to 10 contacts per daily run using `offset` pagination and a persisted `next_offset` cursor in `last_run_context`, preventing turn-budget exhaustion on large pools. Contacts agent `error_budget.max_turns` raised to 30. (#884)
+- **Scheduler task payload** — `scheduler_job_id` is now injected into every fired job's task content so agents can call `scheduler-report` without guessing their own job ID.
 - **Email adapter watermark persistence** — `lastSeenTimestamp` is now persisted to the KG via a new `ConfigStore` service (`src/memory/config-store.ts`) and restored on restart, preventing silent message loss after a process restart during downtime. (#846)
 - **Email adapter poll observability** — each successful poll cycle now emits a `channel.poll` audit event with per-filter skip counts, message totals, watermark, and duration; a `channel.stalled` event fires (once per lifecycle) when no poll completes within 5 × the polling interval. (#846)
 
