@@ -235,6 +235,11 @@ export class CeoNylasClient {
     await this.request<NylasApiMessage>('PUT', url, 'markAsRead', { unread: false });
   }
 
+  async markAsStarred(messageId: string, starred = true): Promise<void> {
+    const url = `${this.baseUrl}/messages/${encodeURIComponent(messageId)}`;
+    await this.request<NylasApiMessage>('PUT', url, 'markAsStarred', { starred });
+  }
+
   async updateMessageFolders(
     messageId: string,
     folders: string[],
@@ -419,6 +424,7 @@ interface NylasApiMessage {
   snippet?: string;
   date?: number;
   unread?: boolean;
+  starred?: boolean;
   folders?: string[];
   labels?: string[];
   attachments?: NylasApiAttachment[];
