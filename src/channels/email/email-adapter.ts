@@ -278,6 +278,7 @@ export class EmailAdapter {
     this.startedAt = Date.now();
     this.lastSuccessfulPollAt = null;
     this.stalledEmitted = false;
+    this.stalledEmitAttempts = 0;
 
     // Poll on interval; also run the watchdog check each tick.
     this.pollTimer = setInterval(() => {
