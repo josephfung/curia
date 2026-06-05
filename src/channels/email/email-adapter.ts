@@ -11,8 +11,15 @@ import type { EventBus } from '../../bus/bus.js';
 import type { Logger } from '../../logger.js';
 import type { OutboundGateway, EmailSendRequest } from '../../skills/outbound-gateway.js';
 import type { ContactService } from '../../contacts/contact-service.js';
+import type { ConfigStore } from '../../memory/config-store.js';
 import { convertNylasMessage } from './message-converter.js';
-import { createInboundMessage, type OutboundMessageEvent, type OutboundNotificationEvent } from '../../bus/events.js';
+import {
+  createInboundMessage,
+  createChannelPoll,
+  createChannelStalled,
+  type OutboundMessageEvent,
+  type OutboundNotificationEvent,
+} from '../../bus/events.js';
 import { sanitizeOutput } from '../../skills/sanitize.js';
 import { buildReplyQuote } from '../../skills/_shared/reply-quote.js';
 
@@ -20,6 +27,12 @@ import { buildReplyQuote } from '../../skills/_shared/reply-quote.js';
 // When the agent's response plus the quoted original would exceed this, the quote
 // is silently dropped so the reply still sends.
 const MAX_REPLY_BODY_LENGTH = 50_000;
+
+// KG namespace and key pattern for persisting the poll high-water mark.
+const POLL_STATE_NAMESPACE = 'system:email-poll-state';
+function lastSeenKey(accountId: string): string {
+  return `${accountId}.last_seen_at`;
+}
 
 // ---------------------------------------------------------------------------
 // Address normalization helpers
@@ -79,6 +92,12 @@ export interface EmailAdapterConfig {
    * the timezone the skills receive via SkillContext.
    */
   timezone: string;
+  /**
+   * KG-backed config store for persisting the poll high-water mark across restarts.
+   * When absent the adapter operates without persistence (in-memory only — reverts
+   * to Date.now() on each restart, which is the legacy behaviour).
+   */
+  configStore?: ConfigStore;
 }
 
 export class EmailAdapter {
@@ -86,6 +105,18 @@ export class EmailAdapter {
   private pollTimer?: ReturnType<typeof setInterval>;
   private lastSeenTimestamp: number = 0;
   private processing = false;
+
+  // ── Watchdog state ─────────────────────────────────────────────────────────
+  // Tracks the last successful poll completion time for stall detection.
+  // "Successful" means listEmailMessages resolved without throwing; zero messages
+  // returned is still a success (a quiet inbox is healthy).
+
+  /** Epoch ms when the adapter was started — used to compute initial stall window. */
+  private startedAt: number | null = null;
+  /** Epoch ms of the most recent poll cycle that reached completion (no throw). */
+  private lastSuccessfulPollAt: number | null = null;
+  /** True once channel.stalled has been emitted this lifecycle; prevents re-emission. */
+  private stalledEmitted = false;
 
   // ── Recently-sent message ID tracking (self-loop guard) ───────────────────
   // After a successful send, the Nylas message ID is added here so that the
@@ -123,7 +154,7 @@ export class EmailAdapter {
   }
 
   async start(): Promise<void> {
-    const { bus, logger, pollingIntervalMs } = this.config;
+    const { bus, logger, pollingIntervalMs, configStore, accountId } = this.config;
 
     // Subscribe to outbound messages for this specific email account.
     // When the coordinator responds to an email-triggered conversation, the dispatcher
@@ -204,11 +235,43 @@ export class EmailAdapter {
       }
     });
 
-    // Initialize last-seen timestamp to now so we only process new emails
+    // Restore the persisted high-water mark so restarts resume from where we left off
+    // rather than silently dropping messages that arrived during downtime.
+    // Falls back to Date.now() on first boot (no stored row) or when no configStore is wired.
     this.lastSeenTimestamp = Math.floor(Date.now() / 1000);
+    if (configStore) {
+      const persisted = await configStore.get(POLL_STATE_NAMESPACE, lastSeenKey(accountId));
+      if (persisted !== null) {
+        const parsed = parseInt(persisted, 10);
+        if (!isNaN(parsed)) {
+          this.lastSeenTimestamp = parsed;
+          logger.info(
+            { accountId, lastSeenTimestamp: this.lastSeenTimestamp },
+            'Email adapter: restored poll watermark from persisted state',
+          );
+        } else {
+          logger.warn(
+            { accountId, persisted },
+            'Email adapter: persisted watermark is not a valid integer — falling back to Date.now()',
+          );
+        }
+      } else {
+        logger.info(
+          { accountId },
+          'Email adapter: no persisted watermark found — first boot, initialising to now',
+        );
+      }
+    }
 
-    // Start polling
-    this.pollTimer = setInterval(() => void this.poll(), pollingIntervalMs);
+    this.startedAt = Date.now();
+    this.lastSuccessfulPollAt = null;
+    this.stalledEmitted = false;
+
+    // Poll on interval; also run the watchdog check each tick.
+    this.pollTimer = setInterval(() => {
+      void this.poll();
+      void this.checkWatchdog();
+    }, pollingIntervalMs);
     logger.info({ pollingIntervalMs }, 'Email adapter started — polling Nylas');
 
     // Do an initial poll immediately and await it so callers that await start()
@@ -222,6 +285,7 @@ export class EmailAdapter {
       clearInterval(this.pollTimer);
       this.pollTimer = undefined;
     }
+    this.startedAt = null;
     this.config.logger.info('Email adapter stopped');
   }
 
@@ -230,6 +294,15 @@ export class EmailAdapter {
     // (e.g. slow Nylas response or many messages to process), skip this cycle.
     if (this.processing) return;
     this.processing = true;
+
+    const pollStart = Date.now();
+    // Capture watermark before the loop so we can detect whether it advanced.
+    const prevWatermark = this.lastSeenTimestamp;
+
+    // Per-filter skip counters for the channel.poll audit event.
+    const skipped = { sent_folder: 0, recently_sent: 0, self: 0, excluded: 0, failed: 0 };
+    let fetched = 0;
+    let processed = 0;
 
     // Separate try/catch for the Nylas API call so a transient network error
     // doesn't silently drop already-fetched messages.
@@ -249,6 +322,8 @@ export class EmailAdapter {
       this.processing = false;
       return;
     }
+
+    fetched = messages.length;
 
     try {
       for (const msg of messages) {
@@ -274,6 +349,7 @@ export class EmailAdapter {
             { messageId: msg.id, folders: msg.folders, accountId: this.config.accountId },
             'Email skipped — message is in sent/drafts folder',
           );
+          skipped.sent_folder++;
           continue;
         }
 
@@ -289,6 +365,7 @@ export class EmailAdapter {
             { messageId: msg.id, accountId: this.config.accountId },
             'Email skipped — matches recently-sent message ID (loop guard)',
           );
+          skipped.recently_sent++;
           continue;
         }
 
@@ -310,7 +387,10 @@ export class EmailAdapter {
         if (
           fromEmail &&
           normalizeForComparison(fromEmail) === normalizeForComparison(this.config.selfEmail)
-        ) continue;
+        ) {
+          skipped.self++;
+          continue;
+        }
 
         // Skip emails from any additionally-excluded sender addresses (e.g. Curia's
         // outbound address on a monitored inbox, to prevent self-reply loops).
@@ -324,6 +404,7 @@ export class EmailAdapter {
             { fromEmail, accountId: this.config.accountId },
             'Email skipped — sender is in excludedSenderEmails',
           );
+          skipped.excluded++;
           continue;
         }
 
@@ -360,6 +441,7 @@ export class EmailAdapter {
             },
           });
           await this.config.bus.publish('channel', event);
+          processed++;
 
           // Warn when the provider's SPF/DKIM/DMARC checks did not all pass.
           // This is an audit signal — the message is still processed, but the
@@ -382,10 +464,91 @@ export class EmailAdapter {
             { err, messageId: msg.id, threadId: msg.threadId, senderEmail: fromEmail },
             'Failed to process inbound email — skipping message',
           );
+          skipped.failed++;
         }
       }
     } finally {
       this.processing = false;
+    }
+
+    // ── Post-poll accounting (only reached when listEmailMessages succeeded) ──
+
+    this.lastSuccessfulPollAt = Date.now();
+
+    // Emit one channel.poll audit event per cycle so operators can verify the
+    // adapter is alive and measure throughput over time.
+    try {
+      await this.config.bus.publish('channel', createChannelPoll({
+        accountId: this.config.accountId,
+        channel: 'email',
+        fetched,
+        processed,
+        skipped,
+        lastSeenAt: this.lastSeenTimestamp,
+        durationMs: Date.now() - pollStart,
+      }));
+    } catch (err) {
+      // Non-fatal — the messages were processed. Lose the audit event, not the mail.
+      this.config.logger.error({ err }, 'Failed to emit channel.poll audit event');
+    }
+
+    // Persist the watermark only when it actually advanced to avoid KG write churn
+    // on idle polls. Wrapped in try/catch so a KG write failure never aborts the
+    // poll loop — the in-memory watermark remains correct for the current run.
+    if (this.lastSeenTimestamp !== prevWatermark && this.config.configStore) {
+      try {
+        await this.config.configStore.set(
+          POLL_STATE_NAMESPACE,
+          lastSeenKey(this.config.accountId),
+          String(this.lastSeenTimestamp),
+        );
+      } catch (err) {
+        this.config.logger.error(
+          { err, accountId: this.config.accountId, lastSeenTimestamp: this.lastSeenTimestamp },
+          'Email adapter: failed to persist poll watermark — in-memory value still current',
+        );
+      }
+    }
+  }
+
+  /**
+   * Check whether the poll loop has stalled and emit channel.stalled if so.
+   * Called on each interval tick alongside poll(). Fires at most once per adapter
+   * lifecycle (until stop()/start()) — repeated alerts add noise without value.
+   */
+  private async checkWatchdog(): Promise<void> {
+    if (this.stalledEmitted) return;
+    if (this.startedAt === null) return;
+
+    const now = Date.now();
+    const threshold = 5 * this.config.pollingIntervalMs;
+
+    // Use the last successful poll time when available; fall back to startedAt
+    // so a never-successful adapter (first poll already failing) is also detected.
+    const reference = this.lastSuccessfulPollAt ?? this.startedAt;
+    if (now - reference <= threshold) return;
+
+    this.stalledEmitted = true;
+    this.config.logger.error(
+      {
+        accountId: this.config.accountId,
+        lastSuccessfulPollAt: this.lastSuccessfulPollAt,
+        stallThresholdMs: threshold,
+      },
+      'Email adapter stall detected — no successful poll within threshold',
+    );
+
+    try {
+      await this.config.bus.publish('channel', createChannelStalled({
+        accountId: this.config.accountId,
+        channel: 'email',
+        lastSuccessfulPollAt: this.lastSuccessfulPollAt,
+        stallThresholdMs: threshold,
+      }));
+    } catch (err) {
+      // If we can't even emit the stall event, log at error level — it's already
+      // logged above, so at minimum there is a log trail.
+      this.config.logger.error({ err }, 'Failed to emit channel.stalled event');
     }
   }
 

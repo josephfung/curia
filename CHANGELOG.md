@@ -13,6 +13,11 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Email adapter watermark persistence** — `lastSeenTimestamp` is now persisted to the KG via a new `ConfigStore` service (`src/memory/config-store.ts`) and restored on restart, preventing silent message loss after a process restart during downtime. (#846)
+- **Email adapter poll observability** — each successful poll cycle now emits a `channel.poll` audit event with per-filter skip counts, message totals, watermark, and duration; a `channel.stalled` event fires (once per lifecycle) when no poll completes within 5 × the polling interval. (#846)
+
 ## [0.33.0] — 2026-06-04 — "Mr. Meeseeks"
 
 > **Mr. Meeseeks** *(Rick and Morty, 2014, Dan Harmon & Justin Roiland)* — summoned to fulfill one task, a Meeseeks exists for that purpose alone, cannot rest while it's open, and pops out of existence the moment it's done. v0.33 gives Curia the same compulsion: every deferred commitment becomes a tracked task in a CEO-visible backlog, a heartbeat wakes anything idle or stale until it resolves, and nothing is allowed to quietly drop.

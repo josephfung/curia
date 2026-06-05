@@ -44,6 +44,7 @@ import { EmbeddingService } from './memory/embedding.js';
 import { KnowledgeGraphStore } from './memory/knowledge-graph.js';
 import { MemoryValidator } from './memory/validation.js';
 import { EntityMemory } from './memory/entity-memory.js';
+import { ConfigStore } from './memory/config-store.js';
 import { SkillRegistry } from './skills/registry.js';
 import { ExecutionLayer } from './skills/execution.js';
 import { loadSkillsFromDirectory, validateAllowedCallers } from './skills/loader.js';
@@ -1073,6 +1074,9 @@ async function main(): Promise<void> {
         contactCreationMaxPerMessage: yamlConfig.contact_creation_limits?.max_per_message ?? 10,
         contactCreationMaxPerHour: yamlConfig.contact_creation_limits?.max_per_hour ?? 100,
         timezone: config.timezone,
+        // Persist the poll high-water mark so restarts resume from where we left off
+        // rather than silently dropping messages that arrived during downtime (#846).
+        configStore: entityMemory ? new ConfigStore(entityMemory, logger) : undefined,
       }));
     }
   }
