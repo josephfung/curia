@@ -25,6 +25,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **`contact-list` skill** — rejects lifecycle status values passed as `role` (e.g. `role: "provisional"`) with a clear redirect to the `status` parameter, preventing silent zero-result sweeps. Manifest description of `role` updated to clarify it filters by job title, not lifecycle state.
 - **Dispatcher reply-lock** — suppresses duplicate `outbound.message` when a human-facing reply skill (`email-reply` or `email-send`) already fired successfully during the same task. Emits `outbound.suppressed_duplicate` audit event instead. Covers both the direct-coordinator and delegated-specialist cases. (#847)
 - **`ceo-inbox` watermark ownership** — moves `last_processed_at` management to `ceo-inbox-list` via `ConfigStore`; clamps future timestamps to `now()` and falls back to 24h lookback. (#866)
 - **Provisional contact promotion sweep** — batched to 10 contacts per daily run using `offset` pagination and a persisted `next_offset` cursor in `last_run_context`, preventing turn-budget exhaustion on large pools. Contacts agent `error_budget.max_turns` raised to 30. (#884)

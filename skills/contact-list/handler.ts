@@ -25,7 +25,16 @@ export class ContactListHandler implements SkillHandler {
       return { success: false, error: 'Role must be 200 characters or fewer' };
     }
 
-    if (status != null && !VALID_STATUSES.includes(status)) {
+    // Guard against a common LLM mistake: passing a lifecycle status as the role parameter.
+    // The role filter searches job titles (e.g. "CEO"); lifecycle filtering uses status.
+    if (role && typeof role === 'string' && (VALID_STATUSES as readonly string[]).includes(role)) {
+      return {
+        success: false,
+        error: `"${role}" is a contact lifecycle status, not a job title. Use the status parameter instead: { status: "${role}" }`,
+      };
+    }
+
+    if (status != null && !(VALID_STATUSES as readonly string[]).includes(status)) {
       return { success: false, error: `Invalid status: "${status}". Must be one of: ${VALID_STATUSES.join(', ')}` };
     }
 

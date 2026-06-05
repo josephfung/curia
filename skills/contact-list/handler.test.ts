@@ -233,6 +233,17 @@ describe('ContactListHandler', () => {
     expect(result.error).toContain('200 characters');
   });
 
+  it.each(['provisional', 'confirmed', 'blocked'])(
+    'rejects role="%s" and redirects to the status parameter',
+    async (statusValue) => {
+      const ctx = makeCtx({ role: statusValue });
+      const result = await handler.execute(ctx);
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('status');
+      expect(result.error).toContain(statusValue);
+    },
+  );
+
   it('rejects combining role with status', async () => {
     const ctx = makeCtx({ role: 'CFO', status: 'provisional' });
     const result = await handler.execute(ctx);
