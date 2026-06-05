@@ -27,10 +27,12 @@ export class ContactListHandler implements SkillHandler {
 
     // Guard against a common LLM mistake: passing a lifecycle status as the role parameter.
     // The role filter searches job titles (e.g. "CEO"); lifecycle filtering uses status.
-    if (role && typeof role === 'string' && (VALID_STATUSES as readonly string[]).includes(role)) {
+    // Normalize before comparing so casing/whitespace variants ("Provisional", " blocked") are caught too.
+    const normalizedRole = typeof role === 'string' ? role.trim().toLowerCase() : undefined;
+    if (normalizedRole && (VALID_STATUSES as readonly string[]).includes(normalizedRole)) {
       return {
         success: false,
-        error: `"${role}" is a contact lifecycle status, not a job title. Use the status parameter instead: { status: "${role}" }`,
+        error: `"${role}" is a contact lifecycle status, not a job title. Use the status parameter instead: { status: "${normalizedRole}" }`,
       };
     }
 

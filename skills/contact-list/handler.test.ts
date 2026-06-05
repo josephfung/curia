@@ -233,14 +233,20 @@ describe('ContactListHandler', () => {
     expect(result.error).toContain('200 characters');
   });
 
-  it.each(['provisional', 'confirmed', 'blocked'])(
+  it.each([
+    // exact lowercase
+    'provisional', 'confirmed', 'blocked',
+    // casing and whitespace variants an LLM might produce
+    'Provisional', 'CONFIRMED', ' blocked',
+  ])(
     'rejects role="%s" and redirects to the status parameter',
     async (statusValue) => {
       const ctx = makeCtx({ role: statusValue });
       const result = await handler.execute(ctx);
       expect(result.success).toBe(false);
       expect(result.error).toContain('status');
-      expect(result.error).toContain(statusValue);
+      // error message includes the normalized (lowercase) form so the LLM knows what to pass
+      expect(result.error).toContain(statusValue.trim().toLowerCase());
     },
   );
 
