@@ -284,7 +284,8 @@ schedule:
       2. Call ceo-inbox-list with folder: "SENT", unread_only: false,
          received_after_hours: 2160 (90 days), limit: 50. Collect all email
          addresses from the "to" and "cc" arrays across all returned messages.
-         Deduplicate into a set.
+         Normalize each address (trim whitespace and convert to lowercase) before
+         adding to the set. Deduplicate into a set.
          Note: ceo-inbox-list is capped at 50 messages per call by the skill
          definition. For high-volume inboxes this may miss older provisional
          contacts.
@@ -296,17 +297,23 @@ schedule:
          "Promotion Sweep — Principal Context" section in your system prompt) as
          contactId so the skill can resolve all calendars registered to the
          principal. Collect all attendee email addresses from non-cancelled
-         events. Deduplicate into a set.
+         events. Normalize each address (trim whitespace and convert to lowercase)
+         before adding to the set. Deduplicate into a set.
          If the call fails (skill error, calendar not connected, API unavailable),
          record the error message and treat the calendar attendee set as empty —
          calendar enrichment is best-effort and must not abort the sweep.
 
       4. For each provisional contact in the batch from step 1:
-         - Use contact-lookup (by: "name") to get their channel identities
-           (email addresses).
+         - Use contact-lookup (by: "name", query: the contact's display_name from
+           the step 1 result) to get their channel identities (email addresses).
+           The step 1 result includes a contact_id for each contact — if the
+           lookup returns more than one contact, use the one whose contact_id
+           matches the step 1 record. This prevents duplicate display names from
+           routing a promotion to the wrong contact.
          - If a contact has no email identity, skip them.
-         - Check whether their email appears in the Sent folder set (step 2) or
-           the calendar attendee set (step 3).
+         - Normalize the contact's email address (trim whitespace and lowercase)
+           before checking membership in the Sent folder set (step 2) or the
+           calendar attendee set (step 3).
          - If found in Sent folder: call contact-register with channel: "email",
            identifier: their email address, displayName: their display name,
            messageTimestamp: the current ISO 8601 time, ceo_has_sent: true.
