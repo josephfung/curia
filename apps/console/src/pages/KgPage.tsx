@@ -111,7 +111,7 @@ function idealEdgeLengthFn(edge: cytoscape.EdgeSingular): number {
 // produce soft springs so those nodes drift outward naturally.
 function edgeElasticityFn(edge: cytoscape.EdgeSingular): number {
   if (STRONG_EDGES.has(edge.data('label') as string)) return 0.9;
-  const conf = (edge.data('confidence') as number) ?? 0.5;
+  const conf = (edge.data('confidence') as number | undefined | null) ?? 0.5;
   const srcScore = DECAY_SCORE[edge.source().data('decayClass') as string] ?? 0.7;
   const tgtScore = DECAY_SCORE[edge.target().data('decayClass') as string] ?? 0.7;
   return Math.max(0.1, conf * Math.min(srcScore, tgtScore) * 0.7);
@@ -451,7 +451,7 @@ export default function KgPage() {
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') return;
       console.error('[KgPage] hero graph load failed:', err);
-      setStatus('Failed to load graph');
+      setStatus(`Failed to load graph: ${err instanceof Error ? err.message : 'Unknown error'}`);
     }
   }, []);
 
@@ -474,7 +474,11 @@ export default function KgPage() {
 
   async function loadNeighborhood(nodeId: string) {
     const cy = cyRef.current;
-    if (!cy) return;
+    if (!cy) {
+      console.error('[KgPage] loadNeighborhood called before Cytoscape was initialized');
+      setStatus('Graph not ready — please refresh');
+      return;
+    }
     neighborhoodAbortRef.current?.abort();
     const controller = new AbortController();
     neighborhoodAbortRef.current = controller;
@@ -506,7 +510,7 @@ export default function KgPage() {
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') return;
       console.error('[KgPage] neighborhood load failed:', err);
-      setStatus('Failed to load');
+      setStatus(`Failed to load: ${err instanceof Error ? err.message : 'Unknown error'}`);
     }
   }
 
@@ -550,7 +554,7 @@ export default function KgPage() {
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') return;
       console.error('[KgPage] expand failed:', err);
-      setStatus('Failed to expand');
+      setStatus(`Failed to expand: ${err instanceof Error ? err.message : 'Unknown error'}`);
     }
   }
 
@@ -624,6 +628,8 @@ export default function KgPage() {
               await loadNeighborhood(principal.kgNodeId);
               return;
             }
+          } else {
+            console.error('[KgPage] principal node lookup: contacts fetch failed with status', res.status);
           }
         } catch (err) {
           console.error('[KgPage] principal node lookup failed:', err);
@@ -702,12 +708,7 @@ export default function KgPage() {
             />
           </div>
 
-          {loadError ? (
-            <div style={{ padding: 32, color: 'var(--app-destructive)', fontSize: 13 }}>
-              {loadError}
-            </div>
-          ) : (
-            <div className="kg-layout">
+          <div className="kg-layout">
               {/* Left: node list sidebar */}
               <div className="kg-sidebar">
                 <div className="kg-sidebar-search">
@@ -722,7 +723,11 @@ export default function KgPage() {
                   <button onClick={submitSearch}>Search</button>
                 </div>
                 <div className="kg-sidebar-list">
-                  {sidebarNodes.length === 0 ? (
+                  {loadError ? (
+                    <p style={{ fontSize: 12, color: 'var(--app-destructive)', margin: 0 }}>
+                      {loadError}
+                    </p>
+                  ) : sidebarNodes.length === 0 ? (
                     <p style={{ fontSize: 12, color: 'var(--app-fg-muted)', margin: 0 }}>
                       No matching nodes.
                     </p>
@@ -783,7 +788,6 @@ export default function KgPage() {
                 />
               )}
             </div>
-          )}
         </main>
       </div>
     </MobileMenuContext.Provider>
