@@ -38,6 +38,11 @@ export class ContactListHandler implements SkillHandler {
       if (typeof offset !== 'number' || !Number.isInteger(offset) || offset < 0) {
         return { success: false, error: 'Offset must be a non-negative integer' };
       }
+      // Require limit when offset > 0 to prevent accidentally returning an unbounded
+      // result set starting from the middle of the table.
+      if (offset > 0 && limit == null) {
+        return { success: false, error: 'Offset requires limit to be set. Use limit together with offset for pagination.' };
+      }
     }
 
     // Role uses a separate query path that doesn't support status/limit/offset — reject the combination
@@ -81,7 +86,7 @@ export class ContactListHandler implements SkillHandler {
       };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      ctx.log.error({ err, role, status, limit }, 'Failed to list contacts');
+      ctx.log.error({ err, role, status, limit, offset }, 'Failed to list contacts');
       return { success: false, error: `Failed to list contacts: ${message}` };
     }
   }

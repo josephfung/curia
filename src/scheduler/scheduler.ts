@@ -355,7 +355,9 @@ export class Scheduler {
         task_payload: job.taskPayload,
       });
     } else {
-      content = JSON.stringify({ scheduler_job_id: job.id, ...job.taskPayload });
+      // scheduler_job_id is placed last so it always wins if taskPayload coincidentally
+      // contains the same key (e.g. a manually-crafted job row).
+      content = JSON.stringify({ ...job.taskPayload, scheduler_job_id: job.id });
     }
 
     // Prepend prior-run context so the agent knows what happened last time
