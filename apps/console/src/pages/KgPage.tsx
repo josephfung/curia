@@ -619,10 +619,10 @@ export default function KgPage() {
         try {
           const res = await apiFetch('/api/kg/contacts');
           if (res.ok) {
-            const contacts = await res.json() as Array<{
+            const { contacts } = await res.json() as { contacts: Array<{
               systemRole: string | null;
               kgNodeId: string | null;
-            }>;
+            }> };
             const principal = contacts.find(c => c.systemRole === 'principal');
             if (principal?.kgNodeId) {
               await loadNeighborhood(principal.kgNodeId);
