@@ -12,6 +12,14 @@ const WATERMARK_KEY = 'last_processed_at';
 const FIRST_RUN_HOURS = 24;
 
 export class CeoInboxListHandler implements SkillHandler {
+  // Namespace is injectable so integration tests can scope their writes to a
+  // test-only namespace and avoid corrupting the production watermark.
+  private readonly ns: string;
+
+  constructor(ns = WATERMARK_NAMESPACE) {
+    this.ns = ns;
+  }
+
   async execute(ctx: SkillContext): Promise<SkillResult> {
     const apiKey = ctx.secret('nylas_api_key');
     const grantId = ctx.secret('ceo_nylas_grant_id');
@@ -67,11 +75,15 @@ export class CeoInboxListHandler implements SkillHandler {
     let effectiveWatermark: number | undefined;
     let watermarkFloor: number | undefined;
     let configStore: ConfigStore | undefined;
+    // Set to true when a future watermark is detected and healed. When true the
+    // received_after_hours caller input is ignored — a poisoned watermark always
+    // recovers via the hard 24h default to guarantee the backlog is visible.
+    let poisonedWatermark = false;
 
     if (ctx.entityMemory) {
       configStore = new ConfigStore(ctx.entityMemory, ctx.log);
       try {
-        const stored = await configStore.get(WATERMARK_NAMESPACE, WATERMARK_KEY);
+        const stored = await configStore.get(this.ns, WATERMARK_KEY);
         if (stored !== null) {
           const parsed = Math.floor(Number(stored));
           if (Number.isFinite(parsed)) {
@@ -86,8 +98,9 @@ export class CeoInboxListHandler implements SkillHandler {
               );
               effectiveWatermark = undefined; // use default 24h lookback for this run
               watermarkFloor = nowSeconds; // advance guard never regresses past healed value
+              poisonedWatermark = true; // bypass received_after_hours override on poisoned runs
               // Heal asynchronously; don't block the Nylas query on this write.
-              configStore.set(WATERMARK_NAMESPACE, WATERMARK_KEY, String(nowSeconds)).catch((err) => {
+              configStore.set(this.ns, WATERMARK_KEY, String(nowSeconds)).catch((err) => {
                 ctx.log.error({ err, healedTo: nowSeconds }, 'ceo-inbox-list: failed to heal future watermark in ConfigStore');
               });
             } else {
@@ -109,10 +122,12 @@ export class CeoInboxListHandler implements SkillHandler {
 
     // +1 on the stored watermark converts "last processed" to "strictly after",
     // preventing re-fetch of the last-seen message (Nylas uses inclusive >= comparison).
+    // When the watermark was poisoned (future timestamp), always use the hard 24h default
+    // regardless of any received_after_hours caller input — we must recover the backlog.
     const receivedAfter =
       effectiveWatermark !== undefined
         ? effectiveWatermark + 1
-        : receivedAfterHours !== undefined
+        : !poisonedWatermark && receivedAfterHours !== undefined
           ? Math.floor((Date.now() - receivedAfterHours * 3_600_000) / 1_000)
           : nowSeconds - FIRST_RUN_HOURS * 3_600; // hard default: last 24h
 
@@ -125,9 +140,11 @@ export class CeoInboxListHandler implements SkillHandler {
         source:
           effectiveWatermark !== undefined
             ? 'config-store'
-            : receivedAfterHours !== undefined
-              ? 'hours'
-              : 'default',
+            : poisonedWatermark
+              ? 'poison-recovery'
+              : receivedAfterHours !== undefined
+                ? 'hours'
+                : 'default',
       },
       'ceo-inbox-list: listing messages',
     );
@@ -158,17 +175,19 @@ export class CeoInboxListHandler implements SkillHandler {
 
       // ── Watermark advance (code-owned, not LLM-owned) ──────────────────────
       //
-      // Advance to max(msg.date) of returned messages. Only writes when there
-      // are messages and the new max strictly advances past the watermarkFloor
-      // (the current persisted value, or nowSeconds after a heal). A zero-message
-      // run leaves last_processed_at unchanged — nothing arrived, nothing to
-      // advance past. The watermarkFloor guard also prevents a healed nowSeconds
-      // from being overwritten by a past message date.
-      if (messages.length > 0 && configStore) {
+      // Advance to max(msg.date) of the raw (pre-filter) result. Using `raw`
+      // rather than `messages` prevents a stall when every fetched message is
+      // Curia-originated: in that case `messages` would be empty, the watermark
+      // would never advance, and the same Curia messages would be re-fetched
+      // every run while newer external mail sits unseen beyond the limit window.
+      // Only writes when there are raw messages and the new max strictly advances
+      // past watermarkFloor (the persisted value, or nowSeconds after a heal).
+      // A zero-raw-message run leaves last_processed_at unchanged.
+      if (raw.length > 0 && configStore) {
         // Use reduce rather than spread+Math.max to avoid a RangeError for very large arrays.
-        const maxDate = messages.reduce((max, m) => (m.date > max ? m.date : max), 0);
+        const maxDate = raw.reduce((max, m) => (m.date > max ? m.date : max), 0);
         if (watermarkFloor === undefined || maxDate > watermarkFloor) {
-          configStore.set(WATERMARK_NAMESPACE, WATERMARK_KEY, String(maxDate)).catch((err) => {
+          configStore.set(this.ns, WATERMARK_KEY, String(maxDate)).catch((err) => {
             ctx.log.error({ err, advanceTo: maxDate }, 'ceo-inbox-list: failed to advance watermark in ConfigStore');
           });
         }
