@@ -70,25 +70,76 @@ const SENS_BADGE: Record<string, string> = {
   restricted:   'badge badge-kg-restricted',
 };
 
+// Edge types that represent close structural relationships — their pairs should
+// sit visually adjacent in the layout.
+const STRONG_EDGES = new Set([
+  'spouse', 'parent', 'child', 'sibling',
+  'reports_to', 'manages', 'member_of', 'founded', 'invested_in', 'advises',
+]);
+
+// Weighting factors for edge elasticity based on how quickly connected nodes
+// go stale. Permanent facts create tight springs; fast-decaying info goes soft.
+const DECAY_SCORE: Record<string, number> = {
+  permanent:  1.0,
+  slow_decay: 0.7,
+  fast_decay: 0.4,
+};
+
+// ── fCoSE physics callbacks ───────────────────────────────────────────────────
+
+// Fact nodes are children of entities; low repulsion keeps them clustered
+// nearby. High-traffic entity types need more space to avoid crowding.
+function nodeRepulsionFn(node: cytoscape.NodeSingular): number {
+  const type = node.data('type') as string;
+  if (type === 'fact') return 1_000;
+  if (type === 'person' || type === 'organization' || type === 'event') return 7_500;
+  return 4_500; // project, decision, concept — fCoSE default
+}
+
+// Fact edges stay short so attributes cluster against their parent entity.
+// Strong relationship pairs sit visually adjacent; generic edges settle at 80px.
+function idealEdgeLengthFn(edge: cytoscape.EdgeSingular): number {
+  const srcType = edge.source().data('type') as string;
+  const tgtType = edge.target().data('type') as string;
+  if (srcType === 'fact' || tgtType === 'fact') return 40;
+  if (STRONG_EDGES.has(edge.data('label') as string)) return 60;
+  return 80;
+}
+
+// Strong relationships attract hard (0.9). For others: weight by confidence
+// and the weaker decay score of the two endpoints — stale or uncertain edges
+// produce soft springs so those nodes drift outward naturally.
+function edgeElasticityFn(edge: cytoscape.EdgeSingular): number {
+  if (STRONG_EDGES.has(edge.data('label') as string)) return 0.9;
+  const conf = (edge.data('confidence') as number) ?? 0.5;
+  const srcScore = DECAY_SCORE[edge.source().data('decayClass') as string] ?? 0.7;
+  const tgtScore = DECAY_SCORE[edge.target().data('decayClass') as string] ?? 0.7;
+  return Math.max(0.1, conf * Math.min(srcScore, tgtScore) * 0.7);
+}
+
 // fcose layout options per the issue spec.
 const FCOSE_FULL = {
   name: 'fcose',
   animate: false,
   fit: true,
   nodeSeparation: 80,
-  idealEdgeLength: 120,
   randomize: true,
-} as const;
+  idealEdgeLength: idealEdgeLengthFn,
+  nodeRepulsion: nodeRepulsionFn,
+  edgeElasticity: edgeElasticityFn,
+};
 
 const FCOSE_EXPAND = {
   name: 'fcose',
   animate: true,
   fit: false,
   nodeSeparation: 80,
-  idealEdgeLength: 120,
   randomize: false,
   animationDuration: 400,
-} as const;
+  idealEdgeLength: idealEdgeLengthFn,
+  nodeRepulsion: nodeRepulsionFn,
+  edgeElasticity: edgeElasticityFn,
+};
 
 // Cytoscape's TS types don't model mapData() string expressions (the library
 // supports them at runtime but types them as numbers). Cast to satisfy the compiler.
@@ -109,8 +160,9 @@ const CY_STYLE = [
       'font-size': 10,
       'font-family': 'Manrope, system-ui, sans-serif',
       // Degree-based size: updated by updateDegrees() after every cy.add().
-      width: 'mapData(degree, 0, 15, 20, 52)',
-      height: 'mapData(degree, 0, 15, 20, 52)',
+      // Wider range than before so hub nodes stand out more dramatically.
+      width: 'mapData(degree, 0, 15, 20, 80)',
+      height: 'mapData(degree, 0, 15, 20, 80)',
       // Confidence-based opacity.
       opacity: 'mapData(confidence, 0, 1, 0.15, 1.0)',
     },
@@ -122,7 +174,8 @@ const CY_STYLE = [
   { selector: 'node[type="decision"]',     style: { 'background-color': '#C9874A' } },
   { selector: 'node[type="event"]',        style: { 'background-color': '#5E9E6B' } },
   { selector: 'node[type="concept"]',      style: { 'background-color': '#888888' } },
-  { selector: 'node[type="fact"]',         style: { 'background-color': '#444444' } },
+  // Facts are decorations, not hubs — fixed small size regardless of degree.
+  { selector: 'node[type="fact"]',         style: { 'background-color': '#444444', width: 10, height: 10 } },
   // Facts: hide label at default size; reveal on select.
   { selector: 'node[type="fact"]',         style: { 'font-size': 0 } },
   { selector: 'node[type="fact"]:selected', style: { 'font-size': 9 } },
@@ -413,7 +466,7 @@ export default function KgPage() {
     cy.add(elements);
     updateDegrees(cy);
     cy.resize();
-    cy.layout(FCOSE_FULL).run();
+    cy.layout(FCOSE_FULL as unknown as cytoscape.LayoutOptions).run();
     applyColorMode(cy, colorModeRef.current);
   }
 
@@ -435,6 +488,14 @@ export default function KgPage() {
       const data = await res.json() as { nodes: ApiKgNode[]; edges: ApiKgEdge[] };
       if (cy.destroyed()) return;
       renderGraph(cy, data);
+      // Animate the viewport to center on the focal node after the layout settles.
+      const focalEl = cy.getElementById(nodeId);
+      if (focalEl.length) {
+        cy.animate(
+          { fit: { eles: focalEl.closedNeighborhood(), padding: 80 } },
+          { duration: 300 },
+        );
+      }
       // Sync selection + URL so refresh and back-nav restore this view.
       const focused = data.nodes.find(n => n.id === nodeId) ?? null;
       setSelectedNode(focused);
@@ -473,17 +534,13 @@ export default function KgPage() {
       if (cy.destroyed()) return;
 
       if (newElements.length > 0) {
-        // Snapshot positions before adding so fcose can pin existing nodes.
-        const fixedNodeConstraint = cy.nodes().map(node => ({
-          nodeId: node.id(),
-          position: { ...node.position() },
-        }));
-
         cy.add(newElements);
         updateDegrees(cy);
         applyColorMode(cy, colorModeRef.current);
-
-        cy.layout({ ...FCOSE_EXPAND, fixedNodeConstraint } as unknown as cytoscape.LayoutOptions).run();
+        // randomize: false warms fCoSE from current positions without hard-pinning
+        // existing nodes, so the graph re-settles globally instead of squeezing
+        // new nodes into whatever gaps remain.
+        cy.layout(FCOSE_EXPAND as unknown as cytoscape.LayoutOptions).run();
       }
 
       cy.elements().removeClass('focal');
@@ -546,34 +603,33 @@ export default function KgPage() {
   useEffect(() => {
     void loadSidebarNodes(initialQ ?? '');
 
-    // Restore ?node= selection from URL (e.g. browser back/refresh).
     if (initialNode) {
-      neighborhoodAbortRef.current?.abort();
-      const controller = new AbortController();
-      neighborhoodAbortRef.current = controller;
+      // Restore ?node= from URL via loadNeighborhood, which handles render,
+      // focal class, viewport centering, and URL sync in one shot.
+      void loadNeighborhood(initialNode);
+    } else {
+      // Default view: focus on the principal's KG node so the graph opens on
+      // a meaningful starting point. Falls back to the hero graph if the
+      // principal has no linked KG node or the contacts fetch fails.
       void (async () => {
         try {
-          const res = await apiFetch(
-            `/api/kg/graph?node_id=${encodeURIComponent(initialNode)}&depth=2`,
-            { signal: controller.signal },
-          );
-          if (!res.ok) throw new Error(await errorMessage(res));
-          const data = await res.json() as { nodes: ApiKgNode[]; edges: ApiKgEdge[] };
-          const cy = cyRef.current;
-          if (cy && !cy.destroyed()) {
-            renderGraph(cy, data);
-            setStatus(`${data.nodes.length} nodes · ${data.edges.length} edges`);
+          const res = await apiFetch('/api/kg/contacts');
+          if (res.ok) {
+            const contacts = await res.json() as Array<{
+              systemRole: string | null;
+              kgNodeId: string | null;
+            }>;
+            const principal = contacts.find(c => c.systemRole === 'principal');
+            if (principal?.kgNodeId) {
+              await loadNeighborhood(principal.kgNodeId);
+              return;
+            }
           }
-          const found = data.nodes.find(n => n.id === initialNode);
-          if (found) setSelectedNode(found);
         } catch (err) {
-          if (err instanceof DOMException && err.name === 'AbortError') return;
-          console.error('[KgPage] ?node= restore failed:', err);
-          setStatus('Failed to restore node');
+          console.error('[KgPage] principal node lookup failed:', err);
         }
+        void loadHeroGraph();
       })();
-    } else {
-      void loadHeroGraph();
     }
     // Run once on mount only.
     // eslint-disable-next-line react-hooks/exhaustive-deps

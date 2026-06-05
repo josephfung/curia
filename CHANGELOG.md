@@ -13,6 +13,9 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Changed
+- **KG graph** — various visual improvements: physics-aware layout, better hub sizing, principal-node default view, and viewport centering on focal nodes. (#861)
+
 ### Fixed
 
 - **Email adapter watermark persistence** — `lastSeenTimestamp` is now persisted to the KG via a new `ConfigStore` service (`src/memory/config-store.ts`) and restored on restart, preventing silent message loss after a process restart during downtime. (#846)
