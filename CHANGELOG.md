@@ -24,7 +24,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **`contact-list` skill** — new `offset` input (v1.2.0) enables cursor-based pagination; `offset > 0` requires `limit` to prevent unbounded result sets. Public API surface change.
 
 ### Fixed
-- **Startup health check** — HTTP API now binds before channel adapters start, so the health check passes within seconds instead of after the initial email catch-up completes (which could block for minutes on a long backlog). Fixes Docker deploy failures where `curia-curia-1` was marked unhealthy before `/api/health` was reachable.
+- **Startup health check** — HTTP API now binds before channel adapters start, so the health check passes within seconds instead of after the initial email catch-up completes (which could block for minutes on a long backlog). Fixes Docker deploy failures where `curia-curia-1` was marked unhealthy before `/api/health` was reachable. Channel adapter startup is now wrapped in a `try/catch` that invokes graceful shutdown (exit 1) rather than letting an adapter failure propagate to the bare `main().catch` path.
 
 - **`contact-list` skill** — rejects lifecycle status values passed as `role` (e.g. `role: "provisional"`) with a clear redirect to the `status` parameter, preventing silent zero-result sweeps. Manifest description of `role` updated to clarify it filters by job title, not lifecycle state.
 - **Dispatcher reply-lock** — suppresses duplicate `outbound.message` when a human-facing reply skill (`email-reply` or `email-send`) already fired successfully during the same task. Emits `outbound.suppressed_duplicate` audit event instead. Covers both the direct-coordinator and delegated-specialist cases. (#847)

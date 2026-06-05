@@ -1653,44 +1653,12 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  // Start all email adapters AFTER the dispatcher is registered so inbound.message
-  // events always have a subscriber. Starting before registration would drop emails
-  // arriving during the startup window (each adapter advances its own high-water mark
-  // on poll, so dropped messages are never retried).
-  //
-  // In setup-required mode we skip external adapters entirely — without a principal
-  // contact there is no recipient policy, no autonomy-bypass identity match, and no
-  // sane fallback for received emails. The operator restarts after completing setup
-  // to bring these up for real.
-  if (!setupRequiredAtBoot) {
-    for (const adapter of emailAdapters) {
-      await adapter.start();
-    }
-    if (emailAdapters.length > 0) {
-      logger.info({ count: emailAdapters.length }, 'Email channel adapter(s) started');
-    }
-  } else if (emailAdapters.length > 0) {
-    logger.warn(
-      { count: emailAdapters.length },
-      'SETUP-REQUIRED mode: skipping email adapter startup — restart after setup to enable',
-    );
-  }
-
-  // Start the Signal adapter AFTER the dispatcher is registered — same ordering rule as email.
-  // SignalAdapter.start() connects to the signal-cli socket and registers the inbound listener.
-  // If signal-cli is not yet running (e.g., cold start with both containers starting simultaneously),
-  // the RPC client's exponential backoff will retry until the socket is available.
-  //
-  // Skipped in setup-required mode for the same reason as email — see above.
-  if (signalAdapter && !setupRequiredAtBoot) {
-    await signalAdapter.start();
-    logger.info('Signal channel adapter started');
-  } else if (signalAdapter && setupRequiredAtBoot) {
-    logger.warn('SETUP-REQUIRED mode: skipping Signal adapter startup — restart after setup to enable');
-  }
-
   // Graceful shutdown — stop accepting new input first, then close connections.
-  const shutdown = async () => {
+  // Accepts exitCode so startup-failure teardown can exit(1) while SIGTERM/SIGINT
+  // exit(0). Defined before channel adapter startup so that a failure in
+  // adapter.start() (after HTTP has already bound) can call shutdown(1) and ensure
+  // the HTTP server, pool, and other already-started resources are closed cleanly.
+  const shutdown = async (exitCode = 0) => {
     logger.info('Shutting down...');
     for (const adapter of emailAdapters) {
       try {
@@ -1769,7 +1737,7 @@ async function main(): Promise<void> {
     } catch (err) {
       logger.error({ err }, 'Error closing database pool during shutdown');
     }
-    process.exit(0);
+    process.exit(exitCode);
   };
 
   process.on('SIGTERM', () => void shutdown());
@@ -1779,6 +1747,48 @@ async function main(): Promise<void> {
   // handler and would terminate uncleanly without draining the DB pool, stopping
   // the scheduler, or gracefully closing the HTTP server.
   process.on('SIGINT', () => void shutdown());
+
+  // Start channel adapters AFTER the dispatcher is registered so inbound.message events
+  // always have a subscriber. Starting before registration would drop messages arriving
+  // during the startup window (each adapter advances its own high-water mark on poll,
+  // so dropped messages are never retried).
+  //
+  // Wrapped in try/catch: if a channel adapter throws after HTTP has already bound,
+  // shutdown() cleans up the HTTP server, pool, scheduler, and other started resources
+  // before the process exits. Without this, the error propagates to main().catch which
+  // calls process.exit(1) without any teardown.
+  //
+  // Skipped entirely in setup-required mode — without a principal contact there is no
+  // recipient policy, no autonomy-bypass identity match, and no sane fallback for
+  // received messages. The operator restarts after completing setup to bring these up.
+  try {
+    if (!setupRequiredAtBoot) {
+      for (const adapter of emailAdapters) {
+        await adapter.start();
+      }
+      if (emailAdapters.length > 0) {
+        logger.info({ count: emailAdapters.length }, 'Email channel adapter(s) started');
+      }
+    } else if (emailAdapters.length > 0) {
+      logger.warn(
+        { count: emailAdapters.length },
+        'SETUP-REQUIRED mode: skipping email adapter startup — restart after setup to enable',
+      );
+    }
+
+    // SignalAdapter.start() connects to the signal-cli socket and registers the inbound listener.
+    // If signal-cli is not yet running (e.g., cold start with both containers starting simultaneously),
+    // the RPC client's exponential backoff will retry until the socket is available.
+    if (signalAdapter && !setupRequiredAtBoot) {
+      await signalAdapter.start();
+      logger.info('Signal channel adapter started');
+    } else if (signalAdapter && setupRequiredAtBoot) {
+      logger.warn('SETUP-REQUIRED mode: skipping Signal adapter startup — restart after setup to enable');
+    }
+  } catch (err) {
+    logger.fatal({ err }, 'Fatal error during channel adapter startup — invoking shutdown');
+    await shutdown(1);
+  }
 
   // 8. CLI channel — only started when stdin is an interactive TTY (i.e., local dev).
   // In Docker / production, stdin is closed or a pipe: readline receives EOF
