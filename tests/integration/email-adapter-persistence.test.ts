@@ -253,6 +253,11 @@ describe('email-adapter stall watchdog (#846)', () => {
     // Advance past 5× pollingIntervalMs (5 × 100ms = 500ms).
     // Tick 6 (600ms) is the first tick where now - startedAt > threshold → stalled.
     await vi.advanceTimersByTimeAsync(650);
+    // Drain microtasks from fire-and-forget `void this.checkWatchdog()` calls inside
+    // the setInterval callback. checkWatchdog() awaits bus.publish(), so two rounds
+    // of Promise.resolve() flush the microtask queue before we assert.
+    await Promise.resolve();
+    await Promise.resolve();
 
     const stalledEvents = capturedEvents.filter(
       (e): e is ChannelStalledEvent => e.type === 'channel.stalled',
@@ -267,6 +272,8 @@ describe('email-adapter stall watchdog (#846)', () => {
 
     // Advance further — must NOT emit a second channel.stalled (fire-once per lifecycle).
     await vi.advanceTimersByTimeAsync(600);
+    await Promise.resolve();
+    await Promise.resolve();
     const stalledTotal = capturedEvents.filter((e) => e.type === 'channel.stalled');
     expect(stalledTotal).toHaveLength(1);
 
@@ -291,6 +298,8 @@ describe('email-adapter stall watchdog (#846)', () => {
 
     // Advance well past 5× interval — still healthy because each tick succeeds.
     await vi.advanceTimersByTimeAsync(650);
+    await Promise.resolve();
+    await Promise.resolve();
 
     const stalledEvents = capturedEvents.filter((e) => e.type === 'channel.stalled');
     expect(stalledEvents).toHaveLength(0);

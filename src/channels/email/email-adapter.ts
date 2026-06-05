@@ -115,8 +115,11 @@ export class EmailAdapter {
   private startedAt: number | null = null;
   /** Epoch ms of the most recent poll cycle that reached completion (no throw). */
   private lastSuccessfulPollAt: number | null = null;
-  /** True once channel.stalled has been emitted this lifecycle; prevents re-emission. */
+  /** True once channel.stalled has been successfully published this lifecycle. */
   private stalledEmitted = false;
+  /** Number of channel.stalled publish attempts this lifecycle (bounds retries on bus failure). */
+  private stalledEmitAttempts = 0;
+  private static readonly MAX_STALL_EMIT_ATTEMPTS = 3;
 
   // ── Recently-sent message ID tracking (self-loop guard) ───────────────────
   // After a successful send, the Nylas message ID is added here so that the
@@ -238,27 +241,36 @@ export class EmailAdapter {
     // Restore the persisted high-water mark so restarts resume from where we left off
     // rather than silently dropping messages that arrived during downtime.
     // Falls back to Date.now() on first boot (no stored row) or when no configStore is wired.
+    // Falls back to Date.now() and logs at error level if the KG read fails — this is a
+    // degraded state (messages since the last persist may be re-fetched) but must not block startup.
     this.lastSeenTimestamp = Math.floor(Date.now() / 1000);
     if (configStore) {
-      const persisted = await configStore.get(POLL_STATE_NAMESPACE, lastSeenKey(accountId));
-      if (persisted !== null) {
-        const parsed = parseInt(persisted, 10);
-        if (!isNaN(parsed)) {
-          this.lastSeenTimestamp = parsed;
-          logger.info(
-            { accountId, lastSeenTimestamp: this.lastSeenTimestamp },
-            'Email adapter: restored poll watermark from persisted state',
-          );
+      try {
+        const persisted = await configStore.get(POLL_STATE_NAMESPACE, lastSeenKey(accountId));
+        if (persisted !== null) {
+          const parsed = parseInt(persisted, 10);
+          if (!isNaN(parsed)) {
+            this.lastSeenTimestamp = parsed;
+            logger.info(
+              { accountId, lastSeenTimestamp: this.lastSeenTimestamp },
+              'Email adapter: restored poll watermark from persisted state',
+            );
+          } else {
+            logger.warn(
+              { accountId, persisted },
+              'Email adapter: persisted watermark is not a valid integer — falling back to Date.now()',
+            );
+          }
         } else {
-          logger.warn(
-            { accountId, persisted },
-            'Email adapter: persisted watermark is not a valid integer — falling back to Date.now()',
+          logger.info(
+            { accountId },
+            'Email adapter: no persisted watermark found — first boot, initialising to now',
           );
         }
-      } else {
-        logger.info(
-          { accountId },
-          'Email adapter: no persisted watermark found — first boot, initialising to now',
+      } catch (err) {
+        logger.error(
+          { err, accountId },
+          'Email adapter: failed to read persisted watermark from KG — falling back to Date.now(). Messages that arrived since the last persist may be dropped.',
         );
       }
     }
@@ -513,12 +525,14 @@ export class EmailAdapter {
 
   /**
    * Check whether the poll loop has stalled and emit channel.stalled if so.
-   * Called on each interval tick alongside poll(). Fires at most once per adapter
+   * Called on each interval tick alongside poll(). Emits at most once per adapter
    * lifecycle (until stop()/start()) — repeated alerts add noise without value.
+   * If the bus publish fails, retries on the next tick up to MAX_STALL_EMIT_ATTEMPTS.
    */
   private async checkWatchdog(): Promise<void> {
     if (this.stalledEmitted) return;
     if (this.startedAt === null) return;
+    if (this.stalledEmitAttempts >= EmailAdapter.MAX_STALL_EMIT_ATTEMPTS) return;
 
     const now = Date.now();
     const threshold = 5 * this.config.pollingIntervalMs;
@@ -528,7 +542,7 @@ export class EmailAdapter {
     const reference = this.lastSuccessfulPollAt ?? this.startedAt;
     if (now - reference <= threshold) return;
 
-    this.stalledEmitted = true;
+    this.stalledEmitAttempts++;
     this.config.logger.error(
       {
         accountId: this.config.accountId,
@@ -545,10 +559,15 @@ export class EmailAdapter {
         lastSuccessfulPollAt: this.lastSuccessfulPollAt,
         stallThresholdMs: threshold,
       }));
+      // Set stalledEmitted only after confirmed publish — if publish fails we retry
+      // on the next tick (bounded by MAX_STALL_EMIT_ATTEMPTS) rather than permanently
+      // silencing the alert.
+      this.stalledEmitted = true;
     } catch (err) {
-      // If we can't even emit the stall event, log at error level — it's already
-      // logged above, so at minimum there is a log trail.
-      this.config.logger.error({ err }, 'Failed to emit channel.stalled event');
+      this.config.logger.error(
+        { err, attempt: this.stalledEmitAttempts, maxAttempts: EmailAdapter.MAX_STALL_EMIT_ATTEMPTS },
+        'Failed to emit channel.stalled — will retry on next watchdog tick',
+      );
     }
   }
 
