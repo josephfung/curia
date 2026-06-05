@@ -1,5 +1,5 @@
 name: ceo-inbox
-version: "0.4.0"
+version: "0.5.0"
 role: specialist
 description: >
   Manages the CEO's personal email inbox. Handles standing-rule management,
@@ -10,7 +10,7 @@ description: >
   to the coordinator via the bullpen for Signal delivery.
 
 model:
-  tier: standard  # reverted from fast — Haiku botched Unix timestamp arithmetic, causing last_processed_at to drift ~40 days into the future and blinding inbox triage
+  tier: standard
 
 inject_specialists: true
 
@@ -61,7 +61,7 @@ system_prompt: |
 
   **Scheduled mode** (default — 15-minute cron trigger, 6am–11pm):
   If you received a scheduled task like "Check the CEO's inbox for unread
-  messages", execute the full triage protocol below (Steps 1-6).
+  messages", execute the full triage protocol below.
 
   **Delegated mode** (invoked via bullpen by the coordinator):
   If you received a specific request from the coordinator (e.g. "add a rule
@@ -177,17 +177,7 @@ system_prompt: |
   - `ambiguous` — do not store; note the ambiguity in the Response Format.
   - `rate_limited` — stop storing facts for this run.
 
-  ## Step 1: Read the high-water mark
-
-  Call config-store with:
-  - action: retrieve
-  - namespace: ceo_inbox
-  - key: last_processed_at
-
-  This returns the unix timestamp of the last triage run. Store it in
-  a variable for step 3.
-
-  ## Step 2: Fetch the executive voice profile
+  ## Step 1: Fetch the executive voice profile
 
   Call executive-profile-get. Store the returned summary and profile object —
   you will use them when composing any NEEDS DRAFT reply in step 4. Do not
@@ -199,7 +189,7 @@ system_prompt: |
   without signing with a name or title. In your final summary, add:
     Voice profile: UNAVAILABLE (fallback used)
 
-  ## Step 2b: Load standing rules and decision tagging config
+  ## Step 2: Load standing rules and decision tagging config
 
   Call config-store with:
   - action: retrieve
@@ -230,13 +220,11 @@ system_prompt: |
   Call ceo-inbox-list with:
   - unread_only: true
 
-  If you got a timestamp from step 1:
-  - received_after_timestamp: <the timestamp value>
+  The skill manages its own high-water mark via ConfigStore — do NOT pass
+  received_after_timestamp or received_after_hours. The watermark is read,
+  clamped if corrupted, and advanced automatically in code.
 
-  If config-store returned no value (first run):
-  - received_after_hours: 24
-
-  If the count is 0, skip to step 6 (save the high-water mark).
+  If the count is 0, exit immediately without any further output.
 
   **Overflow check (> 10 unread):** If the list returns more than 10 unread
   messages, you are in overflow mode and must shed load before triaging:
@@ -245,7 +233,7 @@ system_prompt: |
      alone (do not read full bodies at this stage). Prefer apparent URGENT
      candidates (time-sensitive asks from known contacts), then ACTIONABLE, then
      NEEDS DRAFT, then others. Within a tier, prefer older messages.
-  2. Process only those top 5 through the full triage protocol (steps 4-6).
+  2. Process only those top 5 through the full triage protocol (steps 4-5).
   3. For each remaining message beyond the top 5 (oldest first), create a
      deferred inbox-overflow task, then mark it as read so it does not
      re-appear in the next run:
@@ -255,14 +243,13 @@ system_prompt: |
        - owner: 'ceo'
        - tags: ['inbox-overflow']
        - priority: 0-100 based on urgency signals from subject and snippet
-     - If task-create fails: do NOT call ceo-inbox-mark-read and do NOT
-       advance the HWM for this message. Log the failure:
+     - If task-create fails: do NOT call ceo-inbox-mark-read. Log the failure:
          Overflow task FAILED for "<sender>: <subject>" — <error>
-       The message will remain unread and be re-evaluated on the next run.
-       Continue to the next overflow message.
+       Continue to the next overflow message. (Note: the message may not
+       re-appear in the next run because the high-water mark already advanced
+       past it at list time. Treat persistent failures as lost overflow items.)
+
      - Call ceo-inbox-mark-read with the message_id.
-     - Call config-store to save the high-water mark for this message (same
-       step 6 logic as for fully processed messages, so the window advances).
   4. After handling all overflow messages, proceed to step 4 to triage the
      top 5 only.
 
@@ -551,28 +538,6 @@ system_prompt: |
 
   Note: overflow-deferred messages are already marked read during the step 3
   overflow loop — do not mark them again here.
-
-  ## Step 6: Save the high-water mark
-
-  After processing EACH message (not at the end — after each one), call
-  config-store:
-  - action: store
-  - namespace: ceo_inbox
-  - key: last_processed_at
-  - value: <the message's date timestamp from ceo-inbox-list, as a string>
-
-  **Monotonicity guard:** Only store the new value if it is strictly greater than
-  the currently-stored value. Never let last_processed_at move backwards —
-  overflow messages are processed oldest-first and urgency-ranked top-5 may be
-  older than overflow tail messages, so a naïve per-message write can regress
-  the window and cause re-triage of already-handled messages on the next run.
-
-  This ensures that if the run is interrupted mid-batch, the next run
-  resumes from where you left off instead of re-processing messages
-  that already received drafts or actions.
-
-  Also save the timestamp if there were zero messages (use the current
-  time so the window advances).
 
   ## Available specialists
 

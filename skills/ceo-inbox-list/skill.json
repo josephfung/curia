@@ -1,15 +1,14 @@
 {
   "name": "ceo-inbox-list",
   "description": "List recent messages from the CEO's personal email inbox. Intended for use by the ceo-inbox agent — accesses the CEO's personal email, do not call from other agents.",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "sensitivity": "normal",
   "action_risk": "none",
   "inputs": {
     "limit": "number? (max messages to return, 1–50, default 20)",
     "folder": "string? (Gmail folder/label to list, default 'INBOX'; use 'SENT' for the Sent folder)",
     "unread_only": "boolean? (if true, only return unread messages, default true)",
-    "received_after_hours": "number? (only return messages received in the last N hours, e.g. 24 for last day; ignored if received_after_timestamp is set)",
-    "received_after_timestamp": "number? (unix timestamp in seconds — only return messages received after this time; takes precedence over received_after_hours)"
+    "received_after_hours": "number? (first-run fallback only — only return messages received in the last N hours; ignored when a persisted watermark exists in ConfigStore)"
   },
   "outputs": {
     "messages": "array of { id, threadId, from, to, cc, subject, date, snippet, unread, folders, attachments: [{ id, filename, contentType, size }] }",
@@ -18,5 +17,5 @@
   "permissions": [],
   "secrets": ["nylas_api_key", "ceo_nylas_grant_id", "nylas_self_email"],
   "timeout": 20000,
-  "capabilities": []
+  "capabilities": ["entityMemory"]
 }

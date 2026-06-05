@@ -1,8 +1,15 @@
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
 import { CeoNylasClient } from '../_shared/ceo-nylas-client.js';
+import { ConfigStore } from '../../src/memory/config-store.js';
 
 const MAX_LIMIT = 50;
 const DEFAULT_LIMIT = 20;
+
+const WATERMARK_NAMESPACE = 'ceo_inbox';
+const WATERMARK_KEY = 'last_processed_at';
+
+// Default lookback when no persisted watermark exists (first run).
+const FIRST_RUN_HOURS = 24;
 
 export class CeoInboxListHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {
@@ -38,33 +45,90 @@ export class CeoInboxListHandler implements SkillHandler {
 
     const unreadOnly = input.unread_only !== false; // default true
 
-    // Date gate: received_after_timestamp (absolute, from config-store high-water
-    // mark) takes precedence over received_after_hours (relative, first-run fallback).
-    // config-store returns all values as strings, so we coerce with Number() to
-    // handle both string and number inputs from the LLM. (fix: issue #44)
-    const rawTimestamp = Number(input.received_after_timestamp);
-    const receivedAfterTimestamp =
-      Number.isFinite(rawTimestamp)
-        ? Math.floor(rawTimestamp)
-        : undefined;
-
+    // received_after_hours: first-run fallback only. The absolute watermark is
+    // now managed by this skill via ConfigStore — the LLM no longer supplies
+    // timestamps. (fix: issue #866)
     const receivedAfterHours =
       typeof input.received_after_hours === 'number' && Number.isFinite(input.received_after_hours)
         ? Math.max(1, Math.floor(input.received_after_hours))
         : undefined;
 
-    // +1 on the high-water mark converts "last processed" to "strictly after",
-    // preventing re-processing when Nylas uses inclusive >= comparison. The +1
-    // only applies to the absolute timestamp path — the hours-based fallback is
-    // already an approximate cutoff, not a precise high-water mark. (fix: issue #44)
-    const receivedAfter = receivedAfterTimestamp !== undefined
-      ? receivedAfterTimestamp + 1
-      : (receivedAfterHours !== undefined
-        ? Math.floor((Date.now() - receivedAfterHours * 3_600_000) / 1_000)
-        : undefined);
+    // ── Watermark read (code-owned, not LLM-owned) ────────────────────────────
+    //
+    // Read last_processed_at from ConfigStore. The LLM never supplies this
+    // value — model-fabricated unix timestamps drifted 29 days into the future
+    // and blinded inbox triage for ~19 hours (issue #866).
+    const nowSeconds = Math.floor(Date.now() / 1_000);
+    // effectiveWatermark: the value used to compute receivedAfter.
+    // watermarkFloor: the monotonicity floor for the advance guard; may differ from
+    // effectiveWatermark when we heal a poisoned future timestamp (we fall through
+    // to the default 24h lookback while keeping nowSeconds as the floor so the
+    // advance write doesn't regress back to a past message date).
+    let effectiveWatermark: number | undefined;
+    let watermarkFloor: number | undefined;
+    let configStore: ConfigStore | undefined;
+
+    if (ctx.entityMemory) {
+      configStore = new ConfigStore(ctx.entityMemory, ctx.log);
+      try {
+        const stored = await configStore.get(WATERMARK_NAMESPACE, WATERMARK_KEY);
+        if (stored !== null) {
+          const parsed = Math.floor(Number(stored));
+          if (Number.isFinite(parsed)) {
+            if (parsed > nowSeconds) {
+              // Defensive clamp: a future watermark is physically impossible.
+              // Treat as "no watermark" for this query (fall through to the default
+              // 24h lookback) so the current run can recover the recent backlog.
+              // Heal the stored value immediately so future runs start clean.
+              ctx.log.warn(
+                { stored, nowSeconds, deltaSeconds: parsed - nowSeconds },
+                'ceo-inbox-list: last_processed_at is in the future — healing stored value and falling back to default lookback',
+              );
+              effectiveWatermark = undefined; // use default 24h lookback for this run
+              watermarkFloor = nowSeconds; // advance guard never regresses past healed value
+              // Heal asynchronously; don't block the Nylas query on this write.
+              configStore.set(WATERMARK_NAMESPACE, WATERMARK_KEY, String(nowSeconds)).catch((err) => {
+                ctx.log.error({ err, healedTo: nowSeconds }, 'ceo-inbox-list: failed to heal future watermark in ConfigStore');
+              });
+            } else {
+              effectiveWatermark = parsed;
+              watermarkFloor = parsed;
+            }
+          }
+        }
+      } catch (err) {
+        // Config read failure is non-fatal: fall through to first-run defaults.
+        ctx.log.error(
+          { err, errorType: err instanceof Error ? err.constructor.name : typeof err },
+          'ceo-inbox-list: failed to read watermark from ConfigStore — using first-run default',
+        );
+      }
+    } else {
+      ctx.log.warn({}, 'ceo-inbox-list: entityMemory not available — watermark reads/writes skipped');
+    }
+
+    // +1 on the stored watermark converts "last processed" to "strictly after",
+    // preventing re-fetch of the last-seen message (Nylas uses inclusive >= comparison).
+    const receivedAfter =
+      effectiveWatermark !== undefined
+        ? effectiveWatermark + 1
+        : receivedAfterHours !== undefined
+          ? Math.floor((Date.now() - receivedAfterHours * 3_600_000) / 1_000)
+          : nowSeconds - FIRST_RUN_HOURS * 3_600; // hard default: last 24h
 
     ctx.log.info(
-      { limit, folder, unreadOnly, receivedAfter, source: receivedAfterTimestamp ? 'timestamp' : 'hours' },
+      {
+        limit,
+        folder,
+        unreadOnly,
+        receivedAfter,
+        source:
+          effectiveWatermark !== undefined
+            ? 'config-store'
+            : receivedAfterHours !== undefined
+              ? 'hours'
+              : 'default',
+      },
       'ceo-inbox-list: listing messages',
     );
 
@@ -90,6 +154,24 @@ export class CeoInboxListHandler implements SkillHandler {
           { filtered: raw.length - messages.length },
           'ceo-inbox-list: filtered out messages from Curia',
         );
+      }
+
+      // ── Watermark advance (code-owned, not LLM-owned) ──────────────────────
+      //
+      // Advance to max(msg.date) of returned messages. Only writes when there
+      // are messages and the new max strictly advances past the watermarkFloor
+      // (the current persisted value, or nowSeconds after a heal). A zero-message
+      // run leaves last_processed_at unchanged — nothing arrived, nothing to
+      // advance past. The watermarkFloor guard also prevents a healed nowSeconds
+      // from being overwritten by a past message date.
+      if (messages.length > 0 && configStore) {
+        // Use reduce rather than spread+Math.max to avoid a RangeError for very large arrays.
+        const maxDate = messages.reduce((max, m) => (m.date > max ? m.date : max), 0);
+        if (watermarkFloor === undefined || maxDate > watermarkFloor) {
+          configStore.set(WATERMARK_NAMESPACE, WATERMARK_KEY, String(maxDate)).catch((err) => {
+            ctx.log.error({ err, advanceTo: maxDate }, 'ceo-inbox-list: failed to advance watermark in ConfigStore');
+          });
+        }
       }
 
       return {
