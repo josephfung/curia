@@ -55,7 +55,7 @@ interface ContactServiceBackend {
   findContactByKgNodeId(kgNodeId: string): Promise<Contact | null>;
   findContactByRole(role: string): Promise<Contact[]>;
   findContactBySystemRole(systemRole: SystemRole): Promise<Contact | null>;
-  listContacts(filters?: { status?: ContactStatus; limit?: number }): Promise<Contact[]>;
+  listContacts(filters?: { status?: ContactStatus; limit?: number; offset?: number }): Promise<Contact[]>;
   updateContact(contact: Contact): Promise<void>;
   createIdentity(identity: ChannelIdentity): Promise<void>;
   getIdentitiesForContact(contactId: string): Promise<ChannelIdentity[]>;
@@ -348,8 +348,8 @@ export class ContactService {
     return this.backend.findContactBySystemRole(systemRole);
   }
 
-  /** List contacts, optionally filtered by status and/or capped by limit. */
-  async listContacts(filters?: { status?: ContactStatus; limit?: number }): Promise<Contact[]> {
+  /** List contacts, optionally filtered by status and/or capped by limit with offset for pagination. */
+  async listContacts(filters?: { status?: ContactStatus; limit?: number; offset?: number }): Promise<Contact[]> {
     return this.backend.listContacts(filters);
   }
 
@@ -1071,7 +1071,7 @@ class PostgresContactBackend implements ContactServiceBackend {
     return this.rowToContact(row);
   }
 
-  async listContacts(filters?: { status?: ContactStatus; limit?: number }): Promise<Contact[]> {
+  async listContacts(filters?: { status?: ContactStatus; limit?: number; offset?: number }): Promise<Contact[]> {
     const conditions: string[] = [];
     const params: unknown[] = [];
 
@@ -1086,6 +1086,11 @@ class PostgresContactBackend implements ContactServiceBackend {
     if (filters?.limit != null) {
       params.push(filters.limit);
       sql += ` LIMIT $${params.length}`;
+    }
+
+    if (filters?.offset != null && filters.offset > 0) {
+      params.push(filters.offset);
+      sql += ` OFFSET $${params.length}`;
     }
 
     const result = await this.pool.query<ContactRow>(sql, params);
@@ -1640,7 +1645,7 @@ class InMemoryContactBackend implements ContactServiceBackend {
     return null;
   }
 
-  async listContacts(filters?: { status?: ContactStatus; limit?: number }): Promise<Contact[]> {
+  async listContacts(filters?: { status?: ContactStatus; limit?: number; offset?: number }): Promise<Contact[]> {
     let results = [...this.contacts.values()];
 
     if (filters?.status != null) {
@@ -1650,9 +1655,9 @@ class InMemoryContactBackend implements ContactServiceBackend {
     // Sort by createdAt ascending to match Postgres ORDER BY created_at ASC
     results.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
 
-    if (filters?.limit != null) {
-      results = results.slice(0, filters.limit);
-    }
+    const offset = filters?.offset ?? 0;
+    const end = filters?.limit != null ? offset + filters.limit : undefined;
+    results = results.slice(offset, end);
 
     return results;
   }
