@@ -17,8 +17,21 @@ export class CeoInboxMarkStarredHandler implements SkillHandler {
       return { success: false, error: 'message_id is required' };
     }
 
-    // Default to true (star) when the caller omits the field
-    const starred = typeof input.starred === 'boolean' ? input.starred : true;
+    // LLM tool calls may serialize booleans as strings; accept "true"/"false" explicitly.
+    // Default to true (star) when the field is omitted; reject other non-boolean values.
+    const starredRaw = input.starred;
+    let starred: boolean;
+    if (starredRaw === undefined) {
+      starred = true;
+    } else if (typeof starredRaw === 'boolean') {
+      starred = starredRaw;
+    } else if (starredRaw === 'true') {
+      starred = true;
+    } else if (starredRaw === 'false') {
+      starred = false;
+    } else {
+      return { success: false, error: 'starred must be a boolean' };
+    }
 
     ctx.log.info({ messageId, starred }, 'ceo-inbox-mark-starred: setting starred');
 
