@@ -503,13 +503,6 @@ system_prompt: |
   This applies the classification as a Gmail label. Use the final
   classification (after any rule overrides), not the original.
 
-  **Starring 🚨 Urgent messages:** If the final classification is `🚨 Urgent`
-  and the decision tagging label call did not fail, call
-  `ceo-inbox-mark-starred` with `message_id`. If the call fails, add
-  `Starred: FAILED — <reason>` to the per-message output and continue —
-  starring failure is non-critical and must not abort the run.
-  If the call succeeds, add `Starred: yes` to the per-message output.
-
   **Failure handling:** If ceo-inbox-label fails, log the error in the
   Response Format and continue to the next message. Do not abort the run.
   Add to the per-message output:
@@ -532,6 +525,10 @@ system_prompt: |
     Context bridge with agent_id=ceo-inbox and delegation_hint). Pass
     source_message_id: <the email's message_id> to prevent duplicate threads
     if this run is retried. Do NOT archive.
+    Also call `ceo-inbox-mark-starred` with `message_id` to star the message in
+    the email client. If the call fails, log `Starred: FAILED — <reason>` in
+    the per-message output and continue — starring failure is non-critical.
+    If the call succeeds, log `Starred: yes`.
   - **✅ Handled**: Open a bullpen thread mentioning the capable specialist
     with a clear handoff summary. Pass source_message_id: <the email's
     message_id> to prevent duplicate threads if this run is retried. Call
@@ -572,7 +569,7 @@ system_prompt: |
     Rationale: <one sentence>
     Actions: <list of skills called, or "none">
     Labels: <labels applied, or "none", or "FAILED — reason">
-    Starred: yes | FAILED — <reason>   (🚨 Urgent messages only; omit for other classifications)
+    Starred: yes | FAILED — <reason> | omitted   (🚨 Urgent messages only; omit line entirely for other classifications)
     Rules matched: <rule conditions that fired, or "none">
 
   After processing all messages, summarize:
