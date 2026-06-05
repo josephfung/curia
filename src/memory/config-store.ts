@@ -51,17 +51,25 @@ export class ConfigStore {
     const facts = allFacts.flat();
 
     // Primary match on label; fallback on properties.key for forward-compat.
-    const fact =
-      facts.find((f) => f.label === key) ??
-      facts.find((f) => (f.properties.key as string | undefined) === key);
+    // Pick the most-recently confirmed fact when there are duplicates (e.g. from
+    // a race between two concurrent anchor-create calls, which is unlikely in
+    // practice but possible across restarts).
+    const matching = facts.filter(
+      (f) => f.label === key || (f.properties.key as string | undefined) === key,
+    );
+    const fact = matching.sort(
+      (a, b) => b.temporal.lastConfirmedAt.getTime() - a.temporal.lastConfirmedAt.getTime(),
+    )[0];
 
     if (!fact) return null;
     return (fact.properties.value as string) ?? null;
   }
 
   /**
-   * Write or update a value. Non-throwing — logs a warning when the underlying
-   * storeFact call is rejected (e.g. conflict) and continues.
+   * Write or update a value. Propagates infrastructure errors after logging so
+   * callers (e.g. EmailAdapter.poll) can catch and emit their own diagnostic.
+   * A soft storeFact rejection (result.stored === false) is logged as a warning
+   * and does not throw — the prior value is still valid in that case.
    */
   async set(namespace: string, key: string, value: string): Promise<void> {
     try {
@@ -90,7 +98,11 @@ export class ConfigStore {
         );
       }
     } catch (err) {
+      // Log at the ConfigStore level for observability, then rethrow so callers
+      // can emit their own domain-specific diagnostic (e.g. "failed to persist
+      // poll watermark") without relying on log correlation.
       this.logger.error({ err, namespace, key }, 'ConfigStore.set: failed to write value');
+      throw err;
     }
   }
 
