@@ -851,6 +851,57 @@ export interface TaskCompletedEvent extends BaseEvent {
   payload: TaskCompletedPayload;
 }
 
+// ChannelPollEvent — emitted by EmailAdapter after each successful Nylas poll cycle.
+// Provides an observable heartbeat: if channel.poll stops appearing in the audit log,
+// the adapter has stalled. One event per poll regardless of whether messages were found.
+interface ChannelPollPayload {
+  accountId: string;
+  /** Channel identifier — always 'email' for this event. */
+  channel: 'email';
+  /** Number of messages returned by Nylas (before any filtering). */
+  fetched: number;
+  /** Messages that reached bus.publish('channel', inbound.message). */
+  processed: number;
+  /** Per-filter skip breakdown. */
+  skipped: {
+    sent_folder: number;
+    recently_sent: number;
+    self: number;
+    excluded: number;
+    /** Messages that threw during per-message processing. */
+    failed: number;
+  };
+  /** High-water mark value (epoch seconds) after this poll cycle. */
+  lastSeenAt: number;
+  /** Wall-clock duration of the poll cycle in milliseconds. */
+  durationMs: number;
+}
+
+export interface ChannelPollEvent extends BaseEvent {
+  type: 'channel.poll';
+  sourceLayer: 'channel';
+  payload: ChannelPollPayload;
+}
+
+// ChannelStalledEvent — emitted by EmailAdapter when no successful poll has completed
+// within 5 × pollingIntervalMs. Fired at most once per adapter lifecycle (until restart).
+// No self-heal — surfacing the stall is the fix.
+interface ChannelStalledPayload {
+  accountId: string;
+  /** Channel identifier — always 'email' for this event. */
+  channel: 'email';
+  /** Epoch ms of the last successful poll, or null if the adapter never completed a poll. */
+  lastSuccessfulPollAt: number | null;
+  /** The stall threshold that was exceeded: 5 × pollingIntervalMs. */
+  stallThresholdMs: number;
+}
+
+export interface ChannelStalledEvent extends BaseEvent {
+  type: 'channel.stalled';
+  sourceLayer: 'channel';
+  payload: ChannelStalledPayload;
+}
+
 export type BusEvent =
   | InboundMessageEvent
   | AgentTaskEvent
@@ -889,7 +940,9 @@ export type BusEvent =
   | EmbeddingCallEvent         // #654: embedding API call cost telemetry
   | TaskCreatedEvent           // Tasks v1: task created via task-create skill (#835)
   | TaskUpdatedEvent           // Tasks v1: task fields updated via task-update skill (#835)
-  | TaskCompletedEvent;        // Tasks v1: task set to done via task-complete skill (#835)
+  | TaskCompletedEvent         // Tasks v1: task set to done via task-complete skill (#835)
+  | ChannelPollEvent           // #846: email adapter poll heartbeat (one per cycle)
+  | ChannelStalledEvent;       // #846: email adapter stall detection (fire-once per lifecycle)
 
 // Convenience alias for use in handler maps / switch statements.
 export type EventType = BusEvent['type'];
@@ -1451,6 +1504,26 @@ export function createTaskCompleted(
     sourceLayer: 'execution',
     payload: rest,
     parentEventId,
+  };
+}
+
+export function createChannelPoll(payload: ChannelPollPayload): ChannelPollEvent {
+  return {
+    id: randomUUID(),
+    timestamp: new Date(),
+    type: 'channel.poll',
+    sourceLayer: 'channel',
+    payload,
+  };
+}
+
+export function createChannelStalled(payload: ChannelStalledPayload): ChannelStalledEvent {
+  return {
+    id: randomUUID(),
+    timestamp: new Date(),
+    type: 'channel.stalled',
+    sourceLayer: 'channel',
+    payload,
   };
 }
 
