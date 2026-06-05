@@ -15,9 +15,6 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 - **KG graph** — various visual improvements: physics-aware layout, better hub sizing, principal-node default view, and viewport centering on focal nodes. (#861)
-
-### Changed
-
 - **`contact-list` skill** — new `offset` input (v1.2.0) enables cursor-based pagination; `offset > 0` requires `limit` to prevent unbounded result sets. Public API surface change.
 
 ### Fixed

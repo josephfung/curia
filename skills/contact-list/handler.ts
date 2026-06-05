@@ -12,7 +12,8 @@ const VALID_STATUSES: readonly ContactStatus[] = ['confirmed', 'provisional', 'b
 
 export class ContactListHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {
-    const { role, status, limit, offset } = ctx.input as {
+    // Cast through unknown per repo convention for narrowing from Record<string, unknown>
+    const { role, status, limit, offset } = ctx.input as unknown as {
       role?: string;
       status?: string;
       limit?: number;

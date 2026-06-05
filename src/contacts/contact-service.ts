@@ -1657,7 +1657,10 @@ class InMemoryContactBackend implements ContactServiceBackend {
     // Sort by createdAt ascending to match Postgres ORDER BY created_at ASC
     results.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
 
-    const offset = filters?.offset ?? 0;
+    // Mirror the Postgres path: only apply offset when > 0 so negative values
+    // (which the handler rejects, but the backend should also handle safely)
+    // never produce Array.slice(negative) semantics that differ from Postgres.
+    const offset = filters?.offset != null && filters.offset > 0 ? filters.offset : 0;
     const end = filters?.limit != null ? offset + filters.limit : undefined;
     results = results.slice(offset, end);
 
