@@ -1,7 +1,7 @@
 {
   "name": "ceo-inbox-mark-starred",
   "description": "Star (or unstar) a message in the CEO's personal email inbox. Sets the starred/flagged attribute on the Nylas message object, which maps to a Gmail star or Outlook flag in the email client. Call with message_id after applying the 🚨 Urgent label. Intended for use by the ceo-inbox agent — accesses the CEO's personal email, do not call from other agents.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "sensitivity": "normal",
   "action_risk": "low",
   "inputs": {
