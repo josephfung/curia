@@ -38,26 +38,25 @@ export class ConfigStore {
   /**
    * Read a stored value. Returns null when the namespace has never been written
    * to, or when the key does not exist within the namespace.
+   *
+   * Propagates infrastructure errors (DB down, KG unavailable, etc.) so callers
+   * can distinguish "key not found" (null) from "read failed" (thrown error).
+   * Callers that want fall-through-on-error behaviour must catch explicitly.
    */
   async get(namespace: string, key: string): Promise<string | null> {
-    try {
-      const anchors = await this.entityMemory.findEntities(anchorLabel(namespace));
-      if (anchors.length === 0) return null;
+    const anchors = await this.entityMemory.findEntities(anchorLabel(namespace));
+    if (anchors.length === 0) return null;
 
-      const allFacts = await Promise.all(anchors.map((a) => this.entityMemory.getFacts(a.id)));
-      const facts = allFacts.flat();
+    const allFacts = await Promise.all(anchors.map((a) => this.entityMemory.getFacts(a.id)));
+    const facts = allFacts.flat();
 
-      // Primary match on label; fallback on properties.key for forward-compat.
-      const fact =
-        facts.find((f) => f.label === key) ??
-        facts.find((f) => (f.properties.key as string | undefined) === key);
+    // Primary match on label; fallback on properties.key for forward-compat.
+    const fact =
+      facts.find((f) => f.label === key) ??
+      facts.find((f) => (f.properties.key as string | undefined) === key);
 
-      if (!fact) return null;
-      return (fact.properties.value as string) ?? null;
-    } catch (err) {
-      this.logger.error({ err, namespace, key }, 'ConfigStore.get: failed to read value');
-      return null;
-    }
+    if (!fact) return null;
+    return (fact.properties.value as string) ?? null;
   }
 
   /**
