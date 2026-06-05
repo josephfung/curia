@@ -1620,6 +1620,39 @@ async function main(): Promise<void> {
   const bullpenDispatcher = new BullpenDispatcher(bus, logger, bullpenService);
   bullpenDispatcher.register();
 
+  // HTTP API channel — started BEFORE channel adapters so the health check endpoint
+  // is available immediately. Channel adapters (email, Signal) run their initial
+  // poll synchronously and block on agent task processing; starting HTTP last meant
+  // the health check fired during a multi-minute catch-up and marked the container
+  // unhealthy before the API was even bound. All HTTP adapter dependencies (bus,
+  // pool, services, registries) are fully initialized by this point.
+  const httpAdapter = new HttpAdapter({
+    bus,
+    logger,
+    pool,
+    agentRegistry,
+    port: config.httpPort,
+    apiToken: config.apiToken,
+    webAppBootstrapSecret: config.webAppBootstrapSecret,
+    appOrigin: config.appOrigin,
+    agentNames: agentConfigs.map(c => c.name),
+    skillNames: skillRegistry.list().map(s => s.manifest.name),
+    schedulerService,
+    identityService: officeIdentityService,
+    executiveProfileService,
+    contactService,
+    autonomyService,
+    setupRequiredAtBoot,
+    bootStartedAt,
+  });
+
+  try {
+    await httpAdapter.start();
+  } catch (err) {
+    logger.fatal({ err }, 'Failed to start HTTP API');
+    process.exit(1);
+  }
+
   // Start all email adapters AFTER the dispatcher is registered so inbound.message
   // events always have a subscriber. Starting before registration would drop emails
   // arriving during the startup window (each adapter advances its own high-water mark
@@ -1654,35 +1687,6 @@ async function main(): Promise<void> {
     logger.info('Signal channel adapter started');
   } else if (signalAdapter && setupRequiredAtBoot) {
     logger.warn('SETUP-REQUIRED mode: skipping Signal adapter startup — restart after setup to enable');
-  }
-
-  // HTTP API channel — REST + SSE endpoints for external clients.
-  // Runs alongside the CLI channel so both can be used simultaneously.
-  const httpAdapter = new HttpAdapter({
-    bus,
-    logger,
-    pool,
-    agentRegistry,
-    port: config.httpPort,
-    apiToken: config.apiToken,
-    webAppBootstrapSecret: config.webAppBootstrapSecret,
-    appOrigin: config.appOrigin,
-    agentNames: agentConfigs.map(c => c.name),
-    skillNames: skillRegistry.list().map(s => s.manifest.name),
-    schedulerService,
-    identityService: officeIdentityService,
-    executiveProfileService,
-    contactService,
-    autonomyService,
-    setupRequiredAtBoot,
-    bootStartedAt,
-  });
-
-  try {
-    await httpAdapter.start();
-  } catch (err) {
-    logger.fatal({ err }, 'Failed to start HTTP API');
-    process.exit(1);
   }
 
   // Graceful shutdown — stop accepting new input first, then close connections.
