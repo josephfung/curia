@@ -1,11 +1,11 @@
 {
   "name": "contact-list",
   "description": "List contacts, optionally filtered by role or status, with optional result limit and offset for pagination.",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "sensitivity": "normal",
   "action_risk": "none",
   "inputs": {
-    "role": "string?",
+    "role": "string? (filter by job title / professional role, e.g. 'CEO', 'CFO', 'Engineer'; mutually exclusive with status, limit, and offset; this is NOT a lifecycle status)",
     "status": "string? (confirmed | provisional | blocked)",
     "limit": "number?",
     "offset": "number? (skip this many contacts; use with limit for cursor-based pagination)"
