@@ -155,6 +155,17 @@ interface OutboundBlockedPayload {
   findings: Array<{ rule: string; detail: string }>;
 }
 
+// OutboundSuppressedDuplicatePayload — emitted by the dispatch layer when an agent.response
+// would have produced an outbound.message, but a human-facing reply skill (email-reply or
+// email-send) already fired successfully during the same task. The agent.response payload
+// is preserved in audit_log; only the wire-level send is suppressed. See #847.
+interface OutboundSuppressedDuplicatePayload {
+  routingTaskId: string;   // agent.task event ID whose routing entry triggered the suppression
+  agentId: string;
+  conversationId: string;
+  reason: 'human_reply_already_sent';
+}
+
 // OutboundNotificationPayload — published by the dispatch layer (via OutboundGateway.sendNotification)
 // when a system-level CEO alert needs to be sent. Routing through the bus ensures the notification
 // goes through the same safety pipeline as regular outbound messages, closing the prior direct
@@ -589,6 +600,16 @@ export interface OutboundPiiRedactedEvent extends BaseEvent {
   payload: OutboundPiiRedactedPayload;
 }
 
+// OutboundSuppressedDuplicateEvent — published by the dispatch layer when handleAgentResponse
+// would produce an outbound.message but the reply-lock flag is set (a human-facing reply skill
+// already succeeded during the same task). Provides a full audit trail without triggering
+// a duplicate send. See #847.
+export interface OutboundSuppressedDuplicateEvent extends BaseEvent {
+  type: 'outbound.suppressed_duplicate';
+  sourceLayer: 'dispatch';
+  payload: OutboundSuppressedDuplicatePayload;
+}
+
 // OutboundNotificationEvent — published by the dispatch layer when a system-level CEO
 // notification needs to be sent (blocked-content alert, group-held alert, etc.).
 // Channel adapters subscribe to route it through the outbound safety pipeline.
@@ -923,6 +944,7 @@ export type BusEvent =
   | OutboundBlockedEvent  // Outbound content filter: message blocked before delivery (#38)
   | OutboundDeliveredEvent // Outbound delivery: wire-level send succeeded (#729)
   | OutboundPiiRedactedEvent // Outbound PII redaction: PII scrubbed before delivery (#249)
+  | OutboundSuppressedDuplicateEvent  // #847: duplicate reply suppressed by reply-lock
   | OutboundNotificationEvent // System notifications routed through safety pipeline (#206)
   | ScheduleCreatedEvent   // Scheduler: job created
   | ScheduleFiredEvent     // Scheduler: job fired
@@ -1051,6 +1073,22 @@ export function createOutboundPiiRedacted(
     id: randomUUID(),
     timestamp: new Date(),
     type: 'outbound.pii-redacted',
+    sourceLayer: 'dispatch',
+    payload: rest,
+    parentEventId,
+  };
+}
+
+export function createOutboundSuppressedDuplicate(
+  // parentEventId is required — suppression must trace back to the agent.response that was
+  // suppressed, mirroring the causal position outbound.message would have occupied.
+  payload: OutboundSuppressedDuplicatePayload & { parentEventId: string },
+): OutboundSuppressedDuplicateEvent {
+  const { parentEventId, ...rest } = payload;
+  return {
+    id: randomUUID(),
+    timestamp: new Date(),
+    type: 'outbound.suppressed_duplicate',
     sourceLayer: 'dispatch',
     payload: rest,
     parentEventId,
