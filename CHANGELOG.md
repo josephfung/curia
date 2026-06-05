@@ -13,58 +13,67 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
-### Added
-- **`enable_task_management`** — declarative agent capability that auto-pins the task skills, injects the executor/reification discipline block, and marks an agent heartbeat-eligible. (design 2026-06-04 §6)
-- **`BacklogHeartbeat`** — deterministic hourly System component that wakes idle/stale tasks by enqueuing one-shot scheduler jobs, one per owning agent, globally capped. (design 2026-06-04 §3)
+## [0.33.0] — 2026-06-04 — "Mr. Meeseeks"
 
-### Changed
-- **`ceo-inbox`** — joins the task system (`enable_task_management: true`): reification in the NEEDS DRAFT path prevents bare forward commitments without a backing task; resume mode drafts the complete reply when a deferred follow-up task wakes; overflow load-shedding above 10 unread defers the tail as `inbox-overflow` tasks so LLM time per burst no longer scales linearly. (#840, design 2026-06-04 §8)
-- **coordinator** — task management now arrives via `enable_task_management: true` (replacing manual `task-*` pins); added a bounded `error_budget` for project bursts.
-- **coordinator** — replaced the `intent_anchor`-for-cron-jobs instruction with the new task/scheduling split: `task-create` for deferred CEO-visible work, `scheduler-create` (no `intent_anchor`) for operational sweeps. Adds backlog-awareness and defer-don't-drop rules. (#)
-- **`meeting-debrief`** — migrated from bespoke `pendingDebriefs`/`judgedEvents` state maps to platform tasks; detection now runs 3×/day and pre-schedules a per-meeting debrief task driven by wake-ups. (#839)
+> **Mr. Meeseeks** *(Rick and Morty, 2014, Dan Harmon & Justin Roiland)* — summoned to fulfill one task, a Meeseeks exists for that purpose alone, cannot rest while it's open, and pops out of existence the moment it's done. v0.33 gives Curia the same compulsion: every deferred commitment becomes a tracked task in a CEO-visible backlog, a heartbeat wakes anything idle or stale until it resolves, and nothing is allowed to quietly drop.
 
 ### Added
-- **Tasks console UI** — list view with owner/status/priority model: owner dropdown filter, age column, default priority sort, status lifecycle controls (terminal-state guard), contact name resolution for `waiting_on_contact_id`, next scheduled wake-up time in drawer, and parent/blocked-by task links. (#870)
-- **Tasks v1 scheduler dispatch** — task-wake fires route to `scheduled_jobs.agent_id` and include `task_id`, `title`, `progress` in the content bundle; `updateTask()` now writes the wake-up job's `agent_id` using `source_agent_id ?? tasks.agent_id ?? callerAgentId` so coordinator-triggered reschedules preserve the specialist's routing target. (#837)
-- **Tasks v1 CRUD skills** — `task-create`, `task-list`, `task-update`, `task-complete` skills backed by a new capability-gated `TaskRepo`; promotes `agent_tasks` to a first-class `tasks` table with CEO-visible columns; adds `task.created`, `task.updated`, `task.completed` bus events. (#834, #835)
-- **`contact-update` skill** — direct write path for canonical contact attributes (title, organization, phone, timezone, etc.) with E.164 phone normalization. Pinned to coordinator, ceo-inbox, research-analyst, and contacts. (#863)
-- **Contact canonical attributes** — 12 structured profile fields (`title`, `organization`, `primary_email`, etc.) persisted directly on the `contacts` row; backfill script populates from KG facts. (#829)
-- **Entity context enrichment** — `EntityContext.contact` now exposes all 12 canonical fields; canonical-attribute writes via `memory-store` and `extract-facts` redirect to `ContactService` with E.164 phone normalization; `context-for-email` prefers `contact.primaryEmail` and surfaces `contact.preferredName` for salutations. (#830)
-- **File attachments in outbound email** — all five email skills (`email-send`, `email-reply`, `email-draft-save`, `ceo-inbox-draft-compose`, `ceo-inbox-draft-reply`) now accept an `attachments` input field. Attachments are read from `file://` URLs (TempFileStore), validated, and forwarded to Nylas. The CEO inbox path uses multipart FormData; the Curia outbound path passes `Buffer` content via the Nylas SDK. 20 MB total / 10 attachment limit enforced. (#818)
-- **`ceo-inbox-draft-compose`** — compose cold-outreach drafts to CEO's Gmail Drafts via `CEO_NYLAS_GRANT_ID`. (#815)
-- **Promptfoo red team runbook** — `tests/redteam/` with promptfoo config, `scripts/render-coordinator-prompt.ts` helper, and `pnpm redteam` / `pnpm redteam:report` scripts; tests prompt injection, data exfiltration, hijacking, and ASCII smuggling against the live coordinator system prompt. (#583)
-- **Outbound audience-leak plan** — implementation plan for Stage 2 LLM judge + structured `compose-reply` skill to prevent the coordinator from sending internal reasoning to external recipients. See `docs/wip/2026-06-02-outbound-audience-leak.md`.
-- **Jun 1 email incident plan** — incident reconstruction and two-PR fix plan for the 18-hour email-channel silence + triple-reply burst. See `docs/wip/2026-06-02-jun1-email-incident.md`. (#846, #847)
-- **Tasks & Backlog v1 design** — design memo for a unified task model with deferred work, CEO-visible backlog, and a 3×/day coordinator sweep. See `docs/wip/2026-06-01-tasks-and-backlog-design.md`.
-- **SBOM generation** — SPDX JSON Software Bill of Materials generated on every push to `main` and attached to each GitHub release as a release asset; failure is non-fatal. (#564)
-- **`drive-download-file`** — new skill that downloads a Google Drive file (native or Google-native export) to TempFileStore and returns a `file://` URL, enabling Drive files to be attached to outbound emails. Closes #857.
-- **`pending-actions-digest`** — daily digest now surfaces the task backlog: for-you-to-do, waiting-on-others, and what-I'm-working-on. (#838)
-- **Spec 19 — Tasks & Backlog** — new consolidated spec for the `tasks` table, `task-*` skills, `enable_task_management`, the BacklogHeartbeat, and digest backlog sections. Specs 02/04/07/08/09/17 and the `adding-an-agent` dev guide updated for the `agent_tasks → tasks` rename, canonical contact attributes, and outbound email attachments.
+
+#### Tasks & Backlog v1 (the milestone)
+
+- **`tasks` table** — promotes `agent_tasks` to a first-class table with CEO-visible columns (title, owner, priority, due date, tags, parent/blocked-by links) and a full status lifecycle (open / in_progress / blocked / waiting / done / cancelled). (#834, #835)
+- **`task-create` / `task-list` / `task-update` / `task-complete`** — capability-gated CRUD skills over the backlog, emitting `task.created` / `task.updated` / `task.completed` bus events. (#834, #835)
+- **`enable_task_management`** — declarative agent capability: auto-pins the task skills, injects the executor/reification discipline, and marks the agent heartbeat-eligible. Shipped on the coordinator and ceo-inbox.
+- **`BacklogHeartbeat`** — deterministic hourly component that wakes idle or stale tasks by enqueuing one scheduler job per owning agent, globally capped.
+- **Scheduler ↔ tasks split** — task state lives in `tasks`; the scheduler carries a forward `task_id`. Wake fires bundle `task_id`, `title`, and `progress`, and route to the originating specialist. (#837)
+- **Tasks console UI** — owner/status/priority list with age column, lifecycle controls, contact-name resolution, next-wake time, and parent/blocked-by links. (#869, #870)
+- **Backlog in the daily digest** — `pending-actions-digest` now surfaces for-you-to-do, waiting-on-others, and what-I'm-working-on. (#838)
+- **`meeting-debrief` on tasks** — migrated off bespoke `pendingDebriefs`/`judgedEvents` state maps; detection runs 3×/day and pre-schedules a per-meeting debrief task driven by wake-ups. (#839)
+- **`ceo-inbox` on tasks** — reification blocks bare forward commitments, deferred follow-ups resume into a complete draft, and overflow above 10 unread sheds the tail as `inbox-overflow` tasks. (#840)
+
+#### Contacts
+
+- **Canonical contact attributes** — 12 structured profile fields (title, organization, primary email/phone, timezone, etc.) now persist directly on the `contacts` row, backfilled from the knowledge graph. (#829)
+- **`contact-update` skill** — direct write path for those fields with E.164 phone normalization; pinned to coordinator, ceo-inbox, research-analyst, and contacts. (#863)
+- **Entity context** — `EntityContext.contact` exposes all 12 fields; canonical-attribute writes via `memory-store` / `extract-facts` redirect to `ContactService`, and `context-for-email` prefers the canonical email and preferred name. (#830)
+
+#### Email
+
+- **File attachments** — all five outbound email skills accept an `attachments` field (read from `file://` TempFileStore URLs, validated and forwarded to Nylas; 20 MB total / 10-attachment cap). (#818)
+- **`drive-download-file`** — downloads a Google Drive file (native or Google-native export) to TempFileStore and returns a `file://` URL, bridging Drive into email attachments. (#857)
+- **`ceo-inbox-draft-compose`** — compose cold-outreach drafts to the CEO's Gmail Drafts. (#815)
+
+#### Docs
+
+- **Spec 19 — Tasks & Backlog** — new consolidated spec for the `tasks` table, the `task-*` skills, `enable_task_management`, the BacklogHeartbeat, and digest backlog sections. Specs 02/04/07/08/09/17 and the `adding-an-agent` guide updated for the `agent_tasks → tasks` rename, canonical contact attributes, and outbound email attachments.
 
 ### Changed
-- **Console tasks view** — updated to match the migrated `tasks` schema: drops `scheduled_job_id`, adds all new columns (`title`, `owner`, `priority`, `due_at`, `source`, `tags`, `description`, FK references), extends status filters with new task-lifecycle values, and updates the scheduled-jobs view to display the linked `task_id`. (#869)
+
+- **coordinator** — task management now arrives via `enable_task_management` (replacing manual `task-*` pins); the `intent_anchor`-for-cron instruction is replaced by the task/scheduling split (`task-create` for deferred CEO-visible work, `scheduler-create` for operational sweeps), with backlog-awareness, defer-don't-drop rules, and a bounded project `error_budget`.
 
 ### Fixed
-- **`extract-facts` canonical lookup N+1** — contact lookups are now cached by KG node ID within a single `execute()` call; multiple canonical facts about the same person no longer each trigger a separate DB query. (#830)
-- **`extract-facts` + `memory-store` skill.json contracts** — output schemas now document the `redirected` counter and `redirected_to_contact` action (with `contact_id`) introduced by the canonical attribute guard. (#830)
-- **`canonical-attribute-guard` whitespace handling** — `resolveCanonicalField` now trims leading/trailing whitespace before lookup; LLM-generated attribute keys like `" timezone "` now match correctly instead of falling through to KG writes.
-- **coordinator delegation hint** — `delegation_hint` in active outbound context is now treated as a binding contract; coordinator no longer handles replies directly when a specialist is named, preventing meeting debriefs from getting stuck at `"prompted"`. (#763)
-- **`email-draft-save` unknown account error** — `OutboundGateway` now lists available accounts when unknown `accountId` is passed. (#815)
-- **Working memory TTL** — 30-day expiry on inserts; nightly purge trims expired non-archived turns. (#220)
-- **Automatic scheduled run summaries** — scheduler auto-captures `agent.response.content` as `last_run_summary` via COALESCE; agents no longer need to call `scheduler-report` explicitly. (#817)
-- **Runtime job UUID injection** — valid `scheduler:<uuid>:<run-id>` conversationIds inject a `Job ID` line so agents can optionally override with a structured summary. (#817)
-- **`scheduler-report` pinned to contacts** — contacts agent `pinned_skills` now includes `scheduler-report`. (#817)
-- **`scheduler-report` pinned to ceo-inbox** — ceo-inbox agent `pinned_skills` now includes `scheduler-report`. (#817)
-- **`scheduler-report` pinned to coordinator** — coordinator agent `pinned_skills` now includes `scheduler-report`. (#817)
-- **Principal contact injection** — runtime now injects a `## Principal Contact Details` block (verified email, Signal, phone) into every agent's system prompt per-task, preventing the coordinator from hallucinating the principal's address when composing outbound messages. (#786)
-- **`fast` model tier** — repointed to `google/gemini-3.1-flash-lite` after OpenRouter removed `gemini-2.0-flash-001`; unblocks contacts, calendar, research-analyst, digest. (#812)
-- **Provisional contact sweep** — sweep step 3 now passes `${principal_contact_id}` to `calendar-list-events` (was passing nothing, causing a UUID validation error), and treats calendar failure as best-effort so Sent-folder promotions still fire. (#816)
 
-### Removed
-- None.
+- **Email-channel reliability** — fixes for the Jun 1 incident: an 18-hour channel silence and a triple-reply burst. (#846, #847)
+- **Principal contact injection** — runtime injects a `## Principal Contact Details` block (verified email, Signal, phone) into every agent's prompt, ending principal-address hallucination on outbound. (#786)
+- **Scheduled-run summaries** — the scheduler auto-captures `agent.response.content` as `last_run_summary`; agents no longer need an explicit `scheduler-report` call, which is now pinned to coordinator, ceo-inbox, and contacts. (#817)
+- **Working memory TTL** — 30-day expiry on inserts, with a nightly purge of expired non-archived turns. (#220)
+- **coordinator delegation hint** — `delegation_hint` is now treated as a binding contract; replies route to the named specialist instead of being handled directly, fixing debriefs stuck at `"prompted"`. (#763)
+- **`fast` model tier** — repointed to `google/gemini-3.1-flash-lite` after OpenRouter removed `gemini-2.0-flash-001`. (#812)
+- **Provisional contact sweep** — passes `${principal_contact_id}` to `calendar-list-events` (was a UUID validation error) and treats calendar failure as best-effort. (#816)
+- **`extract-facts` canonical lookups** — per-fact contact lookups cached within one `execute()` call (N+1 fix); `extract-facts` / `memory-store` output schemas document the new `redirected` counter; whitespace in attribute keys is trimmed before lookup. (#830)
+- **`email-draft-save`** — unknown `accountId` now lists the available accounts instead of failing opaquely. (#815)
 
 ### Security
-- **HTML tag filtering** — replaced regex stripping with `node-html-parser`; eliminates the CodeQL `js/bad-tag-filter` bypass. (#590)
+
+- **HTML tag filtering** — replaced regex stripping with `node-html-parser`, eliminating the CodeQL `js/bad-tag-filter` bypass. (#590)
+- **SBOM generation** — SPDX JSON Software Bill of Materials generated on every push to `main` and attached to each GitHub release. (#564)
+- **Promptfoo red-team runbook** — `tests/redteam/` exercises prompt injection, data exfiltration, hijacking, and ASCII smuggling against the live coordinator prompt. (#583)
+
+### Release haiku
+
+> The list never sleeps;
+> a heartbeat wakes each deferred
+> task, then lets it rest.
 
 ## [0.32.0] — 2026-06-01 — "Ariadne"
 
