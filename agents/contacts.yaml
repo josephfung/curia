@@ -1,5 +1,5 @@
 name: contacts
-version: "0.1.0"
+version: "0.2.0"
 role: specialist
 description: >
   Contact domain specialist — briefings, CRUD, deduplication, relationship management,
@@ -7,6 +7,8 @@ description: >
 model:
   tier: fast  # structured CRUD + briefings, no judgment calls, never user-facing
 allow_discovery: false
+error_budget:
+  max_turns: 30  # batched promotion sweep: up to 1 list + 10 lookups + 10 registers + 1 report = ~22 turns worst case
 system_prompt: |
   ## Role
   You are the Contact Specialist. You own the full contact domain for the executive
@@ -256,51 +258,71 @@ schedule:
 
   - cron: "0 8 * * *"   # Daily at 8 AM
     task: >
-      Run the provisional contact promotion sweep. Your goal is to auto-promote provisional
-      contacts to confirmed based on engagement signals from the CEO's Sent folder and calendar.
-      The curia_outbound signal (Curia itself has emailed this contact) fires automatically
-      inside contact-register — no explicit check needed for it.
+      Run one batch of the provisional contact promotion sweep. Your goal is to
+      auto-promote provisional contacts to confirmed based on engagement signals
+      from the CEO's Sent folder and calendar. Each run processes up to 10
+      contacts; subsequent runs pick up where the last one left off.
+
+      Before you begin, extract two values from your context:
+      - scheduler_job_id: read from the "scheduler_job_id" field in the JSON
+        task payload you received (used to call scheduler-report at the end).
+      - next_offset: read from the "next_offset" field in the "Agent context"
+        block of the prior run context (the "[Prior run context — ...]" section
+        at the top of your message). Default to 0 if there is no prior run
+        context or no "next_offset" field.
 
       Steps:
 
-      1. Call contact-list with status: "provisional" to get all provisional contacts.
-         If the count is zero, exit and report that no provisional contacts need promotion.
+      1. Call contact-list with status: "provisional", limit: 10,
+         offset: next_offset. If count is 0 (no contacts in this batch), skip
+         directly to step 5 — reset the cursor to 0 for the next run.
 
       2. Call ceo-inbox-list with folder: "SENT", unread_only: false,
-         received_after_hours: 2160 (90 days), limit: 50. Collect all email addresses
-         from the "to" and "cc" arrays across all returned messages. Deduplicate into a set.
-         Note: ceo-inbox-list is capped at 50 messages per call by the skill definition.
-         For high-volume inboxes this may miss older provisional contacts.
-         @TODO: add pagination support to ceo-inbox-list to scan beyond 50 messages.
+         received_after_hours: 2160 (90 days), limit: 50. Collect all email
+         addresses from the "to" and "cc" arrays across all returned messages.
+         Deduplicate into a set.
+         Note: ceo-inbox-list is capped at 50 messages per call by the skill
+         definition. For high-volume inboxes this may miss older provisional
+         contacts.
+         @TODO: add pagination support to ceo-inbox-list to scan beyond 50
+         messages.
 
       3. Call calendar-list-events with a wide date range: timeMin 90 days ago,
          timeMax 90 days from now. Pass the principal's contact ID (from the
          "Promotion Sweep — Principal Context" section in your system prompt) as
-         contactId so the skill can resolve all calendars registered to the principal.
-         Collect all attendee email addresses from non-cancelled events. Deduplicate
-         into a set.
+         contactId so the skill can resolve all calendars registered to the
+         principal. Collect all attendee email addresses from non-cancelled
+         events. Deduplicate into a set.
          If the call fails (skill error, calendar not connected, API unavailable),
          record the error message and treat the calendar attendee set as empty —
          calendar enrichment is best-effort and must not abort the sweep.
 
-      4. For each provisional contact from step 1:
-         - Use contact-lookup (by: "name") to get their channel identities (email addresses).
+      4. For each provisional contact in the batch from step 1:
+         - Use contact-lookup (by: "name") to get their channel identities
+           (email addresses).
          - If a contact has no email identity, skip them.
          - Check whether their email appears in the Sent folder set (step 2) or
            the calendar attendee set (step 3).
          - If found in Sent folder: call contact-register with channel: "email",
            identifier: their email address, displayName: their display name,
            messageTimestamp: the current ISO 8601 time, ceo_has_sent: true.
-         - If found in calendar only (not in Sent folder): call contact-register with
-           channel: "email", identifier: their email address, displayName: their display
-           name, messageTimestamp: the current ISO 8601 time, calendar_accepted: true.
-         - contact-register automatically checks the curia_outbound signal for every call.
+         - If found in calendar only (not in Sent folder): call contact-register
+           with channel: "email", identifier: their email address,
+           displayName: their display name, messageTimestamp: the current ISO
+           8601 time, calendar_accepted: true.
+         - contact-register automatically checks the curia_outbound signal for
+           every call.
 
-      5. Report a clear summary: how many provisional contacts were checked, how many
-         were promoted, which signal triggered each promotion (curia_outbound,
-         ceo_has_sent, or calendar_accepted), how many provisional contacts remain,
-         and whether the calendar call in step 3 succeeded or failed. If it failed,
-         include the error message so operators can distinguish a transient outage
-         from a permanent misconfiguration (e.g. no calendar registered for the
-         principal).
+      5. Compute the cursor for the next run:
+         - If the batch from step 1 returned fewer than 10 contacts (end of
+           pool), set next_offset to 0 (wrap around for next cycle).
+         - Otherwise, set next_offset to (current next_offset + 10).
+
+      6. Call scheduler-report with:
+         - job_id: the scheduler_job_id you extracted before step 1
+         - summary: how many contacts were checked in this batch, how many were
+           promoted and by which signal (curia_outbound, ceo_has_sent,
+           calendar_accepted), whether the calendar call succeeded or failed,
+           and the next offset so operators can track progress.
+         - context: { "next_offset": <computed value from step 5> }
     expectedDurationSeconds: 540

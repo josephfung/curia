@@ -1,13 +1,14 @@
 {
   "name": "contact-list",
-  "description": "List contacts, optionally filtered by role or status, with optional result limit.",
-  "version": "1.1.0",
+  "description": "List contacts, optionally filtered by role or status, with optional result limit and offset for pagination.",
+  "version": "1.2.0",
   "sensitivity": "normal",
   "action_risk": "none",
   "inputs": {
     "role": "string?",
     "status": "string? (confirmed | provisional | blocked)",
-    "limit": "number?"
+    "limit": "number?",
+    "offset": "number? (skip this many contacts; use with limit for cursor-based pagination)"
   },
   "outputs": {
     "contacts": "array",

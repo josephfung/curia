@@ -1,6 +1,6 @@
 // handler.test.ts — tests for contact-list skill.
-// Covers: no filters, status filter, limit, status+limit, role (existing),
-// invalid status, invalid limit.
+// Covers: no filters, status filter, limit, offset, status+limit+offset, role (existing),
+// invalid status, invalid limit, invalid offset.
 import { describe, it, expect, vi } from 'vitest';
 import { ContactListHandler } from './handler.js';
 import type { SkillContext, SkillResult } from '../../src/skills/types.js';
@@ -38,16 +38,16 @@ function makeCtx(input: Record<string, unknown> = {}, contacts: Contact[] = allC
     input,
     log: createSilentLogger(),
     contactService: {
-      listContacts: vi.fn().mockImplementation((filters?: { status?: string; limit?: number }) => {
+      listContacts: vi.fn().mockImplementation((filters?: { status?: string; limit?: number; offset?: number }) => {
         let results = [...contacts];
         if (filters?.status) {
           results = results.filter((c) => c.status === filters.status);
         }
         // Sort ascending by createdAt to match real backend
         results.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
-        if (filters?.limit != null) {
-          results = results.slice(0, filters.limit);
-        }
+        const offset = filters?.offset ?? 0;
+        const end = filters?.limit != null ? offset + filters.limit : undefined;
+        results = results.slice(offset, end);
         return Promise.resolve(results);
       }),
       findContactByRole: vi.fn().mockResolvedValue([]),
@@ -74,6 +74,7 @@ describe('ContactListHandler', () => {
     expect(ctx.contactService!.listContacts).toHaveBeenCalledWith({
       status: undefined,
       limit: undefined,
+      offset: undefined,
     });
   });
 
@@ -131,6 +132,54 @@ describe('ContactListHandler', () => {
     const contacts = getContacts(result);
     expect(contacts).toHaveLength(1);
     expect(contacts[0].status).toBe('provisional');
+  });
+
+  // --- Offset pagination ---
+
+  it('offset=0 returns same results as no offset', async () => {
+    const ctx = makeCtx({ offset: 0 });
+    const result = await handler.execute(ctx);
+    expect(result.success).toBe(true);
+    expect(getContacts(result)).toHaveLength(4);
+  });
+
+  it('offset skips leading contacts', async () => {
+    const ctx = makeCtx({ offset: 2 });
+    const result = await handler.execute(ctx);
+    expect(result.success).toBe(true);
+    // allContacts sorted by createdAt: alice, bob, carol, dave — offset 2 skips alice+bob
+    const contacts = getContacts(result);
+    expect(contacts).toHaveLength(2);
+    expect(contacts[0]!.display_name).toBe('Carol');
+    expect(contacts[1]!.display_name).toBe('Dave');
+  });
+
+  it('offset past end returns empty array', async () => {
+    const ctx = makeCtx({ offset: 10 });
+    const result = await handler.execute(ctx);
+    expect(result.success).toBe(true);
+    expect(getContacts(result)).toHaveLength(0);
+  });
+
+  it('two consecutive limit+offset pages return disjoint sets', async () => {
+    const ctx1 = makeCtx({ limit: 2, offset: 0 });
+    const ctx2 = makeCtx({ limit: 2, offset: 2 });
+    const page1 = getContacts(await handler.execute(ctx1)).map((c) => c.contact_id);
+    const page2 = getContacts(await handler.execute(ctx2)).map((c) => c.contact_id);
+    expect(page1).toHaveLength(2);
+    expect(page2).toHaveLength(2);
+    expect(page1.some((id) => page2.includes(id))).toBe(false);
+    expect([...page1, ...page2].sort()).toEqual(['a1', 'b2', 'c3', 'd4'].sort());
+  });
+
+  it('offset with status filter paginates within filtered results', async () => {
+    // Only bob and carol are provisional; offset 1 should return just carol
+    const ctx = makeCtx({ status: 'provisional', limit: 10, offset: 1 });
+    const result = await handler.execute(ctx);
+    expect(result.success).toBe(true);
+    const contacts = getContacts(result);
+    expect(contacts).toHaveLength(1);
+    expect(contacts[0]!.display_name).toBe('Carol');
   });
 
   // --- Role filter (existing behavior, regression check) ---
@@ -196,6 +245,27 @@ describe('ContactListHandler', () => {
     const result = await handler.execute(ctx);
     expect(result.success).toBe(false);
     expect(result.error).toContain('Cannot combine role');
+  });
+
+  it('rejects combining role with offset', async () => {
+    const ctx = makeCtx({ role: 'CFO', offset: 5 });
+    const result = await handler.execute(ctx);
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Cannot combine role');
+  });
+
+  it('rejects negative offset', async () => {
+    const ctx = makeCtx({ offset: -1 });
+    const result = await handler.execute(ctx);
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('non-negative integer');
+  });
+
+  it('rejects non-integer offset', async () => {
+    const ctx = makeCtx({ offset: 1.5 });
+    const result = await handler.execute(ctx);
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('non-negative integer');
   });
 
   // --- Output shape ---

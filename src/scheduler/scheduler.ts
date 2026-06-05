@@ -341,19 +341,21 @@ export class Scheduler {
       return;
     }
 
-    // Build the agent.task content. For task-bound jobs, include task_id, title,
-    // progress, and the original task payload so the receiving specialist has full
-    // context. Intent anchor is passed in the event payload (not content) so the
-    // runtime injects it into the system prompt as a non-negotiable behavioral
-    // instruction. For non-task-bound jobs the payload is used as-is.
-    let content = JSON.stringify(job.taskPayload);
+    // Build the agent.task content. The scheduler_job_id is always injected so
+    // agents can call scheduler-report to persist their cursor/context for the
+    // next run. For task-bound jobs, include task_id, title, and progress as
+    // well. For non-task-bound jobs the payload fields are spread at the top level.
+    let content: string;
     if (job.agentTaskId) {
       content = JSON.stringify({
+        scheduler_job_id: job.id,
         task_id: job.agentTaskId,
         ...(job.taskTitle !== null && { title: job.taskTitle }),
         progress: job.progress ?? {},
         task_payload: job.taskPayload,
       });
+    } else {
+      content = JSON.stringify({ scheduler_job_id: job.id, ...job.taskPayload });
     }
 
     // Prepend prior-run context so the agent knows what happened last time

@@ -12,10 +12,11 @@ const VALID_STATUSES: readonly ContactStatus[] = ['confirmed', 'provisional', 'b
 
 export class ContactListHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {
-    const { role, status, limit } = ctx.input as {
+    const { role, status, limit, offset } = ctx.input as {
       role?: string;
       status?: string;
       limit?: number;
+      offset?: number;
     };
 
     // Input validation
@@ -33,10 +34,16 @@ export class ContactListHandler implements SkillHandler {
       }
     }
 
-    // Role uses a separate query path that doesn't support status/limit — reject the combination
+    if (offset != null) {
+      if (typeof offset !== 'number' || !Number.isInteger(offset) || offset < 0) {
+        return { success: false, error: 'Offset must be a non-negative integer' };
+      }
+    }
+
+    // Role uses a separate query path that doesn't support status/limit/offset — reject the combination
     // rather than silently dropping filters.
-    if (role && typeof role === 'string' && (status != null || limit != null)) {
-      return { success: false, error: 'Cannot combine role filter with status or limit. Use role alone, or status/limit without role.' };
+    if (role && typeof role === 'string' && (status != null || limit != null || offset != null)) {
+      return { success: false, error: 'Cannot combine role filter with status, limit, or offset. Use role alone, or status/limit/offset without role.' };
     }
 
     // contactService is a universal service — always injected by ExecutionLayer
@@ -47,7 +54,7 @@ export class ContactListHandler implements SkillHandler {
       };
     }
 
-    ctx.log.info({ role: role ?? '(all)', status: status ?? '(all)', limit: limit ?? '(none)' }, 'Listing contacts');
+    ctx.log.info({ role: role ?? '(all)', status: status ?? '(all)', limit: limit ?? '(none)', offset: offset ?? 0 }, 'Listing contacts');
 
     try {
       // Role filter uses the dedicated findContactByRole path (no change from existing behavior)
@@ -56,6 +63,7 @@ export class ContactListHandler implements SkillHandler {
         : await ctx.contactService.listContacts({
             status: status as ContactStatus | undefined,
             limit,
+            offset,
           });
 
       return {
