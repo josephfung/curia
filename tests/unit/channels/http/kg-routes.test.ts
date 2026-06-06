@@ -1,4 +1,6 @@
 import Fastify from 'fastify';
+import type { LightMyRequestResponse } from 'fastify';
+import rateLimit from '@fastify/rate-limit';
 import type { Pool } from 'pg';
 import type { Logger } from '../../../../src/logger.js';
 import type { ContactService } from '../../../../src/contacts/contact-service.js';
@@ -219,6 +221,46 @@ describe('knowledgeGraphRoutes', () => {
       primaryEmail: 'first.last@sub.example.co.uk',
     });
     expect(response.statusCode).not.toBe(400);
+
+    await app.close();
+  });
+
+  // Regression for CodeQL #98 (js/missing-rate-limiting). GET /api/kg/chat/history
+  // reads from the working_memory table and was the only KG route missing the
+  // KG_RATE (60/min) per-route override — leaving it covered only by the looser
+  // global limit. We register @fastify/rate-limit with a deliberately high global
+  // cap (1000) so the route's own 60/min ceiling is the ONLY thing that can trip a
+  // 429: without the override all 61 requests would pass the limiter and return
+  // 401 at the secret guard; with it, the 61st is rejected by the limiter first.
+  it('rate-limits GET /api/kg/chat/history with the KG per-route cap', async () => {
+    const app = Fastify();
+    await app.register(rateLimit, { max: 1000, timeWindow: '1 minute' });
+    await app.register(knowledgeGraphRoutes, {
+      pool,
+      logger: createLogger(),
+      webAppBootstrapSecret: 'secret-1',
+      secureCookies: false,
+      sessions: new Map(),
+    });
+
+    // The rate-limit onRequest hook runs before the handler's assertSecret check,
+    // so it increments on every (unauthenticated) request. Fire a handful past the
+    // 60/min cap rather than pinning the assertion to the exact 61st request — the
+    // boundary index isn't what we're testing, only that the per-route cap engages.
+    const url = '/api/kg/chat/history?conversationId=c1';
+    const statuses: number[] = [];
+    for (let i = 0; i < 65; i++) {
+      const res: LightMyRequestResponse = await app.inject({ method: 'GET', url });
+      statuses.push(res.statusCode);
+    }
+
+    // The first request passes the limiter and is rejected by the secret guard —
+    // proves requests reach past the rate limiter, so a later 429 comes from the
+    // limiter and not some blanket rejection.
+    expect(statuses[0]).toBe(401);
+    // A 429 within 65 requests can only come from the route's own 60/min override:
+    // the global cap is 1000, so without KG_RATE none of these would be throttled.
+    expect(statuses).toContain(429);
 
     await app.close();
   });

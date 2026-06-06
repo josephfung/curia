@@ -36,6 +36,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Security
 - **Contact email validation** — rewrote the `primaryEmail` format regex to remove polynomial-time backtracking (ReDoS) on attacker-controlled input. (#898, CodeQL js/polynomial-redos)
+- **KG chat history rate limit** — `GET /api/kg/chat/history` now carries the same 60/min per-IP cap as every other KG route; it was the lone DB-backed endpoint left on the looser global limit. (#901, CodeQL js/missing-rate-limiting)
 
 ## [0.33.0] — 2026-06-04 — "Mr. Meeseeks"
 
