@@ -1,6 +1,10 @@
 name: Trivy
 
 on:
+  # Manual trigger so the image scan can be run on demand — e.g. to verify a
+  # base-image / dependency CVE fix immediately instead of waiting for the
+  # weekly schedule. See the trivy-image job's `if` guard below.
+  workflow_dispatch:
   push:
     branches: [main]
   pull_request:
@@ -46,7 +50,9 @@ jobs:
   trivy-image:
     name: Docker Image Scan
     runs-on: ubuntu-latest
-    if: github.event_name == 'schedule'
+    # Image build+scan is expensive, so it's skipped on every push/PR. It runs on
+    # the weekly schedule and on manual dispatch (for on-demand fix verification).
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     steps:
       - uses: actions/checkout@v6
         with:
