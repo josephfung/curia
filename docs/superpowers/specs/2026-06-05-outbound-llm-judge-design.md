@@ -275,6 +275,6 @@ Principal-only replies skip the judge entirely.
 
 ## PR linkage
 
-Per the issue comment: this PR uses `Refs #547` (the broader tone/persona scope stays tracked on
-#547) unless we file a dedicated follow-up issue, in which case `Closes #547`. Default: `Refs #547`
-+ note the deferred scope. Implementer/CEO decision at PR time.
+The PR uses **`Closes #547`** (CEO decision 2026-06-05: the comment was a deliberate scope change,
+so this focused Layer A *is* #547). Tone alignment and persona consistency are deferred and will be
+filed as a **new follow-up issue** referencing this spec, rather than keeping #547 open.
