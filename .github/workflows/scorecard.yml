@@ -24,7 +24,7 @@ jobs:
           persist-credentials: false  # required by Scorecard
 
       - name: Run Scorecard
-        uses: ossf/scorecard-action@v2.4.0
+        uses: ossf/scorecard-action@v2.4.3
         with:
           results_file: scorecard.sarif
           results_format: sarif
@@ -35,3 +35,4 @@ jobs:
         with:
           sarif_file: scorecard.sarif
           category: scorecard
+        if: always()
