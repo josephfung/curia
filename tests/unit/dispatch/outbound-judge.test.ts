@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { OutboundLlmJudge } from '../../../src/dispatch/outbound-judge.js';
+import { OutboundLlmJudge, parseVerdict } from '../../../src/dispatch/outbound-judge.js';
 import type { JudgeConfig } from '../../../src/dispatch/outbound-judge.js';
 import type { LLMProvider, LLMResponse } from '../../../src/agents/llm/provider.js';
 import type { FilterRecipient } from '../../../src/dispatch/outbound-filter.js';
@@ -169,5 +169,35 @@ describe('OutboundLlmJudge', () => {
     await judge.review(MIXED_INPUT);
     const calls = (bus as unknown as { published: Array<{ type: string }> }).published.filter((e) => e.type === 'llm.call');
     expect(calls).toHaveLength(0);
+  });
+});
+
+describe('parseVerdict', () => {
+  it('parses a plain verdict', () => {
+    expect(parseVerdict('{"leak": true, "reason": "x"}')).toEqual({ leak: true, reason: 'x' });
+  });
+  it('defaults reason to empty string when missing', () => {
+    expect(parseVerdict('{"leak": false}')).toEqual({ leak: false, reason: '' });
+  });
+  it('strips a ```json code fence', () => {
+    expect(parseVerdict('```json\n{"leak": true, "reason": "y"}\n```')).toEqual({ leak: true, reason: 'y' });
+  });
+  it('extracts a verdict embedded in surrounding prose', () => {
+    expect(parseVerdict('Here is my answer: {"leak": false, "reason": ""} done')).toEqual({ leak: false, reason: '' });
+  });
+  it('accepts extra keys but keeps only leak+reason', () => {
+    expect(parseVerdict('{"leak": true, "reason": "z", "note": "ignored"}')).toEqual({ leak: true, reason: 'z' });
+  });
+  it('rejects a non-boolean leak (numeric)', () => {
+    expect(parseVerdict('{"leak": 1, "reason": "x"}')).toBeNull();
+  });
+  it('rejects a non-boolean leak (string "true")', () => {
+    expect(parseVerdict('{"leak": "true", "reason": "x"}')).toBeNull();
+  });
+  it('rejects truncated/invalid JSON', () => {
+    expect(parseVerdict('{"leak": false, "reason": "aaa')).toBeNull();
+  });
+  it('rejects entirely non-JSON text', () => {
+    expect(parseVerdict('not json at all')).toBeNull();
   });
 });

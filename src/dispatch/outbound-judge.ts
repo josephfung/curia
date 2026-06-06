@@ -96,7 +96,10 @@ export class OutboundLlmJudge implements OutboundJudge {
           { role: 'system', content: JUDGE_SYSTEM_PROMPT },
           { role: 'user', content: userPrompt },
         ],
-        // Deterministic, short verdict.
+        // Deterministic, short verdict. 100 tokens is ample for {"leak":..,"reason":".."}.
+        // If a model ever emits a verbose reason that gets truncated, parseVerdict treats
+        // the cut-off JSON as malformed — which fails toward blocking (split/closed), the
+        // safe direction for a security boundary.
         options: { temperature: 0, max_tokens: 100 },
       });
       const timeoutPromise = new Promise<typeof TIMEOUT>((resolve) => {
