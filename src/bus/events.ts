@@ -71,6 +71,13 @@ interface AgentResponsePayload {
   // Populated by the agent runtime's tool-use loop; absent on error-path responses
   // where the runtime bailed before completing the loop.
   skillsCalled?: string[];
+  // Present when the agent called compose-reply with an `internal` field. The
+  // dispatcher routes this as a separate principal-directed outbound message,
+  // ensuring it never appears in the external recipient's email body.
+  sidebar?: {
+    audience: 'principal';
+    content: string;
+  };
 }
 
 interface OutboundMessagePayload {

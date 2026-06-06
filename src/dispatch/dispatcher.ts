@@ -81,6 +81,16 @@ export interface DispatcherConfig {
   /** Outbound context service — v2 context bridging. When present, replaces
    *  the working-memory-based context memo injection. */
   outboundContextService?: import('./outbound-context.js').OutboundContextService;
+  /** Routing for the compose-reply sidebar: when set, agent.response events
+   *  that carry a `sidebar` field publish a second outbound.message addressed
+   *  to the principal (in addition to the primary outbound to the inbound sender).
+   *  When absent, sidebar content is logged as a warning and dropped. */
+  principalRouting?: {
+    channelId: string;
+    accountId?: string;
+    /** Recipient identifier (e.g. email address). */
+    recipientId: string;
+  };
 }
 
 /**
@@ -134,6 +144,9 @@ export class Dispatcher {
   private selfEmail?: string;
   /** Outbound context service — v2 context bridging (replaces working-memory memo read path). */
   private _outboundContextService?: import('./outbound-context.js').OutboundContextService;
+  /** Principal routing for compose-reply sidebar delivery. When set, sidebar content
+   *  is published as a second outbound.message to the principal. */
+  private principalRouting?: DispatcherConfig['principalRouting'];
 
   constructor(config: DispatcherConfig) {
     this.bus = config.bus;
@@ -152,6 +165,7 @@ export class Dispatcher {
     this.confidencePipeline = config.confidencePipeline;
     this.selfEmail = config.selfEmail;
     this._outboundContextService = config.outboundContextService;
+    this.principalRouting = config.principalRouting;
 
     // Warn if the trust floor is active but no held-message service was provided — the floor
     // silently becomes a no-op in that case, which is a security-relevant degradation.
@@ -966,6 +980,33 @@ export class Dispatcher {
       taskEventId: event.parentEventId ?? undefined,
     });
     await this.bus.publish('dispatch', outbound);
+
+    // compose-reply sidebar split: if the agent partitioned the reply into an external body
+    // and a principal-only update, publish a second outbound.message to the principal.
+    // Each outbound goes through OutboundGateway and the content filter independently.
+    if (event.payload.sidebar) {
+      if (this.principalRouting) {
+        const sidebarOutbound = createOutboundMessage({
+          conversationId: routing.conversationId,
+          channelId: this.principalRouting.channelId,
+          accountId: this.principalRouting.accountId,
+          content: event.payload.sidebar.content,
+          recipientId: this.principalRouting.recipientId,
+          parentEventId: event.id,
+          taskEventId: event.parentEventId ?? undefined,
+        });
+        await this.bus.publish('dispatch', sidebarOutbound);
+        this.logger.info(
+          { agentId: event.payload.agentId, conversationId: routing.conversationId },
+          'Dispatcher: published sidebar outbound to principal',
+        );
+      } else {
+        this.logger.warn(
+          { agentId: event.payload.agentId, conversationId: routing.conversationId },
+          'Dispatcher: agent.response has sidebar but no principalRouting configured — sidebar dropped',
+        );
+      }
+    }
 
     // Schedule a checkpoint for this conversation — resets the debounce timer if
     // already running, so only fires after a full window of inactivity.

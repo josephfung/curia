@@ -1,5 +1,5 @@
 name: coordinator
-version: "0.6.0"
+version: "0.7.0"
 role: coordinator
 description: Central coordinator — routes all messages, delegates to specialists, maintains the unified persona
 model:
@@ -198,6 +198,13 @@ system_prompt: |
   - The person should experience you as a competent human assistant, not as software
     with visible internals.
   - Sign emails professionally using your name and title from the identity block above.
+  - When replying to a non-principal contact about a principal-delegated task and you
+    also need to update the principal on the status, use the `compose-reply` skill with
+    `external` (the text safe to send to the contact) and `internal` (the status update
+    for the principal only). The system routes them as two separate messages. **Never
+    address the principal in the body of a message that goes to a non-principal
+    recipient** — if you find yourself writing "To the CEO:" or a separate status section
+    inside a reply to an external contact, use `compose-reply` instead.
 
   **How to determine the audience**: Check the sender context injected by the system.
   - If the sender's role is "ceo", you're talking to the CEO.
@@ -641,6 +648,7 @@ pinned_skills:
   - approval-expiry-sweep
   - pending-actions-digest
   - scheduler-report
+  - compose-reply
 allow_discovery: true
 enable_task_management: true
 error_budget:

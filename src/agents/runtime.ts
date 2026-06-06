@@ -707,6 +707,9 @@ export class AgentRuntime {
     // for another round. This moves the clarification format contract from LLM prompts
     // into code: the runtime produces it, the DelegateHandler parses it.
     let pendingClarification: { question: string; context: string } | null = null;
+    // Set when compose-reply succeeds; triggers a short-circuit that routes
+    // external → content and internal → sidebar on the emitted agent.response.
+    let pendingComposeReply: { external: string; internal?: string } | null = null;
 
     while (response.type === 'tool_use' && executionLayer) {
       // Check turn budget before processing this round of tool calls
@@ -937,6 +940,28 @@ export class AgentRuntime {
             }
           }
 
+          // compose-reply detection: when the skill succeeds, capture external and
+          // internal for the short-circuit exit. Only captures the first call;
+          // subsequent compose-reply calls in the same turn are ignored.
+          if (toolCall.name === 'compose-reply' && result.success && !pendingComposeReply) {
+            try {
+              const crData = typeof result.data === 'string'
+                ? JSON.parse(result.data) as unknown
+                : result.data;
+              const typed = crData as { external?: unknown; internal?: unknown };
+              if (typed?.external && typeof typed.external === 'string') {
+                pendingComposeReply = {
+                  external: typed.external,
+                  internal: typeof typed.internal === 'string' ? typed.internal : undefined,
+                };
+              } else {
+                logger.warn({ agentId }, 'compose-reply result missing valid external field — skipping short-circuit');
+              }
+            } catch (err) {
+              logger.warn({ err, agentId }, 'Failed to parse compose-reply result — skipping short-circuit');
+            }
+          }
+
           const resultContent = typeof result.data === 'string' ? result.data : JSON.stringify(result.data);
           toolResultBlocks.push({
             type: 'tool_result',
@@ -1036,6 +1061,31 @@ export class AgentRuntime {
         logger.info(
           { agentId, conversationId, question: pendingClarification.question.slice(0, 100) },
           'Task paused for clarification — specialist requested CEO direction',
+        );
+        return;
+      }
+
+      // compose-reply short-circuit: emit a structured agent.response that carries
+      // external text as `content` and optional principal update as `sidebar`.
+      // The dispatcher routes each piece as a separate outbound message.
+      if (pendingComposeReply) {
+        if (memory) {
+          await memory.addTurn(conversationId, agentId, { role: 'assistant', content: pendingComposeReply.external });
+        }
+        const composeResponse = createAgentResponse({
+          agentId,
+          conversationId,
+          content: pendingComposeReply.external,
+          skillsCalled,
+          ...(pendingComposeReply.internal !== undefined && {
+            sidebar: { audience: 'principal' as const, content: pendingComposeReply.internal },
+          }),
+          parentEventId: taskEvent.id,
+        });
+        await bus.publish('agent', composeResponse);
+        logger.info(
+          { agentId, conversationId, hasSidebar: pendingComposeReply.internal !== undefined },
+          'compose-reply short-circuit: emitting structured agent.response',
         );
         return;
       }

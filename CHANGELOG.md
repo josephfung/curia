@@ -14,10 +14,14 @@ bus event types) are noted explicitly even in the `0.x` range.
 ## [Unreleased]
 
 ### Added
+- **`compose-reply` skill** — lets the coordinator partition a reply into an external-facing body and a principal-only status update; the dispatcher routes each piece as a separate outbound message, eliminating the audience-leak failure mode at the source. (#851)
 - **`ceo-inbox-mark-starred`** — new skill that stars (or unstars) a CEO inbox message via the Nylas starred field; mirrors the pattern of `ceo-inbox-mark-read`.
 - **`⚠️ Stuck` label** — ceo-inbox now applies this label when triage cannot complete for a message (unrecognised classification value, required skill failure, or error budget boundary hit), making failures visible in the Gmail sidebar.
 
 ### Changed
+- **`AgentResponsePayload`** — extended with optional `sidebar: { audience: 'principal'; content: string }` field; public API surface change. (#851)
+- **Dispatcher** — `handleAgentResponse` publishes a second `outbound.message` to the principal when `sidebar` is present and `principalRouting` is configured; adds `principalRouting` to `DispatcherConfig`. (#851)
+- **Coordinator prompt** — Audience Awareness section documents the `compose-reply` pattern; bumped to v0.7.0. (#851)
 - **ceo-inbox triage labels** — renamed to emoji-prefixed variants for better readability in the Gmail sidebar: `URGENT` → `🚨 Urgent`, `ACTIONABLE` → `✅ Handled`, `NEEDS DRAFT` → `✍️ Drafted`, `LEAVE FOR CEO` → `📌 Seen`, `NOISE` → `✔️ Cleared`. Existing Gmail labels with the old names are inert and won't appear on new messages.
 - **`🚨 Urgent` messages are starred automatically** — after step 4h's bullpen notification, ceo-inbox calls `ceo-inbox-mark-starred`. Starring failure is logged but does not abort the run.
 - **KG graph** — various visual improvements: physics-aware layout, better hub sizing, principal-node default view, and viewport centering on focal nodes. (#861)

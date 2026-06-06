@@ -1,0 +1,18 @@
+{
+  "name": "compose-reply",
+  "description": "Structure a reply that has two distinct audiences: an external recipient and the principal. Call this when responding to a non-principal contact about a principal-delegated task and you also need to update the principal on the status. Provide `external` with the text safe to send to the contact, and optionally `internal` with the status update for the principal only. The system routes them as two separate messages — never address the principal in the body of a message that also goes to an external recipient.",
+  "version": "0.1.0",
+  "sensitivity": "normal",
+  "action_risk": "none",
+  "inputs": {
+    "external": "string (text safe to send to the inbound sender)",
+    "internal": "string? (text for the principal only — routed separately, never visible to the external recipient)"
+  },
+  "outputs": {
+    "external": "string (validated external-facing reply)",
+    "internal": "string? (validated principal-facing update, present only when internal was provided)"
+  },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 5000
+}
