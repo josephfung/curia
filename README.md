@@ -12,6 +12,7 @@
   <img src="https://img.shields.io/badge/license-MIT-blue" alt="License: MIT" />
   <img src="https://img.shields.io/badge/node-%3E%3D22-brightgreen" alt="Node >= 22" />
   <img src="https://img.shields.io/badge/typescript-ESM-blue" alt="TypeScript ESM" />
+  <a href="https://securityscorecards.dev/viewer/?uri=github.com/josephfung/curia"><img src="https://api.securityscorecards.dev/projects/github.com/josephfung/curia/badge" alt="OpenSSF Scorecard" /></a>
 </p>
 
 <p align="center">
