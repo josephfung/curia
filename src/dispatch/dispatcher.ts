@@ -87,9 +87,15 @@ export interface DispatcherConfig {
    *  When absent, sidebar content is logged as a warning and dropped. */
   principalRouting?: {
     channelId: string;
+    /** Which named account should send the sidebar. For email channels, defaults to
+     *  'curia' when absent (email adapter fallback). Multi-account deployments should
+     *  set this explicitly to ensure the sidebar is sent from the correct mailbox. */
     accountId?: string;
     /** Recipient identifier (e.g. email address). */
     recipientId: string;
+    /** Subject line for the sidebar email. Only used by the email adapter (fresh-send
+     *  path). Defaults to 'Task update' when absent. */
+    subject?: string;
   };
 }
 
@@ -999,11 +1005,18 @@ export class Dispatcher {
     if (event.payload.sidebar) {
       if (this.principalRouting) {
         const sidebarOutbound = createOutboundMessage({
+          // conversationId is the original inbound thread — kept for action_log
+          // traceability so operators can see which conversation triggered this sidebar.
+          // The email adapter uses `subject` (below) to detect the fresh-send path and
+          // routes to `recipientId` directly instead of threading into this conversation.
           conversationId: routing.conversationId,
           channelId: this.principalRouting.channelId,
           accountId: this.principalRouting.accountId,
           content: event.payload.sidebar.content,
           recipientId: this.principalRouting.recipientId,
+          // subject triggers the email adapter's fresh-send path, routing the sidebar
+          // to the principal's address (recipientId) instead of Armin's thread.
+          subject: this.principalRouting.subject ?? 'Task update',
           parentEventId: event.id,
           taskEventId: event.parentEventId ?? undefined,
         });
@@ -1022,7 +1035,8 @@ export class Dispatcher {
               err,
               agentId: event.payload.agentId,
               conversationId: routing.conversationId,
-              sidebarContentPreview: event.payload.sidebar.content.slice(0, 200),
+              // Content length only — never log the content itself, which is principal-only text.
+              sidebarContentLength: event.payload.sidebar.content.length,
             },
             'Dispatcher: failed to publish sidebar outbound to principal — principal update was NOT delivered',
           );

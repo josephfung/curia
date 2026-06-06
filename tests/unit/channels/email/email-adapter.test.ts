@@ -1246,3 +1246,82 @@ describe('EmailAdapter — sendOutboundReply CC', () => {
     );
   });
 });
+
+describe('EmailAdapter — fresh-send path (compose-reply sidebar)', () => {
+  // When outbound.payload.subject is set, the adapter must send a fresh email
+  // to recipientId instead of threading into the conversationId thread. This path
+  // is used by the dispatcher's compose-reply sidebar split so the principal update
+  // goes to the CEO, not back to the original external sender's thread.
+
+  let mocks: ReturnType<typeof createMocks>;
+  let triggerOutbound: (event: BusEvent) => Promise<void>;
+
+  beforeEach(async () => {
+    mocks = createMocks();
+    triggerOutbound = captureHandler('outbound.message', mocks);
+    void makeAdapter(mocks).start();
+    // Let the initial poll complete, then reset call counts so assertions only
+    // capture what happens in response to the triggered outbound event.
+    await flushPoll();
+    vi.clearAllMocks();
+    // Re-stub send after clearAllMocks so it still returns a resolved promise.
+    (mocks.outboundGateway.send as ReturnType<typeof vi.fn>).mockResolvedValue({ success: true, messageId: 'sent-1' });
+  });
+
+  it('sends a fresh email to recipientId using the provided subject (no thread lookup)', async () => {
+    const event = createOutboundMessage({
+      conversationId: 'email:armin-thread',
+      channelId: 'email',
+      content: 'CEO update: confirmed Fri 2 PM with Armin.',
+      recipientId: CEO_EMAIL,
+      subject: 'Task update',
+      parentEventId: 'task-99',
+    });
+
+    await triggerOutbound(event);
+
+    // Must send to the principal, not look up the original thread
+    expect(mocks.outboundGateway.send).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: CEO_EMAIL,
+        subject: 'Task update',
+        body: 'CEO update: confirmed Fri 2 PM with Armin.',
+      }),
+      expect.any(Object),
+    );
+    // Must NOT do a thread lookup (that would route to the external sender)
+    expect(mocks.outboundGateway.listEmailMessages).not.toHaveBeenCalled();
+  });
+
+  it('does not include replyToMessageId in the fresh-send request', async () => {
+    const event = createOutboundMessage({
+      conversationId: 'email:armin-thread',
+      channelId: 'email',
+      content: 'CEO update: confirmed Fri 2 PM with Armin.',
+      recipientId: CEO_EMAIL,
+      subject: 'Task update',
+      parentEventId: 'task-99',
+    });
+
+    await triggerOutbound(event);
+
+    const [[sendArg]] = (mocks.outboundGateway.send as ReturnType<typeof vi.fn>).mock.calls as [[Record<string, unknown>]];
+    expect(sendArg!['replyToMessageId']).toBeUndefined();
+  });
+
+  it('skips delivery and logs an error when subject is set but recipientId is absent', async () => {
+    const event = createOutboundMessage({
+      conversationId: 'email:armin-thread',
+      channelId: 'email',
+      content: 'CEO update.',
+      // recipientId deliberately omitted
+      subject: 'Task update',
+      parentEventId: 'task-99',
+    });
+
+    await triggerOutbound(event);
+
+    expect(mocks.outboundGateway.send).not.toHaveBeenCalled();
+    expect(mocks.outboundGateway.listEmailMessages).not.toHaveBeenCalled();
+  });
+});

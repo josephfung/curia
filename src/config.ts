@@ -164,6 +164,22 @@ export interface YamlConfig {
       /** Maximum total messages allowed per window across all senders. Default: 100. */
       max_global?: number;
     };
+    /**
+     * Routing config for the compose-reply sidebar. When set, agent.response events
+     * that carry a `sidebar` field publish a second outbound.message to this recipient.
+     * Required to make the compose-reply skill deliver principal updates.
+     */
+    principal_routing?: {
+      /** Channel to use (e.g. 'email'). */
+      channel_id: string;
+      /** Named account to send from. For email channels defaults to 'curia' when absent.
+       *  Multi-account deployments should set this explicitly. */
+      account_id?: string;
+      /** Recipient address (e.g. principal's email). */
+      recipient_id: string;
+      /** Subject line for the sidebar email. Defaults to 'Task update'. */
+      subject?: string;
+    };
   };
   security?: {
     extra_injection_patterns?: Array<{ regex: string; label: string }>;

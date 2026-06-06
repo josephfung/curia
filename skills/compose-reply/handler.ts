@@ -13,7 +13,8 @@ import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/t
 
 export class ComposeReplyHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {
-    const { external, internal } = ctx.input as {
+    // Cast through unknown first per project convention (Record<string,unknown> → typed shape).
+    const { external, internal } = ctx.input as unknown as {
       external?: unknown;
       internal?: unknown;
     };

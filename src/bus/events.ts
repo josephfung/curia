@@ -101,6 +101,14 @@ interface OutboundMessagePayload {
   /** The agent.task event ID that originated this outbound message.
    *  Stamped by the dispatcher for traceability and action_log context. */
   taskEventId?: string;
+  /**
+   * When present, signals the email adapter to send a fresh email (not a thread reply)
+   * addressed to `recipientId` using this string as the subject. Absent for regular
+   * thread replies, where the subject is derived from the existing thread.
+   *
+   * Only consumed by the email channel adapter. Other adapters ignore this field.
+   */
+  subject?: string;
 }
 
 // OutboundDeliveredPayload — emitted by OutboundGateway after a successful

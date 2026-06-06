@@ -87,6 +87,17 @@ dispatch:
     max_per_sender: 15      # messages per sender per window (15 allows for an active chat burst)
     max_global: 100         # total messages per window across all senders
 
+  # Routing for compose-reply sidebar updates. When set, agent.response events that
+  # carry a `sidebar` field (produced by the compose-reply skill) publish a second
+  # outbound.message to this recipient — the principal's inbox — so they receive a
+  # status update separate from the external reply. Omit to disable sidebar delivery.
+  #
+  # principal_routing:
+  #   channel_id: email
+  #   account_id: curia      # named email account to send from; defaults to 'curia'
+  #   recipient_id: principal@example.com
+  #   subject: "Task update" # email subject for sidebar messages (default: 'Task update')
+
 workingMemory:
   # TTL for working memory turns. Rows are expired by DreamEngine's nightly purge
   # pass (DELETE WHERE expires_at < now()). The idx_wm_expires partial index makes

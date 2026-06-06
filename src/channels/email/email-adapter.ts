@@ -582,6 +582,37 @@ export class EmailAdapter {
     const { outboundGateway, logger } = this.config;
     const conversationId = outbound.payload.conversationId;
 
+    // Fresh-send path: when `subject` is set, the caller (dispatcher's sidebar split)
+    // wants a new email to `recipientId`, not a thread reply. The conversationId in
+    // these events is the original inbound thread (kept for traceability) and MUST NOT
+    // be used for routing — the email adapter's thread lookup would route to the wrong
+    // person. Instead, send directly to recipientId with the provided subject.
+    if (outbound.payload.subject !== undefined) {
+      const recipientId = outbound.payload.recipientId;
+      if (!recipientId) {
+        logger.error(
+          { conversationId },
+          'sendOutboundReply: fresh-send path requires recipientId — skipping sidebar delivery',
+        );
+        return;
+      }
+      await this.sendWithGatedDraftFallback(
+        {
+          channel: 'email' as const,
+          accountId: this.config.accountId,
+          to: recipientId,
+          subject: outbound.payload.subject,
+          body: outbound.payload.content,
+        },
+        {
+          taskEventId: outbound.payload.taskEventId,
+          conversationId,
+          parentEventId: outbound.id,
+        },
+      );
+      return;
+    }
+
     if (!conversationId.startsWith('email:')) {
       logger.warn({ conversationId }, 'Cannot send email reply — conversation ID not in email format');
       return;

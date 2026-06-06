@@ -39,7 +39,7 @@ function makeStubs(principalRouting?: { channelId: string; accountId?: string; r
 
   const dispatcher = new Dispatcher({ bus, logger, principalRouting });
 
-  return { dispatcher, bus, publishedEvents, subscribeHandlers };
+  return { dispatcher, bus, logger, publishedEvents, subscribeHandlers };
 }
 
 /** Seeds the routing table for an inbound task. */
@@ -158,6 +158,7 @@ describe('Dispatcher sidebar split', () => {
 
     const outbounds = publishedEvents.filter(isOutboundMessage);
     const principal = outbounds.find(e => e.payload.recipientId === 'ceo@example.com');
+    expect(principal).toBeDefined();
     expect(principal!.payload.channelId).toBe('email');
     expect(principal!.payload.accountId).toBe('curia');
   });
@@ -179,8 +180,8 @@ describe('Dispatcher sidebar split', () => {
 
   it('publishes only one outbound.message when sidebar is present but principalRouting is not configured', async () => {
     // If the dispatcher has no principalRouting, it cannot deliver the sidebar —
-    // it still sends the external reply but silently drops the sidebar.
-    const { dispatcher, subscribeHandlers, publishedEvents } = makeStubs(/* no principalRouting */);
+    // it still sends the external reply but permanently drops the sidebar.
+    const { dispatcher, subscribeHandlers, publishedEvents, logger } = makeStubs(/* no principalRouting */);
     dispatcher.register();
 
     seedRouting(dispatcher, 'task-6', { senderId: 'armin@example.com' });
@@ -194,6 +195,9 @@ describe('Dispatcher sidebar split', () => {
     // Only the external message goes out — sidebar is dropped (no principal routing)
     expect(outbounds).toHaveLength(1);
     expect(outbounds[0]!.payload.content).toBe('External reply.');
+    // The dropped sidebar is a misconfiguration — must be logged at error so it
+    // doesn't silently vanish and can be detected in operational monitoring.
+    expect(logger.error).toHaveBeenCalled();
   });
 
   it('suppresses both the external outbound and the sidebar when reply-lock is active', async () => {

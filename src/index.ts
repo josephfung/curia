@@ -1660,6 +1660,14 @@ async function main(): Promise<void> {
     confidencePipeline,
     selfEmail: resolvedEmailAccounts[0]?.selfEmail,
     outboundContextService,
+    principalRouting: yamlConfig.dispatch?.principal_routing
+      ? {
+          channelId: yamlConfig.dispatch.principal_routing.channel_id,
+          accountId: yamlConfig.dispatch.principal_routing.account_id,
+          recipientId: yamlConfig.dispatch.principal_routing.recipient_id,
+          subject: yamlConfig.dispatch.principal_routing.subject,
+        }
+      : undefined,
   });
   dispatcher.register();
 
