@@ -900,6 +900,23 @@ export class OutboundGateway {
       // Signal: recipient (phone) or groupId. Neither is an email; tagged third-party.
       emails = [request.recipient ?? request.groupId ?? ''];
     }
+    return this.buildRecipientSet(emails);
+  }
+
+  /**
+   * Compute the structural recipient set from a flat list of recipient emails.
+   * `isPrincipal` is from the principal's verified channel identities (isPrincipalEmail),
+   * never the contact role. principalIsSoleRecipient is true ONLY when there is exactly
+   * one recipient and it is the principal.
+   *
+   * Shared by buildFilterRecipients() (live send) and the draft-send path so both
+   * compute the sole-recipient skip condition over the same full envelope semantics.
+   */
+  private buildRecipientSet(emails: string[]): {
+    recipients: FilterRecipient[];
+    principalIncluded: boolean;
+    principalIsSoleRecipient: boolean;
+  } {
     const recipients: FilterRecipient[] = emails
       .filter((e) => e.length > 0)
       .map((email) => ({ email, isPrincipal: this.isPrincipalEmail(email) }));
@@ -1167,7 +1184,7 @@ export class OutboundGateway {
   async sendEmailDraft(
     draftId: string,
     accountId: string | undefined,
-    draftMeta: { recipientEmail: string; body: string; subject: string },
+    draftMeta: { recipientEmail: string; body: string; subject: string; allRecipients?: string[] },
     options?: { humanApproved?: boolean; conversationId?: string; taskEventId?: string; parentEventId?: string },
   ): Promise<OutboundSendResult> {
     // ------------------------------------------------------------------
@@ -1257,7 +1274,13 @@ export class OutboundGateway {
     let filterPassed = false;
     let filterFindings: Array<{ rule: string; detail: string }> = [];
 
-    const draftRecipient: FilterRecipient = { email: recipientEmail, isPrincipal: this.isPrincipalEmail(recipientEmail) };
+    // Build the audience set from the draft's full envelope (To + CC + BCC) so a draft
+    // addressed To: principal with a CC'd/BCC'd third party still runs the judge.
+    // Falls back to the single primary recipient when allRecipients is not supplied.
+    const draftEnvelope = (draftMeta.allRecipients && draftMeta.allRecipients.length > 0)
+      ? draftMeta.allRecipients
+      : [recipientEmail];
+    const { recipients: draftRecipients, principalIncluded: draftPrincipalIncluded, principalIsSoleRecipient: draftPrincipalSole } = this.buildRecipientSet(draftEnvelope);
 
     try {
       const filterResult = await this.contentFilter.check({
@@ -1266,9 +1289,9 @@ export class OutboundGateway {
         conversationId: '',
         channelId: 'email',
         recipientTrustLevel,
-        recipients: [draftRecipient],
-        principalIncluded: draftRecipient.isPrincipal,
-        principalIsSoleRecipient: draftRecipient.isPrincipal,
+        recipients: draftRecipients,
+        principalIncluded: draftPrincipalIncluded,
+        principalIsSoleRecipient: draftPrincipalSole,
       });
       filterPassed = filterResult.passed;
       filterFindings = filterResult.findings;

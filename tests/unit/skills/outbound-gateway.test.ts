@@ -1594,6 +1594,47 @@ describe('OutboundGateway.sendEmailDraft', () => {
     expect(nylasClient.sendDraft).toHaveBeenCalledWith(DRAFT_ID);
   });
 
+  it('runs the content filter over the full To+CC envelope so a draft To: principal + CC: third party is not treated as sole-principal (#547)', async () => {
+    const { gateway, contentFilter } = makeGateway();
+    const result = await gateway.sendEmailDraft(DRAFT_ID, 'joseph', {
+      recipientEmail: 'ceo@example.com',
+      body: 'internal note',
+      subject: 's',
+      // To: principal, CC: external third party.
+      allRecipients: ['ceo@example.com', 'armin@external.com'],
+    });
+
+    expect(result.success).toBe(true);
+    const checkSpy = contentFilter.check as ReturnType<typeof vi.fn>;
+    expect(checkSpy).toHaveBeenCalledOnce();
+    const arg = checkSpy.mock.calls[0]![0];
+    // The judge must RUN: principal is present but NOT the sole recipient.
+    expect(arg.principalIncluded).toBe(true);
+    expect(arg.principalIsSoleRecipient).toBe(false);
+    expect(arg.recipients).toEqual([
+      { email: 'ceo@example.com', isPrincipal: true },
+      { email: 'armin@external.com', isPrincipal: false },
+    ]);
+  });
+
+  it('treats a draft addressed solely to the principal as sole-recipient (judge skips)', async () => {
+    const { gateway, contentFilter } = makeGateway();
+    const result = await gateway.sendEmailDraft(DRAFT_ID, 'joseph', {
+      recipientEmail: 'ceo@example.com',
+      body: 'internal note',
+      subject: 's',
+      allRecipients: ['ceo@example.com'],
+    });
+
+    expect(result.success).toBe(true);
+    const checkSpy = contentFilter.check as ReturnType<typeof vi.fn>;
+    expect(checkSpy).toHaveBeenCalledOnce();
+    const arg = checkSpy.mock.calls[0]![0];
+    expect(arg.principalIncluded).toBe(true);
+    expect(arg.principalIsSoleRecipient).toBe(true);
+    expect(arg.recipients).toEqual([{ email: 'ceo@example.com', isPrincipal: true }]);
+  });
+
   it('returns failure when nylasClient.sendDraft throws', async () => {
     const { gateway } = makeGateway({
       nylasClient: {

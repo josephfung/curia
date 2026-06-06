@@ -117,10 +117,20 @@ export class SendDraftHandler implements SkillHandler {
     // the credentials of the account that owns the draft.
     ctx.log.info({ draftId, account: resolvedAccount, recipient }, 'send-draft: sending');
 
+    // Build the full envelope (To + CC + BCC) so the gateway's Stage 2 audience-leak
+    // judge runs over every recipient, not just the primary To. Without this, a draft
+    // addressed To: principal with a CC'd/BCC'd third party would be treated as a
+    // sole-principal send and skip the judge — leaking internal content. See #547.
+    const allRecipients = [
+      ...draft.to.map((r) => r.email),
+      ...(draft.cc ?? []).map((r) => r.email),
+      ...(draft.bcc ?? []).map((r) => r.email),
+    ];
+
     const sendResult = await ctx.outboundGateway.sendEmailDraft(
       draftId,
       resolvedAccount,
-      { recipientEmail: recipient, body: draft.body, subject: draft.subject },
+      { recipientEmail: recipient, body: draft.body, subject: draft.subject, allRecipients },
       { humanApproved: true, conversationId: ctx.conversationId, taskEventId: ctx.taskEventId },
     );
 
