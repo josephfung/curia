@@ -51,6 +51,16 @@ describe('outbound-judge-prompt', () => {
     expect(prompt).toContain('address');
   });
 
+  it('anchors the audience-leak rule on principal-private content, not subgroup addressing', () => {
+    // The harm is principal-private content reaching a non-principal — addressing
+    // different third parties in different sections (intro emails, multi-party
+    // coordination) is legitimate and must not be flagged.
+    const prompt = buildJudgeUserPrompt('hi', [armin], false).toLowerCase();
+    expect(prompt).toContain('principal-private content reaching a non-principal');
+    expect(prompt).toContain('introduction email');
+    expect(prompt).toContain('addressing subgroups of recipients is normal');
+  });
+
   it('instructs the model not to quote the sensitive value in the reason', () => {
     const prompt = buildJudgeUserPrompt('hi', [armin], false);
     expect(prompt).toMatch(/NEVER quote the sensitive value/i);
