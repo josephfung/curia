@@ -219,6 +219,31 @@ export interface YamlConfig {
       }>;
     };
   };
+  /**
+   * Outbound content filter — Stage 2 LLM-as-judge (audience-leak detection).
+   * Stage 1 (deterministic rules) has no config and always runs.
+   */
+  filter?: {
+    llmJudge?: {
+      /** Kill switch. When false, Stage 2 is skipped entirely. Default: true. */
+      enabled?: boolean;
+      /**
+       * Model the judge runs on. A dedicated model string (NOT a tier reference)
+       * so the judge can use a different vendor independently of the agent tiers.
+       * Validated against the model registry at startup. Default: 'claude-haiku-4-5'.
+       */
+      model?: string;
+      /** Hard timeout for the judge call in ms. Default: 5000. */
+      timeout_ms?: number;
+      /**
+       * Failure handling. Default: 'split'.
+       *   'split'  — judge unreachable (timeout/API error) → deliver; malformed verdict → block.
+       *   'open'   — any judge failure → deliver.
+       *   'closed' — any judge failure → block.
+       */
+      failMode?: 'split' | 'open' | 'closed';
+    };
+  };
   intentDrift?: {
     /** Enable intent drift detection. Default: true. */
     enabled?: boolean;
