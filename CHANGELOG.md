@@ -35,7 +35,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Email adapter poll observability** — each successful poll cycle now emits a `channel.poll` audit event with per-filter skip counts, message totals, watermark, and duration; a `channel.stalled` event fires (once per lifecycle) when no poll completes within 5 × the polling interval. (#846)
 
 ### Security
-- **Outbound content filter Stage 2 (LLM-as-judge)** — adds a configurable, recipient-aware audience-leak check after the Stage 1 rules; blocks internal content leaking to a mixed audience. (#547)
+- **Outbound content filter Stage 2 (LLM-as-judge)** — adds a configurable, recipient-aware check after the Stage 1 rules; blocks internal content or hyper-sensitive financial/credential data leaking to a mixed audience. (#547)
 - **Contact email validation** — rewrote the `primaryEmail` format regex to remove polynomial-time backtracking (ReDoS) on attacker-controlled input. (#898, CodeQL js/polynomial-redos)
 - **KG chat history rate limit** — `GET /api/kg/chat/history` now carries the same 60/min per-IP cap as every other KG route; it was the lone DB-backed endpoint left on the looser global limit. (#901, CodeQL js/missing-rate-limiting)
 - **Base image OS patches** — runtime Dockerfile stage now runs `apt-get upgrade`, pulling Debian 12 fixes for `libgnutls30`/`libgcrypt20` and clearing 13 Trivy CVEs including two criticals (CVE-2026-33845, CVE-2026-42010).
