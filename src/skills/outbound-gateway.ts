@@ -225,6 +225,33 @@ function redactId(value: string): string {
   return `${value.slice(0, 3)}***${value.slice(-3)}`;
 }
 
+/**
+ * Build a principal-safe summary of WHY an outbound message was blocked, for the
+ * CEO notification body. The summary gives the CEO something actionable without
+ * re-leaking the offending content into their mailbox (and through the email
+ * provider that carries the notification).
+ *
+ * Per-finding policy, keyed on the rule name:
+ *   - Stage-2 LLM judge findings (rule prefix `llm-judge-`) carry an ABSTRACT,
+ *     redaction-safe detail by construction: the judge prompt forbids quoting the
+ *     offending value, and the integration suite asserts the reason never echoes a
+ *     secret (see outbound-judge-prompt.ts + outbound-judge.integration.test.ts).
+ *     Their detail is therefore safe to surface, and it is exactly the "judge's
+ *     reason" the principal needs to understand the block.
+ *   - Stage-1 deterministic-rule findings (`secret-pattern`, `contact-data-leak`,
+ *     `internal-structure`, `system-prompt-fragment`) and any other rule can have
+ *     the matched fragment embedded in their detail (a secret, an internal marker,
+ *     a third party's address). For those we surface ONLY the rule name — never the
+ *     detail. This preserves the existing "no sensitive content in the notification"
+ *     invariant for the deterministic stage.
+ */
+function buildBlockReasonSummary(findings: Array<{ rule: string; detail: string }>): string {
+  if (findings.length === 0) return 'Content filter (no rule detail available)';
+  return findings
+    .map((f) => (f.rule.startsWith('llm-judge-') && f.detail ? `${f.rule}: ${f.detail}` : f.rule))
+    .join('\n');
+}
+
 // ---------------------------------------------------------------------------
 // OutboundGateway
 // ---------------------------------------------------------------------------
@@ -658,6 +685,10 @@ export class OutboundGateway {
       // Full reason string (with detail) goes into the bus event for forensics/audit,
       // NOT into any user-facing or notification surface.
       const fullReason = filterFindings.map((f) => `${f.rule}: ${f.detail}`).join('; ');
+      // Principal-safe reason for the CEO notification: surfaces the judge's abstract
+      // reason but never a Stage-1 finding's (potentially sensitive) detail. See
+      // buildBlockReasonSummary for the per-rule policy.
+      const reasonSummary = buildBlockReasonSummary(filterFindings);
 
       // Publish the blocked event for audit logging and downstream consumers.
       // Capture the event so we can link the outbound.notification to it via parentEventId.
@@ -704,11 +735,19 @@ export class OutboundGateway {
             body: [
               'An outbound message was blocked by the content filter.',
               '',
-              `Block ID: ${blockId}`,
+              `Reason: ${reasonSummary}`,
+              // blockedEvent.timestamp is the audit row's own clock. No principal
+              // timezone is plumbed into the gateway (it is infrastructure, not a
+              // skill with ctx.timezone), so we stamp UTC explicitly rather than
+              // emit an ambiguous bare timestamp.
+              `Time: ${blockedEvent.timestamp.toISOString()} (UTC)`,
               `Channel: ${request.channel}`,
               `Intended recipient: ${recipientId}`,
               '',
-              'Please review the audit log for details.',
+              `Block ID: ${blockId}`,
+              `Audit event ID: ${blockedEvent.id}`,
+              '',
+              'Search the audit log by the audit event ID above for the full record.',
             ].join('\n'),
             blockId,
             originalChannel: request.channel,
