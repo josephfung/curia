@@ -187,7 +187,7 @@ export class OutboundContentFilter {
       return { passed: false, findings, stage: 'deterministic' };
     }
 
-    // Stage 2: LLM review (stub — always passes for now)
+    // Stage 2: LLM judge review (audience-leak). No-op pass when no judge is configured.
     // Fail-closed: if the LLM review crashes, block the message rather than
     // silently passing it. This is a security boundary.
     let llmFindings: FilterFinding[] = [];
@@ -377,18 +377,21 @@ export class OutboundContentFilter {
   // Stage 2: LLM review
 
   /**
-   * Run an LLM-based review of the content for contextual appropriateness.
+   * Stage 2: delegate to the configured OutboundJudge (LLM-as-judge).
    *
-   * @TODO (future): Replace stub with a locally-hosted open-source model
-   * (e.g., Mistral 7B or Llama 3) that is intentionally different from the
-   * primary coordinator LLM. Using a different model avoids the risk that
-   * both stages are fooled by the same adversarial prompt. The model should
-   * evaluate: tone appropriateness, accidental information disclosure,
-   * hallucinated facts, and context-specific policy violations.
+   * When a judge is injected, it reviews the (already Stage-1-clean, normalized)
+   * outbound content for audience leaks — internal monologue / system status /
+   * side-channel notes sent to a mixed audience — and returns findings ([] = pass).
+   * When no judge is configured, Stage 2 is a no-op pass.
    *
-   * The local hosting requirement is a deliberate design choice: we do not
-   * want outbound content (which may be sensitive) leaving the trust boundary
-   * to reach an external API just for a safety check.
+   * The judge owns its own timeout, verdict parsing, and failure semantics
+   * (split fail-open/closed) and never throws; see outbound-judge.ts. The caller
+   * (check()) still wraps this in a try/catch as a last-resort net.
+   *
+   * Trust-boundary note: the judge sends outbound content to its configured model
+   * provider for review. Operators choosing a hosted provider should select a model
+   * whose data-handling posture they accept; a different vendor than the agent tiers
+   * is recommended for review diversity (see filter.llmJudge config).
    */
   private async runLlmReview(input: FilterCheckInput): Promise<FilterFinding[]> {
     // No judge configured → Stage 2 is a no-op pass (preserves prior behavior).
