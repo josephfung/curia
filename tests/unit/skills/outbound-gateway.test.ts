@@ -457,6 +457,77 @@ describe('OutboundGateway', () => {
       }
     });
 
+    it('surfaces the judge\'s abstract reason, a timestamp, and the audit event ID', async () => {
+      // The Stage-2 judge reason is abstract by construction (never quotes the
+      // offending value), so unlike Stage-1 details it IS safe to give the CEO —
+      // it is what makes the notification actionable. The body must also carry a
+      // timestamp and the audit event ID so the CEO can find the full record.
+      const judgeReason = 'message contains hyper-sensitive financial or credential data';
+      (mocks.contentFilter.check as ReturnType<typeof vi.fn>).mockResolvedValue({
+        passed: false,
+        findings: [{ rule: 'llm-judge-audience-leak', detail: judgeReason }],
+        stage: 'llm',
+      });
+
+      const gateway = new OutboundGateway({
+        nylasClients: new Map([['curia', mocks.nylasClient]]),
+        contactService: mocks.contactService,
+        contentFilter: mocks.contentFilter,
+        bus: mocks.bus,
+        principalIdentities: [makePrincipalIdentity('ceo@example.com')],
+        logger: mocks.logger,
+      });
+
+      await gateway.send(baseRequest);
+
+      // The outbound.blocked event is published first, then the notification —
+      // grab the blocked event so we can assert the notification echoes its ID.
+      const blockedEvent = (mocks.bus.publish as ReturnType<typeof vi.fn>).mock.calls[0][1] as BusEvent;
+      const notificationEvent = (mocks.bus.publish as ReturnType<typeof vi.fn>).mock.calls[1][1] as BusEvent;
+      expect(blockedEvent.type).toBe('outbound.blocked');
+      expect(notificationEvent.type).toBe('outbound.notification');
+      if (notificationEvent.type === 'outbound.notification' && blockedEvent.type === 'outbound.blocked') {
+        // The judge's abstract reason IS surfaced (gives the CEO something to act on).
+        expect(notificationEvent.payload.body).toContain(judgeReason);
+        // A timestamp is present, explicitly labelled UTC.
+        expect(notificationEvent.payload.body).toMatch(/Time: .+\(UTC\)/);
+        // The audit event ID ties the alert to the full audit record.
+        expect(notificationEvent.payload.body).toContain(blockedEvent.id);
+      }
+    });
+
+    it('still withholds Stage-1 deterministic-rule detail from the notification body', async () => {
+      // Regression guard for the per-rule policy: a deterministic finding's detail
+      // can embed the matched fragment, so only its rule NAME may appear — never
+      // the detail string. (The judge path is covered by the test above.)
+      const secretFragment = 'sk-ant-zzzzzzzzzzzzzzzzzzzz0987654321ZZ';
+      (mocks.contentFilter.check as ReturnType<typeof vi.fn>).mockResolvedValue({
+        passed: false,
+        findings: [{ rule: 'secret-pattern', detail: `API key: ${secretFragment}` }],
+        stage: 'deterministic',
+      });
+
+      const gateway = new OutboundGateway({
+        nylasClients: new Map([['curia', mocks.nylasClient]]),
+        contactService: mocks.contactService,
+        contentFilter: mocks.contentFilter,
+        bus: mocks.bus,
+        principalIdentities: [makePrincipalIdentity('ceo@example.com')],
+        logger: mocks.logger,
+      });
+
+      await gateway.send(baseRequest);
+
+      const notificationEvent = (mocks.bus.publish as ReturnType<typeof vi.fn>).mock.calls[1][1] as BusEvent;
+      expect(notificationEvent.type).toBe('outbound.notification');
+      if (notificationEvent.type === 'outbound.notification') {
+        // The matched secret must never reach the notification...
+        expect(notificationEvent.payload.body).not.toContain(secretFragment);
+        // ...but the rule name is fine and tells the CEO which class of rule fired.
+        expect(notificationEvent.payload.body).toContain('secret-pattern');
+      }
+    });
+
     it('fails closed when filter crashes — blocks send and publishes notification', async () => {
       // If the content filter itself throws, we must treat it as blocked (fail-closed).
       // A crashing filter is a security anomaly; we'd rather miss a send than let

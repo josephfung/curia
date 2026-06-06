@@ -36,6 +36,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Security
 - **Outbound content filter Stage 2 (LLM-as-judge)** — adds a configurable, recipient-aware check after the Stage 1 rules; blocks internal content or hyper-sensitive financial/credential data leaking to a mixed audience. (#547)
+- **Blocked-content CEO notification** — now includes a principal-safe reason (the judge's abstract reason; rule name only for Stage 1), a UTC timestamp, and the audit event ID, so the alert is actionable. Blocked content and Stage 1 rule details are still withheld. (#547)
 - **Contact email validation** — rewrote the `primaryEmail` format regex to remove polynomial-time backtracking (ReDoS) on attacker-controlled input. (#898, CodeQL js/polynomial-redos)
 - **KG chat history rate limit** — `GET /api/kg/chat/history` now carries the same 60/min per-IP cap as every other KG route; it was the lone DB-backed endpoint left on the looser global limit. (#901, CodeQL js/missing-rate-limiting)
 - **Base image OS patches** — runtime Dockerfile stage now runs `apt-get upgrade`, pulling Debian 12 fixes for `libgnutls30`/`libgcrypt20` and clearing 13 Trivy CVEs including two criticals (CVE-2026-33845, CVE-2026-42010).

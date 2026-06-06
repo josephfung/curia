@@ -119,8 +119,19 @@ Tone alignment and persona consistency are deferred to a follow-up; the judge pr
 extended to cover them without further plumbing changes.
 
 **When blocked:** the outbound message is dropped entirely (no partial send), an `outbound.blocked`
-audit event is published, and the CEO receives an opaque notification containing only a block ID
-and the intended recipient — no blocked content, no rule detail.
+audit event is published, and the CEO receives a notification. The notification carries the
+intended recipient, a UTC timestamp, the block ID, the audit event ID (for log lookup), and a
+principal-safe **reason summary**:
+
+- For a Stage 2 judge block, the judge's own `reason` is surfaced — it is abstract by
+  construction (names the category, never quotes the value), so it is safe to show and gives
+  the CEO something actionable.
+- For a Stage 1 deterministic block, only the rule *name* is shown (e.g. `secret-pattern`); the
+  rule detail can embed the matched fragment, so it is withheld.
+
+The blocked content itself is never included, on either path. There is no review-and-approve /
+resend flow yet (see *What's Not Here Yet*), so a false positive currently means the agent's send
+is dropped and must be re-requested.
 
 ---
 
