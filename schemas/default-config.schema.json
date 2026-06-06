@@ -147,6 +147,22 @@
         "minConfidenceToPause": { "type": "string", "enum": ["high", "medium", "low"] }
       }
     },
+    "filter": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "llmJudge": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "model": { "type": "string" },
+            "timeout_ms": { "type": "integer", "minimum": 1 },
+            "failMode": { "type": "string", "enum": ["split", "open", "closed"] }
+          }
+        }
+      }
+    },
     "dreaming": {
       "type": "object",
       "additionalProperties": false,
