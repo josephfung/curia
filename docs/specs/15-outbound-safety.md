@@ -83,19 +83,30 @@ Fast, zero-cost pattern matching. Any finding from Stage 1 blocks immediately �
 - **Secret patterns** — reuses existing patterns from `sanitizeOutput()`: API keys, bearer tokens, hex tokens ≥ 32 chars
 - **Contact data leakage** — email addresses in the body that are not the intended recipient or the CEO
 
-### Stage 2: LLM-as-Judge — audience-leak detection (implemented)
+### Stage 2: LLM-as-Judge — audience-leak & sensitive-data detection (implemented)
 
 A configurable LLM judge (separate model from the coordinator) evaluates content that
-passes Stage 1. This first version has ONE responsibility: detect **audience leaks** —
-internal monologue, system/agent status, or side-channel notes ("To the CEO: ...")
-that should not be sent to a mixed audience. It returns a binary verdict
-`{leak: true|false}`.
+passes Stage 1 and returns a binary verdict `{leak: true|false}`. It flags two classes of
+content that should not reach a mixed audience:
+
+1. **Audience leaks** — internal monologue, system/agent status, or side-channel notes
+   ("To the CEO: ...") embedded in a message a non-principal recipient can read.
+2. **Hyper-sensitive financial / credential data** — payment card numbers, CVV/PIN, bank
+   account and payment-routing details (sort code, routing number, IBAN, SWIFT), passwords,
+   passphrases, API keys, private keys, or one-time/2FA codes. Lower-sensitivity PII that is
+   routinely shared (postal address, phone, DOB, passport/national-ID, frequent-flyer/loyalty
+   numbers) is **not** flagged on its own.
+
+When it flags, the judge's `reason` names the category only and must not quote the offending
+value — so the secret does not re-leak into the `outbound.blocked` audit event or CEO notification.
 
 - **Recipient awareness.** The judge reasons over the full recipient set (To + CC). Each
   recipient is tagged `isPrincipal` structurally (matches one of the principal's verified
   channel identities — never the free-text contact role).
-- **Skip rule.** The judge is skipped when the principal is the SOLE recipient (a private
-  channel where internal language is permitted). Principal + third parties → judge runs.
+- **Skip rule.** The judge is **short-circuited before any model call** when the principal is
+  the SOLE recipient (a private channel). The judge model therefore only ever sees messages
+  with at least one non-principal recipient, and the prompt does not reason about the
+  principal-sole case. Principal + third parties → judge runs.
 - **Model.** Configurable via `filter.llmJudge.model` (default `claude-haiku-4-5`).
   Operators are strongly encouraged to use a different vendor/family than the agent tiers
   so an attack crafted for the coordinator cannot also fool the reviewer.
@@ -146,7 +157,7 @@ without cross-channel confirmation.
 | `OutboundGateway` class — single chokepoint for all external messages | Done |
 | Blocked contact check in gateway pipeline | Done |
 | Content filter Stage 1 — deterministic rules (system prompt fragments, internal field names, secret patterns, contact data leakage) | Done |
-| Content filter Stage 2 — LLM-as-judge (audience-leak detection) | Done |
+| Content filter Stage 2 — LLM-as-judge (audience-leak & hyper-sensitive financial/credential detection) | Done |
 | `outbound.blocked` audit event published on filter block | Done |
 | Caller verification gate — elevated-skill check in execution layer | Partial — role-based gate exists; cross-channel challenge/response flow not built |
 | Display name sanitization — storage-time sanitization of inbound display names | Done |

@@ -79,11 +79,12 @@ export class OutboundLlmJudge implements OutboundJudge {
     // parties on the same message still runs the judge.
     if (input.principalIsSoleRecipient) return [];
 
+    // No principalIsSoleRecipient arg: that case is already short-circuited above, so
+    // by here at least one recipient is a non-principal. Passing it would always be false.
     const userPrompt = buildJudgeUserPrompt(
       input.content,
       input.recipients,
       input.principalIncluded,
-      input.principalIsSoleRecipient,
     );
 
     const start = Date.now();
