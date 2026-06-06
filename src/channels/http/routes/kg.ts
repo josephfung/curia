@@ -794,7 +794,11 @@ export async function knowledgeGraphRoutes(
     if ('primaryEmail' in body) fields.primaryEmail = str(body.primaryEmail);
 
     // Format validation
-    if (fields.primaryEmail != null && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(fields.primaryEmail)) {
+    // Domain labels exclude '.' so the repeated atom and the literal '.' don't
+    // overlap — this keeps matching linear and avoids the polynomial-time
+    // backtracking (ReDoS) the previous `[^@\s]+\.[^@\s]+` form allowed on
+    // attacker-controlled input. See CodeQL alert js/polynomial-redos (#96).
+    if (fields.primaryEmail != null && !/^[^@\s]+@[^@\s.]+(?:\.[^@\s.]+)+$/.test(fields.primaryEmail)) {
       return { error: 'Invalid primaryEmail format.', fields };
     }
     if (fields.linkedinUrl != null && !/^https?:\/\/(www\.)?linkedin\.com\//.test(fields.linkedinUrl)) {

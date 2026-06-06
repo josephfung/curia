@@ -1,6 +1,7 @@
 import Fastify from 'fastify';
 import type { Pool } from 'pg';
 import type { Logger } from '../../../../src/logger.js';
+import type { ContactService } from '../../../../src/contacts/contact-service.js';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { knowledgeGraphRoutes } from '../../../../src/channels/http/routes/kg.js';
 
@@ -13,6 +14,17 @@ function createLogger(): Logger {
     fatal: vi.fn(),
     child: vi.fn(),
   } as unknown as Logger;
+}
+
+// Minimal ContactService stub. The canonical-field validation in
+// POST /api/kg/contacts runs before any service call, so for the email-format
+// tests below createContact must never be reached.
+function createContactService(): ContactService {
+  return {
+    createContact: vi.fn(),
+    getContact: vi.fn(),
+    setTrustLevel: vi.fn(),
+  } as unknown as ContactService;
 }
 
 describe('knowledgeGraphRoutes', () => {
@@ -135,6 +147,78 @@ describe('knowledgeGraphRoutes', () => {
 
     const response = await app.inject({ method: 'GET', url: '/api/kg/nodes' });
     expect(response.statusCode).toBe(503);
+
+    await app.close();
+  });
+
+  // Regression for CodeQL #96 (js/polynomial-redos). The primaryEmail format
+  // regex must not exhibit super-linear backtracking on attacker-controlled
+  // input. A pathological value of length ~100k once forced the vulnerable
+  // pattern into seconds of quadratic backtracking; the fixed pattern rejects
+  // it in well under a millisecond. The route must reject it (400) before
+  // touching the contact service, and do so quickly.
+  it('rejects a ReDoS-crafted primaryEmail quickly, before any service call', async () => {
+    const contactService = createContactService();
+    const app = Fastify();
+    await app.register(knowledgeGraphRoutes, {
+      pool,
+      logger: createLogger(),
+      webAppBootstrapSecret: 'secret-1',
+      secureCookies: false,
+      sessions: new Map(),
+      contactService,
+    });
+
+    // Trailing '@' makes the address invalid, forcing the matcher to explore
+    // every partition of the repeated 'a.' run — worst case for the old regex.
+    const evilEmail = `a@${'a.'.repeat(50_000)}a@`;
+
+    const start = performance.now();
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/kg/contacts',
+      headers: { 'x-web-bootstrap-secret': 'secret-1' },
+      payload: { displayName: 'Test Contact', primaryEmail: evilEmail },
+    });
+    const elapsedMs = performance.now() - start;
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json().error).toMatch(/Invalid primaryEmail/);
+    expect(contactService.createContact).not.toHaveBeenCalled();
+    // The vulnerable regex takes multiple seconds on this input; the fix is sub-ms.
+    expect(elapsedMs).toBeLessThan(1000);
+
+    await app.close();
+  }, 20_000);
+
+  it('accepts a well-formed primaryEmail through to the contact service', async () => {
+    const contactService = createContactService();
+    const app = Fastify();
+    await app.register(knowledgeGraphRoutes, {
+      pool,
+      logger: createLogger(),
+      webAppBootstrapSecret: 'secret-1',
+      secureCookies: false,
+      sessions: new Map(),
+      contactService,
+    });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/kg/contacts',
+      headers: { 'x-web-bootstrap-secret': 'secret-1' },
+      payload: { displayName: 'Test Contact', primaryEmail: 'first.last@sub.example.co.uk' },
+    });
+
+    // A valid address passes format validation and reaches createContact.
+    // (The stub's createContact resolves undefined, so the handler throws on
+    // `created.id` and Fastify returns 500 — that's fine; we only assert the
+    // email cleared format validation and reached the service call.)
+    expect(contactService.createContact).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(contactService.createContact).mock.calls[0]![0]).toMatchObject({
+      primaryEmail: 'first.last@sub.example.co.uk',
+    });
+    expect(response.statusCode).not.toBe(400);
 
     await app.close();
   });
