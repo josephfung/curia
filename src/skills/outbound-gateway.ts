@@ -25,7 +25,7 @@ import { readAttachmentFiles, MAX_ATTACHMENT_BYTES, type OutboundAttachmentInput
 import type { SignalRpcClient } from '../channels/signal/signal-rpc-client.js';
 import type { ContactService } from '../contacts/contact-service.js';
 import type { TrustLevel, ChannelIdentity } from '../contacts/types.js';
-import type { OutboundContentFilter } from '../dispatch/outbound-filter.js';
+import type { OutboundContentFilter, FilterRecipient } from '../dispatch/outbound-filter.js';
 import type { PiiRedactor } from '../dispatch/pii-redactor.js';
 import type { EventBus } from '../bus/bus.js';
 import type { Logger } from '../logger.js';
@@ -615,6 +615,8 @@ export class OutboundGateway {
     let filterPassed = false;
     let filterFindings: Array<{ rule: string; detail: string }> = [];
 
+    const { recipients, principalIncluded, principalIsSoleRecipient } = this.buildFilterRecipients(request);
+
     try {
       const filterResult = await this.contentFilter.check({
         content: redactedBody,
@@ -627,6 +629,9 @@ export class OutboundGateway {
         conversationId: '',
         channelId: request.channel,
         recipientTrustLevel,
+        recipients,
+        principalIncluded,
+        principalIsSoleRecipient,
       });
       filterPassed = filterResult.passed;
       filterFindings = filterResult.findings;
@@ -873,6 +878,34 @@ export class OutboundGateway {
     return this.principalIdentities.some(
       (id) => id.channel === 'email' && id.channelIdentifier.toLowerCase() === normalized,
     );
+  }
+
+  /**
+   * Build the structural recipient set for the content filter's Stage 2 judge.
+   * `isPrincipal` is computed from the principal's verified channel identities
+   * (via isPrincipalEmail) — NOT the free-text contact role.
+   *
+   * For email: To + CC merged, in order. For Signal: the single recipient/groupId
+   * (group IDs never match a principal email, so isPrincipal is false there).
+   */
+  private buildFilterRecipients(request: OutboundSendRequest): {
+    recipients: FilterRecipient[];
+    principalIncluded: boolean;
+    principalIsSoleRecipient: boolean;
+  } {
+    let emails: string[];
+    if (request.channel === 'email') {
+      emails = [request.to, ...(request.cc ?? [])];
+    } else {
+      // Signal: recipient (phone) or groupId. Neither is an email; tagged third-party.
+      emails = [request.recipient ?? request.groupId ?? ''];
+    }
+    const recipients: FilterRecipient[] = emails
+      .filter((e) => e.length > 0)
+      .map((email) => ({ email, isPrincipal: this.isPrincipalEmail(email) }));
+    const principalIncluded = recipients.some((r) => r.isPrincipal);
+    const principalIsSoleRecipient = recipients.length === 1 && recipients[0]!.isPrincipal;
+    return { recipients, principalIncluded, principalIsSoleRecipient };
   }
 
   /**
@@ -1224,6 +1257,8 @@ export class OutboundGateway {
     let filterPassed = false;
     let filterFindings: Array<{ rule: string; detail: string }> = [];
 
+    const draftRecipient: FilterRecipient = { email: recipientEmail, isPrincipal: this.isPrincipalEmail(recipientEmail) };
+
     try {
       const filterResult = await this.contentFilter.check({
         content: body,
@@ -1231,6 +1266,9 @@ export class OutboundGateway {
         conversationId: '',
         channelId: 'email',
         recipientTrustLevel,
+        recipients: [draftRecipient],
+        principalIncluded: draftRecipient.isPrincipal,
+        principalIsSoleRecipient: draftRecipient.isPrincipal,
       });
       filterPassed = filterResult.passed;
       filterFindings = filterResult.findings;
