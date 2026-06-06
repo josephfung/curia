@@ -2,9 +2,9 @@
 
 **Status:** Partial — deterministic rules and LLM-as-judge implemented; see TODO below
 
-> **TODO:** This spec is a stub. Flesh it out fully once the outbound gateway, LLM-as-judge
-> content filter, and caller verification are all complete and battle-tested in production.
-> The WIP design docs in `docs/wip/` have the detailed implementation notes in the meantime:
+> **TODO:** Keep this spec aligned with production behaviour as Stage 2 evolves
+> (tone/persona guardrails, operator override guidance, and caller-verification notes).
+> Detailed implementation notes are in `docs/wip/`:
 > - `docs/wip/2026-03-27-outbound-gateway-design.md`
 > - `docs/wip/2026-03-27-outbound-content-filter-design.md`
 > - `docs/wip/2026-03-28-caller-verification-design.md`
