@@ -185,6 +185,63 @@ describe('OutboundGateway', () => {
     ]);
   });
 
+  it('deduplicates the principal repeated across To+CC so it counts as the sole recipient', async () => {
+    // The principal appears in both To and CC (here with differing case). After
+    // case-insensitive dedup this is an effectively single-recipient principal-only
+    // send, so principalIsSoleRecipient must be true (the judge would then skip).
+    (mocks.contactService.resolveByChannelIdentity as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+
+    const gateway = new OutboundGateway({
+      nylasClients: new Map([['curia', mocks.nylasClient]]),
+      contactService: mocks.contactService,
+      contentFilter: mocks.contentFilter,
+      bus: mocks.bus,
+      principalIdentities: [makePrincipalIdentity('ceo@example.com')],
+      logger: mocks.logger,
+    });
+
+    await gateway.send({
+      channel: 'email',
+      to: 'ceo@example.com',
+      cc: ['CEO@example.com'],
+      subject: 's',
+      body: 'private status for the CEO',
+    });
+
+    const checkSpy = mocks.contentFilter.check as ReturnType<typeof vi.fn>;
+    expect(checkSpy).toHaveBeenCalledOnce();
+    const arg = checkSpy.mock.calls[0]![0];
+    expect(arg.recipients).toEqual([{ email: 'ceo@example.com', isPrincipal: true }]);
+    expect(arg.principalIncluded).toBe(true);
+    expect(arg.principalIsSoleRecipient).toBe(true);
+  });
+
+  it('tags a 1:1 Signal message to the principal via the Signal identity (sole recipient)', async () => {
+    // A 1:1 Signal reply to the principal must be recognised as principal-sole via the
+    // principal's verified SIGNAL identity — NOT the email matcher, which would mis-tag
+    // it as a third party and force the judge to run on a private channel.
+    (mocks.contactService.resolveByChannelIdentity as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+    const signalClient = makeSignalClient();
+
+    const gateway = new OutboundGateway({
+      signalClient: signalClient as unknown as import('../../../src/channels/signal/signal-rpc-client.js').SignalRpcClient,
+      signalPhoneNumber: '+15555550000',
+      contactService: mocks.contactService,
+      contentFilter: mocks.contentFilter,
+      bus: mocks.bus,
+      principalIdentities: [makePrincipalIdentity('+15555551111', 'signal')],
+      logger: mocks.logger,
+    });
+
+    await gateway.send({ channel: 'signal', recipient: '+15555551111', message: 'private status update' });
+
+    const checkSpy = mocks.contentFilter.check as ReturnType<typeof vi.fn>;
+    expect(checkSpy).toHaveBeenCalledOnce();
+    const arg = checkSpy.mock.calls[0]![0];
+    expect(arg.recipients).toEqual([{ email: '+15555551111', isPrincipal: true }]);
+    expect(arg.principalIsSoleRecipient).toBe(true);
+  });
+
   it('allows sends when contact does not exist (null) and proceeds normally', async () => {
     // resolveByChannelIdentity returns null — unknown contact, not blocked
     (mocks.contactService.resolveByChannelIdentity as ReturnType<typeof vi.fn>).mockResolvedValue(null);

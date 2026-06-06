@@ -223,7 +223,10 @@ export class OpenRouterProvider implements LLMProvider {
         }));
       }
 
-      const response: ChatCompletion = await this.client.chat.completions.create(createParams);
+      // Honor an optional AbortSignal passed via options.signal so callers (e.g. the
+      // outbound judge's timeout) can cancel an in-flight request instead of orphaning it.
+      const signal = options?.signal instanceof AbortSignal ? options.signal : undefined;
+      const response: ChatCompletion = await this.client.chat.completions.create(createParams, signal ? { signal } : undefined);
 
       // Extract the first choice — OpenRouter always returns at least one.
       const choice = response.choices[0];

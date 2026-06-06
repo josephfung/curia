@@ -89,6 +89,11 @@ export class OutboundLlmJudge implements OutboundJudge {
     const start = Date.now();
     let timer: ReturnType<typeof setTimeout> | undefined;
     let raced: Awaited<ReturnType<LLMProvider['chat']>> | typeof TIMEOUT;
+    // Abort the in-flight provider request on timeout so a slow judge call doesn't
+    // keep running in the background consuming provider capacity/cost. Providers that
+    // honor options.signal (Anthropic, OpenRouter) cancel the HTTP request; providers
+    // that ignore it still behave correctly (the race already returned).
+    const controller = new AbortController();
     try {
       const chatPromise = this.provider.chat({
         model: this.config.model,
@@ -100,8 +105,11 @@ export class OutboundLlmJudge implements OutboundJudge {
         // If a model ever emits a verbose reason that gets truncated, parseVerdict treats
         // the cut-off JSON as malformed — which fails toward blocking (split/closed), the
         // safe direction for a security boundary.
-        options: { temperature: 0, max_tokens: 100 },
+        options: { temperature: 0, max_tokens: 100, signal: controller.signal },
       });
+      // Once we stop awaiting chatPromise (on timeout/abort), a late rejection would be
+      // unhandled. LLMProvider.chat() is non-throwing by contract, but guard anyway.
+      chatPromise.catch(() => { /* handled via race + abort below */ });
       const timeoutPromise = new Promise<typeof TIMEOUT>((resolve) => {
         timer = setTimeout(() => resolve(TIMEOUT), this.config.timeoutMs);
       });
@@ -115,6 +123,7 @@ export class OutboundLlmJudge implements OutboundJudge {
     }
 
     if (raced === TIMEOUT) {
+      controller.abort(); // cancel the orphaned provider call
       this.logger.warn({ timeoutMs: this.config.timeoutMs, channelId: input.channelId }, 'outbound-judge: timed out');
       return this.onUnreachable(`timed out after ${this.config.timeoutMs}ms`);
     }
@@ -138,8 +147,15 @@ export class OutboundLlmJudge implements OutboundJudge {
 
     const verdict = parseVerdict(response.content);
     if (verdict === null) {
-      this.logger.warn({ raw: response.content.slice(0, 200), channelId: input.channelId }, 'outbound-judge: unparseable verdict');
-      return this.onMalformed(response.content.slice(0, 200));
+      // Log non-sensitive metadata only — the raw model output can echo fragments of
+      // the (possibly sensitive) outbound body, which must not land in plain logs or
+      // in the outbound.blocked audit finding. Hash + length stay debuggable.
+      const responseHash = createHash('sha256').update(response.content).digest('hex');
+      this.logger.warn(
+        { responseHash, responseLength: response.content.length, channelId: input.channelId },
+        'outbound-judge: unparseable verdict',
+      );
+      return this.onMalformed('unparseable JSON verdict');
     }
 
     // Telemetry only on a real, parsed model response.
@@ -211,11 +227,15 @@ export function parseVerdict(raw: string): Verdict | null {
   // Strip a leading/trailing markdown code fence if present.
   const fence = text.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/);
   if (fence) text = fence[1]!.trim();
-  // If there is surrounding prose, extract the first {...} block.
-  if (!text.startsWith('{')) {
-    const brace = text.match(/\{[\s\S]*\}/);
-    if (brace) text = brace[0];
-  }
+  // Extract the FIRST balanced {...} object, ignoring any surrounding prose or
+  // trailing text. A greedy /\{[\s\S]*\}/ would span from the first "{" to the
+  // LAST "}" — so a model that appends extra brace-containing text after a valid
+  // verdict (e.g. `{"leak":false} Note: see {appendix}`) would over-capture, fail
+  // JSON.parse, and be treated as malformed (blocked under split/closed). Scanning
+  // for the first balanced object avoids that false positive.
+  const extracted = extractFirstJsonObject(text);
+  if (extracted === null) return null;
+  text = extracted;
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
@@ -227,4 +247,33 @@ export function parseVerdict(raw: string): Verdict | null {
   if (typeof obj.leak !== 'boolean') return null;
   const reason = typeof obj.reason === 'string' ? obj.reason : '';
   return { leak: obj.leak, reason };
+}
+
+/**
+ * Return the first balanced top-level JSON object substring in `text`, or null if
+ * none is complete. Tracks string literals and escapes so braces inside strings
+ * don't affect nesting depth (e.g. a reason containing "}" won't end the object early).
+ */
+function extractFirstJsonObject(text: string): string | null {
+  const start = text.indexOf('{');
+  if (start === -1) return null;
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = start; i < text.length; i += 1) {
+    const ch = text[i]!;
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === '\\') escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') inString = true;
+    else if (ch === '{') depth += 1;
+    else if (ch === '}') {
+      depth -= 1;
+      if (depth === 0) return text.slice(start, i + 1);
+    }
+  }
+  return null;
 }

@@ -857,6 +857,18 @@ async function main(): Promise<void> {
         timeoutMs: judgeYaml?.timeout_ms ?? 5000,
         failMode: judgeYaml?.failMode ?? 'split',
       };
+      // Validate timeout_ms. local.yaml overrides are deep-merged but NOT schema-checked
+      // at startup, so a 0/negative/non-integer value could slip through — with the default
+      // 'split' failMode that would make every judge call time out instantly and silently
+      // fail open, disabling Stage 2. Fail fast instead. The 250ms floor rejects values too
+      // low for any real model round-trip (also a likely misconfiguration).
+      if (!Number.isInteger(judgeConfig.timeoutMs) || judgeConfig.timeoutMs < 250) {
+        logger.fatal(
+          { timeoutMs: judgeConfig.timeoutMs },
+          'filter.llmJudge.timeout_ms must be an integer >= 250 (ms) — fix config (default.yaml or local.yaml)',
+        );
+        process.exit(1);
+      }
       if (!modelRegistry.isKnownModel(judgeConfig.model)) {
         logger.fatal(
           { model: judgeConfig.model },

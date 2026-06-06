@@ -881,45 +881,86 @@ export class OutboundGateway {
   }
 
   /**
+   * Check whether a Signal identifier (E.164 phone) belongs to the principal.
+   * Matches against the principal's verified SIGNAL channel identities — the email
+   * matcher (isPrincipalEmail) must NOT be used for Signal, or a 1:1 principal Signal
+   * reply would be mis-tagged as a third party and lose its private-channel skip.
+   */
+  private isPrincipalSignal(identifier: string | undefined | null): boolean {
+    if (!identifier || this.principalIdentities.length === 0) return false;
+    return this.principalIdentities.some(
+      (id) => id.channel === 'signal' && id.channelIdentifier === identifier,
+    );
+  }
+
+  /**
    * Build the structural recipient set for the content filter's Stage 2 judge.
-   * `isPrincipal` is computed from the principal's verified channel identities
-   * (via isPrincipalEmail) — NOT the free-text contact role.
+   * `isPrincipal` is computed from the principal's verified channel identities —
+   * channel-aware (email matcher for email, Signal matcher for Signal) — NOT the
+   * free-text contact role.
    *
-   * For email: To + CC merged, in order. For Signal: the single recipient/groupId
-   * (group IDs never match a principal email, so isPrincipal is false there).
+   * For email: To + CC merged, in order. For Signal: the single recipient (matched
+   * via the principal's Signal identity) or a groupId (never a sole-principal channel,
+   * since a group carries other members, so isPrincipal is false there).
    */
   private buildFilterRecipients(request: OutboundSendRequest): {
     recipients: FilterRecipient[];
     principalIncluded: boolean;
     principalIsSoleRecipient: boolean;
   } {
-    let emails: string[];
+    let tagged: FilterRecipient[];
     if (request.channel === 'email') {
-      emails = [request.to, ...(request.cc ?? [])];
+      const emails = [request.to, ...(request.cc ?? [])];
+      tagged = emails
+        .filter((e) => e.length > 0)
+        .map((email) => ({ email, isPrincipal: this.isPrincipalEmail(email) }));
     } else {
-      // Signal: recipient (phone) or groupId. Neither is an email; tagged third-party.
-      emails = [request.recipient ?? request.groupId ?? ''];
+      // Signal: tag via the principal's verified Signal identity. A groupId is never
+      // the principal's private channel, so it is always a non-principal recipient.
+      const identifier = request.recipient ?? request.groupId ?? '';
+      const isPrincipal = request.recipient ? this.isPrincipalSignal(request.recipient) : false;
+      tagged = identifier.length > 0 ? [{ email: identifier, isPrincipal }] : [];
     }
-    return this.buildRecipientSet(emails);
+    return this.finalizeRecipientSet(tagged);
   }
 
   /**
-   * Compute the structural recipient set from a flat list of recipient emails.
-   * `isPrincipal` is from the principal's verified channel identities (isPrincipalEmail),
-   * never the contact role. principalIsSoleRecipient is true ONLY when there is exactly
-   * one recipient and it is the principal.
-   *
-   * Shared by buildFilterRecipients() (live send) and the draft-send path so both
-   * compute the sole-recipient skip condition over the same full envelope semantics.
+   * Build the structural recipient set from a flat list of recipient emails.
+   * `isPrincipal` is from the principal's verified email identities (isPrincipalEmail),
+   * never the contact role. Used by the email draft-send path (drafts are email-only).
    */
   private buildRecipientSet(emails: string[]): {
     recipients: FilterRecipient[];
     principalIncluded: boolean;
     principalIsSoleRecipient: boolean;
   } {
-    const recipients: FilterRecipient[] = emails
+    const tagged: FilterRecipient[] = emails
       .filter((e) => e.length > 0)
       .map((email) => ({ email, isPrincipal: this.isPrincipalEmail(email) }));
+    return this.finalizeRecipientSet(tagged);
+  }
+
+  /**
+   * Deduplicate the tagged recipient list and compute the principal flags.
+   * Dedup is by case-insensitive identifier so the same address repeated across
+   * To/CC/BCC counts once — otherwise a principal listed twice (e.g. To + CC) would
+   * make `principalIsSoleRecipient` false and the judge would run on an effectively
+   * single-recipient principal-only send. `principalIsSoleRecipient` is true ONLY when
+   * exactly one (deduped) recipient remains and it is the principal.
+   */
+  private finalizeRecipientSet(tagged: FilterRecipient[]): {
+    recipients: FilterRecipient[];
+    principalIncluded: boolean;
+    principalIsSoleRecipient: boolean;
+  } {
+    const seen = new Set<string>();
+    const recipients: FilterRecipient[] = [];
+    for (const r of tagged) {
+      const key = r.email.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      recipients.push(r);
+    }
     const principalIncluded = recipients.some((r) => r.isPrincipal);
     const principalIsSoleRecipient = recipients.length === 1 && recipients[0]!.isPrincipal;
     return { recipients, principalIncluded, principalIsSoleRecipient };
