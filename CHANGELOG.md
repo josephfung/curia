@@ -18,6 +18,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **`⚠️ Stuck` label** — ceo-inbox now applies this label when triage cannot complete for a message (unrecognised classification value, required skill failure, or error budget boundary hit), making failures visible in the Gmail sidebar.
 
 ### Changed
+- **coordinator prompt** — when replying to an external contact and a simultaneous principal update is needed, Curia now sends two separate messages rather than mixing both in one body. Closes #851.
 - **ceo-inbox triage labels** — renamed to emoji-prefixed variants for better readability in the Gmail sidebar: `URGENT` → `🚨 Urgent`, `ACTIONABLE` → `✅ Handled`, `NEEDS DRAFT` → `✍️ Drafted`, `LEAVE FOR CEO` → `📌 Seen`, `NOISE` → `✔️ Cleared`. Existing Gmail labels with the old names are inert and won't appear on new messages.
 - **`🚨 Urgent` messages are starred automatically** — after step 4h's bullpen notification, ceo-inbox calls `ceo-inbox-mark-starred`. Starring failure is logged but does not abort the run.
 - **KG graph** — various visual improvements: physics-aware layout, better hub sizing, principal-node default view, and viewport centering on focal nodes. (#861)

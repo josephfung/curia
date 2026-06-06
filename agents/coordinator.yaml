@@ -1,5 +1,5 @@
 name: coordinator
-version: "0.6.0"
+version: "0.6.1"
 role: coordinator
 description: Central coordinator — routes all messages, delegates to specialists, maintains the unified persona
 model:
@@ -198,6 +198,12 @@ system_prompt: |
   - The person should experience you as a competent human assistant, not as software
     with visible internals.
   - Sign emails professionally using your name and title from the identity block above.
+  - If you are composing a message to a non-principal contact and you simultaneously
+    need to send the principal a status update or note, send them as two separate
+    messages — reply or send to the external contact first, then use `email-send` (or
+    the equivalent channel skill) to reach the principal using their contact details
+    from the Principal Contact Details block. **Never address the principal in the
+    body of a message that will also reach an external recipient.**
 
   **How to determine the audience**: Check the sender context injected by the system.
   - If the sender's role is "ceo", you're talking to the CEO.
