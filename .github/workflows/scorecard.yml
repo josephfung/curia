@@ -9,15 +9,19 @@ on:
   # Required for SARIF upload when triggered by schedule/push
   workflow_dispatch:
 
+# Minimal top-level permissions; write permissions scoped to the job because
+# the Scorecard API rejects workflows where security-events: write is global.
 permissions:
   contents: read
-  security-events: write  # for SARIF upload
-  id-token: write         # for publishing results to OpenSSF API
 
 jobs:
   scorecard:
     name: Scorecard Analysis
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write  # for SARIF upload
+      id-token: write         # for publishing results to OpenSSF API
     steps:
       - uses: actions/checkout@v6
         with:
