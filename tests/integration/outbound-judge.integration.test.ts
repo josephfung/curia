@@ -8,7 +8,7 @@
 //
 // Model: claude-haiku-4-5 — cheapest Anthropic model, fast enough for CI parity.
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { OutboundLlmJudge } from '../../src/dispatch/outbound-judge.js';
 import { AnthropicProvider } from '../../src/agents/llm/anthropic.js';
 import { ModelRegistry } from '../../src/agents/llm/model-registry.js';
@@ -75,8 +75,21 @@ describe.skipIf(!RUN)('OutboundLlmJudge integration (real model)', () => {
     expect(findings.some((x) => x.rule === 'llm-judge-audience-leak')).toBe(true);
   }, 20000);
 
-  it('skips entirely when the principal is the sole recipient', async () => {
-    const findings = await judge().review({
+  it('skips entirely when the principal is the sole recipient (no model call)', async () => {
+    // Spy on the provider to PROVE the model is never called on the skip path — asserting
+    // only `[]` would let a regression that still calls the model slip through (it could
+    // return [] under fail-open). The judge must short-circuit before provider.chat().
+    const registry = new ModelRegistry(logger);
+    const provider = new AnthropicProvider(process.env.ANTHROPIC_API_KEY!, logger, registry);
+    const chatSpy = vi.spyOn(provider, 'chat');
+    const j = new OutboundLlmJudge(
+      provider,
+      { enabled: true, model: 'claude-haiku-4-5', timeoutMs: 15000, failMode: 'split' },
+      bus,
+      logger,
+      registry,
+    );
+    const findings = await j.review({
       content: LEAK_BODY,
       recipients: [principal],
       principalIncluded: true,
@@ -84,8 +97,8 @@ describe.skipIf(!RUN)('OutboundLlmJudge integration (real model)', () => {
       conversationId: '',
       channelId: 'email',
     });
-    // No model call is made — the judge short-circuits and returns [] immediately.
     expect(findings).toEqual([]);
+    expect(chatSpy).not.toHaveBeenCalled();
   }, 20000);
 
   it('passes a clean professional reply to a third party', async () => {

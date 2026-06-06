@@ -157,7 +157,7 @@
           "properties": {
             "enabled": { "type": "boolean" },
             "model": { "type": "string" },
-            "timeout_ms": { "type": "integer", "minimum": 1 },
+            "timeout_ms": { "type": "integer", "minimum": 250 },
             "failMode": { "type": "string", "enum": ["split", "open", "closed"] }
           }
         }

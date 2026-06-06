@@ -156,6 +156,23 @@ describe('OutboundLlmJudge', () => {
     expect(await judge.review({ ...MIXED_INPUT, content: 'x'.repeat(200_000) })).toEqual([]);
   });
 
+  it('passes an AbortSignal to the provider and aborts it on timeout', async () => {
+    // Verifies the judge supplies options.signal (so signal-aware providers can cancel
+    // the request) and aborts it when the call times out, rather than orphaning it.
+    let capturedSignal: AbortSignal | undefined;
+    const provider = {
+      id: 'capture',
+      chat: vi.fn((params: { options?: { signal?: AbortSignal } }) => {
+        capturedSignal = params.options?.signal;
+        return new Promise<LLMResponse>((resolve) => setTimeout(() => resolve(textResponse('{"leak": false, "reason": ""}')), 50));
+      }),
+    } as unknown as LLMProvider;
+    const { judge } = makeJudge(provider, { failMode: 'open', timeoutMs: 5 });
+    await judge.review(MIXED_INPUT);
+    expect(capturedSignal).toBeInstanceOf(AbortSignal);
+    expect(capturedSignal!.aborted).toBe(true);
+  });
+
   it('publishes one llm.call telemetry event on a successful verdict', async () => {
     const { judge, bus } = makeJudge(providerReturning(textResponse('{"leak": false, "reason": ""}')));
     await judge.review(MIXED_INPUT);
@@ -199,5 +216,15 @@ describe('parseVerdict', () => {
   });
   it('rejects entirely non-JSON text', () => {
     expect(parseVerdict('not json at all')).toBeNull();
+  });
+  it('extracts only the first balanced object when trailing brace text follows a leading verdict', () => {
+    // Regression: a greedy first-{ to last-} match would over-capture and fail to parse.
+    expect(parseVerdict('{"leak": false, "reason": "ok"} Note: see {appendix}')).toEqual({ leak: false, reason: 'ok' });
+  });
+  it('extracts the first verdict when prose precedes it and brace text follows', () => {
+    expect(parseVerdict('Verdict: {"leak": true, "reason": "y"}\n\nExtra: { more }')).toEqual({ leak: true, reason: 'y' });
+  });
+  it('does not end the object early on a brace inside the reason string', () => {
+    expect(parseVerdict('{"leak": true, "reason": "contains } brace"} trailing')).toEqual({ leak: true, reason: 'contains } brace' });
   });
 });

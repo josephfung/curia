@@ -165,7 +165,10 @@ export class AnthropicProvider implements LLMProvider {
         createParams.tools = mappedTools;
       }
 
-      const response = await this.client.messages.create(createParams);
+      // Honor an optional AbortSignal passed via options.signal so callers (e.g. the
+      // outbound judge's timeout) can cancel an in-flight request instead of orphaning it.
+      const signal = options?.signal instanceof AbortSignal ? options.signal : undefined;
+      const response = await this.client.messages.create(createParams, signal ? { signal } : undefined);
 
       this.logger.debug(
         {
