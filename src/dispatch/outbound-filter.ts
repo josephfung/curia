@@ -15,6 +15,16 @@
 import type { TrustLevel } from '../contacts/types.js';
 import { meetsMinimumTrust } from '../contacts/types.js';
 
+/**
+ * A single resolved outbound recipient. `isPrincipal` is determined structurally
+ * (the recipient matches one of the principal's verified channel identities) —
+ * never from the free-text contact `role` field.
+ */
+export interface FilterRecipient {
+  email: string;
+  isPrincipal: boolean;
+}
+
 export interface FilterCheckInput {
   content: string;
   recipientEmail: string;
