@@ -14,6 +14,7 @@
 
 import type { TrustLevel } from '../contacts/types.js';
 import { meetsMinimumTrust } from '../contacts/types.js';
+import type { OutboundJudge, JudgeInput } from './outbound-judge.js';
 
 /**
  * A single resolved outbound recipient. `isPrincipal` is determined structurally
@@ -35,6 +36,15 @@ export interface FilterCheckInput {
   // Used by the contact-data-leak rule to allow trusted contacts to receive third-party
   // contact data (e.g. CEO asking "what is Hamilton's email?", daily briefing with attendees).
   recipientTrustLevel: TrustLevel | null;
+  /**
+   * Full recipient set (To + CC), each tagged isPrincipal structurally. Used by
+   * Stage 2 (LLM judge). Optional: when absent (legacy callers / Stage-1-only unit
+   * tests), Stage 2 treats the message as NOT principal-sole and the judge — if
+   * configured — runs over an empty recipient list.
+   */
+  recipients?: FilterRecipient[];
+  principalIncluded?: boolean;
+  principalIsSoleRecipient?: boolean;
 }
 
 export interface FilterFinding {
@@ -56,6 +66,8 @@ export interface OutboundContentFilterConfig {
   systemPromptMarkers: string[];
   // CEO email — allowed in outbound content (not a third-party leak).
   ceoEmail: string;
+  /** Optional Stage 2 LLM judge. When absent, Stage 2 is a no-op pass. */
+  judge?: OutboundJudge;
 }
 
 // Bus event type names that should never appear in outbound messages.
@@ -140,9 +152,11 @@ function normalizeForMatching(text: string): string {
 
 export class OutboundContentFilter {
   private config: OutboundContentFilterConfig;
+  private judge?: OutboundJudge;
 
   constructor(config: OutboundContentFilterConfig) {
     this.config = config;
+    this.judge = config.judge;
   }
 
   /**
@@ -376,8 +390,21 @@ export class OutboundContentFilter {
    * want outbound content (which may be sensitive) leaving the trust boundary
    * to reach an external API just for a safety check.
    */
-  private async runLlmReview(_input: FilterCheckInput): Promise<FilterFinding[]> {
-    // Stub: always passes. LLM review not yet implemented.
-    return [];
+  private async runLlmReview(input: FilterCheckInput): Promise<FilterFinding[]> {
+    // No judge configured → Stage 2 is a no-op pass (preserves prior behavior).
+    if (!this.judge) return [];
+
+    const judgeInput: JudgeInput = {
+      content: input.content,
+      recipients: input.recipients ?? [],
+      principalIncluded: input.principalIncluded ?? false,
+      principalIsSoleRecipient: input.principalIsSoleRecipient ?? false,
+      conversationId: input.conversationId,
+      channelId: input.channelId,
+    };
+    // The judge owns its own failure semantics (split fail-open/closed) and never
+    // throws. The try/catch around runLlmReview in check() remains as a last-resort
+    // net for truly unexpected throws.
+    return this.judge.review(judgeInput);
   }
 }
