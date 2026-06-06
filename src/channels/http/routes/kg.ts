@@ -1179,7 +1179,7 @@ export async function knowledgeGraphRoutes(
    * inserted by the summarisation pass) are excluded since they are internal
    * artifacts not intended for display.
    */
-  app.get('/api/kg/chat/history', async (request, reply) => {
+  app.get('/api/kg/chat/history', KG_RATE, async (request, reply) => {
     if (!assertSecret(request, reply, webAppBootstrapSecret, sessions)) return;
 
     const query = request.query as {
