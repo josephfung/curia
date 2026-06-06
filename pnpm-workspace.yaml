@@ -11,6 +11,20 @@ packages:
 # pnpm default changes.
 blockExoticSubdeps: true
 
+# Dependency version overrides. pnpm v10+ reads `overrides` ONLY from this file —
+# a `pnpm.overrides` block in package.json is silently ignored. These pins force
+# transitive deps onto patched versions to clear known CVEs.
+#   - uuid: nylas@8.1.2 pins uuid@8.3.2 (CVE-2026-41907). uuid@11 is the last major
+#     that still ships a CommonJS build, which the CJS Nylas SDK requires; uuid@12+
+#     is ESM-only and would break `require('uuid')`.
+overrides:
+  hono: '>=4.12.18'
+  fast-uri: '>=3.1.2'
+  vite: '>=8.0.5'
+  qs: '>=6.15.2'
+  ip-address: '>=10.1.1'
+  uuid: '^11.1.1'
+
 # esbuild requires a postinstall step to download the platform binary.
 # Both versions (used by vite and tsup) are approved here.
 # promptfoo brings in several native-module packages; only esbuild actually needs

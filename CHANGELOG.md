@@ -37,6 +37,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Security
 - **Contact email validation** — rewrote the `primaryEmail` format regex to remove polynomial-time backtracking (ReDoS) on attacker-controlled input. (#898, CodeQL js/polynomial-redos)
 - **KG chat history rate limit** — `GET /api/kg/chat/history` now carries the same 60/min per-IP cap as every other KG route; it was the lone DB-backed endpoint left on the looser global limit. (#901, CodeQL js/missing-rate-limiting)
+- **Base image OS patches** — runtime Dockerfile stage now runs `apt-get upgrade`, pulling Debian 12 fixes for `libgnutls30`/`libgcrypt20` and clearing 13 Trivy CVEs including two criticals (CVE-2026-33845, CVE-2026-42010).
+- **npm bundled deps** — runtime image bumps global npm to latest, clearing the flagged `picomatch`/`brace-expansion`/`ip-address` copies it carries (npm is never invoked at runtime).
+- **`uuid` pinned to v11** — forces `nylas`'s transitive `uuid@8.3.2` up to `^11.1.1` (CVE-2026-41907); v11 is the last major that still ships the CommonJS build the Nylas SDK requires.
+- **pnpm overrides moved to `pnpm-workspace.yaml`** — pnpm v10+ ignores `pnpm.overrides` in package.json, so the existing pins (qs, ip-address, vite, fast-uri, hono) had silently stopped applying; relocated to the supported file.
 
 ## [0.33.0] — 2026-06-04 — "Mr. Meeseeks"
 

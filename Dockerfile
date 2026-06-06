@@ -32,7 +32,24 @@ FROM node:22-slim
 # uvx is needed to spawn workspace-mcp as an MCP stdio subprocess.
 COPY --from=ghcr.io/astral-sh/uv:0.6.3 /uv /uvx /usr/local/bin/
 
-RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
+# apt-get upgrade pulls the latest Debian 12 security patches for packages baked
+# into the node:22-slim base layer (e.g. libgnutls30, libgcrypt20). Without it the
+# image ships whatever versions were frozen when the base image was built, which
+# Trivy flags as known CVEs even though Debian has already published fixes.
+# Run upgrade before installing curl so curl is installed from the patched lists.
+RUN apt-get update \
+ && apt-get upgrade -y \
+ && apt-get install -y --no-install-recommends curl \
+ && rm -rf /var/lib/apt/lists/*
+
+# The global npm bundled in the base image carries its own transitive deps that
+# Trivy flags (picomatch, brace-expansion, ip-address). npm is never invoked at
+# runtime here — we use corepack/pnpm at build and tsx to run — but bumping it
+# pulls patched bundled deps (npm 11.16.0 ships picomatch 4.0.4, brace-expansion
+# 5.0.6, ip-address 10.2.0) and clears the findings rather than leaving stale
+# copies in the image. Pinned (not @latest) so rebuilds can't silently regress
+# the cleared CVEs; bump deliberately when a newer npm is needed.
+RUN npm install -g npm@11.16.0
 
 # Create a non-root system user/group for the runtime process.
 # UIDs/GIDs are pinned (not dynamic) so docker-compose tmpfs uid= options
