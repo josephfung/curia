@@ -276,6 +276,27 @@ intentDrift:
   checkEveryNBursts: 1
   minConfidenceToPause: high
 
+# Outbound content filter — Stage 2 LLM-as-judge (issue #547, spec 15).
+# Stage 1 (deterministic rules) always runs and has no config. Stage 2 is a
+# single-purpose audience-leak judge: it blocks outbound messages that leak
+# internal monologue, system/agent status, or side-channel notes ("To the CEO: ...")
+# to a mixed audience (any non-principal recipient on the message). It is SKIPPED
+# when the principal is the SOLE recipient (private channel).
+filter:
+  llmJudge:
+    enabled: true
+    # Default works out of the box (claude-haiku-4-5 — smaller/cheaper than the opus coordinator).
+    #
+    # >>> STRONGLY RECOMMENDED <<<: point this at a DIFFERENT vendor/family than the
+    # fast/standard/powerful agent tiers above (e.g. an OpenRouter Gemini or DeepSeek
+    # model such as 'google/gemini-3.1-flash-lite'). Model diversity is the security
+    # value here: an attack crafted to fool the Claude coordinator should not also fool
+    # the reviewer. Requires the corresponding provider API key (e.g. OPENROUTER_API_KEY).
+    model: claude-haiku-4-5
+    timeout_ms: 5000
+    # split (default) | open | closed. See src/config.ts for semantics.
+    failMode: split
+
 # Dream engine — background knowledge graph maintenance (issue #27).
 # The decay pass runs on a configurable interval and reduces the confidence of
 # slow_decay and fast_decay nodes/edges using an exponential half-life model.
