@@ -128,6 +128,11 @@ export class OutboundLlmJudge implements OutboundJudge {
     }
     if (response.type !== 'text') {
       // A tool_use response is unexpected for a judge — treat as malformed.
+      // Log here like every sibling failure branch so this path is observable.
+      this.logger.warn(
+        { responseType: response.type, channelId: input.channelId },
+        'outbound-judge: unexpected non-text response — treating as malformed',
+      );
       return this.onMalformed(`unexpected response type: ${response.type}`);
     }
 

@@ -222,7 +222,29 @@ describe('SendDraftHandler', () => {
         recipientEmail: 'kevin@example.com',
         body: '<p>Hello Kevin</p>',
         subject: 'Re: Project Update',
+        allRecipients: ['kevin@example.com'],
       },
+      expect.objectContaining({ humanApproved: true }),
+    );
+  });
+
+  it('passes the full To+CC+BCC envelope as allRecipients so the gateway judge sees CC recipients (#547)', async () => {
+    const sendEmailDraftMock = vi.fn().mockResolvedValue({ success: true, messageId: 'msg-sent-1' });
+    // Draft addressed To: kevin, CC: an external third party. The gateway must
+    // receive both so its Stage 2 audience-leak judge does not skip on a false
+    // sole-recipient computation.
+    const draftWithCc = { ...DRAFT_STUB, cc: [{ email: 'third@external.com' }] };
+    const ctx = makeCtx({
+      gateway: {
+        listEmailMessages: vi.fn().mockResolvedValue([draftWithCc]),
+        sendEmailDraft: sendEmailDraftMock,
+      },
+    });
+    await handler.execute(ctx);
+    expect(sendEmailDraftMock).toHaveBeenCalledWith(
+      'draft-abc123',
+      'personal',
+      expect.objectContaining({ allRecipients: ['kevin@example.com', 'third@external.com'] }),
       expect.objectContaining({ humanApproved: true }),
     );
   });
