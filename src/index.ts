@@ -66,6 +66,8 @@ import { AuthorizationService } from './contacts/authorization.js';
 import { HeldMessageService } from './contacts/held-messages.js';
 import { DEFAULT_ERROR_BUDGET } from './errors/types.js';
 import { OutboundContentFilter } from './dispatch/outbound-filter.js';
+import { OutboundLlmJudge } from './dispatch/outbound-judge.js';
+import type { JudgeConfig } from './dispatch/outbound-judge.js';
 import { OutboundGateway } from './skills/outbound-gateway.js';
 import { InboundScanner } from './dispatch/inbound-scanner.js';
 import { RateLimiter } from './dispatch/rate-limiter.js';
@@ -842,9 +844,47 @@ async function main(): Promise<void> {
     if (systemPromptMarkers.length === 0) {
       logger.warn('No system prompt markers extracted — system-prompt-fragment rule will not detect prompt leakage. Check that office identity has a name and title configured.');
     }
+    // Stage 2 LLM judge (issue #547). Constructed only when enabled. Routes through a
+    // model→provider router so any registered model works. The judge model is validated
+    // against the registry here so a typo fails fast at startup.
+    let outboundJudge: OutboundLlmJudge | undefined;
+    const judgeYaml = yamlConfig.filter?.llmJudge;
+    const judgeEnabled = judgeYaml?.enabled ?? true;
+    if (judgeEnabled) {
+      const judgeConfig: JudgeConfig = {
+        enabled: true,
+        model: judgeYaml?.model ?? 'claude-haiku-4-5',
+        timeoutMs: judgeYaml?.timeout_ms ?? 5000,
+        failMode: judgeYaml?.failMode ?? 'split',
+      };
+      if (!modelRegistry.isKnownModel(judgeConfig.model)) {
+        logger.fatal(
+          { model: judgeConfig.model },
+          'filter.llmJudge.model is not in the model registry — fix config (default.yaml or local.yaml)',
+        );
+        process.exit(1);
+      }
+      const judgeProviderName = modelRegistry.getProvider(judgeConfig.model);
+      if (!judgeProviderName || !providerRegistry.has(judgeProviderName)) {
+        logger.fatal(
+          { model: judgeConfig.model, provider: judgeProviderName },
+          'filter.llmJudge.model maps to a provider that is not registered — set the corresponding API key or change the model',
+        );
+        process.exit(1);
+      }
+      // Dedicated stateless router instance for the judge (avoids depending on the
+      // infra LLM router which is constructed later in bootstrap).
+      const judgeRouter = new LLMProviderRouter(modelRegistry, providerRegistry);
+      outboundJudge = new OutboundLlmJudge(judgeRouter, judgeConfig, bus, logger, modelRegistry);
+      logger.info({ model: judgeConfig.model, failMode: judgeConfig.failMode }, 'Outbound Stage 2 LLM judge enabled');
+    } else {
+      logger.info('Outbound Stage 2 LLM judge disabled via config (filter.llmJudge.enabled=false)');
+    }
+
     outboundFilter = new OutboundContentFilter({
       systemPromptMarkers,
       ceoEmail,
+      judge: outboundJudge,
     });
     logger.info({ markerCount: systemPromptMarkers.length }, 'Outbound content filter initialized');
   }
