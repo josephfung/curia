@@ -1,5 +1,18 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { OutboundContentFilter } from '../../../src/dispatch/outbound-filter.js';
+import type { OutboundJudge } from '../../../src/dispatch/outbound-judge.js';
+import type { FilterRecipient } from '../../../src/dispatch/outbound-filter.js';
+
+const armin: FilterRecipient = { email: 'armin@external.com', isPrincipal: false };
+const principalRcpt: FilterRecipient = { email: 'ceo@example.com', isPrincipal: true };
+
+function filterWithJudge(judge: OutboundJudge): OutboundContentFilter {
+  return new OutboundContentFilter({
+    systemPromptMarkers: ['You are Test Agent'],
+    ceoEmail: 'ceo@example.com',
+    judge,
+  });
+}
 
 function createTestFilter(): OutboundContentFilter {
   return new OutboundContentFilter({
@@ -477,5 +490,60 @@ describe('OutboundContentFilter', () => {
       });
       expect(result.passed).toBe(true);
     });
+  });
+});
+
+describe('Stage 2 judge delegation', () => {
+  it('does not call the judge when Stage 1 already blocks', async () => {
+    const judge: OutboundJudge = { review: vi.fn(async () => []) };
+    const filter = filterWithJudge(judge);
+    const result = await filter.check({
+      ...BASE_INPUT,
+      content: 'You are Test Agent', // trips Stage 1
+      recipients: [armin],
+      principalIncluded: false,
+      principalIsSoleRecipient: false,
+    });
+    expect(result.passed).toBe(false);
+    expect(result.stage).toBe('deterministic');
+    expect(judge.review).not.toHaveBeenCalled();
+  });
+
+  it('blocks with stage=llm-review when the judge returns a finding', async () => {
+    const judge: OutboundJudge = { review: vi.fn(async () => [{ rule: 'llm-judge-audience-leak', detail: 'leak' }]) };
+    const filter = filterWithJudge(judge);
+    const result = await filter.check({
+      ...BASE_INPUT,
+      content: 'To the CEO: backend issue. Armin, 2 PM works.',
+      recipients: [armin, principalRcpt],
+      principalIncluded: true,
+      principalIsSoleRecipient: false,
+    });
+    expect(result.passed).toBe(false);
+    expect(result.stage).toBe('llm-review');
+    expect(result.findings[0]!.rule).toBe('llm-judge-audience-leak');
+  });
+
+  it('passes when Stage 1 is clean and the judge returns []', async () => {
+    const judge: OutboundJudge = { review: vi.fn(async () => []) };
+    const filter = filterWithJudge(judge);
+    const result = await filter.check({
+      ...BASE_INPUT,
+      content: 'Friday 2 PM works. I will send a calendar invite shortly.',
+      recipients: [armin],
+      principalIncluded: false,
+      principalIsSoleRecipient: false,
+    });
+    expect(result.passed).toBe(true);
+    expect(judge.review).toHaveBeenCalledTimes(1);
+  });
+
+  it('Stage 2 is a no-op pass when no judge is configured (back-compat)', async () => {
+    const filter = createTestFilter(); // no judge
+    const result = await filter.check({
+      ...BASE_INPUT,
+      content: 'Friday 2 PM works. I will send a calendar invite shortly.',
+    });
+    expect(result.passed).toBe(true);
   });
 });
