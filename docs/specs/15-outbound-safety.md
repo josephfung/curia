@@ -1,6 +1,6 @@
 # 15 — Outbound Safety
 
-**Status:** Partial — deterministic rules implemented; see TODO below
+**Status:** Partial — deterministic rules and LLM-as-judge implemented; see TODO below
 
 > **TODO:** This spec is a stub. Flesh it out fully once the outbound gateway, LLM-as-judge
 > content filter, and caller verification are all complete and battle-tested in production.
@@ -32,7 +32,7 @@ the CEO, or exfiltrate internal data to an external party.
 
 | Threat | Example | Defence |
 |---|---|---|
-| **Prompt injection via inbound email** | Attacker email instructs LLM to dump system prompt in reply | Content filter — Stage 1 (deterministic) + Stage 2 (LLM-as-judge, future) |
+| **Prompt injection via inbound email** | Attacker email instructs LLM to dump system prompt in reply | Content filter — Stage 1 (deterministic) + Stage 2 (LLM-as-judge) |
 | **Accidental context leakage** | LLM naturally includes a third party's email address in a reply | Content filter — contact data leakage rule |
 | **Skill-layer bypass** | Prompt injection tricks LLM into calling `email-send` directly, circumventing the dispatcher filter | Outbound gateway — all `nylasClient.sendMessage()` calls go through it |
 | **Impersonation of CEO** | Attacker sends email claiming to be the CEO, triggers a high-sensitivity action | Caller verification — cross-channel challenge/response for elevated skills |
@@ -83,13 +83,29 @@ Fast, zero-cost pattern matching. Any finding from Stage 1 blocks immediately �
 - **Secret patterns** — reuses existing patterns from `sanitizeOutput()`: API keys, bearer tokens, hex tokens ≥ 32 chars
 - **Contact data leakage** — email addresses in the body that are not the intended recipient or the CEO
 
-### Stage 2: LLM-as-Judge (stub — future)
+### Stage 2: LLM-as-Judge — audience-leak detection (implemented)
 
-A locally-hosted open-source model (different from the primary coordinator model) evaluates
-contextual appropriateness for content that passes Stage 1. Model diversity ensures an attack
-crafted for the primary model doesn't fool the reviewer.
+A configurable LLM judge (separate model from the coordinator) evaluates content that
+passes Stage 1. This first version has ONE responsibility: detect **audience leaks** —
+internal monologue, system/agent status, or side-channel notes ("To the CEO: ...")
+that should not be sent to a mixed audience. It returns a binary verdict
+`{leak: true|false}`.
 
-Currently a no-op that always passes. The interface is defined; implementation is deferred.
+- **Recipient awareness.** The judge reasons over the full recipient set (To + CC). Each
+  recipient is tagged `isPrincipal` structurally (matches one of the principal's verified
+  channel identities — never the free-text contact role).
+- **Skip rule.** The judge is skipped when the principal is the SOLE recipient (a private
+  channel where internal language is permitted). Principal + third parties → judge runs.
+- **Model.** Configurable via `filter.llmJudge.model` (default `claude-haiku-4-5`).
+  Operators are strongly encouraged to use a different vendor/family than the agent tiers
+  so an attack crafted for the coordinator cannot also fool the reviewer.
+- **Failure handling** (`filter.llmJudge.failMode`, default `split`): a judge that is
+  unreachable (timeout / API error) fails open (message delivered, Stage-1-only); a live
+  model that returns an unparseable verdict fails closed (blocked). `open`/`closed` force
+  uniform behavior.
+
+Tone alignment and persona consistency are deferred to a follow-up; the judge prompt can be
+extended to cover them without further plumbing changes.
 
 **When blocked:** the outbound message is dropped entirely (no partial send), an `outbound.blocked`
 audit event is published, and the CEO receives an opaque notification containing only a block ID
@@ -130,7 +146,7 @@ without cross-channel confirmation.
 | `OutboundGateway` class — single chokepoint for all external messages | Done |
 | Blocked contact check in gateway pipeline | Done |
 | Content filter Stage 1 — deterministic rules (system prompt fragments, internal field names, secret patterns, contact data leakage) | Done |
-| Content filter Stage 2 — LLM-as-judge | Not Done — stub (always passes) |
+| Content filter Stage 2 — LLM-as-judge (audience-leak detection) | Done |
 | `outbound.blocked` audit event published on filter block | Done |
 | Caller verification gate — elevated-skill check in execution layer | Partial — role-based gate exists; cross-channel challenge/response flow not built |
 | Display name sanitization — storage-time sanitization of inbound display names | Done |
@@ -149,7 +165,7 @@ without cross-channel confirmation.
 
 ## What's Not Here Yet
 
-- LLM-as-judge implementation (Stage 2 of content filter)
+- Stage 2 follow-up: tone alignment and persona consistency checks (the judge prompt can be extended without further plumbing changes)
 - CEO review-and-approve / edit / discard flow for blocked messages
 - Web UI for reviewing `outbound.blocked` events
 - Outbound rate limiting per recipient
