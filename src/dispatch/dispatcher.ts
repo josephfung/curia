@@ -946,6 +946,13 @@ export class Dispatcher {
     // Reply-lock: if a human-facing reply skill (email-reply, email-send) already fired
     // successfully during this task, suppress the outbound.message to prevent a duplicate
     // send. Emit outbound.suppressed_duplicate for the audit trail. See #847.
+    //
+    // Interaction with compose-reply sidebar: when humanReplySent is true, the entire
+    // handler returns early — both the external outbound AND any sidebar are suppressed.
+    // This is intentional: if email-reply/email-send already sent the external message,
+    // the compose-reply flow was abandoned mid-task, and the sidebar (which is the
+    // principal status update for that same send) is no longer relevant. If the principal
+    // needs an update, the completed skill that fired humanReplySent should handle it.
     if (routing.humanReplySent) {
       this.logger.info(
         { agentId: event.payload.agentId, conversationId: routing.conversationId, routingTaskId: event.parentEventId },
@@ -984,6 +991,11 @@ export class Dispatcher {
     // compose-reply sidebar split: if the agent partitioned the reply into an external body
     // and a principal-only update, publish a second outbound.message to the principal.
     // Each outbound goes through OutboundGateway and the content filter independently.
+    //
+    // Note on ordering: the primary outbound was already published above. A failure in the
+    // sidebar publish means the external message went out but the principal update is lost.
+    // We wrap in try/catch so the failure is logged with the sidebar content (for manual
+    // recovery) rather than propagating and aborting the checkpoint scheduling below.
     if (event.payload.sidebar) {
       if (this.principalRouting) {
         const sidebarOutbound = createOutboundMessage({
@@ -995,15 +1007,32 @@ export class Dispatcher {
           parentEventId: event.id,
           taskEventId: event.parentEventId ?? undefined,
         });
-        await this.bus.publish('dispatch', sidebarOutbound);
-        this.logger.info(
-          { agentId: event.payload.agentId, conversationId: routing.conversationId },
-          'Dispatcher: published sidebar outbound to principal',
-        );
+        try {
+          await this.bus.publish('dispatch', sidebarOutbound);
+          this.logger.info(
+            { agentId: event.payload.agentId, conversationId: routing.conversationId },
+            'Dispatcher: published sidebar outbound to principal',
+          );
+        } catch (err) {
+          // Non-fatal for the primary send (already succeeded), but the principal did not
+          // receive their status update. Log at error with the sidebar content truncated so
+          // an operator can manually reconstruct and deliver it.
+          this.logger.error(
+            {
+              err,
+              agentId: event.payload.agentId,
+              conversationId: routing.conversationId,
+              sidebarContentPreview: event.payload.sidebar.content.slice(0, 200),
+            },
+            'Dispatcher: failed to publish sidebar outbound to principal — principal update was NOT delivered',
+          );
+        }
       } else {
-        this.logger.warn(
+        // Misconfiguration: compose-reply requires principalRouting to be useful.
+        // Log at error (not warn) because a principal-directed message has been permanently dropped.
+        this.logger.error(
           { agentId: event.payload.agentId, conversationId: routing.conversationId },
-          'Dispatcher: agent.response has sidebar but no principalRouting configured — sidebar dropped',
+          'Dispatcher: agent.response has sidebar but no principalRouting configured — sidebar dropped permanently',
         );
       }
     }

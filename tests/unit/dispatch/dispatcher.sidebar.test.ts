@@ -195,4 +195,40 @@ describe('Dispatcher sidebar split', () => {
     expect(outbounds).toHaveLength(1);
     expect(outbounds[0]!.payload.content).toBe('External reply.');
   });
+
+  it('suppresses both the external outbound and the sidebar when reply-lock is active', async () => {
+    // When humanReplySent=true (email-reply or email-send already fired), the entire
+    // handleAgentResponse returns early — neither the external outbound nor the sidebar
+    // is sent. The sidebar is intentionally dropped because the compose-reply flow was
+    // abandoned mid-task (email-reply already sent the external message independently).
+    const principalRouting = { channelId: 'email', accountId: 'curia', recipientId: 'ceo@example.com' };
+    const { dispatcher, subscribeHandlers, publishedEvents } = makeStubs(principalRouting);
+    dispatcher.register();
+
+    // Seed routing with humanReplySent = true
+    (dispatcher as unknown as {
+      taskRouting: Map<string, {
+        channelId: string;
+        conversationId: string;
+        senderId: string;
+        accountId?: string;
+        humanReplySent: boolean;
+      }>;
+    }).taskRouting.set('task-lock', {
+      channelId: 'email',
+      conversationId: 'email:thread-abc',
+      senderId: 'armin@example.com',
+      humanReplySent: true,
+    });
+
+    await fireAgentResponse(subscribeHandlers, {
+      taskEventId: 'task-lock',
+      content: 'External reply.',
+      sidebar: { audience: 'principal', content: 'Sidebar that should NOT be sent.' },
+    });
+
+    const outbounds = publishedEvents.filter(isOutboundMessage);
+    // Reply-lock: both external and sidebar suppressed
+    expect(outbounds).toHaveLength(0);
+  });
 });

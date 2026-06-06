@@ -944,10 +944,23 @@ export class AgentRuntime {
           // internal for the short-circuit exit. Only captures the first call;
           // subsequent compose-reply calls in the same turn are ignored.
           if (toolCall.name === 'compose-reply' && result.success && !pendingComposeReply) {
+            // The ComposeReplyHandler always returns a plain object — JSON.parse is only
+            // needed if the execution layer serialized the result to a string. Isolate
+            // the parse step so a JSON syntax error is distinguishable from a type error
+            // in the detection logic below.
+            let crData: unknown;
             try {
-              const crData = typeof result.data === 'string'
+              crData = typeof result.data === 'string'
                 ? JSON.parse(result.data) as unknown
                 : result.data;
+            } catch (err) {
+              logger.error(
+                { err, agentId, conversationId },
+                'compose-reply: failed to parse skill result — skipping short-circuit; tool loop continues',
+              );
+              crData = null;
+            }
+            if (crData !== null) {
               const typed = crData as { external?: unknown; internal?: unknown };
               if (typed?.external && typeof typed.external === 'string') {
                 pendingComposeReply = {
@@ -955,10 +968,11 @@ export class AgentRuntime {
                   internal: typeof typed.internal === 'string' ? typed.internal : undefined,
                 };
               } else {
-                logger.warn({ agentId }, 'compose-reply result missing valid external field — skipping short-circuit');
+                logger.warn(
+                  { agentId, conversationId },
+                  'compose-reply result missing valid external field — skipping short-circuit; tool loop continues',
+                );
               }
-            } catch (err) {
-              logger.warn({ err, agentId }, 'Failed to parse compose-reply result — skipping short-circuit');
             }
           }
 
@@ -1068,10 +1082,12 @@ export class AgentRuntime {
       // compose-reply short-circuit: emit a structured agent.response that carries
       // external text as `content` and optional principal update as `sidebar`.
       // The dispatcher routes each piece as a separate outbound message.
+      //
+      // Ordering: publish to the bus FIRST, then persist to memory. If bus.publish
+      // throws, memory is never written — the task fails visibly and no phantom
+      // assistant turn is recorded for a message that never left. The reverse order
+      // (memory first) would corrupt conversation state if publish fails.
       if (pendingComposeReply) {
-        if (memory) {
-          await memory.addTurn(conversationId, agentId, { role: 'assistant', content: pendingComposeReply.external });
-        }
         const composeResponse = createAgentResponse({
           agentId,
           conversationId,
@@ -1083,6 +1099,9 @@ export class AgentRuntime {
           parentEventId: taskEvent.id,
         });
         await bus.publish('agent', composeResponse);
+        if (memory) {
+          await memory.addTurn(conversationId, agentId, { role: 'assistant', content: pendingComposeReply.external });
+        }
         logger.info(
           { agentId, conversationId, hasSidebar: pendingComposeReply.internal !== undefined },
           'compose-reply short-circuit: emitting structured agent.response',
