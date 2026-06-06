@@ -72,6 +72,12 @@ Two patterns that pass local checks but fail CI regularly:
 
 If you need to approve new build scripts interactively, use `pnpm approve-builds` — do not hand-edit this file.
 
+### Dependency overrides live in pnpm-workspace.yaml — NOT package.json
+
+**pnpm v10+ reads the `overrides` map only from `pnpm-workspace.yaml`. A `pnpm.overrides` block in `package.json` is silently ignored** — no warning, no error, it just does nothing. (We learned this the hard way: five security pins sat dead in `package.json` and only "worked" because natural resolution happened to satisfy their floors.) The same applies to other `package.json#pnpm.*` settings such as `onlyBuiltDependencies`, which is superseded by `allowBuilds` here.
+
+When you need to pin a transitive dependency (e.g. to clear a CVE), add it to the `overrides:` block in `pnpm-workspace.yaml`, run `pnpm install`, and confirm the change actually took effect: the regenerated lockfile must contain a top-level `overrides:` section and `pnpm why <pkg>` must show the forced version. If `pnpm install` reports "Already up to date" after editing an override, pnpm did not see your change — you almost certainly edited the wrong file.
+
 ## Key Files
 
 - `src/index.ts` — bootstrap orchestrator, wires everything in dependency order
