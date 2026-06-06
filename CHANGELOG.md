@@ -14,6 +14,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 ## [Unreleased]
 
 ### Added
+- **OpenSSF Scorecard** — new weekly CI workflow evaluates supply-chain security posture across ~18 checks; results publish to GitHub Security tab (SARIF) and securityscorecards.dev. Badge added to README. Closes #565.
 - **`ceo-inbox-mark-starred`** — new skill that stars (or unstars) a CEO inbox message via the Nylas starred field; mirrors the pattern of `ceo-inbox-mark-read`.
 - **`⚠️ Stuck` label** — ceo-inbox now applies this label when triage cannot complete for a message (unrecognised classification value, required skill failure, or error budget boundary hit), making failures visible in the Gmail sidebar.
 
