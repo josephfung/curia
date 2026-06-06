@@ -151,6 +151,40 @@ describe('OutboundGateway', () => {
     expect(mocks.nylasClient.sendMessage).toHaveBeenCalledOnce();
   });
 
+  it('passes the structural recipient set (To + CC) to the content filter', async () => {
+    // Unknown external recipient + the principal on CC. The filter must receive the
+    // merged To+CC recipient set with isPrincipal computed structurally (via the
+    // principal's verified channel identities), not from any contact role field.
+    (mocks.contactService.resolveByChannelIdentity as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+
+    const gateway = new OutboundGateway({
+      nylasClients: new Map([['curia', mocks.nylasClient]]),
+      contactService: mocks.contactService,
+      contentFilter: mocks.contentFilter,
+      bus: mocks.bus,
+      principalIdentities: [makePrincipalIdentity('ceo@example.com')],
+      logger: mocks.logger,
+    });
+
+    await gateway.send({
+      channel: 'email',
+      to: 'armin@external.com',
+      cc: ['ceo@example.com'],
+      subject: 's',
+      body: 'hello',
+    });
+
+    const checkSpy = mocks.contentFilter.check as ReturnType<typeof vi.fn>;
+    expect(checkSpy).toHaveBeenCalledOnce();
+    const arg = checkSpy.mock.calls[0]![0];
+    expect(arg.principalIncluded).toBe(true);
+    expect(arg.principalIsSoleRecipient).toBe(false);
+    expect(arg.recipients).toEqual([
+      { email: 'armin@external.com', isPrincipal: false },
+      { email: 'ceo@example.com', isPrincipal: true },
+    ]);
+  });
+
   it('allows sends when contact does not exist (null) and proceeds normally', async () => {
     // resolveByChannelIdentity returns null — unknown contact, not blocked
     (mocks.contactService.resolveByChannelIdentity as ReturnType<typeof vi.fn>).mockResolvedValue(null);
@@ -423,6 +457,9 @@ describe('OutboundGateway', () => {
         conversationId: '',
         channelId: baseRequest.channel,
         recipientTrustLevel: null,
+        recipients: [{ email: baseRequest.to, isPrincipal: false }],
+        principalIncluded: false,
+        principalIsSoleRecipient: false,
       });
     });
 
@@ -463,6 +500,9 @@ describe('OutboundGateway', () => {
         conversationId: '',
         channelId: baseRequest.channel,
         recipientTrustLevel: 'high',
+        recipients: [{ email: baseRequest.to, isPrincipal: false }],
+        principalIncluded: false,
+        principalIsSoleRecipient: false,
       });
     });
   });
