@@ -111,6 +111,7 @@ generate_secrets() {
     DB_PASSWORD=$(openssl rand -hex 32)
     API_TOKEN=$(openssl rand -hex 32)
     WEB_APP_BOOTSTRAP_SECRET=$(openssl rand -hex 32)
+    SECRET_ENCRYPTION_KEY=$(openssl rand -base64 32)
     # DATABASE_URL is consumed by host-side `pnpm migrate` (against the postgres
     # container's published port), so the port here must match POSTGRES_PORT.
     # When unset, both default to 5432. Keep this in lockstep with the postgres
@@ -130,6 +131,7 @@ write_env() {
         -e "s|^ANTHROPIC_API_KEY=.*|ANTHROPIC_API_KEY=${anthropic_key}|" \
         -e "s|^API_TOKEN=.*|API_TOKEN=${API_TOKEN}|" \
         -e "s|^WEB_APP_BOOTSTRAP_SECRET=.*|WEB_APP_BOOTSTRAP_SECRET=${WEB_APP_BOOTSTRAP_SECRET}|" \
+        -e "s|^SECRET_ENCRYPTION_KEY=.*|SECRET_ENCRYPTION_KEY=${SECRET_ENCRYPTION_KEY}|" \
         "$ENV_EXAMPLE" > "$ENV_FILE"
 }
 
