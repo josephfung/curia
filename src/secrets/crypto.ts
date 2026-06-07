@@ -25,6 +25,13 @@ export function encrypt(plaintext: string, key: Buffer): { ciphertext: string; i
 /** Decrypt. Throws on a wrong key or tampered ciphertext (GCM auth failure) — never returns garbage. */
 export function decrypt(ciphertext: string, iv: string, key: Buffer): string {
   const data = Buffer.from(ciphertext, 'base64');
+  // Guard against corrupt DB rows that are too short to contain a valid auth tag.
+  // Without this, subarray() silently wraps and Node throws a confusing ERR_CRYPTO_INVALID_AUTH_TAG.
+  if (data.length < AUTH_TAG_BYTES) {
+    throw new Error(
+      `Ciphertext is too short (${data.length} bytes) to contain a valid GCM auth tag`,
+    );
+  }
   // Split the appended auth tag off the end.
   const authTag = data.subarray(data.length - AUTH_TAG_BYTES);
   const encrypted = data.subarray(0, data.length - AUTH_TAG_BYTES);
