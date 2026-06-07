@@ -461,6 +461,9 @@ interface SecretAccessedPayload {
   secretName: string;     // the declared key name — never the resolved value
   agentId?: string;       // agent that invoked the skill
   taskEventId?: string;   // causal chain: the agent.task that triggered this invocation
+  // Where the value was resolved from. Optional for backward compatibility; lets the
+  // audit trail show migration progress as secrets move from env to the vault (#542).
+  source?: 'vault' | 'env';
 }
 
 // AutonomySkillBlockedPayload — published by the execution layer when a skill
