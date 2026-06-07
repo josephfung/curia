@@ -1182,4 +1182,27 @@ describe('ctx.secret resolution', () => {
     await layer.invoke('missing-skill', {});
     expect(caught).toMatch(/declared but not set/);
   });
+
+  it('defers a vault read error to access time (invocation does not abort)', async () => {
+    const registry = new SkillRegistry();
+    let caughtMessage: string | undefined;
+    const handler: SkillHandler = {
+      execute: vi.fn(async (ctx): Promise<SkillResult> => {
+        try { (ctx as SkillContext).secret('tavily_api_key'); }
+        catch (e) { caughtMessage = (e as Error).message; }
+        return { success: true, data: 'ok' };
+      }),
+    };
+    registry.register(makeSecretManifest('vault-err-skill', 'tavily_api_key'), handler);
+    const secretsService = {
+      get: vi.fn().mockRejectedValue(new Error('DB connection refused')),
+    } as unknown as SecretsService;
+    const layer = new ExecutionLayer(registry, logger, { bus: makeBus(), secretsService });
+
+    // invoke() must not throw — the vault error is deferred
+    const result = await layer.invoke('vault-err-skill', {});
+    expect(result.success).toBe(true);
+    // The deferred error surfaces when the handler calls ctx.secret()
+    expect(caughtMessage).toMatch(/DB connection refused/);
+  });
 });
