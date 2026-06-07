@@ -18,6 +18,7 @@ import type { EventBus } from '../bus/bus.js';
 import type { OutboundGateway } from './outbound-gateway.js';
 import type { SchedulerService } from '../scheduler/scheduler-service.js';
 import type { AutonomyService, AutonomyConfig } from '../autonomy/autonomy-service.js';
+import type { SecretsService } from '../secrets/secrets-service.js';
 import type { ApprovalTriggerService, ApprovalRequestResult } from '../autonomy/approval-trigger.js';
 
 const logger = pino({ level: 'silent' });
@@ -1070,5 +1071,115 @@ describe('skillSearch filters by allowed_callers', () => {
     const names = searchResults.map(r => r.name);
     expect(names).toContain('public-skill');
     expect(names).not.toContain('restricted-skill');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// secret resolution: vault-first with env fallback + audit source tag
+// ---------------------------------------------------------------------------
+describe('ctx.secret resolution', () => {
+  // Manifest that declares a secret and a handler that reads it.
+  function makeSecretManifest(name: string, secretKey: string): SkillManifest {
+    return { ...makeManifest(name), secrets: [secretKey] };
+  }
+  function makeSecretReadingHandler(secretKey: string): { handler: SkillHandler; read: () => string | undefined } {
+    let read: string | undefined;
+    const handler: SkillHandler = {
+      execute: vi.fn(async (ctx): Promise<SkillResult> => {
+        read = (ctx as SkillContext).secret(secretKey);
+        return { success: true, data: 'ok' };
+      }),
+    };
+    return { handler, read: () => read };
+  }
+  // publish must return a resolved promise — the closure calls .catch() on it.
+  function makeBus(): EventBus {
+    return { publish: vi.fn().mockResolvedValue(undefined) } as unknown as EventBus;
+  }
+
+  it('reads from the vault when present and tags source=vault', async () => {
+    const registry = new SkillRegistry();
+    const { handler, read } = makeSecretReadingHandler('tavily_api_key');
+    registry.register(makeSecretManifest('vault-skill', 'tavily_api_key'), handler);
+    const secretsService = { get: vi.fn().mockResolvedValue('from-vault') } as unknown as SecretsService;
+    const bus = makeBus();
+    const layer = new ExecutionLayer(registry, logger, { bus, secretsService });
+
+    const result = await layer.invoke('vault-skill', {}, undefined, { agentId: 'agent-1' });
+
+    expect(result.success).toBe(true);
+    expect(read()).toBe('from-vault');
+    const event = (bus.publish as ReturnType<typeof vi.fn>).mock.calls
+      .map(c => c[1]).find(e => e.type === 'secret.accessed');
+    expect(event.payload.source).toBe('vault');
+  });
+
+  it('falls back to env when the vault has no entry and tags source=env', async () => {
+    const registry = new SkillRegistry();
+    const { handler, read } = makeSecretReadingHandler('tavily_api_key');
+    registry.register(makeSecretManifest('env-skill', 'tavily_api_key'), handler);
+    const secretsService = { get: vi.fn().mockResolvedValue(null) } as unknown as SecretsService;
+    const bus = makeBus();
+    process.env.TAVILY_API_KEY = 'from-env';
+    try {
+      const layer = new ExecutionLayer(registry, logger, { bus, secretsService });
+      const result = await layer.invoke('env-skill', {});
+      expect(result.success).toBe(true);
+      expect(read()).toBe('from-env');
+      const event = (bus.publish as ReturnType<typeof vi.fn>).mock.calls
+        .map(c => c[1]).find(e => e.type === 'secret.accessed');
+      expect(event.payload.source).toBe('env');
+    } finally {
+      delete process.env.TAVILY_API_KEY;
+    }
+  });
+
+  it('works with no secretsService wired (env-only, current behavior)', async () => {
+    const registry = new SkillRegistry();
+    const { handler, read } = makeSecretReadingHandler('tavily_api_key');
+    registry.register(makeSecretManifest('legacy-skill', 'tavily_api_key'), handler);
+    process.env.TAVILY_API_KEY = 'legacy-env';
+    try {
+      const layer = new ExecutionLayer(registry, logger, { bus: makeBus() });
+      const result = await layer.invoke('legacy-skill', {});
+      expect(result.success).toBe(true);
+      expect(read()).toBe('legacy-env');
+    } finally {
+      delete process.env.TAVILY_API_KEY;
+    }
+  });
+
+  it('throws (in-handler) when an undeclared secret is requested', async () => {
+    const registry = new SkillRegistry();
+    let caught: string | undefined;
+    const handler: SkillHandler = {
+      execute: vi.fn(async (ctx): Promise<SkillResult> => {
+        try { (ctx as SkillContext).secret('not_declared'); }
+        catch (e) { caught = (e as Error).message; }
+        return { success: true, data: 'ok' };
+      }),
+    };
+    registry.register(makeSecretManifest('decl-skill', 'tavily_api_key'), handler);
+    const layer = new ExecutionLayer(registry, logger, { bus: makeBus() });
+    await layer.invoke('decl-skill', {});
+    expect(caught).toMatch(/not declared in the manifest/);
+  });
+
+  it('throws (in-handler) when a declared secret is set nowhere', async () => {
+    const registry = new SkillRegistry();
+    let caught: string | undefined;
+    const handler: SkillHandler = {
+      execute: vi.fn(async (ctx): Promise<SkillResult> => {
+        try { (ctx as SkillContext).secret('tavily_api_key'); }
+        catch (e) { caught = (e as Error).message; }
+        return { success: true, data: 'ok' };
+      }),
+    };
+    registry.register(makeSecretManifest('missing-skill', 'tavily_api_key'), handler);
+    const secretsService = { get: vi.fn().mockResolvedValue(null) } as unknown as SecretsService;
+    delete process.env.TAVILY_API_KEY;
+    const layer = new ExecutionLayer(registry, logger, { bus: makeBus(), secretsService });
+    await layer.invoke('missing-skill', {});
+    expect(caught).toMatch(/declared but not set/);
   });
 });

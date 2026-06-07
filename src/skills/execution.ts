@@ -79,6 +79,7 @@ export class ExecutionLayer {
   private nylasCalendarClient?: NylasCalendarClient;
   private entityContextAssembler?: EntityContextAssembler;
   private autonomyService?: AutonomyService;
+  private secretsService?: import('../secrets/secrets-service.js').SecretsService;
   private executiveProfileService?: import('../executive/service.js').ExecutiveProfileService;
   private officeIdentityService?: import('../identity/service.js').OfficeIdentityService;
   private browserService?: BrowserService;
@@ -113,6 +114,7 @@ export class ExecutionLayer {
     nylasCalendarClient?: NylasCalendarClient;
     entityContextAssembler?: EntityContextAssembler;
     autonomyService?: AutonomyService;
+    secretsService?: import('../secrets/secrets-service.js').SecretsService;
     executiveProfileService?: import('../executive/service.js').ExecutiveProfileService;
     officeIdentityService?: import('../identity/service.js').OfficeIdentityService;
     browserService?: BrowserService;
@@ -143,6 +145,7 @@ export class ExecutionLayer {
     this.nylasCalendarClient = options?.nylasCalendarClient;
     this.entityContextAssembler = options?.entityContextAssembler;
     this.autonomyService = options?.autonomyService;
+    this.secretsService = options?.secretsService;
     this.executiveProfileService = options?.executiveProfileService;
     this.officeIdentityService = options?.officeIdentityService;
     this.browserService = options?.browserService;
@@ -488,20 +491,51 @@ export class ExecutionLayer {
     // Build the sandboxed context — secret access is restricted to
     // only the secrets declared in the skill's manifest
     const declaredSecrets = new Set(manifest.secrets);
+
+    // Pre-warm declared secrets into a synchronous-access map so ctx.secret() can
+    // remain synchronous while the underlying vault read is async (#542). Vault
+    // takes precedence; missing entries fall back to process.env during the
+    // migration period. A vault read error is captured and re-thrown only if the
+    // skill actually accesses that secret — eagerly throwing here would abort the
+    // invocation over a declared-but-unused secret, changing the lazy-throw contract.
+    const secretCache = new Map<string, { value: string; source: 'vault' | 'env' } | { error: Error }>();
+    for (const name of manifest.secrets) {
+      try {
+        const vaultValue = this.secretsService ? await this.secretsService.get(name) : null;
+        if (vaultValue !== null) {
+          secretCache.set(name, { value: vaultValue, source: 'vault' });
+          continue;
+        }
+      } catch (err) {
+        skillLogger.error({ err, secretName: name }, 'vault read failed for declared secret; deferring error to access time');
+        secretCache.set(name, { error: err instanceof Error ? err : new Error(String(err)) });
+        continue;
+      }
+      // Env vars are uppercase by convention; manifest keys are lowercase.
+      // e.g. manifest "tavily_api_key" → reads process.env.TAVILY_API_KEY
+      const envValue = process.env[name.toUpperCase()];
+      if (envValue) {
+        secretCache.set(name, { value: envValue, source: 'env' });
+      }
+      // Missing in both vault and env → not added; ctx.secret() throws lazily on access.
+    }
+
     const ctx: SkillContext = {
       input,
       secret: (name: string): string => {
         if (!declaredSecrets.has(name)) {
           throw new Error(`Secret '${name}' is not declared in the manifest for skill '${skillName}'`);
         }
-        // Env vars are uppercase by convention; manifest keys are lowercase.
-        // e.g. manifest "tavily_api_key" → reads process.env.TAVILY_API_KEY
-        const value = process.env[name.toUpperCase()];
-        if (!value) {
+        const entry = secretCache.get(name);
+        if (!entry) {
+          // Declared but resolved nowhere (vault + env both empty) — unchanged message.
           throw new Error(`Secret '${name}' is declared but not set in the environment`);
         }
+        if ('error' in entry) {
+          throw entry.error; // deferred vault read failure
+        }
         // Audit log — fire-and-forget so ctx.secret() stays synchronous.
-        // Records skill name, secret name, and causal IDs — never the secret value.
+        // Records skill name, secret name, source, and causal IDs — never the secret value.
         // Falls back to debug-only logging if the bus is not wired (e.g. test environments).
         if (this.bus) {
           this.bus.publish('execution', createSecretAccessed({
@@ -509,6 +543,7 @@ export class ExecutionLayer {
             secretName: name,
             agentId: options?.agentId,
             taskEventId: options?.taskEventId,
+            source: entry.source,
           })).catch((err) => {
             // Error (not warn) — a dropped audit event on a security-critical path must
             // surface at error level so it reaches SIEM/alerting dashboards. The debug
@@ -519,8 +554,8 @@ export class ExecutionLayer {
             );
           });
         }
-        skillLogger.debug({ secretName: name }, 'Secret accessed');
-        return value;
+        skillLogger.debug({ secretName: name, source: entry.source }, 'Secret accessed');
+        return entry.value;
       },
       log: skillLogger,
       agentPersona: this.agentPersona,
