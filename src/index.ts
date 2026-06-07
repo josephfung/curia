@@ -229,6 +229,7 @@ async function main(): Promise<void> {
   } catch (err) {
     logger.fatal({ err }, 'SECRET_ENCRYPTION_KEY is missing or invalid');
     process.exit(1);
+    throw new Error('unreachable'); // guards against process.exit mocks in test environments
   }
   const secretsService = new SecretsService(pool, secretEncryptionKey, logger);
 

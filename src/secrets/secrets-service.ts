@@ -71,7 +71,7 @@ export class SecretsService {
     await this.pool.query(
       `INSERT INTO secrets (name, value_format, encrypted_value, iv, updated_at)
        VALUES ($1, $2, $3, $4, now())
-      // created_at is set once on INSERT (DEFAULT now()) and never modified on conflict.
+      -- created_at is set once on INSERT (DEFAULT now()) and never modified on conflict.
        ON CONFLICT (name) DO UPDATE
          SET value_format = EXCLUDED.value_format,
              encrypted_value = EXCLUDED.encrypted_value,
