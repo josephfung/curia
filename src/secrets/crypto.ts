@@ -35,11 +35,11 @@ export function decrypt(ciphertext: string, iv: string, key: Buffer): string {
   // Split the appended auth tag off the end.
   const authTag = data.subarray(data.length - AUTH_TAG_BYTES);
   const encrypted = data.subarray(0, data.length - AUTH_TAG_BYTES);
-  // nosemgrep: javascript.node-crypto.security.gcm-no-tag-length.gcm-no-tag-length
   // AES-256-GCM enforces a fixed 128-bit (16-byte) auth tag — setAuthTagLength()
   // does not exist on DecipherGCM; it is only relevant for CCM/OCB modes with
   // variable tag lengths. Truncated-tag attacks are already prevented by the
   // AUTH_TAG_BYTES length check above and the fixed split of `data.subarray()`.
+  // nosemgrep: javascript.node-crypto.security.gcm-no-tag-length.gcm-no-tag-length
   const decipher = createDecipheriv(ALGORITHM, key, Buffer.from(iv, 'base64'));
   decipher.setAuthTag(authTag);
   return Buffer.concat([decipher.update(encrypted), decipher.final()]).toString('utf8');
