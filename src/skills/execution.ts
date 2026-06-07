@@ -79,6 +79,8 @@ export class ExecutionLayer {
   private nylasCalendarClient?: NylasCalendarClient;
   private entityContextAssembler?: EntityContextAssembler;
   private autonomyService?: AutonomyService;
+  // secretsService is NOT in capabilityServices — it is infrastructure accessed
+  // through ctx.secret(), not a capability granted directly to skill handlers.
   private secretsService?: import('../secrets/secrets-service.js').SecretsService;
   private executiveProfileService?: import('../executive/service.js').ExecutiveProfileService;
   private officeIdentityService?: import('../identity/service.js').OfficeIdentityService;
@@ -498,26 +500,35 @@ export class ExecutionLayer {
     // migration period. A vault read error is captured and re-thrown only if the
     // skill actually accesses that secret — eagerly throwing here would abort the
     // invocation over a declared-but-unused secret, changing the lazy-throw contract.
-    const secretCache = new Map<string, { value: string; source: 'vault' | 'env' } | { error: Error }>();
-    for (const name of manifest.secrets) {
-      try {
-        const vaultValue = this.secretsService ? await this.secretsService.get(name) : null;
-        if (vaultValue !== null) {
-          secretCache.set(name, { value: vaultValue, source: 'vault' });
-          continue;
+    type SecretCacheEntry = { value: string; source: 'vault' | 'env' } | { error: Error };
+    const secretCache = new Map<string, SecretCacheEntry>();
+
+    // Resolve all declared secrets concurrently — vault first, then env fallback.
+    // Vault errors are deferred (stored as { error }) so a failing vault read does
+    // not abort the invocation unless the skill actually accesses that secret.
+    const resolvedSecrets = await Promise.all(
+      manifest.secrets.map(async (name): Promise<[string, SecretCacheEntry] | null> => {
+        try {
+          const vaultValue = this.secretsService ? await this.secretsService.get(name) : null;
+          if (vaultValue !== null) {
+            return [name, { value: vaultValue, source: 'vault' }];
+          }
+        } catch (err) {
+          skillLogger.error({ err, secretName: name }, 'vault read failed for declared secret; deferring error to access time');
+          return [name, { error: err instanceof Error ? err : new Error(String(err)) }];
         }
-      } catch (err) {
-        skillLogger.error({ err, secretName: name }, 'vault read failed for declared secret; deferring error to access time');
-        secretCache.set(name, { error: err instanceof Error ? err : new Error(String(err)) });
-        continue;
-      }
-      // Env vars are uppercase by convention; manifest keys are lowercase.
-      // e.g. manifest "tavily_api_key" → reads process.env.TAVILY_API_KEY
-      const envValue = process.env[name.toUpperCase()];
-      if (envValue) {
-        secretCache.set(name, { value: envValue, source: 'env' });
-      }
-      // Missing in both vault and env → not added; ctx.secret() throws lazily on access.
+        // Env vars are uppercase by convention; manifest keys are lowercase.
+        // e.g. manifest "tavily_api_key" → reads process.env.TAVILY_API_KEY
+        const envValue = process.env[name.toUpperCase()];
+        if (envValue) {
+          return [name, { value: envValue, source: 'env' }];
+        }
+        // Missing in both vault and env → null; ctx.secret() throws lazily on access.
+        return null;
+      }),
+    );
+    for (const entry of resolvedSecrets) {
+      if (entry) secretCache.set(entry[0], entry[1]);
     }
 
     const ctx: SkillContext = {
