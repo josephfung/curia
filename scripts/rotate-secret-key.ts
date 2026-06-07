@@ -46,7 +46,13 @@ async function main(): Promise<void> {
     await client.query('COMMIT');
     logger.info({ count: rows.length }, 'Key rotation complete. Update SECRET_ENCRYPTION_KEY to the new value and restart.');
   } catch (err) {
-    await client.query('ROLLBACK');
+    try {
+      await client.query('ROLLBACK');
+    } catch (rollbackErr) {
+      // Log both errors: the rollback failure and the root cause that triggered it.
+      // If we only throw rollbackErr, the original error (and which row failed) is lost.
+      logger.error({ rollbackErr, originalErr: err }, 'ROLLBACK failed after rotation error');
+    }
     throw err;
   } finally {
     client.release();

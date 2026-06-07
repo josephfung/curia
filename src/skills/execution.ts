@@ -514,8 +514,21 @@ export class ExecutionLayer {
             return [name, { value: vaultValue, source: 'vault' }];
           }
         } catch (err) {
-          skillLogger.error({ err, secretName: name }, 'vault read failed for declared secret; deferring error to access time');
-          return [name, { error: err instanceof Error ? err : new Error(String(err)) }];
+          skillLogger.error(
+            { err: { message: err instanceof Error ? err.message : String(err), code: (err as NodeJS.ErrnoException).code }, secretName: name },
+            'vault read failed for declared secret; deferring error to access time',
+          );
+          // Wrap with context so the rethrown error names the vault and secret,
+          // not just the raw DB/crypto error message.
+          const contextualError = new Error(
+            `Vault read failed for secret '${name}': ${err instanceof Error ? err.message : String(err)}`,
+            { cause: err instanceof Error ? err : new Error(String(err)) },
+          );
+          // Intentionally not falling through to the env fallback — a vault error
+          // surfaces loudly so the operator fixes it rather than silently masking
+          // the outage with the env value. The env fallback only applies when the
+          // vault has no entry for the secret, not when the vault is unreachable.
+          return [name, { error: contextualError }];
         }
         // Env vars are uppercase by convention; manifest keys are lowercase.
         // e.g. manifest "tavily_api_key" → reads process.env.TAVILY_API_KEY
