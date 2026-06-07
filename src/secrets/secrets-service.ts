@@ -44,6 +44,9 @@ export class SecretsService {
     if (row.value_format !== 'json') {
       throw new Error(`Secret '${name}' has value_format '${row.value_format}', expected 'json'`);
     }
+    // T is trusted by the caller — no runtime validation is performed here.
+    // Callers storing structured secrets must validate the shape after retrieval
+    // (e.g. with Zod or an explicit type guard) if they need a runtime guarantee.
     return JSON.parse(decrypt(row.encrypted_value, row.iv, this.key)) as T;
   }
 
@@ -68,6 +71,7 @@ export class SecretsService {
     await this.pool.query(
       `INSERT INTO secrets (name, value_format, encrypted_value, iv, updated_at)
        VALUES ($1, $2, $3, $4, now())
+      // created_at is set once on INSERT (DEFAULT now()) and never modified on conflict.
        ON CONFLICT (name) DO UPDATE
          SET value_format = EXCLUDED.value_format,
              encrypted_value = EXCLUDED.encrypted_value,
