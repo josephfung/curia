@@ -29,6 +29,10 @@ describe('encrypt/decrypt', () => {
     expect(() => decrypt(ciphertext, iv, randomBytes(32))).toThrow();
   });
 
+  it('throws on ciphertext shorter than auth tag size', () => {
+    expect(() => decrypt(Buffer.alloc(8).toString('base64'), 'aaaaaaaaaaaaaaaaaa==', KEY)).toThrow(/too short/);
+  });
+
   it('throws on tampered ciphertext (GCM auth failure)', () => {
     const { ciphertext, iv } = encrypt('secret', KEY);
     const raw = Buffer.from(ciphertext, 'base64');
