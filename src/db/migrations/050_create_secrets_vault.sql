@@ -13,6 +13,22 @@ CREATE TABLE secrets (
   updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Trigger to auto-maintain updated_at on any UPDATE, regardless of whether the
+-- caller explicitly sets it (e.g. the key rotation script, admin queries).
+CREATE OR REPLACE FUNCTION secrets_set_updated_at()
+  RETURNS trigger LANGUAGE plpgsql AS $$
+  BEGIN
+    NEW.updated_at = now();
+    RETURN NEW;
+  END;
+$$;
+
+CREATE TRIGGER secrets_updated_at
+  BEFORE UPDATE ON secrets
+  FOR EACH ROW EXECUTE FUNCTION secrets_set_updated_at();
+
 -- Down Migration
 
-DROP TABLE secrets;
+DROP TRIGGER IF EXISTS secrets_updated_at ON secrets;
+DROP FUNCTION IF EXISTS secrets_set_updated_at();
+DROP TABLE IF EXISTS secrets;
