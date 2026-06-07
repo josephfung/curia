@@ -95,6 +95,8 @@ import type { ScoringPassConfig } from './autonomy/scoring-pass.js';
 import { BrowserService } from './browser/browser-service.js';
 import { OfficeIdentityService } from './identity/service.js';
 import { ExecutiveProfileService } from './executive/service.js';
+import { loadEncryptionKey } from './secrets/crypto.js';
+import { SecretsService } from './secrets/secrets-service.js';
 import { SensitivityClassifier } from './memory/sensitivity.js';
 import { DreamEngine } from './memory/dream-engine.js';
 import type { DecayConfig } from './memory/dream-engine.js';
@@ -217,6 +219,18 @@ async function main(): Promise<void> {
     logger.fatal({ err }, 'Database connection failed');
     process.exit(1);
   }
+
+  // Secrets vault — load the master key (fail closed) and construct the service (#542).
+  // A missing/malformed SECRET_ENCRYPTION_KEY is a hard startup failure: the vault is a
+  // core security primitive, so we never boot in a half-initialized, can't-decrypt state.
+  let secretEncryptionKey: Buffer;
+  try {
+    secretEncryptionKey = loadEncryptionKey();
+  } catch (err) {
+    logger.fatal({ err }, 'SECRET_ENCRYPTION_KEY is missing or invalid');
+    process.exit(1);
+  }
+  const secretsService = new SecretsService(pool, secretEncryptionKey, logger);
 
   // Autonomy service — manages the global autonomy score (0–100).
   // Instantiated early (right after DB connect) so it's ready before agents start.
@@ -1321,7 +1335,7 @@ async function main(): Promise<void> {
   // entityContextAssembler enables entity_enrichment pre-enrichment and the
   // entity-context skill. agentContactId enables entity_enrichment default='agent'.
   // infraLlmService provides constrained LLM access (classify/extract) with telemetry.
-  const executionLayer = new ExecutionLayer(skillRegistry, logger, { bus, agentRegistry, contactService, outboundGateway, heldMessages, schedulerService, entityMemory, agentPersona, nylasCalendarClient, entityContextAssembler, agentContactId: agentIdentityContactId, autonomyService, executiveProfileService, officeIdentityService, browserService, bullpenService, approvalTrigger, actionLogRepo, taskRepo, confidencePipeline, tempFileStore, infraLlmService, outboundContextService, timezone: config.timezone, selfEmail: resolvedEmailAccounts[0]?.selfEmail, skillOutputMaxLength: yamlConfig.skillOutput?.maxLength, defaultDelegateTimeoutMs: yamlConfig.delegate?.defaultTimeoutMs });
+  const executionLayer = new ExecutionLayer(skillRegistry, logger, { bus, agentRegistry, contactService, outboundGateway, heldMessages, schedulerService, entityMemory, agentPersona, nylasCalendarClient, entityContextAssembler, agentContactId: agentIdentityContactId, autonomyService, secretsService, executiveProfileService, officeIdentityService, browserService, bullpenService, approvalTrigger, actionLogRepo, taskRepo, confidencePipeline, tempFileStore, infraLlmService, outboundContextService, timezone: config.timezone, selfEmail: resolvedEmailAccounts[0]?.selfEmail, skillOutputMaxLength: yamlConfig.skillOutput?.maxLength, defaultDelegateTimeoutMs: yamlConfig.delegate?.defaultTimeoutMs });
 
   // Two-pass agent registration:
   // Pass 1: Register all agents in the registry so specialistSummary() is complete
