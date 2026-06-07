@@ -24,6 +24,9 @@ ENV_EXAMPLE="$REPO_ROOT/.env.example"
 
 # Global: set by handle_existing_env to control main() flow
 SETUP_MODE="full"  # "full" | "resume"
+# Global: set by handle_existing_env when the vault key should be preserved across
+# a full reset (Postgres data is NOT wiped, so existing encrypted rows must stay readable)
+PRESERVED_ENCRYPTION_KEY=""
 
 # Verifies docker, docker compose, node >= 22, pnpm, and openssl are available.
 # Exits 1 with an install link on the first missing tool.
@@ -111,7 +114,13 @@ generate_secrets() {
     DB_PASSWORD=$(openssl rand -hex 32)
     API_TOKEN=$(openssl rand -hex 32)
     WEB_APP_BOOTSTRAP_SECRET=$(openssl rand -hex 32)
-    SECRET_ENCRYPTION_KEY=$(openssl rand -base64 32)
+    # Reuse a preserved key if one exists (full reset keeps Postgres data, so the
+    # vault key must stay the same or existing encrypted rows become unreadable).
+    if [[ -n "${PRESERVED_ENCRYPTION_KEY:-}" ]]; then
+        SECRET_ENCRYPTION_KEY="$PRESERVED_ENCRYPTION_KEY"
+    else
+        SECRET_ENCRYPTION_KEY=$(openssl rand -base64 32)
+    fi
     # DATABASE_URL is consumed by host-side `pnpm migrate` (against the postgres
     # container's published port), so the port here must match POSTGRES_PORT.
     # When unset, both default to 5432. Keep this in lockstep with the postgres
@@ -188,6 +197,10 @@ handle_existing_env() {
                 echo "Aborted." >&2
                 exit 0
             fi
+            # Preserve the vault encryption key so existing rows remain readable.
+            # A full reset does NOT wipe the Postgres volume — generating a new key
+            # would make all previously stored vault secrets permanently unreadable.
+            PRESERVED_ENCRYPTION_KEY=$(grep "^SECRET_ENCRYPTION_KEY=" "$ENV_FILE" 2>/dev/null | cut -d= -f2-)
             rm "$ENV_FILE"
             SETUP_MODE="full"
             ;;
