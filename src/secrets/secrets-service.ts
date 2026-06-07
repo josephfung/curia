@@ -17,7 +17,6 @@ export class SecretsService {
     private readonly key: Buffer,
     // Accepted for API consistency with other services; this service intentionally
     // does not log — errors propagate to the caller, which owns the audit boundary.
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     _logger: Logger,
   ) {}
 

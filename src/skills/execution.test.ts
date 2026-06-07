@@ -1120,6 +1120,7 @@ describe('ctx.secret resolution', () => {
     registry.register(makeSecretManifest('env-skill', 'tavily_api_key'), handler);
     const secretsService = { get: vi.fn().mockResolvedValue(null) } as unknown as SecretsService;
     const bus = makeBus();
+    const savedTavily = process.env.TAVILY_API_KEY;
     process.env.TAVILY_API_KEY = 'from-env';
     try {
       const layer = new ExecutionLayer(registry, logger, { bus, secretsService });
@@ -1130,7 +1131,11 @@ describe('ctx.secret resolution', () => {
         .map(c => c[1]).find(e => e.type === 'secret.accessed');
       expect(event.payload.source).toBe('env');
     } finally {
-      delete process.env.TAVILY_API_KEY;
+      if (savedTavily === undefined) {
+        delete process.env.TAVILY_API_KEY;
+      } else {
+        process.env.TAVILY_API_KEY = savedTavily;
+      }
     }
   });
 
@@ -1138,6 +1143,7 @@ describe('ctx.secret resolution', () => {
     const registry = new SkillRegistry();
     const { handler, read } = makeSecretReadingHandler('tavily_api_key');
     registry.register(makeSecretManifest('legacy-skill', 'tavily_api_key'), handler);
+    const savedTavily = process.env.TAVILY_API_KEY;
     process.env.TAVILY_API_KEY = 'legacy-env';
     try {
       const layer = new ExecutionLayer(registry, logger, { bus: makeBus() });
@@ -1145,7 +1151,11 @@ describe('ctx.secret resolution', () => {
       expect(result.success).toBe(true);
       expect(read()).toBe('legacy-env');
     } finally {
-      delete process.env.TAVILY_API_KEY;
+      if (savedTavily === undefined) {
+        delete process.env.TAVILY_API_KEY;
+      } else {
+        process.env.TAVILY_API_KEY = savedTavily;
+      }
     }
   });
 

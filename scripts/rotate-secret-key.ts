@@ -27,8 +27,11 @@ async function main(): Promise<void> {
   if (!databaseUrl) throw new Error('DATABASE_URL is required');
 
   const pool = new pg.Pool({ connectionString: databaseUrl });
-  const client = await pool.connect();
+  // Declare client outside try so the finally block can always call pool.end(),
+  // even when pool.connect() itself throws before client is assigned.
+  let client: pg.PoolClient | undefined;
   try {
+    client = await pool.connect();
     await client.query('BEGIN');
     const { rows } = await client.query<{ name: string; encrypted_value: string; iv: string }>(
       'SELECT name, encrypted_value, iv FROM secrets FOR UPDATE',
@@ -47,7 +50,7 @@ async function main(): Promise<void> {
     logger.info({ count: rows.length }, 'Key rotation complete. Update SECRET_ENCRYPTION_KEY to the new value and restart.');
   } catch (err) {
     try {
-      await client.query('ROLLBACK');
+      if (client) await client.query('ROLLBACK');
     } catch (rollbackErr) {
       // Log both errors: the rollback failure and the root cause that triggered it.
       // If we only throw rollbackErr, the original error (and which row failed) is lost.
@@ -55,7 +58,7 @@ async function main(): Promise<void> {
     }
     throw err;
   } finally {
-    client.release();
+    client?.release();
     await pool.end();
   }
 }
