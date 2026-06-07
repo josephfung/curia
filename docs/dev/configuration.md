@@ -306,3 +306,23 @@ Environment variables control secrets and deployment-specific values that must n
 | `CURIA_TEMPFILE_DIR` | Optional | Base directory under which the `file-parse` skill resolves `temp_file_url` inputs. The skill rejects paths that escape this directory. Defaults to the OS temp dir when unset. |
 
 See [setup.md](setup.md) for a step-by-step walkthrough of setting these up.
+
+---
+
+## Rotating the secrets vault key
+
+`SECRET_ENCRYPTION_KEY` encrypts all stored secrets. To rotate it:
+
+1. Generate a new key: `openssl rand -base64 32`
+2. Re-encrypt existing rows (single transaction, safe to rerun):
+   ```bash
+   SECRET_ENCRYPTION_KEY_OLD="$CURRENT_KEY" \
+   SECRET_ENCRYPTION_KEY_NEW="$NEW_KEY" \
+   DATABASE_URL="$DATABASE_URL" \
+   pnpm exec tsx scripts/rotate-secret-key.ts
+   ```
+3. Set `SECRET_ENCRYPTION_KEY` to the new value in `.env`.
+4. Restart the app.
+
+If the process is interrupted, the transaction rolls back — the old key still
+decrypts everything. Rerun to retry.
