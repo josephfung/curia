@@ -289,6 +289,7 @@ Environment variables control secrets and deployment-specific values that must n
 
 | Variable | Required | Description |
 |---|---|---|
+| `SECRET_ENCRYPTION_KEY` | Yes | AES-256-GCM key for the secrets vault. Generate with `openssl rand -base64 32`. Changing this without running `scripts/rotate-secret-key.ts` makes stored secrets unreadable. |
 | `DATABASE_URL` | Yes | Postgres connection string |
 | `ANTHROPIC_API_KEY` | Yes | Powers all agents |
 | `API_TOKEN` | Yes | Authenticates HTTP API requests |
