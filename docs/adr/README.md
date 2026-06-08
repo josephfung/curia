@@ -42,6 +42,7 @@ Each ADR follows the [Nygard format](https://adr.github.io/):
 | [018](018-curia-initiated-approval-requests.md) | Curia-initiated approval requests via unified `autonomy_action_log` state machine | Accepted |
 | [019](019-delegation-aware-outbound-context.md) | Delegation-aware outbound context via a dedicated registry (replaces v1 context-memo) | Accepted |
 | [020](020-secrets-vault.md) | Application-layer AES-256-GCM secrets vault in PostgreSQL — structural typing, per-invocation pre-warm cache, env-var fallback for incremental migration | Accepted |
+| [021](021-vault-only-secret-resolution.md) | Vault-only secret resolution — remove the env fallback; only the four vault-bootstrap values stay in `.env`, everything else seeds via `seed-vault` | Accepted |
 
 ## Adding new ADRs
 

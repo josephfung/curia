@@ -23,11 +23,11 @@ describe('loadConfig', () => {
     expect(() => loadConfig()).toThrow('DATABASE_URL');
   });
 
-  it('loads ANTHROPIC_API_KEY from environment', () => {
+  it('does not read ANTHROPIC_API_KEY from environment (vault-only, resolved by applyVaultSecrets)', () => {
     process.env.DATABASE_URL = 'postgres://test:test@localhost:5432/test';
     process.env.ANTHROPIC_API_KEY = 'sk-ant-test';
     const config = loadConfig();
-    expect(config.anthropicApiKey).toBe('sk-ant-test');
+    expect(config.anthropicApiKey).toBeUndefined();
   });
 
   it('defaults LOG_LEVEL to info', () => {
