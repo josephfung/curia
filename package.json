@@ -42,7 +42,7 @@
     "chokidar": "^5.0.0",
     "cose-base": "^2.2.0",
     "cron-parser": "^5.5.0",
-    "cytoscape": "^3.33.4",
+    "cytoscape": "^3.34.0",
     "cytoscape-fcose": "^2.2.0",
     "fastify": "^5.8.5",
     "googleapis": "^173.0.0",
