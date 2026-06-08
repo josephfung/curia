@@ -12,9 +12,11 @@ on:
   schedule:
     - cron: '0 8 * * 3'  # Weekly, Wednesday — staggered from CodeQL (06:00) and Semgrep (07:00)
 
+# Least privilege: the workflow token defaults to read-only. Each job that
+# uploads SARIF grants `security-events: write` at the job level, so the write
+# scope exists only where it's used (Scorecard TokenPermissionsID).
 permissions:
   contents: read
-  security-events: write
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -23,6 +25,9 @@ jobs:
   trivy-fs:
     name: Filesystem Scan
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write  # Upload SARIF step writes to the Security tab
     steps:
       - uses: actions/checkout@v6
         with:
@@ -53,6 +58,9 @@ jobs:
     # Image build+scan is expensive, so it's skipped on every push/PR. It runs on
     # the weekly schedule and on manual dispatch (for on-demand fix verification).
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    permissions:
+      contents: read
+      security-events: write  # Upload SARIF step writes to the Security tab
     steps:
       - uses: actions/checkout@v6
         with:
