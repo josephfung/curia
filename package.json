@@ -48,7 +48,7 @@
     "googleapis": "^173.0.0",
     "js-yaml": "^4.2.0",
     "layout-base": "^2.0.1",
-    "libphonenumber-js": "^1.13.4",
+    "libphonenumber-js": "^1.13.6",
     "luxon": "^3.7.2",
     "node-html-parser": "^7.1.0",
     "node-pg-migrate": "^8.0.4",
