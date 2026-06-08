@@ -8,14 +8,19 @@ on:
   schedule:
     - cron: '0 7 * * 3'  # Weekly, Wednesday — staggered from CodeQL (06:00)
 
+# Least privilege: workflow token defaults to read-only; the scan job grants
+# `security-events: write` at the job level for the SARIF upload (Scorecard
+# TokenPermissionsID).
 permissions:
   contents: read
-  security-events: write  # required for SARIF upload
 
 jobs:
   semgrep:
     name: Semgrep Scan
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write  # required for SARIF upload
     container:
       image: semgrep/semgrep
 

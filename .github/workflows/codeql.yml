@@ -6,10 +6,10 @@ on:
     # Weekly full scan — Wednesday 6am UTC (off-peak)
     - cron: '0 6 * * 3'
 
+# Least privilege: workflow token defaults to read-only; the analyze job grants
+# the write/read scopes CodeQL needs at the job level (Scorecard TokenPermissionsID).
 permissions:
-  security-events: write
   contents: read
-  actions: read
 
 env:
   # Opt in to Node.js 24 runtime before it becomes the forced default on 2026-06-02.
@@ -19,6 +19,10 @@ jobs:
   analyze:
     name: Analyze
     runs-on: ubuntu-latest
+    permissions:
+      security-events: write  # CodeQL uploads analysis results to the Security tab
+      contents: read
+      actions: read           # CodeQL reads workflow run metadata
 
     strategy:
       fail-fast: false
