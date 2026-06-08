@@ -58,10 +58,23 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: sbom-${{ github.sha }}.spdx.json
+          path: ./sbom-download
 
       - name: Attach SBOM to release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}  # gh needs repo context (no checkout in this job)
           RELEASE_TAG: ${{ github.event.release.tag_name }}
-        run: gh release upload "$RELEASE_TAG" sbom.spdx.json --clobber
+        run: |
+          # anchore/sbom-action stores the file inside the artifact under the
+          # artifact name (sbom-<sha>.spdx.json), not the output-file name, so
+          # resolve it dynamically rather than assuming a fixed path. Fail loudly
+          # if it's missing instead of attaching nothing to the release.
+          FILE=$(find ./sbom-download -name '*.spdx.json' | head -n1)
+          if [ -z "$FILE" ]; then
+            echo "::error::SBOM artifact downloaded but no .spdx.json file found inside it" >&2
+            exit 1
+          fi
+          # Copy to a stable name so the release asset is always `sbom.spdx.json`.
+          cp "$FILE" sbom.spdx.json
+          gh release upload "$RELEASE_TAG" sbom.spdx.json --clobber
