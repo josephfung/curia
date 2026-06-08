@@ -48,7 +48,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **`uuid` pinned to v11** — forces `nylas`'s transitive `uuid@8.3.2` up to `^11.1.1` (CVE-2026-41907); v11 is the last major that still ships the CommonJS build the Nylas SDK requires.
 - **pnpm overrides moved to `pnpm-workspace.yaml`** — pnpm v10+ ignores `pnpm.overrides` in package.json, so the existing pins (qs, ip-address, vite, fast-uri, hono) had silently stopped applying; relocated to the supported file.
 - **On-demand Trivy image scan** — the container vulnerability scan now supports `workflow_dispatch`, so base-image/dependency CVE fixes can be re-verified immediately instead of waiting for the weekly schedule.
-- **Least-privilege workflow tokens** — `trivy`, `semgrep`, `codeql`, and `sbom` now default `GITHUB_TOKEN` to read-only and grant write scopes only on the jobs that need them; `sbom` splits release-asset upload into its own write-scoped job that runs only on releases. Clears 4 high-severity Scorecard `TokenPermissionsID` alerts. (#921)
+- **Least-privilege workflow tokens** — security workflows default `GITHUB_TOKEN` to read-only, granting write scopes per-job. Clears 4 Scorecard `TokenPermissionsID` alerts. (#921)
 
 ## [0.33.0] — 2026-06-04 — "Mr. Meeseeks"
 
