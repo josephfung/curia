@@ -319,47 +319,6 @@ disabled) — an absent token would otherwise silently expose the API. `setup.sh
 A missing *optional* secret (OpenAI, OpenRouter, Signal) disables its feature via the
 existing `if (config.x)` guards rather than failing the boot.
 
-### Migrating an existing deployment
-
-A deployment that predates the vault keeps its secrets in `.env`. Because resolution is
-vault-only with **no env fallback**, booting the new code against an empty vault would
-leave every secret unset — so the vault must be seeded **before** the new code resolves
-secrets, and `.env` is trimmed **last**. Order matters; do not reorder these steps.
-
-1. Deploy the new build to a place where `pnpm run seed-vault` can run, but **do not yet
-   restart the app on the new code**. The existing `.env` still holds every secret.
-2. With the current `.env` present, seed the vault from it:
-
-   ```bash
-   pnpm run seed-vault
-   ```
-
-   It reads the live env values and upserts them. Confirm the logged `seeded` list
-   contains every secret you expect; `skipped` should only hold genuinely-unset ones.
-3. Confirm the rows exist (bootstrap-only secrets are not audited, so verify by row):
-
-   ```sql
-   SELECT name FROM secrets ORDER BY name;
-   ```
-
-4. Restart the app on the new code. `applyVaultSecrets` now sources config from the vault.
-   Confirm the boot log line `Resolved bootstrap secrets from vault` shows the expected
-   `present` map, and that email / Signal / agents work.
-5. Confirm a skill read now resolves from the vault:
-
-   ```sql
-   SELECT payload->>'source' FROM events
-    WHERE type = 'secret.accessed' AND payload->>'secretName' = 'nylas_api_key'
-    ORDER BY created_at DESC LIMIT 1;   -- expect 'vault'
-   ```
-
-6. **Only now** remove the migrated secrets from `.env` (leave the four bootstrap values).
-   Restart once more and reconfirm.
-
-**Rollback:** before step 6 the old `.env` still holds every value, so redeploying the
-previous build restores env-based resolution. After step 6, re-add a value with
-`VAR=value pnpm run seed-vault` if needed.
-
 ---
 
 ## Environment variables (`.env`)
