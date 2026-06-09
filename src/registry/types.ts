@@ -2,6 +2,8 @@
 // State is DERIVED (never stored): we cross-reference on-disk manifest discovery
 // against registry rows to compute uninstalled / installed / enabled / ghost.
 
+import type { ActionRisk } from '../skills/types.js';
+
 export type RegistryKind = 'skill' | 'agent';
 
 /** Operational state of a registry item. Derived, not stored. */
@@ -25,7 +27,7 @@ export interface ManifestMetadata {
   description: string;
   version: string;
   // skills
-  actionRisk?: string | number;
+  actionRisk?: ActionRisk;
   sensitivity?: string;
   capabilities?: string[];
   // agents
