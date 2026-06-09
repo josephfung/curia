@@ -60,12 +60,12 @@ export async function verifyRequiredSecrets(
 ): Promise<string[]> {
   const missing: string[] = [];
   for (const name of REQUIRED_SECRET_NAMES) {
-    // Treat an empty value as missing, not present. An empty api_token would pass a bare
-    // null-check but disables HTTP auth — validateBearerToken() treats "" as "no token
-    // configured" — so an unusable vault state must fail loudly here, matching the
-    // falsy-check boot guard in src/index.ts.
+    // Treat an empty or whitespace-only value as missing, not present. An empty (or
+    // blank) api_token would pass a bare null-check but disables HTTP auth —
+    // validateBearerToken() treats "" as "no token configured" — so an unusable vault
+    // state must fail loudly here, matching the falsy-check boot guard in src/index.ts.
     const value = await secrets.get(name);
-    if (value === null || value === '') missing.push(name);
+    if (value === null || value.trim() === '') missing.push(name);
   }
   if (missing.length > 0) {
     log.error({ missing }, 'Required secrets missing from vault');
@@ -89,7 +89,12 @@ export async function seedVault(
   const seeded: string[] = [];
   const skipped: string[] = [];
   for (const name of SEED_SECRET_NAMES) {
-    const value = env[name.toUpperCase()];
+    // Trim before checking and storing: a copy-pasted value often carries a trailing
+    // newline, and a whitespace-only value (e.g. ` `) is unusable at runtime — the
+    // Anthropic client, HTTP auth, and Signal account id all reject it. Treating a
+    // blank-after-trim value as absent keeps an invalid placeholder out of the vault so
+    // verifyRequiredSecrets() and the boot guards see the true "missing" state.
+    const value = env[name.toUpperCase()]?.trim();
     if (value === undefined || value === '') {
       skipped.push(name);
       continue;

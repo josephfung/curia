@@ -2,7 +2,7 @@
 
 Curia is configured through two complementary mechanisms:
 
-- **`.env`** — secrets and environment-specific values (API keys, database URL, port). Never committed to version control.
+- **`.env`** — bootstrap values and environment-specific config (database URL, encryption key, port). Never committed to version control. **Application secrets do not live here** — they resolve from the encrypted vault. See [Secrets](#secrets) below.
 - **`config/default.yaml`** — tuning knobs and feature flags that are safe to commit. Defaults are set here; `.env` overrides nothing in this file — the two are independent.
 
 Changes to `default.yaml` take effect on restart. Changes to `.env` also require a restart.
@@ -231,6 +231,12 @@ The `env:VAR_NAME` references are resolved from environment variables at
 startup — no credentials are stored in `local.yaml`. The actual grant IDs and
 email addresses live in `.env`.
 
+> **Note:** The multi-account `channel_accounts.email` path resolves
+> `env:VAR` references straight from `.env`, **not** from the vault — it is the
+> one path the vault-only model ([ADR-021](../adr/021-vault-only-secret-resolution.md))
+> does not yet cover. The legacy single-account Nylas secrets *are* vault-resolved.
+> Routing multi-account secrets through the vault is tracked as follow-up work (#920).
+
 For a full description of the `channel_accounts.email` schema, see the
 `channel_accounts` comment block in `config/default.yaml`.
 
@@ -283,28 +289,71 @@ Drive integration (service account setup, folder sharing, credential wiring).
 
 ---
 
+## Secrets
+
+Secrets resolve from the **encrypted vault only** — there is no env-var fallback (see
+[ADR-021](../adr/021-vault-only-secret-resolution.md)). Only four bootstrap values stay
+in `.env`, because they are needed to reach and unlock the vault itself:
+
+- `DB_USER`, `DB_PASSWORD`, `DATABASE_URL` — connect to the Postgres instance that hosts
+  the vault.
+- `SECRET_ENCRYPTION_KEY` — decrypts the vault.
+
+Every other secret (Anthropic, OpenAI, OpenRouter, API token, web-app bootstrap secret,
+Nylas trio, Signal number, Tavily) lives only in the vault.
+
+**Seeding:**
+
+- **Fresh install** — `pnpm run setup` seeds the vault automatically after migrations,
+  so the app never boots against an empty vault.
+- **Add or update one secret later** — supply it as a transient env var and run the
+  seeder: `VAR=value pnpm run seed-vault`. The seeder upserts present values; absent
+  ones are skipped, never cleared.
+
+**Missing secrets:** a missing *required* secret fails closed. Most fail at their consumer
+(e.g. `anthropic_api_key`). `api_token` is special-cased with an explicit boot guard that
+refuses to start, because its HTTP-auth consumer fails *open* (no token configured = auth
+disabled) — an absent token would otherwise silently expose the API. `setup.sh` also runs
+`seed-vault` with `SEED_VAULT_VERIFY=1`, which confirms the required rows (`anthropic_api_key`,
+`api_token`, `web_app_bootstrap_secret`) landed and aborts the install if any are missing.
+A missing *optional* secret (OpenAI, OpenRouter, Signal) disables its feature via the
+existing `if (config.x)` guards rather than failing the boot.
+
+---
+
 ## Environment variables (`.env`)
 
-Environment variables control secrets and deployment-specific values that must not be committed. A full list with descriptions lives in `.env.example` at the repo root. Key variables:
+Environment variables control bootstrap values and deployment-specific config that must
+not be committed. Application secrets are **not** set here — they live in the vault (see
+[Secrets](#secrets) above). A full list with descriptions lives in `.env.example` at the
+repo root.
 
-| Variable | Required | Description |
-|---|---|---|
-| `SECRET_ENCRYPTION_KEY` | Yes | AES-256-GCM key for the secrets vault. Generate with `openssl rand -base64 32`. Changing this without running `scripts/rotate-secret-key.ts` makes stored secrets unreadable. |
-| `DATABASE_URL` | Yes | Postgres connection string |
-| `ANTHROPIC_API_KEY` | Yes | Powers all agents |
-| `API_TOKEN` | Yes | Authenticates HTTP API requests |
-| `WEB_APP_BOOTSTRAP_SECRET` | Yes | Web app login secret |
-| `TIMEZONE` | Yes | IANA timezone (e.g. `America/Toronto`) |
-| `CEO_PRIMARY_EMAIL` | Recommended | Prevents first CEO email from being held |
-| `OPENAI_API_KEY` | Tier 2 | Enables entity memory and semantic search |
-| `OPENROUTER_API_KEY` | Optional | Enables multi-model routing via OpenRouter (Gemini Flash, DeepSeek V3, GPT-4o). When set, tiers can map to OpenRouter-hosted models. |
-| `NYLAS_API_KEY` | Tier 2 | Email channel |
-| `NYLAS_GRANT_ID` | Tier 2 | Email grant (connected account) |
-| `NYLAS_SELF_EMAIL` | Tier 2 | Address Curia reads and sends from |
-| `SIGNAL_PHONE_NUMBER` | Tier 3 | Enables Signal channel |
-| `TAVILY_API_KEY` | Tier 3 | Enables `web-search` skill |
-| `GOOGLE_APPLICATION_CREDENTIALS` | Optional | Path to service account JSON for Google Drive |
-| `CURIA_TEMPFILE_DIR` | Optional | Base directory under which the `file-parse` skill resolves `temp_file_url` inputs. The skill rejects paths that escape this directory. Defaults to the OS temp dir when unset. |
+The **Stored in** column shows where each value lives: `.env` for the bootstrap and
+non-secret config that must be on the host before the vault opens, or **vault** for
+secrets that resolve from the encrypted store ([ADR-021](../adr/021-vault-only-secret-resolution.md)).
+Vault secrets are listed by their env-var name because that's the name you pass when
+seeding (`VAR=value pnpm run seed-vault`); they are read from the vault at runtime, not
+from `.env`.
+
+| Variable | Required | Stored in | Description |
+|---|---|---|---|
+| `SECRET_ENCRYPTION_KEY` | Yes | `.env` | AES-256-GCM key for the secrets vault. Generate with `openssl rand -base64 32`. Changing this without running `scripts/rotate-secret-key.ts` makes stored secrets unreadable. |
+| `DATABASE_URL` | Yes | `.env` | Postgres connection string (also reads the vault that hosts the secrets) |
+| `DB_USER` / `DB_PASSWORD` | Yes | `.env` | Postgres credentials |
+| `TIMEZONE` | Yes | `.env` | IANA timezone (e.g. `America/Toronto`) |
+| `CEO_PRIMARY_EMAIL` | Recommended | `.env` | Prevents first CEO email from being held |
+| `ANTHROPIC_API_KEY` | Yes | vault | Powers all agents |
+| `API_TOKEN` | Yes | vault | Authenticates HTTP API requests |
+| `WEB_APP_BOOTSTRAP_SECRET` | Yes | vault | Web app login secret |
+| `OPENAI_API_KEY` | Tier 2 | vault | Enables entity memory and semantic search |
+| `OPENROUTER_API_KEY` | Optional | vault | Enables multi-model routing via OpenRouter (Gemini Flash, DeepSeek V3, GPT-4o). When set, tiers can map to OpenRouter-hosted models. |
+| `NYLAS_API_KEY` | Tier 2 | vault | Email channel |
+| `NYLAS_GRANT_ID` | Tier 2 | vault | Email grant (connected account) |
+| `NYLAS_SELF_EMAIL` | Tier 2 | vault | Address Curia reads and sends from |
+| `SIGNAL_PHONE_NUMBER` | Tier 3 | vault | Enables Signal channel |
+| `TAVILY_API_KEY` | Tier 3 | vault | Enables `web-search` skill |
+| `GOOGLE_APPLICATION_CREDENTIALS` | Optional | `.env` | Path to service account JSON for Google Drive |
+| `CURIA_TEMPFILE_DIR` | Optional | `.env` | Base directory under which the `file-parse` skill resolves `temp_file_url` inputs. The skill rejects paths that escape this directory. Defaults to the OS temp dir when unset. |
 
 See [setup.md](setup.md) for a step-by-step walkthrough of setting these up.
 

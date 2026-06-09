@@ -27,6 +27,9 @@ SETUP_MODE="full"  # "full" | "resume"
 # Global: set by handle_existing_env when the vault key should be preserved across
 # a full reset (Postgres data is NOT wiped, so existing encrypted rows must stay readable)
 PRESERVED_ENCRYPTION_KEY=""
+# Global: set by main() from the prompted Anthropic key, consumed by run_infra to
+# seed the vault (#911). Empty on the resume path (vault already seeded on first run).
+SEED_ANTHROPIC_KEY=""
 
 # Verifies docker, docker compose, node >= 22, pnpm, and openssl are available.
 # Exits 1 with an install link on the first missing tool.
@@ -129,17 +132,16 @@ generate_secrets() {
     DATABASE_URL="postgres://curia:${DB_PASSWORD}@localhost:${pg_host_port}/curia"
 }
 
-# Templates ENV_EXAMPLE into ENV_FILE, substituting generated secrets.
-# Takes the Anthropic API key as $1. Optional vars remain commented.
+# Templates ENV_EXAMPLE into ENV_FILE, substituting the four bootstrap secrets.
+# Optional vars remain commented.
 write_env() {
-    local anthropic_key="$1"
+    # ANTHROPIC_API_KEY / API_TOKEN / WEB_APP_BOOTSTRAP_SECRET are NOT written here —
+    # they are seeded into the encrypted vault after migrations (#911). Only the four
+    # values needed to reach and unlock the vault live in .env.
     sed \
         -e "s|^DB_USER=.*|DB_USER=${DB_USER}|" \
         -e "s|^DB_PASSWORD=.*|DB_PASSWORD=${DB_PASSWORD}|" \
         -e "s|^DATABASE_URL=.*|DATABASE_URL=${DATABASE_URL}|" \
-        -e "s|^ANTHROPIC_API_KEY=.*|ANTHROPIC_API_KEY=${anthropic_key}|" \
-        -e "s|^API_TOKEN=.*|API_TOKEN=${API_TOKEN}|" \
-        -e "s|^WEB_APP_BOOTSTRAP_SECRET=.*|WEB_APP_BOOTSTRAP_SECRET=${WEB_APP_BOOTSTRAP_SECRET}|" \
         -e "s|^SECRET_ENCRYPTION_KEY=.*|SECRET_ENCRYPTION_KEY=${SECRET_ENCRYPTION_KEY}|" \
         "$ENV_EXAMPLE" > "$ENV_FILE"
 }
@@ -355,7 +357,9 @@ wait_for_curia() {
 }
 
 # Starts Postgres, runs migrations, starts the full stack, writes SETUP_COMPLETE marker.
-# Parses .env to get DATABASE_URL, HTTP_PORT, and WEB_APP_BOOTSTRAP_SECRET for use at runtime.
+# Parses .env to get DATABASE_URL and HTTP_PORT for use at runtime. The bootstrap secret
+# is no longer stored in .env (#911) — it lives in the vault; only the full-setup path
+# holds it in-shell to display once (see print_summary's empty-secret branch on resume).
 run_infra() {
     if [[ ! -f "$ENV_FILE" ]]; then
         error ".env not found. Cannot continue setup."
@@ -390,6 +394,44 @@ run_infra() {
     fi
     success "Migrations applied"
 
+    # Seed the encrypted vault with the prompted/generated secrets (#911). Must run
+    # after migrations (the `secrets` table exists) and before the app boots, because
+    # the app resolves these vault-only with no env fallback. SEED_VAULT_VERIFY=1 makes
+    # seed-vault confirm the required rows (anthropic_api_key, api_token,
+    # web_app_bootstrap_secret) actually landed in the vault and exit non-zero if not —
+    # so a run that never persisted them fails loudly here rather than booting an instance
+    # with HTTP auth disabled (#911).
+    #
+    # The bootstrap secrets are passed explicitly per setup mode rather than forwarding
+    # the ambient shell environment:
+    #   - Full install: the freshly generated/prompted values are NOT written to .env, so
+    #     the seed-vault child can only receive them through these assignments.
+    #   - Resume: the vault was already seeded on the first run, so pass NONE of them and
+    #     let seed-vault re-verify the existing rows. Forwarding them on resume would
+    #     either clobber an already-seeded ANTHROPIC_API_KEY to empty (failing
+    #     verification) or silently re-seed API_TOKEN / WEB_APP_BOOTSTRAP_SECRET from
+    #     whatever happens to be in the operator's shell — an unintended secret rotation.
+    #     (A legacy pre-vault .env still migrates: run_infra exported its plaintext
+    #     secrets above, and seed-vault reads them from the inherited process.env.)
+    info "Seeding secrets vault..."
+    seed_secret_env=()
+    if [[ "$SETUP_MODE" == "full" ]]; then
+        seed_secret_env=(
+            "ANTHROPIC_API_KEY=$SEED_ANTHROPIC_KEY"
+            "API_TOKEN=$API_TOKEN"
+            "WEB_APP_BOOTSTRAP_SECRET=$WEB_APP_BOOTSTRAP_SECRET"
+        )
+    fi
+    # ${arr[@]+"${arr[@]}"} expands safely to nothing when the array is empty, even under
+    # `set -u` on bash 3.2 (macOS default), where a bare "${arr[@]}" is an unbound error.
+    if ! env ${seed_secret_env[@]+"${seed_secret_env[@]}"} SEED_VAULT_VERIFY=1 \
+         pnpm --prefix "$REPO_ROOT" run seed-vault; then
+        error "Vault seeding failed or required secrets are missing. See the output above."
+        hint "If this is a resume after a failed first run, re-run full setup (option 3) to regenerate and seed the bootstrap secrets."
+        exit 1
+    fi
+    success "Secrets vault seeded"
+
     info "Starting Curia..."
     if ! docker compose --project-directory "$REPO_ROOT" up -d; then
         error "Failed to start Curia stack."
@@ -410,7 +452,9 @@ run_infra() {
     # Mark setup as complete so the idempotency menu can distinguish restart vs recovery.
     printf "\n# SETUP_COMPLETE\n" >> "$ENV_FILE"
 
-    print_summary "$WEB_APP_BOOTSTRAP_SECRET"
+    # On the resume path the bootstrap secret is not in-shell (not in .env anymore,
+    # not regenerated), so pass it defensively — print_summary degrades gracefully.
+    print_summary "${WEB_APP_BOOTSTRAP_SECRET:-}"
 }
 
 # Prints the final summary box with login URL and bootstrap secret.
@@ -429,11 +473,19 @@ print_summary() {
     printf "║%-${W}s║\n" ""
     printf "║   %-$((W-3))s║\n" "Open:    http://localhost:${port}"
     printf "║%-${W}s║\n" ""
-    printf "║   %-$((W-3))s║\n" "Bootstrap secret (save this to a password manager):"
-    printf "║   %-$((W-3))s║\n" "${secret}"
-    printf "║%-${W}s║\n" ""
-    printf "║   %-$((W-3))s║\n" "Enter it on the login page to create your account."
-    printf "║   %-$((W-3))s║\n" "You won't be shown it again here."
+    if [[ -n "$secret" ]]; then
+        # Full setup — the freshly generated secret is in hand; show it once.
+        printf "║   %-$((W-3))s║\n" "Bootstrap secret (save this to a password manager):"
+        printf "║   %-$((W-3))s║\n" "${secret}"
+        printf "║%-${W}s║\n" ""
+        printf "║   %-$((W-3))s║\n" "Enter it on the login page to create your account."
+        printf "║   %-$((W-3))s║\n" "You won't be shown it again here."
+    else
+        # Resume — the secret now lives in the vault, not .env, and isn't retrievable
+        # here. It was shown during the initial setup run.
+        printf "║   %-$((W-3))s║\n" "Bootstrap secret: stored in the encrypted vault."
+        printf "║   %-$((W-3))s║\n" "(Shown once during initial setup; not retrievable here.)"
+    fi
     printf "║%-${W}s║\n" ""
     printf "╚%s╝\n" "$border"
     echo ""
@@ -452,7 +504,8 @@ main() {
         generate_secrets
         local anthropic_key
         anthropic_key=$(prompt_anthropic_key)
-        write_env "$anthropic_key"
+        SEED_ANTHROPIC_KEY="$anthropic_key"
+        write_env
         success ".env written"
     fi
 

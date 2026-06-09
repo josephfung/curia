@@ -49,6 +49,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **pnpm overrides moved to `pnpm-workspace.yaml`** — pnpm v10+ ignores `pnpm.overrides` in package.json, so the existing pins (qs, ip-address, vite, fast-uri, hono) had silently stopped applying; relocated to the supported file.
 - **On-demand Trivy image scan** — the container vulnerability scan now supports `workflow_dispatch`, so base-image/dependency CVE fixes can be re-verified immediately instead of waiting for the weekly schedule.
 - **Least-privilege workflow tokens** — security workflows default `GITHUB_TOKEN` to read-only, granting write scopes per-job. Clears 4 Scorecard `TokenPermissionsID` alerts. (#921)
+- **Secrets migrated out of `.env` into the vault** — application secrets resolve from the encrypted vault only (no env fallback); just the four DB/encryption bootstrap values stay in `.env`. See ADR-021. (#911)
 
 ## [0.33.0] — 2026-06-04 — "Mr. Meeseeks"
 

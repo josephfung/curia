@@ -941,19 +941,22 @@ export function loadConfig(): Config {
 
   return {
     databaseUrl,
-    anthropicApiKey: process.env.ANTHROPIC_API_KEY,
-    openaiApiKey: process.env.OPENAI_API_KEY,
-    openrouterApiKey: process.env.OPENROUTER_API_KEY,
+    // Bootstrap/config secrets are resolved from the vault by applyVaultSecrets()
+    // after the vault is constructed (#911). loadConfig() no longer reads them from
+    // env — vault-only, no fallback. They are undefined here and overwritten at boot.
+    anthropicApiKey: undefined,
+    openaiApiKey: undefined,
+    openrouterApiKey: undefined,
     logLevel: process.env.LOG_LEVEL ?? 'info',
     httpPort,
-    apiToken: process.env.API_TOKEN,
-    webAppBootstrapSecret: process.env.WEB_APP_BOOTSTRAP_SECRET,
+    apiToken: undefined,
+    webAppBootstrapSecret: undefined,
     appOrigin: process.env.APP_ORIGIN || undefined,
     timezone,
-    nylasApiKey: process.env.NYLAS_API_KEY,
-    nylasGrantId: process.env.NYLAS_GRANT_ID,
+    nylasApiKey: undefined,
+    nylasGrantId: undefined,
     nylasPollingIntervalMs,
-    nylasSelfEmail: process.env.NYLAS_SELF_EMAIL ?? '',
+    nylasSelfEmail: '',
     // Reject the literal `.env.example` placeholder so a user who runs
     // `pnpm run setup` and never edits the generated .env doesn't get a phantom
     // CEO contact named "CEO" bound to `you@yourdomain.com` created at boot —
@@ -965,6 +968,6 @@ export function loadConfig(): Config {
     // .trim() prevents a whitespace-only value (e.g. "  ") from activating the
     // Signal adapter with a bogus socket path or phone number.
     signalSocketPath: process.env.SIGNAL_SOCKET_PATH?.trim() || undefined,
-    signalPhoneNumber: process.env.SIGNAL_PHONE_NUMBER?.trim() || undefined,
+    signalPhoneNumber: undefined,
   };
 }

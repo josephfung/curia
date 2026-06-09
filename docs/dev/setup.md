@@ -48,12 +48,16 @@ for you:
    (Nylas, OpenAI, Tavily, Signal) commented out for Tiers 2 and 3.
 5. Starts the Postgres container, waits for it to be healthy, and applies
    all database migrations.
-6. Runs `pnpm install --frozen-lockfile` if `node_modules/` is missing
+6. **Seeds the encrypted secrets vault** from the values it just generated
+   and prompted for. Secrets resolve from the vault only — there is no
+   `.env` fallback (see [ADR-021](../adr/021-vault-only-secret-resolution.md)),
+   so this runs before first boot to avoid an empty-vault failure.
+7. Runs `pnpm install --frozen-lockfile` if `node_modules/` is missing
    (skipped on re-runs).
-7. Brings up the full stack (`docker compose up -d`) and polls Curia's
+8. Brings up the full stack (`docker compose up -d`) and polls Curia's
    healthcheck so the success banner only fires once the app is actually
    responding.
-8. Appends `# SETUP_COMPLETE` to `.env` as a clean-finish marker and prints
+9. Appends `# SETUP_COMPLETE` to `.env` as a clean-finish marker and prints
    a summary box with `http://localhost:3000` and your bootstrap secret.
 
 **Save the bootstrap secret to a password manager** — the script will not
@@ -109,6 +113,31 @@ full design is documented in
 
 ---
 
+## Adding secrets after setup
+
+Tiers 2 and 3 add credentials (Nylas, OpenAI, Tavily, Signal). These are
+**secrets**, and secrets resolve from the encrypted vault only — there is no
+`.env` fallback (see [ADR-021](../adr/021-vault-only-secret-resolution.md)).
+Setting a key in `.env` alone has no effect.
+
+To add or update a secret, pass it as a transient env var to the seeder:
+
+```bash
+NYLAS_API_KEY=nyk_v0_... pnpm run seed-vault
+```
+
+The seeder upserts the value into the vault (re-running is safe; absent values
+are skipped, never cleared). You can pass several at once. Then restart Curia so
+the relevant channel or skill picks the secret up. The env-var snippets in the
+tiers below name the variables to seed.
+
+> Only the four vault-bootstrap values (`DB_USER`, `DB_PASSWORD`,
+> `DATABASE_URL`, `SECRET_ENCRYPTION_KEY`) plus non-secret config (`TIMEZONE`,
+> `CEO_PRIMARY_EMAIL`, etc.) belong in `.env`. Everything else goes through the
+> vault.
+
+---
+
 ## Tier 2 — Recommended
 
 Adds the email channel and knowledge graph embeddings. This gives you a realistic development environment close to how Curia is actually used.
@@ -137,13 +166,16 @@ After completing the OAuth flow, the grant appears in your dashboard. Copy the *
 
 `NYLAS_SELF_EMAIL` is the address of the connected account — the address Curia reads and sends from:
 
-```env
-NYLAS_API_KEY=nyk_v0_...
-NYLAS_GRANT_ID=<grant-id-from-dashboard>
-NYLAS_SELF_EMAIL=curia@yourdomain.com
+Seed all three into the vault (see [Adding secrets after setup](#adding-secrets-after-setup)):
+
+```bash
+NYLAS_API_KEY=nyk_v0_... \
+NYLAS_GRANT_ID=<grant-id-from-dashboard> \
+NYLAS_SELF_EMAIL=curia@yourdomain.com \
+pnpm run seed-vault
 ```
 
-Restart Curia (`pnpm local`) — the email channel activates automatically when all three Nylas vars are present.
+Restart Curia (`pnpm local`) — the email channel activates automatically when all three Nylas secrets are in the vault.
 
 > **Multiple email accounts:** The three vars above wire up a single "legacy" email account. To configure multiple named accounts with per-account outbound policies (e.g. a Curia account that sends directly and a personal account that requires your approval), use `channel_accounts.email` in `config/local.yaml`. See [configuration.md](configuration.md#configlocalyaml--deployment-overrides) for details and an example.
 
@@ -151,10 +183,10 @@ Restart Curia (`pnpm local`) — the email channel activates automatically when 
 
 OpenAI's embedding model (`text-embedding-3-small`) powers entity memory and semantic search in the knowledge graph. Without it, KG lookups are exact-match only and smoke tests are unavailable.
 
-Get an API key from [platform.openai.com](https://platform.openai.com) and set it:
+Get an API key from [platform.openai.com](https://platform.openai.com) and seed it into the vault:
 
-```env
-OPENAI_API_KEY=sk-...
+```bash
+OPENAI_API_KEY=sk-... pnpm run seed-vault
 ```
 
 > **Checkpoint:** Email channel active, knowledge graph fully functional with semantic search. This is the recommended baseline for most development work.
@@ -169,13 +201,13 @@ Adds web research capability and (when available) Signal messaging.
 
 Powers the `web-search` skill, which lets agents research topics and look up current information.
 
-Sign up at [tavily.com](https://tavily.com) and copy your API key:
+Sign up at [tavily.com](https://tavily.com) and seed your API key into the vault:
 
-```env
-TAVILY_API_KEY=tvly-...
+```bash
+TAVILY_API_KEY=tvly-... pnpm run seed-vault
 ```
 
-No restart required if Curia is already running — the skill picks up the key on next use.
+No restart required if Curia is already running — the skill resolves the key from the vault on next use.
 
 ### Signal
 
@@ -185,10 +217,10 @@ Signal messaging runs via [signal-cli](https://github.com/AsamK/signal-cli). The
 
 Signal requires registering a phone number with signal-cli and seeding the `signal-data` Docker volume with the resulting credentials. Refer to your deployment documentation for the bootstrap procedure.
 
-**2. Set the env var**
+**2. Seed the phone number**
 
-```env
-SIGNAL_PHONE_NUMBER=+12223334444
+```bash
+SIGNAL_PHONE_NUMBER=+12223334444 pnpm run seed-vault
 ```
 
 That's the E.164 number you registered via `signal-cli register` + `verify`. `SIGNAL_SOCKET_PATH` is managed by the deployment layer — do not set it in `.env`.

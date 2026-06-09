@@ -97,6 +97,7 @@ import { OfficeIdentityService } from './identity/service.js';
 import { ExecutiveProfileService } from './executive/service.js';
 import { loadEncryptionKey } from './secrets/crypto.js';
 import { SecretsService } from './secrets/secrets-service.js';
+import { applyVaultSecrets } from './secrets/apply-vault-secrets.js';
 import { SensitivityClassifier } from './memory/sensitivity.js';
 import { DreamEngine } from './memory/dream-engine.js';
 import type { DecayConfig } from './memory/dream-engine.js';
@@ -259,6 +260,29 @@ async function main(): Promise<void> {
     }
   } catch (err) {
     logger.fatal({ err }, 'Database migration failed');
+    process.exit(1);
+  }
+
+  // Resolve bootstrap/config secrets from the vault now that migrations have run
+  // (the `secrets` table exists) and before any consumer reads config (#911).
+  // Vault-only: a missing required secret leaves config undefined, failing closed at
+  // its consumer exactly as an unset env var did — there is no env fallback.
+  // A vault read error (DB/decrypt failure) is a hard startup failure, surfaced
+  // with a structured fatal line to match the migration/encryption-key blocks above.
+  try {
+    await applyVaultSecrets(config, secretsService, logger);
+  } catch (err) {
+    logger.fatal({ err }, 'Failed to resolve bootstrap secrets from vault');
+    process.exit(1);
+  }
+
+  // api_token is a REQUIRED secret with a fail-OPEN consumer: validateBearerToken()
+  // (src/channels/http/auth.ts) disables HTTP auth entirely when no token is configured
+  // — a local-dev convenience. Under vault-only resolution an absent vault row would
+  // silently expose every authenticated endpoint, so guard it explicitly here: fail
+  // closed (refuse to boot), not open (#911). Mirror the anthropic_api_key guard below.
+  if (!config.apiToken) {
+    logger.fatal('api_token is missing from the vault — refusing to boot with HTTP auth disabled. Seed it with: API_TOKEN=<value> pnpm run seed-vault');
     process.exit(1);
   }
 
