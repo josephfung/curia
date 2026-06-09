@@ -1,0 +1,68 @@
+# Trusted, in-repo list of skills/agents enabled by default on a FRESH install.
+# NOT read from individual manifests (which are attacker-controlled on upload) —
+# this file ships with the codebase. Reconciliation enrolls these as enabled ONLY
+# when no registry row already exists (it never overrides an admin's choice).
+#
+# The existing production deployment ignores this file: it is migrated by the
+# one-shot scripts/backfill-registry-enable-all.ts, which enables everything on disk.
+#
+# MCP-backed skills (create_doc, search_drive_files, etc.) are NOT listed here —
+# they are loaded by loadMcpServers and are not on-disk SkillDiscovery items.
+skills:
+  - skill-registry
+  # Core communication
+  - email-send
+  - email-reply
+  - email-archive
+  - email-list
+  - email-get
+  - email-download-attachment
+  - email-draft-save
+  - email-label
+  - email-list-folders
+  - email-create-folder
+  - email-mark-read
+  - send-draft
+  - signal-send
+  # Memory + knowledge
+  - memory-query
+  - memory-store
+  - memory-confirm
+  - entity-context
+  # Scheduling
+  - scheduler-create
+  - scheduler-list
+  - scheduler-cancel
+  - scheduler-report
+  # Contacts
+  - contact-update
+  # Config + identity
+  - config-store
+  - executive-profile-get
+  - executive-profile-update
+  # Utility
+  - date-resolve
+  - context-for-email
+  - context-bridge-release
+  - held-messages-list
+  - held-messages-process
+  - decay-warnings-list
+  - delegate
+  - file-parse
+  - web-fetch
+  - web-browser
+  - web-search
+  - drive-download-file
+  - image-generate
+  - template-doc-request
+  # Autonomy
+  - get-autonomy
+  - set-autonomy
+  - approve-action
+  - deny-action
+  - dismiss-action
+  - list-pending-actions
+  - approval-expiry-sweep
+  - pending-actions-digest
+agents:
+  - coordinator

@@ -30,7 +30,8 @@ import { OpenRouterProvider } from './agents/llm/openrouter.js';
 import { AgentRuntime } from './agents/runtime.js';
 import { Dispatcher } from './dispatch/dispatcher.js';
 import { CliAdapter } from './channels/cli/cli-adapter.js';
-import { loadAllAgentConfigs, interpolateRuntimeContext } from './agents/loader.js';
+import { discoverAgentManifests, interpolateRuntimeContext } from './agents/loader.js';
+import type { AgentYamlConfig } from './agents/loader.js';
 import { ModelRouter } from './agents/llm/model-router.js';
 import { ModelRegistry } from './agents/llm/model-registry.js';
 import { createEstimateCostUsd } from './agents/llm/pricing.js';
@@ -47,7 +48,7 @@ import { EntityMemory } from './memory/entity-memory.js';
 import { ConfigStore } from './memory/config-store.js';
 import { SkillRegistry } from './skills/registry.js';
 import { ExecutionLayer } from './skills/execution.js';
-import { loadSkillsFromDirectory, validateAllowedCallers } from './skills/loader.js';
+import { loadSkillsFromDirectory, discoverSkillManifests, validateAllowedCallers } from './skills/loader.js';
 import { loadMcpServers } from './skills/mcp-loader.js';
 import type { McpSession } from './skills/mcp-client.js';
 import { ContactService } from './contacts/contact-service.js';
@@ -113,6 +114,12 @@ import { compileSecurityContextBlock } from './security/security-context.js';
 import { OutboundContextService } from './dispatch/outbound-context.js';
 import { applyTaskManagement } from './agents/task-management.js';
 import { BacklogHeartbeat } from './scheduler/backlog-heartbeat.js';
+import * as fs from 'node:fs';
+import yaml from 'js-yaml';
+import { RegistryRepo } from './registry/registry-repo.js';
+import { RegistryService } from './registry/registry-service.js';
+import { reconcileRegistries, type RegistryDefaults } from './registry/reconcile.js';
+import type { Discovery } from './registry/types.js';
 
 async function main(): Promise<void> {
   // Captured at the very start of main() so the wizard's post-setup polling
@@ -766,8 +773,55 @@ async function main(): Promise<void> {
   // via the LLM's tool-use API through the execution layer.
   const skillRegistry = new SkillRegistry(config.timezone);
   const skillsDir = path.resolve(import.meta.dirname, '../skills');
+  const agentsDir = path.resolve(import.meta.dirname, '../agents');
+
+  // --- Registry: discover everything on disk (lenient), reconcile the core set,
+  // then load+register ONLY enabled skills/agents. (Spec: skill/agent registry, #541.)
+  const skillDiscovery = discoverSkillManifests(skillsDir);
+  const agentDiscovery = discoverAgentManifests(agentsDir);
+
+  const skillRegistryRepo = new RegistryRepo(pool, 'skill_registry');
+  const agentRegistryRepo = new RegistryRepo(pool, 'agent_registry');
+
+  // Load the trusted fresh-install core set.
+  let registryDefaults: RegistryDefaults = { skills: [], agents: [] };
   try {
-    const skillCount = await loadSkillsFromDirectory(skillsDir, skillRegistry, logger);
+    const defaultsPath = path.resolve(import.meta.dirname, '../config/registry-defaults.yaml');
+    if (fs.existsSync(defaultsPath)) {
+      registryDefaults = (yaml.load(fs.readFileSync(defaultsPath, 'utf-8')) as RegistryDefaults) ?? registryDefaults;
+    }
+  } catch (err) {
+    logger.fatal({ err }, 'Failed to read config/registry-defaults.yaml');
+    process.exit(1);
+  }
+
+  try {
+    await reconcileRegistries({
+      skillRepo: skillRegistryRepo,
+      agentRepo: agentRegistryRepo,
+      skillDiscoveryNames: new Set(skillDiscovery.map(d => d.name)),
+      agentDiscoveryNames: new Set(agentDiscovery.map(d => d.name)),
+      defaults: registryDefaults,
+      logger,
+    });
+  } catch (err) {
+    logger.fatal({ err }, 'Registry reconciliation failed');
+    process.exit(1);
+  }
+
+  // Ghost warnings: a registry row whose files are gone never loads.
+  const skillDiscNames = new Set(skillDiscovery.map(d => d.name));
+  for (const row of await skillRegistryRepo.listRows()) {
+    if (!skillDiscNames.has(row.name)) {
+      logger.warn({ skill: row.name }, 'registry: enabled/installed skill has no files on disk (ghost); not loaded');
+    }
+  }
+
+  const enabledSkillNames = new Set(
+    (await skillRegistryRepo.listRows()).filter(r => r.enabled).map(r => r.name),
+  );
+  try {
+    const skillCount = await loadSkillsFromDirectory(skillDiscovery, skillRegistry, logger, enabledSkillNames);
     logger.info({ skillCount }, 'Skills loaded');
   } catch (err) {
     // Fail hard on skill loading errors — a broken skill.json or handler should
@@ -802,12 +856,27 @@ async function main(): Promise<void> {
   // Agent registry — tracks all running agents for delegation and listing.
   const agentRegistry = new AgentRegistry();
 
-  // Load all agent configs from the agents/ directory.
-  // Fail hard on errors — consistent with skill loading and DB connection checks.
-  const agentsDir = path.resolve(import.meta.dirname, '../agents');
-  let agentConfigs;
+  // Agents: ghost warnings, then keep only ENABLED, healthy agent configs.
+  // agentsDir + agentDiscovery are already populated above (in the registry block).
+  const agentDiscNames = new Set(agentDiscovery.map(d => d.name));
+  for (const row of await agentRegistryRepo.listRows()) {
+    if (!agentDiscNames.has(row.name)) {
+      logger.warn({ agent: row.name }, 'registry: enabled/installed agent has no files on disk (ghost); not loaded');
+    }
+  }
+  const enabledAgentNames = new Set(
+    (await agentRegistryRepo.listRows()).filter(r => r.enabled).map(r => r.name),
+  );
+  let agentConfigs: AgentYamlConfig[];
   try {
-    agentConfigs = loadAllAgentConfigs(agentsDir);
+    agentConfigs = [];
+    for (const disc of agentDiscovery) {
+      if (!enabledAgentNames.has(disc.name)) continue;
+      if (!disc.config) {
+        throw new Error(`Enabled agent '${disc.name}' has an invalid config: ${disc.error ?? 'unknown error'}`);
+      }
+      agentConfigs.push(disc.config);
+    }
     logger.info({ agents: agentConfigs.map(c => c.name) }, 'Agent configs loaded');
   } catch (err) {
     logger.fatal({ err }, 'Failed to load agent configs');
@@ -1386,12 +1455,34 @@ async function main(): Promise<void> {
   // Cross-validate allowed_callers in skill manifests against known agent names.
   // Must run after both skills and agents are loaded. Unknown names → hard fail.
   try {
-    const knownAgentNames = new Set(agentConfigs.map(c => c.name));
+    // Use ALL discovered agent names (enabled + disabled), not just enabled ones, so a
+    // skill that allows a currently-disabled agent as a caller doesn't trip the typo
+    // check. A genuinely unknown name still throws.
+    const knownAgentNames = new Set(agentDiscovery.map(d => d.name));
     validateAllowedCallers(skillRegistry, knownAgentNames);
   } catch (err) {
     logger.fatal({ err }, 'allowed_callers validation failed — fix skill manifests');
     process.exit(1);
   }
+
+  // RegistryService backs the /api/registry/* routes. Seed it with the discovery
+  // captured above so the UI can show uninstalled/ghost/error items, not just enabled.
+  // TODO: pass to HttpAdapter in Task 9 (HttpAdapterConfig gains a registryService field).
+  // Constructed here; wired into HttpAdapterConfig in Task 9 (registryService field).
+  // void-cast suppresses noUnusedLocals until that task adds it to the config object.
+  const registryService = new RegistryService(
+    skillRegistryRepo,
+    agentRegistryRepo,
+    skillDiscovery as unknown as Discovery[],
+    agentDiscovery.map(d => ({
+      name: d.name,
+      metadata: d.config
+        ? { name: d.config.name, description: d.config.description ?? d.config.name, version: d.config.version ?? '0.0.0', role: d.config.role, modelTier: d.config.model?.tier }
+        : null,
+      error: d.error,
+    })),
+  );
+  void registryService; // Task 9 will pass this to HttpAdapterConfig instead
 
   // Agents with enable_task_management: true — read by the BacklogHeartbeat to
   // know which source_agent_ids it may wake (and as the fallback target list).
