@@ -69,6 +69,10 @@ export interface AgentYamlConfig {
    *  task-management discipline block, and marks the agent heartbeat-eligible.
    *  See docs/wip/2026-06-04-task-execution-heartbeat-design.md §6. Default: false. */
   enable_task_management?: boolean;
+  /** Optional declarative install/uninstall blocks (skill/agent registry, #541).
+   *  Reserved schema surface — parsed but inert in PR1. */
+  install?: Record<string, unknown>;
+  uninstall?: Record<string, unknown>;
 }
 
 /**

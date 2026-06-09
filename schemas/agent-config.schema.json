@@ -93,6 +93,8 @@
     "inject_specialists": {
       "type": "boolean",
       "description": "When true, ${available_specialists} in the system_prompt is replaced at bootstrap with the list of registered specialist agents."
-    }
+    },
+    "install":   { "type": "object" },
+    "uninstall": { "type": "object" }
   }
 }
