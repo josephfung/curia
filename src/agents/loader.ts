@@ -138,6 +138,35 @@ function interpolatePersona(
   });
 }
 
+/** One discovered on-disk agent: lenient parse for the registry UI + reconciliation.
+ *  `config` is null when the YAML failed to parse (error captured). When valid, the
+ *  full parsed config is reused by the bootstrap so enabled agents aren't re-read. */
+export interface AgentDiscovery {
+  name: string;
+  config: AgentYamlConfig | null;
+  error?: string;
+}
+
+/**
+ * Scan dirPath and parse every agent YAML leniently. A parse error is captured
+ * per-file rather than thrown, so a broken DISABLED agent never crashes startup.
+ */
+export function discoverAgentManifests(dirPath: string): AgentDiscovery[] {
+  const files = fs.readdirSync(dirPath).filter(f => f.endsWith('.yaml') || f.endsWith('.yml'));
+  return files.map(f => {
+    try {
+      const config = loadAgentConfig(path.join(dirPath, f));
+      return { name: config.name, config };
+    } catch (err) {
+      return {
+        name: f.replace(/\.ya?ml$/, ''),
+        config: null,
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
+  });
+}
+
 /**
  * Interpolate runtime context placeholders in the system prompt.
  * Currently supports:
