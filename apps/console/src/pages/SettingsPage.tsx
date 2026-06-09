@@ -319,6 +319,8 @@ function AutonomySection() {
 // back/forward navigation works correctly within the settings shell.
 const SETTINGS_SECTIONS = [
   { id: 'autonomy',  label: 'Autonomy',    href: '/settings/autonomy' },
+  { id: 'skills',   label: 'Skills',      href: '/settings/skills' },
+  { id: 'agents',   label: 'Agents',      href: '/settings/agents' },
   { id: 'workspace', label: 'Workspace',   href: '/settings/workspace' },
 ];
 
@@ -327,7 +329,7 @@ interface SettingsLayoutProps {
   children: React.ReactNode;
 }
 
-function SettingsLayout({ activeSection, children }: SettingsLayoutProps) {
+export function SettingsLayout({ activeSection, children }: SettingsLayoutProps) {
   const [theme, setTheme] = useTheme();
   const [mobileOpen, setMobileOpen] = useState(false);
 

@@ -17,6 +17,12 @@ const AutonomyPage = lazy(() =>
 const WorkspacePage = lazy(() =>
   import('./pages/SettingsPage').then(m => ({ default: m.WorkspacePage })),
 );
+const SkillsPage = lazy(() =>
+  import('./pages/RegistrySettings').then(m => ({ default: m.SkillsPage })),
+);
+const AgentsPage = lazy(() =>
+  import('./pages/RegistrySettings').then(m => ({ default: m.AgentsPage })),
+);
 const WizardPage = lazy(() => import('./pages/WizardPage'));
 const ContactsPage = lazy(() => import('./pages/ContactsPage'));
 const JobsPage = lazy(() => import('./pages/JobsPage'));
@@ -103,6 +109,18 @@ const workspaceRoute = createRoute({
   component: WorkspacePage,
 });
 
+const skillsSettingsRoute = createRoute({
+  getParentRoute: () => settingsRoute,
+  path: '/skills',
+  component: SkillsPage,
+});
+
+const agentsSettingsRoute = createRoute({
+  getParentRoute: () => settingsRoute,
+  path: '/agents',
+  component: AgentsPage,
+});
+
 const loginRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/login',
@@ -146,7 +164,7 @@ const routeTree = rootRoute.addChildren([
     jobsRoute,
     tasksRoute,
     kgRoute,
-    settingsRoute.addChildren([autonomyRoute, workspaceRoute]),
+    settingsRoute.addChildren([autonomyRoute, workspaceRoute, skillsSettingsRoute, agentsSettingsRoute]),
   ]),
   loginRoute,
 ]);
