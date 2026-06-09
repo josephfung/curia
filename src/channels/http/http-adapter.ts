@@ -35,6 +35,7 @@ import { knowledgeGraphRoutes } from './routes/kg.js';
 import { identityRoutes } from './routes/identity.js';
 import { executiveRoutes } from './routes/executive.js';
 import { autonomyRoutes } from './routes/autonomy.js';
+import { registryRoutes } from './routes/registry.js';
 import { setupRoutes } from './routes/setup.js';
 import type { OfficeIdentityService } from '../../identity/service.js';
 import type { ExecutiveProfileService } from '../../executive/service.js';
@@ -58,6 +59,7 @@ export interface HttpAdapterConfig {
   executiveProfileService?: ExecutiveProfileService;
   contactService: ContactService;
   autonomyService?: AutonomyService;
+  registryService?: import('../../registry/registry-service.js').RegistryService;
   /**
    * True when the process booted without a principal contact and is running in
    * setup-required mode (email + Signal adapters are skipped until restart).
@@ -159,6 +161,7 @@ export class HttpAdapter {
         routeUrl.startsWith('/api/executive') ||
         routeUrl.startsWith('/api/jobs') ||
         routeUrl.startsWith('/api/autonomy') ||
+        routeUrl.startsWith('/api/registry') ||
         routeUrl.startsWith('/api/setup')
       ) return;
 
@@ -292,6 +295,15 @@ export class HttpAdapter {
     if (webAppBootstrapSecret && this.config.autonomyService) {
       await this.app.register(autonomyRoutes, {
         autonomyService: this.config.autonomyService,
+        webAppBootstrapSecret,
+        sessions,
+      });
+    }
+
+    // Registry routes — session-auth for the skill/agent management UI.
+    if (webAppBootstrapSecret && this.config.registryService) {
+      await this.app.register(registryRoutes, {
+        registryService: this.config.registryService,
         webAppBootstrapSecret,
         sessions,
       });
