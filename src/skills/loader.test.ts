@@ -1,19 +1,29 @@
-// loader.test.ts — tests for capability validation and manifest freeze in the skill loader.
+// loader.test.ts — tests for skill discovery, gated loading, capability validation,
+// and manifest freeze in the skill loader.
 //
-// Covers three security-critical properties:
-//   1. Unknown capability names cause a hard load failure at startup
-//   2. Valid capabilities load successfully and the manifest is frozen
-//   3. Frozen manifests reject mutation attempts at runtime
+// Covers:
+//   1. discoverSkillManifests: parses manifests without importing handlers
+//   2. discoverSkillManifests: captures parse errors leniently
+//   3. loadSkillsFromDirectory: only registers enabled skills (gated)
+//   4. loadSkillsFromDirectory: hard-fails on enabled skill with bad manifest
+//   5. loadSkillsFromDirectory: skips disabled skill with bad manifest
+//   6. Unknown capability names cause a hard load failure at startup
+//   7. Valid capabilities load successfully and the manifest is frozen
+//   8. Frozen manifests reject mutation attempts at runtime
+//   9. allowed_callers freeze and startup validation
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as fs from 'node:fs';
+import * as os from 'node:os';
 import * as path from 'node:path';
 import pino from 'pino';
-import { loadSkillsFromDirectory, validateAllowedCallers } from './loader.js';
+import { discoverSkillManifests, loadSkillsFromDirectory, validateAllowedCallers } from './loader.js';
 import { SkillRegistry } from './registry.js';
+import { createLogger } from '../logger.js';
 
 // Silent logger — these tests do not assert on log output
 const logger = pino({ level: 'silent' });
+const silentLogger = createLogger('silent');
 
 /**
  * Write a minimal skill directory (skill.json + trivial handler) into tmpDir.
@@ -37,7 +47,85 @@ function setupSkillDir(tmpDir: string, skillName: string, manifest: Record<strin
 }
 
 // ---------------------------------------------------------------------------
-// Test 1: Unknown capability name causes load failure
+// Helper: write a skill with an inline handler string
+// ---------------------------------------------------------------------------
+
+function writeSkill(dir: string, name: string, manifest: object, handler: string) {
+  const sdir = path.join(dir, name);
+  fs.mkdirSync(sdir, { recursive: true });
+  fs.writeFileSync(path.join(sdir, 'skill.json'), JSON.stringify(manifest));
+  fs.writeFileSync(path.join(sdir, 'handler.js'), handler);
+}
+
+// ---------------------------------------------------------------------------
+// Discovery tests (no handler import)
+// ---------------------------------------------------------------------------
+
+describe('discoverSkillManifests', () => {
+  let dir: string;
+  beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'skills-')); });
+  afterEach(() => { fs.rmSync(dir, { recursive: true, force: true }); });
+
+  it('returns metadata without importing handlers', () => {
+    writeSkill(dir, 'good', { name: 'good', description: 'd', version: '1.0.0', action_risk: 'low' }, 'throw new Error("should not import");');
+    const found = discoverSkillManifests(dir);
+    expect(found).toHaveLength(1);
+    expect(found[0]!.name).toBe('good');
+    expect(found[0]!.metadata?.actionRisk).toBe('low');
+    expect(found[0]!.error).toBeUndefined();
+  });
+
+  it('captures a parse error instead of throwing', () => {
+    const sdir = path.join(dir, 'broken');
+    fs.mkdirSync(sdir);
+    fs.writeFileSync(path.join(sdir, 'skill.json'), '{ not json');
+    const found = discoverSkillManifests(dir);
+    expect(found[0]!.metadata).toBeNull();
+    expect(found[0]!.error).toBeTruthy();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Gated loading tests (enabledNames gate)
+// ---------------------------------------------------------------------------
+
+describe('loadSkillsFromDirectory (gated)', () => {
+  let dir: string;
+  let registry: SkillRegistry;
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'skills-'));
+    registry = new SkillRegistry('UTC');
+  });
+  afterEach(() => { fs.rmSync(dir, { recursive: true, force: true }); });
+
+  const HANDLER = 'export default { async execute() { return { success: true, data: {} }; } };';
+
+  it('registers only enabled skills', async () => {
+    writeSkill(dir, 'on',  { name: 'on',  description: 'd', version: '1.0.0', action_risk: 'none' }, HANDLER);
+    writeSkill(dir, 'off', { name: 'off', description: 'd', version: '1.0.0', action_risk: 'none' }, HANDLER);
+    const discoveries = discoverSkillManifests(dir);
+    const loaded = await loadSkillsFromDirectory(discoveries, registry, silentLogger, new Set(['on']));
+    expect(loaded).toBe(1);
+    expect(registry.get('on')).toBeDefined();
+    expect(registry.get('off')).toBeUndefined();
+  });
+
+  it('hard-fails on an ENABLED skill with a bad manifest', async () => {
+    const discoveries = [{ name: 'bad', metadata: null, error: 'bad json', dir: path.join(dir, 'bad') }];
+    await expect(
+      loadSkillsFromDirectory(discoveries as never, registry, silentLogger, new Set(['bad'])),
+    ).rejects.toThrow();
+  });
+
+  it('skips a DISABLED skill with a bad manifest (no throw)', async () => {
+    const discoveries = [{ name: 'bad', metadata: null, error: 'bad json', dir: path.join(dir, 'bad') }];
+    const loaded = await loadSkillsFromDirectory(discoveries as never, registry, silentLogger, new Set());
+    expect(loaded).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Capability validation tests
 // ---------------------------------------------------------------------------
 
 describe('loader: capability validation', () => {
@@ -55,18 +143,16 @@ describe('loader: capability validation', () => {
         capabilities: ['outboundGateway', 'notARealCapability'],
       });
       const registry = new SkillRegistry();
+      const discoveries = discoverSkillManifests(tmpDir);
+      const enabledNames = new Set(discoveries.map(d => d.name));
       // The loader wraps the inner error; the bad capability name must appear
       // in the final message so operators know what to fix.
-      await expect(loadSkillsFromDirectory(tmpDir, registry, logger))
+      await expect(loadSkillsFromDirectory(discoveries, registry, logger, enabledNames))
         .rejects.toThrow('notARealCapability');
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
   });
-
-  // ---------------------------------------------------------------------------
-  // Test 2: Valid capabilities load successfully and manifest is frozen
-  // ---------------------------------------------------------------------------
 
   it('accepts valid capability names and freezes both manifest and capabilities array', async () => {
     const tmpDir = path.join(import.meta.dirname, '__test_cap_valid__');
@@ -82,7 +168,9 @@ describe('loader: capability validation', () => {
         capabilities: ['outboundGateway'],
       });
       const registry = new SkillRegistry();
-      const count = await loadSkillsFromDirectory(tmpDir, registry, logger);
+      const discoveries = discoverSkillManifests(tmpDir);
+      const enabledNames = new Set(discoveries.map(d => d.name));
+      const count = await loadSkillsFromDirectory(discoveries, registry, logger, enabledNames);
       expect(count).toBe(1);
 
       const skill = registry.get('good-skill');
@@ -93,10 +181,6 @@ describe('loader: capability validation', () => {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
   });
-
-  // ---------------------------------------------------------------------------
-  // Test 3: Manifest is frozen even when no capabilities are declared
-  // ---------------------------------------------------------------------------
 
   it('freezes the manifest even when no capabilities field is present', async () => {
     const tmpDir = path.join(import.meta.dirname, '__test_cap_none__');
@@ -112,7 +196,9 @@ describe('loader: capability validation', () => {
         // no 'capabilities' key — skill uses only universal services
       });
       const registry = new SkillRegistry();
-      const count = await loadSkillsFromDirectory(tmpDir, registry, logger);
+      const discoveries = discoverSkillManifests(tmpDir);
+      const enabledNames = new Set(discoveries.map(d => d.name));
+      const count = await loadSkillsFromDirectory(discoveries, registry, logger, enabledNames);
       expect(count).toBe(1);
 
       const skill = registry.get('nocap-skill');
@@ -123,10 +209,6 @@ describe('loader: capability validation', () => {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
   });
-
-  // ---------------------------------------------------------------------------
-  // Test 4: Frozen manifest cannot be mutated at runtime
-  // ---------------------------------------------------------------------------
 
   it('throws when attempting to mutate a frozen capabilities array', async () => {
     const tmpDir = path.join(import.meta.dirname, '__test_cap_freeze__');
@@ -142,7 +224,9 @@ describe('loader: capability validation', () => {
         capabilities: ['outboundGateway'],
       });
       const registry = new SkillRegistry();
-      await loadSkillsFromDirectory(tmpDir, registry, logger);
+      const discoveries = discoverSkillManifests(tmpDir);
+      const enabledNames = new Set(discoveries.map(d => d.name));
+      await loadSkillsFromDirectory(discoveries, registry, logger, enabledNames);
 
       const skill = registry.get('frozen-skill');
       // ESM modules run in strict mode — pushing to a frozen array throws TypeError.
@@ -175,7 +259,9 @@ describe('loader: allowed_callers', () => {
         allowed_callers: ['coordinator'],
       });
       const registry = new SkillRegistry();
-      await loadSkillsFromDirectory(tmpDir, registry, logger);
+      const discoveries = discoverSkillManifests(tmpDir);
+      const enabledNames = new Set(discoveries.map(d => d.name));
+      await loadSkillsFromDirectory(discoveries, registry, logger, enabledNames);
 
       const skill = registry.get('restricted-skill');
       expect(Object.isFrozen(skill?.manifest.allowed_callers)).toBe(true);
@@ -204,7 +290,9 @@ describe('validateAllowedCallers', () => {
         allowed_callers: ['coordinator'],
       });
       const registry = new SkillRegistry();
-      await loadSkillsFromDirectory(tmpDir, registry, logger);
+      const discoveries = discoverSkillManifests(tmpDir);
+      const enabledNames = new Set(discoveries.map(d => d.name));
+      await loadSkillsFromDirectory(discoveries, registry, logger, enabledNames);
 
       const knownAgents = new Set(['coordinator', 'calendar', 'ceo-inbox']);
       expect(() => validateAllowedCallers(registry, knownAgents)).not.toThrow();
@@ -227,7 +315,9 @@ describe('validateAllowedCallers', () => {
         allowed_callers: ['system'],
       });
       const registry = new SkillRegistry();
-      await loadSkillsFromDirectory(tmpDir, registry, logger);
+      const discoveries = discoverSkillManifests(tmpDir);
+      const enabledNames = new Set(discoveries.map(d => d.name));
+      await loadSkillsFromDirectory(discoveries, registry, logger, enabledNames);
 
       // 'system' is not in the known agents set — but it's always valid
       const knownAgents = new Set(['coordinator']);
@@ -251,7 +341,9 @@ describe('validateAllowedCallers', () => {
         allowed_callers: ['coordinatorrr'],
       });
       const registry = new SkillRegistry();
-      await loadSkillsFromDirectory(tmpDir, registry, logger);
+      const discoveries = discoverSkillManifests(tmpDir);
+      const enabledNames = new Set(discoveries.map(d => d.name));
+      await loadSkillsFromDirectory(discoveries, registry, logger, enabledNames);
 
       const knownAgents = new Set(['coordinator', 'calendar']);
       expect(() => validateAllowedCallers(registry, knownAgents)).toThrow('coordinatorrr');
@@ -273,7 +365,9 @@ describe('validateAllowedCallers', () => {
         outputs: {},
       });
       const registry = new SkillRegistry();
-      await loadSkillsFromDirectory(tmpDir, registry, logger);
+      const discoveries = discoverSkillManifests(tmpDir);
+      const enabledNames = new Set(discoveries.map(d => d.name));
+      await loadSkillsFromDirectory(discoveries, registry, logger, enabledNames);
 
       const knownAgents = new Set(['coordinator']);
       expect(() => validateAllowedCallers(registry, knownAgents)).not.toThrow();
@@ -298,7 +392,9 @@ describe('validateAllowedCallers', () => {
         allowed_callers: [],
       });
       const registry = new SkillRegistry();
-      await loadSkillsFromDirectory(tmpDir, registry, logger);
+      const discoveries = discoverSkillManifests(tmpDir);
+      const enabledNames = new Set(discoveries.map(d => d.name));
+      await loadSkillsFromDirectory(discoveries, registry, logger, enabledNames);
 
       const knownAgents = new Set(['coordinator']);
       expect(() => validateAllowedCallers(registry, knownAgents)).not.toThrow();

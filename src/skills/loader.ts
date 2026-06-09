@@ -12,6 +12,7 @@ import * as path from 'node:path';
 import type { SkillManifest, SkillHandler } from './types.js';
 import type { SkillRegistry } from './registry.js';
 import type { Logger } from '../logger.js';
+import type { ManifestMetadata } from '../registry/types.js';
 
 /**
  * Fixed allowlist of valid capability names that skills may declare in their manifest.
@@ -32,53 +33,93 @@ export const VALID_CAPABILITIES: ReadonlySet<string> = new Set([
   'infraLlm', 'outboundContext', 'taskRepo',
 ]);
 
+/** One discovered on-disk skill: lenient parse for the registry UI + reconciliation.
+ *  `metadata` is null when skill.json failed to parse (error captured). `dir` is the
+ *  skill directory, needed by loadSkillsFromDirectory to import the handler. */
+export interface SkillDiscovery {
+  name: string;
+  metadata: ManifestMetadata | null;
+  error?: string;
+  dir: string;
+  /** Full parsed+defaulted manifest, present only when metadata !== null. */
+  manifest?: SkillManifest;
+}
+
 /**
- * Load all skills from a directory into the registry.
- *
- * Expects directory structure:
- *   skills/
- *     web-fetch/
- *       skill.json
- *       handler.ts (or handler.js)
- *
- * Returns the number of skills successfully loaded.
+ * Scan skillsDir and parse every skill.json leniently (no handler import).
+ * A parse error is captured per-skill rather than thrown, so a broken DISABLED
+ * skill never crashes startup. Used by the registry UI, reconciliation, and as
+ * the input to loadSkillsFromDirectory.
  */
-export async function loadSkillsFromDirectory(
-  skillsDir: string,
-  registry: SkillRegistry,
-  logger: Logger,
-): Promise<number> {
+export function discoverSkillManifests(skillsDir: string): SkillDiscovery[] {
   if (!fs.existsSync(skillsDir)) {
     throw new Error(`Skills directory not found: ${skillsDir}`);
   }
-
-  const entries = fs.readdirSync(skillsDir, { withFileTypes: true });
-  let loaded = 0;
-
-  for (const entry of entries) {
+  const out: SkillDiscovery[] = [];
+  for (const entry of fs.readdirSync(skillsDir, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;
-
-    const skillDir = path.join(skillsDir, entry.name);
-    const manifestPath = path.join(skillDir, 'skill.json');
-
-    // Skip directories without a manifest
-    if (!fs.existsSync(manifestPath)) {
-      logger.debug({ dir: entry.name }, 'Skipping directory without skill.json');
-      continue;
-    }
+    const dir = path.join(skillsDir, entry.name);
+    const manifestPath = path.join(dir, 'skill.json');
+    if (!fs.existsSync(manifestPath)) continue; // not a skill dir (e.g. _shared)
 
     try {
-      // Load and validate manifest
-      const raw = fs.readFileSync(manifestPath, 'utf-8');
-      const manifest = JSON.parse(raw) as SkillManifest;
-
-      // Set defaults for optional fields
+      const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8')) as SkillManifest;
+      // Apply the same defaults that loadSkillsFromDirectory used to apply inline,
+      // so the pre-parsed manifest is consistent with what the loader will register.
       manifest.timeout ??= 30000;
       manifest.sensitivity ??= 'normal';
       manifest.permissions ??= [];
       manifest.secrets ??= [];
       manifest.inputs ??= {};
       manifest.outputs ??= {};
+      out.push({
+        name: manifest.name,
+        dir,
+        manifest,
+        metadata: {
+          name: manifest.name,
+          description: manifest.description,
+          version: manifest.version,
+          actionRisk: manifest.action_risk,
+          sensitivity: manifest.sensitivity,
+          capabilities: manifest.capabilities,
+        },
+      });
+    } catch (err) {
+      out.push({ name: entry.name, dir, metadata: null, error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+  return out;
+}
+
+/**
+ * Register enabled skills from pre-computed discovery results.
+ *
+ * Only skills whose name is in `enabledNames` are imported + registered. A disabled
+ * skill is skipped (info-logged). An ENABLED skill with a bad manifest (metadata null)
+ * is a hard failure — a thing going live must be valid (fail closed, unchanged from
+ * the old behavior). Returns the number of skills registered.
+ */
+export async function loadSkillsFromDirectory(
+  discoveries: SkillDiscovery[],
+  registry: SkillRegistry,
+  logger: Logger,
+  enabledNames: Set<string>,
+): Promise<number> {
+  let loaded = 0;
+
+  for (const disc of discoveries) {
+    if (!enabledNames.has(disc.name)) {
+      logger.info({ skill: disc.name }, 'Skill not enabled in registry; skipping');
+      continue;
+    }
+    if (disc.metadata === null || !disc.manifest) {
+      // Enabled but unparseable — fail closed.
+      throw new Error(`Enabled skill '${disc.name}' has an invalid manifest: ${disc.error ?? 'unknown error'}`);
+    }
+
+    try {
+      const manifest = disc.manifest;
 
       // Validate declared capabilities against the fixed allowlist.
       // Unknown names fail hard at startup — a typo in skill.json is a configuration
@@ -96,12 +137,12 @@ export async function loadSkillsFromDirectory(
 
       // Dynamically import the handler.
       // We look for handler.ts first (for tsx/development) then handler.js (for compiled).
-      const handlerPath = fs.existsSync(path.join(skillDir, 'handler.ts'))
-        ? path.join(skillDir, 'handler.ts')
-        : path.join(skillDir, 'handler.js');
+      const handlerPath = fs.existsSync(path.join(disc.dir, 'handler.ts'))
+        ? path.join(disc.dir, 'handler.ts')
+        : path.join(disc.dir, 'handler.js');
 
       if (!fs.existsSync(handlerPath)) {
-        throw new Error(`No handler.ts or handler.js found in ${skillDir}`);
+        throw new Error(`No handler.ts or handler.js found in ${disc.dir}`);
       }
 
       const handlerModule = await import(`file://${handlerPath}`) as Record<string, unknown>;
@@ -135,8 +176,8 @@ export async function loadSkillsFromDirectory(
       logger.info({ skill: manifest.name, version: manifest.version }, 'Skill loaded');
       loaded++;
     } catch (err) {
-      logger.error({ err, dir: entry.name }, 'Failed to load skill');
-      throw new Error(`Failed to load skill from ${skillDir}: ${err instanceof Error ? err.message : String(err)}`);
+      logger.error({ err, skill: disc.name }, 'Failed to load skill');
+      throw new Error(`Failed to load skill '${disc.name}': ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
