@@ -23,6 +23,19 @@ assert_true() {
     fi
 }
 
+assert_false() {
+    local desc="$1"
+    local file="$2"
+    local pattern="$3"
+    if ! grep -qF "$pattern" "$file" 2>/dev/null; then
+        echo "  ✓ $desc"
+        PASS=$((PASS + 1))
+    else
+        echo "  ✗ $desc — did not expect '$pattern' in $file"
+        FAIL=$((FAIL + 1))
+    fi
+}
+
 assert_valid_key() {
     local desc="$1"
     local key="$2"
@@ -71,6 +84,7 @@ cat > "$_tmp_example" <<'EXAMPLE_EOF'
 DB_USER=your-db-user
 DB_PASSWORD=your-db-password
 DATABASE_URL=postgres://your-db-user:your-db-password@localhost:5432/curia
+SECRET_ENCRYPTION_KEY=replace-with-a-base64-32-byte-key
 ANTHROPIC_API_KEY=sk-ant-...
 API_TOKEN=your-secret-token-here
 WEB_APP_BOOTSTRAP_SECRET=replace-with-a-long-random-secret
@@ -80,25 +94,33 @@ EXAMPLE_EOF
 
 _tmp_env=$(mktemp)
 
-# Override script globals for test isolation
+# Override script globals for test isolation. Under vault-only (#911), write_env only
+# templates the four bootstrap values into .env; ANTHROPIC_API_KEY / API_TOKEN /
+# WEB_APP_BOOTSTRAP_SECRET are seeded into the encrypted vault and must NOT appear here.
 ENV_EXAMPLE="$_tmp_example"
 ENV_FILE="$_tmp_env"
 DB_USER="curia"
 DB_PASSWORD="testpassword123abc"
+SECRET_ENCRYPTION_KEY="dGVzdC1lbmNyeXB0aW9uLWtleS0zMmJ5dGVzLWxvbmcxMjM0NQ=="
 API_TOKEN="testtoken456def"
 WEB_APP_BOOTSTRAP_SECRET="testsecret789ghi"
 DATABASE_URL="postgres://curia:testpassword123abc@localhost:5432/curia"
 
-write_env "sk-ant-testkey999"
+write_env
 
-assert_true "DB_USER=curia written"                   "$_tmp_env" "DB_USER=curia"
-assert_true "DB_PASSWORD written"                      "$_tmp_env" "DB_PASSWORD=testpassword123abc"
-assert_true "DATABASE_URL written"                     "$_tmp_env" "DATABASE_URL=postgres://curia:testpassword123abc@localhost:5432/curia"
-assert_true "ANTHROPIC_API_KEY written"                "$_tmp_env" "ANTHROPIC_API_KEY=sk-ant-testkey999"
-assert_true "API_TOKEN written"                        "$_tmp_env" "API_TOKEN=testtoken456def"
-assert_true "WEB_APP_BOOTSTRAP_SECRET written"         "$_tmp_env" "WEB_APP_BOOTSTRAP_SECRET=testsecret789ghi"
-assert_true "optional comment line preserved"          "$_tmp_env" "# NYLAS_API_KEY"
-assert_true "non-substituted var preserved"            "$_tmp_env" "LOG_LEVEL=info"
+assert_true  "DB_USER=curia written"                  "$_tmp_env" "DB_USER=curia"
+assert_true  "DB_PASSWORD written"                     "$_tmp_env" "DB_PASSWORD=testpassword123abc"
+assert_true  "DATABASE_URL written"                    "$_tmp_env" "DATABASE_URL=postgres://curia:testpassword123abc@localhost:5432/curia"
+assert_true  "SECRET_ENCRYPTION_KEY written"           "$_tmp_env" "SECRET_ENCRYPTION_KEY=dGVzdC1lbmNyeXB0aW9uLWtleS0zMmJ5dGVzLWxvbmcxMjM0NQ=="
+# Vault-only: these three are NOT written to .env (they go to the encrypted vault). The
+# live values must never be templated in, and the example placeholders stay untouched.
+assert_false "API_TOKEN live value not written to .env"    "$_tmp_env" "API_TOKEN=testtoken456def"
+assert_false "WEB_APP_BOOTSTRAP live value not in .env"    "$_tmp_env" "WEB_APP_BOOTSTRAP_SECRET=testsecret789ghi"
+assert_true  "ANTHROPIC_API_KEY placeholder left untouched" "$_tmp_env" "ANTHROPIC_API_KEY=sk-ant-..."
+assert_true  "API_TOKEN placeholder left untouched"        "$_tmp_env" "API_TOKEN=your-secret-token-here"
+assert_true  "WEB_APP_BOOTSTRAP placeholder left untouched" "$_tmp_env" "WEB_APP_BOOTSTRAP_SECRET=replace-with-a-long-random-secret"
+assert_true  "optional comment line preserved"            "$_tmp_env" "# NYLAS_API_KEY"
+assert_true  "non-substituted var preserved"              "$_tmp_env" "LOG_LEVEL=info"
 
 rm -f "$_tmp_example" "$_tmp_env"
 # Reset ENV_FILE/ENV_EXAMPLE to real paths after test

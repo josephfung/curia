@@ -19,7 +19,7 @@ The fallback was always meant to be temporary. As long as it exists:
   key, `.env` still has the old one, and the fallback masks which one actually wins.
   That is a genuine debugging hazard ("why is it still using the old key?").
 
-#911 removes the payoff: migrate every secret into the vault and delete the env
+Issue #911 removes the payoff: migrate every secret into the vault and delete the env
 fallback. The open question this ADR settles is **what stays in `.env`** and **how
 fresh installs avoid an empty-vault boot failure** once there's no fallback to cushion
 them.

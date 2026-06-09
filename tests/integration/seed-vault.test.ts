@@ -47,6 +47,30 @@ describeIf('seedVault', () => {
     expect(skipped).toContain('nylas_api_key');
   });
 
+  it('treats whitespace-only env values as absent (skipped)', async () => {
+    const { seeded, skipped } = await seedVault(secrets, { NYLAS_API_KEY: '   ' }, logger);
+    expect(seeded).not.toContain('nylas_api_key');
+    expect(skipped).toContain('nylas_api_key');
+    expect(await secrets.get('nylas_api_key')).toBeNull();
+  });
+
+  it('trims surrounding whitespace from seeded values (copy-paste artifacts)', async () => {
+    await seedVault(secrets, { TAVILY_API_KEY: '  tvly_padded_123\n' }, logger);
+    expect(await secrets.get('tavily_api_key')).toBe('tvly_padded_123');
+  });
+
+  it('verifyRequiredSecrets treats a whitespace-only required secret as missing', async () => {
+    await seedVault(
+      secrets,
+      { ANTHROPIC_API_KEY: 'sk-ant-x', API_TOKEN: 'tok-x', WEB_APP_BOOTSTRAP_SECRET: 'wabs-x' },
+      logger,
+    );
+    // A whitespace-only row would pass a bare null-check but disables HTTP auth, so it
+    // must be reported missing — set it directly (the seeder would have skipped it).
+    await secrets.set('api_token', '   ');
+    expect(await verifyRequiredSecrets(secrets, logger)).toEqual(['api_token']);
+  });
+
   it('is idempotent — re-running upserts the same value', async () => {
     await seedVault(secrets, { TAVILY_API_KEY: 'tvly_v1' }, logger);
     await seedVault(secrets, { TAVILY_API_KEY: 'tvly_v2' }, logger);

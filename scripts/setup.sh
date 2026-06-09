@@ -396,19 +396,35 @@ run_infra() {
 
     # Seed the encrypted vault with the prompted/generated secrets (#911). Must run
     # after migrations (the `secrets` table exists) and before the app boots, because
-    # the app resolves these vault-only with no env fallback. seed-vault reads values
-    # from process.env, so export them here; absent ones are simply skipped. On the
-    # resume path SEED_ANTHROPIC_KEY is empty (vault already seeded on the first run),
-    # so ANTHROPIC_API_KEY is exported empty and skipped — intended.
-    # SEED_VAULT_VERIFY=1 makes seed-vault confirm the required rows (anthropic_api_key,
-    # api_token, web_app_bootstrap_secret) actually landed in the vault and exit non-zero
-    # if not — so a resume run whose first attempt never persisted them fails loudly here
-    # rather than booting an instance with HTTP auth disabled (#911).
+    # the app resolves these vault-only with no env fallback. SEED_VAULT_VERIFY=1 makes
+    # seed-vault confirm the required rows (anthropic_api_key, api_token,
+    # web_app_bootstrap_secret) actually landed in the vault and exit non-zero if not —
+    # so a run that never persisted them fails loudly here rather than booting an instance
+    # with HTTP auth disabled (#911).
+    #
+    # The bootstrap secrets are passed explicitly per setup mode rather than forwarding
+    # the ambient shell environment:
+    #   - Full install: the freshly generated/prompted values are NOT written to .env, so
+    #     the seed-vault child can only receive them through these assignments.
+    #   - Resume: the vault was already seeded on the first run, so pass NONE of them and
+    #     let seed-vault re-verify the existing rows. Forwarding them on resume would
+    #     either clobber an already-seeded ANTHROPIC_API_KEY to empty (failing
+    #     verification) or silently re-seed API_TOKEN / WEB_APP_BOOTSTRAP_SECRET from
+    #     whatever happens to be in the operator's shell — an unintended secret rotation.
+    #     (A legacy pre-vault .env still migrates: run_infra exported its plaintext
+    #     secrets above, and seed-vault reads them from the inherited process.env.)
     info "Seeding secrets vault..."
-    if ! ANTHROPIC_API_KEY="$SEED_ANTHROPIC_KEY" \
-         API_TOKEN="${API_TOKEN:-}" \
-         WEB_APP_BOOTSTRAP_SECRET="${WEB_APP_BOOTSTRAP_SECRET:-}" \
-         SEED_VAULT_VERIFY=1 \
+    seed_secret_env=()
+    if [[ "$SETUP_MODE" == "full" ]]; then
+        seed_secret_env=(
+            "ANTHROPIC_API_KEY=$SEED_ANTHROPIC_KEY"
+            "API_TOKEN=$API_TOKEN"
+            "WEB_APP_BOOTSTRAP_SECRET=$WEB_APP_BOOTSTRAP_SECRET"
+        )
+    fi
+    # ${arr[@]+"${arr[@]}"} expands safely to nothing when the array is empty, even under
+    # `set -u` on bash 3.2 (macOS default), where a bare "${arr[@]}" is an unbound error.
+    if ! env ${seed_secret_env[@]+"${seed_secret_env[@]}"} SEED_VAULT_VERIFY=1 \
          pnpm --prefix "$REPO_ROOT" run seed-vault; then
         error "Vault seeding failed or required secrets are missing. See the output above."
         hint "If this is a resume after a failed first run, re-run full setup (option 3) to regenerate and seed the bootstrap secrets."

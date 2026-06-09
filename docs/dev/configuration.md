@@ -330,7 +330,7 @@ secrets, and `.env` is trimmed **last**. Order matters; do not reorder these ste
    restart the app on the new code**. The existing `.env` still holds every secret.
 2. With the current `.env` present, seed the vault from it:
 
-   ```
+   ```bash
    pnpm run seed-vault
    ```
 
