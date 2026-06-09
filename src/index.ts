@@ -1467,9 +1467,6 @@ async function main(): Promise<void> {
 
   // RegistryService backs the /api/registry/* routes. Seed it with the discovery
   // captured above so the UI can show uninstalled/ghost/error items, not just enabled.
-  // TODO: pass to HttpAdapter in Task 9 (HttpAdapterConfig gains a registryService field).
-  // Constructed here; wired into HttpAdapterConfig in Task 9 (registryService field).
-  // void-cast suppresses noUnusedLocals until that task adds it to the config object.
   const registryService = new RegistryService(
     skillRegistryRepo,
     agentRegistryRepo,
@@ -1482,7 +1479,6 @@ async function main(): Promise<void> {
       error: d.error,
     })),
   );
-  void registryService; // Task 9 will pass this to HttpAdapterConfig instead
 
   // Agents with enable_task_management: true — read by the BacklogHeartbeat to
   // know which source_agent_ids it may wake (and as the fallback target list).
@@ -1824,6 +1820,7 @@ async function main(): Promise<void> {
     executiveProfileService,
     contactService,
     autonomyService,
+    registryService,
     setupRequiredAtBoot,
     bootStartedAt,
   });
