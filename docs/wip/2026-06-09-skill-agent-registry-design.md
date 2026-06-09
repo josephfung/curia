@@ -347,11 +347,27 @@ sees the ⚠ indicator and can Uninstall to clear the row.
 
 ## Web app
 
-New "Skills & Agents" collapsible nav group in `Sidebar.tsx`, two routes
-(`/registry/skills`, `/registry/agents`) in `router.tsx`, two pages modeled on
-`ContactsPage` (records table + right-hand detail drawer).
+Skills & Agents are **low-churn configuration**, so they live under **Workspace Settings**
+as two new sections alongside "Autonomy" — not as top-level nav. This reuses the existing
+settings shell in `SettingsPage.tsx`:
 
-**List view (each):**
+- Add two entries to `SETTINGS_SECTIONS`: `{ id: 'skills', label: 'Skills', href: '/settings/skills' }`
+  and `{ id: 'agents', label: 'Agents', href: '/settings/agents' }`.
+- Add two child routes (`/settings/skills`, `/settings/agents`) in `router.tsx`, each
+  rendering an exported page component (`SkillsPage`, `AgentsPage`) that wraps a
+  `SkillsSection` / `AgentsSection` in `<SettingsLayout activeSection="...">` — exactly the
+  `AutonomyPage` pattern.
+- **No `Sidebar.tsx` changes** — the sections are reached through the existing Settings
+  nav, which retains its `settings-nav` rail.
+
+The section content (records table + detail drawer) is modeled on `ContactsPage` but
+**renders inside the `settings-content` div**, so the `settings-nav` rail stays visible.
+The detail drawer slides over within the settings shell (or renders as an inline panel if
+the overlay drawer doesn't fit the narrower column cleanly — a layout call for
+implementation). The table is the same `.records-table` markup, just hosted in the
+settings column rather than full-width.
+
+**List view (each section):**
 - One row per known entry, with a **state pill**: `uninstalled` (grey) · `installed`
   (amber) · `enabled` (green) · `ghost` (red ⚠).
 - `enabled`/`installed` rows: an enable/disable **toggle**.
