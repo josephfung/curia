@@ -27,7 +27,8 @@
     "redteam": "promptfoo redteam run --config tests/redteam/promptfooconfig.yaml --env-file .env",
     "redteam:report": "promptfoo view",
     "backfill:contact-attributes": "tsx --env-file=.env scripts/backfill-contact-attributes.ts",
-    "seed-vault": "tsx --env-file=.env scripts/seed-vault.ts"
+    "seed-vault": "tsx --env-file=.env scripts/seed-vault.ts",
+    "backfill:registry": "tsx --env-file=.env scripts/backfill-registry-enable-all.ts"
   },
   "license": "MIT",
   "dependencies": {
