@@ -81,6 +81,11 @@ export interface SkillManifest {
    *  scheduler) where no agentId is present.
    *  Validated at load time against known agent names — typos fail at startup. */
   allowed_callers?: string[];
+  /** Optional declarative install/uninstall blocks (spec: skill/agent registry, #541).
+   *  Reserved schema surface — PARSED BUT INERT in PR1. PR2 (secrets) and PR3 (config)
+   *  define and act on their contents. Existing manifests omit both. */
+  install?: Record<string, unknown>;
+  uninstall?: Record<string, unknown>;
 }
 
 /**

@@ -59,6 +59,8 @@
       "type": "array",
       "items": { "type": "string", "minLength": 1 },
       "description": "Agent names allowed to invoke this skill. Omit for unrestricted access. 'system' is a reserved name for system-layer invocations."
-    }
+    },
+    "install":   { "type": "object" },
+    "uninstall": { "type": "object" }
   }
 }
