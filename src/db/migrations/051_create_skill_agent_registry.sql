@@ -27,6 +27,36 @@ CREATE TABLE agent_registry (
 -- No secondary indexes: both tables hold dozens of rows at most and the only hot
 -- query is a full "list all rows" at startup. The PRIMARY KEY on name suffices.
 
+-- Trigger to auto-maintain updated_at on any UPDATE, regardless of whether the
+-- caller explicitly sets it (e.g. admin queries, bulk enables).
+CREATE OR REPLACE FUNCTION skill_registry_set_updated_at()
+  RETURNS trigger LANGUAGE plpgsql AS $$
+  BEGIN
+    NEW.updated_at = now();
+    RETURN NEW;
+  END;
+$$;
+
+CREATE TRIGGER skill_registry_updated_at
+  BEFORE UPDATE ON skill_registry
+  FOR EACH ROW EXECUTE FUNCTION skill_registry_set_updated_at();
+
+CREATE OR REPLACE FUNCTION agent_registry_set_updated_at()
+  RETURNS trigger LANGUAGE plpgsql AS $$
+  BEGIN
+    NEW.updated_at = now();
+    RETURN NEW;
+  END;
+$$;
+
+CREATE TRIGGER agent_registry_updated_at
+  BEFORE UPDATE ON agent_registry
+  FOR EACH ROW EXECUTE FUNCTION agent_registry_set_updated_at();
+
 -- Down Migration
-DROP TABLE skill_registry;
-DROP TABLE agent_registry;
+DROP TRIGGER IF EXISTS skill_registry_updated_at ON skill_registry;
+DROP FUNCTION IF EXISTS skill_registry_set_updated_at();
+DROP TRIGGER IF EXISTS agent_registry_updated_at ON agent_registry;
+DROP FUNCTION IF EXISTS agent_registry_set_updated_at();
+DROP TABLE IF EXISTS skill_registry;
+DROP TABLE IF EXISTS agent_registry;
