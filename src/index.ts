@@ -1513,6 +1513,9 @@ async function main(): Promise<void> {
         : null,
       error: d.error,
     })),
+    // PR2 (#939): backs the install/enable secrets gate — a skill declaring
+    // install.requires_secrets can't go live until those keys exist in the vault.
+    secretsService,
   );
 
   // Agents with enable_task_management: true — read by the BacklogHeartbeat to
@@ -1856,6 +1859,7 @@ async function main(): Promise<void> {
     contactService,
     autonomyService,
     registryService,
+    secretsService,
     setupRequiredAtBoot,
     bootStartedAt,
   });

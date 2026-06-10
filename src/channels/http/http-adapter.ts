@@ -36,6 +36,7 @@ import { identityRoutes } from './routes/identity.js';
 import { executiveRoutes } from './routes/executive.js';
 import { autonomyRoutes } from './routes/autonomy.js';
 import { registryRoutes } from './routes/registry.js';
+import { vaultRoutes } from './routes/vault.js';
 import { setupRoutes } from './routes/setup.js';
 import type { OfficeIdentityService } from '../../identity/service.js';
 import type { ExecutiveProfileService } from '../../executive/service.js';
@@ -60,6 +61,9 @@ export interface HttpAdapterConfig {
   contactService: ContactService;
   autonomyService?: AutonomyService;
   registryService?: import('../../registry/registry-service.js').RegistryService;
+  /** Backs the /api/vault/* routes (secrets status + skill-secret entry). Mounted only
+   *  alongside registryService, which scopes which secret names may be written. */
+  secretsService?: import('../../secrets/secrets-service.js').SecretsService;
   /**
    * True when the process booted without a principal contact and is running in
    * setup-required mode (email + Signal adapters are skipped until restart).
@@ -307,6 +311,18 @@ export class HttpAdapter {
         webAppBootstrapSecret,
         sessions,
       });
+
+      // Vault routes — secrets status + skill-secret entry for the registry UI's
+      // install-time gate. Requires both services: registryService scopes which
+      // secret names may be written.
+      if (this.config.secretsService) {
+        await this.app.register(vaultRoutes, {
+          secretsService: this.config.secretsService,
+          registryService: this.config.registryService,
+          webAppBootstrapSecret,
+          sessions,
+        });
+      }
     }
 
     // Only register KG routes when the secret is configured — if unset, the routes
