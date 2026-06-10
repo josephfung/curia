@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import * as path from 'node:path';
-import { loadSkillsFromDirectory } from '../../../src/skills/loader.js';
+import { discoverSkillManifests, loadSkillsFromDirectory } from '../../../src/skills/loader.js';
 import { SkillRegistry } from '../../../src/skills/registry.js';
 import pino from 'pino';
 
@@ -11,7 +11,10 @@ describe('loadSkillsFromDirectory', () => {
     const registry = new SkillRegistry();
     const skillsDir = path.resolve(import.meta.dirname, '../../../skills');
 
-    await loadSkillsFromDirectory(skillsDir, registry, logger);
+    // Discover all skills, then enable only web-fetch so we don't pay the
+    // full dynamic-import cost for 90+ handlers in a 5 s test timeout.
+    const discoveries = discoverSkillManifests(skillsDir);
+    await loadSkillsFromDirectory(discoveries, registry, logger, new Set(['web-fetch']));
 
     const webFetch = registry.get('web-fetch');
     expect(webFetch).toBeDefined();
@@ -23,14 +26,18 @@ describe('loadSkillsFromDirectory', () => {
     const registry = new SkillRegistry();
     const skillsDir = path.resolve(import.meta.dirname, '../../../skills');
 
-    const count = await loadSkillsFromDirectory(skillsDir, registry, logger);
+    // Enable only web-fetch — we just need to confirm the return value
+    // reflects the actual number of registered skills (1 here). Loading all
+    // 90+ handlers would risk the 5 s vitest timeout on a cold import cache.
+    const discoveries = discoverSkillManifests(skillsDir);
+    const count = await loadSkillsFromDirectory(discoveries, registry, logger, new Set(['web-fetch']));
     expect(count).toBeGreaterThanOrEqual(1);
   });
 
   it('throws for a nonexistent directory', async () => {
-    const registry = new SkillRegistry();
-    await expect(loadSkillsFromDirectory('/tmp/nonexistent-dir-xyz', registry, logger))
-      .rejects.toThrow();
+    // discoverSkillManifests now owns the directory scan, so it is the
+    // function that throws when the directory doesn't exist.
+    expect(() => discoverSkillManifests('/tmp/nonexistent-dir-xyz')).toThrow();
   });
 
   // Regression guard: every installed skill manifest must be convertible to a
@@ -44,11 +51,16 @@ describe('loadSkillsFromDirectory', () => {
   // `"message_id": "string — Nylas message ID..."`. The registry parsed the
   // entire string as the type, tripped the primitive-type allowlist, and curia
   // refused to start.
+  // 30 s timeout: dynamically importing all skill handlers on a cold module
+  // cache can exceed the default 5 s. This test must cover every installed
+  // skill — it is the regression guard for malformed manifests.
   it('produces valid tool definitions for every installed skill', async () => {
     const registry = new SkillRegistry();
     const skillsDir = path.resolve(import.meta.dirname, '../../../skills');
 
-    await loadSkillsFromDirectory(skillsDir, registry, logger);
+    const discoveries = discoverSkillManifests(skillsDir);
+    const enabledNames = new Set(discoveries.map(d => d.name));
+    await loadSkillsFromDirectory(discoveries, registry, logger, enabledNames);
 
     const allSkillNames = registry.list().map(s => s.manifest.name);
     expect(allSkillNames.length).toBeGreaterThan(0);
@@ -61,5 +73,5 @@ describe('loadSkillsFromDirectory', () => {
       expect(tool.input_schema.type).toBe('object');
       expect(tool.input_schema.properties).toBeDefined();
     }
-  });
+  }, 30_000);
 });
