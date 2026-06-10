@@ -31,7 +31,7 @@ import { AgentRuntime } from './agents/runtime.js';
 import { Dispatcher } from './dispatch/dispatcher.js';
 import { CliAdapter } from './channels/cli/cli-adapter.js';
 import { discoverAgentManifests, interpolateRuntimeContext } from './agents/loader.js';
-import type { AgentYamlConfig } from './agents/loader.js';
+import type { AgentYamlConfig, AgentDiscovery } from './agents/loader.js';
 import { ModelRouter } from './agents/llm/model-router.js';
 import { ModelRegistry } from './agents/llm/model-registry.js';
 import { createEstimateCostUsd } from './agents/llm/pricing.js';
@@ -49,6 +49,7 @@ import { ConfigStore } from './memory/config-store.js';
 import { SkillRegistry } from './skills/registry.js';
 import { ExecutionLayer } from './skills/execution.js';
 import { loadSkillsFromDirectory, discoverSkillManifests, validateAllowedCallers } from './skills/loader.js';
+import type { SkillDiscovery } from './skills/loader.js';
 import { loadMcpServers } from './skills/mcp-loader.js';
 import type { McpSession } from './skills/mcp-client.js';
 import { ContactService } from './contacts/contact-service.js';
@@ -119,7 +120,7 @@ import yaml from 'js-yaml';
 import { RegistryRepo } from './registry/registry-repo.js';
 import { RegistryService } from './registry/registry-service.js';
 import { reconcileRegistries, type RegistryDefaults } from './registry/reconcile.js';
-import type { Discovery } from './registry/types.js';
+import type { Discovery, RegistryRow } from './registry/types.js';
 
 async function main(): Promise<void> {
   // Captured at the very start of main() so the wizard's post-setup polling
@@ -777,8 +778,15 @@ async function main(): Promise<void> {
 
   // --- Registry: discover everything on disk (lenient), reconcile the core set,
   // then load+register ONLY enabled skills/agents. (Spec: skill/agent registry, #541.)
-  const skillDiscovery = discoverSkillManifests(skillsDir);
-  const agentDiscovery = discoverAgentManifests(agentsDir);
+  let skillDiscovery: SkillDiscovery[];
+  let agentDiscovery: AgentDiscovery[];
+  try {
+    skillDiscovery = discoverSkillManifests(skillsDir);
+    agentDiscovery = discoverAgentManifests(agentsDir);
+  } catch (err) {
+    logger.fatal({ err }, 'Failed to discover skills/agents on disk');
+    process.exit(1);
+  }
 
   const skillRegistryRepo = new RegistryRepo(pool, 'skill_registry');
   const agentRegistryRepo = new RegistryRepo(pool, 'agent_registry');
@@ -788,7 +796,18 @@ async function main(): Promise<void> {
   try {
     const defaultsPath = path.resolve(import.meta.dirname, '../config/registry-defaults.yaml');
     if (fs.existsSync(defaultsPath)) {
-      registryDefaults = (yaml.load(fs.readFileSync(defaultsPath, 'utf-8')) as RegistryDefaults) ?? registryDefaults;
+      const loaded = yaml.load(fs.readFileSync(defaultsPath, 'utf-8'));
+      if (!loaded) {
+        // An empty or null YAML file would silently boot with zero defaults — fatal instead.
+        logger.fatal({ path: defaultsPath }, 'config/registry-defaults.yaml is empty or null');
+        process.exit(1);
+      }
+      const candidate = loaded as RegistryDefaults;
+      if (!Array.isArray(candidate.skills) || !Array.isArray(candidate.agents)) {
+        logger.fatal({ path: defaultsPath, loaded }, 'config/registry-defaults.yaml has wrong shape (expected {skills: [], agents: []})');
+        process.exit(1);
+      }
+      registryDefaults = candidate;
     }
   } catch (err) {
     logger.fatal({ err }, 'Failed to read config/registry-defaults.yaml');
@@ -810,16 +829,21 @@ async function main(): Promise<void> {
   }
 
   // Ghost warnings: a registry row whose files are gone never loads.
+  // One listRows() call per table; used for both ghost scan and enabled-name set.
+  let skillRows: RegistryRow[];
+  try {
+    skillRows = await skillRegistryRepo.listRows();
+  } catch (err) {
+    logger.fatal({ err }, 'Failed to read skill_registry rows after reconciliation');
+    process.exit(1);
+  }
   const skillDiscNames = new Set(skillDiscovery.map(d => d.name));
-  for (const row of await skillRegistryRepo.listRows()) {
+  for (const row of skillRows) {
     if (!skillDiscNames.has(row.name)) {
       logger.warn({ skill: row.name }, 'registry: enabled/installed skill has no files on disk (ghost); not loaded');
     }
   }
-
-  const enabledSkillNames = new Set(
-    (await skillRegistryRepo.listRows()).filter(r => r.enabled).map(r => r.name),
-  );
+  const enabledSkillNames = new Set(skillRows.filter(r => r.enabled).map(r => r.name));
   try {
     const skillCount = await loadSkillsFromDirectory(skillDiscovery, skillRegistry, logger, enabledSkillNames);
     logger.info({ skillCount }, 'Skills loaded');
@@ -858,15 +882,20 @@ async function main(): Promise<void> {
 
   // Agents: ghost warnings, then keep only ENABLED, healthy agent configs.
   // agentsDir + agentDiscovery are already populated above (in the registry block).
+  let agentRows: RegistryRow[];
+  try {
+    agentRows = await agentRegistryRepo.listRows();
+  } catch (err) {
+    logger.fatal({ err }, 'Failed to read agent_registry rows after reconciliation');
+    process.exit(1);
+  }
   const agentDiscNames = new Set(agentDiscovery.map(d => d.name));
-  for (const row of await agentRegistryRepo.listRows()) {
+  for (const row of agentRows) {
     if (!agentDiscNames.has(row.name)) {
       logger.warn({ agent: row.name }, 'registry: enabled/installed agent has no files on disk (ghost); not loaded');
     }
   }
-  const enabledAgentNames = new Set(
-    (await agentRegistryRepo.listRows()).filter(r => r.enabled).map(r => r.name),
-  );
+  const enabledAgentNames = new Set(agentRows.filter(r => r.enabled).map(r => r.name));
   let agentConfigs: AgentYamlConfig[];
   try {
     agentConfigs = [];

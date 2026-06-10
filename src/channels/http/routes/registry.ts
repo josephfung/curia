@@ -13,6 +13,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { RegistryService } from '../../../registry/registry-service.js';
 import type { RegistryKind } from '../../../registry/types.js';
+import { RegistryGuardError } from '../../../registry/types.js';
 import { assertSecret, type SessionStore } from '../session-auth.js';
 
 export interface RegistryRouteOptions {
@@ -70,8 +71,8 @@ export async function registryRoutes(
   // -- POST state-change actions: install, enable, install-enable, disable --
   //
   // A single factory function handles all four so the auth + error handling pattern
-  // isn't repeated. Service guard failures (ghost install, not-installed enable)
-  // are caller errors → 400; unexpected failures → 500 already logged by the caller.
+  // isn't repeated. RegistryGuardError (not-on-disk, broken manifest, not-installed
+  // enable) are caller errors → 400. All other errors are infrastructure failures → 500.
 
   const action = (op: 'install' | 'enable' | 'install-enable' | 'disable') =>
     async (request: FastifyRequest, reply: FastifyReply) => {
@@ -91,9 +92,14 @@ export async function registryRoutes(
         else entry = await registryService.disable(kind, name, ACTOR);
         return reply.send({ entry });
       } catch (err) {
-        // Service guard failures (ghost install, not-installed enable) are caller errors → 400.
-        request.log.warn({ err, kind, name, op }, `registry ${op} rejected`);
-        return reply.status(400).send({ error: err instanceof Error ? err.message : 'Operation failed' });
+        if (err instanceof RegistryGuardError) {
+          // Expected validation rejection — bad request from the caller.
+          request.log.info({ err, kind, name, op }, `registry ${op} rejected: guard`);
+          return reply.status(400).send({ error: err.message });
+        }
+        // Unexpected failure — DB error, invariant violation, etc.
+        request.log.error({ err, kind, name, op }, `registry ${op} failed unexpectedly`);
+        return reply.status(500).send({ error: 'Operation failed. Check server logs.' });
       }
     };
 

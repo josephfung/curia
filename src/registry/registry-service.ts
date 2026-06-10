@@ -6,6 +6,7 @@
 import type {
   IRegistryRepo, RegistryKind, RegistryEntry, Discovery,
 } from './types.js';
+import { RegistryGuardError } from './types.js';
 
 export class RegistryService {
   // Discovery is captured once at startup and held here. setDiscovery exists so the
@@ -80,10 +81,10 @@ export class RegistryService {
   private assertInstallable(kind: RegistryKind, name: string): void {
     const disc = this.discovery(kind).find(d => d.name === name);
     if (!disc) {
-      throw new Error(`Cannot install '${name}': not on disk (no manifest found).`);
+      throw new RegistryGuardError(`Cannot install '${name}': not on disk (no manifest found).`);
     }
     if (disc.metadata === null) {
-      throw new Error(`Cannot install '${name}': its manifest failed to parse (${disc.error ?? 'unknown error'}).`);
+      throw new RegistryGuardError(`Cannot install '${name}': its manifest failed to parse (${disc.error ?? 'unknown error'}).`);
     }
   }
 
@@ -96,7 +97,7 @@ export class RegistryService {
   async enable(kind: RegistryKind, name: string, actor: string): Promise<RegistryEntry> {
     this.assertInstallable(kind, name);
     const row = await this.repo(kind).getRow(name);
-    if (!row) throw new Error(`Cannot enable '${name}': not installed. Install it first.`);
+    if (!row) throw new RegistryGuardError(`Cannot enable '${name}': not installed. Install it first.`);
     await this.repo(kind).enable(name, actor);
     return this.entry(kind, name);
   }
@@ -110,7 +111,7 @@ export class RegistryService {
 
   async disable(kind: RegistryKind, name: string, actor: string): Promise<RegistryEntry> {
     const row = await this.repo(kind).getRow(name);
-    if (!row) throw new Error(`Cannot disable '${name}': no registry row.`);
+    if (!row) throw new RegistryGuardError(`Cannot disable '${name}': no registry row.`);
     await this.repo(kind).disable(name, actor);
     return this.entry(kind, name);
   }
