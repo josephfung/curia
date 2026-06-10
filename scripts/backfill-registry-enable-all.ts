@@ -26,10 +26,11 @@ async function main(): Promise<void> {
     const skillRepo = new RegistryRepo(pool, 'skill_registry');
     const agentRepo = new RegistryRepo(pool, 'agent_registry');
 
-    let skillsEnrolled = 0, skillsSkipped = 0;
+    let skillsEnrolled = 0, skillsSkipped = 0, skillsErrored = 0;
     for (const disc of discoverSkillManifests(skillsDir)) {
       if (disc.metadata === null) {
         logger.warn({ skill: disc.name, error: disc.error }, 'skipping skill with unparseable manifest');
+        skillsErrored++;
         continue;
       }
       const existing = await skillRepo.getRow(disc.name);
@@ -39,10 +40,11 @@ async function main(): Promise<void> {
       skillsEnrolled++;
     }
 
-    let agentsEnrolled = 0, agentsSkipped = 0;
+    let agentsEnrolled = 0, agentsSkipped = 0, agentsErrored = 0;
     for (const disc of discoverAgentManifests(agentsDir)) {
       if (disc.config === null) {
         logger.warn({ agent: disc.name, error: disc.error }, 'skipping agent with unparseable config');
+        agentsErrored++;
         continue;
       }
       const existing = await agentRepo.getRow(disc.name);
@@ -52,7 +54,13 @@ async function main(): Promise<void> {
       agentsEnrolled++;
     }
 
-    logger.info({ skillsEnrolled, skillsSkipped, agentsEnrolled, agentsSkipped }, 'registry backfill complete');
+    logger.info(
+      { skillsEnrolled, skillsSkipped, skillsErrored, agentsEnrolled, agentsSkipped, agentsErrored },
+      'registry backfill complete',
+    );
+    if (skillsErrored > 0 || agentsErrored > 0) {
+      logger.warn({ skillsErrored, agentsErrored }, 'backfill completed with parse errors; some items were not enrolled');
+    }
   } finally {
     await pool.end();
   }

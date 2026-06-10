@@ -152,6 +152,9 @@ export interface AgentDiscovery {
  * per-file rather than thrown, so a broken DISABLED agent never crashes startup.
  */
 export function discoverAgentManifests(dirPath: string): AgentDiscovery[] {
+  if (!fs.existsSync(dirPath)) {
+    throw new Error(`Agents directory not found: ${dirPath}`);
+  }
   const files = fs.readdirSync(dirPath).filter(f => f.endsWith('.yaml') || f.endsWith('.yml'));
   return files.map(f => {
     try {

@@ -66,3 +66,9 @@ skills:
   - pending-actions-digest
 agents:
   - coordinator
+  - setup-wizard       # required for onboarding on a fresh install
+  - contacts
+  - calendar
+  - ceo-inbox
+  - research-analyst
+  - meeting-debrief

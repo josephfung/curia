@@ -56,6 +56,16 @@ export interface RegistryEntry {
   enabledBy: string | null;
 }
 
+/** Thrown by RegistryService for expected guard rejections (not-on-disk, broken manifest,
+ *  not-installed enable, etc.). Routes catch this specifically to return HTTP 400;
+ *  all other errors bubble up as HTTP 500. */
+export class RegistryGuardError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'RegistryGuardError';
+  }
+}
+
 /** The DB-access contract RegistryService and reconciliation depend on.
  *  The Postgres implementation is RegistryRepo; tests use an in-memory fake. */
 export interface IRegistryRepo {
