@@ -61,6 +61,14 @@ export class SecretsService {
     await this.upsert(name, 'json', ciphertext, iv);
   }
 
+  /** List the names of all configured secrets — keys only, never values. Used by the
+   *  registry UI to cross-reference a skill's install.requires_secrets, and by the
+   *  install/enable gate to check that required keys are present. */
+  async list(): Promise<string[]> {
+    const result = await this.pool.query<{ name: string }>('SELECT name FROM secrets ORDER BY name');
+    return result.rows.map(r => r.name);
+  }
+
   /** Remove a secret. No error if it does not exist. */
   async delete(name: string): Promise<void> {
     await this.pool.query('DELETE FROM secrets WHERE name = $1', [name]);

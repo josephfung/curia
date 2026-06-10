@@ -30,6 +30,9 @@ export interface ManifestMetadata {
   actionRisk?: ActionRisk;
   sensitivity?: string;
   capabilities?: string[];
+  /** Vault keys the skill's install block declares it needs (install.requires_secrets).
+   *  Surfaced to the registry UI and consulted by the install/enable secrets gate. */
+  requiresSecrets?: string[];
   // agents
   role?: string;
   modelTier?: string;
@@ -64,6 +67,14 @@ export class RegistryGuardError extends Error {
     super(message);
     this.name = 'RegistryGuardError';
   }
+}
+
+/** Narrow read-only view of the secrets vault the registry's install/enable gate needs.
+ *  SecretsService satisfies this; tests pass a fake. Keeps RegistryService decoupled from
+ *  the full secrets surface (it only ever needs the configured key names). */
+export interface SecretsLister {
+  /** Names of all configured secrets — keys only, never values. */
+  list(): Promise<string[]>;
 }
 
 /** The DB-access contract RegistryService and reconciliation depend on.
