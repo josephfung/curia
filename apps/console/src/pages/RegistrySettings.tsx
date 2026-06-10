@@ -251,6 +251,7 @@ function RegistrySection({ kind }: { kind: 'skill' | 'agent' }) {
       const data = await res.json() as Record<string, RegistryEntry[]>;
       const list = data[kindPath] ?? [];
       setEntries(list);
+      setLoadError(null); // clear any prior error on successful reload
       // Keep the drawer in sync with the freshly-loaded state so action
       // buttons reflect the true current state after a transition.
       setSelected(prev =>
@@ -312,6 +313,7 @@ function RegistrySection({ kind }: { kind: 'skill' | 'agent' }) {
 
         {selected && (
           <RegistryDrawer
+            key={selected.name}
             entry={selected}
             kindPath={kindPath}
             onClose={() => setSelected(null)}

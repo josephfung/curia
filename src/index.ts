@@ -195,13 +195,16 @@ async function main(): Promise<void> {
   });
 
   // 1b. Startup validation — fail fast before any I/O if configs are malformed.
-  // Validates config/default.yaml, agents/*.yaml, and skills/*/skill.json against
-  // JSON Schema. Any failure exits the process before the DB connection is attempted.
+  // Only validates config/default.yaml and config/skills.yaml here. Agent and skill
+  // manifests are validated by the registry-aware discovery pass further below — that
+  // pass is lenient (it captures per-item errors) and fail-closes only for ENABLED
+  // manifests, so a broken disabled/uninstalled manifest no longer aborts startup.
   try {
     await runStartupValidation({
       configDir,
-      agentsDir: path.resolve(import.meta.dirname, '../agents'),
-      skillsDir: path.resolve(import.meta.dirname, '../skills'),
+      // agentsDir / skillsDir intentionally omitted — manifest schema validation now
+      // happens inside discoverAgentManifests / discoverSkillManifests so that broken
+      // uninstalled manifests don't block startup.
       // `schemasDir` is computed here (the entrypoint) — not inside the validator —
       // because tsup bundles every source file into a single `dist/index.js`,
       // collapsing `import.meta.dirname` to `dist/` regardless of which source file
@@ -791,24 +794,27 @@ async function main(): Promise<void> {
   const skillRegistryRepo = new RegistryRepo(pool, 'skill_registry');
   const agentRegistryRepo = new RegistryRepo(pool, 'agent_registry');
 
-  // Load the trusted fresh-install core set.
-  let registryDefaults: RegistryDefaults = { skills: [], agents: [] };
+  // Load the trusted fresh-install core set. The file MUST exist and be valid —
+  // a missing file would silently leave nothing enrolled on a fresh DB, so treat
+  // absence as a fatal misconfiguration rather than defaulting to empty.
+  let registryDefaults: RegistryDefaults;
   try {
     const defaultsPath = path.resolve(import.meta.dirname, '../config/registry-defaults.yaml');
-    if (fs.existsSync(defaultsPath)) {
-      const loaded = yaml.load(fs.readFileSync(defaultsPath, 'utf-8'));
-      if (!loaded) {
-        // An empty or null YAML file would silently boot with zero defaults — fatal instead.
-        logger.fatal({ path: defaultsPath }, 'config/registry-defaults.yaml is empty or null');
-        process.exit(1);
-      }
-      const candidate = loaded as RegistryDefaults;
-      if (!Array.isArray(candidate.skills) || !Array.isArray(candidate.agents)) {
-        logger.fatal({ path: defaultsPath, loaded }, 'config/registry-defaults.yaml has wrong shape (expected {skills: [], agents: []})');
-        process.exit(1);
-      }
-      registryDefaults = candidate;
+    if (!fs.existsSync(defaultsPath)) {
+      logger.fatal({ path: defaultsPath }, 'config/registry-defaults.yaml not found — cannot enroll core defaults');
+      process.exit(1);
     }
+    const loaded = yaml.load(fs.readFileSync(defaultsPath, 'utf-8'));
+    if (!loaded) {
+      logger.fatal({ path: defaultsPath }, 'config/registry-defaults.yaml is empty or null');
+      process.exit(1);
+    }
+    const candidate = loaded as RegistryDefaults;
+    if (!Array.isArray(candidate.skills) || !Array.isArray(candidate.agents)) {
+      logger.fatal({ path: defaultsPath, loaded }, 'config/registry-defaults.yaml has wrong shape (expected {skills: [], agents: []})');
+      process.exit(1);
+    }
+    registryDefaults = candidate;
   } catch (err) {
     logger.fatal({ err }, 'Failed to read config/registry-defaults.yaml');
     process.exit(1);

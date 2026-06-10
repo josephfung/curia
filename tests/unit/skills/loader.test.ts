@@ -31,7 +31,7 @@ describe('loadSkillsFromDirectory', () => {
     // 90+ handlers would risk the 5 s vitest timeout on a cold import cache.
     const discoveries = discoverSkillManifests(skillsDir);
     const count = await loadSkillsFromDirectory(discoveries, registry, logger, new Set(['web-fetch']));
-    expect(count).toBeGreaterThanOrEqual(1);
+    expect(count).toBe(1);
   });
 
   it('throws for a nonexistent directory', async () => {

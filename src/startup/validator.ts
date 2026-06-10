@@ -61,8 +61,10 @@ function formatErrors(errors: ErrorObject[]): string {
  */
 export async function runStartupValidation(opts: {
   configDir: string;
-  agentsDir: string;
-  skillsDir: string;
+  /** When omitted, agent manifests are not validated in this pass. */
+  agentsDir?: string;
+  /** When omitted, skill manifests are not validated in this pass. */
+  skillsDir?: string;
   schemasDir: string;
   logger: Logger;
   /** Override config filename for testing. Defaults to 'default.yaml'. */
@@ -105,8 +107,8 @@ export async function runStartupValidation(opts: {
     }
   }
 
-  // 3. Validate all agents/*.yaml
-  if (fs.existsSync(agentsDir)) {
+  // 3. Validate all agents/*.yaml (skipped when agentsDir is omitted)
+  if (agentsDir && fs.existsSync(agentsDir)) {
     const agentFiles = fs
       .readdirSync(agentsDir)
       .filter(f => f.endsWith('.yaml') || f.endsWith('.yml'));
@@ -125,7 +127,7 @@ export async function runStartupValidation(opts: {
     }
   }
 
-  // 4. Validate all skills/*/skill.json
+  // 4. Validate all skills/*/skill.json (skipped when skillsDir is omitted)
   //
   // Supports two layouts:
   //   a) skillsDir is a parent containing multiple skill subdirectories (production):
@@ -135,7 +137,7 @@ export async function runStartupValidation(opts: {
   //
   // In case (b), the directory is checked first for a direct skill.json, then
   // subdirectories are scanned as in case (a).
-  if (fs.existsSync(skillsDir)) {
+  if (skillsDir && fs.existsSync(skillsDir)) {
     // Case (b): direct skill.json in skillsDir itself
     const directManifest = path.join(skillsDir, 'skill.json');
     if (fs.existsSync(directManifest)) {
