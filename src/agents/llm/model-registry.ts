@@ -114,7 +114,10 @@ const MODEL_REGISTRY: Record<string, ModelMetadata> = {
       outputPerMToken: 0.87,
     },
     capabilities: ['coding', 'reasoning'],
-    maxOutputTokens: 8_192,
+    // 8_192 was too low — long-form writing tasks (e.g. import_to_google_doc with
+    // a full essay body) exceeded it, producing truncated JSON tool call arguments.
+    // DeepSeek V4 Pro on OpenRouter supports up to 64k output tokens (#934).
+    maxOutputTokens: 32_768,
   },
   'openai/gpt-4o': {
     provider: 'openrouter',

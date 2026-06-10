@@ -13,6 +13,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`deepseek/deepseek-v4-pro` output token cap** — raised `maxOutputTokens` from 8192 to 32768; the old value caused long-form writing tasks (e.g. essay drafts via `import_to_google_doc`) to produce truncated JSON tool call arguments and non-retryable errors. (#934)
+
 ### Added
 - **Skill/Agent registry** — DB-gated install/enable lifecycle for skills and agents (`skill_registry`/`agent_registry` tables, startup reconciliation of a trusted core set, one-shot prod backfill). Only enabled items load at runtime. (#541)
 - **Skills & Agents settings** — manage install/enable/disable state from Workspace Settings. (#541)
