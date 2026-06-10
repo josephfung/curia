@@ -105,6 +105,7 @@ function SecretRow({ name, configured, onSaved }: {
             autoComplete="off"
             value={value}
             placeholder={`Enter ${name}`}
+            aria-label={`Secret value for ${name}`}
             onChange={e => setValue(e.target.value)}
             style={{ flex: 1 }}
           />

@@ -1,5 +1,7 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterAll } from 'vitest';
 import * as path from 'node:path';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
 import { discoverSkillManifests, loadSkillsFromDirectory } from '../../../src/skills/loader.js';
 import { SkillRegistry } from '../../../src/skills/registry.js';
 import pino from 'pino';
@@ -32,6 +34,48 @@ describe('loadSkillsFromDirectory', () => {
     const discoveries = discoverSkillManifests(skillsDir);
     const count = await loadSkillsFromDirectory(discoveries, registry, logger, new Set(['web-fetch']));
     expect(count).toBe(1);
+  });
+
+  // PR2 (#939): install.requires_secrets is normalized at this lenient-discovery boundary
+  // (raw JSON.parse, no Ajv), so a malformed manifest can't leak a non-array/non-string
+  // shape into the registry gate or vault scope guard.
+  describe('install.requires_secrets normalization', () => {
+    const tmpDir = path.join(os.tmpdir(), 'curia-loader-requires-secrets-test');
+
+    function writeSkill(name: string, install: unknown): void {
+      const dir = path.join(tmpDir, name);
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, 'skill.json'), JSON.stringify({
+        name, description: 'd', version: '1.0.0', action_risk: 'none', install,
+      }));
+    }
+
+    afterAll(() => { fs.rmSync(tmpDir, { recursive: true, force: true }); });
+
+    it('keeps a well-formed string array', () => {
+      writeSkill('good', { requires_secrets: ['a', 'b'] });
+      const disc = discoverSkillManifests(tmpDir).find(d => d.name === 'good');
+      expect(disc?.metadata?.requiresSecrets).toEqual(['a', 'b']);
+    });
+
+    it('coerces a non-array value to undefined (no requirement)', () => {
+      writeSkill('bad-string', { requires_secrets: 'tavily_api_key' });
+      const disc = discoverSkillManifests(tmpDir).find(d => d.name === 'bad-string');
+      // Must NOT be the raw string — that would iterate char-by-char downstream.
+      expect(disc?.metadata?.requiresSecrets).toBeUndefined();
+    });
+
+    it('drops non-string entries from a mixed array', () => {
+      writeSkill('mixed', { requires_secrets: ['ok', 42, null, 'fine'] });
+      const disc = discoverSkillManifests(tmpDir).find(d => d.name === 'mixed');
+      expect(disc?.metadata?.requiresSecrets).toEqual(['ok', 'fine']);
+    });
+
+    it('leaves requiresSecrets undefined when there is no install block', () => {
+      writeSkill('none', undefined);
+      const disc = discoverSkillManifests(tmpDir).find(d => d.name === 'none');
+      expect(disc?.metadata?.requiresSecrets).toBeUndefined();
+    });
   });
 
   it('throws for a nonexistent directory', async () => {

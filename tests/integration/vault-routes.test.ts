@@ -18,6 +18,11 @@ const SECRET = 'test-bootstrap-secret';
 const KEY = randomBytes(32);
 const logger = pino({ level: 'silent' });
 const hdr = { 'x-web-bootstrap-secret': SECRET };
+// Suite-unique key namespace. Deliberately NOT a canonical secret name (e.g. tavily_api_key)
+// so a shared/persistent DATABASE_URL can't have a real configured key overwritten, and so
+// cleanup only ever touches this suite's own rows (no race with other integration suites
+// that use a 'test_%' prefix).
+const DECLARED_KEY = 'vault_rt_declared_key';
 
 describeIf('vault routes', () => {
   let pool: pg.Pool;
@@ -34,7 +39,7 @@ describeIf('vault routes', () => {
     const registryService = new RegistryService(
       new RegistryRepo(pool, 'skill_registry'),
       new RegistryRepo(pool, 'agent_registry'),
-      [{ name: 'web-search', metadata: { name: 'web-search', description: 'd', version: '1.0.0', requiresSecrets: ['tavily_api_key'] } }],
+      [{ name: 'web-search', metadata: { name: 'web-search', description: 'd', version: '1.0.0', requiresSecrets: [DECLARED_KEY] } }],
       [],
       secretsService,
     );
@@ -52,7 +57,8 @@ describeIf('vault routes', () => {
   });
 
   beforeEach(async () => {
-    await pool.query("DELETE FROM secrets WHERE name LIKE 'tavily_%' OR name LIKE 'test_%'");
+    // Scope cleanup to this suite's own namespace only — never the shared 'test_%' prefix.
+    await pool.query("DELETE FROM secrets WHERE name LIKE 'vault_rt_%'");
   });
 
   it('requires auth', async () => {
@@ -61,38 +67,38 @@ describeIf('vault routes', () => {
   });
 
   it('status lists configured key names', async () => {
-    await app.inject({ method: 'PUT', url: '/api/vault/secrets/tavily_api_key', headers: hdr, payload: { value: 'tok-xyz' } });
+    await app.inject({ method: 'PUT', url: `/api/vault/secrets/${DECLARED_KEY}`, headers: hdr, payload: { value: 'tok-xyz' } });
     const res = await app.inject({ method: 'GET', url: '/api/vault/status', headers: hdr });
     expect(res.statusCode).toBe(200);
     const body = res.json() as { configured_keys: string[] };
-    expect(body.configured_keys).toContain('tavily_api_key');
+    expect(body.configured_keys).toContain(DECLARED_KEY);
     // The value must never appear in the status response.
     expect(JSON.stringify(body)).not.toContain('tok-xyz');
   });
 
   it('sets a declared secret and persists it', async () => {
-    const res = await app.inject({ method: 'PUT', url: '/api/vault/secrets/tavily_api_key', headers: hdr, payload: { value: 'tok-abc' } });
+    const res = await app.inject({ method: 'PUT', url: `/api/vault/secrets/${DECLARED_KEY}`, headers: hdr, payload: { value: 'tok-abc' } });
     expect(res.statusCode).toBe(200);
     const svc = new SecretsService(pool, KEY, logger);
-    expect(await svc.get('tavily_api_key')).toBe('tok-abc');
+    expect(await svc.get(DECLARED_KEY)).toBe('tok-abc');
   });
 
   it('rejects setting a secret no skill declares', async () => {
-    const res = await app.inject({ method: 'PUT', url: '/api/vault/secrets/test_arbitrary', headers: hdr, payload: { value: 'x' } });
+    const res = await app.inject({ method: 'PUT', url: '/api/vault/secrets/vault_rt_undeclared', headers: hdr, payload: { value: 'x' } });
     expect(res.statusCode).toBe(400);
     expect((res.json() as { error: string }).error).toMatch(/not a required secret/);
     // Nothing was written.
-    expect(await new SecretsService(pool, KEY, logger).get('test_arbitrary')).toBeNull();
+    expect(await new SecretsService(pool, KEY, logger).get('vault_rt_undeclared')).toBeNull();
   });
 
   it('rejects an empty value', async () => {
-    const res = await app.inject({ method: 'PUT', url: '/api/vault/secrets/tavily_api_key', headers: hdr, payload: { value: '' } });
+    const res = await app.inject({ method: 'PUT', url: `/api/vault/secrets/${DECLARED_KEY}`, headers: hdr, payload: { value: '' } });
     expect(res.statusCode).toBe(400);
     expect((res.json() as { error: string }).error).toMatch(/non-empty/);
   });
 
   it('rejects an oversized value', async () => {
-    const res = await app.inject({ method: 'PUT', url: '/api/vault/secrets/tavily_api_key', headers: hdr, payload: { value: 'x'.repeat(8193) } });
+    const res = await app.inject({ method: 'PUT', url: `/api/vault/secrets/${DECLARED_KEY}`, headers: hdr, payload: { value: 'x'.repeat(8193) } });
     expect(res.statusCode).toBe(400);
     expect((res.json() as { error: string }).error).toMatch(/exceeds/);
   });
