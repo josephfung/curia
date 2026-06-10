@@ -72,6 +72,18 @@ export function discoverSkillManifests(skillsDir: string): SkillDiscovery[] {
       manifest.secrets ??= [];
       manifest.inputs ??= {};
       manifest.outputs ??= {};
+
+      // Normalize install.requires_secrets at this single untrusted-input boundary.
+      // Discovery is deliberately lenient (raw JSON.parse, no Ajv here — see the comment
+      // on this function), so a hand-edited/malformed manifest could carry a non-array or
+      // non-string entries. Coerce to a clean string[] (dropping non-strings) so the
+      // downstream registry gate and vault scope guard are guaranteed a valid shape and
+      // never iterate a string char-by-char or throw on `.filter`. Absent/empty → undefined.
+      // (A genuinely malformed manifest is still caught by the schema-validation CI test.)
+      const rawRequires: unknown = manifest.install?.requires_secrets;
+      const requiresSecrets = Array.isArray(rawRequires)
+        ? rawRequires.filter((s): s is string => typeof s === 'string')
+        : undefined;
       out.push({
         name: manifest.name,
         dir,
@@ -84,7 +96,8 @@ export function discoverSkillManifests(skillsDir: string): SkillDiscovery[] {
           sensitivity: manifest.sensitivity,
           capabilities: manifest.capabilities,
           // PR2 (#939): surface the install-time secrets gate to the registry UI + service.
-          requiresSecrets: manifest.install?.requires_secrets,
+          // Normalized above to a clean string[] | undefined.
+          requiresSecrets,
         },
       });
     } catch (err) {
