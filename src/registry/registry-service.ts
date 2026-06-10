@@ -78,7 +78,9 @@ export class RegistryService {
   /** Every vault key declared across skills' install.requires_secrets (deduped).
    *  Scopes the vault write endpoint: only a secret some skill actually needs may be set
    *  through it, so the console can't write arbitrary keys into the vault. Reads from
-   *  in-memory discovery — no DB round-trip. */
+   *  in-memory discovery — no DB round-trip.
+   *  Skills only by design (agents don't declare requires_secrets); if that ever changes,
+   *  this must also union agentDiscovery, or declared agent secrets won't be settable. */
   declaredSecretNames(): string[] {
     const names = new Set<string>();
     for (const d of this.skillDiscovery) {

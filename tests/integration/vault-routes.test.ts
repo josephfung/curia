@@ -90,4 +90,10 @@ describeIf('vault routes', () => {
     expect(res.statusCode).toBe(400);
     expect((res.json() as { error: string }).error).toMatch(/non-empty/);
   });
+
+  it('rejects an oversized value', async () => {
+    const res = await app.inject({ method: 'PUT', url: '/api/vault/secrets/tavily_api_key', headers: hdr, payload: { value: 'x'.repeat(8193) } });
+    expect(res.statusCode).toBe(400);
+    expect((res.json() as { error: string }).error).toMatch(/exceeds/);
+  });
 });
