@@ -13,6 +13,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Removed
+
+- **`backfill:registry` script** — one-shot prod migration (`scripts/backfill-registry-enable-all.ts`) removed after successful run on production; all existing skill/agent rows are now in the registry. (#541)
+
 ### Fixed
 
 - **`deepseek/deepseek-v4-pro` output token cap** — raised `maxOutputTokens` from 8192 to 32768; the old value caused long-form writing tasks (e.g. essay drafts via `import_to_google_doc`) to produce truncated JSON tool call arguments and non-retryable errors. (#934)
