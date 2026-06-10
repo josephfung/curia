@@ -3,8 +3,8 @@
 # this file ships with the codebase. Reconciliation enrolls these as enabled ONLY
 # when no registry row already exists (it never overrides an admin's choice).
 #
-# The existing production deployment ignores this file: it is migrated by the
-# one-shot scripts/backfill-registry-enable-all.ts, which enables everything on disk.
+# The existing production deployment was migrated by a one-shot backfill script
+# (now removed) that enrolled all on-disk items as enabled.
 #
 # MCP-backed skills (create_doc, search_drive_files, etc.) are NOT listed here —
 # they are loaded by loadMcpServers and are not on-disk SkillDiscovery items.
