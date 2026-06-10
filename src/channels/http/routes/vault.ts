@@ -19,6 +19,10 @@ export interface VaultSecretsPort {
   set(name: string, value: string): Promise<void>;
 }
 
+/** Generous ceiling for a string secret (API keys, tokens). Structured/JSON secrets use
+ *  a different storage path; this endpoint only sets 'string' secrets a skill declares. */
+const MAX_SECRET_VALUE_LENGTH = 8192;
+
 export interface VaultRouteOptions {
   secretsService: VaultSecretsPort;
   /** Used to scope writes to secrets that some skill actually declares it needs. */
@@ -62,6 +66,12 @@ export async function vaultRoutes(
     // satisfied by storing a blank — a present-but-empty key is not "configured".
     if (typeof value !== 'string' || value.length === 0) {
       return reply.status(400).send({ error: 'Body must include a non-empty string "value".' });
+    }
+    // Upper bound (defense in depth): these are API-key-shaped string secrets, not blobs.
+    // The global bodyLimit already caps this; the explicit limit keeps a tighter, clearer
+    // ceiling on what an authenticated caller can stash under a declared key.
+    if (value.length > MAX_SECRET_VALUE_LENGTH) {
+      return reply.status(400).send({ error: `Secret value exceeds ${MAX_SECRET_VALUE_LENGTH} characters.` });
     }
 
     // Scope guard: only secrets some skill declares may be set here. This is the line

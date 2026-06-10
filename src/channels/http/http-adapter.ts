@@ -166,6 +166,7 @@ export class HttpAdapter {
         routeUrl.startsWith('/api/jobs') ||
         routeUrl.startsWith('/api/autonomy') ||
         routeUrl.startsWith('/api/registry') ||
+        routeUrl.startsWith('/api/vault') ||
         routeUrl.startsWith('/api/setup')
       ) return;
 
