@@ -23,7 +23,7 @@ import { MemoryValidator } from '../../src/memory/validation.js';
 import { EntityMemory } from '../../src/memory/entity-memory.js';
 import { SkillRegistry } from '../../src/skills/registry.js';
 import { ExecutionLayer } from '../../src/skills/execution.js';
-import { loadSkillsFromDirectory } from '../../src/skills/loader.js';
+import { discoverSkillManifests, loadSkillsFromDirectory } from '../../src/skills/loader.js';
 import { ContactService } from '../../src/contacts/contact-service.js';
 import { ContactResolver } from '../../src/contacts/contact-resolver.js';
 import { NylasClient } from '../../src/channels/email/nylas-client.js';
@@ -106,10 +106,13 @@ export async function createHarness(): Promise<CuriaHarness> {
   const contactResolver = new ContactResolver(contactService, entityMemory, undefined, logger);
 
   // Skill registry — loads all skills from the skills/ directory.
-  // Resolve relative to this file's location, up to project root, into skills/.
+  // Smoke tests enable all skills (no registry DB available) so every handler is
+  // registered. The two-step API mirrors the production bootstrap path.
   const skillRegistry = new SkillRegistry();
   const skillsDir = path.resolve(import.meta.dirname, '../../skills');
-  await loadSkillsFromDirectory(skillsDir, skillRegistry, logger);
+  const skillDiscoveries = discoverSkillManifests(skillsDir);
+  const allSkillNames = new Set(skillDiscoveries.map(d => d.name));
+  await loadSkillsFromDirectory(skillDiscoveries, skillRegistry, logger, allSkillNames);
 
   // Agent registry — tracks all running agents for delegation and listing.
   const agentRegistry = new AgentRegistry();

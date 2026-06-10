@@ -1,7 +1,8 @@
 // TODO(remove-after-541): one-shot migration for the EXISTING production deployment.
 // Enrolls every on-disk skill/agent as ENABLED so upgrade preserves today's behavior
 // (everything that was auto-loaded stays loaded). Fresh installs do NOT run this — they
-// rely on config/registry-defaults.yaml. Idempotent: re-running only adds missing rows.
+// rely on config/registry-defaults.yaml. Idempotent: re-running skips ANY existing row
+// regardless of enabled state, so it never re-enables an intentionally-disabled item.
 // Delete this script and its package.json entry after the production backfill is done.
 //
 // Run: pnpm backfill:registry
@@ -34,7 +35,7 @@ async function main(): Promise<void> {
         continue;
       }
       const existing = await skillRepo.getRow(disc.name);
-      if (existing?.enabled) { skillsSkipped++; continue; }
+      if (existing) { skillsSkipped++; continue; } // skip any existing row (respect admin state)
       await skillRepo.install(disc.name, 'backfill');
       await skillRepo.enable(disc.name, 'backfill');
       skillsEnrolled++;
@@ -48,7 +49,7 @@ async function main(): Promise<void> {
         continue;
       }
       const existing = await agentRepo.getRow(disc.name);
-      if (existing?.enabled) { agentsSkipped++; continue; }
+      if (existing) { agentsSkipped++; continue; } // skip any existing row (respect admin state)
       await agentRepo.install(disc.name, 'backfill');
       await agentRepo.enable(disc.name, 'backfill');
       agentsEnrolled++;

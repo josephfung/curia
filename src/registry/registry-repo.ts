@@ -6,9 +6,12 @@
 import type { DbPool } from '../db/connection.js';
 import type { IRegistryRepo, RegistryRow } from './types.js';
 
-// Fixed allowlist — the table name is interpolated into SQL (identifiers can't be
-// parameterized), so it MUST come from this set and never from user input.
-const ALLOWED_TABLES = new Set(['skill_registry', 'agent_registry']);
+// Only these two tables are valid — validated in the constructor.
+// SQL strings use literal table names (never runtime concatenation) so the
+// parameterized-queries rule is satisfied: data values use $1/$2, table names
+// are compile-time string literals selected via this map.
+const ALLOWED_TABLES = ['skill_registry', 'agent_registry'] as const;
+type RegistryTable = typeof ALLOWED_TABLES[number];
 
 interface DbRegistryRow {
   name: string;
@@ -34,25 +37,68 @@ function mapRow(row: DbRegistryRow): RegistryRow {
 
 const COLS = 'name, enabled, installed_at, installed_by, enabled_at, enabled_by, updated_at';
 
+// Prebuilt SQL per table — no runtime string interpolation of identifiers.
+const SQL: Record<RegistryTable, {
+  list: string;
+  get: string;
+  install: string;
+  enable: string;
+  disable: string;
+  uninstall: string;
+}> = {
+  skill_registry: {
+    list: `SELECT ${COLS} FROM skill_registry`,
+    get: `SELECT ${COLS} FROM skill_registry WHERE name = $1`,
+    install: `INSERT INTO skill_registry (name, enabled, installed_by)
+              VALUES ($1, false, $2)
+              ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
+              RETURNING ${COLS}`,
+    enable: `UPDATE skill_registry
+               SET enabled = true, enabled_at = now(), enabled_by = $2, updated_at = now()
+             WHERE name = $1
+             RETURNING ${COLS}`,
+    disable: `UPDATE skill_registry
+                SET enabled = false, enabled_at = NULL, enabled_by = NULL, updated_at = now()
+              WHERE name = $1
+              RETURNING ${COLS}`,
+    uninstall: `DELETE FROM skill_registry WHERE name = $1`,
+  },
+  agent_registry: {
+    list: `SELECT ${COLS} FROM agent_registry`,
+    get: `SELECT ${COLS} FROM agent_registry WHERE name = $1`,
+    install: `INSERT INTO agent_registry (name, enabled, installed_by)
+              VALUES ($1, false, $2)
+              ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
+              RETURNING ${COLS}`,
+    enable: `UPDATE agent_registry
+               SET enabled = true, enabled_at = now(), enabled_by = $2, updated_at = now()
+             WHERE name = $1
+             RETURNING ${COLS}`,
+    disable: `UPDATE agent_registry
+                SET enabled = false, enabled_at = NULL, enabled_by = NULL, updated_at = now()
+              WHERE name = $1
+              RETURNING ${COLS}`,
+    uninstall: `DELETE FROM agent_registry WHERE name = $1`,
+  },
+};
+
 export class RegistryRepo implements IRegistryRepo {
-  private readonly table: string;
+  private readonly sql: typeof SQL[RegistryTable];
 
   constructor(private readonly pool: DbPool, table: string) {
-    if (!ALLOWED_TABLES.has(table)) {
+    if (!(ALLOWED_TABLES as readonly string[]).includes(table)) {
       throw new Error(`RegistryRepo: invalid table '${table}'`);
     }
-    this.table = table;
+    this.sql = SQL[table as RegistryTable];
   }
 
   async listRows(): Promise<RegistryRow[]> {
-    const { rows } = await this.pool.query<DbRegistryRow>(`SELECT ${COLS} FROM ${this.table}`);
+    const { rows } = await this.pool.query<DbRegistryRow>(this.sql.list);
     return rows.map(mapRow);
   }
 
   async getRow(name: string): Promise<RegistryRow | null> {
-    const { rows } = await this.pool.query<DbRegistryRow>(
-      `SELECT ${COLS} FROM ${this.table} WHERE name = $1`, [name],
-    );
+    const { rows } = await this.pool.query<DbRegistryRow>(this.sql.get, [name]);
     const row = rows[0];
     return row ? mapRow(row) : null;
   }
@@ -61,24 +107,12 @@ export class RegistryRepo implements IRegistryRepo {
     // Insert a disabled row; if it already exists, leave it untouched and return it.
     // ON CONFLICT DO UPDATE requires at least one SET clause, so we use a no-op
     // (name = EXCLUDED.name) to trigger RETURNING without modifying any columns.
-    const { rows } = await this.pool.query<DbRegistryRow>(
-      `INSERT INTO ${this.table} (name, enabled, installed_by)
-       VALUES ($1, false, $2)
-       ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
-       RETURNING ${COLS}`,
-      [name, actor],
-    );
+    const { rows } = await this.pool.query<DbRegistryRow>(this.sql.install, [name, actor]);
     return mapRow(rows[0]!);
   }
 
   async enable(name: string, actor: string): Promise<RegistryRow> {
-    const { rows } = await this.pool.query<DbRegistryRow>(
-      `UPDATE ${this.table}
-         SET enabled = true, enabled_at = now(), enabled_by = $2, updated_at = now()
-       WHERE name = $1
-       RETURNING ${COLS}`,
-      [name, actor],
-    );
+    const { rows } = await this.pool.query<DbRegistryRow>(this.sql.enable, [name, actor]);
     if (!rows[0]) throw new Error(`enable: no registry row for '${name}'`);
     return mapRow(rows[0]);
   }
@@ -87,18 +121,12 @@ export class RegistryRepo implements IRegistryRepo {
   // use it in a future implementation), but clearing enabled_at/by is the
   // canonical way to record a disable — no separate actor column needed now.
   async disable(name: string, _actor: string): Promise<RegistryRow> {
-    const { rows } = await this.pool.query<DbRegistryRow>(
-      `UPDATE ${this.table}
-         SET enabled = false, enabled_at = NULL, enabled_by = NULL, updated_at = now()
-       WHERE name = $1
-       RETURNING ${COLS}`,
-      [name],
-    );
+    const { rows } = await this.pool.query<DbRegistryRow>(this.sql.disable, [name]);
     if (!rows[0]) throw new Error(`disable: no registry row for '${name}'`);
     return mapRow(rows[0]);
   }
 
   async uninstall(name: string): Promise<void> {
-    await this.pool.query(`DELETE FROM ${this.table} WHERE name = $1`, [name]);
+    await this.pool.query(this.sql.uninstall, [name]);
   }
 }

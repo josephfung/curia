@@ -27,8 +27,8 @@ export interface ReconcileDeps {
 
 export async function reconcileRegistries(deps: ReconcileDeps): Promise<void> {
   const { skillRepo, agentRepo, skillDiscoveryNames, agentDiscoveryNames, defaults, logger } = deps;
-  await reconcileOne('skill', skillRepo, skillDiscoveryNames, defaults.skills ?? [], logger);
-  await reconcileOne('agent', agentRepo, agentDiscoveryNames, defaults.agents ?? [], logger);
+  await reconcileOne('skill', skillRepo, skillDiscoveryNames, defaults.skills, logger);
+  await reconcileOne('agent', agentRepo, agentDiscoveryNames, defaults.agents, logger);
 }
 
 async function reconcileOne(

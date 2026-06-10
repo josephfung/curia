@@ -51,8 +51,8 @@ describeIf('registry routes', () => {
   });
 
   afterAll(async () => {
-    await app.close();
-    await pool.end();
+    await app?.close();
+    await pool?.end();
   });
 
   // Reset the skill_registry table before each test to ensure isolation.
