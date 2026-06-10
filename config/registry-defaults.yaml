@@ -35,11 +35,30 @@ skills:
   - scheduler-cancel
   - scheduler-report
   # Contacts
+  - contact-create
+  - contact-find-duplicates
+  - contact-grant-permission
+  - contact-link-identity
+  - contact-list
+  - contact-lookup
+  - contact-merge
+  - contact-register
+  - contact-rename
+  - contact-revoke-permission
+  - contact-set-identity-status
+  - contact-set-trust
+  - contact-unlink-identity
   - contact-update
+  # Tasks
+  - task-create
+  - task-list
+  - task-complete
+  - task-update
   # Config + identity
   - config-store
   - executive-profile-get
   - executive-profile-update
+  - behavioral-preferences-update
   # Utility
   - date-resolve
   - context-for-email
@@ -49,9 +68,10 @@ skills:
   - decay-warnings-list
   - delegate
   - file-parse
+  - request-clarification
+  - bullpen
   - web-fetch
   - web-browser
-  - web-search
   - drive-download-file
   - image-generate
   - template-doc-request
@@ -64,11 +84,16 @@ skills:
   - list-pending-actions
   - approval-expiry-sweep
   - pending-actions-digest
+  # NOTE: web-search excluded — requires Tavily API key (secrets: [tavily_api_key])
+  # NOTE: calendar-* excluded — require Google Calendar credentials; enable after calendar setup
+  # NOTE: ceo-inbox-* excluded — companion to the ceo-inbox agent; enable alongside it
+  # NOTE: KG skills (extract-facts, extract-relationships, query-relationships, delete-relationship)
+  #        excluded — require OpenAI embeddings
 agents:
   - coordinator
   - setup-wizard       # required for onboarding on a fresh install
   - contacts
-  - calendar
-  - ceo-inbox
   - research-analyst
   - meeting-debrief
+  # NOTE: calendar excluded — calendar-* skills are not default; enable after calendar credentials configured
+  # NOTE: ceo-inbox excluded — specialized inbox agent; must be enabled manually
