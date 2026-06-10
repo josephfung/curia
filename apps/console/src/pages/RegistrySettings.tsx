@@ -14,6 +14,9 @@ interface ManifestMetadata {
   capabilities?: string[];
   role?: string;
   modelTier?: string;
+  // PR2 (#939): vault keys a skill declares in install.requires_secrets. Cross-referenced
+  // against GET /api/vault/status to show configured/missing status and gate install/enable.
+  requiresSecrets?: string[];
 }
 
 interface RegistryEntry {
@@ -53,6 +56,73 @@ async function errorMessage(res: Response): Promise<string> {
   return `HTTP ${res.status}`;
 }
 
+// ── Required-secret row (status + inline entry) ──────────────────────────────
+//
+// One required vault key. Shows a configured/missing pill; when missing, offers a
+// masked input + Save that PUTs the value to /api/vault/secrets/:name. On success it
+// calls onSaved so the drawer re-reads vault status and re-evaluates the install gate.
+
+function SecretRow({ name, configured, onSaved }: {
+  name: string;
+  configured: boolean;
+  onSaved: () => void;
+}) {
+  const [value, setValue] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const save = useCallback(async () => {
+    setBusy(true);
+    setErr(null);
+    try {
+      const res = await apiFetch(`/api/vault/secrets/${encodeURIComponent(name)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ value }),
+      });
+      if (!res.ok) throw new Error(await errorMessage(res));
+      setValue(''); // don't keep the secret in component state after a successful save
+      onSaved();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Failed to save secret');
+    } finally {
+      setBusy(false);
+    }
+  }, [name, value, onSaved]);
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <span className={`status-pill ${configured ? 'confirmed' : 'blocked'}`}>
+          {configured ? 'configured' : 'missing'}
+        </span>
+        <code style={{ fontSize: 13 }}>{name}</code>
+      </div>
+      {!configured && (
+        <div style={{ display: 'flex', gap: 6 }}>
+          <input
+            type="password"
+            autoComplete="off"
+            value={value}
+            placeholder={`Enter ${name}`}
+            onChange={e => setValue(e.target.value)}
+            style={{ flex: 1 }}
+          />
+          <button
+            type="button"
+            className="btn btn-secondary btn-sm"
+            disabled={busy || value.length === 0}
+            onClick={() => void save()}
+          >
+            Save
+          </button>
+        </div>
+      )}
+      {err && <p className="autonomy-error" style={{ margin: 0 }}>{err}</p>}
+    </div>
+  );
+}
+
 // ── Detail drawer ────────────────────────────────────────────────────────────
 
 function RegistryDrawer({ entry, kindPath, onClose, onChanged }: {
@@ -63,6 +133,38 @@ function RegistryDrawer({ entry, kindPath, onClose, onChanged }: {
 }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+
+  // PR2 (#939): required-secrets gate. Only skills declare install.requires_secrets.
+  const required = entry.kind === 'skill' ? (entry.metadata?.requiresSecrets ?? []) : [];
+  const [configured, setConfigured] = useState<Set<string>>(new Set());
+  const [secretsErr, setSecretsErr] = useState<string | null>(null);
+
+  // Read which vault keys are configured so we can show per-secret status and gate the
+  // install/enable actions. Fail closed: if the status read fails we treat everything as
+  // unconfigured (the gate stays on) rather than letting an install slip through.
+  const loadVaultStatus = useCallback(async () => {
+    if (required.length === 0) return;
+    try {
+      const res = await apiFetch('/api/vault/status');
+      if (!res.ok) throw new Error(await errorMessage(res));
+      const data = await res.json() as { configured_keys?: string[] };
+      setConfigured(new Set(data.configured_keys ?? []));
+      setSecretsErr(null);
+    } catch (e) {
+      setConfigured(new Set());
+      setSecretsErr(e instanceof Error ? e.message : 'Failed to load secret status');
+    }
+  }, [required.length]);
+
+  useEffect(() => { void loadVaultStatus(); }, [loadVaultStatus]);
+
+  const missingSecrets = required.filter(s => !configured.has(s));
+  // Block install/enable while any required secret is unconfigured — mirrors the
+  // service-level gate so the UI never offers an action the backend will reject.
+  const secretsBlock = missingSecrets.length > 0;
+  const secretsBlockTitle = secretsBlock
+    ? `Configure required secret(s) first: ${missingSecrets.join(', ')}`
+    : undefined;
 
   // Perform a mutating API call on the entry and refresh the list on success.
   const act = useCallback(async (method: 'POST' | 'DELETE', suffix: string) => {
@@ -154,6 +256,23 @@ function RegistryDrawer({ entry, kindPath, onClose, onChanged }: {
             </>
           )}
 
+          {required.length > 0 && (
+            <div className="form-field">
+              <label>Required secrets</label>
+              {secretsErr && <p className="autonomy-error" style={{ margin: 0 }}>{secretsErr}</p>}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {required.map(name => (
+                  <SecretRow
+                    key={name}
+                    name={name}
+                    configured={configured.has(name)}
+                    onSaved={() => { void loadVaultStatus(); }}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
+
           <div className="form-field">
             <label>Installed</label>
             <div>
@@ -180,7 +299,8 @@ function RegistryDrawer({ entry, kindPath, onClose, onChanged }: {
             <button
               type="button"
               className="btn btn-secondary btn-sm"
-              disabled={busy}
+              disabled={busy || secretsBlock}
+              title={secretsBlockTitle}
               onClick={() => void act('POST', '/install')}
             >
               Install
@@ -188,7 +308,8 @@ function RegistryDrawer({ entry, kindPath, onClose, onChanged }: {
             <button
               type="button"
               className="btn btn-primary btn-sm"
-              disabled={busy}
+              disabled={busy || secretsBlock}
+              title={secretsBlockTitle}
               onClick={() => void act('POST', '/install-enable')}
             >
               Install &amp; enable
@@ -201,7 +322,8 @@ function RegistryDrawer({ entry, kindPath, onClose, onChanged }: {
           <button
             type="button"
             className="btn btn-primary btn-sm"
-            disabled={busy}
+            disabled={busy || secretsBlock}
+            title={secretsBlockTitle}
             onClick={() => void act('POST', '/enable')}
           >
             Enable
