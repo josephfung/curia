@@ -81,10 +81,16 @@ export interface SkillManifest {
    *  scheduler) where no agentId is present.
    *  Validated at load time against known agent names — typos fail at startup. */
   allowed_callers?: string[];
-  /** Optional declarative install/uninstall blocks (spec: skill/agent registry, #541).
-   *  Reserved schema surface — PARSED BUT INERT in PR1. PR2 (secrets) and PR3 (config)
-   *  define and act on their contents. Existing manifests omit both. */
-  install?: Record<string, unknown>;
+  /** Optional declarative install block (spec: skill/agent registry, #541).
+   *  PR2 (#939) defines `requires_secrets`: the vault keys that must be configured
+   *  before this skill can be installed or enabled. This is the install/enable GATE,
+   *  distinct from the top-level `secrets` field above (the runtime allowlist that
+   *  ctx.secret() reads from) — they overlap often but answer different questions. */
+  install?: {
+    /** Vault secret keys that must exist before install/enable. Enforced by RegistryService. */
+    requires_secrets?: string[];
+  };
+  /** Reserved uninstall block — PARSED BUT INERT. PR3 (config) will define its contents. */
   uninstall?: Record<string, unknown>;
 }
 

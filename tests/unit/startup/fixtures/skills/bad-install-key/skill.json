@@ -1,0 +1,7 @@
+{
+  "name": "bad-install-key",
+  "description": "Skill with an unknown key inside the install block",
+  "version": "1.0.0",
+  "action_risk": "none",
+  "install": { "requires_config": ["nope"] }
+}

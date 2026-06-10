@@ -60,7 +60,17 @@
       "items": { "type": "string", "minLength": 1 },
       "description": "Agent names allowed to invoke this skill. Omit for unrestricted access. 'system' is a reserved name for system-layer invocations."
     },
-    "install":   { "type": "object" },
+    "install": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "requires_secrets": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "description": "Vault secret keys this skill needs configured before it can be installed or enabled."
+        }
+      }
+    },
     "uninstall": { "type": "object" }
   }
 }

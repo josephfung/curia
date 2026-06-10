@@ -1,6 +1,12 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { RegistryService } from './registry-service.js';
-import type { IRegistryRepo, RegistryRow, Discovery } from './types.js';
+import type { IRegistryRepo, RegistryRow, Discovery, SecretsLister } from './types.js';
+
+// In-memory fake vault — returns whatever key names it was seeded with.
+class FakeSecrets implements SecretsLister {
+  constructor(private names: string[] = []) {}
+  async list() { return [...this.names]; }
+}
 
 // In-memory fake repo — exercises RegistryService logic without a database.
 class FakeRepo implements IRegistryRepo {
@@ -113,5 +119,81 @@ describe('RegistryService lifecycle guards', () => {
     await skillRepo.install('gone', 'web-app');
     await svc.uninstall('skill', 'gone', 'web-app');
     expect(await skillRepo.getRow('gone')).toBeNull();
+  });
+});
+
+// ── PR2 (#939): install/enable secrets gate ──────────────────────────────────
+
+// Discovery helper that attaches install.requires_secrets to a skill's metadata.
+const discWithSecrets = (name: string, requiresSecrets: string[]): Discovery => ({
+  name,
+  metadata: { name, description: `${name} desc`, version: '1.0.0', requiresSecrets },
+});
+
+describe('RegistryService secrets gate', () => {
+  let skillRepo: FakeRepo;
+
+  beforeEach(() => {
+    skillRepo = new FakeRepo();
+  });
+
+  it('blocks install when a required secret is missing', async () => {
+    const svc = new RegistryService(skillRepo, new FakeRepo(), [], [], new FakeSecrets([]));
+    svc.setDiscovery('skill', [discWithSecrets('web-search', ['tavily_api_key'])]);
+    await expect(svc.install('skill', 'web-search', 'web-app'))
+      .rejects.toThrow(/tavily_api_key/);
+    // Nothing was written — the gate runs before repo.install.
+    expect(await skillRepo.getRow('web-search')).toBeNull();
+  });
+
+  it('lists every missing secret in the error', async () => {
+    const svc = new RegistryService(skillRepo, new FakeRepo(), [], [], new FakeSecrets(['have']));
+    svc.setDiscovery('skill', [discWithSecrets('s', ['have', 'missing_a', 'missing_b'])]);
+    await expect(svc.install('skill', 's', 'web-app'))
+      .rejects.toThrow(/missing_a, missing_b/);
+  });
+
+  it('allows install when all required secrets are present', async () => {
+    const svc = new RegistryService(skillRepo, new FakeRepo(), [], [], new FakeSecrets(['tavily_api_key']));
+    svc.setDiscovery('skill', [discWithSecrets('web-search', ['tavily_api_key'])]);
+    const entry = await svc.install('skill', 'web-search', 'web-app');
+    expect(entry.state).toBe('installed');
+  });
+
+  it('installAndEnable is gated the same way', async () => {
+    const svc = new RegistryService(skillRepo, new FakeRepo(), [], [], new FakeSecrets([]));
+    svc.setDiscovery('skill', [discWithSecrets('web-search', ['tavily_api_key'])]);
+    await expect(svc.installAndEnable('skill', 'web-search', 'web-app'))
+      .rejects.toThrow(/tavily_api_key/);
+  });
+
+  it('blocks enable when a required secret was removed after install', async () => {
+    const svc = new RegistryService(skillRepo, new FakeRepo(), [], [], new FakeSecrets([]));
+    svc.setDiscovery('skill', [discWithSecrets('web-search', ['tavily_api_key'])]);
+    await skillRepo.install('web-search', 'web-app'); // row exists (installed directly)
+    await expect(svc.enable('skill', 'web-search', 'web-app'))
+      .rejects.toThrow(/tavily_api_key/);
+  });
+
+  it('leaves skills with no requires_secrets unaffected', async () => {
+    const svc = new RegistryService(skillRepo, new FakeRepo(), [], [], new FakeSecrets([]));
+    svc.setDiscovery('skill', [disc('plain')]); // no requiresSecrets in metadata
+    const entry = await svc.installAndEnable('skill', 'plain', 'web-app');
+    expect(entry.state).toBe('enabled');
+  });
+
+  it('treats an empty requires_secrets array as no requirement', async () => {
+    const svc = new RegistryService(skillRepo, new FakeRepo(), [], [], new FakeSecrets([]));
+    svc.setDiscovery('skill', [discWithSecrets('s', [])]);
+    const entry = await svc.install('skill', 's', 'web-app');
+    expect(entry.state).toBe('installed');
+  });
+
+  it('fails closed when a skill requires secrets but no vault is wired', async () => {
+    // No SecretsLister passed — a skill that needs secrets must not slip through.
+    const svc = new RegistryService(skillRepo, new FakeRepo(), [], []);
+    svc.setDiscovery('skill', [discWithSecrets('web-search', ['tavily_api_key'])]);
+    await expect(svc.install('skill', 'web-search', 'web-app'))
+      .rejects.toThrow(/vault is unavailable/);
   });
 });

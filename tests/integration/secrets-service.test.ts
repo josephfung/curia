@@ -81,4 +81,15 @@ describeIf('SecretsService', () => {
     await service.delete('test_del');
     expect(await service.get('test_del')).toBeNull();
   });
+
+  it('list returns configured key names only (no values)', async () => {
+    await service.set('test_list_a', 'secret-a');
+    await service.setJSON('test_list_b', { token: 'secret-b' });
+    const names = await service.list();
+    expect(names).toContain('test_list_a');
+    expect(names).toContain('test_list_b');
+    // Values must never appear — list() returns names only.
+    expect(names).not.toContain('secret-a');
+    expect(JSON.stringify(names)).not.toContain('secret-b');
+  });
 });

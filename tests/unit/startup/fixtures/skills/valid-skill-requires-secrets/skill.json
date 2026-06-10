@@ -1,0 +1,7 @@
+{
+  "name": "valid-skill-requires-secrets",
+  "description": "A valid skill that declares install.requires_secrets",
+  "version": "1.0.0",
+  "action_risk": "none",
+  "install": { "requires_secrets": ["tavily_api_key"] }
+}

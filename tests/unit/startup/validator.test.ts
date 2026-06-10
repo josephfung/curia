@@ -98,6 +98,18 @@ describe('startup validator — skill manifests', () => {
       runWith({ skills: path.join(F, 'skills/valid-skill-numeric') }),
     ).resolves.toBeUndefined();
   });
+
+  it('passes for a manifest declaring install.requires_secrets', async () => {
+    await expect(
+      runWith({ skills: path.join(F, 'skills/valid-skill-requires-secrets') }),
+    ).resolves.toBeUndefined();
+  });
+
+  it('throws for an unknown key inside the install block (additionalProperties)', async () => {
+    await expect(
+      runWith({ skills: path.join(F, 'skills/bad-install-key') }),
+    ).rejects.toThrow(/requires_config/);
+  });
 });
 
 // ── default-config.yaml validation ──────────────────────────────────────────

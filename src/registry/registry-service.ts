@@ -4,18 +4,24 @@
 // SkillRegistry/AgentRegistry are NOT mutated — enforcement is restart-based (spec §6).
 
 import type {
-  IRegistryRepo, RegistryKind, RegistryEntry, Discovery,
+  IRegistryRepo, RegistryKind, RegistryEntry, Discovery, SecretsLister,
 } from './types.js';
 import { RegistryGuardError } from './types.js';
 
 export class RegistryService {
   // Discovery is captured once at startup and held here. setDiscovery exists so the
   // bootstrap (and tests) can inject the lenient discovery results after construction.
+  //
+  // `secrets` (optional) backs the PR2 install/enable gate: a skill that declares
+  // install.requires_secrets cannot go live until those keys exist in the vault. It is
+  // optional so non-secrets call sites (and most tests) construct the service unchanged;
+  // when a skill DOES require secrets but no lister is wired, the gate fails closed.
   constructor(
     private readonly skillRepo: IRegistryRepo,
     private readonly agentRepo: IRegistryRepo,
     private skillDiscovery: Discovery[],
     private agentDiscovery: Discovery[],
+    private readonly secrets?: SecretsLister,
   ) {}
 
   setDiscovery(kind: RegistryKind, discovery: Discovery[]): void {
@@ -69,6 +75,18 @@ export class RegistryService {
     return entries;
   }
 
+  /** Every vault key declared across skills' install.requires_secrets (deduped).
+   *  Scopes the vault write endpoint: only a secret some skill actually needs may be set
+   *  through it, so the console can't write arbitrary keys into the vault. Reads from
+   *  in-memory discovery — no DB round-trip. */
+  declaredSecretNames(): string[] {
+    const names = new Set<string>();
+    for (const d of this.skillDiscovery) {
+      for (const s of d.metadata?.requiresSecrets ?? []) names.add(s);
+    }
+    return [...names];
+  }
+
   /** Look up a single derived entry (used to return the post-op state). */
   private async entry(kind: RegistryKind, name: string): Promise<RegistryEntry> {
     const all = await this.list(kind);
@@ -88,14 +106,42 @@ export class RegistryService {
     }
   }
 
+  /** PR2 (#939) secrets gate: reject install/enable when the item's manifest declares
+   *  install.requires_secrets that aren't all present in the vault. Items with no declared
+   *  secrets are unaffected. A declared-but-unverifiable secret (no lister wired) fails
+   *  closed — we never let something requiring secrets go live without confirming them. */
+  private async assertSecretsConfigured(kind: RegistryKind, name: string): Promise<void> {
+    const disc = this.discovery(kind).find(d => d.name === name);
+    const required = disc?.metadata?.requiresSecrets ?? [];
+    if (required.length === 0) return;
+
+    if (!this.secrets) {
+      throw new RegistryGuardError(
+        `Cannot install '${name}': it requires secrets (${required.join(', ')}) but the secrets vault is unavailable.`,
+      );
+    }
+    const configured = new Set(await this.secrets.list());
+    const missing = required.filter(s => !configured.has(s));
+    if (missing.length > 0) {
+      throw new RegistryGuardError(
+        `Cannot install '${name}': required secret(s) not configured in the vault: ${missing.join(', ')}. ` +
+        `Configure them before installing.`,
+      );
+    }
+  }
+
   async install(kind: RegistryKind, name: string, actor: string): Promise<RegistryEntry> {
     this.assertInstallable(kind, name);
+    await this.assertSecretsConfigured(kind, name);
     await this.repo(kind).install(name, actor);
     return this.entry(kind, name);
   }
 
   async enable(kind: RegistryKind, name: string, actor: string): Promise<RegistryEntry> {
     this.assertInstallable(kind, name);
+    // Re-check at enable time too: secrets could have been deleted since install, and
+    // enable is the moment the skill actually goes live on the next restart.
+    await this.assertSecretsConfigured(kind, name);
     const row = await this.repo(kind).getRow(name);
     if (!row) throw new RegistryGuardError(`Cannot enable '${name}': not installed. Install it first.`);
     await this.repo(kind).enable(name, actor);
@@ -104,6 +150,7 @@ export class RegistryService {
 
   async installAndEnable(kind: RegistryKind, name: string, actor: string): Promise<RegistryEntry> {
     this.assertInstallable(kind, name);
+    await this.assertSecretsConfigured(kind, name);
     await this.repo(kind).install(name, actor);
     await this.repo(kind).enable(name, actor);
     return this.entry(kind, name);

@@ -83,6 +83,8 @@ export function discoverSkillManifests(skillsDir: string): SkillDiscovery[] {
           actionRisk: manifest.action_risk,
           sensitivity: manifest.sensitivity,
           capabilities: manifest.capabilities,
+          // PR2 (#939): surface the install-time secrets gate to the registry UI + service.
+          requiresSecrets: manifest.install?.requires_secrets,
         },
       });
     } catch (err) {
