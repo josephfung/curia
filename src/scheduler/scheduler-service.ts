@@ -603,20 +603,33 @@ export class SchedulerService {
     ];
 
     const { rows } = await this.pool.query(sql, params);
-    const resultRow = rows[0] as {
-      id: string;
-      prior_status?: string | null;
-      prior_failures?: number | null;
-      prior_error?: string | null;
-    };
+    const resultRow = rows[0] as
+      | {
+          id: string;
+          prior_status?: string | null;
+          prior_failures?: number | null;
+          prior_error?: string | null;
+        }
+      | undefined;
+    // An INSERT ... ON CONFLICT DO UPDATE with no DO UPDATE WHERE always returns exactly
+    // one row (the inserted or the updated row), so an empty result means the statement or
+    // connection is fundamentally broken. Fail loudly rather than dereferencing undefined —
+    // loadDeclarativeJobs() catches this and logs it on the per-schedule error path.
+    if (!resultRow) {
+      throw new Error(
+        `upsertDeclarativeJob: upsert returned no row for ${sourceAgentId}/${agentId} (${schedule.cron})`,
+      );
+    }
     const jobId = resultRow.id;
+
+    const revivedFromCancelled = resultRow.prior_status === 'cancelled';
 
     // Reviving overrides a terminal 'cancelled' state, so surface it loudly — the
     // symmetric cancellation path (cancelStaleDeclarativeJobs) logs per row, and a
     // resurrection must be at least as visible. Include the failure bookkeeping the
     // upsert just wiped so the prior context survives in the logs. warn (not info)
     // because this silently undoes a deliberate cancelJob() if one was issued.
-    if (resultRow.prior_status === 'cancelled') {
+    if (revivedFromCancelled) {
       this.logger.warn(
         {
           jobId,
@@ -628,6 +641,24 @@ export class SchedulerService {
         },
         'Declarative job revived from cancelled — its YAML declaration still exists. ' +
           'If this job was deliberately stopped, remove its schedule entry from the agent YAML instead of cancelling it.',
+      );
+
+      // cancelJob() cancels a job AND cascades 'cancelled' onto its linked task (see
+      // cancelJob above). Reviving only the job would leave an intent_anchor schedule
+      // pointing at a terminal 'cancelled' task, which the task-update guards
+      // (TERMINAL_STATUSES) then reject — an inconsistent, un-editable state. So when we
+      // revive, also reactivate the linked task. Scoped to status = 'cancelled' so a task
+      // left 'active' by the stale-cleanup path, or one legitimately 'done', is untouched.
+      // (No declarative schedule sets intent_anchor today, so this is a no-op in practice,
+      // but it keeps revival symmetric with cancelJob's cascade for when they do.)
+      await this.pool.query(
+        `UPDATE tasks
+            SET status = 'active', updated_at = now()
+           FROM scheduled_jobs sj
+          WHERE sj.id = $1
+            AND tasks.id = sj.task_id
+            AND tasks.status = 'cancelled'`,
+        [jobId],
       );
     }
 
