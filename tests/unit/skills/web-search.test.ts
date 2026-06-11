@@ -41,6 +41,7 @@ describe('WebSearchHandler', () => {
   it('returns failure when API key is missing', async () => {
     const ctx: SkillContext = {
       input: { query: 'test' },
+      // A genuinely-missing secret throws a plain Error with no `cause`.
       secret: () => { throw new Error('Secret not set'); },
       log: logger,
     };
@@ -51,6 +52,28 @@ describe('WebSearchHandler', () => {
       // Guidance must lead the operator to the console/vault, not the env var.
       expect(result.error).toContain('Skills');
       expect(result.error).not.toContain('TAVILY_API_KEY');
+    }
+  });
+
+  it('surfaces vault read failures as operational errors, not missing-secret guidance', async () => {
+    const ctx: SkillContext = {
+      input: { query: 'test' },
+      // The execution layer wraps a vault read failure in an Error with a `cause`
+      // (see src/skills/execution.ts). That is an outage, not a misconfiguration —
+      // operators must not be sent to the console to "add the key".
+      secret: () => {
+        throw new Error("Vault read failed for secret 'tavily_api_key': DB connection refused", {
+          cause: new Error('DB connection refused'),
+        });
+      },
+      log: logger,
+    };
+    const result = await handler.execute(ctx);
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error).toContain('vault');
+      expect(result.error).not.toContain('not configured');
+      expect(result.error).not.toContain('Settings');
     }
   });
 
