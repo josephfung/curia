@@ -84,7 +84,9 @@ skills:
   - list-pending-actions
   - approval-expiry-sweep
   - pending-actions-digest
-  # NOTE: web-search excluded — requires Tavily API key (secrets: [tavily_api_key])
+  # NOTE: web-search excluded — gated by install.requires_secrets: [tavily_api_key].
+  #        Stays admin-enabled: an operator provisions the Tavily key in the console
+  #        (Settings → Skills → web-search), which lifts the gate and lets them install/enable it.
   # NOTE: calendar-* excluded — require Google Calendar credentials; enable after calendar setup
   # NOTE: ceo-inbox-* excluded — companion to the ceo-inbox agent; enable alongside it
   # NOTE: KG skills (extract-facts, extract-relationships, query-relationships, delete-relationship)

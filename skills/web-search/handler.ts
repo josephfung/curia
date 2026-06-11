@@ -57,14 +57,19 @@ export class WebSearchHandler implements SkillHandler {
     }
 
     // Resolve API key — declared in manifest so secret() will allow it.
-    // If the env var is not set, secret() throws — we surface that as a
-    // user-readable error rather than letting the exception propagate.
+    // ctx.secret() reads the vault first and falls back to the TAVILY_API_KEY
+    // env var; if neither has it, it throws. We surface that as a user-readable
+    // error rather than letting the exception propagate. The guidance points at
+    // the console/vault (the source of truth) rather than the env var fallback.
     let apiKey: string;
     try {
       apiKey = ctx.secret('tavily_api_key');
     } catch (err) {
       ctx.log.error({ err }, 'Failed to resolve Tavily API key');
-      return { success: false, error: 'Tavily API key not configured — set TAVILY_API_KEY in the environment' };
+      return {
+        success: false,
+        error: 'Tavily API key not configured — add tavily_api_key in the console under Settings → Skills → web-search → Required secrets',
+      };
     }
 
     if (searchDepth !== undefined && searchDepth !== 'basic' && searchDepth !== 'advanced') {

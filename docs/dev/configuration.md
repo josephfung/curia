@@ -351,7 +351,7 @@ from `.env`.
 | `NYLAS_GRANT_ID` | Tier 2 | vault | Email grant (connected account) |
 | `NYLAS_SELF_EMAIL` | Tier 2 | vault | Address Curia reads and sends from |
 | `SIGNAL_PHONE_NUMBER` | Tier 3 | vault | Enables Signal channel |
-| `TAVILY_API_KEY` | Tier 3 | vault | Enables `web-search` skill |
+| `TAVILY_API_KEY` | Tier 3 | vault | Gates `web-search` (`install.requires_secrets`). Provision `tavily_api_key` via the console (Settings → Skills → web-search); the env var is a fallback only and should be unset in production. |
 | `GOOGLE_APPLICATION_CREDENTIALS` | Optional | `.env` | Path to service account JSON for Google Drive |
 | `CURIA_TEMPFILE_DIR` | Optional | `.env` | Base directory under which the `file-parse` skill resolves `temp_file_url` inputs. The skill rejects paths that escape this directory. Defaults to the OS temp dir when unset. |
 

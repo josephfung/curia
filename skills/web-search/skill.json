@@ -1,9 +1,10 @@
 {
   "name": "web-search",
   "description": "Search the web using Tavily. Returns structured results with title, URL, snippet, and (for advanced depth) extracted page content. For simple lookups, one search is enough. For research tasks, call multiple times with different queries — each covering a different angle — before forming a conclusion.",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "sensitivity": "normal",
   "action_risk": "none",
+  "install": { "requires_secrets": ["tavily_api_key"] },
   "inputs": {
     "query": "string",
     "maxResults": "number?",
