@@ -201,13 +201,22 @@ Adds web research capability and (when available) Signal messaging.
 
 Powers the `web-search` skill, which lets agents research topics and look up current information.
 
-Sign up at [tavily.com](https://tavily.com) and seed your API key into the vault:
+`web-search` is **excluded from the default core set** and is **gated by `install.requires_secrets: [tavily_api_key]`** — it cannot be installed or enabled until the Tavily key exists in the vault. This makes it the reference flow for provisioning a skill secret through the console.
+
+**Provision via the console (recommended):**
+
+1. Sign up at [tavily.com](https://tavily.com) and copy your API key (`tvly-...`).
+2. In the console, open **Settings → Skills → web-search → Required secrets**. `tavily_api_key` shows as **missing** and **Install & enable** is disabled.
+3. Paste the key inline. It is stored encrypted in the vault; the status flips to **configured** and the button enables.
+4. Click **Install & enable**. Enforcement is **restart-based** — the skill registers and becomes usable on the next process restart.
+
+**Alternative (dev shortcut):** seed the key into the vault directly, then enable web-search in the console:
 
 ```bash
 TAVILY_API_KEY=tvly-... pnpm run seed-vault
 ```
 
-No restart required if Curia is already running — the skill resolves the key from the vault on next use.
+`ctx.secret('tavily_api_key')` resolves **vault-first** with a `TAVILY_API_KEY` env-var fallback. In production the vault is the single source of truth — do **not** leave `TAVILY_API_KEY` set in the deploy environment, since a lingering env var would mask whether the vault entry is actually being used.
 
 ### Signal
 

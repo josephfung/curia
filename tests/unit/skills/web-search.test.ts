@@ -46,7 +46,12 @@ describe('WebSearchHandler', () => {
     };
     const result = await handler.execute(ctx);
     expect(result.success).toBe(false);
-    if (!result.success) expect(result.error).toContain('API key');
+    if (!result.success) {
+      expect(result.error).toContain('API key');
+      // Guidance must lead the operator to the console/vault, not the env var.
+      expect(result.error).toContain('Skills');
+      expect(result.error).not.toContain('TAVILY_API_KEY');
+    }
   });
 
   it('returns structured results on success', async () => {
