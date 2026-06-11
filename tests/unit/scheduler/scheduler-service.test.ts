@@ -779,7 +779,30 @@ describe('SchedulerService', () => {
       );
     });
 
-    it('does NOT log a revival warn for a routine refresh of a non-cancelled row', async () => {
+    it('reactivates the linked task when a cancelled job is revived — symmetry with cancelJob cascade', async () => {
+      // cancelJob() cancels the job AND cascades 'cancelled' onto its linked task. Reviving
+      // the job must also reactivate that task, or an intent_anchor schedule ends up pointing
+      // at a terminal task the update guards reject.
+      pool.query.mockResolvedValueOnce({
+        rows: [{ id: 'job-revived', prior_status: 'cancelled', prior_failures: 0, prior_error: null }],
+      });
+
+      await svc.upsertDeclarativeJob('ceo-inbox', 'ceo-inbox', {
+        cron: '*/15 6-23 * * *',
+        task: 'Check the CEO inbox',
+      });
+
+      const reactivation = pool.query.mock.calls.find(
+        ([sql]) =>
+          typeof sql === 'string' && sql.includes("SET status = 'active'") && sql.includes('FROM scheduled_jobs sj'),
+      ) as [string, unknown[]] | undefined;
+      expect(reactivation).toBeDefined();
+      // Scoped to a cancelled task only — a task left 'active' or legitimately 'done' is untouched.
+      expect(reactivation![0]).toContain("tasks.status = 'cancelled'");
+      expect(reactivation![1]).toContain('job-revived');
+    });
+
+    it('does NOT log a revival warn or reactivate a task for a routine refresh of a non-cancelled row', async () => {
       pool.query.mockResolvedValueOnce({ rows: [{ id: 'job-refresh', prior_status: 'pending' }] });
 
       await svc.upsertDeclarativeJob('ceo-inbox', 'ceo-inbox', {
@@ -787,10 +810,10 @@ describe('SchedulerService', () => {
         task: 'Check the CEO inbox',
       });
 
-      expect(logger.warn).not.toHaveBeenCalledWith(
-        expect.anything(),
-        expect.stringContaining('revived from cancelled'),
-      );
+      // No warn at all on a routine refresh (a stricter contract than "no revival message").
+      expect(logger.warn).not.toHaveBeenCalled();
+      // And exactly one query — the upsert — with no task-reactivation follow-up.
+      expect(pool.query).toHaveBeenCalledTimes(1);
     });
 
     it('persists sourceAgentId separately from the target agent id', async () => {
