@@ -66,6 +66,18 @@ export class WebSearchHandler implements SkillHandler {
       apiKey = ctx.secret('tavily_api_key');
     } catch (err) {
       ctx.log.error({ err }, 'Failed to resolve Tavily API key');
+      // ctx.secret() throws for two very different reasons, and they need
+      // different remediation. A genuinely-missing secret is a plain Error; a
+      // vault READ failure (DB down, decrypt error) is wrapped with a `cause` by
+      // the execution layer (src/skills/execution.ts). Reporting an outage as
+      // "not configured" would send operators to the console to re-enter a key
+      // that is already there — so only the missing case points to the console.
+      if (err instanceof Error && err.cause !== undefined) {
+        return {
+          success: false,
+          error: 'Web search unavailable: failed to read the Tavily API key from the secrets vault (operational error, not a missing key). Check vault/database connectivity.',
+        };
+      }
       return {
         success: false,
         error: 'Tavily API key not configured — add tavily_api_key in the console under Settings → Skills → web-search → Required secrets',
