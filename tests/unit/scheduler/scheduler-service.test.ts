@@ -725,6 +725,74 @@ describe('SchedulerService', () => {
       expect(sql).toContain('ON CONFLICT (source_agent_id, agent_id, cron_expr, (task_payload::text)) WHERE created_by = \'system\'');
     });
 
+    it('revives a cancelled row on conflict — DO UPDATE flips cancelled back to pending and resets failure state', async () => {
+      pool.query.mockResolvedValueOnce({ rows: [{ id: 'job-revive', prior_status: 'pending' }] });
+
+      await svc.upsertDeclarativeJob('ceo-inbox', 'ceo-inbox', {
+        cron: '*/15 6-23 * * *',
+        task: 'Check the CEO inbox',
+      });
+
+      const [sql] = pool.query.mock.calls[0] as [string];
+      // A row that a prior stale-cleanup cancelled must be revived when its YAML
+      // declaration still exists. Without this the ON CONFLICT path updates the row
+      // in place and leaves status='cancelled' forever, silently disabling a still-
+      // declared job. Only 'cancelled' is revived; running/suspended/pending/failed
+      // are left untouched so a restart never resurrects a deliberately-stopped job.
+      expect(sql).toContain(
+        "status = CASE WHEN scheduled_jobs.status = 'cancelled' THEN 'pending' ELSE scheduled_jobs.status END",
+      );
+      expect(sql).toContain(
+        "consecutive_failures = CASE WHEN scheduled_jobs.status = 'cancelled' THEN 0 ELSE scheduled_jobs.consecutive_failures END",
+      );
+      expect(sql).toContain(
+        "last_error = CASE WHEN scheduled_jobs.status = 'cancelled' THEN NULL ELSE scheduled_jobs.last_error END",
+      );
+      // The `prior` CTE + RETURNING let us detect a revival (pre-update status) so it
+      // can be logged distinctly from a routine refresh.
+      expect(sql).toContain('WITH prior AS');
+      expect(sql).toContain('task_payload::text = $4::jsonb::text');
+      expect(sql).toContain('(SELECT prior_status FROM prior) AS prior_status');
+    });
+
+    it('logs a warn when a cancelled job is revived, carrying the wiped failure context', async () => {
+      // prior_status='cancelled' means the conflicting row was previously cancelled and is
+      // now being resurrected — operators must see this, especially in case it undoes a
+      // deliberate cancelJob().
+      pool.query.mockResolvedValueOnce({
+        rows: [{ id: 'job-revived', prior_status: 'cancelled', prior_failures: 3, prior_error: 'Job timed out after 70m' }],
+      });
+
+      await svc.upsertDeclarativeJob('ceo-inbox', 'ceo-inbox', {
+        cron: '*/15 6-23 * * *',
+        task: 'Check the CEO inbox',
+      });
+
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          jobId: 'job-revived',
+          agentId: 'ceo-inbox',
+          priorConsecutiveFailures: 3,
+          priorLastError: 'Job timed out after 70m',
+        }),
+        expect.stringContaining('revived from cancelled'),
+      );
+    });
+
+    it('does NOT log a revival warn for a routine refresh of a non-cancelled row', async () => {
+      pool.query.mockResolvedValueOnce({ rows: [{ id: 'job-refresh', prior_status: 'pending' }] });
+
+      await svc.upsertDeclarativeJob('ceo-inbox', 'ceo-inbox', {
+        cron: '*/15 6-23 * * *',
+        task: 'Check the CEO inbox',
+      });
+
+      expect(logger.warn).not.toHaveBeenCalledWith(
+        expect.anything(),
+        expect.stringContaining('revived from cancelled'),
+      );
+    });
+
     it('persists sourceAgentId separately from the target agent id', async () => {
       pool.query.mockResolvedValueOnce({ rows: [{ id: 'job-source' }] });
 

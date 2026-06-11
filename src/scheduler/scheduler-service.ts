@@ -539,15 +539,55 @@ export class SchedulerService {
     // ('principal') and agent-decided ('agent') tasks. See issue #558.
     const originator = makeSystemOriginator();
 
+    // The `prior` CTE captures the row's state BEFORE the upsert (it reads the
+    // statement-start snapshot), so we can tell a routine refresh apart from a
+    // revival of a previously-cancelled row and log the latter loudly below.
+    // The payload predicate mirrors the ON CONFLICT key: task_payload::text is the
+    // stored jsonb canonical text, and $4::jsonb::text normalizes the incoming
+    // payload the same way, so this matches exactly the row ON CONFLICT will hit.
     const sql = `
+      WITH prior AS (
+        SELECT status AS prior_status,
+               consecutive_failures AS prior_failures,
+               last_error AS prior_error
+          FROM scheduled_jobs
+         WHERE created_by = 'system'
+           AND source_agent_id = $1
+           AND agent_id = $2
+           AND cron_expr = $3
+           AND task_payload::text = $4::jsonb::text
+      )
       INSERT INTO scheduled_jobs (source_agent_id, agent_id, cron_expr, task_payload, status, next_run_at, created_by, timezone, expected_duration_seconds, originator)
       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
       ON CONFLICT (source_agent_id, agent_id, cron_expr, (task_payload::text)) WHERE created_by = 'system'
       DO UPDATE SET next_run_at = $6,
                     timezone = $8,
                     expected_duration_seconds = $9,
-                    originator = COALESCE(scheduled_jobs.originator, $10)
-      RETURNING id
+                    originator = COALESCE(scheduled_jobs.originator, $10),
+                    -- Revive a row that a prior stale-cleanup cancelled but whose YAML
+                    -- declaration still exists. Without this, the ON CONFLICT path updates
+                    -- the row in place and leaves status = 'cancelled' forever, so a still-
+                    -- declared job silently never runs again after one bad cancellation
+                    -- (e.g. the historical task_payload-normalization mismatch). Revive ONLY
+                    -- 'cancelled'; 'running', 'suspended' (failure threshold), 'paused' (drift),
+                    -- 'pending', 'failed' and 'completed' are left untouched.
+                    --
+                    -- Consequence: a deliberate cancelJob() on a still-declared declarative job
+                    -- is NOT durable across restart — it lands in 'cancelled' and is revived
+                    -- here. The supported way to permanently stop a declarative job is to remove
+                    -- its schedule entry from the agent YAML; the row then has no re-declaring
+                    -- upsert, so cancelStaleDeclarativeJobs cancels it and it stays cancelled.
+                    -- Revivals are logged at warn level below so the override is visible.
+                    --
+                    -- Reviving also clears the stale failure bookkeeping so the job starts from
+                    -- a clean slate; the wiped values are preserved in the revival log line.
+                    status = CASE WHEN scheduled_jobs.status = 'cancelled' THEN 'pending' ELSE scheduled_jobs.status END,
+                    consecutive_failures = CASE WHEN scheduled_jobs.status = 'cancelled' THEN 0 ELSE scheduled_jobs.consecutive_failures END,
+                    last_error = CASE WHEN scheduled_jobs.status = 'cancelled' THEN NULL ELSE scheduled_jobs.last_error END
+      RETURNING id,
+                (SELECT prior_status FROM prior) AS prior_status,
+                (SELECT prior_failures FROM prior) AS prior_failures,
+                (SELECT prior_error FROM prior) AS prior_error
     `;
     const params: unknown[] = [
       sourceAgentId,
@@ -563,7 +603,33 @@ export class SchedulerService {
     ];
 
     const { rows } = await this.pool.query(sql, params);
-    const jobId = (rows[0] as { id: string }).id;
+    const resultRow = rows[0] as {
+      id: string;
+      prior_status?: string | null;
+      prior_failures?: number | null;
+      prior_error?: string | null;
+    };
+    const jobId = resultRow.id;
+
+    // Reviving overrides a terminal 'cancelled' state, so surface it loudly — the
+    // symmetric cancellation path (cancelStaleDeclarativeJobs) logs per row, and a
+    // resurrection must be at least as visible. Include the failure bookkeeping the
+    // upsert just wiped so the prior context survives in the logs. warn (not info)
+    // because this silently undoes a deliberate cancelJob() if one was issued.
+    if (resultRow.prior_status === 'cancelled') {
+      this.logger.warn(
+        {
+          jobId,
+          sourceAgentId,
+          agentId,
+          cron: schedule.cron,
+          priorConsecutiveFailures: resultRow.prior_failures ?? null,
+          priorLastError: resultRow.prior_error ?? null,
+        },
+        'Declarative job revived from cancelled — its YAML declaration still exists. ' +
+          'If this job was deliberately stopped, remove its schedule entry from the agent YAML instead of cancelling it.',
+      );
+    }
 
     // If intent_anchor is set, create a linked tasks row so the drift detector can
     // fire for this job — same pattern as createJob(). The WHERE NOT EXISTS guard ensures
