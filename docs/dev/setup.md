@@ -218,6 +218,8 @@ TAVILY_API_KEY=tvly-... pnpm run seed-vault
 
 `ctx.secret('tavily_api_key')` resolves **vault-first** with a `TAVILY_API_KEY` env-var fallback. In production the vault is the single source of truth — do **not** leave `TAVILY_API_KEY` set in the deploy environment, since a lingering env var would mask whether the vault entry is actually being used.
 
+> **Revocation caveat:** the install/enable gate checks the **vault only**, but the runtime resolver falls back to the env var. So if `TAVILY_API_KEY` is still set, *deleting `tavily_api_key` from the vault does not revoke web-search* — the skill keeps working off the env var, and only the `secret.accessed` event (`source: env`) reveals it. Treat removing the env var as a prerequisite for vault-based key rotation/revocation, not just initial setup.
+
 ### Signal
 
 Signal messaging runs via [signal-cli](https://github.com/AsamK/signal-cli). The socket path is wired up automatically by Docker Compose — the only thing you need to set is your phone number.
