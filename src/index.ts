@@ -1262,7 +1262,9 @@ async function main(): Promise<void> {
   // keeping the resolver pure). Email is satisfied via config when ≥1 account resolved.
   const channelConfigKeys = (descriptor: ChannelDescriptor): Set<string> => {
     if (descriptor.name === 'email' && resolvedEmailAccounts.length > 0) {
-      return new Set(['nylas_api_key', 'nylas_grant_id', 'nylas_self_email']);
+      // All of email's required creds come from config/default.yaml accounts (vault/env not needed).
+      // Derive from the descriptor so this stays in sync if the catalog's required-key list changes.
+      return new Set(descriptor.requiredSecretKeys);
     }
     return new Set<string>();
   };
