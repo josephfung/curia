@@ -314,13 +314,13 @@ function AutonomySection() {
 
 // ── Settings layout ───────────────────────────────────────────────────────────
 
-// The settings nav sections. Only 'autonomy' is functional; others are stubs
-// for future PRs. Rendered as <Link> elements so the URL changes on click and
-// back/forward navigation works correctly within the settings shell.
+// The settings nav sections. Only 'autonomy' is functional; 'workspace' is a stub
+// for a future PR. Skills and Agents used to live here but are now standalone
+// top-level pages (see RegistrySettings.tsx) reachable from the sidebar directly.
+// Rendered as <Link> elements so the URL changes on click and back/forward
+// navigation works correctly within the settings shell.
 const SETTINGS_SECTIONS = [
   { id: 'autonomy',  label: 'Autonomy',    href: '/settings/autonomy' },
-  { id: 'skills',   label: 'Skills',      href: '/settings/skills' },
-  { id: 'agents',   label: 'Agents',      href: '/settings/agents' },
   { id: 'workspace', label: 'Workspace',   href: '/settings/workspace' },
 ];
 
