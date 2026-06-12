@@ -32,6 +32,7 @@ const ROUTES: Record<string, string> = {
   jobs:     '/jobs',
   skills:   '/skills',
   agents:   '/agents',
+  channels: '/channels',
   settings: '/settings/workspace',
 };
 
@@ -73,7 +74,7 @@ export function Sidebar({ activeView, theme, onThemeChange }: SidebarProps) {
   // Expand the Settings group when on any of its pages (Skills/Agents are now
   // standalone pages but still live under the sidebar's Settings group).
   const [settingsOpen, setSettingsOpen] = useState(
-    activeView === 'settings' || activeView === 'skills' || activeView === 'agents',
+    activeView === 'settings' || activeView === 'skills' || activeView === 'agents' || activeView === 'channels',
   );
   const [principalName, setPrincipalName] = useState<string | null>(null);
   const { setOpen } = useMobileMenu();
@@ -186,6 +187,13 @@ export function Sidebar({ activeView, theme, onThemeChange }: SidebarProps) {
               >
                 <IconAutonomy />
                 Agents
+              </button>
+              <button
+                className={`nav-sub-item${activeView === 'channels' ? ' active' : ''}`}
+                onClick={() => go('channels')}
+              >
+                <IconWand />
+                Channels
               </button>
               <button
                 className={`nav-sub-item${activeView === 'settings' ? ' active' : ''}`}
