@@ -86,7 +86,9 @@ export class ChannelRegistryService {
   async uninstall(name: string, _actor: string): Promise<void> {
     const d = this.descriptor(name);
     if (!d.isToggleable) throw new ChannelGuardError(`Channel '${name}' cannot be uninstalled.`);
-    // Clear the channel's vault keys (best-effort; delete is a no-op if the key is absent).
+    // Clear the channel's vault keys first; delete is a no-op if the key is absent.
+    // A delete failure surfaces to the caller and aborts before the row is removed,
+    // so the registry row is only removed once the keys are cleared.
     if (this.secrets) {
       for (const field of d.credentialFields) {
         await this.secrets.delete(`channel.${name}.${field.key}`);

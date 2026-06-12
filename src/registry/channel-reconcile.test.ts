@@ -4,6 +4,7 @@ import { reconcileChannelRegistry } from './channel-reconcile.js';
 import type { IChannelRegistryRepo, ChannelRegistryRow } from './channel-registry-types.js';
 import type { ChannelDescriptor } from '../channels/catalog.js';
 import type { ChannelCredentialStatus } from '../channels/credential-resolver.js';
+import { createLogger } from '../logger.js';
 
 class FakeRepo implements IChannelRegistryRepo {
   rows = new Map<string, ChannelRegistryRow>();
@@ -19,7 +20,7 @@ class FakeRepo implements IChannelRegistryRepo {
   async uninstall(name: string) { this.rows.delete(name); }
 }
 
-const silentLogger = { info() {}, warn() {}, error() {}, debug() {} } as any;
+const silentLogger = createLogger('silent');
 
 const CATALOG: ChannelDescriptor[] = [
   { name: 'email', description: '', isToggleable: true, credentialFields: [], requiredSecretKeys: ['x'] },
