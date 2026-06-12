@@ -73,7 +73,7 @@ export class CliAdapter implements Channel {
       }
 
       if (content === '/quit' || content === '/exit') {
-        this.stop();
+        void this.stop();
         return;
       }
 
