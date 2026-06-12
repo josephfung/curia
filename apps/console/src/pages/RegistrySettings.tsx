@@ -410,11 +410,11 @@ function Pagination({ total, page, pageSize, totalPages, onPage, onPageSize }: P
         </select>
       </div>
       <div className="records-pagination-controls">
-        <button className="records-page-btn" onClick={() => onPage(page - 1)} disabled={page <= 1}>‹</button>
+        <button className="records-page-btn" aria-label="Previous page" onClick={() => onPage(page - 1)} disabled={page <= 1}>‹</button>
         {pages.map(p => (
-          <button key={p} className={`records-page-btn${p === page ? ' active' : ''}`} onClick={() => onPage(p)}>{p}</button>
+          <button key={p} className={`records-page-btn${p === page ? ' active' : ''}`} aria-label={`Page ${p}`} aria-current={p === page ? 'page' : undefined} onClick={() => onPage(p)}>{p}</button>
         ))}
-        <button className="records-page-btn" onClick={() => onPage(page + 1)} disabled={page >= totalPages}>›</button>
+        <button className="records-page-btn" aria-label="Next page" onClick={() => onPage(page + 1)} disabled={page >= totalPages}>›</button>
       </div>
     </div>
   );
