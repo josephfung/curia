@@ -24,6 +24,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **`deepseek/deepseek-v4-pro` output token cap** — raised `maxOutputTokens` from 8192 to 32768; the old value caused long-form writing tasks (e.g. essay drafts via `import_to_google_doc`) to produce truncated JSON tool call arguments and non-retryable errors. (#934)
 
 ### Added
+- **Channel registry** — database-backed install/enable lifecycle for channels with credentials in the secrets vault (vault-first, env/config fallback); new `Channel` interface, `Channels` console page, and always-on HTTP/CLI safeguard. (#543)
 - **`install.requires_secrets`** — skills can declare vault keys that must be configured before they install/enable; `RegistryService` rejects install/enable when any are missing, and the Skills drawer shows per-secret status with inline entry (e.g. enter a Tavily key when enabling web-search). Adds `SecretsService.list()` and `/api/vault/*` routes. Closes #939.
 - **Skill/Agent registry** — DB-gated install/enable lifecycle for skills and agents (`skill_registry`/`agent_registry` tables, startup reconciliation of a trusted core set, one-shot prod backfill). Only enabled items load at runtime. (#541)
 - **Skills & Agents settings** — manage install/enable/disable state from Workspace Settings. (#541)

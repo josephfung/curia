@@ -90,10 +90,11 @@ When you need to pin a transitive dependency (e.g. to clear a CVE), add it to th
 ## Adding Things
 
 ### New Channel Adapter
-1. Create `src/channels/<name>/` implementing `ChannelAdapter` interface
-2. Register as `layer: "channel"` with the bus
-3. Add config section to `config/default.yaml`
-4. Write tests
+1. Create `src/channels/<name>/` implementing the `Channel` interface from `src/channels/channel.ts` (`name`, `isToggleable`, `start()`, `stop()`)
+2. Add a `ChannelDescriptor` to `src/channels/catalog.ts` (credential fields + required secret keys)
+3. Register as `layer: "channel"` with the bus
+4. Add config section to `config/default.yaml`
+5. Write tests
 
 ### New Skill
 1. Create `skills/<name>/skill.json` (manifest) + `handler.ts`
