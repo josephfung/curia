@@ -267,9 +267,9 @@ Carried over from the issue, plus deferrals from design:
     `readonly threaded` property on the `Channel` interface, which that follow-up should
     do first.
 
-  **Drafted as a follow-up issue:** see
-  [`docs/wip/2026-06-12-channel-policy-registry-issue.md`](./2026-06-12-channel-policy-registry-issue.md)
-  (review before filing on GitHub).
+  **Filed as follow-up issue
+  [#962](https://github.com/josephfung/curia/issues/962)** (draft at
+  [`docs/wip/2026-06-12-channel-policy-registry-issue.md`](./2026-06-12-channel-policy-registry-issue.md)).
 - **Hot-reload** of channel adapters without restart. Enable/disable applies at next
   restart.
 - **Multi-account management in the UI.** The existing config-driven multi-account email

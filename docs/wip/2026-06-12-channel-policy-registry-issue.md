@@ -1,7 +1,8 @@
-# DRAFT ISSUE — review before filing on GitHub
+# Channel policy issue — FILED as #962
 
 > Spun out of #543 (channel registry). This captures the **channel policy** concern
-> deliberately deferred from that issue. Review, then file with `gh issue create`.
+> deliberately deferred from that issue.
+> **Filed:** https://github.com/josephfung/curia/issues/962
 
 **Suggested title:** `feat: DB-backed channel policy (trust / unknown_sender / threaded) with yaml defaults`
 
