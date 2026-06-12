@@ -36,6 +36,7 @@ import { identityRoutes } from './routes/identity.js';
 import { executiveRoutes } from './routes/executive.js';
 import { autonomyRoutes } from './routes/autonomy.js';
 import { registryRoutes } from './routes/registry.js';
+import { channelRegistryRoutes } from './routes/channel-registry.js';
 import { vaultRoutes } from './routes/vault.js';
 import { setupRoutes } from './routes/setup.js';
 import type { OfficeIdentityService } from '../../identity/service.js';
@@ -62,6 +63,9 @@ export interface HttpAdapterConfig {
   contactService: ContactService;
   autonomyService?: AutonomyService;
   registryService?: import('../../registry/registry-service.js').RegistryService;
+  /** Backs the /api/registry/channels/* routes (channel install/enable lifecycle). Mounted
+   *  only when webAppBootstrapSecret is also configured. */
+  channelRegistryService?: import('../../registry/channel-registry-service.js').ChannelRegistryService;
   /** Backs the /api/vault/* routes (secrets status + skill-secret entry). Mounted only
    *  alongside registryService, which scopes which secret names may be written. */
   secretsService?: import('../../secrets/secrets-service.js').SecretsService;
@@ -327,6 +331,17 @@ export class HttpAdapter implements Channel {
           sessions,
         });
       }
+    }
+
+    // Channel registry routes — the channel install/enable lifecycle for the console UI.
+    // Independent of the skill/agent registryService, so guarded only on the bootstrap
+    // secret + its own service.
+    if (webAppBootstrapSecret && this.config.channelRegistryService) {
+      await this.app.register(channelRegistryRoutes, {
+        channelRegistryService: this.config.channelRegistryService,
+        webAppBootstrapSecret,
+        sessions,
+      });
     }
 
     // Only register KG routes when the secret is configured — if unset, the routes
