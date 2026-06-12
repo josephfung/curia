@@ -22,6 +22,10 @@ channels:
 
 # Multi-account email configuration (spec §03-email-channel.md).
 #
+# Note: email credentials may now also be supplied via the secrets vault (keys
+# `channel.email.*`) and managed in the Channels console page. The config path
+# below remains supported and is preferred for multi-account setups.
+#
 # channel_accounts.email defines one or more named Nylas-backed email accounts.
 # Each account has its own grant ID and self-email address. All accounts send
 # directly via the OutboundGateway (autonomy-gated).
