@@ -1,6 +1,9 @@
-import { useState, useEffect, useCallback } from 'react';
-import { SettingsLayout } from './SettingsPage.js';
+import { useState, useEffect, useMemo, useCallback } from 'react';
+import { MobileMenuContext } from '../context/MobileMenu.js';
+import { Sidebar } from '../components/Sidebar.js';
+import { Topbar, TopbarSearch } from '../components/Topbar.js';
 import { apiFetch } from '../api.js';
+import { useTheme } from '../hooks/useTheme.js';
 
 // ── Types (mirror src/registry/types.ts RegistryEntry) ──────────────────────
 type DerivedState = 'uninstalled' | 'installed' | 'enabled' | 'ghost';
@@ -14,6 +17,7 @@ interface ManifestMetadata {
   capabilities?: string[];
   role?: string;
   modelTier?: string;
+  memoryScopes?: string[];
   // PR2 (#939): vault keys a skill declares in install.requires_secrets. Cross-referenced
   // against GET /api/vault/status to show configured/missing status and gate install/enable.
   requiresSecrets?: string[];
@@ -237,16 +241,28 @@ function RegistryDrawer({ entry, kindPath, onClose, onChanged }: {
                 <div>{entry.metadata.version}</div>
               </div>
               {entry.kind === 'skill' && (
-                <div className="form-field">
-                  <label>Action risk</label>
-                  <div>{String(entry.metadata.actionRisk ?? '—')}</div>
-                </div>
+                <>
+                  <div className="form-field">
+                    <label>Action risk</label>
+                    <div>{String(entry.metadata.actionRisk ?? '—')}</div>
+                  </div>
+                  <div className="form-field">
+                    <label>Sensitivity</label>
+                    <div>{entry.metadata.sensitivity ?? '—'}</div>
+                  </div>
+                </>
               )}
               {entry.kind === 'agent' && (
-                <div className="form-field">
-                  <label>Role / model</label>
-                  <div>{entry.metadata.role ?? '—'} / {entry.metadata.modelTier ?? '—'}</div>
-                </div>
+                <>
+                  <div className="form-field">
+                    <label>Role / model</label>
+                    <div>{entry.metadata.role ?? '—'} / {entry.metadata.modelTier ?? '—'}</div>
+                  </div>
+                  <div className="form-field">
+                    <label>Memory scopes</label>
+                    <div>{entry.metadata.memoryScopes?.join(', ') || '—'}</div>
+                  </div>
+                </>
               )}
               {entry.metadata.capabilities && (
                 <div className="form-field">
@@ -359,13 +375,73 @@ function RegistryDrawer({ entry, kindPath, onClose, onChanged }: {
   );
 }
 
-// ── Section (table + drawer) ─────────────────────────────────────────────────
+// ── Pagination ───────────────────────────────────────────────────────────────
+//
+// Local copy of the Contacts/Tasks pagination control — the codebase keeps one
+// per records page rather than sharing a single component.
 
-function RegistrySection({ kind }: { kind: 'skill' | 'agent' }) {
+interface PaginationProps {
+  total: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+  onPage: (p: number) => void;
+  onPageSize: (n: number) => void;
+}
+
+function Pagination({ total, page, pageSize, totalPages, onPage, onPageSize }: PaginationProps) {
+  const start = total === 0 ? 0 : (page - 1) * pageSize + 1;
+  const end = Math.min(page * pageSize, total);
+
+  const pages: number[] = [];
+  for (let i = 1; i <= totalPages; i++) pages.push(i);
+
+  return (
+    <div className="records-pagination">
+      <div className="records-pagination-info">
+        Showing <strong style={{ color: 'var(--app-fg)' }}>{start}–{end}</strong> of {total}
+      </div>
+      <div className="records-page-size">
+        Rows
+        <select value={pageSize} onChange={e => onPageSize(Number(e.target.value))}>
+          <option value="10">10</option>
+          <option value="25">25</option>
+          <option value="50">50</option>
+        </select>
+      </div>
+      <div className="records-pagination-controls">
+        <button className="records-page-btn" onClick={() => onPage(page - 1)} disabled={page <= 1}>‹</button>
+        {pages.map(p => (
+          <button key={p} className={`records-page-btn${p === page ? ' active' : ''}`} onClick={() => onPage(p)}>{p}</button>
+        ))}
+        <button className="records-page-btn" onClick={() => onPage(page + 1)} disabled={page >= totalPages}>›</button>
+      </div>
+    </div>
+  );
+}
+
+// ── Standalone registry page (Skills / Agents) ───────────────────────────────
+//
+// Mirrors the Contacts/Tasks layout: its own sidebar + topbar (with search), a
+// records table, and pagination. Skills and Agents used to render inside the
+// settings shell; they are now top-level pages reachable directly from the
+// sidebar's Settings group.
+
+function RegistryPage({ kind }: { kind: 'skill' | 'agent' }) {
   const kindPath = kind === 'skill' ? 'skills' : 'agents';
+  const [theme, setTheme] = useTheme();
+  const [mobileOpen, setMobileOpen] = useState(false);
+
   const [entries, setEntries] = useState<RegistryEntry[]>([]);
   const [selected, setSelected] = useState<RegistryEntry | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [search, setSearch] = useState('');
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
+
+  useEffect(() => {
+    document.documentElement.dataset['mobileSidebar'] = mobileOpen ? 'open' : '';
+  }, [mobileOpen]);
 
   const load = useCallback(async () => {
     try {
@@ -387,81 +463,154 @@ function RegistrySection({ kind }: { kind: 'skill' | 'agent' }) {
 
   useEffect(() => { void load(); }, [load]);
 
+  // Search filters on name + description; pagination is applied to the result.
+  const filtered = useMemo(() => {
+    if (!search) return entries;
+    const q = search.toLowerCase();
+    return entries.filter(e =>
+      (e.name + ' ' + (e.metadata?.description ?? '')).toLowerCase().includes(q),
+    );
+  }, [entries, search]);
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const safePage = Math.min(page, totalPages);
+  const pageRows = filtered.slice((safePage - 1) * pageSize, safePage * pageSize);
+
+  const title = kind === 'skill' ? 'Skills' : 'Agents';
+  // Name, State, two kind-specific columns, Version.
+  const colCount = 5;
+
   return (
-    <>
-      <div className="settings-page-header">
-        <h2 className="settings-page-title">
-          {kind === 'skill' ? 'Skills' : 'Agents'}
-        </h2>
-        <p className="settings-page-sub">
-          Install, enable, and disable {kind === 'skill' ? 'skills' : 'agents'}.
-          Changes take effect on the next restart.
-        </p>
-      </div>
-
-      {loadError && <p className="autonomy-error">{loadError}</p>}
-
-      <div className="records-layout">
-        <div className="records-table-wrap">
-          <table className="records-table">
-            <thead>
-              <tr>
-                <th>Name</th>
-                <th>State</th>
-                <th>Version</th>
-              </tr>
-            </thead>
-            <tbody>
-              {entries.map(e => (
-                <tr
-                  key={e.name}
-                  className={selected?.name === e.name ? 'active' : undefined}
-                  onClick={() => setSelected(e)}
-                  style={{ cursor: 'pointer' }}
-                >
-                  {/* Warn icon if the manifest failed to parse */}
-                  <td>{e.name}{e.manifestError ? ' ⚠' : ''}</td>
-                  <td>
-                    <span className={`status-pill ${STATE_PILL[e.state]}`}>
-                      {/* Extra warning on ghost: manifest is gone but DB row lingers */}
-                      {e.state}{e.state === 'ghost' ? ' ⚠' : ''}
-                    </span>
-                  </td>
-                  <td>{e.metadata?.version ?? '—'}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-
-        {selected && (
-          <RegistryDrawer
-            key={selected.name}
-            entry={selected}
-            kindPath={kindPath}
-            onClose={() => setSelected(null)}
-            onChanged={() => { void load(); }}
+    <MobileMenuContext.Provider value={{ open: mobileOpen, setOpen: setMobileOpen }}>
+      <div className="app-root">
+        <Sidebar activeView={kindPath} theme={theme} onThemeChange={setTheme} />
+        {mobileOpen && (
+          <div
+            className="sidebar-backdrop"
+            onClick={() => setMobileOpen(false)}
+            aria-hidden="true"
           />
         )}
+        <main className="main">
+          <Topbar crumb="Settings" title={title}>
+            <TopbarSearch
+              placeholder={`Search ${kindPath}…`}
+              value={search}
+              onChange={v => { setSearch(v); setPage(1); }}
+            />
+          </Topbar>
+
+          {loadError ? (
+            <div style={{ padding: 32, color: 'var(--app-destructive)', fontSize: 13 }}>{loadError}</div>
+          ) : (
+            <>
+              {/* Mobile search — TopbarSearch is hidden below 768px by the shared stylesheet */}
+              <div className="contacts-mobile-search">
+                <input
+                  type="text"
+                  placeholder={`Search ${kindPath}…`}
+                  value={search}
+                  onChange={e => { setSearch(e.target.value); setPage(1); }}
+                />
+              </div>
+
+              <div className="records-layout">
+                <div className="records-main">
+                  <div className="records-table-wrap">
+                    <table className="records-table">
+                      <thead>
+                        <tr>
+                          <th>Name</th>
+                          <th>State</th>
+                          {kind === 'agent' ? (
+                            <>
+                              <th>Model tier</th>
+                              <th>Memory scopes</th>
+                            </>
+                          ) : (
+                            <>
+                              <th>Action risk</th>
+                              <th>Sensitivity</th>
+                            </>
+                          )}
+                          <th>Version</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {pageRows.map(e => (
+                          <tr
+                            key={e.name}
+                            className={selected?.name === e.name ? 'active' : undefined}
+                            onClick={() => setSelected(e)}
+                            style={{ cursor: 'pointer' }}
+                          >
+                            {/* Warn icon if the manifest failed to parse */}
+                            <td>{e.name}{e.manifestError ? ' ⚠' : ''}</td>
+                            <td>
+                              <span className={`status-pill ${STATE_PILL[e.state]}`}>
+                                {/* Extra warning on ghost: manifest is gone but DB row lingers */}
+                                {e.state}{e.state === 'ghost' ? ' ⚠' : ''}
+                              </span>
+                            </td>
+                            {kind === 'agent' ? (
+                              <>
+                                <td>{e.metadata?.modelTier ?? '—'}</td>
+                                <td>{e.metadata?.memoryScopes?.join(', ') || '—'}</td>
+                              </>
+                            ) : (
+                              <>
+                                {/* actionRisk may be 0 (a valid risk score), so guard on null, not falsy. */}
+                                <td>{e.metadata?.actionRisk != null ? String(e.metadata.actionRisk) : '—'}</td>
+                                <td>{e.metadata?.sensitivity ?? '—'}</td>
+                              </>
+                            )}
+                            <td>{e.metadata?.version ?? '—'}</td>
+                          </tr>
+                        ))}
+                        {pageRows.length === 0 && (
+                          <tr>
+                            <td colSpan={colCount} style={{ textAlign: 'center', padding: 40, color: 'var(--app-fg-muted)' }}>
+                              No {kindPath} match.
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                  <Pagination
+                    total={filtered.length}
+                    page={safePage}
+                    pageSize={pageSize}
+                    totalPages={totalPages}
+                    onPage={setPage}
+                    onPageSize={n => { setPageSize(n); setPage(1); }}
+                  />
+                </div>
+
+                {selected && (
+                  <RegistryDrawer
+                    key={selected.name}
+                    entry={selected}
+                    kindPath={kindPath}
+                    onClose={() => setSelected(null)}
+                    onChanged={() => { void load(); }}
+                  />
+                )}
+              </div>
+            </>
+          )}
+        </main>
       </div>
-    </>
+    </MobileMenuContext.Provider>
   );
 }
 
-// ── Exported page components (one per child route) ───────────────────────────
+// ── Exported page components (one per route) ─────────────────────────────────
 
 export function SkillsPage() {
-  return (
-    <SettingsLayout activeSection="skills">
-      <RegistrySection kind="skill" />
-    </SettingsLayout>
-  );
+  return <RegistryPage kind="skill" />;
 }
 
 export function AgentsPage() {
-  return (
-    <SettingsLayout activeSection="agents">
-      <RegistrySection kind="agent" />
-    </SettingsLayout>
-  );
+  return <RegistryPage kind="agent" />;
 }

@@ -11,6 +11,8 @@ import {
   IconChecklist,
   IconClock,
   IconSettings,
+  IconWand,
+  IconAutonomy,
   IconChevron,
 } from './Icons';
 
@@ -28,6 +30,8 @@ const ROUTES: Record<string, string> = {
   contacts: '/contacts',
   tasks:    '/tasks',
   jobs:     '/jobs',
+  skills:   '/skills',
+  agents:   '/agents',
   settings: '/settings/workspace',
 };
 
@@ -66,7 +70,11 @@ function getInitials(name: string | null): string {
 
 export function Sidebar({ activeView, theme, onThemeChange }: SidebarProps) {
   const [memoryOpen, setMemoryOpen] = useState(true);
-  const [settingsOpen, setSettingsOpen] = useState(activeView === 'settings');
+  // Expand the Settings group when on any of its pages (Skills/Agents are now
+  // standalone pages but still live under the sidebar's Settings group).
+  const [settingsOpen, setSettingsOpen] = useState(
+    activeView === 'settings' || activeView === 'skills' || activeView === 'agents',
+  );
   const [principalName, setPrincipalName] = useState<string | null>(null);
   const { setOpen } = useMobileMenu();
   const navigate = useNavigate();
@@ -166,13 +174,26 @@ export function Sidebar({ activeView, theme, onThemeChange }: SidebarProps) {
           {settingsOpen && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 2, marginTop: 2 }}>
               <button
+                className={`nav-sub-item${activeView === 'skills' ? ' active' : ''}`}
+                onClick={() => go('skills')}
+              >
+                <IconWand />
+                Skills
+              </button>
+              <button
+                className={`nav-sub-item${activeView === 'agents' ? ' active' : ''}`}
+                onClick={() => go('agents')}
+              >
+                <IconAutonomy />
+                Agents
+              </button>
+              <button
                 className={`nav-sub-item${activeView === 'settings' ? ' active' : ''}`}
                 onClick={() => go('settings')}
               >
                 <IconSettings />
                 Workspace
               </button>
-
             </div>
           )}
         </div>

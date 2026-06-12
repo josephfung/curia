@@ -109,16 +109,19 @@ const workspaceRoute = createRoute({
   component: WorkspacePage,
 });
 
-const skillsSettingsRoute = createRoute({
+// Skills and Agents are now standalone top-level pages (peer to Contacts/Tasks),
+// no longer rendered inside the settings shell. The two routes below preserve the
+// old /settings/skills and /settings/agents URLs by redirecting to the new paths.
+const skillsSettingsRedirect = createRoute({
   getParentRoute: () => settingsRoute,
   path: '/skills',
-  component: SkillsPage,
+  beforeLoad: () => { throw redirect({ to: '/skills' }); },
 });
 
-const agentsSettingsRoute = createRoute({
+const agentsSettingsRedirect = createRoute({
   getParentRoute: () => settingsRoute,
   path: '/agents',
-  component: AgentsPage,
+  beforeLoad: () => { throw redirect({ to: '/agents' }); },
 });
 
 const loginRoute = createRoute({
@@ -145,6 +148,18 @@ const tasksRoute = createRoute({
   component: TasksPage,
 });
 
+const skillsRoute = createRoute({
+  getParentRoute: () => authedRoute,
+  path: '/skills',
+  component: SkillsPage,
+});
+
+const agentsRoute = createRoute({
+  getParentRoute: () => authedRoute,
+  path: '/agents',
+  component: AgentsPage,
+});
+
 const kgRoute = createRoute({
   getParentRoute: () => authedRoute,
   path: '/kg',
@@ -163,8 +178,10 @@ const routeTree = rootRoute.addChildren([
     contactsRoute,
     jobsRoute,
     tasksRoute,
+    skillsRoute,
+    agentsRoute,
     kgRoute,
-    settingsRoute.addChildren([autonomyRoute, workspaceRoute, skillsSettingsRoute, agentsSettingsRoute]),
+    settingsRoute.addChildren([autonomyRoute, workspaceRoute, skillsSettingsRedirect, agentsSettingsRedirect]),
   ]),
   loginRoute,
 ]);

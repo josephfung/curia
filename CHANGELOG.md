@@ -33,6 +33,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **`⚠️ Stuck` label** — ceo-inbox now applies this label when triage cannot complete for a message (unrecognised classification value, required skill failure, or error budget boundary hit), making failures visible in the Gmail sidebar.
 
 ### Changed
+- **Skills & Agents console pages** — promoted from Settings sub-sections to standalone top-level pages (`/skills`, `/agents`) that mirror the Contacts/Tasks layout with search and pagination. Agents now lists model tier and memory scopes; Skills lists action risk and sensitivity. Memory scopes are now surfaced through the registry API metadata. Old `/settings/skills` and `/settings/agents` URLs redirect. (#541)
 - **`web-search`** — first consumer of `install.requires_secrets`; declares `tavily_api_key` as an install-time gate, so the Tavily key is now provisioned via the console vault and the not-configured error points operators there. (#943)
 - **Skill/agent loading** — now gated on the registry; only enabled items are registered. `skill.json` and agent YAML schemas gain optional, inert `install`/`uninstall` blocks. `allowed_callers` validation now treats all discovered agents (enabled or disabled) as known. (#541)
 - **`secret.accessed` event** — gains an optional `source: 'vault' | 'env'` field showing where each secret resolved from. Backward-compatible; existing consumers compile unchanged. (#542)
