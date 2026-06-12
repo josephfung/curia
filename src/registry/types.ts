@@ -36,6 +36,8 @@ export interface ManifestMetadata {
   // agents
   role?: string;
   modelTier?: string;
+  /** Isolated memory scopes the agent reads/writes (agents/<name>.yaml → memory.scopes). */
+  memoryScopes?: string[];
 }
 
 /** One on-disk item found during discovery. `metadata` is null when the manifest
