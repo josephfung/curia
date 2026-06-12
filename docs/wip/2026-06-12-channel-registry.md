@@ -1863,4 +1863,17 @@ git -C "$WT" commit -m "docs: document channel registry (changelog, config, CLAU
 - **Spec coverage:** every acceptance criterion in the design maps to a task — table (T5), interface (T1/T3), startup gating + always-on http/cli (T9/T11), vault naming + resolution (T2/T4), missing-cred warning-not-crash (T9/T11), console list + drawer + form (T12/T13), static install via form→vault (T12), uninstall clears vault + row (T8/T12). OAuth and policy are explicitly out of scope (#962).
 - **Type consistency:** `channelCredentialStatus` / `ChannelCredentialStatus` / `CredentialStatusFn` / `ChannelRegistryEntry` / `ChannelGuardError` names are used identically across Tasks 4, 6, 8, 9, 11. Repo method `install(name, actor, isToggleable)` signature is consistent in the interface (T6), impl (T7), service calls (T8), and reconcile (T9).
 - **Known soft spots (flagged inline for the implementer):** EmailAdapter `stop()` timer-field name (T3c); exact auth helper exports for routes (T10); `DbPool` import path (T7); `requiredHint` placeholder + class names in the console page (T12). Each is called out at its step.
+
+---
+
+## Discovered during implementation
+
+Issues found by code review that the plan did not anticipate, and how they were resolved:
+
+- **Vault write scope guard rejected channel keys (gap in T10/T12).** The console saves credentials via `PUT /api/vault/secrets/:name`, but that route's existing scope guard (`registryService.declaredSecretNames()`, from #939) only permits *skill*-declared secret names. Channel keys (`channel.<name>.<key>`) are not skill-declared, so a real save would have returned 400 and the credential-install acceptance criterion would not have worked end to end. **Resolved** by an added unit ("Unit V"): widened the guard in `src/channels/http/routes/vault.ts` to also accept exact channel credential keys derived from `CHANNEL_CATALOG` (skill-declared **or** known-channel-key), preserving the "no arbitrary `channel.*` writes" protection, with a new `vault.test.ts` proving both accept and reject paths. Commit `8dd8dd7f`.
+- **Plan's `disable()` SQL bound an extra parameter (T7).** The plan's repo `disable` bound `[name, actor]` for a `$1`-only query, which throws at runtime. Fixed to bind `[name]` (param kept as `_actor` for interface symmetry), matching the sibling `registry-repo.ts`.
+- **`DbPool` import path (T7).** The real export is `../db/connection.js`, not the plan's guessed `../db/pool.js`.
+- **Auth helpers for routes (T10).** The real auth primitive is `assertSecret` from `../session-auth.js` (wrapped in a local `requireAuth` closure), and `AUTH_RATE` is a local const — not importable from `registry.ts` as the plan sketch assumed.
+- **Console page patterns (T12).** RegistrySettings uses concrete class names (`records-layout`, `status-pill`, `drawer-footer`, etc.) and a `SecretRow`-style subcomponent; the plan's placeholder class names were replaced with the real ones.
+- **EmailAdapter/HTTP `stop()` already existed (T3).** Both adapters already had working `stop()` implementations; only the `Channel` interface members (`name`, `isToggleable`) needed adding.
 ```
