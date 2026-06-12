@@ -12,6 +12,23 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { RegistryService } from '../../../registry/registry-service.js';
 import { assertSecret, type SessionStore } from '../session-auth.js';
+import { CHANNEL_CATALOG } from '../../catalog.js';
+
+// Allow-set of valid channel credential vault keys, derived once from the static catalog.
+// A channel credential is stored as `channel.<channel>.<field.key>`; only the exact
+// (channel, field) pairs the catalog declares are writable here. This mirrors the
+// skill-declared-secret scope guard: the channel console can configure known credentials,
+// but no arbitrary `channel.*` name may be written (e.g. `channel.email.bogus` is rejected).
+const CHANNEL_CREDENTIAL_KEYS: ReadonlySet<string> = new Set(
+  CHANNEL_CATALOG.flatMap(descriptor =>
+    descriptor.credentialFields.map(field => `channel.${descriptor.name}.${field.key}`),
+  ),
+);
+
+/** True iff `name` is a valid channel credential key declared by the catalog. */
+function isChannelCredentialKey(name: string): boolean {
+  return CHANNEL_CREDENTIAL_KEYS.has(name);
+}
 
 /** The narrow slice of SecretsService these routes need — list names + set a string value. */
 export interface VaultSecretsPort {
@@ -74,13 +91,18 @@ export async function vaultRoutes(
       return reply.status(400).send({ error: `Secret value exceeds ${MAX_SECRET_VALUE_LENGTH} characters.` });
     }
 
-    // Scope guard: only secrets some skill declares may be set here. This is the line
-    // between "configure a skill's secret" and "write any key into the vault".
-    if (!registryService.declaredSecretNames().includes(name)) {
-      request.log.info({ name }, 'vault set rejected: name not declared by any skill');
+    // Scope guard: a name may be set only if it is EITHER a secret some skill declares
+    // OR a valid channel credential key from the catalog. This is the line between
+    // "configure a declared secret / known channel credential" and "write any key into
+    // the vault". Arbitrary `channel.*` names that aren't in the catalog are still rejected.
+    const isSkillDeclared = registryService.declaredSecretNames().includes(name);
+    if (!isSkillDeclared && !isChannelCredentialKey(name)) {
+      request.log.info({ name }, 'vault set rejected: name not declared by any skill or channel');
       return reply.status(400).send({
-        error: `'${name}' is not a required secret declared by any skill. ` +
-          `Only secrets a skill lists in install.requires_secrets can be set here.`,
+        error: `'${name}' is not a required secret declared by any skill, ` +
+          `nor a known channel credential. Only secrets a skill lists in ` +
+          `install.requires_secrets, or channel credentials defined in the channel catalog, ` +
+          `can be set here.`,
       });
     }
 

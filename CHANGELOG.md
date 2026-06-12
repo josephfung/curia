@@ -19,6 +19,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **Channel credential vault writes** — the `PUT /api/vault/secrets/:name` scope guard now also accepts valid channel credential keys (`channel.<channel>.<field>`) derived from `CHANNEL_CATALOG`, so the Channels console can save credentials end-to-end; arbitrary/bogus `channel.*` names are still rejected.
 - **Declarative job revival** — `upsertDeclarativeJob` now flips a `cancelled` row back to `pending` (clearing failure state) on conflict, so a still-declared schedule that a prior stale-cleanup wrongly cancelled is restored on restart instead of staying silently dead; `running`/`suspended`/`failed` are left untouched.
 - **`deepseek/deepseek-v4-pro` output token cap** — raised `maxOutputTokens` from 8192 to 32768; the old value caused long-form writing tasks (e.g. essay drafts via `import_to_google_doc`) to produce truncated JSON tool call arguments and non-retryable errors. (#934)
 
