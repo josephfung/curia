@@ -43,6 +43,7 @@ import type { ExecutiveProfileService } from '../../executive/service.js';
 import type { ContactService } from '../../contacts/contact-service.js';
 import type { AutonomyService } from '../../autonomy/autonomy-service.js';
 import { type SessionStore } from './session-auth.js';
+import type { Channel } from '../channel.js';
 
 export interface HttpAdapterConfig {
   bus: EventBus;
@@ -80,7 +81,9 @@ export interface HttpAdapterConfig {
   bootStartedAt: string;
 }
 
-export class HttpAdapter {
+export class HttpAdapter implements Channel {
+  readonly name = 'http';
+  readonly isToggleable = false;
   private app: FastifyInstance;
   private config: HttpAdapterConfig;
   private eventRouter: EventRouter;

@@ -22,6 +22,7 @@ import { convertSignalEnvelope } from './message-converter.js';
 import { checkGroupMemberTrust } from './group-trust.js';
 import { createInboundMessage } from '../../bus/events.js';
 import { sanitizeOutput } from '../../skills/sanitize.js';
+import type { Channel } from '../channel.js';
 
 export interface SignalAdapterConfig {
   bus: EventBus;
@@ -51,7 +52,9 @@ export interface SignalAdapterConfig {
   ceoEmail?: string;
 }
 
-export class SignalAdapter {
+export class SignalAdapter implements Channel {
+  readonly name = 'signal';
+  readonly isToggleable = true;
   private readonly config: SignalAdapterConfig;
   private readonly log: Logger;
   // Bound handler so we can remove it in stop() without losing the reference.
