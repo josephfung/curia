@@ -121,6 +121,11 @@ import { RegistryRepo } from './registry/registry-repo.js';
 import { RegistryService } from './registry/registry-service.js';
 import { reconcileRegistries, type RegistryDefaults } from './registry/reconcile.js';
 import type { Discovery, RegistryRow } from './registry/types.js';
+import { CHANNEL_CATALOG, type ChannelDescriptor } from './channels/catalog.js';
+import { channelCredentialStatus } from './channels/credential-resolver.js';
+import { ChannelRegistryRepo } from './registry/channel-registry-repo.js';
+import { ChannelRegistryService } from './registry/channel-registry-service.js';
+import { reconcileChannelRegistry } from './registry/channel-reconcile.js';
 
 async function main(): Promise<void> {
   // Captured at the very start of main() so the wizard's post-setup polling
@@ -1248,11 +1253,69 @@ async function main(): Promise<void> {
     logger.warn('Outbound gateway NOT initialized — outboundFilter not ready (coordinator config missing?). Outbound send skills will be unavailable.');
   }
 
+  // ── Channel registry ───────────────────────────────────────────────────────
+  // Decide which channels start, from DB lifecycle state + resolvable credentials.
+  // Credentials resolve vault-first, then env, then config (multi-account email).
+  const channelRegistryRepo = new ChannelRegistryRepo(pool);
+
+  // Config-satisfied keys per channel (the messy, config-shape-aware part lives here,
+  // keeping the resolver pure). Email is satisfied via config when ≥1 account resolved.
+  const channelConfigKeys = (descriptor: ChannelDescriptor): Set<string> => {
+    if (descriptor.name === 'email' && resolvedEmailAccounts.length > 0) {
+      return new Set(['nylas_api_key', 'nylas_grant_id', 'nylas_self_email']);
+    }
+    return new Set<string>();
+  };
+
+  const channelCredentialStatusFn = (descriptor: ChannelDescriptor) =>
+    channelCredentialStatus(
+      { secrets: secretsService, configResolvedKeys: channelConfigKeys(descriptor) },
+      descriptor,
+    );
+
+  try {
+    await reconcileChannelRegistry({
+      repo: channelRegistryRepo,
+      catalog: CHANNEL_CATALOG,
+      credentialStatus: channelCredentialStatusFn,
+      logger,
+    });
+  } catch (err) {
+    logger.fatal({ err }, 'Channel registry reconciliation failed');
+    process.exit(1);
+  }
+
+  // Compute the set of channels that should actually start this boot: enabled in the DB
+  // AND credentials currently resolvable. Non-toggleable channels (http/cli) always start.
+  const channelRows = await channelRegistryRepo.listRows();
+  const enabledByName = new Map(channelRows.map(r => [r.name, r.enabled]));
+  const channelShouldStart = new Set<string>();
+  for (const descriptor of CHANNEL_CATALOG) {
+    if (!descriptor.isToggleable) { channelShouldStart.add(descriptor.name); continue; }
+    if (!enabledByName.get(descriptor.name)) continue;
+    const status = await channelCredentialStatusFn(descriptor);
+    if (status.requiredResolvable) {
+      channelShouldStart.add(descriptor.name);
+    } else {
+      // Enabled but credentials no longer resolve: warn and skip — never crash (spec §7).
+      logger.warn({ channel: descriptor.name }, 'channel enabled but required credentials missing; not starting');
+    }
+  }
+
+  // Service backing /api/registry/channels/* (delete wired for uninstall vault cleanup).
+  const channelRegistryService = new ChannelRegistryService(
+    channelRegistryRepo,
+    CHANNEL_CATALOG,
+    channelCredentialStatusFn,
+    secretsService,
+  );
+  // ───────────────────────────────────────────────────────────────────────────
+
   // Construct one EmailAdapter per resolved account (but don't start any yet —
   // adapters must not poll until the dispatcher is registered, otherwise inbound.message
   // events have no subscriber and are permanently dropped because each adapter advances
   // its own high-water mark on poll).
-  if (outboundGateway) {
+  if (outboundGateway && channelShouldStart.has('email')) {
     for (const account of resolvedEmailAccounts) {
       if (!nylasClientMap.has(account.name)) continue; // skip accounts with no client (NYLAS_API_KEY missing)
 
@@ -1278,7 +1341,7 @@ async function main(): Promise<void> {
 
   // Construct the Signal adapter (but don't start it yet — same ordering rule as email:
   // dispatcher must be registered first so inbound.message always has a subscriber).
-  if (outboundGateway && signalRpcClient && config.signalPhoneNumber) {
+  if (outboundGateway && signalRpcClient && config.signalPhoneNumber && channelShouldStart.has('signal')) {
     signalAdapter = new SignalAdapter({
       bus,
       logger,
@@ -1859,6 +1922,7 @@ async function main(): Promise<void> {
     contactService,
     autonomyService,
     registryService,
+    channelRegistryService,
     secretsService,
     setupRequiredAtBoot,
     bootStartedAt,
