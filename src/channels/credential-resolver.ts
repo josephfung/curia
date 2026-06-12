@@ -22,6 +22,9 @@ export interface CredentialResolverDeps {
   env?: Record<string, string | undefined>;
   /** Required keys the caller considers satisfied via config/default.yaml (e.g. email accounts). */
   configResolvedKeys?: Set<string>;
+  /** Optional logger. A vault read failure is treated as 'missing' (so env/config
+   *  fallback still applies) but is logged here rather than swallowed. Omitted in tests. */
+  logger?: { warn(obj: unknown, msg: string): void };
 }
 
 export interface ChannelCredentialStatus {
@@ -39,7 +42,18 @@ export async function channelCredentialStatus(
   const fields: CredentialFieldStatus[] = [];
 
   for (const field of descriptor.credentialFields) {
-    const vaultVal = await deps.secrets.get(`channel.${descriptor.name}.${field.key}`);
+    // Vault read is isolated per field: a transient vault failure must not abort the
+    // whole resolution and falsely report a channel as broken. On error we treat the
+    // vault value as absent and fall through to env/config precedence.
+    let vaultVal: string | null = null;
+    try {
+      vaultVal = await deps.secrets.get(`channel.${descriptor.name}.${field.key}`);
+    } catch (err) {
+      deps.logger?.warn(
+        { err, channel: descriptor.name, key: field.key },
+        'channel credential vault read failed; treating as missing and falling back to env/config',
+      );
+    }
     let source: CredentialSource;
     if (vaultVal) source = 'vault';
     else if (field.envFallback && env[field.envFallback]) source = 'env';

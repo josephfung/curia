@@ -55,7 +55,11 @@ async function errorMessage(res: Response): Promise<string> {
     try {
       const d = await res.json() as { error?: string };
       if (d.error) return d.error;
-    } catch { /* fall through to HTTP status */ }
+    } catch (err) {
+      // Malformed JSON body — log (don't swallow) and fall through to the HTTP status,
+      // which is still a useful message for the caller.
+      console.error('[errorMessage] failed to parse JSON error body:', err);
+    }
   }
   return `HTTP ${res.status}`;
 }

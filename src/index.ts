@@ -1262,16 +1262,22 @@ async function main(): Promise<void> {
   // keeping the resolver pure). Email is satisfied via config when ≥1 account resolved.
   const channelConfigKeys = (descriptor: ChannelDescriptor): Set<string> => {
     if (descriptor.name === 'email' && resolvedEmailAccounts.length > 0) {
-      // All of email's required creds come from config/default.yaml accounts (vault/env not needed).
-      // Derive from the descriptor so this stays in sync if the catalog's required-key list changes.
-      return new Set(descriptor.requiredSecretKeys);
+      // Email's runtime creds come from config/default.yaml accounts. Only mark a key
+      // as config-resolved when it is actually present, so registry state reflects what
+      // the adapter can really boot with (the API key in particular is global config,
+      // not per-account, so a resolved account does not by itself imply a key exists).
+      const keys = new Set<string>();
+      keys.add('nylas_grant_id');
+      keys.add('nylas_self_email');
+      if (config.nylasApiKey) keys.add('nylas_api_key');
+      return keys;
     }
     return new Set<string>();
   };
 
   const channelCredentialStatusFn = (descriptor: ChannelDescriptor) =>
     channelCredentialStatus(
-      { secrets: secretsService, configResolvedKeys: channelConfigKeys(descriptor) },
+      { secrets: secretsService, configResolvedKeys: channelConfigKeys(descriptor), logger },
       descriptor,
     );
 
@@ -2081,7 +2087,14 @@ async function main(): Promise<void> {
   // input while the CLI remains available for local development sessions.
   if (process.stdin.isTTY) {
     const cli = new CliAdapter(bus, logger, () => void shutdown());
-    cli.start();
+    // start() is async but performs only synchronous setup (no awaits), so the readline
+    // interface is ready for prompt() immediately below. Attach a .catch() so a setup
+    // failure (e.g. an unauthorized bus.subscribe) is logged and shut down fatally rather
+    // than surfacing as an unhandled promise rejection.
+    void cli.start().catch((err) => {
+      logger.fatal({ err }, 'CLI adapter failed to start — invoking shutdown');
+      void shutdown(1);
+    });
     // Print welcome directly to stdout (logger writes to curia.log in dev mode)
     process.stdout.write('\nCuria is ready. Type a message, /quit to exit, or Ctrl+C.\n\n');
     cli.prompt();
