@@ -22,6 +22,7 @@ import {
 } from '../../bus/events.js';
 import { sanitizeOutput } from '../../skills/sanitize.js';
 import { buildReplyQuote } from '../../skills/_shared/reply-quote.js';
+import type { Channel } from '../channel.js';
 
 // Mirrors MAX_BODY_LENGTH in skills/email-send/handler.ts and skills/email-reply/handler.ts.
 // When the agent's response plus the quoted original would exceed this, the quote
@@ -100,8 +101,14 @@ export interface EmailAdapterConfig {
   configStore?: ConfigStore;
 }
 
-export class EmailAdapter {
+export class EmailAdapter implements Channel {
+  readonly name = 'email';
+  readonly isToggleable = true;
   private config: EmailAdapterConfig;
+  // Existing setInterval handle — cleared in stop() to halt the poll loop. The
+  // overlap guard (`processing`) plus clearing this interval are sufficient to
+  // stop polling; no separate `stopped` flag is needed because polls are driven
+  // by a single repeating interval rather than per-poll re-scheduling.
   private pollTimer?: ReturnType<typeof setInterval>;
   private lastSeenTimestamp: number = 0;
   private processing = false;

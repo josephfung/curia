@@ -3,6 +3,7 @@ import type { EventBus } from '../../bus/bus.js';
 import { createInboundMessage } from '../../bus/events.js';
 import type { OutboundMessageEvent } from '../../bus/events.js';
 import type { Logger } from '../../logger.js';
+import type { Channel } from '../channel.js';
 
 /**
  * CLI channel adapter — interactive terminal I/O for local development and testing.
@@ -14,7 +15,9 @@ import type { Logger } from '../../logger.js';
  * (channel → dispatch → agent → dispatch → channel) can be exercised without
  * a real messaging platform.
  */
-export class CliAdapter {
+export class CliAdapter implements Channel {
+  readonly name = 'cli';
+  readonly isToggleable = false;
   private bus: EventBus;
   private logger: Logger;
   private rl?: readline.Interface;
@@ -26,7 +29,7 @@ export class CliAdapter {
     this.onExit = onExit;
   }
 
-  start(): void {
+  async start(): Promise<void> {
     // Subscribe to outbound messages directed at the CLI channel.
     this.bus.subscribe('outbound.message', 'channel', (event) => {
       if (event.type === 'outbound.message' && event.payload.channelId === 'cli') {
@@ -94,7 +97,7 @@ export class CliAdapter {
     this.rl?.prompt();
   }
 
-  stop(): void {
+  async stop(): Promise<void> {
     this.rl?.close();
   }
 }
