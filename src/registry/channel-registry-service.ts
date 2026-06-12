@@ -97,10 +97,25 @@ export class ChannelRegistryService {
     await this.repo.uninstall(name);
   }
 
+  // Build the single entry for a channel after a mutation. Resolves only THIS channel's
+  // row + credential status rather than calling list() — a successful write must not have
+  // its response fail because some unrelated channel's credential resolution errored.
   private async entry(name: string): Promise<ChannelRegistryEntry> {
-    const entries = await this.list();
-    const found = entries.find(e => e.name === name);
-    if (!found) throw new Error(`entry: '${name}' not in catalog after mutation`);
-    return found;
+    const d = this.descriptor(name);
+    const row = await this.repo.getRow(name);
+    if (!row) throw new Error(`entry: '${name}' missing registry row after mutation`);
+    const status = await this.credentialStatus(d);
+    return {
+      name: d.name,
+      description: d.description,
+      state: row.enabled ? 'enabled' : 'installed',
+      isToggleable: d.isToggleable,
+      credentialFields: status.fields,
+      requiredResolvable: status.requiredResolvable,
+      installedAt: row.installedAt,
+      installedBy: row.installedBy,
+      enabledAt: row.enabledAt,
+      enabledBy: row.enabledBy,
+    };
   }
 }
