@@ -23,6 +23,9 @@ const SkillsPage = lazy(() =>
 const AgentsPage = lazy(() =>
   import('./pages/RegistrySettings').then(m => ({ default: m.AgentsPage })),
 );
+const ChannelsPage = lazy(() =>
+  import('./pages/ChannelSettings').then(m => ({ default: m.ChannelsPage })),
+);
 const WizardPage = lazy(() => import('./pages/WizardPage'));
 const ContactsPage = lazy(() => import('./pages/ContactsPage'));
 const JobsPage = lazy(() => import('./pages/JobsPage'));
@@ -160,6 +163,12 @@ const agentsRoute = createRoute({
   component: AgentsPage,
 });
 
+const channelsRoute = createRoute({
+  getParentRoute: () => authedRoute,
+  path: '/channels',
+  component: ChannelsPage,
+});
+
 const kgRoute = createRoute({
   getParentRoute: () => authedRoute,
   path: '/kg',
@@ -180,6 +189,7 @@ const routeTree = rootRoute.addChildren([
     tasksRoute,
     skillsRoute,
     agentsRoute,
+    channelsRoute,
     kgRoute,
     settingsRoute.addChildren([autonomyRoute, workspaceRoute, skillsSettingsRedirect, agentsSettingsRedirect]),
   ]),
