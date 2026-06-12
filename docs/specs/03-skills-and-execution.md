@@ -35,9 +35,10 @@ skills/
 
 - `sensitivity`: `"normal"` (auto-approvable) or `"elevated"` — **target behaviour**: requires human approval on first use by that agent; **current behaviour**: not yet enforced — the execution layer applies role-gating instead (caller must have `role: ceo`); the persist-once-ask-once flow is deferred (see Safety Gate section below)
 - `action_risk`: required on all manifests. Named labels — `none`, `low`, `medium`, `high`, `critical` — map to minimum autonomy score thresholds. Raw integers (0–100) are also accepted for precision. Enforced by the execution layer against the live autonomy score.
-- `secrets`: declares which env-var-backed secrets the skill will request via `ctx.secret()`
+- `secrets`: declares which vault secret keys the skill will request via `ctx.secret()` (vault-first, env fallback at bootstrap)
 - `permissions`: declared capabilities, validated at load time
 - `timeout`: per-invocation timeout in ms; exceeded invocations return a failure result (default 30000)
+- `install.requires_secrets` (optional): vault secret keys that must already exist before the skill can be **installed or enabled** in the registry. `RegistryService` rejects install/enable until every listed key is present in the vault. This is the install/enable gate, distinct from the runtime `secrets` allowlist above. Example: `web-search` declares `"install": { "requires_secrets": ["tavily_api_key"] }`. (An `uninstall` block is parsed but currently inert.)
 
 **Privilege access** — skills declare which privileged services they need via `"capabilities": [...]` in `skill.json`. The loader validates names against a fixed allowlist (`VALID_CAPABILITIES` in `src/skills/loader.ts`) at startup and rejects unknown names. The manifest is frozen after loading. The execution layer injects only declared services into `SkillContext` — skills cannot self-escalate at runtime. Universal services (`contactService`, `entityContextAssembler`, `agentPersona`) are available to all skills without declaration. See the `capabilities` section in `docs/dev/adding-a-skill.md` for the full capability reference.
 
@@ -52,7 +53,7 @@ interface SkillHandler {
 
 interface SkillContext {
   input: Record<string, unknown>;  // validated against manifest inputs
-  secret(name: string): string;    // scoped secret access (reads env vars)
+  secret(name: string): string;    // scoped secret access (resolves a vault secret key)
   log: Logger;                     // scoped pino child logger
   agentPersona?: AgentPersona;     // display name, title, email signature — available to all skills
   caller?: CallerContext;          // caller identity (guaranteed for elevated skills)
@@ -121,6 +122,30 @@ Tool-list expansion is **per-task**: each task gets a local copy of the startup 
 
 ---
 
+## Skill & Agent Registry
+
+Skills (and agents) are not enabled merely by existing on disk — they are tracked in registry tables with an explicit install/enable lifecycle. The skill and agent registries share one migration (`051_create_skill_agent_registry.sql`) and the same column shape: `name` (PK), `enabled` (bool), `installed_at`, `installed_by`, `enabled_at`, `enabled_by`, `updated_at`.
+
+- **Disabled by default.** A newly added skill or agent is registered at startup but starts **disabled**.
+- **Restart-based enforcement.** Enabled items are loaded/registered at startup; disabled items are skipped. Changing enable state takes effect on the next restart — there is no live reload.
+- **Secret gating.** `RegistryService` enforces `install.requires_secrets`: install/enable is rejected until every declared vault secret key exists in the vault. `web-search` is the first consumer (`requires_secrets: ["tavily_api_key"]`).
+
+Lifecycle is driven via the registry HTTP routes (`src/channels/http/routes/registry.ts`):
+
+```
+GET    /api/registry/skills
+GET    /api/registry/agents
+POST   /api/registry/:kind/:name/install
+POST   /api/registry/:kind/:name/enable
+POST   /api/registry/:kind/:name/install-enable
+POST   /api/registry/:kind/:name/disable
+DELETE /api/registry/:kind/:name
+```
+
+Channels have their own parallel registry — see [spec 04 — Channels](04-channels.md).
+
+---
+
 ## Execution Layer
 
 Skills are invoked directly by `AgentRuntime` via `ExecutionLayer.invoke(skillName, input, caller, options)`. The execution layer is constructed once per process and shared across all agents.
@@ -172,11 +197,13 @@ Skill handlers should be designed so that a timeout leaves no half-committed vis
 
 Skills access secrets via `ctx.secret("name")`:
 
-- **Implementation:** Environment variables behind a scoped accessor. Secret names map to env var names (e.g., `ctx.secret("signal_phone_number")` reads `SIGNAL_PHONE_NUMBER` from the environment).
-- The execution layer validates that the calling skill's manifest declares the requested secret in its `secrets` array
-- Agents/LLMs never see secret values — only skills access them internally
-- All secret access is audit-logged (which skill, when, from which task) but values are never logged
-- **Future:** Swap env var backend for HashiCorp Vault or similar without changing skill code
+- **Implementation:** An **encrypted application-layer vault** backs the accessor. Secrets are stored AES-256-GCM-encrypted in the `secrets` table (one row per secret: `name`, `value_format`, `encrypted_value`, `iv`, timestamps) and decrypted on read by `SecretsService` using `SECRET_ENCRYPTION_KEY`. See [ADR-020](../adr/020-secrets-vault.md) (app-layer AES-256-GCM vault) and [ADR-021](../adr/021-vault-only-secret-resolution.md) (vault-only resolution).
+- **Resolution order:** vault-first. `SecretsService.get(name)` returns `Promise<string | null>` and reads only the vault — there is no env fallback inside the service. The vault-first-then-env fallback happens once at bootstrap via `applyVaultSecrets()`. The only secrets that remain in `.env` are the four bootstrap values needed to reach and unlock the vault: `DATABASE_URL`, `SECRET_ENCRYPTION_KEY`, `DB_USER`, `DB_PASSWORD`.
+- `SecretsService.list()` returns `Promise<string[]>` — secret **names only**, never values.
+- The execution layer validates that the calling skill's manifest declares the requested secret in its `secrets` array.
+- Agents/LLMs never see secret values — only skills access them internally.
+- All secret access is audit-logged (the `secret.accessed` event records which secret, when, and the resolution source `vault | env`) but values are never logged.
+- **Seeding & rotation:** `pnpm run seed-vault` upserts secrets (transient-env usage, e.g. `NYLAS_API_KEY=nyk_... pnpm run seed-vault`); `scripts/rotate-secret-key.ts` re-encrypts every row under a new key in a single transaction. See [Configuration → Secrets](../dev/configuration.md#secrets).
 
 ---
 
@@ -230,6 +257,12 @@ These are not bundled but documented as recommended integrations:
 | Output sanitization — tag stripping, secret redaction, truncation, error wrapping | Done |
 | Resource boundaries — per-invocation timeout enforcement from manifest | Done |
 | Secrets access — `ctx.secret()` scoped to manifest `secrets` array, audit-logged | Done |
+| Encrypted secrets vault — AES-256-GCM, `secrets` table, vault-first resolution (ADR-020/021) | Done |
+| Vault seeding (`seed-vault`) and key rotation (`rotate-secret-key.ts`) scripts | Done |
+| Skill registry — `skill_registry` table, install/enable lifecycle, restart-based loading | Done |
+| Agent registry — `agent_registry` table, install/enable lifecycle, restart-based loading | Done |
+| `install.requires_secrets` gate — `RegistryService` blocks install/enable until declared vault keys exist | Done |
+| Registry HTTP API — list/install/enable/install-enable/disable/delete routes | Done |
 | MCP skills — MCP client, stdio/StreamableHTTP transport, `tools/list` discovery | Done |
 | MCP `headers` config field — per-server auth headers for hosted MCP servers | Done |
 | Built-in skill: `skill-registry` (agent-invocable search) | Done |

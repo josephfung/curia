@@ -15,13 +15,33 @@ Config is merged in order: `default.yaml` ← `local.yaml` or `production.yaml` 
 
 ### Secret References
 
-Secrets are never stored in config files. Reference them via environment variable interpolation:
+Secrets are never stored in config files. Application secrets resolve from the **encrypted
+vault** (vault-first; see [spec 03 — Secrets Access](03-skills-and-execution.md#secrets-access)
+and ADR-020/021). Only four bootstrap values live in `.env`, because they are needed to reach
+and unlock the vault itself: `DATABASE_URL`, `SECRET_ENCRYPTION_KEY`, `DB_USER`, `DB_PASSWORD`.
+(Alongside these, `.env` also holds non-secret operational config such as `HTTP_PORT`,
+`POSTGRES_PORT`, `NYLAS_POLL_INTERVAL_MS`, `TIMEZONE`, `CEO_PRIMARY_EMAIL`, and the Google OAuth
+client settings.)
+
+Config files may still reference an env var via interpolation where the value is genuinely an
+environment value rather than a secret:
 
 ```yaml
 channels:
   signal:
     phone_number: ${SIGNAL_PHONE_NUMBER}
 ```
+
+> **Note:** A value like `signal_phone_number` is a *secret* and is read from the vault at
+> runtime. The env-var form is a bootstrap fallback / seeding affordance, not the primary
+> resolution path.
+
+**Seeding the vault:** `pnpm run setup` seeds the vault automatically after migrations on a fresh
+install. To add or update a single secret later, supply it as a transient env var and run the
+seeder: `VAR=value pnpm run seed-vault` (e.g. `NYLAS_API_KEY=nyk_... pnpm run seed-vault`).
+`setup.sh` runs the seeder with `SEED_VAULT_VERIFY=1`, which aborts the install if a required
+secret did not land. To rotate the encryption key, re-encrypt every row with
+`SECRET_ENCRYPTION_KEY_OLD=<b64> SECRET_ENCRYPTION_KEY_NEW=<b64> DATABASE_URL=<url> pnpm exec tsx scripts/rotate-secret-key.ts`.
 
 ### Config Validation
 
@@ -198,6 +218,13 @@ Automated security scanning runs on every pull request and on a weekly schedule:
 - **Semgrep CE** — pattern-based SAST for JavaScript/TypeScript. Initial triage suppressed 28 false positives; ongoing results appear in the Security tab.
 - **CodeQL** — weekly JS/TS semantic analysis.
 - **Gitleaks** — blocks merge if hardcoded secrets are detected in the diff.
+- **OpenSSF Scorecard** — `.github/workflows/scorecard.yml` runs weekly and on push. It publishes SARIF to GitHub's Security tab and to securityscorecards.dev, and the score is surfaced via an OpenSSF badge in the README.
+
+### Supply-Chain Hardening
+
+- **SHA-pinned GitHub Actions** — every action in every workflow is pinned to a full 40-character commit SHA (not a floating tag). Dependabot keeps these pins current.
+- **Least-privilege `GITHUB_TOKEN`** — token permissions are scoped at the job level rather than granted broadly at the workflow level.
+- **SHA-pinned Docker base images** — base images in the Dockerfile are pinned by SHA-256 digest, and the `docker` ecosystem is enabled in Dependabot so digest bumps are proposed automatically.
 
 ### Branch Protection
 
@@ -325,6 +352,11 @@ curia/
 | Config validation against JSON Schema at startup | Done |
 | Non-root container — production image runs as `curia` user | Done |
 | Trivy scanning — filesystem (npm deps + secrets) on every PR; Docker image scan weekly | Done |
+| OpenSSF Scorecard workflow (`scorecard.yml`) — weekly + push, SARIF to Security tab + securityscorecards.dev, README badge | Done |
+| GitHub Actions pinned to 40-char commit SHAs (Dependabot-maintained) | Done |
+| `GITHUB_TOKEN` permissions scoped at job level (least privilege) | Done |
+| Docker base images pinned by SHA-256 digest; `docker` ecosystem added to Dependabot | Done |
+| Encrypted secrets vault for application secrets; 4 bootstrap env vars in `.env`; `seed-vault` seeding | Done |
 | Branch protection on `main` — required PR review + passing status checks | Done |
 | `CURIA_TEMPFILE_DIR` env var — base directory for the `file-parse` `temp_file_url` path validation (see [spec 03](03-skills-and-execution.md)) | Done |
 | `qs` pinned to ≥ 6.15.2 — closes CVE-2026-8723 | Done |

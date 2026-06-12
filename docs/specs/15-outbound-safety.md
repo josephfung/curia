@@ -135,6 +135,30 @@ is dropped and must be re-requested.
 
 ---
 
+## Audience Partitioning (coordinator prompt guidance)
+
+The content filter (above) is the *detection* layer — it catches principal-private or internal
+content that has already leaked into an external-facing body. A complementary *prevention* layer
+stops the leak from being composed in the first place, at the point where the coordinator decides
+what to send.
+
+This prevention layer is implemented as **coordinator prompt guidance**, not a skill or payload
+field. The `agents/coordinator.yaml` system prompt (under `## Audience Awareness`) instructs the
+coordinator: when a single interaction calls for both an **external reply** *and* a **principal
+status update**, treat them as two independent outbound actions —
+
+1. the external reply (composed for the external recipient only), and
+2. a **separate** outbound call to the principal via `email-send` / `signal-send`,
+
+— and **never** address the principal in a body that also reaches an external recipient.
+
+> **Implementation note:** An earlier design (a dedicated `compose-reply` skill plus an
+> `AgentResponsePayload.sidebar` field, PR #907) was **closed unmerged**. What shipped (PR #908)
+> is the prompt-guidance mechanism described above. There is **no** `compose-reply` skill and
+> **no** `sidebar` payload field in the codebase — do not document them as existing.
+
+---
+
 ## Caller Verification
 
 For skills declared with `sensitivity: elevated`, the execution layer requires a verified
@@ -169,6 +193,7 @@ without cross-channel confirmation.
 | Blocked contact check in gateway pipeline | Done |
 | Content filter Stage 1 — deterministic rules (system prompt fragments, internal field names, secret patterns, contact data leakage) | Done |
 | Content filter Stage 2 — LLM-as-judge (audience-leak & hyper-sensitive financial/credential detection) | Done |
+| Audience partitioning — coordinator prompt guidance to send external reply and principal status update as **separate** outbound messages (no shared body) | Done |
 | `outbound.blocked` audit event published on filter block | Done |
 | Caller verification gate — elevated-skill check in execution layer | Partial — role-based gate exists; cross-channel challenge/response flow not built |
 | Display name sanitization — storage-time sanitization of inbound display names | Done |

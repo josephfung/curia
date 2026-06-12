@@ -15,6 +15,8 @@ See [Adding an Agent](adding-an-agent.md) if you want to create a new agent rath
 5. Pin the skill in any agent that should use it (`pinned_skills` in the agent YAML), or make it discoverable via `allow_discovery: true`
 6. Restart Curia — skills are loaded from the `skills/` directory at startup
 
+> **The skill starts disabled in the registry.** A newly added skill is registered at startup but is **not enabled** by default. Enable it (via the registry HTTP API or admin UI) before any agent can call it. Enable state is **restart-based** — toggling enabled/disabled takes effect on the next restart, when only enabled skills are loaded and registered. See [Manifest → `install.requires_secrets`](#installrequires_secrets-optional) for the secret-gating that the registry enforces at install/enable time, and [Skills & Execution Spec — Registry lifecycle](../specs/03-skills-and-execution.md) for the full design.
+
 ---
 
 ## Directory Layout
@@ -212,13 +214,25 @@ Declared capabilities required by this skill, validated at load time. Currently 
 
 Names of secrets this skill will access via `ctx.secret("name")`. The execution layer validates that any secret requested at runtime was declared here — undeclared secret requests are rejected with an error.
 
-Secret names map to environment variables at runtime (e.g., `"brave_api_key"` → `BRAVE_API_KEY`). See [Secrets Access](#secrets-access) below.
+Secret names are **vault secret keys** resolved via `ctx.secret()` (vault-first, with an env-var fallback applied at bootstrap). See [Secrets Access](#secrets-access) below.
 
 ```json
 "secrets": ["brave_api_key"]
 ```
 
 Note: Infrastructure skills (email, calendar) access Nylas clients via `ctx.outboundGateway` and `ctx.nylasCalendarClient`, which are bootstrapped at startup. These are not secrets — do not declare them in `secrets`.
+
+#### `install.requires_secrets` (optional)
+
+A **separate** optional block from the runtime `secrets` allowlist above. While `secrets` declares which vault keys the handler may read *at invocation time*, `install.requires_secrets` declares the vault secret keys that must already be configured *before the skill can be installed or enabled* in the registry.
+
+```json
+"install": { "requires_secrets": ["tavily_api_key"] }
+```
+
+The registry (`RegistryService`) enforces this: an install or enable request is **rejected** until every key listed here exists in the vault. This makes "a skill cannot be turned on without its credentials" a structural guarantee rather than a runtime surprise. `web-search` is the first consumer — it declares `"install": { "requires_secrets": ["tavily_api_key"] }`, so it cannot be enabled until `tavily_api_key` is seeded.
+
+Use `install.requires_secrets` for the credential that *gates the skill's existence* (the API key without which the skill is useless). Use `secrets` for the full set of vault keys the handler reads — the two often overlap but serve different purposes (gate vs. runtime-read allowlist).
 
 #### `timeout` (optional, default: `30000`)
 
@@ -280,7 +294,7 @@ interface SkillContext {
   input: Record<string, unknown>;
 
   /** Synchronous secret access — only secrets declared in manifest.secrets are accessible.
-   *  Maps name → env var (e.g. 'brave_api_key' → process.env.BRAVE_API_KEY).
+   *  Resolves a vault secret key (vault-first, env fallback applied at bootstrap).
    *  Throws if the name is not declared in the manifest. */
   secret(name: string): string;
 
@@ -365,7 +379,7 @@ type SkillResult =
 const apiKey = ctx.secret('stripe_api_key');  // synchronous — no await
 ```
 
-- `ctx.secret()` is **synchronous** — it reads from environment variables at call time
+- `ctx.secret()` is **synchronous** — it resolves a **vault secret key** at call time (vault-first; an env-var fallback is applied at bootstrap, see `applyVaultSecrets()`)
 - The execution layer throws if the name is not declared in `manifest.secrets`
 - Secret values are never logged — the audit log records which secret was accessed, not its value
 - Agents/LLMs never see secret values — only the handler has access within its execution scope
@@ -456,7 +470,7 @@ Integration tests that call real external APIs should be tagged with `.integrati
 
 The execution layer automatically sanitizes skill results before feeding them to the LLM:
 - Strips XML/HTML tags that could be interpreted as system instructions
-- Truncates outputs longer than 10,000 characters (configurable) with a `[truncated]` marker
+- Truncates outputs longer than 200,000 characters (configurable via `skillOutput.maxLength` in `config/default.yaml`) with a `[truncated]` marker
 - Redacts patterns matching known secret formats (API keys, tokens)
 - Wraps error strings in `<tool_error>` tags to prevent injection
 
@@ -525,7 +539,9 @@ See [Adding an Agent — Using config-store](adding-an-agent.md#using-config-sto
 - [ ] `timeout` is set appropriately for the expected latency
 - [ ] Tests cover the success path and at least one failure path
 - [ ] Any required secrets are declared in `"secrets"` array
+- [ ] If the skill is useless without a specific credential, it declares that vault key in `install.requires_secrets` so the registry blocks install/enable until it is configured
 - [ ] Skill is pinned in at least one agent YAML (or documented as discoverable)
+- [ ] Remember the skill starts **disabled** in the registry — enabling it is a restart-based registry action, not just adding the directory
 
 ---
 

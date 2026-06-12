@@ -28,6 +28,18 @@ If `WEB_APP_BOOTSTRAP_SECRET` is missing, the KG API routes are not registered a
   - Query params: `node_id`, `depth`, `limit`
   - Purpose: neighborhood traversal for a selected node; falls back to recent nodes when no `node_id` is provided.
 
+## Graph layout
+
+The graph view uses a **physics-aware layout** so the structure of the graph is legible rather than a uniform hairball:
+
+- **Per-type node repulsion** — node types repel at different strengths (facts ~1,000; person/org/event ~7,500), so high-level entities spread out while their facts cluster near them.
+- **Per-edge ideal length** — edges have type-dependent rest lengths (facts ~40px; strong relationships ~60px).
+- **Per-edge elasticity** — edge stiffness scales with the edge's strength/confidence, so stronger relationships pull their endpoints closer.
+- **Degree-based node sizing** — more-connected nodes render larger.
+- **Viewport centering** — the view centers on the focal node.
+
+On default mount, the explorer loads the **principal's 2-hop neighborhood** so the most relevant subgraph is visible without a manual search.
+
 ---
 
 ## Implementation Status
@@ -39,3 +51,5 @@ If `WEB_APP_BOOTSTRAP_SECRET` is missing, the KG API routes are not registered a
 | `WEB_APP_BOOTSTRAP_SECRET` gating on all data API routes | Done |
 | KG view ported to React console (`apps/console/src/pages/KgPage.tsx`) | Done |
 | Legacy Cytoscape SPA (`/old`) removed | Done |
+| Physics-aware layout — per-type repulsion, per-edge ideal length & elasticity, degree-based sizing, focal-node centering | Done |
+| Default mount loads the principal's 2-hop neighborhood | Done |

@@ -32,6 +32,19 @@ CREATE INDEX idx_audit_unacknowledged ON audit_log (acknowledged) WHERE acknowle
 - **Causal tracing** — `parent_event_id` links events into chains: message → dispatch → agent → skill → response. Full chain reconstruction via recursive query.
 - **Acknowledged flag** — marks whether the event was successfully delivered to all subscribers. Unacknowledged events can be replayed on restart (manual for launch, automatic later).
 
+### Notable audit events
+
+Beyond the bus events listed in the layer table below, these security/operational events are
+written to the audit log:
+
+| Event | Emitted by | Purpose |
+|---|---|---|
+| `secret.accessed` | execution | Records every `ctx.secret()` call — which secret, when, and the resolution `source` (`vault` \| `env`). The value is never recorded. |
+| `outbound.blocked` | system | An outbound message was blocked by the content filter. Payload: `blockId`, `conversationId`, `channelId`, `content`, `recipientId`, `reason`, `findings[]`. See [spec 15](15-outbound-safety.md). |
+| `outbound.suppressed_duplicate` | system | A duplicate agent-response→outbound was suppressed because a human-facing reply already shipped for the routing task (reason `'human_reply_already_sent'`). See [spec 05](05-error-recovery.md). |
+| `channel.poll` | channel | Emitted once per email poll cycle for operator visibility. See [spec 04](04-channels.md). |
+| `channel.stalled` | channel | Watchdog event when no successful poll completes within `5 × pollingIntervalMs` (at most once per adapter lifecycle). See [spec 04](04-channels.md). |
+
 ### Redaction
 
 A configurable redaction layer processes payloads before writing to the audit log:
@@ -81,10 +94,11 @@ For persistent tasks:
 
 ### Secrets Isolation
 
+- Secrets are stored in an **encrypted application-layer vault** (AES-256-GCM, `secrets` table), decrypted on read by `SecretsService`. Resolution is vault-first; the only secrets in `.env` are the four bootstrap values needed to reach and unlock the vault (`DATABASE_URL`, `SECRET_ENCRYPTION_KEY`, `DB_USER`, `DB_PASSWORD`). See [ADR-020](../adr/020-secrets-vault.md) / [ADR-021](../adr/021-vault-only-secret-resolution.md) and [spec 03 — Secrets Access](03-skills-and-execution.md#secrets-access).
 - Agents/LLMs never see secret values
 - Only skills access secrets, through the scoped `ctx.secret()` interface
-- Every secret access is audit-logged (which skill, from which agent/task)
-- Secret values are never written to the audit log
+- Every secret access is audit-logged via `secret.accessed` (which skill, from which agent/task, and the resolution `source`: `vault` \| `env`)
+- Secret values are never written to the audit log — `SecretsService.list()` returns names only
 - Skills can only access secrets declared in their manifest
 
 ### Input Validation
@@ -348,7 +362,9 @@ These are non-negotiable for launch.
 |---|---|
 | Bus layer enforcement tested (channel cannot publish `skill.invoke`) | Done |
 | Audit log append-only verified (no UPDATE or DELETE code paths) and DB-level trigger enforcement | Done |
-| Secret values never appear in logs, audit, or LLM context | Not Done |
+| Secret values never appear in logs, audit, or LLM context | Done |
+| Encrypted secrets vault (AES-256-GCM, `secrets` table, vault-first resolution; ADR-020/021) | Done |
+| `secret.accessed` audit event records skill, time, and resolution source (`vault` \| `env`) | Done |
 | Tool output sanitization active for all skill results | Done |
 | Inbound message sanitization active (injection pattern detection) | Done |
 | Error strings scrubbed before LLM injection | Done |
