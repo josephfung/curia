@@ -3,7 +3,7 @@
 //   - http/cli (non-toggleable) are ALWAYS present and enabled — operator-lockout safeguard.
 //   - toggleable channels with no row whose credentials resolve are installed + enabled, so
 //     existing deployments light up unchanged. Existing admin state is never overwritten.
-import type { Logger } from 'pino';
+import type { Logger } from '../logger.js';
 import type { ChannelDescriptor } from '../channels/catalog.js';
 import type { CredentialStatusFn } from './channel-registry-service.js';
 import type { IChannelRegistryRepo } from './channel-registry-types.js';
