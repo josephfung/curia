@@ -13,6 +13,8 @@ See [Adding a Skill](adding-a-skill.md) if you want to add a capability rather t
 3. Restart Curia — agent YAML files are loaded and schema-validated at startup
 4. Pin the skills the agent needs (see the [skills directory](../specs/03-skills-and-execution.md#built-in-skills) and browse `skills/` for available options)
 
+> **New agents start disabled in the registry.** Like skills, agents are tracked in a registry (`agent_registry`) with an install/enable lifecycle. A newly added agent is registered at startup but **not enabled** by default — enable it (via the registry HTTP API or admin UI) before it participates in routing. Enable state is **restart-based**: only enabled agents are loaded and registered on the next restart. See [Configuration → registry](configuration.md#skill-agent-and-channel-registry).
+
 ---
 
 ## YAML Schema Reference

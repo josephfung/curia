@@ -125,6 +125,43 @@ A `known_failures` table records tool + error-type combinations that consistentl
 
 ---
 
+## Resilience Patterns
+
+Beyond per-layer failure handling, several subsystems ship with targeted resilience patterns.
+A recurring theme: **state that controls whether work re-runs is managed in code, not by the
+LLM** — an LLM-managed watermark or counter can hallucinate a value and either skip work or
+re-do it.
+
+### Channel poll watchdog (`channel.stalled`)
+
+The email adapter persists its poll high-water mark in code (via `ConfigStore`) and runs a
+watchdog on each tick. If no successful poll completes within `5 × pollingIntervalMs`, it emits
+a `channel.stalled` audit event (at most once per adapter lifecycle) so a silently wedged poll
+loop becomes visible to operators. See [spec 04 — Channels](04-channels.md).
+
+### Duplicate outbound suppression (#847)
+
+When an agent's `agent.response` would translate into an outbound message, the dispatcher
+suppresses it if a human-facing reply (`email-reply` / `email-send`) has already shipped for the
+same routing task. The suppression emits an `outbound.suppressed_duplicate` audit event with
+reason `'human_reply_already_sent'`, preventing the principal (or an external recipient) from
+receiving the same content twice.
+
+### Triage watermark moved to code (#866)
+
+The ceo-inbox triage `last_processed_at` watermark is managed in code (via `ConfigStore`) rather
+than by the LLM. Future timestamps are clamped to `now()` so a bad value cannot push the watermark
+ahead and cause messages to be skipped on the next run.
+
+### Contacts promotion sweep batching (#884)
+
+The provisional-contact promotion sweep is batched to 10 contacts per run using offset pagination,
+with the cursor persisted in `last_run_context` so successive runs advance through the backlog
+without re-scanning. The contacts agent's `error_budget` is raised to 30 turns to accommodate the
+batched work. See [spec 09 — Contacts & Identity](09-contacts-and-identity.md).
+
+---
+
 ## Error Classification
 
 *Lesson from Zora: string-matching error messages for classification is fragile.*
@@ -189,6 +226,10 @@ This is enforced by code review convention. A lint rule (`no-empty-catch` + cust
 | Channel adapter failure handling: reconnection with exponential backoff | Partial — Signal only; email uses polling model |
 | Channel adapter failure handling: outbound message queue (max 100) for disconnected channels | Not Done |
 | Scheduled job failure handling (suspension after 3 failures, user notification) | Done |
+| Channel poll watchdog — `channel.stalled` audit event when no poll succeeds within `5 × pollingIntervalMs` | Done |
+| Duplicate outbound suppression — `outbound.suppressed_duplicate` when a human reply already shipped (#847) | Done |
+| ceo-inbox triage watermark managed in code with future-timestamp clamping (#866) | Done |
+| Contacts promotion sweep batched to 10/run via offset cursor in `last_run_context`; `error_budget` raised to 30 (#884) | Done |
 | Database unavailable: fail-fast at startup | Done |
 | Database unavailable: in-operation handling (retry in non-critical paths, bubble up in critical) | Partial — health check detects it; path-specific handling not verified |
 | `AgentError` structured type with `ErrorType` discriminated union | Done |

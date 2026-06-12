@@ -13,6 +13,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Documentation
+
+- **Specs & dev guides updated for v0.34** — refreshed specs 03/04/05/06/08/09/12/15 and the `adding-a-skill` / `adding-an-agent` / `configuration` dev guides to cover the secrets vault (ADR-020/021), the skill/agent/channel registry and `install.requires_secrets` gate, the new `Channel` interface, audience-partitioning prompt guidance (#851), the new audit events, and the OpenSSF/supply-chain hardening. Corrected the stale skill-output sanitization cap (10k → 200k).
+
 ### Removed
 
 - **`backfill:registry` script** — one-shot prod migration (`scripts/backfill-registry-enable-all.ts`) removed after successful run on production; all existing skill/agent rows are now in the registry. (#541)

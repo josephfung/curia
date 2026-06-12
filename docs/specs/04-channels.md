@@ -6,21 +6,48 @@ Each channel is a self-contained adapter that translates between platform-specif
 
 ---
 
-## Adapter Interface
+## Channel Interface
+
+Every channel implements the formal `Channel` contract in `src/channels/channel.ts`. This replaces the previous duck-typed `ChannelAdapter { id; start; stop; send }` pattern. Notably, there is **no `send()` method** — outbound delivery now flows through the `OutboundGateway`, not through the channel object itself.
 
 ```typescript
-interface ChannelAdapter {
-  id: string;                      // e.g., "signal", "email"
+interface Channel {
+  readonly name: string;          // 'email' | 'signal' | 'http' | 'cli' — matches catalog + registry row
+  readonly isToggleable: boolean; // false for http and cli (always-on safeguard channels)
   start(): Promise<void>;         // connect/listen
-  stop(): Promise<void>;          // graceful shutdown
-  send(message: OutboundMessage): Promise<void>;
+  stop(): Promise<void>;          // graceful, idempotent teardown (process shutdown)
 }
 ```
 
-Each adapter:
+Each channel:
 - Publishes `inbound.message` (normalized) when a platform message arrives
-- Subscribes to `outbound.message` and calls `send()` to deliver responses
+- Has its outbound responses delivered via the `OutboundGateway` (channels are no longer responsible for `send()`)
 - Handles its own connection lifecycle, authentication, and reconnection
+
+### Channel Catalog & Registry
+
+Channels are described by a static catalog (`src/channels/catalog.ts`) and tracked at runtime in a registry table, mirroring the skill/agent registry model (spec 03).
+
+```typescript
+interface ChannelDescriptor {
+  name: string;
+  description: string;
+  isToggleable: boolean;
+  credentialFields: ChannelCredentialField[];
+  requiredSecretKeys: string[];
+}
+
+interface ChannelCredentialField {
+  key: string;
+  label: string;
+  secret: boolean;
+  envFallback?: string;   // bootstrap env var fallback
+}
+```
+
+- **Registry table** (`channel_registry`, migration `052_create_channel_registry.sql`): `name` (PK), `enabled`, `is_toggleable`, `installed_at`/`installed_by`, `enabled_at`/`enabled_by`, `updated_at`.
+- **Always-on safeguard:** the `http` and `cli` channels have `isToggleable: false` — they always start and cannot be disabled (operator-lockout protection). `email` and `signal` are toggleable.
+- **Vault key convention:** channel credentials are stored under structured vault keys of the form `channel.<name>.<field>` — e.g. the email channel's Nylas API key lives at `channel.email.nylas_api_key`. A `ChannelCredentialField` may also declare an `envFallback` env var used at bootstrap.
 
 ---
 
@@ -51,11 +78,15 @@ interface OutboundMessage {
 
 ## Launch Channels
 
+Channels are not started merely by being configured — like skills and agents, they are tracked in the `channel_registry` with an install/enable lifecycle (restart-based). The `http` and `cli` channels are non-toggleable and always start; `email` and `signal` must be enabled in the registry.
+
 ### CLI
-Interactive terminal for local dev and testing. Reads from stdin, writes to stdout. Simplest adapter — useful for testing agent logic without external services.
+Interactive terminal for local dev and testing. Reads from stdin, writes to stdout. Simplest adapter — useful for testing agent logic without external services. **Non-toggleable** (`isToggleable: false`): always starts, cannot be disabled.
 
 ### Email (via Nylas API)
 - **Inbound:** Polls Nylas Messages API at configurable interval (default: 30s)
+- **Poll high-water mark (resilience):** the adapter persists its `lastSeenTimestamp` high-water mark via `ConfigStore` (namespace `system:email-poll-state`, key `<accountId>.last_seen_at`) so restarts resume where they left off. This watermark is **code-managed, not LLM-managed**.
+- **Poll observability:** a `channel.poll` audit event is emitted once per poll cycle. A watchdog emits a `channel.stalled` audit event (at most once per adapter lifecycle) when no successful poll completes within `5 × pollingIntervalMs`.
 - **Outbound:** Sends via Nylas Send API
 - **Conversation ID:** derived from Nylas thread ID (`email:<threadId>`)
 - **Participant extraction:** From/To/CC addresses are extracted and auto-create contacts
@@ -76,16 +107,18 @@ Interactive terminal for local dev and testing. Reads from stdin, writes to stdo
 - Token-based authentication
 - This is the interface a future web dashboard or mobile app would use
 - **Conversation ID:** provided by the client or generated server-side
+- **Non-toggleable** (`isToggleable: false`): always starts, cannot be disabled — disabling HTTP would lock operators out of the registry API itself.
 
 ---
 
 ## Adding a New Channel
 
 Adding a channel means creating a directory in `src/channels/<name>/` with:
-1. A class implementing `ChannelAdapter`
-2. Registration in the channel config (`config/default.yaml`)
+1. A class implementing the `Channel` interface from `src/channels/channel.ts` (`name`, `isToggleable`, `start()`, `stop()`)
+2. A `ChannelDescriptor` entry in `src/channels/catalog.ts` (credential fields + required secret keys)
+3. Registration in the channel config (`config/default.yaml`)
 
-No core code changes needed. The adapter registers with the bus as `layer: "channel"` and is automatically restricted to channel-safe event types.
+The channel registers with the bus as `layer: "channel"` and is automatically restricted to channel-safe event types. A new toggleable channel starts **disabled** in the `channel_registry` and must be installed/enabled (restart-based) before it starts; `http`/`cli` are non-toggleable and always run.
 
 ---
 
@@ -138,7 +171,12 @@ Each adapter implements reconnection with exponential backoff:
 
 | Item | Status |
 |---|---|
-| `ChannelAdapter` interface (`start`, `stop`, `send`) | Partial — no shared TypeScript interface; each adapter implements the pattern independently |
+| `Channel` interface (`name`, `isToggleable`, `start`, `stop` — no `send`; outbound via `OutboundGateway`) in `src/channels/channel.ts` | Done |
+| Channel catalog (`ChannelDescriptor` + `ChannelCredentialField`) in `src/channels/catalog.ts` | Done |
+| Channel registry — `channel_registry` table, install/enable lifecycle, restart-based; `http`/`cli` non-toggleable | Done |
+| Channel credential vault keys — `channel.<name>.<field>` convention | Done |
+| Email poll high-water mark — `lastSeenTimestamp` persisted via `ConfigStore` (`system:email-poll-state`), code-managed | Done |
+| Email poll observability — `channel.poll` per cycle; `channel.stalled` watchdog at `5 × pollingIntervalMs` | Done |
 | `InboundMessage` type | Done |
 | `OutboundMessage` type | Done |
 | CLI channel adapter | Done |

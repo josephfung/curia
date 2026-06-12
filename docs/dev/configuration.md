@@ -190,6 +190,39 @@ Changes take effect on restart.
 
 ---
 
+## Skill, agent, and channel registry
+
+Skills, agents, and channels are not enabled simply by existing on disk — they are tracked in three registry tables (`skill_registry`, `agent_registry`, `channel_registry`) with an explicit **install → enable** lifecycle.
+
+- **Disabled by default.** A newly added skill or agent is registered at startup but starts **disabled**. It must be enabled before it can be loaded.
+- **Restart-based enforcement.** Enabled items are loaded/registered at startup; disabled items are skipped. Changing enable state takes effect on the next restart.
+- **Secret gating (`install.requires_secrets`).** A skill manifest may declare `install: { requires_secrets: [...] }` — vault secret keys that must already exist before the registry will install or enable the skill. `RegistryService` rejects install/enable until every declared key is present in the vault. (`web-search` declares `["tavily_api_key"]`.)
+- **Always-on channels.** The `http` and `cli` channels have `isToggleable: false` — they always start and cannot be disabled, an operator-lockout safeguard. `email` and `signal` are toggleable.
+
+Lifecycle is driven via the registry HTTP API (or the admin UI):
+
+```
+GET    /api/registry/skills
+GET    /api/registry/agents
+POST   /api/registry/:kind/:name/install
+POST   /api/registry/:kind/:name/enable
+POST   /api/registry/:kind/:name/install-enable
+POST   /api/registry/:kind/:name/disable
+DELETE /api/registry/:kind/:name
+```
+
+### Channel credential vault keys
+
+Channel credentials follow a structured vault-key convention so each channel's secrets are namespaced:
+
+```
+channel.<name>.<field>
+```
+
+For example, the email channel's Nylas API key is stored under `channel.email.nylas_api_key`. The catalog (`src/channels/catalog.ts`) declares each channel's `credentialFields` and `requiredSecretKeys`; a `ChannelCredentialField` may also name an `envFallback` for bootstrap. See [Channels spec](../specs/04-channels.md) for the full catalog/registry model.
+
+---
+
 ## `config/local.yaml` — deployment overrides
 
 `config/local.yaml` is an optional file that, when present, is deep-merged on
