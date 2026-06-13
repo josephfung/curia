@@ -708,6 +708,61 @@ describe('AgentRuntime', () => {
     expect(secPos).toBeLessThan(bodyPos);
   });
 
+  it('appends ## Available Specialists when availableSpecialists is provided', async () => {
+    const provider = createMockProvider('OK');
+    const runtime = new AgentRuntime({
+      agentId: 'coordinator',
+      systemPrompt: 'Body text.',
+      provider,
+      resolvedModel: 'mock-model',
+      bus,
+      logger: createLogger('error'),
+      availableSpecialists: '- calendar-specialist: schedules meetings\n- contacts: resolves people',
+    });
+    runtime.register();
+
+    const task = createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'conv-specialists-1',
+      channelId: 'cli',
+      senderId: 'user',
+      content: 'Hello',
+      parentEventId: 'parent-specialists-1',
+    });
+    await bus.publish('dispatch', task);
+
+    const systemMsg = (provider.chat as ReturnType<typeof vi.fn>).mock.calls[0]![0].messages[0]!.content as string;
+    expect(systemMsg).toContain('## Available Specialists');
+    expect(systemMsg).toContain('- calendar-specialist: schedules meetings');
+  });
+
+  it('does not append ## Available Specialists for a non-coordinator agent (no availableSpecialists)', async () => {
+    const provider = createMockProvider('OK');
+    const runtime = new AgentRuntime({
+      agentId: 'calendar',
+      systemPrompt: 'Specialist body.',
+      provider,
+      resolvedModel: 'mock-model',
+      bus,
+      logger: createLogger('error'),
+      // availableSpecialists intentionally omitted
+    });
+    runtime.register();
+
+    const task = createAgentTask({
+      agentId: 'calendar',
+      conversationId: 'conv-specialists-2',
+      channelId: 'cli',
+      senderId: 'user',
+      content: 'Hello',
+      parentEventId: 'parent-specialists-2',
+    });
+    await bus.publish('dispatch', task);
+
+    const systemMsg = (provider.chat as ReturnType<typeof vi.fn>).mock.calls[0]![0].messages[0]!.content as string;
+    expect(systemMsg).not.toContain('## Available Specialists');
+  });
+
   it('omits the identity block and continues when compileSystemPromptBlock throws', async () => {
     const provider = createMockProvider('OK');
     const logger = createLogger('error');

@@ -1604,7 +1604,6 @@ async function main(): Promise<void> {
       // in AgentRuntime.processTask() by the officeIdentityService passed below,
       // enabling hot-reload without a restart.
       systemPrompt = interpolateRuntimeContext(systemPrompt, {
-        availableSpecialists: agentRegistry.specialistSummary(),
         agentContactId: agentIdentityContactId,
         principalContactId: principalContact?.id,
       });
@@ -1740,6 +1739,10 @@ async function main(): Promise<void> {
       // the startup-cached principalIdentities array (already filtered to verified + active).
       // Mirrors the channelAccounts pattern (#387). Fixes #786.
       principalIdentities,
+      // Specialist roster — appended as "## Available Specialists" for the coordinator.
+      // Specialists that opt in via inject_specialists keep the bootstrap ${available_specialists}
+      // placeholder (resolved in interpolateRuntimeContext); this runtime path is coordinator-only.
+      availableSpecialists: agentConfig.role === 'coordinator' ? agentRegistry.specialistSummary() : undefined,
       // Agent registry — allows the runtime to look up the target agent's
       // expected_duration_seconds when injecting delegate timeouts (#387).
       agentRegistry,
