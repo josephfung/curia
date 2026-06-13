@@ -216,7 +216,7 @@ describe('compileWritingVoiceBlock', () => {
   });
 });
 
-describe('interpolateRuntimeContext with executive_voice_block', () => {
+describe('interpolateRuntimeContext does not handle executive_voice_block (removed, #957)', () => {
   // The ${executive_voice_block} injection path was removed (Task 4, #957). The
   // placeholder, if ever present in a template, now has no special handling and is
   // left literal — confirmed below so a future re-introduction of the token is intentional.
