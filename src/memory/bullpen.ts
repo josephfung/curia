@@ -57,7 +57,9 @@ export interface PendingThreadContext {
 
 interface BullpenBackend {
   openThread(thread: BullpenThread, message: BullpenMessage): Promise<void>;
-  postMessage(threadId: string, message: BullpenMessage): Promise<void>;
+  // closeAfter, when true, marks the thread closed in the same operation that
+  // persists the message — the message is always written first (see #881).
+  postMessage(threadId: string, message: BullpenMessage, closeAfter?: boolean): Promise<void>;
   closeThread(threadId: string): Promise<void>;
   getThread(threadId: string): Promise<{ thread: BullpenThread; messages: BullpenMessage[] } | null>;
   findThreadBySourceMessageId(sourceMessageId: string): Promise<{ thread: BullpenThread; message: BullpenMessage } | null>;
@@ -96,7 +98,7 @@ class InMemoryBullpenBackend implements BullpenBackend {
     return { thread: { ...thread }, message: { ...msgs[0]! } };
   }
 
-  async postMessage(threadId: string, message: BullpenMessage): Promise<void> {
+  async postMessage(threadId: string, message: BullpenMessage, closeAfter = false): Promise<void> {
     const thread = this.threads.get(threadId);
     if (!thread) throw new Error(`Thread ${threadId} not found`);
     thread.messageCount++;
@@ -104,6 +106,8 @@ class InMemoryBullpenBackend implements BullpenBackend {
     const msgs = this.messages.get(threadId) ?? [];
     msgs.push({ ...message });
     this.messages.set(threadId, msgs);
+    // Close after the message is appended so the reply is never lost (#881).
+    if (closeAfter) thread.status = 'closed';
   }
 
   async closeThread(threadId: string): Promise<void> {
@@ -181,7 +185,7 @@ class PostgresBullpenBackend implements BullpenBackend {
     }
   }
 
-  async postMessage(threadId: string, message: BullpenMessage): Promise<void> {
+  async postMessage(threadId: string, message: BullpenMessage, closeAfter = false): Promise<void> {
     // Atomically insert the message and conditionally increment message_count.
     // The UPDATE uses WHERE status='open' AND message_count<100 so that concurrent
     // close or cap-reaching posts are rejected at the DB level, not just app level.
@@ -193,13 +197,18 @@ class PostgresBullpenBackend implements BullpenBackend {
          VALUES ($1, $2, $3, $4, $5, $6, $7)`,
         [message.id, threadId, message.senderType, message.senderId, JSON.stringify(message.content), message.mentionedAgentIds, message.createdAt],
       );
+      // When closeAfter is set, flip status to 'closed' in the same UPDATE that
+      // records the message — the INSERT above runs first, so the reply is always
+      // persisted, and the close is atomic with it (#881). The WHERE status='open'
+      // guard means we only ever close a thread that was open at write time.
       const updateRes = await client.query<{ message_count: number }>(
         `UPDATE bullpen_threads
          SET message_count = message_count + 1,
-             last_message_at = $1
+             last_message_at = $1,
+             status = CASE WHEN $3 THEN 'closed' ELSE status END
          WHERE id = $2 AND status = 'open' AND message_count < 100
          RETURNING message_count`,
-        [message.createdAt, threadId],
+        [message.createdAt, threadId, closeAfter],
       );
       if (updateRes.rows.length === 0) {
         // Thread is closed or at cap — roll back the message insert.
@@ -413,6 +422,10 @@ export class BullpenService {
     senderAgentId: string,
     content: string,
     mentionedAgentIds: string[],
+    // When true, the thread is closed atomically with this reply (#881). Unlike the
+    // explicit closeThread action, close_after is a soft conclusion signal available
+    // to any replying participant — the participant check below is the only gate.
+    closeAfter = false,
   ): Promise<BullpenMessage> {
     const existing = await this.backend.getThread(threadId);
     if (!existing) throw new Error(`Thread ${threadId} not found`);
@@ -433,7 +446,7 @@ export class BullpenService {
       senderId: senderAgentId, content, mentionedAgentIds,
       createdAt: new Date(),
     };
-    await this.backend.postMessage(threadId, message);
+    await this.backend.postMessage(threadId, message, closeAfter);
     return message;
   }
 
@@ -483,5 +496,10 @@ export function formatBullpenContext(pending: PendingThreadContext[]): string {
       lines.push(`  → Call bullpen get_thread for full history.`);
     }
   }
+  // Thread-closure convention (#881): bullpen threads tend to be left open because
+  // nothing prompts agents to close them. Surfacing this line on every turn that
+  // injects bullpen state gives all agents the convention without per-agent prompt edits.
+  lines.push('');
+  lines.push('When your bullpen reply concludes a thread, pass close_after: true so it is closed atomically. Leave it off (or false) if the discussion is still going.');
   return lines.join('\n');
 }
