@@ -100,7 +100,7 @@ import { ExecutiveProfileService } from './executive/service.js';
 import { loadEncryptionKey } from './secrets/crypto.js';
 import { SecretsService } from './secrets/secrets-service.js';
 import { SecretCaptureService } from './secrets/secret-capture-service.js';
-import { CHANNEL_CREDENTIAL_KEYS } from './channels/http/routes/vault.js';
+import { channelCredentialKeys } from './channels/http/routes/vault.js';
 import { applyVaultSecrets } from './secrets/apply-vault-secrets.js';
 import { SensitivityClassifier } from './memory/sensitivity.js';
 import { DreamEngine } from './memory/dream-engine.js';
@@ -1569,7 +1569,7 @@ async function main(): Promise<void> {
   // route's CHANNEL_CREDENTIAL_KEYS so there's a single source of truth for writable names.
   const secretCaptureService = new SecretCaptureService(pool, secretsService, {
     getAllowedSystemNames: () =>
-      new Set([...registryService.declaredSecretNames(), ...CHANNEL_CREDENTIAL_KEYS]),
+      new Set([...registryService.declaredSecretNames(), ...channelCredentialKeys()]),
     logger,
   });
   // Injected after construction because the ExecutionLayer is created before registryService

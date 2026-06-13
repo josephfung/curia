@@ -75,7 +75,12 @@ export default function SecretCapturePage() {
       // component state rather than leaving it sitting in memory behind a dead form.
       if (res.status === 410) { setValue(''); setView({ kind: 'gone' }); return; }
       if (res.status === 404) { setValue(''); setView({ kind: 'notfound' }); return; }
-      const data = (await res.json().catch(() => ({}))) as { error?: string };
+      // Parse the error body only when it's actually JSON, with an explicit fall-through to
+      // the generic message — mirrors WizardPage's extractError() convention (no console).
+      let data: { error?: string } = {};
+      if (res.headers.get('content-type')?.includes('application/json')) {
+        try { data = (await res.json()) as { error?: string }; } catch { /* fall through to fallback */ }
+      }
       setError(data.error ?? 'Could not save the value. Please try again.');
     } catch {
       setError('Network error. Please try again.');

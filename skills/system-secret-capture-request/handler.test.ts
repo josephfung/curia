@@ -69,6 +69,26 @@ describe('SystemSecretCaptureRequestHandler', () => {
     expect(result.success).toBe(false);
   });
 
+  it('rejects an invalid value_format', async () => {
+    const ctx = makeCtx({ secret_name: 'anthropic_api_key', value_format: 'xml' });
+    const result = await new SystemSecretCaptureRequestHandler().execute(ctx);
+    expect(result.success).toBe(false);
+  });
+
+  it('falls back to localhost:{httpPort} when appOrigin is unset', async () => {
+    const ctx = {
+      input: { secret_name: 'anthropic_api_key' },
+      secret: () => 'unused',
+      log: pino({ level: 'silent' }),
+      secretCapture: fakeMinter({ result: { rawToken: 'tok' } }),
+      appOrigin: undefined,
+      httpPort: 4521,
+    } as unknown as SkillContext;
+    const result = await new SystemSecretCaptureRequestHandler().execute(ctx);
+    const data = (result as { success: true; data: Record<string, unknown> }).data;
+    expect(data.capture_url).toBe('http://localhost:4521/secret-capture/tok');
+  });
+
   it('errors when the secretCapture capability is missing', async () => {
     const ctx = {
       input: { secret_name: 'anthropic_api_key' },
