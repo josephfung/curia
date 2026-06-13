@@ -939,18 +939,6 @@ async function main(): Promise<void> {
   // if the config uses a different role value (e.g., "chief-of-staff").
   const coordinatorConfig = agentConfigs.find(c => c.name === 'coordinator');
 
-  // Warn if the coordinator system prompt is missing the ${security_context_block} placeholder.
-  // The block is still injected unconditionally at runtime (unconditional append path in
-  // AgentRuntime.processTask()), but the missing placeholder means it will appear at the
-  // end of the prompt rather than at the intended position after ${office_identity_block}.
-  if (coordinatorConfig && !coordinatorConfig.system_prompt.includes('${security_context_block}')) {
-    logger.warn(
-      'coordinator.yaml is missing ${security_context_block} placeholder — ' +
-      'the security block will be appended at end of prompt instead of its intended position. ' +
-      'Add ${security_context_block} after ${office_identity_block} in agents/coordinator.yaml.',
-    );
-  }
-
   // Extract agent persona from the identity service — the single source of truth
   // for the agent's identity. Used by skills (via SkillContext.agentPersona) so
   // templates and outbound-facing code never hardcode the agent's name or title.

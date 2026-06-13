@@ -12,16 +12,18 @@ describe('loadAgentConfig', () => {
     expect(config.name).toBe('coordinator');
     expect(config.role).toBe('coordinator');
     expect(config.model.tier).toBe('standard');
-    // The identity block token is present — system prompt is meaningful.
-    expect(config.system_prompt).toContain('${office_identity_block}');
+    // System prompt is meaningful — the body begins with the Date & Time section.
+    expect(config.system_prompt).toContain('## Date & Time');
   });
 
-  it('uses office_identity_block token instead of persona fields', () => {
-    // Since the identity block migration (issue #139), the coordinator no longer has
-    // inline persona fields. Identity is injected at runtime via ${office_identity_block}.
+  it('carries no identity/security placeholders or persona fields in the YAML', () => {
+    // Since the identity block migration (issue #139), the coordinator has no inline
+    // persona fields. As of the decision-spine refactor (#957), identity and security
+    // are PREPENDED by the runtime as a fixed preamble rather than substituted via
+    // ${...} tokens, so the YAML no longer carries those placeholders either.
     const config = loadAgentConfig(path.join(agentsDir, 'coordinator.yaml'));
-    // The runtime token is present — will be replaced at startup by OfficeIdentityService.
-    expect(config.system_prompt).toContain('${office_identity_block}');
+    expect(config.system_prompt).not.toContain('${office_identity_block}');
+    expect(config.system_prompt).not.toContain('${security_context_block}');
     // No legacy persona tokens remain in the YAML.
     expect(config.system_prompt).not.toContain('${persona.display_name}');
     expect(config.system_prompt).not.toContain('${persona.tone}');
