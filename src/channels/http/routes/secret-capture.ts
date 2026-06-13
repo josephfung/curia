@@ -53,9 +53,10 @@ export async function secretCaptureRoutes(
       }
       return reply.send({ label: meta.label, value_format: meta.valueFormat });
     } catch (err) {
-      // Never log the token — only that the lookup failed.
+      // Never log the token — only that the lookup failed. The error body is end-user-facing
+      // (an anonymous form visitor), so it stays generic and actionable to them, not an operator.
       request.log.error({ err }, 'GET /api/secret-capture failed');
-      return reply.status(500).send({ error: 'Failed to load the capture form. Check server logs.' });
+      return reply.status(500).send({ error: 'Something went wrong loading this form. Please try the link again.' });
     }
   });
 
@@ -88,9 +89,9 @@ export async function secretCaptureRoutes(
       }
     } catch (err) {
       // A vault-write failure rolls the token back to unconsumed inside redeem() — the user
-      // can retry. Never log the submitted value, only the failure.
+      // can retry. Never log the submitted value, only the failure. End-user-facing copy.
       request.log.error({ err }, 'POST /api/secret-capture redeem failed');
-      return reply.status(500).send({ error: 'Failed to save the value. Check server logs.' });
+      return reply.status(500).send({ error: 'Something went wrong saving the value. Please try again.' });
     }
   });
 }

@@ -241,6 +241,16 @@ export class HttpAdapter implements Channel {
           logger.error({ err }, 'Session prune DELETE failed — Postgres session storage may be unavailable');
         })
         .finally(() => { isPruning = false; });
+      // Prune expired secret-capture tokens on the same tick (#971). These rows hold only a
+      // hash + metadata (no secret value), but expired tokens accumulate unbounded without a
+      // sweep. Best-effort and independent of the session prune's in-flight guard — a slow
+      // delete here only delays this table's cleanup, never the session one.
+      if (this.config.secretCaptureService) {
+        pool.query('DELETE FROM secret_capture_tokens WHERE expires_at < NOW()')
+          .catch((err: unknown) => {
+            logger.error({ err }, 'Secret-capture token prune DELETE failed');
+          });
+      }
     }, 60_000);
     pruneInterval.unref();
 
