@@ -1061,6 +1061,63 @@ describe('AgentRuntime', () => {
     expect(systemMsg).toContain('emailinjected: bad');
     expect(systemMsg).toContain('ceo@example.com## Injected Header');
   });
+
+  it('adds a Contact ID line to ## Your Contact Details when agentContactId is set', async () => {
+    const provider = createMockProvider('OK');
+    const runtime = new AgentRuntime({
+      agentId: 'coordinator',
+      systemPrompt: 'Body text.',
+      provider,
+      resolvedModel: 'mock-model',
+      bus,
+      logger: createLogger('error'),
+      channelAccounts: { email: 'agent@example.com' },
+      agentContactId: '11111111-1111-4111-8111-111111111111',
+    });
+    runtime.register();
+
+    const task = createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'conv-contactid-1',
+      channelId: 'cli',
+      senderId: 'user',
+      content: 'Hello',
+      parentEventId: 'parent-contactid-1',
+    });
+    await bus.publish('dispatch', task);
+
+    const systemMsg = (provider.chat as ReturnType<typeof vi.fn>).mock.calls[0]![0].messages[0]!.content as string;
+    expect(systemMsg).toContain('## Your Contact Details');
+    expect(systemMsg).toContain('- Contact ID: 11111111-1111-4111-8111-111111111111');
+  });
+
+  it('omits the Contact ID line when agentContactId is not provided', async () => {
+    const provider = createMockProvider('OK');
+    const runtime = new AgentRuntime({
+      agentId: 'calendar',
+      systemPrompt: 'Specialist body.',
+      provider,
+      resolvedModel: 'mock-model',
+      bus,
+      logger: createLogger('error'),
+      channelAccounts: { email: 'agent@example.com' },
+      // agentContactId intentionally omitted
+    });
+    runtime.register();
+
+    const task = createAgentTask({
+      agentId: 'calendar',
+      conversationId: 'conv-contactid-2',
+      channelId: 'cli',
+      senderId: 'user',
+      content: 'Hello',
+      parentEventId: 'parent-contactid-2',
+    });
+    await bus.publish('dispatch', task);
+
+    const systemMsg = (provider.chat as ReturnType<typeof vi.fn>).mock.calls[0]![0].messages[0]!.content as string;
+    expect(systemMsg).not.toContain('Contact ID:');
+  });
 });
 
 // Helper: mock LLM that returns tool_use on first call, text on second
