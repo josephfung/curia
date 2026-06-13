@@ -214,4 +214,22 @@ describe('BullpenDispatcher', () => {
       .filter(([_l, e]) => (e as { type: string }).type === 'agent.task');
     expect(tasks).toHaveLength(0);
   });
+
+  it('skips task creation when the thread is closed (e.g. reply with close_after)', async () => {
+    // A close_after reply closes the thread atomically and then publishes the concluding
+    // agent.discuss; the dispatcher must not fan out reply tasks for a closed thread. (#881)
+    const { thread } = await bullpenService.openThread(
+      'Close-after dispatch test', 'coordinator', ['coordinator', 'agent-b'], 'Start', [],
+    );
+    await bullpenService.postMessage(thread.id, 'agent-b', 'Concluding reply', [], true);
+    const event = createAgentDiscuss({
+      threadId: thread.id, messageId: 'msg-closed', topic: 'Close-after dispatch test',
+      senderAgentId: 'agent-b', participants: ['coordinator', 'agent-b'],
+      mentionedAgentIds: ['coordinator'], content: 'Concluding reply', parentEventId: 'task-1',
+    });
+    await bus._trigger('agent.discuss', event);
+    const tasks = (bus.publish as ReturnType<typeof vi.fn>).mock.calls
+      .filter(([_l, e]) => (e as { type: string }).type === 'agent.task');
+    expect(tasks).toHaveLength(0);
+  });
 });

@@ -84,6 +84,7 @@ describeIf('BullpenService integration (Postgres)', () => {
     const reply = await service.postMessage(thread.id, 'agent-b', 'Concluding reply', [], true);
 
     const after = await service.getThread(thread.id);
+    expect(after).not.toBeNull();
     // The reply was written first and persisted...
     expect(after!.thread.status).toBe('closed');
     expect(after!.thread.messageCount).toBe(2);

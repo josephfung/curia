@@ -16,7 +16,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Added
 
 - **`task-create`** — optional `target_agent_id` assigns a new task (and its wake-up) to another registered agent, so the coordinator or ceo-inbox can schedule work for a specialist like meeting-debrief. (#880)
-- **`bullpen`** — `reply` accepts `close_after: true` to close a thread atomically with the reply, and `formatBullpenContext()` now nudges agents to use it so concluded threads actually get closed. (#881)
+- **`bullpen`** — `reply` accepts `close_after: true` to close a thread atomically with the reply, `formatBullpenContext()` nudges agents to use it, and the dispatcher skips reply-task fan-out for closed threads so a concluding reply doesn't create dead-end tasks. (#881)
 
 ## [0.34.0] — 2026-06-12 — "Heimdall"
 
