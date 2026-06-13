@@ -326,7 +326,8 @@ async function main(): Promise<void> {
 
   // 4b. Office identity — System-layer service that owns the instance persona.
   // Must be initialized after migrations (schema) and bus (emits config.change events),
-  // and before agents boot (coordinator needs ${office_identity_block}).
+  // and before agents boot (the coordinator's identity block is prepended as a preamble
+  // by AgentRuntime, compiled from this service).
   // Fatal on failure: without an identity, the coordinator system prompt is incomplete.
   // First boot seeds DEFAULT_OFFICE_IDENTITY from src/identity/defaults.ts; subsequent
   // boots load whichever version the wizard or API last wrote.
