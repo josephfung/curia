@@ -1,4 +1,5 @@
 name: setup-wizard
+version: "0.1.0"
 role: specialist
 description: >
   First-conversation specialist and setup guide. Invoke when the principal
@@ -70,5 +71,6 @@ pinned_skills:
   - skill-registry
   - memory-store
   - executive-profile-update
+  - system-secret-capture-request
 allow_discovery: false
 inject_specialists: false

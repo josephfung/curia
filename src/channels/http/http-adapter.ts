@@ -38,6 +38,7 @@ import { autonomyRoutes } from './routes/autonomy.js';
 import { registryRoutes } from './routes/registry.js';
 import { channelRegistryRoutes } from './routes/channel-registry.js';
 import { vaultRoutes } from './routes/vault.js';
+import { secretCaptureRoutes } from './routes/secret-capture.js';
 import { setupRoutes } from './routes/setup.js';
 import type { OfficeIdentityService } from '../../identity/service.js';
 import type { ExecutiveProfileService } from '../../executive/service.js';
@@ -69,6 +70,9 @@ export interface HttpAdapterConfig {
   /** Backs the /api/vault/* routes (secrets status + skill-secret entry). Mounted only
    *  alongside registryService, which scopes which secret names may be written. */
   secretsService?: import('../../secrets/secrets-service.js').SecretsService;
+  /** Backs the public /api/secret-capture/* routes (one-time tokenized secret capture, #971).
+   *  Token-authed, so mounted independently of the bootstrap secret. */
+  secretCaptureService?: import('../../secrets/secret-capture-service.js').SecretCaptureService;
   /**
    * True when the process booted without a principal contact and is running in
    * setup-required mode (email + Signal adapters are skipped until restart).
@@ -174,6 +178,9 @@ export class HttpAdapter implements Channel {
         routeUrl.startsWith('/api/autonomy') ||
         routeUrl.startsWith('/api/registry') ||
         routeUrl.startsWith('/api/vault') ||
+        // Secret-capture routes are token-authed (the single-use token in the URL is the
+        // capability), so they bypass bearer auth and self-authorize via the token (#971).
+        routeUrl.startsWith('/api/secret-capture') ||
         routeUrl.startsWith('/api/setup')
       ) return;
 
@@ -364,6 +371,16 @@ export class HttpAdapter implements Channel {
         eventRouter: this.eventRouter,
         contactService: this.config.contactService,
         sessions,
+      });
+    }
+
+    // Secret-capture routes (#971) — public, token-authed form for agent-initiated secret
+    // capture. Independent of the bootstrap secret: the single-use token IS the credential,
+    // and the routes are exempted from bearer auth in the onRequest hook above. Registered
+    // before the console wildcard so /api/secret-capture/* resolves to the API, not the SPA.
+    if (this.config.secretCaptureService) {
+      await this.app.register(secretCaptureRoutes, {
+        secretCaptureService: this.config.secretCaptureService,
       });
     }
 

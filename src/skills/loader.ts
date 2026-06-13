@@ -30,7 +30,7 @@ export const VALID_CAPABILITIES: ReadonlySet<string> = new Set([
   'schedulerService', 'entityMemory', 'nylasCalendarClient',
   'autonomyService', 'executiveProfileService', 'officeIdentityService', 'browserService', 'bullpenService', 'skillSearch',
   'actionLogRepo', 'executionLayer', 'confidencePipeline', 'tempFileStore',
-  'infraLlm', 'outboundContext', 'taskRepo',
+  'infraLlm', 'outboundContext', 'taskRepo', 'secretCapture',
 ]);
 
 /** One discovered on-disk skill: lenient parse for the registry UI + reconciliation.
