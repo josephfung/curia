@@ -49,8 +49,8 @@ export interface AgentConfig {
   /** Optional autonomy service — when provided, the autonomy block is injected
    *  into the effective system prompt on every task. Only the coordinator receives this. */
   autonomyService?: AutonomyService;
-  /** Optional identity service — when provided, ${office_identity_block} in the system
-   *  prompt is replaced with the freshly-compiled identity block on every task turn.
+  /** Optional identity service — when provided, the freshly-compiled identity block is
+   *  PREPENDED to the system prompt as a preamble (above the body) on every task turn.
    *  This enables hot-reload: identity changes via the API or file watcher take effect
    *  on the very next coordinator turn without a restart. Only the coordinator uses this. */
   officeIdentityService?: OfficeIdentityService;
@@ -110,10 +110,9 @@ export interface AgentConfig {
    *  and injected here so the runtime doesn't import pricing.ts directly.
    *  Optional for test convenience; defaults to a zero-cost no-op. */
   estimateCostUsd?: (actualModel: string, usage: LLMUsage, logger?: Logger) => number;
-  /** Compiled security context block — injected into the effective system prompt on every
-   *  task. If the prompt contains ${security_context_block}, the placeholder is replaced at
-   *  that position. If the placeholder is absent, the block is appended unconditionally as a
-   *  platform safety net. When omitted, no injection occurs. */
+  /** Compiled security context block. When provided, it is PREPENDED to the effective
+   *  system prompt (immediately after the identity block) on every task. When omitted,
+   *  no injection occurs. */
   securityContextBlock?: string;
 }
 
