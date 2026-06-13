@@ -734,6 +734,8 @@ describe('AgentRuntime', () => {
     const systemMsg = (provider.chat as ReturnType<typeof vi.fn>).mock.calls[0]![0].messages[0]!.content as string;
     expect(systemMsg).toContain('## Available Specialists');
     expect(systemMsg).toContain('- calendar-specialist: schedules meetings');
+    // The roster lands after the body, not inside the prepended preamble.
+    expect(systemMsg.indexOf('Body text.')).toBeLessThan(systemMsg.indexOf('## Available Specialists'));
   });
 
   it('does not append ## Available Specialists for a non-coordinator agent (no availableSpecialists)', async () => {

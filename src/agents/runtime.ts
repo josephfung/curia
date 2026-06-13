@@ -247,9 +247,10 @@ export class AgentRuntime {
       effectiveSystemPrompt = preambleParts.join('\n\n') + '\n\n' + effectiveSystemPrompt;
     }
 
-    // Append the specialist roster as a fixed appendix block. Coordinator-only in
-    // practice (passed only for the coordinator in src/index.ts); gated on presence
-    // so specialists that don't route work never see it.
+    // Append the specialist roster as a fixed ## Available Specialists block — after
+    // the body, before the per-turn voice/autonomy/date blocks (not strictly last).
+    // Coordinator-only in practice (passed only for the coordinator in src/index.ts);
+    // gated on presence so specialists that don't route work never see it.
     if (this.config.availableSpecialists) {
       effectiveSystemPrompt += '\n\n## Available Specialists\n' + this.config.availableSpecialists;
     }
