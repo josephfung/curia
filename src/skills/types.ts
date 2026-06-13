@@ -255,6 +255,18 @@ export interface SkillContext {
   /** Configurable fallback timeout for specialist delegations when no timeout_ms is supplied.
    *  Sourced from config.delegate.defaultTimeoutMs. Relevant to the delegate skill only. */
   defaultDelegateTimeoutMs?: number;
+  /** Secret-capture minter — available to skills declaring 'secretCapture' in capabilities.
+   *  Mints one-time tokenized links for agent-initiated secret capture (#971). Deliberately
+   *  a MINT-ONLY surface: there is no method that returns a stored secret value, so the
+   *  "LLM never sees secrets" guarantee is structural rather than prompt-enforced. */
+  secretCapture?: import('../secrets/secret-capture-service.js').SecretCaptureMinter;
+  /** Operator-facing origin of the console (e.g. "https://curia.example.com"), used by the
+   *  capture skills to build the magic-link URL. Undefined in local dev — fall back to
+   *  http://localhost:{httpPort}. Sourced from config.appOrigin. */
+  appOrigin?: string;
+  /** Local HTTP port the SPA is served on, used as the dev fallback origin when appOrigin
+   *  is unset. Sourced from config.httpPort. */
+  httpPort?: number;
 }
 
 /**

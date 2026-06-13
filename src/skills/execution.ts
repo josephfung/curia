@@ -103,6 +103,13 @@ export class ExecutionLayer {
   private skillOutputMaxLength: number;
   /** Configurable fallback timeout for the delegate skill when no timeout_ms is supplied. */
   private defaultDelegateTimeoutMs?: number;
+  /** Secret-capture minter — injected post-construction via setSecretCaptureService()
+   *  because it depends on registryService, which is built after the ExecutionLayer (#971). */
+  private secretCaptureService?: import('../secrets/secret-capture-service.js').SecretCaptureMinter;
+  /** Operator-facing console origin + local HTTP port — used by the capture skills to build
+   *  the magic-link URL (appOrigin in prod, http://localhost:{httpPort} in dev). */
+  private appOrigin?: string;
+  private httpPort?: number;
 
   constructor(registry: SkillRegistry, logger: Logger, options?: {
     bus?: EventBus;
@@ -133,6 +140,8 @@ export class ExecutionLayer {
     selfEmail?: string;
     skillOutputMaxLength?: number;
     defaultDelegateTimeoutMs?: number;
+    appOrigin?: string;
+    httpPort?: number;
   }) {
     this.registry = registry;
     this.logger = logger;
@@ -164,6 +173,17 @@ export class ExecutionLayer {
     this.selfEmail = options?.selfEmail;
     this.skillOutputMaxLength = options?.skillOutputMaxLength ?? DEFAULT_SKILL_OUTPUT_MAX_LENGTH;
     this.defaultDelegateTimeoutMs = options?.defaultDelegateTimeoutMs;
+    this.appOrigin = options?.appOrigin;
+    this.httpPort = options?.httpPort;
+  }
+
+  /**
+   * Inject the secret-capture minter after construction.
+   * Called from index.ts once registryService (which the system-name allowlist depends on)
+   * is available. Mirrors setAgentContactId's post-bootstrap injection pattern (#971).
+   */
+  setSecretCaptureService(svc: import('../secrets/secret-capture-service.js').SecretCaptureMinter): void {
+    this.secretCaptureService = svc;
   }
 
   /**
@@ -615,6 +635,10 @@ export class ExecutionLayer {
       selfEmail: this.selfEmail,
       // Configurable fallback timeout for the delegate skill (sourced from config.delegate.defaultTimeoutMs).
       defaultDelegateTimeoutMs: this.defaultDelegateTimeoutMs,
+      // Console origin + local port so the capture skills can build the magic-link URL
+      // (appOrigin in prod, http://localhost:{httpPort} in dev). Harmless for other skills.
+      appOrigin: this.appOrigin,
+      httpPort: this.httpPort,
     };
 
     // Capability-gated service injection.
@@ -658,6 +682,10 @@ export class ExecutionLayer {
       // instance is created per-invocation (pre-scoped with conversationId) in the injection loop.
       // Listed here so the missing-cap guard knows it's configured when outboundContextService is set.
       outboundContext: this.outboundContextService,
+      // secretCapture is the mint-only minter for agent-initiated secret capture (#971).
+      // Injected as a plain field (default branch in the loop). Listed here so the
+      // missing-cap guard fails closed if a skill declares it before it's wired.
+      secretCapture: this.secretCaptureService,
     };
 
     // Hard-restrict executionLayer to approve-action only.

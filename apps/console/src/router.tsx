@@ -27,6 +27,7 @@ const ChannelsPage = lazy(() =>
   import('./pages/ChannelSettings').then(m => ({ default: m.ChannelsPage })),
 );
 const WizardPage = lazy(() => import('./pages/WizardPage'));
+const SecretCapturePage = lazy(() => import('./pages/SecretCapturePage'));
 const ContactsPage = lazy(() => import('./pages/ContactsPage'));
 const JobsPage = lazy(() => import('./pages/JobsPage'));
 const TasksPage = lazy(() => import('./pages/TasksPage'));
@@ -133,6 +134,14 @@ const loginRoute = createRoute({
   component: LoginPage,
 });
 
+// Public secret-capture form (#971). Child of rootRoute — NOT authedRoute — so it renders
+// without a session: the single-use token in the path is the only credential.
+const secretCaptureRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/secret-capture/$token',
+  component: SecretCapturePage,
+});
+
 const contactsRoute = createRoute({
   getParentRoute: () => authedRoute,
   path: '/contacts',
@@ -194,6 +203,7 @@ const routeTree = rootRoute.addChildren([
     settingsRoute.addChildren([autonomyRoute, workspaceRoute, skillsSettingsRedirect, agentsSettingsRedirect]),
   ]),
   loginRoute,
+  secretCaptureRoute,
 ]);
 
 export const router = createRouter({ routeTree });

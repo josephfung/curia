@@ -99,6 +99,8 @@ import { OfficeIdentityService } from './identity/service.js';
 import { ExecutiveProfileService } from './executive/service.js';
 import { loadEncryptionKey } from './secrets/crypto.js';
 import { SecretsService } from './secrets/secrets-service.js';
+import { SecretCaptureService } from './secrets/secret-capture-service.js';
+import { CHANNEL_CREDENTIAL_KEYS } from './channels/http/routes/vault.js';
 import { applyVaultSecrets } from './secrets/apply-vault-secrets.js';
 import { SensitivityClassifier } from './memory/sensitivity.js';
 import { DreamEngine } from './memory/dream-engine.js';
@@ -1506,7 +1508,7 @@ async function main(): Promise<void> {
   // entityContextAssembler enables entity_enrichment pre-enrichment and the
   // entity-context skill. agentContactId enables entity_enrichment default='agent'.
   // infraLlmService provides constrained LLM access (classify/extract) with telemetry.
-  const executionLayer = new ExecutionLayer(skillRegistry, logger, { bus, agentRegistry, contactService, outboundGateway, heldMessages, schedulerService, entityMemory, agentPersona, nylasCalendarClient, entityContextAssembler, agentContactId: agentIdentityContactId, autonomyService, secretsService, executiveProfileService, officeIdentityService, browserService, bullpenService, approvalTrigger, actionLogRepo, taskRepo, confidencePipeline, tempFileStore, infraLlmService, outboundContextService, timezone: config.timezone, selfEmail: resolvedEmailAccounts[0]?.selfEmail, skillOutputMaxLength: yamlConfig.skillOutput?.maxLength, defaultDelegateTimeoutMs: yamlConfig.delegate?.defaultTimeoutMs });
+  const executionLayer = new ExecutionLayer(skillRegistry, logger, { bus, agentRegistry, contactService, outboundGateway, heldMessages, schedulerService, entityMemory, agentPersona, nylasCalendarClient, entityContextAssembler, agentContactId: agentIdentityContactId, autonomyService, secretsService, executiveProfileService, officeIdentityService, browserService, bullpenService, approvalTrigger, actionLogRepo, taskRepo, confidencePipeline, tempFileStore, infraLlmService, outboundContextService, timezone: config.timezone, selfEmail: resolvedEmailAccounts[0]?.selfEmail, skillOutputMaxLength: yamlConfig.skillOutput?.maxLength, defaultDelegateTimeoutMs: yamlConfig.delegate?.defaultTimeoutMs, appOrigin: config.appOrigin, httpPort: config.httpPort });
 
   // Two-pass agent registration:
   // Pass 1: Register all agents in the registry so specialistSummary() is complete
@@ -1559,6 +1561,19 @@ async function main(): Promise<void> {
     // install.requires_secrets can't go live until those keys exist in the vault.
     secretsService,
   );
+
+  // Secret-capture service (#971) — mints one-time tokens for agent-initiated secret
+  // capture and redeems submitted values into the vault. Shared by the public HTTP routes
+  // and the two capture skills. The system-name allowlist is a live thunk: declared skill
+  // secrets ∪ channel credential keys, reusing RegistryService's exact logic + the vault
+  // route's CHANNEL_CREDENTIAL_KEYS so there's a single source of truth for writable names.
+  const secretCaptureService = new SecretCaptureService(pool, secretsService, {
+    getAllowedSystemNames: () =>
+      new Set([...registryService.declaredSecretNames(), ...CHANNEL_CREDENTIAL_KEYS]),
+  });
+  // Injected after construction because the ExecutionLayer is created before registryService
+  // (which the allowlist thunk depends on). Mirrors setAgentContactId's post-hoc injection.
+  executionLayer.setSecretCaptureService(secretCaptureService);
 
   // Agents with enable_task_management: true — read by the BacklogHeartbeat to
   // know which source_agent_ids it may wake (and as the fallback target list).
@@ -1906,6 +1921,7 @@ async function main(): Promise<void> {
     registryService,
     channelRegistryService,
     secretsService,
+    secretCaptureService,
     setupRequiredAtBoot,
     bootStartedAt,
   });

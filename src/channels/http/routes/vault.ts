@@ -19,7 +19,9 @@ import { CHANNEL_CATALOG } from '../../catalog.js';
 // (channel, field) pairs the catalog declares are writable here. This mirrors the
 // skill-declared-secret scope guard: the channel console can configure known credentials,
 // but no arbitrary `channel.*` name may be written (e.g. `channel.email.bogus` is rejected).
-const CHANNEL_CREDENTIAL_KEYS: ReadonlySet<string> = new Set(
+// Exported so the secret-capture system-name allowlist (#971) reuses the exact same set of
+// writable channel credential keys, rather than re-deriving it from the catalog independently.
+export const CHANNEL_CREDENTIAL_KEYS: ReadonlySet<string> = new Set(
   CHANNEL_CATALOG.flatMap(descriptor =>
     descriptor.credentialFields.map(field => `channel.${descriptor.name}.${field.key}`),
   ),
