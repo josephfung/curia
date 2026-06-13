@@ -51,6 +51,18 @@ export class BullpenDispatcher {
       return;
     }
 
+    // A reply with close_after: true closes the thread atomically, then still publishes a
+    // normal agent.discuss event for the concluding message. Creating reply-oriented tasks
+    // for a closed thread is a dead end — any reply is rejected with "Cannot post to closed
+    // thread" — so skip dispatch here, mirroring the message-cap guard above. (#881)
+    if (threadRecord.thread.status === 'closed') {
+      this.logger.info(
+        { threadId },
+        'BullpenDispatcher: thread is closed — skipping task creation (concluding reply needs no follow-up)',
+      );
+      return;
+    }
+
     const { topic, participants } = threadRecord.thread;
 
     // Prefer the originator from the discuss event (fast path — already in memory).
