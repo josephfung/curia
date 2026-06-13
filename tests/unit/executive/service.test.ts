@@ -217,28 +217,13 @@ describe('compileWritingVoiceBlock', () => {
 });
 
 describe('interpolateRuntimeContext with executive_voice_block', () => {
-  // Test that the loader correctly replaces the ${executive_voice_block} placeholder.
-  it('replaces ${executive_voice_block} placeholder', async () => {
-    const { interpolateRuntimeContext } = await import('../../../src/agents/loader.js');
-    const template = 'Before ${executive_voice_block} after';
-    const result = interpolateRuntimeContext(template, {
-      executiveVoiceBlock: '## Executive Writing Voice\nTest block',
-    });
-    expect(result).toBe('Before ## Executive Writing Voice\nTest block after');
-  });
-
+  // The ${executive_voice_block} injection path was removed (Task 4, #957). The
+  // placeholder, if ever present in a template, now has no special handling and is
+  // left literal — confirmed below so a future re-introduction of the token is intentional.
   it('leaves placeholder literal when no executive voice block provided', async () => {
     const { interpolateRuntimeContext } = await import('../../../src/agents/loader.js');
     const template = 'Before ${executive_voice_block} after';
     const result = interpolateRuntimeContext(template, {});
     expect(result).toBe('Before ${executive_voice_block} after');
-  });
-});
-
-describe('coordinator.yaml includes executive_voice_block placeholder', () => {
-  it('has the ${executive_voice_block} placeholder', () => {
-    const coordinatorPath = path.resolve(import.meta.dirname, '../../../agents/coordinator.yaml');
-    const raw = fs.readFileSync(coordinatorPath, 'utf-8');
-    expect(raw).toContain('${executive_voice_block}');
   });
 });

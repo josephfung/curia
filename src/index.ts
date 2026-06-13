@@ -343,8 +343,11 @@ async function main(): Promise<void> {
   // writing voice and style preferences. Separate from office identity (which is
   // the assistant's persona). The executive's identity (name, title) lives in the
   // contact system — this is purely about how the system represents them.
-  // Non-fatal on failure: drafts will use generic voice. The ${executive_voice_block}
-  // placeholder stays literal in the system prompt, making misconfiguration visible.
+  // Non-fatal on failure: the profile is consumed at runtime by the
+  // executive-profile-get / executive-profile-update skills (e.g. the ceo-inbox
+  // specialist fetches the writing voice when drafting), not injected into any
+  // system prompt. If initialization fails, those skills fall back to generic
+  // voice rather than taking down startup.
   const executiveConfigPath = path.resolve(import.meta.dirname, '../config/executive-profile.yaml');
   let executiveProfileService: ExecutiveProfileService | undefined;
   try {

@@ -1,8 +1,11 @@
 // types.ts — Executive Profile types.
 //
 // These types define the shape of the executive (CEO) profile that is stored
-// in the DB, loaded from config/executive-profile.yaml on first startup, and
-// injected into agent system prompts via the ${executive_voice_block} token.
+// in the DB and loaded from config/executive-profile.yaml on first startup.
+// The writing voice is consumed at runtime by the executive-profile-get skill,
+// which compiles it via compileWritingVoiceBlock() for the requesting agent
+// (e.g. the ceo-inbox specialist when drafting). It is not injected into agent
+// system prompts as a placeholder token.
 //
 // Separation from OfficeIdentity is intentional:
 //   OfficeIdentity     = how the assistant presents itself
