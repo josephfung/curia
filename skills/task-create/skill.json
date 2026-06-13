@@ -1,7 +1,7 @@
 {
   "name": "task-create",
-  "description": "Create a new task in the backlog. Provide a title and optionally description, owner (curia/ceo/external), priority (0-100), due date, tags, parent task, blocked-by task, waiting-on contact, and an intent anchor. When wake_at is set, schedules a one-shot wake-up for this task at that time.",
-  "version": "0.1.0",
+  "description": "Create a new task in the backlog. Provide a title and optionally description, owner (curia/ceo/external), priority (0-100), due date, tags, parent task, blocked-by task, waiting-on contact, and an intent anchor. When wake_at is set, schedules a one-shot wake-up for this task at that time. Set target_agent_id to assign the task (and its wake-up) to another agent — e.g. the coordinator scheduling a debrief task for the meeting-debrief specialist.",
+  "version": "0.2.0",
   "sensitivity": "normal",
   "action_risk": "low",
   "inputs": {
@@ -17,7 +17,8 @@
     "waiting_on_contact_id": "string?",
     "waiting_on_text": "string?",
     "intent_anchor": "string?",
-    "source": "string?"
+    "source": "string?",
+    "target_agent_id": "string?"
   },
   "outputs": {
     "task_id": "string",
@@ -33,5 +34,5 @@
   "permissions": [],
   "secrets": [],
   "timeout": 30000,
-  "capabilities": ["taskRepo"]
+  "capabilities": ["taskRepo", "agentRegistry"]
 }

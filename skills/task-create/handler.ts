@@ -2,6 +2,22 @@
 //
 // Creates a new task row. Auto-fills agent_id and source_agent_id from the caller context.
 // When wake_at is provided, creates a linked one-shot scheduled_jobs row atomically.
+//
+// Cross-agent scheduling (target_agent_id) — DECISION (issue #880):
+// By default a task is owned by, and its wake fires back to, the creating agent
+// (self-routing). When `target_agent_id` is supplied, the task is instead OWNED by
+// the target: tasks.agent_id and tasks.source_agent_id both become the target, and
+// because the linked scheduled_jobs row inherits agent_id from the task (see
+// TaskRepo.createTask), the wake fires to the target. `created_by` still records the
+// real creator for audit. Owning the task — not merely redirecting the first wake —
+// is what makes re-wakes correct: when the target later reschedules via task-update,
+// that path routes off source_agent_id, which now points at the target.
+//
+// Gating: OPEN model. Any agent may target any *registered* agent. The only gate is
+// existence — the target must be a known agent, otherwise the wake would fire to a
+// dead agent_id that no runtime consumes. A stricter per-agent allowlist
+// (`schedulable_by` in agent YAML) was considered and deliberately deferred; revisit
+// if a compromised-agent threat model warrants restricting who can schedule into whom.
 
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
 import { toLocalIso, formatDisplayTimezone } from '../../src/time/timestamp.js';
@@ -29,6 +45,7 @@ export class TaskCreateHandler implements SkillHandler {
       waiting_on_text?: string;
       intent_anchor?: string;
       source?: string;
+      target_agent_id?: string;
     };
 
     if (!input.title || typeof input.title !== 'string' || !input.title.trim()) {
@@ -66,6 +83,43 @@ export class TaskCreateHandler implements SkillHandler {
     const derivedSource = (input.source as 'ceo' | 'agent' | 'scheduler' | 'coordinator' | undefined)
       ?? (ctx.agentId === 'coordinator' ? 'coordinator' : 'agent');
 
+    // Resolve the OWNING agent for this task (see the cross-agent scheduling note at
+    // the top of this file). Defaults to the creator; `target_agent_id` redirects
+    // ownership — and therefore the wake — to another registered agent.
+    const creatorAgentId = ctx.agentId ?? 'system';
+    let owningAgentId = creatorAgentId;
+    if (input.target_agent_id !== undefined) {
+      if (typeof input.target_agent_id !== 'string' || !input.target_agent_id.trim()) {
+        return { success: false, error: 'target_agent_id must be a non-empty string' };
+      }
+      const target = input.target_agent_id.trim();
+      // Self-targeting is just self-routing — always allowed, no registry needed.
+      if (target !== creatorAgentId) {
+        if (!ctx.agentRegistry) {
+          return {
+            success: false,
+            error: 'task-create: agentRegistry not available — cannot validate target_agent_id. '
+              + 'Check that the skill manifest declares the agentRegistry capability.',
+          };
+        }
+        if (!ctx.agentRegistry.has(target)) {
+          return {
+            success: false,
+            error: `target_agent_id '${target}' is not a registered agent — `
+              + 'a wake scheduled to an unknown agent would never fire.',
+          };
+        }
+        owningAgentId = target;
+        // Cross-agent authority operation — one agent scheduling work onto
+        // another agent's queue. Log it explicitly so an unexpected wake on the
+        // target can be traced to its creator without DB archaeology.
+        ctx.log.info(
+          { creatorAgentId, owningAgentId, title: input.title },
+          'task-create: redirecting task ownership to target agent',
+        );
+      }
+    }
+
     let dueAt: Date | undefined;
     if (input.due_at) {
       if (!ISO_DATETIME_RE.test(input.due_at)) {
@@ -87,11 +141,16 @@ export class TaskCreateHandler implements SkillHandler {
       }
     }
 
-    ctx.log.info({ title: input.title, owner: input.owner ?? 'curia' }, 'Creating task');
+    ctx.log.info(
+      { title: input.title, owner: input.owner ?? 'curia', owningAgentId, creatorAgentId },
+      'Creating task',
+    );
 
     try {
       const task = await ctx.taskRepo.createTask({
-        agentId: ctx.agentId ?? 'system',
+        // owningAgentId == creatorAgentId for the default (self-routing) case;
+        // a valid target_agent_id redirects ownership (and the linked wake) to it.
+        agentId: owningAgentId,
         title: input.title.trim(),
         description: input.description,
         owner: (input.owner as 'curia' | 'ceo' | 'external') ?? 'curia',
@@ -105,8 +164,10 @@ export class TaskCreateHandler implements SkillHandler {
         waitingOnText: input.waiting_on_text,
         intentAnchor: input.intent_anchor,
         source: derivedSource,
-        sourceAgentId: ctx.agentId ?? undefined,
-        createdBy: ctx.agentId ?? 'system',
+        // source_agent_id tracks the owning specialist (drives re-wake routing in
+        // TaskRepo.updateTask); created_by always records the actual creator.
+        sourceAgentId: owningAgentId,
+        createdBy: creatorAgentId,
       });
 
       const tz = ctx.timezone;
