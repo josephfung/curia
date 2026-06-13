@@ -43,7 +43,22 @@ single voice.
 behalf (a `delegation_hint`ed outbound) is **always** transfer-ownership — I route it to
 that specialist and never answer it myself, even for a trivial "no."
 
-This is the **single intended behavior change.** Everything else ports 1:1.
+## Intended behavior changes (the only deviations from 1:1 porting)
+
+Everything else ports 1:1. There are exactly **two** intended changes:
+
+1. **The transfer-ownership reply rule** (above) — the keystone fix for the delegation
+   defect.
+2. **Remove the vestigial `${executive_voice_block}`** from the coordinator. It was a
+   bare placeholder with no surrounding prose; the coordinator composes as Curia (the
+   office) in its own `office_identity` voice and never drafts in the CEO's *personal*
+   voice. The ceo-inbox specialist — which owns CEO-voice drafting — already fetches the
+   voice profile at runtime via the `executive-profile-get` skill (ceo-inbox.yaml Step 1),
+   not via an injected block, so nothing depends on the coordinator carrying it. The
+   `executive-profile-get` / `executive-profile-update` skills stay pinned to the
+   coordinator (it remains the profile's custodian); only the injected block is removed.
+   Because no other agent receives `executiveProfileService`, the runtime/loader
+   voice-injection path becomes dead and is removed in full.
 
 ## Target structure — the 5-part taxonomy
 
@@ -105,7 +120,7 @@ syntax, Drive-upload steps, email account-selection rules, email threading mecha
 | 13 | Scheduling and Task Management | 3 — Direct; backlog-surfacing → 4 |
 | 14 | Email (send/reply, inbox, To/CC, before composing) | 3 — Direct; threading + account rules → 5 |
 | 15 | CEO Inbox Requests | 2 — Routing decision (borrow-then-answer); cold-compose addr resolution → 5 |
-| 16 | `${executive_voice_block}` (injected) | Appendix (runtime-injected) |
+| 16 | `${executive_voice_block}` (injected) | **Removed** (vestigial — see Intended behavior changes #2) |
 | 17 | Account Identity for Tool Calls | 5 — Reference |
 | 18 | Reaching the Principal | 3 — Direct |
 | 19 | Your Team (`${available_specialists}`) | 2 — Routing decision; roster injected → Appendix |
@@ -141,7 +156,6 @@ the YAML no longer carries placeholders. This matches the existing always-inject
 
 <coordinator.yaml system_prompt body — placeholder-free>
 
-[executive_voice_block]        <- APPENDIX
 [## Available Specialists]     <- APPENDIX (roster from agentRegistry.specialistSummary())
 [## Your Contact Details]      <- APPENDIX (now includes a `Contact ID: <uuid>` line)
 [## Principal Contact Details] <- APPENDIX (unchanged)
@@ -155,8 +169,9 @@ coordinator). The body's identity guidance references that block.
 
 ### Scope (decision: preserve current scoping)
 
-- `office_identity_block`, `security_context_block`, `executive_voice_block`: coordinator
-  only (as today — services are passed to `AgentRuntime` only for the coordinator).
+- `office_identity_block`, `security_context_block`: coordinator only (as today —
+  services are passed to `AgentRuntime` only for the coordinator).
+- `executive_voice_block`: **removed entirely** (see Intended behavior changes #2).
 - `available_specialists`: coordinator gets it via the new runtime appendix. Specialists
   that opt in with `inject_specialists: true` (e.g. ceo-inbox.yaml) keep their existing
   `${available_specialists}` placeholder resolved at bootstrap — **untouched.**
@@ -167,18 +182,24 @@ coordinator). The body's identity guidance references that block.
 ### File changes
 
 - **`agents/coordinator.yaml`** — full `system_prompt` restructure; remove all `${...}`
-  placeholders; bump `version` 0.6.0 → 0.7.0.
+  placeholders (including `${executive_voice_block}`); bump `version` 0.6.0 → 0.7.0.
 - **`src/agents/runtime.ts`** — replace the in-place `.replace('${...}', block)` logic
-  for identity/security/voice with prepend (identity, security) / append (voice). Add
-  `## Available Specialists` and the `Contact ID:` line to the appendix. Thread
-  `availableSpecialists` and `agentContactId` through `AgentRuntimeConfig`.
+  for identity/security with prepend (identity, security). Add `## Available Specialists`
+  and the `Contact ID:` line to the appendix. Thread `availableSpecialists` and
+  `agentContactId` through `AgentRuntimeConfig`. **Remove** the `${executive_voice_block}`
+  injection block (L259-276), the `executiveProfileService` / `executiveDisplayName`
+  config fields, and the now-unused `compileWritingVoiceBlock` import.
 - **`src/index.ts`** — pass `availableSpecialists` and `agentContactId` into the
   coordinator's `AgentRuntime`; **delete** the missing-`${security_context_block}`
-  failsafe warning at ~L941.
-- **`src/agents/loader.ts`** — `interpolateRuntimeContext` is unchanged in behavior
-  (specialists still rely on it). The coordinator branch in `index.ts` simply stops
-  feeding it the now-absent placeholders (no-op replaces are harmless, but the
-  `availableSpecialists` arg for the coordinator moves to the runtime path).
+  failsafe warning at ~L941; **stop passing** `executiveProfileService` /
+  `executiveDisplayName` to the coordinator's `AgentRuntime`. (`executiveProfileService`
+  itself stays alive — the `executive-profile-*` skills consume it.)
+- **`src/agents/loader.ts`** — `interpolateRuntimeContext` keeps the
+  `${available_specialists}` / `${agent_contact_id}` / `${principal_contact_id}` branches
+  for specialists. **Remove** the `${executive_voice_block}` branch (no remaining
+  consumer) and drop `executiveVoiceBlock` from its context param. The coordinator branch
+  in `index.ts` stops feeding it the now-absent placeholders; the coordinator's
+  `availableSpecialists` moves to the runtime appendix path.
 
 ## Validation
 
@@ -190,12 +211,14 @@ coordinator). The body's identity guidance references that block.
   checkbox stays open at PR time with the method documented.
 - **Tests (TDD on the code change):**
   - `runtime` — coordinator effective prompt **starts with** identity→security preamble
-    and **includes** voice + `## Available Specialists` + a `Contact ID:` line in the
-    appendix; a non-coordinator agent gets none of those.
+    and **includes** `## Available Specialists` + a `Contact ID:` line in the appendix;
+    a non-coordinator agent gets none of those. Assert the coordinator prompt **no longer
+    contains** the executive voice block.
   - `loader` — `interpolateRuntimeContext` still resolves specialist placeholders
     (`${agent_contact_id}`, `${available_specialists}`, `${principal_contact_id}`)
-    unchanged.
-  - Remove the index.ts failsafe and any test asserting that warning.
+    unchanged; the `${executive_voice_block}` branch is gone.
+  - Remove the index.ts failsafe and any test asserting that warning. Remove/adjust any
+    test asserting executive-voice injection into the coordinator.
 - **Manual smoke pass:** email reply, contacts "brief me", memory store/recall,
   scheduling, held-message surfacing, approval handling.
 
@@ -205,6 +228,8 @@ coordinator). The body's identity guidance references that block.
   Agent YAML is a public API surface so the change is called out explicitly).
 - CHANGELOG `[Unreleased]` → **Changed**: coordinator prompt re-derived around the
   three-way routing decision; transfer-ownership replies now always delegate.
+- CHANGELOG `[Unreleased]` → **Removed**: vestigial executive-voice block injection from
+  the coordinator (CEO-voice drafting lives in the ceo-inbox specialist).
 
 ## Out of scope (per #957)
 
