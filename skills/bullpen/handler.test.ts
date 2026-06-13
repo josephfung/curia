@@ -87,6 +87,61 @@ describe('BullpenHandler', () => {
     expect((openCtx.bus!.publish as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(2);
   });
 
+  it('reply: close_after=true posts the reply and closes the thread', async () => {
+    const openCtx = makeCtx({
+      action: 'post',
+      topic: 'Close-after test',
+      participants: ['coordinator', 'agent-b'],
+      content: 'Start',
+      mentioned_agent_ids: ['agent-b'],
+    });
+    const openResult = await handler.execute(openCtx);
+    const threadId = ((openResult as { success: true; data: Record<string, unknown> }).data).thread_id as string;
+
+    const replyCtx = makeCtx(
+      { action: 'reply', thread_id: threadId, content: 'Concluding reply', close_after: true },
+      { bullpenService: openCtx.bullpenService, bus: openCtx.bus, agentId: 'agent-b' },
+    );
+    const replyResult = await handler.execute(replyCtx);
+    expect(replyResult.success).toBe(true);
+    const data = (replyResult as { success: true; data: Record<string, unknown> }).data;
+    expect(typeof data.message_id).toBe('string');
+    expect(data.status).toBe('closed');
+
+    // Thread is actually closed: a follow-up reply must now fail.
+    const followUp = makeCtx(
+      { action: 'reply', thread_id: threadId, content: 'Too late' },
+      { bullpenService: openCtx.bullpenService, bus: openCtx.bus, agentId: 'coordinator' },
+    );
+    const followUpResult = await handler.execute(followUp);
+    expect(followUpResult.success).toBe(false);
+    expect((followUpResult as { success: false; error: string }).error).toMatch(/closed/);
+  });
+
+  it('reply: close_after=false (default) leaves the thread open', async () => {
+    const openCtx = makeCtx({
+      action: 'post',
+      topic: 'Stay-open test',
+      participants: ['coordinator', 'agent-b'],
+      content: 'Start',
+      mentioned_agent_ids: ['agent-b'],
+    });
+    const openResult = await handler.execute(openCtx);
+    const threadId = ((openResult as { success: true; data: Record<string, unknown> }).data).thread_id as string;
+
+    const replyCtx = makeCtx(
+      { action: 'reply', thread_id: threadId, content: 'Still going' },
+      { bullpenService: openCtx.bullpenService, bus: openCtx.bus, agentId: 'agent-b' },
+    );
+    const replyResult = await handler.execute(replyCtx);
+    expect(replyResult.success).toBe(true);
+    const data = (replyResult as { success: true; data: Record<string, unknown> }).data;
+    expect(data.status).toBeUndefined();
+
+    const get = await openCtx.bullpenService!.getThread(threadId);
+    expect(get!.thread.status).toBe('open');
+  });
+
   it('get_thread: returns full thread without publishing', async () => {
     const ctx = makeCtx({
       action: 'post',

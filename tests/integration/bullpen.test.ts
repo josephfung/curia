@@ -77,4 +77,18 @@ describeIf('BullpenService integration (Postgres)', () => {
     // Also verify the application-layer guard blocks further posts
     await expect(service.postMessage(thread.id, 'coordinator', 'After close', [])).rejects.toThrow('closed');
   });
+
+  it('postMessage with closeAfter=true persists the reply and closes the thread atomically (#881)', async () => {
+    // Full open → reply with close_after → thread is closed flow.
+    const { thread } = await service.openThread(`${runId} — Close-after test`, 'coordinator', ['coordinator', 'agent-b'], 'Opening', []);
+    const reply = await service.postMessage(thread.id, 'agent-b', 'Concluding reply', [], true);
+
+    const after = await service.getThread(thread.id);
+    // The reply was written first and persisted...
+    expect(after!.thread.status).toBe('closed');
+    expect(after!.thread.messageCount).toBe(2);
+    expect(after!.messages.some(m => m.id === reply.id)).toBe(true);
+    // ...and the thread is now closed, so further posts are rejected.
+    await expect(service.postMessage(thread.id, 'coordinator', 'Too late', [])).rejects.toThrow('closed');
+  });
 });

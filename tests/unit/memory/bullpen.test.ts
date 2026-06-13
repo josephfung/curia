@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { BullpenService } from '../../../src/memory/bullpen.js';
+import { BullpenService, formatBullpenContext } from '../../../src/memory/bullpen.js';
+import type { PendingThreadContext } from '../../../src/memory/bullpen.js';
 
 describe('BullpenService (in-memory)', () => {
   let service: BullpenService;
@@ -67,6 +68,39 @@ describe('BullpenService (in-memory)', () => {
     expect(result?.thread.status).toBe('closed');
   });
 
+  it('postMessage with closeAfter=true posts the reply and closes the thread', async () => {
+    const { thread } = await service.openThread('Test', 'coordinator', ['coordinator', 'agent-b'], 'Hello', []);
+    const message = await service.postMessage(thread.id, 'agent-b', 'Concluding reply', [], true);
+    const result = await service.getThread(thread.id);
+    // The reply is written first and persists...
+    expect(result?.thread.messageCount).toBe(2);
+    expect(result?.messages.some(m => m.id === message.id)).toBe(true);
+    // ...and the thread is closed atomically with it.
+    expect(result?.thread.status).toBe('closed');
+  });
+
+  it('postMessage with closeAfter=false (default) leaves the thread open', async () => {
+    const { thread } = await service.openThread('Test', 'coordinator', ['coordinator', 'agent-b'], 'Hello', []);
+    await service.postMessage(thread.id, 'agent-b', 'Still talking', []);
+    const result = await service.getThread(thread.id);
+    expect(result?.thread.status).toBe('open');
+  });
+
+  it('postMessage with closeAfter=true allows a non-creator participant to close', async () => {
+    // close_after is a soft conclusion signal available to any replying participant,
+    // unlike the explicit `close` action which is restricted to creator/coordinator.
+    const { thread } = await service.openThread('Test', 'agent-a', ['agent-a', 'agent-b'], 'Hi', []);
+    await service.postMessage(thread.id, 'agent-b', 'Done here', [], true);
+    const result = await service.getThread(thread.id);
+    expect(result?.thread.status).toBe('closed');
+  });
+
+  it('postMessage with closeAfter=true rejects (and does not close) a closed thread', async () => {
+    const { thread } = await service.openThread('Test', 'coordinator', ['coordinator'], 'Hi', []);
+    await service.closeThread(thread.id, 'coordinator');
+    await expect(service.postMessage(thread.id, 'coordinator', 'Late', [], true)).rejects.toThrow('closed');
+  });
+
   it('getPendingThreadsForAgent returns only threads where latest sender is not the agent', async () => {
     const { thread } = await service.openThread(
       'Pending test',
@@ -106,5 +140,27 @@ describe('BullpenService (in-memory)', () => {
     expect(pending[0]?.recentMessages).toHaveLength(5);
     // Should be the last 5 messages
     expect(pending[0]?.recentMessages[4]?.content).toBe('Msg 8');
+  });
+});
+
+describe('formatBullpenContext', () => {
+  function makePending(): PendingThreadContext {
+    return {
+      threadId: 'thread-1',
+      topic: 'Q2 planning',
+      totalMessages: 1,
+      recentMessages: [
+        { senderAgentId: 'coordinator', content: 'What do you think?', mentionedAgentIds: [], createdAt: new Date(0) },
+      ],
+    };
+  }
+
+  it('returns empty string when there are no pending threads', () => {
+    expect(formatBullpenContext([])).toBe('');
+  });
+
+  it('includes the close_after convention note when threads are present', () => {
+    const out = formatBullpenContext([makePending()]);
+    expect(out).toContain('close_after');
   });
 });

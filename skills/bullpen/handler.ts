@@ -146,7 +146,12 @@ export class BullpenHandler implements SkillHandler {
             ? (rawMentioned as string[]).map(m => m.trim()).filter(m => m.length > 0 && existing.thread.participants.includes(m))
             : [];
 
-          const message = await ctx.bullpenService.postMessage(threadId, ctx.agentId, content, mentionedAgentIds);
+          // close_after lets an agent conclude a thread in the same call as its reply (#881).
+          // The message is persisted first, then the thread is closed atomically — so a
+          // successful postMessage means both happened. Only an explicit `true` closes.
+          const closeAfter = input['close_after'] === true;
+
+          const message = await ctx.bullpenService.postMessage(threadId, ctx.agentId, content, mentionedAgentIds, closeAfter);
 
           // Publish is fire-and-forget — reply is already persisted. Same
           // rationale as `post`: bus.publish dispatches subscribers sequentially,
@@ -171,7 +176,13 @@ export class BullpenHandler implements SkillHandler {
             );
           });
 
-          return { success: true, data: { thread_id: threadId, message_id: message.id } };
+          // Report the close in the result so the agent gets confirmation the thread is done.
+          return {
+            success: true,
+            data: closeAfter
+              ? { thread_id: threadId, message_id: message.id, status: 'closed' }
+              : { thread_id: threadId, message_id: message.id },
+          };
         }
 
         case 'get_thread': {
