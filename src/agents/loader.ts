@@ -174,7 +174,6 @@ export function discoverAgentManifests(dirPath: string): AgentDiscovery[] {
  * Interpolate runtime context placeholders in the system prompt.
  * Currently supports:
  * - ${office_identity_block} — compiled identity block from OfficeIdentityService
- * - ${executive_voice_block} — compiled writing voice block from ExecutiveProfileService
  * - ${available_specialists} — list of specialist agents from the agent registry
  * - ${current_date} — today's date in the configured timezone (YYYY-MM-DD, Day)
  * - ${timezone} — the configured IANA timezone name
@@ -187,10 +186,6 @@ export function discoverAgentManifests(dirPath: string): AgentDiscovery[] {
  *
  * This runs at bootstrap time (after all agents are registered) and is separate
  * from persona interpolation which runs at config load time.
- *
- * Note: ${executive_voice_block} is also replaced per-turn in runtime.ts (for hot
- * reload support), but the bootstrap-time pass here handles the static case and
- * ensures the placeholder is resolved even if the runtime injection path is skipped.
  */
 export function interpolateRuntimeContext(
   systemPrompt: string,
@@ -199,7 +194,6 @@ export function interpolateRuntimeContext(
     agentContactId?: string;
     principalContactId?: string;
     officeIdentityBlock?: string;
-    executiveVoiceBlock?: string;
   },
 ): string {
   return systemPrompt
@@ -210,13 +204,6 @@ export function interpolateRuntimeContext(
       // If the service is not yet initialized, leave the placeholder as-is so the
       // misconfiguration is visible rather than silently producing an empty block.
       context.officeIdentityBlock ?? '${office_identity_block}',
-    )
-    .replace(
-      /\$\{executive_voice_block\}/g,
-      // The voice block is compiled by ExecutiveProfileService.compileWritingVoiceBlock().
-      // If the service is not initialized (non-fatal), the placeholder stays literal —
-      // visible in LLM output as a misconfiguration signal, but not a hard failure.
-      context.executiveVoiceBlock ?? '${executive_voice_block}',
     )
     .replace(
       /\$\{available_specialists\}/g,

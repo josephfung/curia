@@ -656,27 +656,6 @@ async function main(): Promise<void> {
     logger.info('CEO_PRIMARY_EMAIL not set — CEO contact bootstrap skipped (principal will be created via the onboarding wizard at /setup).');
   }
 
-  // Look up the CEO's display name from the contact system for the executive voice
-  // block. The name lives in the contacts table (single source of truth), not in the
-  // executive profile. Falls back to 'the executive' if no CEO contact exists.
-  let executiveDisplayName = 'the executive';
-  if (config.ceoPrimaryEmail) {
-    try {
-      const nameResult = await pool.query<{ display_name: string }>(
-        `SELECT c.display_name
-         FROM contacts c
-         JOIN contact_channel_identities ci ON ci.contact_id = c.id
-         WHERE ci.channel = 'email' AND ci.channel_identifier = $1`,
-        [config.ceoPrimaryEmail],
-      );
-      if (nameResult.rows[0]?.display_name) {
-        executiveDisplayName = nameResult.rows[0].display_name;
-      }
-    } catch (err) {
-      logger.warn({ err }, 'Failed to look up CEO display name for executive voice block — using fallback');
-    }
-  }
-
   // Held messages — stores messages from unknown senders pending CEO review.
   const heldMessages = HeldMessageService.createWithPostgres(pool, logger);
   logger.info('Held message service initialized');
@@ -1716,11 +1695,6 @@ async function main(): Promise<void> {
       // every task, so identity hot-reloads (file watcher or API PUT) take effect on the
       // next turn without a restart.
       officeIdentityService: agentConfig.role === 'coordinator' ? officeIdentityService : undefined,
-      // The coordinator gets per-turn executive voice block injection. This replaces the
-      // ${executive_voice_block} placeholder with the CEO's writing voice guidance, compiled
-      // fresh each turn for hot-reload support. The display name comes from the contact system.
-      executiveProfileService: agentConfig.role === 'coordinator' ? executiveProfileService : undefined,
-      executiveDisplayName: agentConfig.role === 'coordinator' ? executiveDisplayName : undefined,
       // The coordinator gets per-turn security context block injection. The block is
       // prepended to the system prompt (immediately after the identity block) on every task.
       // Specialists do not receive this — they operate in a trust-elevated context (tasks

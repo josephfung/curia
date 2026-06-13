@@ -7,7 +7,6 @@ import type { ExecutionLayer } from '../../../src/skills/execution.js';
 import { createLogger } from '../../../src/logger.js';
 import { WorkingMemory } from '../../../src/memory/working-memory.js';
 import type { AgentError } from '../../../src/errors/types.js';
-import type { ExecutiveProfile } from '../../../src/executive/types.js';
 
 // Minimal provenance block for mock LLM responses — satisfies the required field
 // without tying tests to specific model names.
@@ -126,77 +125,6 @@ describe('AgentRuntime', () => {
     // Error responses must be flagged so consumers (e.g. delegate skill) know not
     // to treat the fallback message as a real result.
     expect(responses[0]?.payload.isError).toBe(true);
-  });
-
-  it('fails task when executiveProfileService is provided but not initialized', async () => {
-    const provider = createMockProvider('This should not be called');
-    const logger = createLogger('error');
-    const runtime = new AgentRuntime({
-      agentId: 'coordinator',
-      systemPrompt: 'Header ${executive_voice_block} Footer',
-      provider,
-      resolvedModel: 'mock-model',
-      bus,
-      logger,
-      executiveProfileService: {
-        get: vi.fn(() => {
-          throw new Error('ExecutiveProfileService not initialized — call initialize() before get()');
-        }),
-      } as unknown as import('../../../src/executive/service.js').ExecutiveProfileService,
-      executiveDisplayName: 'Joseph',
-    });
-    runtime.register();
-
-    const task = createAgentTask({
-      agentId: 'coordinator',
-      conversationId: 'conv-exec-uninitialized',
-      channelId: 'cli',
-      senderId: 'user',
-      content: 'hello',
-      parentEventId: 'parent-exec-uninitialized',
-    });
-    await bus.publish('dispatch', task);
-
-    expect(provider.chat).not.toHaveBeenCalled();
-    expect(responses).toHaveLength(1);
-    expect(responses[0]?.payload.isError).toBe(true);
-    expect(responses[0]?.payload.content).toContain('unexpected error occurred');
-  });
-
-  it('logs and continues when executive voice block compilation throws', async () => {
-    const provider = createMockProvider('Hello with fallback prompt');
-    const logger = createLogger('error');
-    const loggerErrorSpy = vi.spyOn(logger, 'error');
-    const executiveProfile = {} as ExecutiveProfile;
-    const runtime = new AgentRuntime({
-      agentId: 'coordinator',
-      systemPrompt: 'Header ${executive_voice_block} Footer',
-      provider,
-      resolvedModel: 'mock-model',
-      bus,
-      logger,
-      executiveProfileService: {
-        get: vi.fn(() => executiveProfile),
-      } as unknown as import('../../../src/executive/service.js').ExecutiveProfileService,
-      executiveDisplayName: 'Joseph',
-    });
-    runtime.register();
-
-    const task = createAgentTask({
-      agentId: 'coordinator',
-      conversationId: 'conv-exec-compile-throws',
-      channelId: 'cli',
-      senderId: 'user',
-      content: 'hello',
-      parentEventId: 'parent-exec-compile-throws',
-    });
-    await bus.publish('dispatch', task);
-
-    expect(provider.chat).toHaveBeenCalledTimes(1);
-    expect(loggerErrorSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ err: expect.any(Error), agentId: 'coordinator' }),
-      'Failed to compile executive voice block — ${executive_voice_block} placeholder left in prompt',
-    );
   });
 
   it('includes conversation history in LLM context', async () => {
