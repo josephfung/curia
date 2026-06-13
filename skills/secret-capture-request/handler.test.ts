@@ -37,7 +37,7 @@ function makeCtx(input: Record<string, unknown>, overrides: Partial<SkillContext
 describe('SecretCaptureRequestHandler', () => {
   it('mints a user secret and builds the URL from appOrigin', async () => {
     const minter = fakeMinter();
-    const ctx = makeCtx({ secret_name: 'my flight password' }, { secretCapture: minter });
+    const ctx = makeCtx({ secret_name: 'my flight password' }, { secretCapture: minter, timezone: 'America/Toronto' });
     const result = await new SecretCaptureRequestHandler().execute(ctx);
 
     expect(result.success).toBe(true);
@@ -45,6 +45,9 @@ describe('SecretCaptureRequestHandler', () => {
     expect(data.capture_url).toBe('https://curia.example.com/secret-capture/abc123');
     expect(data.secret_name).toBe('user.flight');
     expect(minter.userCalls).toEqual([{ rawName: 'my flight password', label: 'my flight password', valueFormat: 'string' }]);
+    // Timestamp-metadata contract: the field is `displayTimezone` (camelCase), not snake_case.
+    expect(typeof data.displayTimezone).toBe('string');
+    expect(data).not.toHaveProperty('display_timezone');
   });
 
   it('falls back to localhost:{httpPort} when appOrigin is unset', async () => {

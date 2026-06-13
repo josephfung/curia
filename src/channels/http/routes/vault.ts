@@ -19,13 +19,22 @@ import { CHANNEL_CATALOG } from '../../catalog.js';
 // (channel, field) pairs the catalog declares are writable here. This mirrors the
 // skill-declared-secret scope guard: the channel console can configure known credentials,
 // but no arbitrary `channel.*` name may be written (e.g. `channel.email.bogus` is rejected).
-// Exported so the secret-capture system-name allowlist (#971) reuses the exact same set of
-// writable channel credential keys, rather than re-deriving it from the catalog independently.
-export const CHANNEL_CREDENTIAL_KEYS: ReadonlySet<string> = new Set(
+// Private backing set — never exported directly. A `ReadonlySet` type annotation only guards
+// at compile time; exporting the live object would let any importer `.add()` to the exact set
+// these routes (and the #971 system-capture allowlist) trust. Consumers get a fresh copy via
+// channelCredentialKeys() instead, so the writable allow-list can't be widened at runtime.
+const CHANNEL_CREDENTIAL_KEYS: ReadonlySet<string> = new Set(
   CHANNEL_CATALOG.flatMap(descriptor =>
     descriptor.credentialFields.map(field => `channel.${descriptor.name}.${field.key}`),
   ),
 );
+
+/** A fresh copy of the writable channel-credential key set, derived once from the catalog.
+ *  Returns a new Set each call so callers can spread/iterate it without being able to mutate
+ *  the canonical backing set. Reused by the secret-capture system-name allowlist (#971). */
+export function channelCredentialKeys(): ReadonlySet<string> {
+  return new Set(CHANNEL_CREDENTIAL_KEYS);
+}
 
 /** True iff `name` is a valid channel credential key declared by the catalog. */
 function isChannelCredentialKey(name: string): boolean {
