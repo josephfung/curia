@@ -215,45 +215,32 @@ export class AgentRuntime {
     // each get their own copy and never see each other's expansions.
     const workingToolDefs = skillToolDefs ? [...skillToolDefs] : undefined;
 
-    // Replace the ${office_identity_block} placeholder with the freshly-compiled
-    // identity block. This runs per-task (not at startup) so identity changes via
-    // the API or file watcher take effect on the next coordinator turn without a restart.
-    // The token stays literal in the stored systemPrompt; we substitute it here each turn.
+    // Build the fixed preamble — constraints first, most salient. Identity then
+    // security are PREPENDED to the body (not substituted in-place), so the YAML
+    // carries no ${...} placeholders. Both are coordinator-only: the services /
+    // block are passed to AgentRuntime only for the coordinator (see src/index.ts).
+    // Per-task (not startup) so identity/security hot-reloads take effect next turn.
     let effectiveSystemPrompt = systemPrompt;
+    const preambleParts: string[] = [];
     if (officeIdentityService) {
       try {
-        effectiveSystemPrompt = effectiveSystemPrompt.replace(
-          '${office_identity_block}',
-          officeIdentityService.compileSystemPromptBlock(),
-        );
+        preambleParts.push(officeIdentityService.compileSystemPromptBlock());
       } catch (err) {
-        // A compile failure should not abort the task. Log at error (operator signal)
-        // and proceed with the placeholder literal visible — the misconfiguration will
-        // be obvious in the LLM's response if the block is structurally broken.
-        logger.error({ err, agentId }, 'Failed to compile identity block — ${office_identity_block} placeholder left in prompt');
+        // A compile failure must not abort the task. Log at error (operator signal)
+        // and proceed without the identity block rather than emitting a literal
+        // placeholder or a structurally broken block.
+        logger.error({ err, agentId }, 'Failed to compile identity block — identity preamble omitted this turn');
       }
     }
-
-    // Inject the platform security context block. If the system prompt contains
-    // ${security_context_block}, replace it in-place so the operator controls
-    // positioning. If the placeholder is absent (e.g. a custom coordinator.yaml
-    // that predates this feature), append unconditionally — the block is a
-    // platform guarantee, not opt-in text. See design spec #500.
-    //
-    // No try-catch here: String.replace() and concatenation cannot throw.
-    // If this block ever changes to involve a throwing call, the correct
-    // handling is to abort the task — not to proceed without security policy.
+    // Security context is a platform guarantee, not opt-in text. When provided it is
+    // always prepended directly after identity. No try-catch: string concatenation
+    // cannot throw. (Removed the old missing-placeholder append failsafe — the block
+    // now has a single, fixed home.)
     if (this.config.securityContextBlock) {
-      const replaced = effectiveSystemPrompt.replace(
-        '${security_context_block}',
-        this.config.securityContextBlock,
-      );
-      if (replaced === effectiveSystemPrompt) {
-        // Placeholder absent — append as the safety net.
-        effectiveSystemPrompt += '\n\n' + this.config.securityContextBlock;
-      } else {
-        effectiveSystemPrompt = replaced;
-      }
+      preambleParts.push(this.config.securityContextBlock);
+    }
+    if (preambleParts.length > 0) {
+      effectiveSystemPrompt = preambleParts.join('\n\n') + '\n\n' + effectiveSystemPrompt;
     }
 
     // Replace the ${executive_voice_block} placeholder with the freshly-compiled

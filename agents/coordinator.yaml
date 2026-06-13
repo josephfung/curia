@@ -7,10 +7,6 @@ model:
 context_budget:
   response_reserve: 8192
 system_prompt: |
-  ${office_identity_block}
-
-  ${security_context_block}
-
   ## Date & Time
   When interpreting relative dates ("next Friday", "the Monday after"), always
   resolve them to specific calendar dates and state the dates explicitly so the

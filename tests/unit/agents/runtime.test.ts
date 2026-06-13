@@ -616,13 +616,13 @@ describe('AgentRuntime', () => {
     expect(systemMsg?.content).not.toContain('## Scheduled Task — Scope Restriction');
   });
 
-  it('replaces ${security_context_block} placeholder when securityContextBlock is set', async () => {
+  it('prepends securityContextBlock above the body when set', async () => {
     const provider = createMockProvider('OK');
     const runtime = new AgentRuntime({
       agentId: 'coordinator',
-      systemPrompt: 'Before.\n${security_context_block}\nAfter.',
+      systemPrompt: 'Body text.',
       provider,
-      resolvedModel: "mock-model",
+      resolvedModel: 'mock-model',
       bus,
       logger: createLogger('error'),
       securityContextBlock: '## Security\nPolicy here.',
@@ -639,50 +639,20 @@ describe('AgentRuntime', () => {
     });
     await bus.publish('dispatch', task);
 
-    const systemMsg = (provider.chat as ReturnType<typeof vi.fn>).mock.calls[0][0].messages[0].content as string;
-    // Block replaces placeholder at its exact position
-    expect(systemMsg).toContain('Before.\n## Security\nPolicy here.\nAfter.');
-    // Block must not appear a second time (no duplicate at end)
+    const systemMsg = (provider.chat as ReturnType<typeof vi.fn>).mock.calls[0]![0].messages[0]!.content as string;
+    // Security block sits at the very top, immediately above the body.
+    expect(systemMsg.startsWith('## Security\nPolicy here.\n\nBody text.')).toBe(true);
+    // Block appears exactly once (no duplicate append).
     expect(systemMsg.indexOf('## Security')).toBe(systemMsg.lastIndexOf('## Security'));
   });
 
-  it('appends securityContextBlock unconditionally when placeholder is absent', async () => {
-    const provider = createMockProvider('OK');
-    const runtime = new AgentRuntime({
-      agentId: 'coordinator',
-      systemPrompt: 'No placeholder here.',
-      provider,
-      resolvedModel: "mock-model",
-      bus,
-      logger: createLogger('error'),
-      securityContextBlock: '## Security\nPolicy here.',
-    });
-    runtime.register();
-
-    const task = createAgentTask({
-      agentId: 'coordinator',
-      conversationId: 'conv-sec-2',
-      channelId: 'cli',
-      senderId: 'user',
-      content: 'Hello',
-      parentEventId: 'parent-sec-2',
-    });
-    await bus.publish('dispatch', task);
-
-    const systemMsg = (provider.chat as ReturnType<typeof vi.fn>).mock.calls[0][0].messages[0].content as string;
-    expect(systemMsg).toContain('No placeholder here.');
-    expect(systemMsg).toContain('## Security\nPolicy here.');
-    // Verify the '\n\n' separator is correct — the block must be appended with exactly two newlines
-    expect(systemMsg).toContain('No placeholder here.\n\n## Security');
-  });
-
-  it('does not modify the prompt when securityContextBlock is not provided', async () => {
+  it('does not inject a security block when securityContextBlock is omitted', async () => {
     const provider = createMockProvider('OK');
     const runtime = new AgentRuntime({
       agentId: 'coordinator',
       systemPrompt: 'Only this text.',
       provider,
-      resolvedModel: "mock-model",
+      resolvedModel: 'mock-model',
       bus,
       logger: createLogger('error'),
       // securityContextBlock intentionally omitted
@@ -699,9 +669,43 @@ describe('AgentRuntime', () => {
     });
     await bus.publish('dispatch', task);
 
-    const systemMsg = (provider.chat as ReturnType<typeof vi.fn>).mock.calls[0][0].messages[0].content as string;
-    // No securityContextBlock provided, so no security block should appear
+    const systemMsg = (provider.chat as ReturnType<typeof vi.fn>).mock.calls[0]![0].messages[0]!.content as string;
     expect(systemMsg).not.toContain('## Security');
+  });
+
+  it('prepends identity above security, both above the body', async () => {
+    const provider = createMockProvider('OK');
+    const runtime = new AgentRuntime({
+      agentId: 'coordinator',
+      systemPrompt: 'Body text.',
+      provider,
+      resolvedModel: 'mock-model',
+      bus,
+      logger: createLogger('error'),
+      officeIdentityService: {
+        compileSystemPromptBlock: () => '## Identity\nWho you are.',
+      } as unknown as import('../../../src/identity/service.js').OfficeIdentityService,
+      securityContextBlock: '## Security\nPolicy here.',
+    });
+    runtime.register();
+
+    const task = createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'conv-preamble-order',
+      channelId: 'cli',
+      senderId: 'user',
+      content: 'Hello',
+      parentEventId: 'parent-preamble-order',
+    });
+    await bus.publish('dispatch', task);
+
+    const systemMsg = (provider.chat as ReturnType<typeof vi.fn>).mock.calls[0]![0].messages[0]!.content as string;
+    const idPos = systemMsg.indexOf('## Identity');
+    const secPos = systemMsg.indexOf('## Security');
+    const bodyPos = systemMsg.indexOf('Body text.');
+    expect(idPos).toBeGreaterThan(-1);
+    expect(idPos).toBeLessThan(secPos);
+    expect(secPos).toBeLessThan(bodyPos);
   });
 
   it('injects ## Principal Contact Details block when principalIdentities is non-empty', async () => {
