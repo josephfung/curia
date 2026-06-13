@@ -80,6 +80,11 @@ export interface AgentConfig {
    *  or hallucinating addresses. Injected into all agents — specialists need this too.
    *  See #786. */
   principalIdentities?: ChannelIdentity[];
+  /** The specialist roster string (from AgentRegistry.specialistSummary()). When provided,
+   *  a "## Available Specialists" block is appended to the system prompt. Passed only for
+   *  the coordinator (see src/index.ts). Specialists that use the ${available_specialists}
+   *  bootstrap placeholder are unaffected. */
+  availableSpecialists?: string;
   /** Agent registry — used to look up target agent's expectedDurationSeconds when a delegate
    *  call is made, so the runtime can inject an appropriate timeout_ms. See #387. */
   agentRegistry?: AgentRegistry;
@@ -240,6 +245,13 @@ export class AgentRuntime {
     }
     if (preambleParts.length > 0) {
       effectiveSystemPrompt = preambleParts.join('\n\n') + '\n\n' + effectiveSystemPrompt;
+    }
+
+    // Append the specialist roster as a fixed appendix block. Coordinator-only in
+    // practice (passed only for the coordinator in src/index.ts); gated on presence
+    // so specialists that don't route work never see it.
+    if (this.config.availableSpecialists) {
+      effectiveSystemPrompt += '\n\n## Available Specialists\n' + this.config.availableSpecialists;
     }
 
     // Replace the ${executive_voice_block} placeholder with the freshly-compiled
