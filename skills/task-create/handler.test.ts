@@ -4,8 +4,17 @@ import { TaskCreateHandler } from './handler.js';
 import type { SkillContext } from '../../src/skills/types.js';
 import type { TaskRepo } from '../../src/db/task-repo.js';
 import type { TaskRow } from '../../src/db/queries/tasks.js';
+import type { AgentRegistry } from '../../src/agents/agent-registry.js';
 
 const silentLog = pino({ level: 'silent' });
+
+// Minimal AgentRegistry stub — task-create only calls has() to validate a
+// cross-agent target exists before redirecting the wake to it.
+function makeRegistry(knownAgents: string[] = []): AgentRegistry {
+  return {
+    has: vi.fn((name: string) => knownAgents.includes(name)),
+  } as unknown as AgentRegistry;
+}
 
 function makeCtx(overrides: Partial<SkillContext> = {}): SkillContext {
   return {
@@ -224,6 +233,121 @@ describe('TaskCreateHandler', () => {
     const data = (result as { success: true; data: { displayTimezone: string } }).data;
     expect(typeof data.displayTimezone).toBe('string');
     expect(data.displayTimezone).not.toBe('');
+  });
+
+  // ── Cross-agent targeting (target_agent_id) ───────────────────────────────
+
+  it('self-routes ownership to the calling agent when target_agent_id is omitted', async () => {
+    const taskRepo = makeTaskRepo();
+    const ctx = makeCtx({
+      input: { title: 'Self-owned task' },
+      taskRepo,
+      agentId: 'meeting-debrief',
+    });
+
+    await new TaskCreateHandler().execute(ctx);
+
+    const calls = (taskRepo.createTask as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls[0]![0]).toMatchObject({
+      agentId: 'meeting-debrief',
+      sourceAgentId: 'meeting-debrief',
+      createdBy: 'meeting-debrief',
+    });
+  });
+
+  it('routes ownership and the wake to a valid cross-agent target', async () => {
+    const taskRepo = makeTaskRepo();
+    const ctx = makeCtx({
+      input: {
+        title: 'Debrief: Acme sync',
+        target_agent_id: 'meeting-debrief',
+        wake_at: '2026-06-10T17:00:00.000Z',
+      },
+      taskRepo,
+      agentId: 'coordinator',
+      agentRegistry: makeRegistry(['coordinator', 'meeting-debrief', 'ceo-inbox']),
+    });
+
+    const result = await new TaskCreateHandler().execute(ctx);
+
+    expect(result.success).toBe(true);
+    const calls = (taskRepo.createTask as ReturnType<typeof vi.fn>).mock.calls;
+    // The target owns the task (agent_id + source_agent_id) so re-wakes scheduled
+    // by the target via task-update route back to it; created_by records the
+    // actual creator for audit.
+    expect(calls[0]![0]).toMatchObject({
+      agentId: 'meeting-debrief',
+      sourceAgentId: 'meeting-debrief',
+      createdBy: 'coordinator',
+    });
+  });
+
+  it('treats target_agent_id equal to the caller as self-routing (no registry needed)', async () => {
+    const taskRepo = makeTaskRepo();
+    const ctx = makeCtx({
+      input: { title: 'Self target', target_agent_id: 'meeting-debrief' },
+      taskRepo,
+      agentId: 'meeting-debrief',
+      // No agentRegistry provided — self-targeting must not require it.
+    });
+
+    const result = await new TaskCreateHandler().execute(ctx);
+
+    expect(result.success).toBe(true);
+    const calls = (taskRepo.createTask as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls[0]![0]).toMatchObject({
+      agentId: 'meeting-debrief',
+      sourceAgentId: 'meeting-debrief',
+      createdBy: 'meeting-debrief',
+    });
+  });
+
+  it('rejects a target_agent_id that is not a registered agent', async () => {
+    const taskRepo = makeTaskRepo();
+    const ctx = makeCtx({
+      input: { title: 'Bad target', target_agent_id: 'ghost-agent' },
+      taskRepo,
+      agentId: 'coordinator',
+      agentRegistry: makeRegistry(['coordinator', 'meeting-debrief']),
+    });
+
+    const result = await new TaskCreateHandler().execute(ctx);
+
+    expect(result.success).toBe(false);
+    expect((result as { success: false; error: string }).error).toMatch(/target_agent_id/);
+    expect(taskRepo.createTask).not.toHaveBeenCalled();
+  });
+
+  it('rejects a non-string target_agent_id', async () => {
+    const taskRepo = makeTaskRepo();
+    const ctx = makeCtx({
+      input: { title: 'Task', target_agent_id: 123 as unknown as string },
+      taskRepo,
+      agentId: 'coordinator',
+      agentRegistry: makeRegistry(['coordinator']),
+    });
+
+    const result = await new TaskCreateHandler().execute(ctx);
+
+    expect(result.success).toBe(false);
+    expect((result as { success: false; error: string }).error).toMatch(/target_agent_id/);
+    expect(taskRepo.createTask).not.toHaveBeenCalled();
+  });
+
+  it('errors when target_agent_id is set but the agent registry is unavailable', async () => {
+    const taskRepo = makeTaskRepo();
+    const ctx = makeCtx({
+      input: { title: 'Task', target_agent_id: 'meeting-debrief' },
+      taskRepo,
+      agentId: 'coordinator',
+      // agentRegistry intentionally omitted.
+    });
+
+    const result = await new TaskCreateHandler().execute(ctx);
+
+    expect(result.success).toBe(false);
+    expect((result as { success: false; error: string }).error).toMatch(/agentRegistry|registry/);
+    expect(taskRepo.createTask).not.toHaveBeenCalled();
   });
 
   // ── Error propagation ─────────────────────────────────────────────────────

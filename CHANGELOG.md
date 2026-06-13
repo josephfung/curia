@@ -13,6 +13,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Added
+
+- **`task-create`** — optional `target_agent_id` assigns a new task (and its wake-up) to another registered agent, so the coordinator or ceo-inbox can schedule work for a specialist like meeting-debrief. (#880)
+
 ## [0.34.0] — 2026-06-12 — "Heimdall"
 
 > **Heimdall** *(Norse myth; Marvel's Thor, 2011, Kenneth Branagh)* — the unsleeping sentry of the Bifröst, who sees and hears across the nine realms and lets no one cross the gate unbidden. v0.34 gives Curia the same watch at every threshold: a registry decides which skills, agents, and channels may load; a secrets vault holds the keys, so nothing enables until its credentials are present; and a second-stage judge guards what crosses outward. Nothing runs, or leaves, without passing the gate.
