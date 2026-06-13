@@ -25,7 +25,10 @@ describe('loadAgentConfig', () => {
     expect(config.system_prompt).not.toContain('${executive_voice_block}');
     expect(config.system_prompt).not.toContain('${available_specialists}');
     expect(config.system_prompt).not.toContain('${agent_contact_id}');
+    expect(config.system_prompt).not.toContain('${principal_contact_id}');
     expect(config.system_prompt).not.toContain('${persona.');
+    // Catch-all: any unexpected ${...} token regresses the placeholder-free contract.
+    expect(config.system_prompt).not.toMatch(/\$\{[^}]+\}/);
   });
 
   it('throws on nonexistent file', () => {

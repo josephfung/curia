@@ -294,13 +294,17 @@ export class AgentRuntime {
     // to the CEO's details when tools require an account parameter.
     // Injected into ALL agents (coordinator + specialists) so every agent knows its identity.
     const { channelAccounts } = this.config;
-    if (channelAccounts && (channelAccounts.email || channelAccounts.phone)) {
+    // Render the block when there is ANY identity to show — channel accounts OR the
+    // agent's own contact ID. Gating the whole block on channel accounts would drop the
+    // contact ID for a deployment with no email/phone, breaking the per-turn contact-ID
+    // injection contract (codeant review on #974).
+    if ((channelAccounts && (channelAccounts.email || channelAccounts.phone)) || this.config.agentContactId) {
       const lines: string[] = ['## Your Contact Details'];
       lines.push('These are your own accounts. Use them when tools require an email address, phone number,');
       lines.push('or similar "acting as" identifier — never substitute the CEO\'s details.');
       lines.push('');
-      if (channelAccounts.email) lines.push(`- Email: ${channelAccounts.email}`);
-      if (channelAccounts.phone) lines.push(`- Phone: ${channelAccounts.phone}`);
+      if (channelAccounts?.email) lines.push(`- Email: ${channelAccounts.email}`);
+      if (channelAccounts?.phone) lines.push(`- Phone: ${channelAccounts.phone}`);
       // The agent's own contact ID — used for self-directed entity/calendar lookups.
       // Coordinator-only in practice (passed only for the coordinator in src/index.ts).
       if (this.config.agentContactId) lines.push(`- Contact ID: ${this.config.agentContactId}`);

@@ -1044,7 +1044,40 @@ describe('AgentRuntime', () => {
     await bus.publish('dispatch', task);
 
     const systemMsg = (provider.chat as ReturnType<typeof vi.fn>).mock.calls[0]![0].messages[0]!.content as string;
+    // The block itself still renders (the email is present) — only the Contact ID line is absent.
+    expect(systemMsg).toContain('## Your Contact Details');
     expect(systemMsg).not.toContain('Contact ID:');
+  });
+
+  it('still renders the Contact ID when no channel accounts are configured', async () => {
+    // Regression guard (codeant review on #974): the Contact ID line must not be gated on
+    // channel-account presence — a deployment with no email/phone still gets its contact ID.
+    const provider = createMockProvider('OK');
+    const runtime = new AgentRuntime({
+      agentId: 'coordinator',
+      systemPrompt: 'Body text.',
+      provider,
+      resolvedModel: 'mock-model',
+      bus,
+      logger: createLogger('error'),
+      // channelAccounts intentionally omitted
+      agentContactId: '11111111-1111-4111-8111-111111111111',
+    });
+    runtime.register();
+
+    const task = createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'conv-contactid-3',
+      channelId: 'cli',
+      senderId: 'user',
+      content: 'Hello',
+      parentEventId: 'parent-contactid-3',
+    });
+    await bus.publish('dispatch', task);
+
+    const systemMsg = (provider.chat as ReturnType<typeof vi.fn>).mock.calls[0]![0].messages[0]!.content as string;
+    expect(systemMsg).toContain('## Your Contact Details');
+    expect(systemMsg).toContain('- Contact ID: 11111111-1111-4111-8111-111111111111');
   });
 });
 
