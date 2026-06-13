@@ -243,8 +243,10 @@ export class HttpAdapter implements Channel {
         .finally(() => { isPruning = false; });
       // Prune expired secret-capture tokens on the same tick (#971). These rows hold only a
       // hash + metadata (no secret value), but expired tokens accumulate unbounded without a
-      // sweep. Best-effort and independent of the session prune's in-flight guard — a slow
-      // delete here only delays this table's cleanup, never the session one.
+      // sweep. Best-effort: it shares the session prune's `isPruning` early-return above (so a
+      // long-running session DELETE also defers this sweep a tick), but it doesn't touch
+      // `isPruning` itself, so a slow delete here never blocks the session prune. A delayed
+      // sweep of this low-volume, value-free table is harmless.
       if (this.config.secretCaptureService) {
         pool.query('DELETE FROM secret_capture_tokens WHERE expires_at < NOW()')
           .catch((err: unknown) => {
