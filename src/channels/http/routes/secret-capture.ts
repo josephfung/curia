@@ -14,6 +14,7 @@
 // key already exists.
 
 import type { FastifyInstance } from 'fastify';
+import type { Logger } from '../../../logger.js';
 import type { CaptureMetadata, RedeemResult } from '../../../secrets/secret-capture-service.js';
 
 /** The narrow service surface these routes need: read metadata, redeem a value. No mint. */
@@ -24,6 +25,10 @@ export interface SecretCapturePort {
 
 export interface SecretCaptureRouteOptions {
   secretCaptureService: SecretCapturePort;
+  /** The real pino logger. The Fastify instance is created with `logger: false`, so
+   *  `request.log` is a no-op — we log through this injected logger instead so failures on
+   *  these security-sensitive endpoints are actually recorded. */
+  logger: Logger;
 }
 
 /** Generous ceiling for a captured value (API keys, passwords, small JSON credential sets).
@@ -34,7 +39,7 @@ export async function secretCaptureRoutes(
   app: FastifyInstance,
   options: SecretCaptureRouteOptions,
 ): Promise<void> {
-  const { secretCaptureService } = options;
+  const { secretCaptureService, logger } = options;
 
   // Tight per-route rate limit — the token is unauthenticated, so cap brute-force/abuse
   // per IP the same way POST /auth does. No-op if @fastify/rate-limit isn't registered.
@@ -55,7 +60,7 @@ export async function secretCaptureRoutes(
     } catch (err) {
       // Never log the token — only that the lookup failed. The error body is end-user-facing
       // (an anonymous form visitor), so it stays generic and actionable to them, not an operator.
-      request.log.error({ err }, 'GET /api/secret-capture failed');
+      logger.error({ err }, 'GET /api/secret-capture failed');
       return reply.status(500).send({ error: 'Something went wrong loading this form. Please try the link again.' });
     }
   });
@@ -90,7 +95,7 @@ export async function secretCaptureRoutes(
     } catch (err) {
       // A vault-write failure rolls the token back to unconsumed inside redeem() — the user
       // can retry. Never log the submitted value, only the failure. End-user-facing copy.
-      request.log.error({ err }, 'POST /api/secret-capture redeem failed');
+      logger.error({ err }, 'POST /api/secret-capture redeem failed');
       return reply.status(500).send({ error: 'Something went wrong saving the value. Please try again.' });
     }
   });

@@ -109,10 +109,10 @@ describe('resolveSystemSecretName', () => {
   });
 });
 
-describe('SecretCaptureService.mint', () => {
+describe('SecretCaptureService minting (via the public name-policy entry points)', () => {
   it('stores the SHA-256 hash, never the raw token', async () => {
     const { svc, queries } = makeService();
-    const { rawToken } = await svc.mint({ secretName: 'user.x', valueFormat: 'string', ttlMinutes: 30 });
+    const { rawToken } = await svc.mintUserSecret({ rawName: 'x' });
 
     const insert = queries.find(q => q.sql.includes('INSERT INTO secret_capture_tokens'));
     expect(insert).toBeDefined();
@@ -124,10 +124,10 @@ describe('SecretCaptureService.mint', () => {
     expect(rawToken).toMatch(/^[0-9a-f]{64}$/);
   });
 
-  it('sets expiry ttlMinutes in the future', async () => {
+  it('sets a fixed 30-minute expiry (TTL is not caller-controlled)', async () => {
     const { svc } = makeService();
     const before = Date.now();
-    const { expiresAt } = await svc.mint({ secretName: 'user.x', valueFormat: 'string', ttlMinutes: 30 });
+    const { expiresAt } = await svc.mintUserSecret({ rawName: 'x' });
     expect(expiresAt.getTime()).toBeGreaterThanOrEqual(before + 29 * 60_000);
     expect(expiresAt.getTime()).toBeLessThanOrEqual(Date.now() + 31 * 60_000);
   });
@@ -155,23 +155,16 @@ describe('SecretCaptureService.getMetadata', () => {
     expect(await svc.getMetadata('deadbeef')).toBe('not_found');
   });
 
-  it('returns expired for a consumed token', async () => {
+  it('returns expired for a spent token (consumed or past — computed in SQL)', async () => {
     const { svc } = makeService(() => ({
-      rows: [{ label: 'x', value_format: 'string', expires_at: new Date(Date.now() + 60_000), consumed_at: new Date() }],
-    }));
-    expect(await svc.getMetadata('deadbeef')).toBe('expired');
-  });
-
-  it('returns expired for a past token', async () => {
-    const { svc } = makeService(() => ({
-      rows: [{ label: 'x', value_format: 'string', expires_at: new Date(Date.now() - 60_000), consumed_at: null }],
+      rows: [{ label: 'x', value_format: 'string', spent: true }],
     }));
     expect(await svc.getMetadata('deadbeef')).toBe('expired');
   });
 
   it('returns label + valueFormat for a live token, never the vault key', async () => {
     const { svc } = makeService(() => ({
-      rows: [{ label: 'Flight password', value_format: 'string', expires_at: new Date(Date.now() + 60_000), consumed_at: null, secret_name: 'user.secret' }],
+      rows: [{ label: 'Flight password', value_format: 'string', spent: false, secret_name: 'user.secret' }],
     }));
     const meta = await svc.getMetadata('deadbeef');
     expect(meta).toEqual({ label: 'Flight password', valueFormat: 'string' });
@@ -200,14 +193,14 @@ describe('SecretCaptureService.redeem', () => {
 
   it('returns expired for a consumed token', async () => {
     const { svc } = makeService(router({
-      peek: [{ value_format: 'string', expires_at: new Date(Date.now() + 60_000), consumed_at: new Date() }],
+      peek: [{ value_format: 'string', spent: true }],
     }));
     expect(await svc.redeem('deadbeef', 'val')).toBe('expired');
   });
 
   it('writes a string value into the vault and consumes the token', async () => {
     const { svc, secrets, queries } = makeService(router({
-      peek: [{ value_format: 'string', expires_at: new Date(Date.now() + 60_000), consumed_at: null }],
+      peek: [{ value_format: 'string', spent: false }],
       claim: [{ secret_name: 'user.flight', value_format: 'string' }],
     }));
     const result = await svc.redeem('deadbeef', 'hunter2');
@@ -221,7 +214,7 @@ describe('SecretCaptureService.redeem', () => {
 
   it('writes JSON via setJSON when value_format is json', async () => {
     const { svc, secrets } = makeService(router({
-      peek: [{ value_format: 'json', expires_at: new Date(Date.now() + 60_000), consumed_at: null }],
+      peek: [{ value_format: 'json', spent: false }],
       claim: [{ secret_name: 'user.creds', value_format: 'json' }],
     }));
     const result = await svc.redeem('deadbeef', '{"a":1}');
@@ -231,7 +224,7 @@ describe('SecretCaptureService.redeem', () => {
 
   it('rejects invalid JSON without burning the token', async () => {
     const { svc, secrets, queries } = makeService(router({
-      peek: [{ value_format: 'json', expires_at: new Date(Date.now() + 60_000), consumed_at: null }],
+      peek: [{ value_format: 'json', spent: false }],
     }));
     const result = await svc.redeem('deadbeef', 'not json');
     expect(result).toBe('invalid_json');
@@ -242,7 +235,7 @@ describe('SecretCaptureService.redeem', () => {
 
   it('treats a lost claim race as expired (single-use)', async () => {
     const { svc } = makeService(router({
-      peek: [{ value_format: 'string', expires_at: new Date(Date.now() + 60_000), consumed_at: null }],
+      peek: [{ value_format: 'string', spent: false }],
       claim: [], // someone else consumed it between peek and claim
     }));
     expect(await svc.redeem('deadbeef', 'val')).toBe('expired');
@@ -250,7 +243,7 @@ describe('SecretCaptureService.redeem', () => {
 
   it('clears consumed_at and rethrows when the vault write fails', async () => {
     const { svc, secrets, queries } = makeService(router({
-      peek: [{ value_format: 'string', expires_at: new Date(Date.now() + 60_000), consumed_at: null }],
+      peek: [{ value_format: 'string', spent: false }],
       claim: [{ secret_name: 'user.flight', value_format: 'string' }],
     }));
     secrets.failNextWrite();
@@ -267,7 +260,7 @@ describe('SecretCaptureService.redeem', () => {
     const errors: unknown[] = [];
     const { pool } = makePool((sql) => {
       if (sql.includes('SELECT')) {
-        return { rows: [{ value_format: 'string', expires_at: new Date(Date.now() + 60_000), consumed_at: null }] };
+        return { rows: [{ value_format: 'string', spent: false }] };
       }
       if (sql.includes('consumed_at = now()')) return { rows: [{ secret_name: 'user.flight', value_format: 'string' }] };
       throw new Error('rollback UPDATE failed (db down)');

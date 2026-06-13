@@ -87,7 +87,9 @@ export interface MintNameArgs {
   rawName: string;
   label?: string;
   valueFormat?: CaptureValueFormat;
-  ttlMinutes?: number;
+  // NOTE: TTL is intentionally NOT caller-controlled. The lifetime is a fixed security
+  // property of the feature (single-use + 30 min, per #971), so callers cannot mint links
+  // that are already dead, absurdly long-lived, or NaN. See DEFAULT_CAPTURE_TTL_MINUTES.
 }
 
 export interface MintResult {
@@ -122,63 +124,55 @@ export class SecretCaptureService implements SecretCaptureMinter {
     private readonly options: SecretCaptureServiceOptions,
   ) {}
 
-  /** Low-level mint: secretName is assumed already resolved & validated by the caller. */
-  async mint(args: {
-    secretName: string;
-    label?: string;
-    valueFormat: CaptureValueFormat;
-    ttlMinutes: number;
-  }): Promise<{ rawToken: string; expiresAt: Date }> {
+  /**
+   * Low-level mint — PRIVATE on purpose. The only public entry points are mintUserSecret /
+   * mintSystemSecret, which each run a name policy first. Keeping this private means no holder
+   * of a SecretCaptureService can bypass the `user.` namespace sandbox or the system allowlist
+   * by passing an arbitrary secretName. TTL is fixed (not a parameter) for the same reason.
+   */
+  private async mint(secretName: string, label: string | undefined, valueFormat: CaptureValueFormat): Promise<{ rawToken: string; expiresAt: Date }> {
     // 256-bit raw token — lives only in the returned URL. We persist its hash, matching the
     // session-auth pattern, so a DB compromise cannot reconstruct a usable capture link.
     const rawToken = randomBytes(32).toString('hex');
     const tokenHash = hashToken(rawToken);
-    const expiresAt = new Date(Date.now() + args.ttlMinutes * 60_000);
+    const expiresAt = new Date(Date.now() + DEFAULT_CAPTURE_TTL_MINUTES * 60_000);
     await this.pool.query(
       `INSERT INTO secret_capture_tokens (token_hash, secret_name, label, value_format, expires_at)
        VALUES ($1, $2, $3, $4, $5)`,
-      [tokenHash, args.secretName, args.label ?? null, args.valueFormat, expiresAt],
+      [tokenHash, secretName, label ?? null, valueFormat, expiresAt],
     );
     return { rawToken, expiresAt };
   }
 
   async mintUserSecret(args: MintNameArgs): Promise<MintResult> {
     const secretName = resolveUserSecretName(args.rawName);
-    const { rawToken, expiresAt } = await this.mint({
-      secretName,
-      label: args.label,
-      valueFormat: args.valueFormat ?? 'string',
-      ttlMinutes: args.ttlMinutes ?? DEFAULT_CAPTURE_TTL_MINUTES,
-    });
+    const { rawToken, expiresAt } = await this.mint(secretName, args.label, args.valueFormat ?? 'string');
     return { rawToken, secretName, expiresAt };
   }
 
   async mintSystemSecret(args: MintNameArgs): Promise<MintResult> {
     const secretName = resolveSystemSecretName(args.rawName, this.options.getAllowedSystemNames());
-    const { rawToken, expiresAt } = await this.mint({
-      secretName,
-      label: args.label,
-      valueFormat: args.valueFormat ?? 'string',
-      ttlMinutes: args.ttlMinutes ?? DEFAULT_CAPTURE_TTL_MINUTES,
-    });
+    const { rawToken, expiresAt } = await this.mint(secretName, args.label, args.valueFormat ?? 'string');
     return { rawToken, secretName, expiresAt };
   }
 
-  /** Metadata for the public GET endpoint. Never returns the vault key (secret_name). */
+  /** Metadata for the public GET endpoint. Never returns the vault key (secret_name).
+   *  `spent` is computed in SQL with the DB clock (`now()`), the same time source the atomic
+   *  claim uses — so metadata and redemption never disagree about validity under clock skew. */
   async getMetadata(rawToken: string): Promise<CaptureMetadata> {
     const res = await this.pool.query<{
       label: string | null;
       value_format: CaptureValueFormat;
-      expires_at: Date;
-      consumed_at: Date | null;
+      spent: boolean;
     }>(
-      `SELECT label, value_format, expires_at, consumed_at
+      `SELECT label, value_format,
+              (consumed_at IS NOT NULL OR expires_at <= now()) AS spent
          FROM secret_capture_tokens WHERE token_hash = $1`,
       [hashToken(rawToken)],
     );
     const row = res.rows[0];
     if (!row) return 'not_found';
-    if (this.isSpent(row.consumed_at, row.expires_at)) return 'expired';
+    if (row.spent) return 'expired';
     return { label: row.label, valueFormat: row.value_format };
   }
 
@@ -193,18 +187,20 @@ export class SecretCaptureService implements SecretCaptureMinter {
     const tokenHash = hashToken(rawToken);
 
     // Peek to distinguish not_found / expired / invalid_json before mutating anything.
+    // `spent` uses the DB clock (`now()`) — the same source as the atomic claim below — so the
+    // pre-check and the claim agree on validity regardless of app/DB clock skew.
     const peek = await this.pool.query<{
       value_format: CaptureValueFormat;
-      expires_at: Date;
-      consumed_at: Date | null;
+      spent: boolean;
     }>(
-      `SELECT value_format, expires_at, consumed_at
+      `SELECT value_format,
+              (consumed_at IS NOT NULL OR expires_at <= now()) AS spent
          FROM secret_capture_tokens WHERE token_hash = $1`,
       [tokenHash],
     );
     const row = peek.rows[0];
     if (!row) return 'not_found';
-    if (this.isSpent(row.consumed_at, row.expires_at)) return 'expired';
+    if (row.spent) return 'expired';
 
     let parsed: unknown;
     if (row.value_format === 'json') {
@@ -259,10 +255,5 @@ export class SecretCaptureService implements SecretCaptureMinter {
       throw err; // always the original vault-write error, never the rollback error
     }
     return 'ok';
-  }
-
-  /** A token is spent if it has been consumed or its expiry has passed. */
-  private isSpent(consumedAt: Date | null, expiresAt: Date): boolean {
-    return consumedAt !== null || new Date(expiresAt).getTime() <= Date.now();
   }
 }
