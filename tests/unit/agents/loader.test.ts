@@ -12,22 +12,20 @@ describe('loadAgentConfig', () => {
     expect(config.name).toBe('coordinator');
     expect(config.role).toBe('coordinator');
     expect(config.model.tier).toBe('standard');
-    // System prompt is meaningful — the body begins with the Date & Time section.
-    expect(config.system_prompt).toContain('## Date & Time');
+    // System prompt is meaningful and reflects the routing-decision spine.
+    expect(config.system_prompt).toContain('Transfer-ownership');
   });
 
-  it('carries no identity/security placeholders or persona fields in the YAML', () => {
-    // Since the identity block migration (issue #139), the coordinator has no inline
-    // persona fields. As of the decision-spine refactor (#957), identity and security
-    // are PREPENDED by the runtime as a fixed preamble rather than substituted via
-    // ${...} tokens, so the YAML no longer carries those placeholders either.
+  it('coordinator.yaml carries no ${...} runtime placeholders', () => {
+    // Runtime blocks (identity, security, specialists, contact ID) are now always-injected
+    // by AgentRuntime at fixed positions — the YAML must be placeholder-free (#957).
     const config = loadAgentConfig(path.join(agentsDir, 'coordinator.yaml'));
     expect(config.system_prompt).not.toContain('${office_identity_block}');
     expect(config.system_prompt).not.toContain('${security_context_block}');
-    // No legacy persona tokens remain in the YAML.
-    expect(config.system_prompt).not.toContain('${persona.display_name}');
-    expect(config.system_prompt).not.toContain('${persona.tone}');
-    expect(config.system_prompt).not.toContain('${persona.title}');
+    expect(config.system_prompt).not.toContain('${executive_voice_block}');
+    expect(config.system_prompt).not.toContain('${available_specialists}');
+    expect(config.system_prompt).not.toContain('${agent_contact_id}');
+    expect(config.system_prompt).not.toContain('${persona.');
   });
 
   it('throws on nonexistent file', () => {
