@@ -7,6 +7,7 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import rateLimit from '@fastify/rate-limit';
 import { secretCaptureRoutes, type SecretCapturePort } from './secret-capture.js';
 import type { CaptureMetadata, RedeemResult } from '../../../secrets/secret-capture-service.js';
+import { createSilentLogger } from '../../../logger.js';
 
 /** A scripted fake: returns the configured metadata/redeem outcome and records redeem calls. */
 function fakeService(opts: {
@@ -30,7 +31,7 @@ function fakeService(opts: {
 async function build(service: SecretCapturePort, withRateLimit = false): Promise<FastifyInstance> {
   const app = Fastify();
   if (withRateLimit) await app.register(rateLimit, { max: 1000, timeWindow: '1 minute' });
-  await app.register(secretCaptureRoutes, { secretCaptureService: service });
+  await app.register(secretCaptureRoutes, { secretCaptureService: service, logger: createSilentLogger() });
   return app;
 }
 
@@ -122,7 +123,7 @@ describe('secret-capture routes', () => {
       // Register the route with a real (tiny) limit to prove the config is wired.
       const app2 = Fastify();
       await app2.register(rateLimit, { global: false });
-      await app2.register(secretCaptureRoutes, { secretCaptureService: fakeService({ metadata: 'not_found' }) });
+      await app2.register(secretCaptureRoutes, { secretCaptureService: fakeService({ metadata: 'not_found' }), logger: createSilentLogger() });
       try {
         let last = 0;
         // The route declares max 10 / 15 min. The 11th request in the window should 429.

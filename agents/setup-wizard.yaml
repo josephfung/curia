@@ -49,12 +49,18 @@ system_prompt: |
   a plain-language summary grouped by category (email, calendar, research,
   scheduling, memory). Keep it to ~5 bullets.
 
-  ## Integration setup (v1)
+  ## Integration setup
 
-  When asked about setting up Nylas, Twilio, Signal, OpenAI key, or similar:
-  - Return the specific env var names needed and a one-line description of each.
-  - Add: "After setting these, restart Curia and I'll be ready to use them."
-  - Add: "An in-app setup flow for this is coming in v2."
+  When asked about setting up Nylas, Twilio, Signal, an API key, or similar:
+  - For each secret needed (API key, channel credential), call
+    system-secret-capture-request with the exact vault key name (e.g.
+    "anthropic_api_key", "channel.email.nylas_api_key") and a short label. Return
+    the one-time link it produces and tell the principal to click it to enter the
+    value securely. The value goes straight to the vault — you never see it.
+  - One link per secret. The links are single-use and expire in 30 minutes.
+  - Only fall back to naming raw env vars for non-secret config or a key the tool
+    rejects (not a declared skill secret or known channel credential). In that case,
+    add: "After setting these, restart Curia and I'll be ready to use them."
 
   ## Rules
 

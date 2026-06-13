@@ -46,6 +46,7 @@ export class SystemSecretCaptureRequestHandler implements SkillHandler {
     try {
       valueFormat = parseValueFormat(value_format);
     } catch (err) {
+      ctx.log.warn({ err, value_format }, 'system-secret-capture-request: invalid value_format');
       return { success: false, error: err instanceof Error ? err.message : String(err) };
     }
 
@@ -64,7 +65,7 @@ export class SystemSecretCaptureRequestHandler implements SkillHandler {
           capture_url: captureUrl,
           expires_at: expiresLocal,
           secret_name: secretName,
-          display_timezone: ctx.timezone ? formatDisplayTimezone(ctx.timezone, new Date()) : undefined,
+          displayTimezone: ctx.timezone ? formatDisplayTimezone(ctx.timezone, new Date()) : undefined,
           summary:
             `Send this one-time link to the user so they can enter the value for "${secretName}". ` +
             `It expires in 30 minutes and works once. The value goes straight to the vault — you will not see it.`,

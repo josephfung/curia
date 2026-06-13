@@ -229,11 +229,29 @@ export class HttpAdapter implements Channel {
     // interval tick would launch a second concurrent DELETE against the same pool, eventually
     // exhausting connections. Skip the DB prune for this tick if one is already running.
     let isPruning = false;
+    // Separate in-flight guard for the secret-capture token sweep (#971). Without it, a
+    // DELETE that stalls (e.g. on a table lock) would let every 60s tick enqueue another
+    // query against the same pool, piling up work and exhausting connections — the same
+    // overlap the sessions guard prevents for its own DELETE.
+    let isPruningCaptureTokens = false;
     const pruneInterval = setInterval(() => {
       const now = Date.now();
       for (const [tokenHash, expiresAt] of sessions) {
         if (now > expiresAt) sessions.delete(tokenHash);
       }
+
+      // Prune expired secret-capture tokens. These rows hold only a hash + metadata (no secret
+      // value), but expired tokens accumulate unbounded without a sweep. Guarded independently
+      // of the session prune so neither can block or skip the other.
+      if (this.config.secretCaptureService && !isPruningCaptureTokens) {
+        isPruningCaptureTokens = true;
+        pool.query('DELETE FROM secret_capture_tokens WHERE expires_at < NOW()')
+          .catch((err: unknown) => {
+            logger.error({ err }, 'Secret-capture token prune DELETE failed');
+          })
+          .finally(() => { isPruningCaptureTokens = false; });
+      }
+
       if (isPruning) return;
       isPruning = true;
       pool.query('DELETE FROM sessions WHERE expires_at < NOW()')
@@ -241,18 +259,6 @@ export class HttpAdapter implements Channel {
           logger.error({ err }, 'Session prune DELETE failed — Postgres session storage may be unavailable');
         })
         .finally(() => { isPruning = false; });
-      // Prune expired secret-capture tokens on the same tick (#971). These rows hold only a
-      // hash + metadata (no secret value), but expired tokens accumulate unbounded without a
-      // sweep. Best-effort: it shares the session prune's `isPruning` early-return above (so a
-      // long-running session DELETE also defers this sweep a tick), but it doesn't touch
-      // `isPruning` itself, so a slow delete here never blocks the session prune. A delayed
-      // sweep of this low-volume, value-free table is harmless.
-      if (this.config.secretCaptureService) {
-        pool.query('DELETE FROM secret_capture_tokens WHERE expires_at < NOW()')
-          .catch((err: unknown) => {
-            logger.error({ err }, 'Secret-capture token prune DELETE failed');
-          });
-      }
     }, 60_000);
     pruneInterval.unref();
 
@@ -393,6 +399,7 @@ export class HttpAdapter implements Channel {
     if (this.config.secretCaptureService) {
       await this.app.register(secretCaptureRoutes, {
         secretCaptureService: this.config.secretCaptureService,
+        logger,
       });
     }
 

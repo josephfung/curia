@@ -23,9 +23,14 @@ export default function SecretCapturePage() {
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
-  // Load form metadata on mount. We never request the vault key — only the label + format.
+  // Load form metadata on mount AND whenever the token changes. We reset to a clean loading
+  // state and clear any previously typed value first, so the old form (with an old secret and
+  // old token binding) can never be submitted against a newly navigated-to token.
   useEffect(() => {
     let cancelled = false;
+    setView({ kind: 'loading' });
+    setValue('');
+    setError(null);
     (async () => {
       try {
         const res = await apiFetch(`/api/secret-capture/${token}`);
@@ -43,7 +48,9 @@ export default function SecretCapturePage() {
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
-    if (view.kind !== 'form') return;
+    // Guard against a double-submit race: a second in-flight POST could otherwise land a 410
+    // (token already consumed by the first) and flip the UI away from the success state.
+    if (submitting || view.kind !== 'form') return;
     setError(null);
 
     const check = validateSubmitValue(value, view.valueFormat);
@@ -64,8 +71,10 @@ export default function SecretCapturePage() {
         setView({ kind: 'success' });
         return;
       }
-      if (res.status === 410) { setView({ kind: 'gone' }); return; }
-      if (res.status === 404) { setView({ kind: 'notfound' }); return; }
+      // Terminal failures: the link is no longer usable, so drop the entered secret from
+      // component state rather than leaving it sitting in memory behind a dead form.
+      if (res.status === 410) { setValue(''); setView({ kind: 'gone' }); return; }
+      if (res.status === 404) { setValue(''); setView({ kind: 'notfound' }); return; }
       const data = (await res.json().catch(() => ({}))) as { error?: string };
       setError(data.error ?? 'Could not save the value. Please try again.');
     } catch {
