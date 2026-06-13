@@ -708,6 +708,47 @@ describe('AgentRuntime', () => {
     expect(secPos).toBeLessThan(bodyPos);
   });
 
+  it('omits the identity block and continues when compileSystemPromptBlock throws', async () => {
+    const provider = createMockProvider('OK');
+    const logger = createLogger('error');
+    const loggerErrorSpy = vi.spyOn(logger, 'error');
+    const runtime = new AgentRuntime({
+      agentId: 'coordinator',
+      systemPrompt: 'Body text.',
+      provider,
+      resolvedModel: 'mock-model',
+      bus,
+      logger,
+      officeIdentityService: {
+        compileSystemPromptBlock: () => {
+          throw new Error('identity compile boom');
+        },
+      } as unknown as import('../../../src/identity/service.js').OfficeIdentityService,
+      securityContextBlock: '## Security\nPolicy here.',
+    });
+    runtime.register();
+
+    const task = createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'conv-identity-throws',
+      channelId: 'cli',
+      senderId: 'user',
+      content: 'Hello',
+      parentEventId: 'parent-identity-throws',
+    });
+    await bus.publish('dispatch', task);
+
+    // The task still runs (not aborted) and the body + security are present.
+    expect(provider.chat).toHaveBeenCalledTimes(1);
+    const systemMsg = (provider.chat as ReturnType<typeof vi.fn>).mock.calls[0]![0].messages[0]!.content as string;
+    expect(systemMsg).toContain('Body text.');
+    expect(systemMsg).toContain('## Security\nPolicy here.');
+    // No identity block leaked.
+    expect(systemMsg).not.toContain('## Identity');
+    // The failure was logged at error level.
+    expect(loggerErrorSpy).toHaveBeenCalled();
+  });
+
   it('injects ## Principal Contact Details block when principalIdentities is non-empty', async () => {
     const provider = createMockProvider('OK');
     const runtime = new AgentRuntime({

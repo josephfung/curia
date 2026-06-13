@@ -1599,9 +1599,10 @@ async function main(): Promise<void> {
     // This runs in pass 2 so all specialists are already in the registry.
     let systemPrompt = agentConfig.system_prompt;
     if (agentConfig.role === 'coordinator') {
-      // Do NOT pass officeIdentityBlock here — leave ${office_identity_block}
-      // as a literal placeholder. It is replaced per-turn in AgentRuntime.processTask()
-      // by the officeIdentityService passed below, enabling hot-reload without a restart.
+      // Do NOT pass officeIdentityBlock here. The coordinator YAML contains no
+      // identity placeholder; the identity block is prepended per-turn as a preamble
+      // in AgentRuntime.processTask() by the officeIdentityService passed below,
+      // enabling hot-reload without a restart.
       systemPrompt = interpolateRuntimeContext(systemPrompt, {
         availableSpecialists: agentRegistry.specialistSummary(),
         agentContactId: agentIdentityContactId,
@@ -1711,7 +1712,7 @@ async function main(): Promise<void> {
       // comparisons) that require a reliable "now".
       timezone: config.timezone,
       // The coordinator gets per-turn identity block injection via officeIdentityService.
-      // This replaces the ${office_identity_block} placeholder in the system prompt on
+      // This prepends the identity block to the system prompt as a preamble on
       // every task, so identity hot-reloads (file watcher or API PUT) take effect on the
       // next turn without a restart.
       officeIdentityService: agentConfig.role === 'coordinator' ? officeIdentityService : undefined,
@@ -1720,8 +1721,8 @@ async function main(): Promise<void> {
       // fresh each turn for hot-reload support. The display name comes from the contact system.
       executiveProfileService: agentConfig.role === 'coordinator' ? executiveProfileService : undefined,
       executiveDisplayName: agentConfig.role === 'coordinator' ? executiveDisplayName : undefined,
-      // The coordinator gets per-turn security context block injection. The block replaces
-      // the ${security_context_block} placeholder if present, or is appended unconditionally.
+      // The coordinator gets per-turn security context block injection. The block is
+      // prepended to the system prompt (immediately after the identity block) on every task.
       // Specialists do not receive this — they operate in a trust-elevated context (tasks
       // arrive from the coordinator after the security layer has already evaluated the sender).
       securityContextBlock: agentConfig.role === 'coordinator' ? securityContextBlock : undefined,
