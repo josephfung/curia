@@ -245,9 +245,12 @@ export class AgentRuntime {
     }
 
     // Append the specialist roster as a fixed ## Available Specialists block — after
-    // the body, before the per-turn voice/autonomy/date blocks (not strictly last).
+    // the body, before the per-turn autonomy/date blocks (not strictly last).
     // Coordinator-only in practice (passed only for the coordinator in src/index.ts);
     // gated on presence so specialists that don't route work never see it.
+    // @TODO: the roster comes from AgentRegistry.specialistSummary() over operator-authored
+    // agent manifests — trusted. If specialist names/descriptions ever become user- or
+    // API-editable, strip newlines here (as the ## Principal Contact Details block does).
     if (this.config.availableSpecialists) {
       effectiveSystemPrompt += '\n\n## Available Specialists\n' + this.config.availableSpecialists;
     }
