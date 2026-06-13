@@ -18,6 +18,14 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **`task-create`** — optional `target_agent_id` assigns a new task (and its wake-up) to another registered agent, so the coordinator or ceo-inbox can schedule work for a specialist like meeting-debrief. (#880)
 - **`bullpen`** — `reply` accepts `close_after: true` to close a thread atomically with the reply, `formatBullpenContext()` nudges agents to use it, and the dispatcher skips reply-task fan-out for closed threads so a concluding reply doesn't create dead-end tasks. (#881)
 
+### Changed
+
+- **Coordinator prompt** — re-derived around a three-way routing decision; delegation-hinted outbound replies now always transfer to the owning specialist. (#957)
+
+### Removed
+
+- **Coordinator executive-voice block** — removed the vestigial injection; CEO-voice drafting lives in the ceo-inbox specialist. (#957)
+
 ## [0.34.0] — 2026-06-12 — "Heimdall"
 
 > **Heimdall** *(Norse myth; Marvel's Thor, 2011, Kenneth Branagh)* — the unsleeping sentry of the Bifröst, who sees and hears across the nine realms and lets no one cross the gate unbidden. v0.34 gives Curia the same watch at every threshold: a registry decides which skills, agents, and channels may load; a secrets vault holds the keys, so nothing enables until its credentials are present; and a second-stage judge guards what crosses outward. Nothing runs, or leaves, without passing the gate.
