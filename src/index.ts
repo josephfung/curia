@@ -1593,9 +1593,11 @@ async function main(): Promise<void> {
         );
       }
     }
-    // For the coordinator, interpolate runtime context (specialist list, agent contact ID).
-    // Date and timezone are no longer baked in here — they are appended fresh on every
-    // task turn via AgentRuntime using formatTimeContextBlock() so they never go stale.
+    // For the coordinator, interpolate runtime context (just the principal contact ID).
+    // The specialist roster and the coordinator's own contact ID are no longer resolved
+    // here — they are injected per-turn by AgentRuntime (## Available Specialists block
+    // and the Contact ID line in ## Your Contact Details). Date and timezone are likewise
+    // appended fresh every task turn via formatTimeContextBlock() so they never go stale.
     // This runs in pass 2 so all specialists are already in the registry.
     let systemPrompt = agentConfig.system_prompt;
     if (agentConfig.role === 'coordinator') {
