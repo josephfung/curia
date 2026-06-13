@@ -10,6 +10,7 @@ import {
   type CaptureSecretsPort,
 } from './secret-capture-service.js';
 import { hashToken } from '../channels/http/session-auth.js';
+import type { Logger } from '../logger.js';
 
 /** A mock pool whose response is computed per-query from a handler, so a test can
  *  branch on the SQL (peek vs claim vs clear) and simulate races/empty results. */
@@ -256,5 +257,30 @@ describe('SecretCaptureService.redeem', () => {
     await expect(svc.redeem('deadbeef', 'hunter2')).rejects.toThrow('vault write failed');
     const clear = queries.find(q => q.sql.includes('SET consumed_at = NULL'));
     expect(clear).toBeDefined();
+    // The rollback must only un-consume a still-live token (never resurrect a dead row).
+    expect(clear!.sql).toContain('expires_at > now()');
+  });
+
+  it('propagates the ORIGINAL vault error (not the rollback error) when the rollback also fails', async () => {
+    // Simulate the correlated-DB-outage case: the vault write fails AND the rollback UPDATE
+    // rejects. The user must see the real vault error, and the token-stranded event is logged.
+    const errors: unknown[] = [];
+    const { pool } = makePool((sql) => {
+      if (sql.includes('SELECT')) {
+        return { rows: [{ value_format: 'string', expires_at: new Date(Date.now() + 60_000), consumed_at: null }] };
+      }
+      if (sql.includes('consumed_at = now()')) return { rows: [{ secret_name: 'user.flight', value_format: 'string' }] };
+      throw new Error('rollback UPDATE failed (db down)');
+    });
+    const secrets = makeSecretsPort();
+    secrets.failNextWrite();
+    const logger = { error: (obj: unknown) => { errors.push(obj); } } as unknown as Logger;
+    const svc = new SecretCaptureService(pool, secrets, {
+      getAllowedSystemNames: () => SYSTEM_ALLOWED,
+      logger,
+    });
+    await expect(svc.redeem('deadbeef', 'hunter2')).rejects.toThrow('vault write failed');
+    // The stranded-token event was logged for an operator.
+    expect(errors).toHaveLength(1);
   });
 });

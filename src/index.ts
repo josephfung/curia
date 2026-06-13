@@ -1570,6 +1570,7 @@ async function main(): Promise<void> {
   const secretCaptureService = new SecretCaptureService(pool, secretsService, {
     getAllowedSystemNames: () =>
       new Set([...registryService.declaredSecretNames(), ...CHANNEL_CREDENTIAL_KEYS]),
+    logger,
   });
   // Injected after construction because the ExecutionLayer is created before registryService
   // (which the allowlist thunk depends on). Mirrors setAgentContactId's post-hoc injection.

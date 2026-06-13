@@ -15,6 +15,7 @@
 //                               (the same allowlist the vault PUT route enforces).
 
 import type { DbPool } from '../db/connection.js';
+import type { Logger } from '../logger.js';
 import { hashToken } from '../channels/http/session-auth.js';
 import { randomBytes } from 'node:crypto';
 
@@ -100,6 +101,9 @@ export interface SecretCaptureServiceOptions {
   /** Returns the live allowlist for system captures (declared secrets ∪ channel keys).
    *  A thunk (not a static set) so it reflects the registry state at mint time. */
   getAllowedSystemNames: () => ReadonlySet<string>;
+  /** Logger for the one operator-actionable failure mode: a token stranded consumed-but-unsaved
+   *  when the post-vault-failure rollback itself fails. Optional so tests can omit it. */
+  logger?: Logger;
 }
 
 /** Outcome of a redeem attempt. Vault-write failures are not in this union — they rethrow
@@ -213,6 +217,10 @@ export class SecretCaptureService implements SecretCaptureMinter {
 
     // Atomic single-use claim. RETURNING is empty if another request already consumed it
     // or it expired in the gap since the peek — both map to 'expired'.
+    //
+    // We consume the token BEFORE writing to the vault (not after) so a crash between the two
+    // can never leave a redeemable token whose value was already stored. The failure direction
+    // is "capability lost, retry needed" rather than "single-use token still reusable".
     const claim = await this.pool.query<{ secret_name: string; value_format: CaptureValueFormat }>(
       `UPDATE secret_capture_tokens
           SET consumed_at = now()
@@ -230,13 +238,25 @@ export class SecretCaptureService implements SecretCaptureMinter {
         await this.secrets.set(claimed.secret_name, value);
       }
     } catch (err) {
-      // Roll the token back to unconsumed so the user can retry the submission. The value
-      // is never logged — only the failure propagates.
-      await this.pool.query(
-        `UPDATE secret_capture_tokens SET consumed_at = NULL WHERE token_hash = $1`,
-        [tokenHash],
-      );
-      throw err;
+      // Roll the token back to unconsumed so the user can retry — but only if it is still live
+      // (the `expires_at > now()` guard avoids resurrecting consumed_at on an already-dead row).
+      // The rollback is wrapped so that if IT fails (e.g. the same DB outage that failed the
+      // vault write), the ORIGINAL vault error still propagates and we log the stranded token
+      // for an operator. The value is never logged — only the failure.
+      try {
+        await this.pool.query(
+          `UPDATE secret_capture_tokens SET consumed_at = NULL
+            WHERE token_hash = $1 AND expires_at > now()`,
+          [tokenHash],
+        );
+      } catch (rollbackErr) {
+        this.options.logger?.error(
+          { err: rollbackErr },
+          'secret-capture: failed to roll back consumed_at after a vault-write error — ' +
+          'token is stranded consumed-but-unsaved; the user cannot retry and must be re-issued a link',
+        );
+      }
+      throw err; // always the original vault-write error, never the rollback error
     }
     return 'ok';
   }
