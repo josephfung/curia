@@ -1604,7 +1604,6 @@ async function main(): Promise<void> {
       // in AgentRuntime.processTask() by the officeIdentityService passed below,
       // enabling hot-reload without a restart.
       systemPrompt = interpolateRuntimeContext(systemPrompt, {
-        agentContactId: agentIdentityContactId,
         principalContactId: principalContact?.id,
       });
     } else if (agentConfig.inject_specialists) {
@@ -1743,6 +1742,9 @@ async function main(): Promise<void> {
       // Specialists that opt in via inject_specialists keep the bootstrap ${available_specialists}
       // placeholder (resolved in interpolateRuntimeContext); this runtime path is coordinator-only.
       availableSpecialists: agentConfig.role === 'coordinator' ? agentRegistry.specialistSummary() : undefined,
+      // The coordinator's own contact ID — surfaced in "## Your Contact Details".
+      // Specialists keep the ${agent_contact_id} bootstrap placeholder.
+      agentContactId: agentConfig.role === 'coordinator' ? agentIdentityContactId : undefined,
       // Agent registry — allows the runtime to look up the target agent's
       // expected_duration_seconds when injecting delegate timeouts (#387).
       agentRegistry,

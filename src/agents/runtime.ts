@@ -73,6 +73,11 @@ export interface AgentConfig {
     email?: string;
     phone?: string;
   };
+  /** The agent's own contact ID (a UUID). When provided, a "Contact ID: <uuid>" line is
+   *  added to the "## Your Contact Details" block so the agent can reference its own
+   *  identity for self-directed lookups. Passed only for the coordinator (specialists use
+   *  the ${agent_contact_id} bootstrap placeholder). */
+  agentContactId?: string;
   /** The principal's verified channel identities (email, phone, Signal), loaded from
    *  contact_channel_identities at startup. When provided and non-empty, a
    *  "## Principal Contact Details" block is appended to the system prompt on every task
@@ -320,6 +325,9 @@ export class AgentRuntime {
       lines.push('');
       if (channelAccounts.email) lines.push(`- Email: ${channelAccounts.email}`);
       if (channelAccounts.phone) lines.push(`- Phone: ${channelAccounts.phone}`);
+      // The agent's own contact ID — used for self-directed entity/calendar lookups.
+      // Coordinator-only in practice (passed only for the coordinator in src/index.ts).
+      if (this.config.agentContactId) lines.push(`- Contact ID: ${this.config.agentContactId}`);
       effectiveSystemPrompt += '\n\n' + lines.join('\n');
     }
 
