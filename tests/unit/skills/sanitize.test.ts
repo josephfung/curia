@@ -80,8 +80,11 @@ describe('sanitizeOutput', () => {
   it('STILL redacts structured credentials when skipSecretRedaction is set', () => {
     // skipSecretRedaction only drops the broad generic-hex rule — real credential formats
     // (API keys, JWT/Bearer, AWS) must still be scrubbed even for opted-out skills.
+    // The AWS-shaped value is assembled at runtime so no literal AKIA-key string exists in
+    // source (it would otherwise trip the secret scanner); the assembled value still matches
+    // the AKIA[0-9A-Z]{16} pattern at runtime.
     const apiKey = 'sk-ant-api03-abcdefghijk1234567890';
-    const aws = 'AKIAABCDEFGHIJKLMNOP';
+    const aws = 'AKIA' + 'A'.repeat(16);
     const result = sanitizeOutput(`key ${apiKey} aws ${aws}`, { skipSecretRedaction: true });
     expect(result).not.toContain(apiKey);
     expect(result).not.toContain(aws);
