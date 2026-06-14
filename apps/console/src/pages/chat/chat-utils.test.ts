@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseSseEvent, makeMessage, formatTimestamp } from './chat-utils.js';
+import { parseSseEvent, makeMessage, formatTimestamp, linkifyText } from './chat-utils.js';
 
 describe('parseSseEvent', () => {
   it('returns status text for skill.invoke events', () => {
@@ -84,5 +84,48 @@ describe('formatTimestamp', () => {
     expect(result).not.toMatch(/^Today · /);
     // Should contain a middle dot
     expect(result).toContain(' · ');
+  });
+});
+
+describe('linkifyText', () => {
+  it('wraps a bare https URL in an anchor tag', () => {
+    const result = linkifyText('Visit https://example.com please');
+    expect(result).toContain('<a href="https://example.com"');
+    expect(result).toContain('target="_blank"');
+    expect(result).toContain('rel="noopener noreferrer"');
+    expect(result).toContain('Visit ');
+    expect(result).toContain(' please');
+  });
+
+  it('wraps a bare http URL', () => {
+    const result = linkifyText('http://example.com');
+    expect(result).toContain('<a href="http://example.com"');
+  });
+
+  it('escapes HTML before linking so user text cannot inject markup', () => {
+    const result = linkifyText('<script>alert(1)</script>');
+    expect(result).not.toContain('<script>');
+    expect(result).toContain('&lt;script&gt;');
+  });
+
+  it('passes through plain text unchanged (modulo entity escaping)', () => {
+    const result = linkifyText('Hello world');
+    expect(result).toBe('Hello world');
+  });
+
+  it('handles text with no URLs', () => {
+    const result = linkifyText('No links here.');
+    expect(result).toBe('No links here.');
+  });
+
+  it('handles multiple URLs in one message', () => {
+    const result = linkifyText('See https://a.com and https://b.com');
+    expect(result).toContain('<a href="https://a.com"');
+    expect(result).toContain('<a href="https://b.com"');
+  });
+
+  it('does not linkify javascript: URIs', () => {
+    const result = linkifyText('javascript:alert(1)');
+    expect(result).not.toContain('<a href="javascript:');
   });
 });
