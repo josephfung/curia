@@ -1,7 +1,7 @@
 {
   "name": "email-reply",
   "description": "Reply to an existing email thread. By default, replies to all participants (reply-all). Pass cc as empty string to reply to sender only, or as a comma-separated list to explicitly set recipients. Provide the Nylas message ID to reply to and the reply body.",
-  "version": "1.3.0",
+  "version": "1.3.1",
   "sensitivity": "normal",
   "action_risk": "medium",
   "inputs": {
@@ -9,7 +9,7 @@
     "body": "string",
     "cc": "string? (comma-separated — omit for reply-all default, empty string to reply to sender only)",
     "attachments": "object[]? (file attachments — array of {file_url: string, filename: string, content_type: string}. file_url must be a file:// URL from email-download-attachment or similar. Max 10 attachments, 20 MB total.)",
-    "context_bridge": "string? (JSON — optional context bridge registration: {agent_id, expected_reply?, delegation_hint?, metadata?, expires_in_hours?})"
+    "context_bridge": "string? (JSON — optional context bridge registration that adds a delegation hint so the agent can route any reply faster; every outbound is auto-tracked even without it. Shape: {agent_id, expected_reply?, delegation_hint?, metadata?, expires_in_hours?}. Example: {\"agent_id\":\"coordinator\",\"delegation_hint\":\"calendar-specialist\",\"expected_reply\":\"confirmation or reschedule request\"})"
   },
   "outputs": {
     "message_id": "string",

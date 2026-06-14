@@ -1,7 +1,7 @@
 {
   "name": "config-store",
-  "description": "Store or retrieve agent configuration in the knowledge graph. Use 'store' to save a key-value pair under a namespace (e.g. namespace='writing_config', key='writing_guide_url'). Use 'retrieve' to read one key or all keys in a namespace. Use 'list_namespaces' to see which namespaces have been written to. Values are permanent — use this for deploy-agnostic config the CEO provides once via chat.",
-  "version": "1.0.0",
+  "description": "Store or retrieve agent configuration in the knowledge graph. Use 'store' to save a key-value pair under a namespace (e.g. namespace='writing_config', key='writing_guide_url'). Use 'retrieve' to read one key or all keys in a namespace. Use 'list_namespaces' to see which namespaces have been written to. Values are permanent — use this for deploy-agnostic config the CEO provides once via chat. Common namespaces and their key conventions: `company` (company overview — descriptive keys like legal_name, registered_address, ceo_name); `meeting_links` (personal meeting links — key format \"{person_name} {platform} link\", value is the URL); `travel_preferences` (CEO travel prefs — descriptive keys like preferred_airline, seat_preference, hotel_chain); `loyalty_programs` (memberships — key is the program name, e.g. \"Aeroplan\", value is a JSON string like '{\"member_number\":\"ABC123\",\"tier\":\"Super Elite\"}'). No delete action: to change a value, store again under the same key to overwrite it.",
+  "version": "1.0.1",
   "sensitivity": "normal",
   "action_risk": "low",
   "inputs": {
