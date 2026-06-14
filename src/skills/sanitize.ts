@@ -200,6 +200,12 @@ export function sanitizeOutput(
  *
  * The value set itself is held by the caller (e.g. a BrowserSession) and never
  * logged; this function only consumes it.
+ *
+ * LIMITATION: this catches VERBATIM reflection only. A value that a page re-emits
+ * transformed — URL-encoded, HTML-entity-encoded, Unicode-normalized, base64'd, or
+ * split across DOM nodes joined with whitespace — will not match and is not redacted.
+ * This is a backstop, not the primary defense (the value is never shown to the agent
+ * and password fields render masked); don't over-trust it as a complete guarantee.
  */
 export function redactValues(text: string, values: Iterable<string>): string {
   // De-dupe and drop empties, then sort longest-first (see longer-overlap note above).
