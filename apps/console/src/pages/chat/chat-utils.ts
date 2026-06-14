@@ -50,3 +50,23 @@ export function formatTimestamp(ts: Date): string {
   const date = ts.toLocaleDateString([], { month: 'short', day: 'numeric' });
   return `${date} · ${time}`;
 }
+
+/**
+ * Escapes HTML in user-supplied text and wraps bare http/https URLs in anchor tags.
+ * The result is safe to pass to dangerouslySetInnerHTML: HTML escaping runs first,
+ * so no user text can inject markup. The URL regex only matches http/https, blocking
+ * javascript: and other non-http schemes.
+ */
+export function linkifyText(text: string): string {
+  // Escape HTML entities first so user text cannot inject markup.
+  const escaped = text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+  // Wrap bare URLs. The exclusion set [^\s<>"] stops at whitespace and the HTML
+  // characters that would break the surrounding attribute or tag context.
+  return escaped.replace(
+    /https?:\/\/[^\s<>"]+/g,
+    url => `<a href="${url}" target="_blank" rel="noopener noreferrer">${url}</a>`,
+  );
+}

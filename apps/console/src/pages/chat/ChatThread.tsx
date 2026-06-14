@@ -1,6 +1,6 @@
 // apps/console/src/pages/chat/ChatThread.tsx
 import { useEffect, useRef } from 'react';
-import { formatTimestamp } from './chat-utils.js';
+import { formatTimestamp, linkifyText } from './chat-utils.js';
 import type { Message } from './types.js';
 
 interface ChatThreadProps {
@@ -108,7 +108,9 @@ export function ChatThread({ messages, hasMore, loadingHistory, loadMore }: Chat
                 // No raw user input ever reaches dangerouslySetInnerHTML.
                 <span dangerouslySetInnerHTML={{ __html: msg.html }} />
               ) : (
-                msg.text
+                // Safe: linkifyText() escapes all HTML entities before adding anchor tags,
+                // so user-supplied text cannot inject markup. Only http/https URLs are linked.
+                <span dangerouslySetInnerHTML={{ __html: linkifyText(msg.text) }} />
               )}
             </div>
             {msg.timestamp && (
