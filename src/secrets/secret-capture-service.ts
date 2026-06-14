@@ -135,13 +135,16 @@ export class SecretCaptureService implements SecretCaptureMinter {
     // session-auth pattern, so a DB compromise cannot reconstruct a usable capture link.
     const rawToken = randomBytes(32).toString('hex');
     const tokenHash = hashToken(rawToken);
-    const expiresAt = new Date(Date.now() + DEFAULT_CAPTURE_TTL_MINUTES * 60_000);
-    await this.pool.query(
+    // Compute expires_at from the DB clock (now() + TTL), not the app clock, and read it back.
+    // Redemption/metadata also compare against the DB now(), so mint and redeem share one time
+    // source — app/DB clock skew can never make a link expire early or linger past its TTL.
+    const result = await this.pool.query<{ expires_at: Date }>(
       `INSERT INTO secret_capture_tokens (token_hash, secret_name, label, value_format, expires_at)
-       VALUES ($1, $2, $3, $4, $5)`,
-      [tokenHash, secretName, label ?? null, valueFormat, expiresAt],
+       VALUES ($1, $2, $3, $4, now() + make_interval(mins => $5))
+       RETURNING expires_at`,
+      [tokenHash, secretName, label ?? null, valueFormat, DEFAULT_CAPTURE_TTL_MINUTES],
     );
-    return { rawToken, expiresAt };
+    return { rawToken, expiresAt: result.rows[0]!.expires_at };
   }
 
   async mintUserSecret(args: MintNameArgs): Promise<MintResult> {

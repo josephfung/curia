@@ -55,8 +55,13 @@ function makeSecretsPort(): CaptureSecretsPort & {
 
 const SYSTEM_ALLOWED = new Set(['anthropic_api_key', 'channel.email.nylas_api_key']);
 
+// Default handler: the mint INSERT now uses RETURNING expires_at (DB-clock TTL), so echo a
+// row back for it; everything else returns no rows unless a test overrides the handler.
 function makeService(
-  poolHandler: (sql: string, params: unknown[]) => { rows: Record<string, unknown>[]; rowCount?: number } = () => ({ rows: [] }),
+  poolHandler: (sql: string, params: unknown[]) => { rows: Record<string, unknown>[]; rowCount?: number } =
+    (sql) => sql.includes('INSERT INTO secret_capture_tokens')
+      ? { rows: [{ expires_at: new Date(Date.now() + 30 * 60_000) }] }
+      : { rows: [] },
 ) {
   const { pool, queries } = makePool(poolHandler);
   const secrets = makeSecretsPort();

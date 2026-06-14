@@ -12,7 +12,9 @@ import { toLocalIso, formatDisplayTimezone } from '../../src/time/timestamp.js';
 /** Build the operator-facing magic-link URL. Prod uses ctx.appOrigin; dev falls back to the
  *  local SPA origin (Fastify serves the built console on httpPort). */
 function buildCaptureUrl(ctx: SkillContext, rawToken: string): string {
-  const origin = ctx.appOrigin ?? `http://localhost:${ctx.httpPort ?? 3000}`;
+  // Trim any trailing slash so a configured appOrigin like "https://host/" doesn't yield a
+  // "//secret-capture/..." path that breaks SPA route matching.
+  const origin = (ctx.appOrigin ?? `http://localhost:${ctx.httpPort ?? 3000}`).replace(/\/+$/, '');
   return `${origin}/secret-capture/${rawToken}`;
 }
 
