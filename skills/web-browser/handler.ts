@@ -83,6 +83,11 @@ export class WebBrowserHandler implements SkillHandler {
 
     ctx.log.info({ action, sessionId, url, selector }, 'Executing browser action');
 
+    // Set when this action injects a secret by reference (#973). A screenshot taken on the
+    // same action could capture the value in a non-masked field, and an image can't be
+    // value-redacted — so we refuse to capture one when this is true (see screenshot block).
+    let injectedSecretThisAction = false;
+
     try {
       // --- Dispatch action ---
       switch (action as BrowserAction) {
@@ -166,6 +171,7 @@ export class WebBrowserHandler implements SkillHandler {
             // ref or a missing secret. Any thrown message names the ref, never the value.
             fillValue = await ctx.resolveSecretRef(secret_ref!);
             session.registerInjectedSecret(fillValue);
+            injectedSecretThisAction = true;
           } else {
             if (typeof text !== 'string') {
               return { success: false, error: 'type requires text (string) or secret_ref (string)' };
@@ -210,21 +216,24 @@ export class WebBrowserHandler implements SkillHandler {
       // session from BOTH the content and the URL before they reach the LLM. A hostile page
       // could reflect a typed password back through the DOM, or a GET-form submit could echo
       // it into the query string (page.url()); this prevents both round-trip exfiltration
-      // paths. The literal scrub catches verbatim reflection only — see redactValues. No-op
-      // when nothing has been injected.
+      // paths. redactInjectedSecrets covers the raw value plus its URL- and HTML-encoded
+      // variants (see BrowserSession). No-op when nothing has been injected.
       const content = session.redactInjectedSecrets(rawContent);
       const currentUrl = session.redactInjectedSecrets(page.url());
 
       const result: Record<string, unknown> = { content, session_id: sessionId, url: currentUrl };
 
       // Capture screenshot if explicitly requested or if action === 'screenshot'.
-      // RESIDUAL RISK (#973): the value-aware backstop scrubs TEXT only — it cannot touch
-      // a PNG. A secret typed into a `type=password` field renders masked (dots), so the
-      // common login case is safe; a secret filled into a plain text field would be visible
-      // in the image. This is the accepted "rely on browser password masking" decision from
-      // the issue. We add no screenshot trigger tied to a secret fill, so this is no worse
-      // than baseline — but a screenshot of a secret-bearing page is NOT value-redacted.
-      if (screenshot || action === 'screenshot') {
+      // HARD GUARD (#973): refuse to capture on the same action that injected a secret by
+      // reference. The value-aware backstop scrubs TEXT only — it cannot touch a PNG, and a
+      // secret filled into a non-masked field would be visible in the image and round-trip
+      // into LLM context. (A `type=password` field renders masked, but we can't assume the
+      // field type, so we fail closed.) A standalone screenshot on a later call is still
+      // allowed — by then the secret-bearing input is typically gone or masked.
+      if (injectedSecretThisAction && (screenshot || action === 'screenshot')) {
+        ctx.log.debug({ action, sessionId }, 'Screenshot suppressed: a secret was injected this action (#973)');
+        result.screenshot_skipped = 'A secret was filled in this action; screenshot suppressed to avoid capturing the value (#973).';
+      } else if (screenshot || action === 'screenshot') {
         const buf = await page.screenshot({ type: 'png', fullPage: false });
         result.screenshot_base64 = buf.toString('base64');
       }

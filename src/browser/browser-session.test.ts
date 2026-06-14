@@ -46,6 +46,29 @@ describe('BrowserSession injected-secret redaction', () => {
     expect(session.redactInjectedSecrets('intact')).toBe('intact');
   });
 
+  it('redacts a URL-encoded reflection of a registered value', () => {
+    const session = makeSession();
+    const secret = 'p@ss w&rd';
+    session.registerInjectedSecret(secret);
+
+    // A GET-form submit re-emits the value URL-encoded in the query string.
+    const encoded = encodeURIComponent(secret); // p%40ss%20w%26rd
+    const out = session.redactInjectedSecrets(`https://site.test/login?pw=${encoded}`);
+    expect(out).not.toContain(encoded);
+    expect(out).toContain('[REDACTED]');
+  });
+
+  it('redacts an HTML-entity-encoded reflection of a registered value', () => {
+    const session = makeSession();
+    const secret = 'a&b<c>';
+    session.registerInjectedSecret(secret);
+
+    // A page that echoes the value into the DOM escapes HTML metacharacters.
+    const out = session.redactInjectedSecrets('reflected: a&amp;b&lt;c&gt;');
+    expect(out).not.toContain('a&amp;b&lt;c&gt;');
+    expect(out).toContain('[REDACTED]');
+  });
+
   it('keeps redaction sets isolated per session', () => {
     const a = makeSession();
     const b = makeSession();

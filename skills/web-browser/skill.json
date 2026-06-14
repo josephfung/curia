@@ -18,7 +18,8 @@
     "content": "string",
     "session_id": "string",
     "url": "string",
-    "screenshot_base64": "string?"
+    "screenshot_base64": "string?",
+    "screenshot_skipped": "string?"
   },
   "permissions": [
     "network:https"

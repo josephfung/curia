@@ -44,7 +44,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Security
 
-- **Value-aware browser redaction** — secret values injected by reference are tracked per browser session and scrubbed from any returned page content or error, blocking round-trip exfiltration via a page that reflects a typed credential back. (#973)
+- **Value-aware browser redaction** — secret values injected by reference are tracked per browser session and scrubbed (raw plus URL/HTML-encoded variants) from returned content, the page URL, and errors; screenshots are suppressed on a secret-fill action since an image can't be value-redacted. Blocks round-trip exfiltration via a page that reflects a typed credential back. (#973)
 
 ### Removed
 
