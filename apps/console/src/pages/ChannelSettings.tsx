@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { MobileMenuContext } from '../context/MobileMenu.js';
 import { Sidebar } from '../components/Sidebar.js';
 import { Topbar } from '../components/Topbar.js';
@@ -312,8 +312,20 @@ function ChannelDrawer({ entry, onClose, onChanged }: {
 //
 // Mirrors the RegistrySettings (Skills/Agents) layout: its own sidebar + topbar, a
 // records table of channels with state pills, and a detail drawer with a credential
-// form + lifecycle actions. The catalog is small (four channels), so there is no
-// search or pagination.
+// form + lifecycle actions.
+
+type ChannelSortKey = 'name' | 'state' | 'description';
+
+// Defined at module level so it's not recreated on every render.
+// Non-toggleable channels (http, cli) are always on — treat as 'enabled' for sort/filter.
+function channelSortValue(e: ChannelEntry, key: ChannelSortKey): string {
+  switch (key) {
+    case 'name':        return e.name;
+    case 'state':       return e.isToggleable ? e.state : 'enabled';
+    case 'description': return e.description;
+    default:            return '';
+  }
+}
 
 export function ChannelsPage() {
   const [theme, setTheme] = useTheme();
@@ -322,6 +334,8 @@ export function ChannelsPage() {
   const [entries, setEntries] = useState<ChannelEntry[]>([]);
   const [selected, setSelected] = useState<ChannelEntry | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [sort, setSort] = useState<{ key: ChannelSortKey; dir: 'asc' | 'desc' }>({ key: 'name', dir: 'asc' });
+  const [stateFilter, setStateFilter] = useState<'all' | ChannelState>('all');
 
   useEffect(() => {
     document.documentElement.dataset['mobileSidebar'] = mobileOpen ? 'open' : '';
@@ -347,6 +361,40 @@ export function ChannelsPage() {
 
   useEffect(() => { void load(); }, [load]);
 
+  const counts = useMemo(() => ({
+    all:         entries.length,
+    // Non-toggleable channels count as enabled (they are always on)
+    enabled:     entries.filter(e => e.state === 'enabled' || !e.isToggleable).length,
+    installed:   entries.filter(e => e.isToggleable && e.state === 'installed').length,
+    uninstalled: entries.filter(e => e.isToggleable && e.state === 'uninstalled').length,
+  }), [entries]);
+
+  const filtered = useMemo(() => {
+    let rows = entries;
+    if (stateFilter !== 'all') {
+      if (stateFilter === 'enabled') {
+        rows = rows.filter(e => e.state === 'enabled' || !e.isToggleable);
+      } else {
+        rows = rows.filter(e => e.isToggleable && e.state === stateFilter);
+      }
+    }
+    const dir = sort.dir === 'asc' ? 1 : -1;
+    return [...rows].sort((a, b) => {
+      const av = channelSortValue(a, sort.key);
+      const bv = channelSortValue(b, sort.key);
+      if (av < bv) return -1 * dir;
+      if (av > bv) return  1 * dir;
+      return 0;
+    });
+  }, [entries, stateFilter, sort]);
+
+  function toggleSort(key: ChannelSortKey) {
+    setSort(s => s.key === key
+      ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' }
+      : { key, dir: 'asc' });
+  }
+  const sortArrow = (key: ChannelSortKey) => sort.key === key ? (sort.dir === 'asc' ? '↑' : '↓') : '';
+
   return (
     <MobileMenuContext.Provider value={{ open: mobileOpen, setOpen: setMobileOpen }}>
       <div className="app-root">
@@ -364,58 +412,92 @@ export function ChannelsPage() {
           {loadError ? (
             <div style={{ padding: 32, color: 'var(--app-destructive)', fontSize: 13 }}>{loadError}</div>
           ) : (
-            <div className="records-layout">
-              <div className="records-main">
-                <div className="records-table-wrap">
-                  <table className="records-table">
-                    <thead>
-                      <tr>
-                        <th>Name</th>
-                        <th>State</th>
-                        <th>Description</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {entries.map(e => (
-                        <tr
-                          key={e.name}
-                          className={selected?.name === e.name ? 'active' : undefined}
-                          onClick={() => setSelected(e)}
-                          style={{ cursor: 'pointer' }}
-                        >
-                          <td>{e.name}</td>
-                          <td>
-                            {/* Non-toggleable channels (http, cli) are always on. */}
-                            {e.isToggleable ? (
-                              <span className={`status-pill ${STATE_PILL[e.state]}`}>{STATE_LABEL[e.state]}</span>
-                            ) : (
-                              <span className="status-pill confirmed">Always on</span>
-                            )}
-                          </td>
-                          <td>{e.description}</td>
-                        </tr>
-                      ))}
-                      {entries.length === 0 && (
-                        <tr>
-                          <td colSpan={3} style={{ textAlign: 'center', padding: 40, color: 'var(--app-fg-muted)' }}>
-                            No channels.
-                          </td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
+            <>
+              <div className="records-toolbar">
+                <div className="records-toolbar-left">
+                  {(['all', 'enabled', 'installed', 'uninstalled'] as const).map(v => (
+                    <button
+                      key={v}
+                      className={`records-filter-chip${stateFilter === v ? ' active' : ''}`}
+                      onClick={() => setStateFilter(v)}
+                    >
+                      {v === 'all' ? 'All' : v.charAt(0).toUpperCase() + v.slice(1)}
+                      <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 11, opacity: 0.7 }}>
+                        {counts[v as keyof typeof counts]}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+                <div className="records-toolbar-right">
+                  <span className="topbar-meta">{filtered.length} of {entries.length}</span>
                 </div>
               </div>
 
-              {selected && (
-                <ChannelDrawer
-                  key={selected.name}
-                  entry={selected}
-                  onClose={() => setSelected(null)}
-                  onChanged={() => { void load(); }}
-                />
-              )}
-            </div>
+              <div className="records-layout">
+                <div className="records-main">
+                  <div className="records-table-wrap">
+                    <table className="records-table">
+                      <thead>
+                        <tr>
+                          <th className="sortable" aria-sort={sort.key === 'name' ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none'}>
+                            <button className="sort-btn" onClick={() => toggleSort('name')}>
+                              Name <span className="sort-arrow">{sortArrow('name')}</span>
+                            </button>
+                          </th>
+                          <th className="sortable" aria-sort={sort.key === 'state' ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none'}>
+                            <button className="sort-btn" onClick={() => toggleSort('state')}>
+                              State <span className="sort-arrow">{sortArrow('state')}</span>
+                            </button>
+                          </th>
+                          <th className="sortable" aria-sort={sort.key === 'description' ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none'}>
+                            <button className="sort-btn" onClick={() => toggleSort('description')}>
+                              Description <span className="sort-arrow">{sortArrow('description')}</span>
+                            </button>
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {filtered.map(e => (
+                          <tr
+                            key={e.name}
+                            className={selected?.name === e.name ? 'active' : undefined}
+                            onClick={() => setSelected(e)}
+                            style={{ cursor: 'pointer' }}
+                          >
+                            <td>{e.name}</td>
+                            <td>
+                              {/* Non-toggleable channels (http, cli) are always on. */}
+                              {e.isToggleable ? (
+                                <span className={`status-pill ${STATE_PILL[e.state]}`}>{STATE_LABEL[e.state]}</span>
+                              ) : (
+                                <span className="status-pill confirmed">Always on</span>
+                              )}
+                            </td>
+                            <td>{e.description}</td>
+                          </tr>
+                        ))}
+                        {filtered.length === 0 && (
+                          <tr>
+                            <td colSpan={3} style={{ textAlign: 'center', padding: 40, color: 'var(--app-fg-muted)' }}>
+                              No channels.
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                {selected && (
+                  <ChannelDrawer
+                    key={selected.name}
+                    entry={selected}
+                    onClose={() => setSelected(null)}
+                    onChanged={() => { void load(); }}
+                  />
+                )}
+              </div>
+            </>
           )}
         </main>
       </div>
