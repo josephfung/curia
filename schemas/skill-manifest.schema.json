@@ -74,7 +74,7 @@
     "uninstall": { "type": "object" },
     "skip_secret_redaction": {
       "type": "boolean",
-      "description": "When true, this skill's output bypasses the execution layer's built-in secret-pattern redaction (e.g. the generic long-hex token rule). Only for skills whose output legitimately carries a high-entropy capability token that must reach the LLM to be relayed (e.g. secret-capture magic links) and which structurally cannot emit real secret values. Tag-stripping and truncation still apply."
+      "description": "When true, this skill's output bypasses ONLY the broad generic-long-hex secret scrub (the structured credential scrubs — API keys, JWT/Bearer, AWS — stay active). For skills whose output legitimately carries a high-entropy hex capability token that must reach the LLM to be relayed (e.g. secret-capture magic links). Tag-stripping and truncation still apply. Gated at startup: a skill setting this must also declare the 'secretCapture' capability."
     }
   }
 }

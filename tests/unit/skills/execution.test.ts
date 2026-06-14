@@ -148,13 +148,16 @@ describe('ExecutionLayer', () => {
     }
   });
 
-  it('preserves a high-entropy token when the manifest sets skip_secret_redaction', async () => {
+  it('preserves a high-entropy hex token when the manifest sets skip_secret_redaction', async () => {
     const token = 'a'.repeat(64);
     const url = `https://host/secret-capture/${token}`;
     const handler: SkillHandler = {
       execute: async () => ({ success: true, data: { capture_url: url } }),
     };
-    registry.register(makeManifest({ skip_secret_redaction: true }), handler);
+    // skip_secret_redaction is gated to skills declaring secretCapture; inject a stub service
+    // so the capability guard passes (the handler doesn't use it here).
+    registry.register(makeManifest({ skip_secret_redaction: true, capabilities: ['secretCapture'] }), handler);
+    execution.setSecretCaptureService({} as unknown as Parameters<typeof execution.setSecretCaptureService>[0]);
 
     const result = await execution.invoke('test-skill', { query: 'test' });
     expect(result.success).toBe(true);

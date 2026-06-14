@@ -68,13 +68,24 @@ describe('sanitizeOutput', () => {
     expect(result).not.toContain(token);
   });
 
-  it('skips the built-in secret-pattern scrub when skipSecretRedaction is set', () => {
+  it('preserves a generic hex token when skipSecretRedaction is set', () => {
     // A capability token (e.g. a one-time capture link) must survive for the LLM to relay it.
     const token = 'a'.repeat(64);
     const url = `https://host/secret-capture/${token}`;
     const result = sanitizeOutput(url, { skipSecretRedaction: true });
     expect(result).toBe(url);
     expect(result).not.toContain('[REDACTED]');
+  });
+
+  it('STILL redacts structured credentials when skipSecretRedaction is set', () => {
+    // skipSecretRedaction only drops the broad generic-hex rule — real credential formats
+    // (API keys, JWT/Bearer, AWS) must still be scrubbed even for opted-out skills.
+    const apiKey = 'sk-ant-api03-abcdefghijk1234567890';
+    const aws = 'AKIAABCDEFGHIJKLMNOP';
+    const result = sanitizeOutput(`key ${apiKey} aws ${aws}`, { skipSecretRedaction: true });
+    expect(result).not.toContain(apiKey);
+    expect(result).not.toContain(aws);
+    expect(result).toContain('[REDACTED]');
   });
 
   it('still strips dangerous tags even when skipSecretRedaction is set', () => {

@@ -16,13 +16,22 @@ export interface SanitizeOptions {
   isError?: boolean;
   /** Additional regex patterns to redact (beyond built-in API key patterns). */
   extraRedactPatterns?: RegExp[];
-  /** When true, skip the built-in SECRET_PATTERNS redaction (still strips dangerous tags,
-   *  still applies extraRedactPatterns, still truncates). Set by the execution layer only for
-   *  skills that declare `skip_secret_redaction` — i.e. skills whose output legitimately carries
-   *  a high-entropy capability token (e.g. a one-time capture link) that must survive to reach
-   *  the LLM, and which structurally cannot emit real secret values. Default false. */
+  /** When true, skip ONLY the broad GENERIC_LONG_HEX_PATTERN scrub (not the structured
+   *  credential patterns — API keys, JWT/Bearer, AWS keys stay redacted). Still strips
+   *  dangerous tags, still applies extraRedactPatterns, still truncates. Set by the execution
+   *  layer only for skills that declare `skip_secret_redaction` — i.e. skills whose output
+   *  legitimately carries a high-entropy hex capability token (e.g. a one-time capture link)
+   *  that must survive to reach the LLM. Default false. */
   skipSecretRedaction?: boolean;
 }
+
+// Heuristic that flags any 32+ char lowercase-hex run as a possible secret. This is the
+// ONLY pattern a skipSecretRedaction skill bypasses: it's a broad, format-agnostic catch
+// that also matches legitimate high-entropy capability tokens (e.g. the secret-capture
+// one-time link, randomBytes(32).toString('hex')). The structured credential patterns
+// below stay active even for opted-out skills, so a real API key / JWT / AWS key is still
+// scrubbed regardless of the flag.
+const GENERIC_LONG_HEX_PATTERN = /(?<![a-zA-Z0-9])[a-f0-9]{32,}(?![a-zA-Z0-9])/g;
 
 // Patterns matching common secret formats — these are redacted from all skill output.
 // Order matters: more specific patterns first to avoid partial matches.
@@ -35,8 +44,8 @@ const SECRET_PATTERNS: RegExp[] = [
   /AKIA[0-9A-Z]{16}/g,
   // Bearer tokens (JWT or opaque)
   /Bearer\s+[A-Za-z0-9\-_=]+\.[A-Za-z0-9\-_=]+\.[A-Za-z0-9\-_.+/=]*/g,
-  // Generic long hex tokens (32+ chars)
-  /(?<![a-zA-Z0-9])[a-f0-9]{32,}(?![a-zA-Z0-9])/g,
+  // Generic long hex tokens (32+ chars) — the only pattern skipSecretRedaction bypasses.
+  GENERIC_LONG_HEX_PATTERN,
 ];
 
 // Tags whose content must be stripped entirely (not just the tag delimiters).
@@ -143,11 +152,15 @@ export function sanitizeOutput(
   text = stripDangerousTags(text);
 
   // 3. Redact known secret patterns.
-  // SECRET_PATTERNS is skipped when the caller opts out (skill declares skip_secret_redaction),
-  // since a capability token in that skill's output would otherwise be falsely scrubbed. Any
-  // caller-supplied extraRedactPatterns always apply regardless — opting out of the built-in
-  // generic scrub never disables an explicit redaction the caller asked for.
-  const allPatterns = [...(skipSecretRedaction ? [] : SECRET_PATTERNS), ...extraRedactPatterns];
+  // When the caller opts out (skill declares skip_secret_redaction), we skip ONLY the broad
+  // GENERIC_LONG_HEX_PATTERN — the rule that falsely scrubs a capability token in that skill's
+  // output. The structured credential patterns (API keys, JWT/Bearer, AWS) stay active, so an
+  // opted-out skill still can't leak a real credential format. Caller-supplied
+  // extraRedactPatterns always apply regardless.
+  const builtInPatterns = skipSecretRedaction
+    ? SECRET_PATTERNS.filter(p => p !== GENERIC_LONG_HEX_PATTERN)
+    : SECRET_PATTERNS;
+  const allPatterns = [...builtInPatterns, ...extraRedactPatterns];
   for (const pattern of allPatterns) {
     // Reset lastIndex for global patterns since we reuse them across calls
     pattern.lastIndex = 0;
