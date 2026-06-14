@@ -76,6 +76,14 @@ function applyInline(text: string): string {
   // Italic: _text_ (word-boundary anchored to avoid matching underscores in identifiers)
   out = out.replace(/(?<!_)\b_(?!_)(.+?)(?<!_)_\b(?!_)/g, '<em>$1</em>');
 
+  // Auto-link bare URLs. Runs after bold/italic so formatting inside URLs is preserved,
+  // and before code-span restoration so URLs inside code spans are not linkified
+  // (they exist only as \x00CODE...\x00 placeholders at this point).
+  out = out.replace(
+    /https?:\/\/[^\s<>"]+/g,
+    url => `<a href="${url}" target="_blank" rel="noopener noreferrer">${url}</a>`,
+  );
+
   // Restore code spans
   out = out.replace(/\x00CODE(\d+)\x00/g, (_, i: string) => codePlaceholders[parseInt(i, 10)]!);
 
