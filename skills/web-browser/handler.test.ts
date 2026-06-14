@@ -42,7 +42,7 @@ function makeMockPage(content: string, fill: ReturnType<typeof vi.fn>, url = 'ht
 }
 
 /** Build a SkillContext + a real BrowserSession wrapping the mock page. */
-function makeCtx(opts: {
+function makeSkillContext(opts: {
   input: Record<string, unknown>;
   pageContent?: string;
   pageUrl?: string;
@@ -70,7 +70,7 @@ function makeCtx(opts: {
 describe('web-browser type action with secret_ref (#973)', () => {
   it('fills the resolved secret value and never returns it', async () => {
     const resolveSecretRef = vi.fn().mockResolvedValue(SECRET_VALUE);
-    const { ctx, fill } = makeCtx({
+    const { ctx, fill } = makeSkillContext({
       input: { action: 'type', selector: '#pass', secret_ref: 'user.aeroplan_password' },
       resolveSecretRef,
     });
@@ -88,7 +88,7 @@ describe('web-browser type action with secret_ref (#973)', () => {
   it('redacts an injected value reflected back through get_content', async () => {
     const resolveSecretRef = vi.fn().mockResolvedValue(SECRET_VALUE);
     // First fill the secret, then a page whose content echoes it back.
-    const { ctx, session } = makeCtx({
+    const { ctx, session } = makeSkillContext({
       input: { action: 'type', selector: '#pass', secret_ref: 'user.aeroplan_password' },
       pageContent: `Welcome. Your entered password was ${SECRET_VALUE} (oops).`,
       resolveSecretRef,
@@ -108,7 +108,7 @@ describe('web-browser type action with secret_ref (#973)', () => {
 
   it('redacts an injected value reflected back through the returned url (GET form)', async () => {
     const resolveSecretRef = vi.fn().mockResolvedValue(SECRET_VALUE);
-    const { ctx } = makeCtx({
+    const { ctx } = makeSkillContext({
       input: { action: 'type', selector: '#pass', secret_ref: 'user.aeroplan_password' },
       // A form that submits via GET puts the field value into the query string.
       pageUrl: `https://aeroplan.com/login?pw=${SECRET_VALUE}`,
@@ -125,9 +125,27 @@ describe('web-browser type action with secret_ref (#973)', () => {
     }
   });
 
+  it('suppresses a screenshot on the same action that injects a secret', async () => {
+    const resolveSecretRef = vi.fn().mockResolvedValue(SECRET_VALUE);
+    const { ctx } = makeSkillContext({
+      // screenshot:true on a secret_ref fill — the field may render the value (non-password
+      // input), and an image can't be value-redacted, so capture must be refused.
+      input: { action: 'type', selector: '#pass', secret_ref: 'user.aeroplan_password', screenshot: true },
+      resolveSecretRef,
+    });
+
+    const result = await new WebBrowserHandler().execute(ctx);
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const data = result.data as { screenshot_base64?: string };
+      expect(data.screenshot_base64).toBeUndefined();
+    }
+  });
+
   it('rejects when both text and secret_ref are supplied (mutually exclusive)', async () => {
     const resolveSecretRef = vi.fn().mockResolvedValue(SECRET_VALUE);
-    const { ctx, fill } = makeCtx({
+    const { ctx, fill } = makeSkillContext({
       input: { action: 'type', selector: '#pass', text: 'literal', secret_ref: 'user.aeroplan_password' },
       resolveSecretRef,
     });
@@ -140,14 +158,14 @@ describe('web-browser type action with secret_ref (#973)', () => {
   });
 
   it('rejects when neither text nor secret_ref is supplied', async () => {
-    const { ctx } = makeCtx({ input: { action: 'type', selector: '#pass' } });
+    const { ctx } = makeSkillContext({ input: { action: 'type', selector: '#pass' } });
     const result = await new WebBrowserHandler().execute(ctx);
     expect(result.success).toBe(false);
   });
 
   it('errors clearly when secret_ref is used but the resolver capability is absent', async () => {
     // resolveSecretRef undefined — the skill was invoked without the secretResolver capability.
-    const { ctx, fill } = makeCtx({
+    const { ctx, fill } = makeSkillContext({
       input: { action: 'type', selector: '#pass', secret_ref: 'user.aeroplan_password' },
     });
 
@@ -161,7 +179,7 @@ describe('web-browser type action with secret_ref (#973)', () => {
   });
 
   it('still supports a literal text fill (non-secret path unchanged)', async () => {
-    const { ctx, fill } = makeCtx({
+    const { ctx, fill } = makeSkillContext({
       input: { action: 'type', selector: '#search', text: 'hello world' },
     });
 

@@ -7,6 +7,17 @@
 import type { BrowserContext, Page } from 'playwright';
 import { redactValues } from '../skills/sanitize.js';
 
+/** HTML-entity-escape the characters a browser escapes when reflecting input into DOM text.
+ *  `&` must be replaced first so the entity ampersands it introduces aren't re-escaped. */
+function htmlEscape(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#x27;');
+}
+
 export class BrowserSession {
   readonly context: BrowserContext;
   readonly page: Page;
@@ -42,10 +53,26 @@ export class BrowserSession {
   /**
    * Scrub every injected secret value from `text`, replacing exact occurrences with
    * `[REDACTED]`. Returns `text` unchanged when nothing has been injected.
+   *
+   * redactValues matches literals only, so a page that reflects a value *transformed*
+   * (URL-encoded into a query string after a GET submit, or HTML-entity-encoded into the
+   * DOM) would slip past a raw-only match. We therefore redact each value AND its common
+   * browser encodings — the two surfaces that actually carry reflected input back to us.
    */
   redactInjectedSecrets(text: string): string {
     if (this.injectedSecretValues.size === 0) return text;
-    return redactValues(text, this.injectedSecretValues);
+    const variants = new Set<string>();
+    for (const value of this.injectedSecretValues) {
+      variants.add(value);
+      // URL encodings — query strings / form-GET reflections in page.url().
+      // encodeURIComponent covers query params; encodeURI covers full-URL reflection.
+      // Wrapped in try/catch: these throw on lone surrogate halves, which we ignore.
+      try { variants.add(encodeURIComponent(value)); } catch { /* malformed input — skip */ }
+      try { variants.add(encodeURI(value)); } catch { /* malformed input — skip */ }
+      // HTML-entity encoding — DOM text reflection via get_content.
+      variants.add(htmlEscape(value));
+    }
+    return redactValues(text, variants);
   }
 
   /** Returns true if the session has been idle longer than ttlMs. */
