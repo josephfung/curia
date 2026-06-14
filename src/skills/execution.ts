@@ -49,6 +49,21 @@ import { buildRateLimitSourceKey } from '../memory/rate-limit-key.js';
 // reaches the LLM context window.
 const DEFAULT_SKILL_OUTPUT_MAX_LENGTH = 200_000;
 
+// Secret-by-reference resolution (#973) — see ctx.resolveSecretRef.
+//
+// Only `user.*` references may be resolved by reference. The `user.` namespace is the
+// trust boundary established by #971: it cannot name a system key (snake_case, e.g.
+// `anthropic_api_key`) or a channel credential (`channel.*`), so form-fill material is
+// structurally separated from privileged secrets.
+const USER_SECRET_PREFIX = 'user.';
+
+// Hard allowlist of skills permitted to declare and use the `secretResolver` capability.
+// Mirrors the executionLayer→approve-action restriction below: declaring the capability in
+// skill.json is necessary but NOT sufficient — the skill name must also appear here. Kept as
+// a set so sibling skills that legitimately need by-reference injection (e.g. a future
+// http-request skill) can be added deliberately rather than by manifest edit alone.
+export const SECRET_RESOLVER_ALLOWED_SKILLS: ReadonlySet<string> = new Set(['web-browser']);
+
 /** Options passed to ExecutionLayer.invoke() by the agent runtime. */
 export interface InvokeOptions {
   taskEventId?: string;
@@ -686,6 +701,10 @@ export class ExecutionLayer {
       // Injected as a plain field (default branch in the loop). Listed here so the
       // missing-cap guard fails closed if a skill declares it before it's wired.
       secretCapture: this.secretCaptureService,
+      // secretResolver injects the by-reference resolver closure (#973), built in the
+      // loop below. Backed by secretsService — listed here so the missing-cap guard fails
+      // closed when a skill declares the capability but no vault is wired.
+      secretResolver: this.secretsService,
     };
 
     // Hard-restrict executionLayer to approve-action only.
@@ -703,6 +722,25 @@ export class ExecutionLayer {
         success: false,
         error: this.wrapSkillError(
           `Skill '${skillName}' declares capability 'executionLayer' but only 'approve-action' is permitted to use it`,
+        ),
+      };
+    }
+
+    // Hard-restrict secretResolver to the allowlist (#973).
+    // resolveSecretRef dereferences stored user.* secrets into the handler at runtime — a
+    // surface that must not be available to arbitrary skills even if they declare it. The
+    // manifest capability is necessary but not sufficient; the skill name must also be on
+    // SECRET_RESOLVER_ALLOWED_SKILLS. This guard is the enforcement boundary (mirrors the
+    // executionLayer→approve-action restriction above).
+    if (caps.includes('secretResolver') && !SECRET_RESOLVER_ALLOWED_SKILLS.has(manifest.name)) {
+      skillLogger.error(
+        { skillName, manifestName: manifest.name },
+        'SECURITY: secretResolver capability is restricted to an allowlist — refusing to run skill',
+      );
+      return {
+        success: false,
+        error: this.wrapSkillError(
+          `Skill '${skillName}' declares capability 'secretResolver' but is not on the resolver allowlist`,
         ),
       };
     }
@@ -785,6 +823,51 @@ export class ExecutionLayer {
           ctx.writeTempFile = (buffer: Buffer, filename: string) =>
             this.tempFileStore!.write(buffer, filename);
         }
+      } else if (cap === 'secretResolver') {
+        // Inject the by-reference secret resolver (#973). Unlike ctx.secret() (static,
+        // manifest-declared, pre-warmed), this resolves DYNAMIC user.<slug> names at call
+        // time straight from the vault. Two guardrails enforced here, defense-in-depth on
+        // top of the skill allowlist already checked above:
+        //   1. Namespace: only user.* references resolve — system/channel keys are rejected
+        //      before the vault is ever consulted, so they can never be form-fill material.
+        //   2. Audit: every resolution emits secret.accessed (name + source, byReference:true)
+        //      — never the value. The value is returned to the handler only; the handler
+        //      contract (see SkillContext.resolveSecretRef) forbids placing it in results/logs.
+        ctx.resolveSecretRef = async (ref: string): Promise<string> => {
+          if (typeof ref !== 'string' || !ref.startsWith(USER_SECRET_PREFIX)) {
+            throw new Error(
+              `resolveSecretRef: only ${USER_SECRET_PREFIX}* secret references may be resolved by reference (got '${ref}')`,
+            );
+          }
+          if (!this.secretsService) {
+            // Should be unreachable — the missing-cap guard refuses the skill when
+            // secretsService is unset — but fail loud rather than silently returning ''.
+            throw new Error('resolveSecretRef: secrets service is not configured');
+          }
+          const value = await this.secretsService.get(ref);
+          if (value === null) {
+            throw new Error(`resolveSecretRef: secret '${ref}' was not found in the vault`);
+          }
+          // Audit — fire-and-forget, name + source only, flagged as by-reference.
+          if (this.bus) {
+            this.bus.publish('execution', createSecretAccessed({
+              skillName,
+              secretName: ref,
+              agentId: options?.agentId,
+              taskEventId: options?.taskEventId,
+              source: 'vault',
+              byReference: true,
+            })).catch((err) => {
+              skillLogger.error(
+                { err, secretName: ref, skillName, agentId: options?.agentId, taskEventId: options?.taskEventId },
+                'AUDIT FAILURE: secret.accessed (by-reference) event could not be published — secret was returned but access may not be recorded',
+              );
+            });
+          }
+          // Debug log records the NAME only, never the value.
+          skillLogger.debug({ secretName: ref, source: 'vault', byReference: true }, 'Secret resolved by reference');
+          return value;
+        };
       } else {
         (ctx as unknown as Record<string, unknown>)[cap] = capabilityServices[cap];
       }

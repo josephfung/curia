@@ -1216,3 +1216,211 @@ describe('ctx.secret resolution', () => {
     expect(caughtMessage).toMatch(/DB connection refused/);
   });
 });
+
+// ---------------------------------------------------------------------------
+// secretResolver capability — ctx.resolveSecretRef (by-reference resolution, #973)
+// ---------------------------------------------------------------------------
+
+describe('secretResolver capability (resolveSecretRef)', () => {
+  /** Manifest declaring the secretResolver capability under an arbitrary name.
+   *  sensitivity/action_risk are kept minimal so these tests isolate the resolver
+   *  capability gate from the (separately tested) sensitivity and autonomy gates. */
+  function makeResolverManifest(name: string): SkillManifest {
+    return {
+      name,
+      description: `${name} description`,
+      version: '1.0.0',
+      sensitivity: 'normal',
+      action_risk: 'none',
+      inputs: {},
+      outputs: {},
+      permissions: [],
+      secrets: [],
+      timeout: 5000,
+      capabilities: ['secretResolver'],
+    };
+  }
+
+  const RESOLVED_VALUE = 'sup3r-s3cret-pw';
+
+  it('injects ctx.resolveSecretRef and resolves a user.* secret for an allowlisted skill', async () => {
+    const registry = new SkillRegistry();
+    let resolved: string | undefined;
+    const handler: SkillHandler = {
+      execute: vi.fn(async (ctx): Promise<SkillResult> => {
+        resolved = await ctx.resolveSecretRef!('user.aeroplan_password');
+        return { success: true, data: 'ok' };
+      }),
+    };
+    // 'web-browser' is on the resolver allowlist.
+    registry.register(makeResolverManifest('web-browser'), handler);
+
+    const secretsService = { get: vi.fn().mockResolvedValue(RESOLVED_VALUE) } as unknown as SecretsService;
+    const layer = new ExecutionLayer(registry, logger, { bus: makeBus(), secretsService });
+
+    const result = await layer.invoke('web-browser', {});
+
+    expect(result.success).toBe(true);
+    expect(resolved).toBe(RESOLVED_VALUE);
+    expect(secretsService.get).toHaveBeenCalledWith('user.aeroplan_password');
+  });
+
+  it('rejects a non-user.* reference (system/channel keys are never form-fill material)', async () => {
+    const registry = new SkillRegistry();
+    let error: string | undefined;
+    const handler: SkillHandler = {
+      execute: vi.fn(async (ctx): Promise<SkillResult> => {
+        try { await ctx.resolveSecretRef!('anthropic_api_key'); }
+        catch (e) { error = (e as Error).message; }
+        return { success: true, data: 'ok' };
+      }),
+    };
+    registry.register(makeResolverManifest('web-browser'), handler);
+
+    const secretsService = { get: vi.fn().mockResolvedValue('should-not-be-read') } as unknown as SecretsService;
+    const layer = new ExecutionLayer(registry, logger, { bus: makeBus(), secretsService });
+
+    await layer.invoke('web-browser', {});
+
+    expect(error).toMatch(/user\./);
+    // The vault must never be consulted for a rejected namespace.
+    expect(secretsService.get).not.toHaveBeenCalled();
+  });
+
+  it('rejects channel.* references too', async () => {
+    const registry = new SkillRegistry();
+    let error: string | undefined;
+    const handler: SkillHandler = {
+      execute: vi.fn(async (ctx): Promise<SkillResult> => {
+        try { await ctx.resolveSecretRef!('channel.email.nylas_api_key'); }
+        catch (e) { error = (e as Error).message; }
+        return { success: true, data: 'ok' };
+      }),
+    };
+    registry.register(makeResolverManifest('web-browser'), handler);
+    const secretsService = { get: vi.fn() } as unknown as SecretsService;
+    const layer = new ExecutionLayer(registry, logger, { bus: makeBus(), secretsService });
+
+    await layer.invoke('web-browser', {});
+
+    expect(error).toMatch(/user\./);
+    expect(secretsService.get).not.toHaveBeenCalled();
+  });
+
+  it('throws when the referenced user.* secret does not exist', async () => {
+    const registry = new SkillRegistry();
+    let error: string | undefined;
+    const handler: SkillHandler = {
+      execute: vi.fn(async (ctx): Promise<SkillResult> => {
+        try { await ctx.resolveSecretRef!('user.missing'); }
+        catch (e) { error = (e as Error).message; }
+        return { success: true, data: 'ok' };
+      }),
+    };
+    registry.register(makeResolverManifest('web-browser'), handler);
+    const secretsService = { get: vi.fn().mockResolvedValue(null) } as unknown as SecretsService;
+    const layer = new ExecutionLayer(registry, logger, { bus: makeBus(), secretsService });
+
+    await layer.invoke('web-browser', {});
+
+    expect(error).toMatch(/user\.missing/);
+    expect(error).not.toContain('null');
+  });
+
+  it('emits secret.accessed with byReference:true, name + source only, never the value', async () => {
+    const registry = new SkillRegistry();
+    const handler: SkillHandler = {
+      execute: vi.fn(async (ctx): Promise<SkillResult> => {
+        await ctx.resolveSecretRef!('user.aeroplan_password');
+        return { success: true, data: 'ok' };
+      }),
+    };
+    registry.register(makeResolverManifest('web-browser'), handler);
+
+    const mockBus = { publish: vi.fn().mockResolvedValue(undefined) } as unknown as EventBus;
+    const secretsService = { get: vi.fn().mockResolvedValue(RESOLVED_VALUE) } as unknown as SecretsService;
+    const layer = new ExecutionLayer(registry, logger, {
+      bus: mockBus,
+      secretsService,
+    });
+
+    await layer.invoke('web-browser', {}, undefined, { agentId: 'agent-1', taskEventId: 'task-1' });
+
+    expect(mockBus.publish).toHaveBeenCalledWith(
+      'execution',
+      expect.objectContaining({
+        type: 'secret.accessed',
+        payload: expect.objectContaining({
+          skillName: 'web-browser',
+          secretName: 'user.aeroplan_password',
+          byReference: true,
+          source: 'vault',
+        }),
+      }),
+    );
+
+    // The resolved value must NEVER appear anywhere in any published event.
+    for (const call of (mockBus.publish as unknown as ReturnType<typeof vi.fn>).mock.calls) {
+      expect(JSON.stringify(call)).not.toContain(RESOLVED_VALUE);
+    }
+  });
+
+  it('refuses to run a skill that declares secretResolver but is not on the allowlist', async () => {
+    const registry = new SkillRegistry();
+    const handler = makeHandler('ok');
+    registry.register(makeResolverManifest('rogue-skill'), handler);
+
+    const secretsService = { get: vi.fn() } as unknown as SecretsService;
+    const layer = new ExecutionLayer(registry, logger, { bus: makeBus(), secretsService });
+
+    const result = await layer.invoke('rogue-skill', {});
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error).toMatch(/secretResolver/);
+    }
+    // Fail-closed: the handler must not run.
+    expect(handler.execute).not.toHaveBeenCalled();
+  });
+
+  it('does NOT inject resolveSecretRef for skills without the capability', async () => {
+    const registry = new SkillRegistry();
+    let capturedCtx: SkillContext | undefined;
+    const handler: SkillHandler = {
+      execute: vi.fn(async (ctx): Promise<SkillResult> => {
+        capturedCtx = ctx;
+        return { success: true, data: 'ok' };
+      }),
+    };
+    // Same manifest but no capabilities declared.
+    registry.register({ ...makeResolverManifest('web-browser'), capabilities: [] }, handler);
+    const secretsService = { get: vi.fn() } as unknown as SecretsService;
+    const layer = new ExecutionLayer(registry, logger, { bus: makeBus(), secretsService });
+
+    await layer.invoke('web-browser', {});
+
+    expect(capturedCtx?.resolveSecretRef).toBeUndefined();
+  });
+
+  it('fails closed when secretResolver is declared but no secretsService is configured', async () => {
+    const registry = new SkillRegistry();
+    const handler = makeHandler('ok');
+    registry.register(makeResolverManifest('web-browser'), handler);
+
+    // No secretsService wired into the layer.
+    const layer = new ExecutionLayer(registry, logger, { bus: makeBus() });
+
+    const result = await layer.invoke('web-browser', {});
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error).toMatch(/secretResolver/);
+    }
+    expect(handler.execute).not.toHaveBeenCalled();
+  });
+});
+
+/** Minimal mock bus that resolves publish — used by the resolver suite. */
+function makeBus(): EventBus {
+  return { publish: vi.fn().mockResolvedValue(undefined) } as unknown as EventBus;
+}

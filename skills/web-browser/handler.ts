@@ -21,12 +21,16 @@ export class WebBrowserHandler implements SkillHandler {
       return { success: false, error: 'browserService is not available — BrowserService failed to start or is not wired into ExecutionLayer' };
     }
 
-    const { action, url, selector, text, value, session_id, screenshot } = ctx.input as {
+    const { action, url, selector, text, value, secret_ref, session_id, screenshot } = ctx.input as {
       action?: string;
       url?: string;
       selector?: string;
       text?: string;
       value?: string;
+      // secret_ref (#973): name of a user.* vault secret to type by reference. The literal
+      // value is dereferenced server-side via ctx.resolveSecretRef and never enters this
+      // handler's inputs, return value, or logs. Mutually exclusive with `text`.
+      secret_ref?: string;
       session_id?: string;
       screenshot?: boolean;
     };
@@ -63,9 +67,13 @@ export class WebBrowserHandler implements SkillHandler {
     // --- All other actions: acquire session ---
     let sessionId: string;
     let page: Page;
+    // Keep the session itself (not just its page) so we can register injected secret
+    // values for value-aware redaction (#973) and scrub them from returned content.
+    let session: import('../../src/browser/browser-session.js').BrowserSession;
     try {
       const result = await ctx.browserService.getOrCreateSession(session_id ?? undefined);
       sessionId = result.sessionId;
+      session = result.session;
       page = result.session.page as Page;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -135,11 +143,38 @@ export class WebBrowserHandler implements SkillHandler {
           if (!selector || typeof selector !== 'string') {
             return { success: false, error: 'type requires selector (string)' };
           }
-          if (text === undefined || text === null || typeof text !== 'string') {
-            return { success: false, error: 'type requires text (string)' };
+
+          // secret_ref (#973): fill a user.* vault secret by reference. Mutually exclusive
+          // with `text` — supplying both is ambiguous and rejected. The resolved value is
+          // registered with the session so it is scrubbed from any content read back, then
+          // typed via fill(). It is never logged and never returned to the agent.
+          const hasSecretRef = typeof secret_ref === 'string' && secret_ref.length > 0;
+          const hasText = text !== undefined && text !== null;
+
+          if (hasSecretRef && hasText) {
+            return { success: false, error: 'type accepts either text or secret_ref, not both' };
           }
+
+          let fillValue: string;
+          if (hasSecretRef) {
+            if (!ctx.resolveSecretRef) {
+              // Capability not granted to this invocation — fail loud rather than
+              // silently falling back to typing the reference name as a literal.
+              return { success: false, error: 'secret_ref requires the secretResolver capability, which is not available to this skill' };
+            }
+            // resolveSecretRef enforces the user.* namespace + audit; it throws on a bad
+            // ref or a missing secret. Any thrown message names the ref, never the value.
+            fillValue = await ctx.resolveSecretRef(secret_ref!);
+            session.registerInjectedSecret(fillValue);
+          } else {
+            if (typeof text !== 'string') {
+              return { success: false, error: 'type requires text (string) or secret_ref (string)' };
+            }
+            fillValue = text;
+          }
+
           const typeTarget = await resolveLocator(page, selector);
-          await typeTarget.fill(text);
+          await typeTarget.fill(fillValue);
           break;
         }
 
@@ -168,9 +203,15 @@ export class WebBrowserHandler implements SkillHandler {
 
       // --- Gather result ---
       const currentUrl = page.url();
-      const content = action === 'screenshot'
+      const rawContent = action === 'screenshot'
         ? ''   // screenshot action doesn't need DOM text
         : await getCleanedContent(page);
+
+      // Value-aware redaction backstop (#973): scrub any secret value injected into this
+      // session from the content before it reaches the LLM. A hostile page could reflect
+      // a typed password back through the DOM; this prevents that round-trip exfiltration.
+      // No-op when nothing has been injected.
+      const content = session.redactInjectedSecrets(rawContent);
 
       const result: Record<string, unknown> = { content, session_id: sessionId, url: currentUrl };
 
@@ -183,8 +224,12 @@ export class WebBrowserHandler implements SkillHandler {
       return { success: true, data: result };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
+      // Scrub any injected secret value from the error too — a Playwright error after a
+      // secret fill is unlikely to echo the value, but the backstop must cover error paths.
+      // ctx.log.error intentionally omits the message body for the same reason.
+      const safeMessage = session.redactInjectedSecrets(message);
       ctx.log.error({ err, action, sessionId }, 'Browser action failed');
-      return { success: false, error: `Browser action "${action}" failed: ${message}` };
+      return { success: false, error: `Browser action "${action}" failed: ${safeMessage}` };
     }
   }
 }

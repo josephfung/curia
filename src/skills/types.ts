@@ -57,7 +57,8 @@ export interface SkillManifest {
    *  Valid capabilities: bus, agentRegistry, outboundGateway, heldMessages,
    *  schedulerService, entityMemory, nylasCalendarClient, autonomyService,
    *  executiveProfileService, officeIdentityService, browserService, bullpenService, skillSearch,
-   *  actionLogRepo, executionLayer, confidencePipeline, tempFileStore, infraLlm, outboundContext.
+   *  actionLogRepo, executionLayer, confidencePipeline, tempFileStore, infraLlm, outboundContext,
+   *  taskRepo, secretCapture, secretResolver.
    *
    *  Services NOT listed here (contactService, entityContextAssembler, agentPersona)
    *  are universal — available to every skill without declaration. */
@@ -267,6 +268,14 @@ export interface SkillContext {
    *  a MINT-ONLY surface: there is no method that returns a stored secret value, so the
    *  "LLM never sees secrets" guarantee is structural rather than prompt-enforced. */
   secretCapture?: import('../secrets/secret-capture-service.js').SecretCaptureMinter;
+  /** Resolve a `user.*` secret by reference at runtime — available only to skills declaring
+   *  'secretResolver' in capabilities AND on the execution-layer allowlist (#973). Unlike
+   *  ctx.secret() (which is restricted to manifest-declared static names), this resolves
+   *  DYNAMIC `user.<slug>` names chosen per activity. Guardrails: only `user.*` references
+   *  resolve (system/channel keys are rejected); each call emits secret.accessed (name only,
+   *  byReference: true). The returned value is for runtime use only — handlers MUST NOT place
+   *  it in SkillResult.data, error strings, or logs. */
+  resolveSecretRef?: (ref: string) => Promise<string>;
   /** Operator-facing origin of the console (e.g. "https://curia.example.com"), used by the
    *  capture skills to build the magic-link URL. Undefined in local dev — fall back to
    *  http://localhost:{httpPort}. Sourced from config.appOrigin. */
