@@ -1263,7 +1263,8 @@ table.records-table tbody tr.active td { background: transparent; }
 }
 
 .msg-bubble.user {
-  background: var(--app-card-elev);
+  background: var(--app-teal);
+  color: #fff;
   border-radius: 12px 12px 2px 12px;
 }
 
