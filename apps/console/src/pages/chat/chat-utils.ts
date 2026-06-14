@@ -68,8 +68,21 @@ export function linkifyText(text: string): string {
   return escaped.replace(
     /https?:\/\/[^\s<>"]+/g,
     url => {
-      // Strip trailing sentence punctuation that is almost certainly not part of the URL.
-      const stripped = url.replace(/[.,;:!?)'"\]]+$/, '');
+      // Strip trailing sentence punctuation. Balanced bracket pairs (e.g.
+      // Wikipedia /wiki/Function_(mathematics)) are only stripped when unmatched.
+      let stripped = url.replace(/[.,;:!?'"`]+$/, '');
+      while (stripped.endsWith(')')) {
+        const opens = (stripped.match(/\(/g) ?? []).length;
+        const closes = (stripped.match(/\)/g) ?? []).length;
+        if (closes <= opens) break;
+        stripped = stripped.slice(0, -1);
+      }
+      while (stripped.endsWith(']')) {
+        const opens = (stripped.match(/\[/g) ?? []).length;
+        const closes = (stripped.match(/\]/g) ?? []).length;
+        if (closes <= opens) break;
+        stripped = stripped.slice(0, -1);
+      }
       const suffix = url.slice(stripped.length);
       return `<a href="${stripped}" target="_blank" rel="noopener noreferrer">${stripped}</a>${suffix}`;
     },
