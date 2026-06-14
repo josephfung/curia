@@ -131,9 +131,15 @@ export class SecretCaptureService implements SecretCaptureMinter {
    * by passing an arbitrary secretName. TTL is fixed (not a parameter) for the same reason.
    */
   private async mint(secretName: string, label: string | undefined, valueFormat: CaptureValueFormat): Promise<{ rawToken: string; expiresAt: Date }> {
-    // 256-bit raw token — lives only in the returned URL. We persist its hash, matching the
-    // session-auth pattern, so a DB compromise cannot reconstruct a usable capture link.
-    const rawToken = randomBytes(32).toString('hex');
+    // 128-bit raw token, base64url-encoded → a short (~22 char) mixed-case slug that reads
+    // like an ordinary magic-link id, NOT a 64-char hex hash. Two reasons for this shape:
+    //   1. The relaying LLM was self-redacting the old hex token (it pattern-matched a long
+    //      hex string in a "secret-capture" context as a credential and printed [REDACTED]).
+    //      A short base64url slug doesn't trip that instinct.
+    //   2. It matches none of the secret-scrub regexes (not a 32+ hex run, no sk-/AKIA/Bearer).
+    // 128 bits is still cryptographically unguessable for a single-use, 30-minute, rate-limited
+    // link. The token lives only in the URL; we persist its hash (session-auth pattern).
+    const rawToken = randomBytes(16).toString('base64url');
     const tokenHash = hashToken(rawToken);
     // Compute expires_at from the DB clock (now() + TTL), not the app clock, and read it back.
     // Redemption/metadata also compare against the DB now(), so mint and redeem share one time

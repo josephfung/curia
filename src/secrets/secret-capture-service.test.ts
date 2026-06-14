@@ -125,8 +125,10 @@ describe('SecretCaptureService minting (via the public name-policy entry points)
     expect(storedHash).toBe(hashToken(rawToken));
     // The raw token must never be a stored parameter.
     expect(insert!.params).not.toContain(rawToken);
-    // 64 hex chars = 32 bytes of entropy.
-    expect(rawToken).toMatch(/^[0-9a-f]{64}$/);
+    // Short base64url slug (~22 chars from 16 bytes) — not a long hex hash, and it matches
+    // none of the secret-scrub regexes (no 32+ hex run, no sk-/AKIA/Bearer).
+    expect(rawToken).toMatch(/^[A-Za-z0-9_-]{20,24}$/);
+    expect(rawToken).not.toMatch(/[a-f0-9]{32,}/);
   });
 
   it('sets a fixed 30-minute expiry (TTL is not caller-controlled)', async () => {
@@ -143,7 +145,7 @@ describe('SecretCaptureService.mintUserSecret / mintSystemSecret', () => {
     const { svc } = makeService();
     const res = await svc.mintUserSecret({ rawName: 'Flight Site Password' });
     expect(res.secretName).toBe('user.flight_site_password');
-    expect(res.rawToken).toMatch(/^[0-9a-f]{64}$/);
+    expect(res.rawToken).toMatch(/^[A-Za-z0-9_-]{20,24}$/);
   });
 
   it('mintSystemSecret accepts an allowed key and rejects an unknown one', async () => {
