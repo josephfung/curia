@@ -420,6 +420,25 @@ function Pagination({ total, page, pageSize, totalPages, onPage, onPageSize }: P
   );
 }
 
+// ── Sort types and helpers ────────────────────────────────────────────────────
+
+// Sort key covers columns from both kinds; kind-specific ones only appear
+// in the table when the relevant kind is active.
+type SortKey = 'name' | 'state' | 'version' | 'modelTier' | 'memoryScopes' | 'actionRisk' | 'sensitivity';
+
+function getSortValue(entry: RegistryEntry, key: SortKey): string {
+  switch (key) {
+    case 'name':         return entry.name;
+    case 'state':        return entry.state;
+    case 'version':      return entry.metadata?.version ?? '';
+    case 'modelTier':    return entry.metadata?.modelTier ?? '';
+    case 'memoryScopes': return entry.metadata?.memoryScopes?.join(', ') ?? '';
+    case 'actionRisk':   return entry.metadata?.actionRisk != null ? String(entry.metadata.actionRisk) : '';
+    case 'sensitivity':  return entry.metadata?.sensitivity ?? '';
+    default:             return '';
+  }
+}
+
 // ── Standalone registry page (Skills / Agents) ───────────────────────────────
 //
 // Mirrors the Contacts/Tasks layout: its own sidebar + topbar (with search), a
@@ -438,6 +457,8 @@ function RegistryPage({ kind }: { kind: 'skill' | 'agent' }) {
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
+  const [sort, setSort] = useState<{ key: SortKey; dir: 'asc' | 'desc' }>({ key: 'name', dir: 'asc' });
+  const [stateFilter, setStateFilter] = useState<'all' | DerivedState>('all');
 
   useEffect(() => {
     document.documentElement.dataset['mobileSidebar'] = mobileOpen ? 'open' : '';
@@ -463,14 +484,41 @@ function RegistryPage({ kind }: { kind: 'skill' | 'agent' }) {
 
   useEffect(() => { void load(); }, [load]);
 
-  // Search filters on name + description; pagination is applied to the result.
+  // Count entries by state for the filter pill badges.
+  const counts = useMemo(() => ({
+    all:         entries.length,
+    uninstalled: entries.filter(e => e.state === 'uninstalled').length,
+    installed:   entries.filter(e => e.state === 'installed').length,
+    enabled:     entries.filter(e => e.state === 'enabled').length,
+    ghost:       entries.filter(e => e.state === 'ghost').length,
+  }), [entries]);
+
+  // State filter, search filter, and sort — all in one pass.
   const filtered = useMemo(() => {
-    if (!search) return entries;
-    const q = search.toLowerCase();
-    return entries.filter(e =>
-      (e.name + ' ' + (e.metadata?.description ?? '')).toLowerCase().includes(q),
-    );
-  }, [entries, search]);
+    let rows = entries;
+    if (stateFilter !== 'all') rows = rows.filter(e => e.state === stateFilter);
+    if (search) {
+      const q = search.toLowerCase();
+      rows = rows.filter(e =>
+        (e.name + ' ' + (e.metadata?.description ?? '')).toLowerCase().includes(q),
+      );
+    }
+    const dir = sort.dir === 'asc' ? 1 : -1;
+    return [...rows].sort((a, b) => {
+      const av = getSortValue(a, sort.key);
+      const bv = getSortValue(b, sort.key);
+      if (av < bv) return -1 * dir;
+      if (av > bv) return  1 * dir;
+      return 0;
+    });
+  }, [entries, stateFilter, search, sort]);
+
+  function toggleSort(key: SortKey) {
+    setSort(s => s.key === key
+      ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' }
+      : { key, dir: 'asc' });
+  }
+  const sortArrow = (key: SortKey) => sort.key === key ? (sort.dir === 'asc' ? '↑' : '↓') : '';
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
   const safePage = Math.min(page, totalPages);
@@ -514,26 +562,74 @@ function RegistryPage({ kind }: { kind: 'skill' | 'agent' }) {
                 />
               </div>
 
+              <div className="records-toolbar">
+                <div className="records-toolbar-left">
+                  {(['all', 'enabled', 'installed', 'ghost', 'uninstalled'] as const).map(v => (
+                    <button
+                      key={v}
+                      className={`records-filter-chip${stateFilter === v ? ' active' : ''}`}
+                      onClick={() => { setStateFilter(v); setPage(1); }}
+                    >
+                      {v === 'all' ? 'All' : v.charAt(0).toUpperCase() + v.slice(1)}
+                      <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 11, opacity: 0.7 }}>
+                        {counts[v as keyof typeof counts]}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+                <div className="records-toolbar-right">
+                  <span className="topbar-meta">{filtered.length} of {entries.length}</span>
+                </div>
+              </div>
+
               <div className="records-layout">
                 <div className="records-main">
                   <div className="records-table-wrap">
                     <table className="records-table">
                       <thead>
                         <tr>
-                          <th>Name</th>
-                          <th>State</th>
+                          <th className="sortable" aria-sort={sort.key === 'name' ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none'}>
+                            <button className="sort-btn" onClick={() => toggleSort('name')}>
+                              Name <span className="sort-arrow">{sortArrow('name')}</span>
+                            </button>
+                          </th>
+                          <th className="sortable" aria-sort={sort.key === 'state' ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none'}>
+                            <button className="sort-btn" onClick={() => toggleSort('state')}>
+                              State <span className="sort-arrow">{sortArrow('state')}</span>
+                            </button>
+                          </th>
                           {kind === 'agent' ? (
                             <>
-                              <th>Model tier</th>
-                              <th>Memory scopes</th>
+                              <th className="sortable" aria-sort={sort.key === 'modelTier' ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none'}>
+                                <button className="sort-btn" onClick={() => toggleSort('modelTier')}>
+                                  Model tier <span className="sort-arrow">{sortArrow('modelTier')}</span>
+                                </button>
+                              </th>
+                              <th className="sortable" aria-sort={sort.key === 'memoryScopes' ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none'}>
+                                <button className="sort-btn" onClick={() => toggleSort('memoryScopes')}>
+                                  Memory scopes <span className="sort-arrow">{sortArrow('memoryScopes')}</span>
+                                </button>
+                              </th>
                             </>
                           ) : (
                             <>
-                              <th>Action risk</th>
-                              <th>Sensitivity</th>
+                              <th className="sortable" aria-sort={sort.key === 'actionRisk' ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none'}>
+                                <button className="sort-btn" onClick={() => toggleSort('actionRisk')}>
+                                  Action risk <span className="sort-arrow">{sortArrow('actionRisk')}</span>
+                                </button>
+                              </th>
+                              <th className="sortable" aria-sort={sort.key === 'sensitivity' ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none'}>
+                                <button className="sort-btn" onClick={() => toggleSort('sensitivity')}>
+                                  Sensitivity <span className="sort-arrow">{sortArrow('sensitivity')}</span>
+                                </button>
+                              </th>
                             </>
                           )}
-                          <th>Version</th>
+                          <th className="sortable" aria-sort={sort.key === 'version' ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none'}>
+                            <button className="sort-btn" onClick={() => toggleSort('version')}>
+                              Version <span className="sort-arrow">{sortArrow('version')}</span>
+                            </button>
+                          </th>
                         </tr>
                       </thead>
                       <tbody>
