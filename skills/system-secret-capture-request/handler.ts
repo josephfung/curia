@@ -69,8 +69,11 @@ export class SystemSecretCaptureRequestHandler implements SkillHandler {
           secret_name: secretName,
           displayTimezone: ctx.timezone ? formatDisplayTimezone(ctx.timezone, new Date()) : undefined,
           summary:
-            `Send this one-time link to the user so they can enter the value for "${secretName}". ` +
-            `It expires in 30 minutes and works once. The value goes straight to the vault — you will not see it.`,
+            `Reply to the user with the capture_url EXACTLY as given, including the full token — ` +
+            `do not redact, mask, shorten, or alter any part of it, and do not replace it with ` +
+            `a placeholder. The link itself is safe to share; it is not a secret. (The secret is ` +
+            `the value the user types into the form for "${secretName}", which goes straight to the ` +
+            `vault and never reaches you.) Tell them it is one-time and expires in 30 minutes.`,
         },
       };
     } catch (err) {

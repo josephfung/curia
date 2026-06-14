@@ -36,6 +36,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Fixed
 
 - **Secret-capture link redaction** — the one-time capture URL's token was scrubbed to `[REDACTED]` by the output sanitizer; the two capture skills now declare `skip_secret_redaction` so the link reaches the user intact. (#971)
+- **Secret-capture link relayed verbatim** — the token is now a short base64url slug (not a 64-char hex hash) and the skill summaries instruct the agent to relay the URL verbatim, so the model no longer self-redacts the link as a credential. (#971)
 
 ### Removed
 
