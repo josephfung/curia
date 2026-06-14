@@ -16,6 +16,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Added
 
 - **Secret capture** — agents mint a one-time link to a web form so a user can add a new vault secret mid-conversation; the value never touches the LLM. Skills `secret-capture-request` and `system-secret-capture-request`. (#971)
+- **`skip_secret_redaction` (skill manifest schema, public API)** — opt a skill's output out of the built-in secret-pattern scrub; for skills whose output carries a capability token that must reach the LLM. Tag-stripping and truncation still apply. (#971)
 - **`task-create`** — optional `target_agent_id` assigns a new task (and its wake-up) to another registered agent, so the coordinator or ceo-inbox can schedule work for a specialist like meeting-debrief. (#880)
 - **`bullpen`** — `reply` accepts `close_after: true` to close a thread atomically with the reply, `formatBullpenContext()` nudges agents to use it, and the dispatcher skips reply-task fan-out for closed threads so a concluding reply doesn't create dead-end tasks. (#881)
 
@@ -23,6 +24,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 - **`SkillContext` (public API)** — adds optional `secretCapture` capability and `appOrigin`/`httpPort` fields (backward compatible). (#971)
 - **Coordinator prompt** — re-derived around a three-way routing decision; delegation-hinted outbound replies now always transfer to the owning specialist. (#957)
+
+### Fixed
+
+- **Secret-capture link redaction** — the one-time capture URL's token was scrubbed to `[REDACTED]` by the output sanitizer; the two capture skills now declare `skip_secret_redaction` so the link reaches the user intact. (#971)
 
 ### Removed
 

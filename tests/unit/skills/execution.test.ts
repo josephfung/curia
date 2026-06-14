@@ -133,6 +133,36 @@ describe('ExecutionLayer', () => {
     }
   });
 
+  it('redacts a high-entropy token in skill output by default', async () => {
+    const token = 'a'.repeat(64); // randomBytes(32).toString('hex') shape
+    const handler: SkillHandler = {
+      execute: async () => ({ success: true, data: { url: `https://host/secret-capture/${token}` } }),
+    };
+    registry.register(makeManifest(), handler);
+
+    const result = await execution.invoke('test-skill', { query: 'test' });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(JSON.stringify(result.data)).toContain('[REDACTED]');
+      expect(JSON.stringify(result.data)).not.toContain(token);
+    }
+  });
+
+  it('preserves a high-entropy token when the manifest sets skip_secret_redaction', async () => {
+    const token = 'a'.repeat(64);
+    const url = `https://host/secret-capture/${token}`;
+    const handler: SkillHandler = {
+      execute: async () => ({ success: true, data: { capture_url: url } }),
+    };
+    registry.register(makeManifest({ skip_secret_redaction: true }), handler);
+
+    const result = await execution.invoke('test-skill', { query: 'test' });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect((result.data as { capture_url: string }).capture_url).toBe(url);
+    }
+  });
+
   describe('elevated skill caller verification', () => {
     // The elevated-skill gate now checks isPrincipalOriginated(taskMetadata) —
     // the authorization signal is the task originator, not the immediate caller.

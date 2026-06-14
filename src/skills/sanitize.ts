@@ -16,6 +16,12 @@ export interface SanitizeOptions {
   isError?: boolean;
   /** Additional regex patterns to redact (beyond built-in API key patterns). */
   extraRedactPatterns?: RegExp[];
+  /** When true, skip the built-in SECRET_PATTERNS redaction (still strips dangerous tags,
+   *  still applies extraRedactPatterns, still truncates). Set by the execution layer only for
+   *  skills that declare `skip_secret_redaction` — i.e. skills whose output legitimately carries
+   *  a high-entropy capability token (e.g. a one-time capture link) that must survive to reach
+   *  the LLM, and which structurally cannot emit real secret values. Default false. */
+  skipSecretRedaction?: boolean;
 }
 
 // Patterns matching common secret formats — these are redacted from all skill output.
@@ -113,7 +119,7 @@ export function sanitizeOutput(
   raw: string | unknown,
   options: SanitizeOptions = {},
 ): string {
-  const { maxLength = Infinity, isError = false, extraRedactPatterns = [] } = options;
+  const { maxLength = Infinity, isError = false, extraRedactPatterns = [], skipSecretRedaction = false } = options;
 
   // 1. Coerce non-strings to JSON so we always work with a string
   let text: string;
@@ -136,8 +142,12 @@ export function sanitizeOutput(
   //   - js/polynomial-redos: no catastrophic backtracking — parser runs in linear time
   text = stripDangerousTags(text);
 
-  // 3. Redact known secret patterns
-  const allPatterns = [...SECRET_PATTERNS, ...extraRedactPatterns];
+  // 3. Redact known secret patterns.
+  // SECRET_PATTERNS is skipped when the caller opts out (skill declares skip_secret_redaction),
+  // since a capability token in that skill's output would otherwise be falsely scrubbed. Any
+  // caller-supplied extraRedactPatterns always apply regardless — opting out of the built-in
+  // generic scrub never disables an explicit redaction the caller asked for.
+  const allPatterns = [...(skipSecretRedaction ? [] : SECRET_PATTERNS), ...extraRedactPatterns];
   for (const pattern of allPatterns) {
     // Reset lastIndex for global patterns since we reuse them across calls
     pattern.lastIndex = 0;

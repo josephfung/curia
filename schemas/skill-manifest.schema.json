@@ -71,6 +71,10 @@
         }
       }
     },
-    "uninstall": { "type": "object" }
+    "uninstall": { "type": "object" },
+    "skip_secret_redaction": {
+      "type": "boolean",
+      "description": "When true, this skill's output bypasses the execution layer's built-in secret-pattern redaction (e.g. the generic long-hex token rule). Only for skills whose output legitimately carries a high-entropy capability token that must reach the LLM to be relayed (e.g. secret-capture magic links) and which structurally cannot emit real secret values. Tag-stripping and truncation still apply."
+    }
   }
 }

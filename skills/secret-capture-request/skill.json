@@ -1,7 +1,7 @@
 {
   "name": "secret-capture-request",
   "description": "Mint a one-time, single-use, 30-minute link the user can click to enter a NEW personal secret (e.g. a website password). The value is typed by the user into a secure web form and written straight to the vault under a `user.<slug>` key. You never see the value — this skill returns only the link, never the secret. Use when a task needs a secret the vault does not yet have.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "sensitivity": "normal",
   "action_risk": "low",
   "inputs": {
@@ -17,5 +17,6 @@
   "permissions": [],
   "secrets": [],
   "timeout": 30000,
-  "capabilities": ["secretCapture"]
+  "capabilities": ["secretCapture"],
+  "skip_secret_redaction": true
 }
