@@ -181,6 +181,40 @@ export function sanitizeOutput(
   return text;
 }
 
+/**
+ * Value-aware redaction: scrub exact occurrences of known secret VALUES from text.
+ *
+ * Unlike SECRET_PATTERNS (which match credential *shapes*), this redacts specific
+ * literal strings the caller knows are sensitive — e.g. a password that was injected
+ * into a browser form by reference (#973) and could be reflected back by a hostile
+ * page through get_content. This is the backstop that prevents round-trip exfiltration
+ * of a value the pattern-based scrub would never recognize.
+ *
+ * Behavior:
+ *  - Each non-empty value is replaced wherever it appears with `[REDACTED]`.
+ *  - Values are treated as LITERALS, never regex (no special-char interpretation).
+ *  - Longer values are redacted first so a short value that is a substring of a
+ *    longer one (e.g. "pass" inside "password123") can't leave the tail exposed.
+ *  - Empty / whitespace-only values are ignored — redacting "" would replace the
+ *    gap between every character and destroy the whole string.
+ *
+ * The value set itself is held by the caller (e.g. a BrowserSession) and never
+ * logged; this function only consumes it.
+ */
+export function redactValues(text: string, values: Iterable<string>): string {
+  // De-dupe and drop empties, then sort longest-first (see longer-overlap note above).
+  const distinct = [...new Set(values)].filter(v => typeof v === 'string' && v.trim().length > 0);
+  distinct.sort((a, b) => b.length - a.length);
+
+  let result = text;
+  for (const value of distinct) {
+    // split/join performs a literal, global replacement with no regex parsing —
+    // safe against values containing regex metacharacters ($, ., (, ), etc.).
+    result = result.split(value).join('[REDACTED]');
+  }
+  return result;
+}
+
 // ── Display name sanitization ───────────────────────────────────────
 //
 // Defense-in-depth: sanitize display names at storage time, not just

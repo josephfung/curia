@@ -1,7 +1,7 @@
 {
   "name": "web-browser",
-  "description": "Control a real web browser to interact with JS-rendered pages, fill forms, navigate multi-step flows, and interact with sites that have no API. Use this instead of web-fetch when a page requires JavaScript, login, or user interaction. Each call performs one action and returns the updated page state. Pass session_id back on subsequent calls to maintain browser context across actions. Actions: navigate (url required), click (selector required), type (selector+text required), select (selector+value required), get_content, screenshot, close_session.",
-  "version": "1.0.0",
+  "description": "Control a real web browser to interact with JS-rendered pages, fill forms, navigate multi-step flows, and interact with sites that have no API. Use this instead of web-fetch when a page requires JavaScript, login, or user interaction. Each call performs one action and returns the updated page state. Pass session_id back on subsequent calls to maintain browser context across actions. Actions: navigate (url required), click (selector required), type (selector + either text OR secret_ref), select (selector+value required), get_content, screenshot, close_session. To fill a stored credential into a form, pass secret_ref (a user.* secret name) instead of text — the value is filled server-side and never shown to you.",
+  "version": "1.1.0",
   "sensitivity": "elevated",
   "action_risk": "medium",
   "inputs": {
@@ -10,6 +10,7 @@
     "selector": "string?",
     "text": "string?",
     "value": "string?",
+    "secret_ref": "string?",
     "session_id": "string?",
     "screenshot": "boolean?"
   },
@@ -25,6 +26,7 @@
   "secrets": [],
   "timeout": 30000,
   "capabilities": [
-    "browserService"
+    "browserService",
+    "secretResolver"
   ]
 }

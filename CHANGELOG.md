@@ -18,6 +18,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **URL auto-linking in chat** — bare `http`/`https` URLs in both agent and user messages are automatically wrapped in clickable anchor tags; URLs inside code spans are excluded.
 - **Sortable columns** — Name, State, and kind-specific columns in the Agents, Skills, and Channels views are now sortable (click to sort asc, click again for desc).
 - **State filter pills** — Agents and Skills views gain All/Enabled/Installed/Ghost/Uninstalled pill filters with live counts; Channels gains All/Enabled/Installed/Uninstalled.
+- **Secret-by-reference injection** — the `web-browser` `type` action accepts `secret_ref` (a `user.*` vault key) to fill a stored credential; the value is dereferenced server-side and never enters the LLM context, tool call, result, or logs. (#973)
+- **`secretResolver` capability (skill manifest schema, public API)** — runtime by-reference resolution of dynamic `user.*` secrets; gated to a hard skill allowlist (`web-browser` only) and the `user.*` namespace. (#973)
 
 ### Changed
 
@@ -31,12 +33,18 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Changed
 
 - **`SkillContext` (public API)** — adds optional `secretCapture` capability and `appOrigin`/`httpPort` fields (backward compatible). (#971)
+- **`SkillContext` (public API)** — adds optional `resolveSecretRef(ref)` method, injected only for allowlisted skills declaring `secretResolver` (backward compatible). (#973)
+- **`SecretAccessedEvent` (bus event types, public API)** — payload gains optional `byReference` flag distinguishing dynamic by-reference resolution from declared-secret access (backward compatible). (#973)
 - **Coordinator prompt** — re-derived around a three-way routing decision; delegation-hinted outbound replies now always transfer to the owning specialist. (#957)
 
 ### Fixed
 
 - **Secret-capture link redaction** — the one-time capture URL's token was scrubbed to `[REDACTED]` by the output sanitizer; the two capture skills now declare `skip_secret_redaction` so the link reaches the user intact. (#971)
 - **Secret-capture link relayed verbatim** — the token is now a short base64url slug (not a 64-char hex hash) and the skill summaries instruct the agent to relay the URL verbatim, so the model no longer self-redacts the link as a credential. (#971)
+
+### Security
+
+- **Value-aware browser redaction** — secret values injected by reference are tracked per browser session and scrubbed from any returned page content or error, blocking round-trip exfiltration via a page that reflects a typed credential back. (#973)
 
 ### Removed
 

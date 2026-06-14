@@ -35,6 +35,11 @@ function makeMockBrowserService(): BrowserService {
     isExpired: vi.fn().mockReturnValue(false),
     close: vi.fn().mockResolvedValue(undefined),
     context: {} as never,
+    // Injected-secret redaction surface (#973). The handler registers any by-reference
+    // fill value and scrubs returned content through these; the pass-through stub is
+    // sufficient for the non-secret paths exercised here.
+    registerInjectedSecret: vi.fn(),
+    redactInjectedSecrets: vi.fn((text: string) => text),
   };
 
   return {

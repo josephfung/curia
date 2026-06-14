@@ -464,6 +464,10 @@ interface SecretAccessedPayload {
   // Where the value was resolved from. Optional for backward compatibility; lets the
   // audit trail show migration progress as secrets move from env to the vault (#542).
   source?: 'vault' | 'env';
+  // True when the secret was resolved dynamically by reference (ctx.resolveSecretRef,
+  // #973) rather than via a manifest-declared ctx.secret() call. Distinguishes the
+  // two access paths in the audit trail. Absent/false for declared-secret access.
+  byReference?: boolean;
 }
 
 // AutonomySkillBlockedPayload — published by the execution layer when a skill
