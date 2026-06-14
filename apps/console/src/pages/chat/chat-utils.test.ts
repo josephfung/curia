@@ -128,4 +128,10 @@ describe('linkifyText', () => {
     const result = linkifyText('javascript:alert(1)');
     expect(result).not.toContain('<a href="javascript:');
   });
+
+  it('strips trailing punctuation from linked URLs', () => {
+    const result = linkifyText('Visit https://example.com. for more');
+    expect(result).toContain('<a href="https://example.com"');
+    expect(result).not.toContain('<a href="https://example.com."');
+  });
 });

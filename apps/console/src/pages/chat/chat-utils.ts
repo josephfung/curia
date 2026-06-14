@@ -67,6 +67,11 @@ export function linkifyText(text: string): string {
   // characters that would break the surrounding attribute or tag context.
   return escaped.replace(
     /https?:\/\/[^\s<>"]+/g,
-    url => `<a href="${url}" target="_blank" rel="noopener noreferrer">${url}</a>`,
+    url => {
+      // Strip trailing sentence punctuation that is almost certainly not part of the URL.
+      const stripped = url.replace(/[.,;:!?)'"\]]+$/, '');
+      const suffix = url.slice(stripped.length);
+      return `<a href="${stripped}" target="_blank" rel="noopener noreferrer">${stripped}</a>${suffix}`;
+    },
   );
 }

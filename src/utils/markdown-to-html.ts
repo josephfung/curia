@@ -81,7 +81,12 @@ function applyInline(text: string): string {
   // (they exist only as \x00CODE...\x00 placeholders at this point).
   out = out.replace(
     /https?:\/\/[^\s<>"]+/g,
-    url => `<a href="${url}" target="_blank" rel="noopener noreferrer">${url}</a>`,
+    url => {
+      // Strip trailing sentence punctuation that is almost certainly not part of the URL.
+      const stripped = url.replace(/[.,;:!?)'"\]]+$/, '');
+      const suffix = url.slice(stripped.length);
+      return `<a href="${stripped}" target="_blank" rel="noopener noreferrer">${stripped}</a>${suffix}`;
+    },
   );
 
   // Restore code spans
