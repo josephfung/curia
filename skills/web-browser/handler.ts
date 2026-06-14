@@ -202,20 +202,28 @@ export class WebBrowserHandler implements SkillHandler {
       }
 
       // --- Gather result ---
-      const currentUrl = page.url();
       const rawContent = action === 'screenshot'
         ? ''   // screenshot action doesn't need DOM text
         : await getCleanedContent(page);
 
       // Value-aware redaction backstop (#973): scrub any secret value injected into this
-      // session from the content before it reaches the LLM. A hostile page could reflect
-      // a typed password back through the DOM; this prevents that round-trip exfiltration.
-      // No-op when nothing has been injected.
+      // session from BOTH the content and the URL before they reach the LLM. A hostile page
+      // could reflect a typed password back through the DOM, or a GET-form submit could echo
+      // it into the query string (page.url()); this prevents both round-trip exfiltration
+      // paths. The literal scrub catches verbatim reflection only — see redactValues. No-op
+      // when nothing has been injected.
       const content = session.redactInjectedSecrets(rawContent);
+      const currentUrl = session.redactInjectedSecrets(page.url());
 
       const result: Record<string, unknown> = { content, session_id: sessionId, url: currentUrl };
 
-      // Capture screenshot if explicitly requested or if action === 'screenshot'
+      // Capture screenshot if explicitly requested or if action === 'screenshot'.
+      // RESIDUAL RISK (#973): the value-aware backstop scrubs TEXT only — it cannot touch
+      // a PNG. A secret typed into a `type=password` field renders masked (dots), so the
+      // common login case is safe; a secret filled into a plain text field would be visible
+      // in the image. This is the accepted "rely on browser password masking" decision from
+      // the issue. We add no screenshot trigger tied to a secret fill, so this is no worse
+      // than baseline — but a screenshot of a secret-bearing page is NOT value-redacted.
       if (screenshot || action === 'screenshot') {
         const buf = await page.screenshot({ type: 'png', fullPage: false });
         result.screenshot_base64 = buf.toString('base64');
@@ -224,11 +232,14 @@ export class WebBrowserHandler implements SkillHandler {
       return { success: true, data: result };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      // Scrub any injected secret value from the error too — a Playwright error after a
-      // secret fill is unlikely to echo the value, but the backstop must cover error paths.
-      // ctx.log.error intentionally omits the message body for the same reason.
+      // Scrub any injected secret value from the error before it reaches the agent AND the
+      // logs (#973). A Playwright failure references the selector, not the typed value, but
+      // the backstop must cover error paths too — so we log the redacted message and a
+      // redacted stack rather than the raw err object (whose .message/.stack are the
+      // unredacted source). No `{ err }` here: pino would serialize the unscrubbed original.
       const safeMessage = session.redactInjectedSecrets(message);
-      ctx.log.error({ err, action, sessionId }, 'Browser action failed');
+      const safeStack = err instanceof Error && err.stack ? session.redactInjectedSecrets(err.stack) : undefined;
+      ctx.log.error({ action, sessionId, errMessage: safeMessage, stack: safeStack }, 'Browser action failed');
       return { success: false, error: `Browser action "${action}" failed: ${safeMessage}` };
     }
   }

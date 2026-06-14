@@ -21,7 +21,7 @@ const SECRET_VALUE = 'sup3r-s3cr3t-pw';
  * Build a mock Playwright page. `content` is what get_content reads back (used to
  * verify value-aware redaction). The shared `fill` spy records what got typed.
  */
-function makeMockPage(content: string, fill: ReturnType<typeof vi.fn>) {
+function makeMockPage(content: string, fill: ReturnType<typeof vi.fn>, url = 'https://aeroplan.com/account') {
   const locator = {
     count: vi.fn().mockResolvedValue(1),
     first: vi.fn().mockReturnThis(),
@@ -30,7 +30,7 @@ function makeMockPage(content: string, fill: ReturnType<typeof vi.fn>) {
     selectOption: vi.fn().mockResolvedValue(undefined),
   };
   return {
-    url: vi.fn().mockReturnValue('https://aeroplan.com/account'),
+    url: vi.fn().mockReturnValue(url),
     evaluate: vi.fn().mockResolvedValue(content),
     waitForTimeout: vi.fn().mockResolvedValue(undefined),
     screenshot: vi.fn().mockResolvedValue(Buffer.from('png')),
@@ -45,10 +45,11 @@ function makeMockPage(content: string, fill: ReturnType<typeof vi.fn>) {
 function makeCtx(opts: {
   input: Record<string, unknown>;
   pageContent?: string;
+  pageUrl?: string;
   resolveSecretRef?: (ref: string) => Promise<string>;
 }): { ctx: SkillContext; session: BrowserSession; fill: ReturnType<typeof vi.fn> } {
   const fill = vi.fn().mockResolvedValue(undefined);
-  const page = makeMockPage(opts.pageContent ?? 'nothing sensitive here', fill);
+  const page = makeMockPage(opts.pageContent ?? 'nothing sensitive here', fill, opts.pageUrl);
   const session = new BrowserSession({} as unknown as BrowserContext, page as unknown as Page);
 
   const browserService = {
@@ -103,6 +104,25 @@ describe('web-browser type action with secret_ref (#973)', () => {
     }
     // The session recorded the value so subsequent get_content calls are scrubbed too.
     expect(session.redactInjectedSecrets(SECRET_VALUE)).toBe('[REDACTED]');
+  });
+
+  it('redacts an injected value reflected back through the returned url (GET form)', async () => {
+    const resolveSecretRef = vi.fn().mockResolvedValue(SECRET_VALUE);
+    const { ctx } = makeCtx({
+      input: { action: 'type', selector: '#pass', secret_ref: 'user.aeroplan_password' },
+      // A form that submits via GET puts the field value into the query string.
+      pageUrl: `https://aeroplan.com/login?pw=${SECRET_VALUE}`,
+      resolveSecretRef,
+    });
+
+    const result = await new WebBrowserHandler().execute(ctx);
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const data = result.data as { url: string };
+      expect(data.url).not.toContain(SECRET_VALUE);
+      expect(data.url).toContain('[REDACTED]');
+    }
   });
 
   it('rejects when both text and secret_ref are supplied (mutually exclusive)', async () => {
