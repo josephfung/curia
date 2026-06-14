@@ -16,7 +16,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Added
 
 - **Secret capture** — agents mint a one-time link to a web form so a user can add a new vault secret mid-conversation; the value never touches the LLM. Skills `secret-capture-request` and `system-secret-capture-request`. (#971)
-- **`skip_secret_redaction` (skill manifest schema, public API)** — opt a skill's output out of the built-in secret-pattern scrub; for skills whose output carries a capability token that must reach the LLM. Tag-stripping and truncation still apply. (#971)
+- **`skip_secret_redaction` (skill manifest schema, public API)** — opt a skill's output out of only the broad generic-hex secret scrub (structured credential patterns stay active); gated at startup to skills declaring `secretCapture`. For capability tokens (e.g. capture links) that must reach the LLM. (#971)
 - **`task-create`** — optional `target_agent_id` assigns a new task (and its wake-up) to another registered agent, so the coordinator or ceo-inbox can schedule work for a specialist like meeting-debrief. (#880)
 - **`bullpen`** — `reply` accepts `close_after: true` to close a thread atomically with the reply, `formatBullpenContext()` nudges agents to use it, and the dispatcher skips reply-task fan-out for closed threads so a concluding reply doesn't create dead-end tasks. (#881)
 

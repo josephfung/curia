@@ -65,6 +65,17 @@ export class SkillRegistry {
         `Expected one of: ${[...ACTION_RISK_LABELS].join(', ')}.`,
       );
     }
+    // Fail closed: skip_secret_redaction relaxes the output secret scrub, so it is gated to
+    // skills that declare the 'secretCapture' capability (the secret-capture family, whose
+    // output structurally cannot carry a real secret value). This stops an unrelated or
+    // misconfigured skill from silently weakening redaction by setting the flag. (#971)
+    if (manifest.skip_secret_redaction === true && !(manifest.capabilities ?? []).includes('secretCapture')) {
+      throw new Error(
+        `Skill '${manifest.name}' sets skip_secret_redaction but does not declare the ` +
+        `'secretCapture' capability. This flag relaxes output secret redaction and is ` +
+        `restricted to secret-capture skills — remove the flag or add the capability.`,
+      );
+    }
     this.skills.set(manifest.name, { manifest, handler, mcpInputSchema });
   }
 

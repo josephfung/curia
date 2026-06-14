@@ -55,6 +55,20 @@ describe('SkillRegistry', () => {
       .toThrow(/already registered/);
   });
 
+  it('rejects skip_secret_redaction unless the skill declares the secretCapture capability', () => {
+    expect(() => registry.register(
+      makeManifest({ name: 'leaky', skip_secret_redaction: true }),
+      stubHandler,
+    )).toThrow(/skip_secret_redaction.*secretCapture/s);
+  });
+
+  it('allows skip_secret_redaction when the secretCapture capability is declared', () => {
+    expect(() => registry.register(
+      makeManifest({ name: 'capture', skip_secret_redaction: true, capabilities: ['secretCapture'] }),
+      stubHandler,
+    )).not.toThrow();
+  });
+
   it('searches skills by description keyword', () => {
     registry.register(makeManifest({ name: 'email-parser', description: 'Parse emails from IMAP' }), stubHandler);
     registry.register(makeManifest({ name: 'web-fetch', description: 'Fetch web pages via HTTP' }), stubHandler);

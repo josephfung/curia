@@ -92,11 +92,12 @@ export interface SkillManifest {
   };
   /** Reserved uninstall block — PARSED BUT INERT. PR3 (config) will define its contents. */
   uninstall?: Record<string, unknown>;
-  /** When true, this skill's output bypasses the execution layer's built-in secret-pattern
-   *  redaction (SECRET_PATTERNS in sanitize.ts). Only for skills whose output legitimately
-   *  carries a high-entropy capability token that must reach the LLM to be relayed (e.g. the
-   *  secret-capture one-time links) and which structurally cannot emit real secret values.
-   *  Tag-stripping and length truncation still apply. Default false/undefined. */
+  /** When true, this skill's output bypasses ONLY the broad generic-long-hex secret scrub in
+   *  sanitize.ts (the structured credential patterns — API keys, JWT/Bearer, AWS — still apply).
+   *  For skills whose output legitimately carries a high-entropy hex capability token that must
+   *  reach the LLM to be relayed (e.g. the secret-capture one-time links). Tag-stripping and
+   *  truncation still apply. Gated at registration to skills declaring the 'secretCapture'
+   *  capability. Default false/undefined. */
   skip_secret_redaction?: boolean;
 }
 
