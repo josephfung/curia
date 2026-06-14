@@ -879,8 +879,12 @@ export class ExecutionLayer {
 
       // Sanitize successful output before returning.
       // Strips dangerous tags, redacts secrets, and truncates to the configured limit.
+      // skip_secret_redaction lets a skill opt its output out of the generic secret-pattern
+      // scrub (e.g. secret-capture, whose one-time link contains a high-entropy token that
+      // would otherwise be falsely redacted). Tag-stripping and truncation still apply.
+      const skipSecretRedaction = manifest.skip_secret_redaction === true;
       if (result.success && typeof result.data === 'string') {
-        const sanitized = sanitizeOutput(result.data, { maxLength: this.skillOutputMaxLength });
+        const sanitized = sanitizeOutput(result.data, { maxLength: this.skillOutputMaxLength, skipSecretRedaction });
         // Check the original length — post-sanitize length includes the suffix so >=
         // would fire a false positive when output is exactly skillOutputMaxLength chars.
         if (result.data.length > this.skillOutputMaxLength) {
@@ -889,7 +893,7 @@ export class ExecutionLayer {
         return { success: true, data: sanitized };
       } else if (result.success && result.data !== null && result.data !== undefined) {
         const raw = JSON.stringify(result.data);
-        const sanitized = sanitizeOutput(raw, { maxLength: this.skillOutputMaxLength });
+        const sanitized = sanitizeOutput(raw, { maxLength: this.skillOutputMaxLength, skipSecretRedaction });
         if (raw.length > this.skillOutputMaxLength) {
           skillLogger.warn({ skillName, outputLength: raw.length }, 'Skill output truncated to configured limit');
         }

@@ -92,6 +92,12 @@ export interface SkillManifest {
   };
   /** Reserved uninstall block — PARSED BUT INERT. PR3 (config) will define its contents. */
   uninstall?: Record<string, unknown>;
+  /** When true, this skill's output bypasses the execution layer's built-in secret-pattern
+   *  redaction (SECRET_PATTERNS in sanitize.ts). Only for skills whose output legitimately
+   *  carries a high-entropy capability token that must reach the LLM to be relayed (e.g. the
+   *  secret-capture one-time links) and which structurally cannot emit real secret values.
+   *  Tag-stripping and length truncation still apply. Default false/undefined. */
+  skip_secret_redaction?: boolean;
 }
 
 /**

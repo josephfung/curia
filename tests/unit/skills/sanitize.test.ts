@@ -61,6 +61,38 @@ describe('sanitizeOutput', () => {
     expect(result).not.toContain('eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9');
   });
 
+  it('redacts a generic 64-char hex token (the secret-capture URL case) by default', () => {
+    const token = 'a'.repeat(64); // 64 hex chars, like randomBytes(32).toString('hex')
+    const result = sanitizeOutput(`https://host/secret-capture/${token}`);
+    expect(result).toContain('[REDACTED]');
+    expect(result).not.toContain(token);
+  });
+
+  it('skips the built-in secret-pattern scrub when skipSecretRedaction is set', () => {
+    // A capability token (e.g. a one-time capture link) must survive for the LLM to relay it.
+    const token = 'a'.repeat(64);
+    const url = `https://host/secret-capture/${token}`;
+    const result = sanitizeOutput(url, { skipSecretRedaction: true });
+    expect(result).toBe(url);
+    expect(result).not.toContain('[REDACTED]');
+  });
+
+  it('still strips dangerous tags even when skipSecretRedaction is set', () => {
+    const result = sanitizeOutput('before <script>evil()</script> after', { skipSecretRedaction: true });
+    expect(result).not.toContain('evil');
+    expect(result).toContain('before');
+    expect(result).toContain('after');
+  });
+
+  it('still applies extraRedactPatterns when skipSecretRedaction is set', () => {
+    const result = sanitizeOutput('token=SHHH', {
+      skipSecretRedaction: true,
+      extraRedactPatterns: [/SHHH/g],
+    });
+    expect(result).not.toContain('SHHH');
+    expect(result).toContain('[REDACTED]');
+  });
+
   it('wraps error strings in tool_error format', () => {
     const result = sanitizeOutput('connection refused', { isError: true });
     expect(result).toContain('<tool_error>');
