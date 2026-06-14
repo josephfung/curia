@@ -426,6 +426,15 @@ function Pagination({ total, page, pageSize, totalPages, onPage, onPageSize }: P
 // in the table when the relevant kind is active.
 type SortKey = 'name' | 'state' | 'version' | 'modelTier' | 'memoryScopes' | 'actionRisk' | 'sensitivity';
 
+function actionRiskToSortKey(v: string | number | null | undefined): string {
+  // Normalize to a zero-padded 3-digit number string so lexicographic sort = numeric sort.
+  // String labels map to their spec-defined minimum autonomy scores.
+  if (v == null) return '000';
+  if (typeof v === 'number') return String(v).padStart(3, '0');
+  const labels: Record<string, number> = { none: 0, low: 60, medium: 70, high: 80, critical: 90 };
+  return String(labels[v] ?? 0).padStart(3, '0');
+}
+
 function getSortValue(entry: RegistryEntry, key: SortKey): string {
   switch (key) {
     case 'name':         return entry.name;
@@ -433,7 +442,7 @@ function getSortValue(entry: RegistryEntry, key: SortKey): string {
     case 'version':      return entry.metadata?.version ?? '';
     case 'modelTier':    return entry.metadata?.modelTier ?? '';
     case 'memoryScopes': return entry.metadata?.memoryScopes?.join(', ') ?? '';
-    case 'actionRisk':   return entry.metadata?.actionRisk != null ? String(entry.metadata.actionRisk) : '';
+    case 'actionRisk':   return actionRiskToSortKey(entry.metadata?.actionRisk);
     case 'sensitivity':  return entry.metadata?.sensitivity ?? '';
     default:             return '';
   }

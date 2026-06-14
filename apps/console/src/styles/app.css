@@ -1268,6 +1268,11 @@ table.records-table tbody tr.active td { background: transparent; }
   border-radius: 12px 12px 2px 12px;
 }
 
+.msg-bubble.user a {
+  color: #fff;
+  text-decoration: underline;
+}
+
 .msg-bubble.agent {
   background: var(--app-card);
   border: 1px solid var(--app-border);

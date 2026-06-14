@@ -36,4 +36,10 @@ describe('markdownToHtml — URL auto-linking', () => {
     const result = markdownToHtml('Hello world');
     expect(result).toBe('<p>Hello world</p>');
   });
+
+  it('strips trailing punctuation from linked URLs', () => {
+    const result = markdownToHtml('Visit https://example.com. for more');
+    expect(result).toContain('<a href="https://example.com"');
+    expect(result).not.toContain('<a href="https://example.com."');
+  });
 });
