@@ -57,6 +57,13 @@ describe('SecretCaptureRequestHandler', () => {
     expect(data.capture_url).toBe('http://localhost:4521/secret-capture/abc123');
   });
 
+  it('trims a trailing slash on appOrigin so the URL has no double slash', async () => {
+    const ctx = makeCtx({ secret_name: 'x' }, { appOrigin: 'https://curia.example.com/' });
+    const result = await new SecretCaptureRequestHandler().execute(ctx);
+    const data = (result as { success: true; data: Record<string, unknown> }).data;
+    expect(data.capture_url).toBe('https://curia.example.com/secret-capture/abc123');
+  });
+
   it('never returns the submitted value (mint surface has no read path)', async () => {
     const ctx = makeCtx({ secret_name: 'x' });
     const result = await new SecretCaptureRequestHandler().execute(ctx);

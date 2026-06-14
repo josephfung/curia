@@ -5,7 +5,7 @@
 // credential. The value the user types is POSTed straight to the vault server-side; it is
 // never echoed back, stored client-side, or sent anywhere but the capture endpoint.
 
-import { useState, useEffect, type FormEvent } from 'react';
+import { useState, useEffect, useRef, type FormEvent } from 'react';
 import { useParams } from '@tanstack/react-router';
 import { CuriaWordmark } from '../components/Icons';
 import { apiFetch } from '../api';
@@ -22,12 +22,17 @@ export default function SecretCapturePage() {
   const [value, setValue] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  // Always holds the token currently shown. A submit captures the token it started with and
+  // compares against this ref before applying its result, so a late response from a previous
+  // token (after the user navigated to a different capture link) can't clobber the new page.
+  const activeToken = useRef(token);
 
   // Load form metadata on mount AND whenever the token changes. We reset to a clean loading
   // state and clear any previously typed value first, so the old form (with an old secret and
   // old token binding) can never be submitted against a newly navigated-to token.
   useEffect(() => {
     let cancelled = false;
+    activeToken.current = token;
     setView({ kind: 'loading' });
     setValue('');
     setError(null);
@@ -59,13 +64,17 @@ export default function SecretCapturePage() {
       return;
     }
 
+    const submittedToken = token;
     setSubmitting(true);
     try {
-      const res = await apiFetch(`/api/secret-capture/${token}`, {
+      const res = await apiFetch(`/api/secret-capture/${submittedToken}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ value }),
       });
+      // If the user navigated to a different capture link while this POST was in flight, drop
+      // the stale result rather than overwriting the now-active token's page.
+      if (activeToken.current !== submittedToken) return;
       if (res.ok) {
         setValue(''); // drop the value from memory as soon as it's accepted
         setView({ kind: 'success' });
@@ -83,9 +92,10 @@ export default function SecretCapturePage() {
       }
       setError(data.error ?? 'Could not save the value. Please try again.');
     } catch {
-      setError('Network error. Please try again.');
+      if (activeToken.current === submittedToken) setError('Network error. Please try again.');
     } finally {
-      setSubmitting(false);
+      // Only clear the spinner if we're still on the token this submit started for.
+      if (activeToken.current === submittedToken) setSubmitting(false);
     }
   }
 
