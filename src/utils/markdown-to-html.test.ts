@@ -42,4 +42,15 @@ describe('markdownToHtml — URL auto-linking', () => {
     expect(result).toContain('<a href="https://example.com"');
     expect(result).not.toContain('<a href="https://example.com."');
   });
+
+  it('preserves balanced parentheses inside URLs', () => {
+    const result = markdownToHtml('See https://en.wikipedia.org/wiki/Function_(mathematics) here');
+    expect(result).toContain('<a href="https://en.wikipedia.org/wiki/Function_(mathematics)"');
+  });
+
+  it('does not linkify javascript: or data: URIs', () => {
+    const result = markdownToHtml('Try javascript:alert(1) or data:text/html,x');
+    expect(result).not.toContain('<a href="javascript:');
+    expect(result).not.toContain('<a href="data:');
+  });
 });

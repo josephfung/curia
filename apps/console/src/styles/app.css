@@ -1273,6 +1273,12 @@ table.records-table tbody tr.active td { background: transparent; }
   text-decoration: underline;
 }
 
+/* In dark mode --app-teal is #478189 (4.41:1 against white — just below AA).
+   Override to light-mode teal (#1A6B5E, 6.4:1) so the bubble stays AA-compliant. */
+[data-theme="dark"] .msg-bubble.user {
+  background: #1A6B5E;
+}
+
 .msg-bubble.agent {
   background: var(--app-card);
   border: 1px solid var(--app-border);

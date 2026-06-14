@@ -134,4 +134,9 @@ describe('linkifyText', () => {
     expect(result).toContain('<a href="https://example.com"');
     expect(result).not.toContain('<a href="https://example.com."');
   });
+
+  it('preserves balanced parentheses inside URLs', () => {
+    const result = linkifyText('See https://en.wikipedia.org/wiki/Function_(mathematics) here');
+    expect(result).toContain('<a href="https://en.wikipedia.org/wiki/Function_(mathematics)"');
+  });
 });
