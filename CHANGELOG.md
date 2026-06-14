@@ -23,6 +23,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
+- **Coordinator prompt (policy/reference split)** — tool-specific mechanics moved out of the coordinator prompt into the skill manifests the model already sees: config-store namespace conventions, the context_bridge shape, and decay-warning nudge phrasings now live on their respective skills; the `## Reference` region is removed. Drive-upload steps stay condensed in the prompt (their target `create_drive_file` is an MCP tool with no local manifest). (#958)
+- **`config-store` / `email-reply` / `email-send` / `signal-send` / `decay-warnings-list`** — descriptions/input docs expanded to carry the relocated mechanics; behavior unchanged. (#958)
 - **User chat bubble** — user messages now appear with a teal background (`--app-teal`) and white text, visually distinguishing them from agent replies.
 
 - **Secret capture** — agents mint a one-time link to a web form so a user can add a new vault secret mid-conversation; the value never touches the LLM. Skills `secret-capture-request` and `system-secret-capture-request`. (#971)
