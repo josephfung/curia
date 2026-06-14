@@ -15,6 +15,14 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **URL auto-linking in chat** — bare `http`/`https` URLs in both agent and user messages are automatically wrapped in clickable anchor tags; URLs inside code spans are excluded.
+- **Sortable columns** — Name, State, and kind-specific columns in the Agents, Skills, and Channels views are now sortable (click to sort asc, click again for desc).
+- **State filter pills** — Agents and Skills views gain All/Enabled/Installed/Ghost/Uninstalled pill filters with live counts; Channels gains All/Enabled/Installed/Uninstalled.
+
+### Changed
+
+- **User chat bubble** — user messages now appear with a teal background (`--app-teal`) and white text, visually distinguishing them from agent replies.
+
 - **Secret capture** — agents mint a one-time link to a web form so a user can add a new vault secret mid-conversation; the value never touches the LLM. Skills `secret-capture-request` and `system-secret-capture-request`. (#971)
 - **`skip_secret_redaction` (skill manifest schema, public API)** — opt a skill's output out of only the broad generic-hex secret scrub (structured credential patterns stay active); gated at startup to skills declaring `secretCapture`. For capability tokens (e.g. capture links) that must reach the LLM. (#971)
 - **`task-create`** — optional `target_agent_id` assigns a new task (and its wake-up) to another registered agent, so the coordinator or ceo-inbox can schedule work for a specialist like meeting-debrief. (#880)
