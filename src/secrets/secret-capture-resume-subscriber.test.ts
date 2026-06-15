@@ -3,12 +3,12 @@
 
 import { describe, it, expect } from 'vitest';
 import pino from 'pino';
-import { SecretCaptureResumeSubscriber } from './secret-capture-resume-subscriber.js';
+import { SecretCaptureResumeSubscriber, type ResumeRoutingRegistrar } from './secret-capture-resume-subscriber.js';
 import type { EventBus } from '../bus/bus.js';
 import type { BusEvent, Layer, EventType, AgentTaskEvent } from '../bus/events.js';
 import { createSecretCaptured } from '../bus/events.js';
 
-function fakeBus() {
+function makeFakeBus(opts: { publishThrows?: boolean } = {}) {
   const handlers = new Map<EventType, Array<(e: BusEvent) => unknown>>();
   const published: Array<{ layer: Layer; event: BusEvent }> = [];
   const bus = {
@@ -18,6 +18,7 @@ function fakeBus() {
       handlers.set(type, list);
     },
     async publish(layer: Layer, event: BusEvent) {
+      if (opts.publishThrows) throw new Error('bus down');
       published.push({ layer, event });
     },
   } as unknown as EventBus;
@@ -29,7 +30,7 @@ function fakeBus() {
 
 const ORIGINATOR = { contactId: 'ceo', systemRole: 'principal', channel: 'email', initiatedAt: 't' };
 
-function fullEvent() {
+function makeCapturedEvent(overrides: Partial<Parameters<typeof createSecretCaptured>[0]> = {}) {
   return createSecretCaptured(
     {
       secretName: 'user.aeroplan_password',
@@ -40,22 +41,26 @@ function fullEvent() {
       taskEventId: 'task-evt-9',
       resumeIntent: 'check the Aeroplan balance',
       originator: ORIGINATOR,
+      ...overrides,
     },
     'task-evt-9',
   );
 }
 
-function makeSubscriber() {
-  const { bus, published, emit } = fakeBus();
-  const sub = new SecretCaptureResumeSubscriber(bus, pino({ level: 'silent' }));
+function makeSubscriber(opts: { publishThrows?: boolean } = {}) {
+  const { bus, published, emit } = makeFakeBus(opts);
+  // Spy registrar so tests can assert routing is seeded for the resume task.
+  const routingCalls: Array<{ taskEventId: string; routing: Parameters<ResumeRoutingRegistrar>[1] }> = [];
+  const registerRouting: ResumeRoutingRegistrar = (taskEventId, routing) => { routingCalls.push({ taskEventId, routing }); };
+  const sub = new SecretCaptureResumeSubscriber(bus, pino({ level: 'silent' }), registerRouting);
   sub.start();
-  return { published, emit };
+  return { published, emit, routingCalls };
 }
 
 describe('SecretCaptureResumeSubscriber', () => {
   it('re-enters the originating agent via a synthetic agent.task with parentEventId threaded', async () => {
     const { published, emit } = makeSubscriber();
-    await emit(fullEvent());
+    await emit(makeCapturedEvent());
 
     expect(published).toHaveLength(1);
     const { layer, event } = published[0]!;
@@ -77,16 +82,28 @@ describe('SecretCaptureResumeSubscriber', () => {
     expect(task.payload.content).toContain('check the Aeroplan balance');
   });
 
+  it('seeds dispatcher routing for the resume task BEFORE publishing it (#972)', async () => {
+    const { published, emit, routingCalls } = makeSubscriber();
+    await emit(makeCapturedEvent());
+
+    // Routing must be registered for the same task id that is published, with the origin channel,
+    // so the dispatcher delivers the agent's reply back to the user instead of dropping it.
+    expect(routingCalls).toHaveLength(1);
+    const publishedTaskId = (published[0]!.event as AgentTaskEvent).id;
+    expect(routingCalls[0]!.taskEventId).toBe(publishedTaskId);
+    expect(routingCalls[0]!.routing).toEqual({ channelId: 'email', conversationId: 'conv-1', senderId: 'ceo' });
+  });
+
   it('does not double-dispatch on duplicate event delivery', async () => {
     const { published, emit } = makeSubscriber();
-    const event = fullEvent();
+    const event = makeCapturedEvent();
     await emit(event);
     await emit(event); // same event id delivered twice
     expect(published).toHaveLength(1);
   });
 
   it('skips (no dispatch) when essential routing is missing', async () => {
-    const { published, emit } = makeSubscriber();
+    const { published, emit, routingCalls } = makeSubscriber();
     // A token minted outside an agent context has no agentId — nothing to route a resume to.
     await emit(createSecretCaptured({
       secretName: 'user.x',
@@ -96,6 +113,7 @@ describe('SecretCaptureResumeSubscriber', () => {
       // agentId intentionally absent
     }));
     expect(published).toHaveLength(0);
+    expect(routingCalls).toHaveLength(0);
   });
 
   it('falls back to a generic sender when no originator is present', async () => {
@@ -114,9 +132,30 @@ describe('SecretCaptureResumeSubscriber', () => {
     expect(task.payload.metadata).toBeUndefined();
   });
 
+  it('falls back to a generic sender when originator.contactId is malformed (not a string)', async () => {
+    const { published, emit } = makeSubscriber();
+    // A malformed persisted originator (contactId is a number) must not yield a non-string senderId.
+    await emit(makeCapturedEvent({
+      originator: { contactId: 123 as unknown as string, systemRole: 'principal', channel: 'email', initiatedAt: 't' },
+    }));
+    expect(published).toHaveLength(1);
+    const task = published[0]!.event as AgentTaskEvent;
+    expect(task.payload.senderId).toBe('secret-capture');
+  });
+
+  it('rolls back the dedup marker and propagates when publish fails', async () => {
+    const { emit } = makeSubscriber({ publishThrows: true });
+    const event = makeCapturedEvent();
+    // The failure must propagate (catch policy: log + propagate), not be swallowed.
+    await expect(emit(event)).rejects.toThrow('bus down');
+    // After rollback a retry is allowed: a second delivery is attempted again (and throws again),
+    // proving the dedup marker was cleared rather than left blocking the retry.
+    await expect(emit(event)).rejects.toThrow('bus down');
+  });
+
   it('never leaks a secret value (the event carries none; content is name/intent only)', async () => {
     const { published, emit } = makeSubscriber();
-    await emit(fullEvent());
+    await emit(makeCapturedEvent());
     // Sanity: the payload only ever references the vault key/label/intent — there is no value
     // anywhere in the chain to leak, and the content is built from names only.
     expect(JSON.stringify(published[0]!.event)).not.toContain('hunter2');
