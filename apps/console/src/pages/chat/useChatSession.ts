@@ -224,7 +224,6 @@ export function useChatSession(): ChatSession {
     sourceRef.current = null;
     if (watchdogRef.current) { clearTimeout(watchdogRef.current); watchdogRef.current = null; }
 
-    const sentAt = Date.now();
     // Optimistic append so the user sees their message immediately.
     setMessages((prev) => [
       ...prev,
@@ -273,10 +272,14 @@ export function useChatSession(): ChatSession {
         const res = await apiFetch(
           `/api/kg/chat/history?conversationId=${encodeURIComponent(convId)}&limit=${HISTORY_PAGE_SIZE}`,
         );
+        // A terminal SSE event may have settled the turn during the await — bail
+        // before mutating state so we don't append a duplicate or stale notice.
+        if (settled) return;
         if (res.ok) {
           fetchOk = true;
           const data = (await res.json()) as HistoryResponse;
-          const recovered = pickRecoveredReply(data.messages, sentAt);
+          if (settled) return;
+          const recovered = pickRecoveredReply(data.messages);
           if (recovered) {
             setMessages((prev) => [
               ...prev,
@@ -292,6 +295,8 @@ export function useChatSession(): ChatSession {
         console.error('[useChatSession] recovery history fetch failed:', err);
       }
 
+      // Re-check after the try/catch: the turn may have settled while awaiting.
+      if (settled) return;
       if (!fetchOk) {
         // Recovery itself failed — we can't claim progress. Tell the user the
         // status is unknown and finalize (close the dead stream; nothing more is

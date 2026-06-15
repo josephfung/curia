@@ -59,28 +59,46 @@ describe('parseSseEvent', () => {
 });
 
 describe('pickRecoveredReply', () => {
-  const sentAt = new Date('2026-06-15T12:00:00Z').getTime();
-
-  it('returns the most recent assistant reply that landed at or after the send time', () => {
+  // Timestamps are deliberately out of order vs. position to prove the function
+  // relies on message ORDERING, not wall-clock comparison (clock-skew safe).
+  it('returns the assistant reply that follows the last user message', () => {
     const items = [
       { id: '1', role: 'user' as const, content: 'q', html: null, timestamp: '2026-06-15T11:59:00Z' },
       { id: '2', role: 'assistant' as const, content: 'old', html: null, timestamp: '2026-06-15T11:59:30Z' },
       { id: '3', role: 'user' as const, content: 'q2', html: null, timestamp: '2026-06-15T12:00:00Z' },
       { id: '4', role: 'assistant' as const, content: 'fresh', html: '<p>fresh</p>', timestamp: '2026-06-15T12:03:00Z' },
     ];
-    expect(pickRecoveredReply(items, sentAt)).toEqual({ text: 'fresh', html: '<p>fresh</p>' });
+    expect(pickRecoveredReply(items)).toEqual({ text: 'fresh', html: '<p>fresh</p>' });
   });
 
-  it('returns null when no assistant reply landed after the send time', () => {
+  it('returns the reply even when its server timestamp predates the user turn (clock skew)', () => {
+    // Assistant row stamped BEFORE the user row — would be dropped by a wall-clock
+    // comparison, but ordering correctly identifies it as the reply.
     const items = [
-      { id: '1', role: 'user' as const, content: 'q', html: null, timestamp: '2026-06-15T12:00:00Z' },
-      { id: '2', role: 'assistant' as const, content: 'stale', html: null, timestamp: '2026-06-15T11:00:00Z' },
+      { id: '1', role: 'user' as const, content: 'q', html: null, timestamp: '2026-06-15T12:00:05Z' },
+      { id: '2', role: 'assistant' as const, content: 'reply', html: null, timestamp: '2026-06-15T12:00:00Z' },
     ];
-    expect(pickRecoveredReply(items, sentAt)).toBeNull();
+    expect(pickRecoveredReply(items)).toEqual({ text: 'reply', html: null });
+  });
+
+  it('returns null when the latest turn is unanswered (history ends on a user message)', () => {
+    const items = [
+      { id: '1', role: 'user' as const, content: 'q', html: null, timestamp: '2026-06-15T11:00:00Z' },
+      { id: '2', role: 'assistant' as const, content: 'prior reply', html: null, timestamp: '2026-06-15T11:00:30Z' },
+      { id: '3', role: 'user' as const, content: 'q2', html: null, timestamp: '2026-06-15T12:00:00Z' },
+    ];
+    expect(pickRecoveredReply(items)).toBeNull();
+  });
+
+  it('returns null when there is no user turn', () => {
+    const items = [
+      { id: '1', role: 'assistant' as const, content: 'orphan', html: null, timestamp: '2026-06-15T12:00:00Z' },
+    ];
+    expect(pickRecoveredReply(items)).toBeNull();
   });
 
   it('returns null for an empty history page', () => {
-    expect(pickRecoveredReply([], sentAt)).toBeNull();
+    expect(pickRecoveredReply([])).toBeNull();
   });
 });
 

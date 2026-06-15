@@ -1079,9 +1079,10 @@ export async function knowledgeGraphRoutes(
         metadata: { trustLevel: 'medium' },
       }));
     } catch (publishErr) {
-      const message = publishErr instanceof Error ? publishErr.message : String(publishErr);
+      // Log the real error server-side (full context) but return a fixed,
+      // client-safe message — don't echo internal bus/implementation detail back.
       logger.error({ err: publishErr, conversationId }, 'KG chat message publish failed');
-      return reply.status(500).send({ error: message });
+      return reply.status(500).send({ error: 'Failed to publish chat message.' });
     }
 
     // Ack: the reply is delivered over the SSE stream, not this response.

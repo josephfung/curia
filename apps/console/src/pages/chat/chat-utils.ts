@@ -65,17 +65,31 @@ export function parseSseEvent(data: string): SseEvent | null {
 
 /**
  * Recovery helper for the client watchdog: given a page of chat history (oldest
- * first) and the time we sent the current turn, return the most recent assistant
- * reply that landed at or after the send time — the reply we may have missed if
- * the SSE message event never arrived. Returns null if there's no such reply.
+ * first), return the assistant reply to the most recent user turn — i.e. the most
+ * recent assistant message positioned AFTER the last user message. Returns null
+ * when the latest turn is still unanswered (history ends on a user message) or
+ * there is no user turn yet.
+ *
+ * Uses message ORDERING, not wall-clock timestamps. The previous version compared
+ * a server-written timestamp against a client-side Date.now(), which a skewed
+ * client clock could trip — a valid reply judged "too old" and silently dropped.
+ * The server persists the inbound user turn (runtime addTurn) before producing a
+ * reply, so "an assistant message after the last user message" reliably identifies
+ * the reply to the current turn without depending on either clock. (#985)
  */
 export function pickRecoveredReply(
   items: HistoryMessage[],
-  sentAtMs: number,
 ): { text: string; html: string | null } | null {
+  // Find the most recent user message; its reply (if any) sits after it.
+  let lastUserIdx = -1;
   for (let i = items.length - 1; i >= 0; i--) {
+    if (items[i]!.role === 'user') { lastUserIdx = i; break; }
+  }
+  if (lastUserIdx === -1) return null;
+
+  for (let i = items.length - 1; i > lastUserIdx; i--) {
     const m = items[i]!;
-    if (m.role === 'assistant' && new Date(m.timestamp).getTime() >= sentAtMs) {
+    if (m.role === 'assistant') {
       return { text: m.content, html: m.html };
     }
   }
