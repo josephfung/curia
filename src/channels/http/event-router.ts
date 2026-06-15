@@ -44,9 +44,38 @@ export class MessageRejectedError extends Error {
   }
 }
 
+/**
+ * Discriminated result of a publish/wait cycle. `waitForResponse` ALWAYS resolves
+ * with one of these — it never rejects.
+ *
+ * Why never reject: the timeout and supersede outcomes are fired by a timer / a
+ * later request, potentially long after the route handler stopped awaiting (the
+ * client disconnected, or a newer POST replaced the pending entry). A rejection
+ * with no attached handler becomes an `unhandledRejection` and, under Node's
+ * default policy, crashes the entire multi-agent process — taking every channel
+ * and agent down with it. A *resolved* promise can never be an unhandled
+ * rejection, so resolving with a discriminated result makes that crash
+ * structurally impossible regardless of who is (or isn't) awaiting. See #983.
+ */
+export type WaitResult =
+  | { ok: true; content: string }
+  | { ok: false; kind: 'timeout' }
+  | { ok: false; kind: 'superseded' }
+  | { ok: false; kind: 'rejected'; error: MessageRejectedError };
+
+/**
+ * Canonical client-facing messages for the non-error WaitResult outcomes.
+ * Defined here (next to WaitResult) so both the /api/messages and /api/kg/chat
+ * handlers map a given `kind` to identical wording — they used to be free-floating
+ * strings on the Error objects and risked drifting apart once moved to the routes.
+ */
+export const WAIT_TIMEOUT_MESSAGE = 'Response timeout — the agent did not respond in time';
+export const WAIT_SUPERSEDED_MESSAGE = 'Superseded by a newer request for the same conversation_id';
+
 export interface PendingResponse {
-  resolve: (content: string) => void;
-  reject: (error: Error) => void;
+  /** Settle the waiter's promise. Resolving (never rejecting) is what keeps a
+   *  late timeout/supersede from leaking as an unhandledRejection — see WaitResult. */
+  settle: (result: WaitResult) => void;
   timeout: NodeJS.Timeout;
 }
 
@@ -97,7 +126,7 @@ export class EventRouter {
       if (pending) {
         clearTimeout(pending.timeout);
         this.pendingResponses.delete(convId);
-        pending.resolve(event.payload.content);
+        pending.settle({ ok: true, content: event.payload.content });
       }
 
       // Stream to all SSE clients (filtered by conversationId if set).
@@ -175,7 +204,7 @@ export class EventRouter {
         if (pending) {
           clearTimeout(pending.timeout);
           this.pendingResponses.delete(convId);
-          pending.reject(new MessageRejectedError(event.payload.reason));
+          pending.settle({ ok: false, kind: 'rejected', error: new MessageRejectedError(event.payload.reason) });
         }
       }
 
@@ -215,27 +244,34 @@ export class EventRouter {
   }
 
   /**
-   * Register a pending POST response. Returns a promise that resolves with the response content.
-   * If a request is already pending for this conversationId, rejects it first to avoid
-   * orphaned promises and leaked timeouts.
+   * Register a pending POST response. Returns a promise that ALWAYS resolves with
+   * a discriminated {@link WaitResult} — it never rejects (see WaitResult for why).
+   *
+   * If a request is already pending for this conversationId, it is settled with
+   * `{ ok: false, kind: 'superseded' }` first to avoid orphaned promises and
+   * leaked timeouts. This can happen if two POSTs race with the same ID.
    */
-  waitForResponse(conversationId: string, timeoutMs: number): Promise<string> {
-    // Reject any existing pending request for this conversationId to prevent
-    // orphaned promises. This can happen if two POSTs race with the same ID.
+  waitForResponse(conversationId: string, timeoutMs: number): Promise<WaitResult> {
+    // Supersede any existing pending request for this conversationId. Settling
+    // (not rejecting) means the old route handler — which may no longer be
+    // awaiting — gets a clean result rather than a floating rejection.
     const existing = this.pendingResponses.get(conversationId);
     if (existing) {
       clearTimeout(existing.timeout);
       this.pendingResponses.delete(conversationId);
-      existing.reject(new Error('Superseded by a newer request for the same conversation_id'));
+      existing.settle({ ok: false, kind: 'superseded' });
     }
 
-    return new Promise<string>((resolve, reject) => {
+    return new Promise<WaitResult>((resolve) => {
       const timeout = setTimeout(() => {
         this.pendingResponses.delete(conversationId);
-        reject(new Error('Response timeout — the agent did not respond in time'));
+        // resolve, never reject: the awaiter may be gone (client disconnected) and
+        // an unhandled rejection here would crash the whole process. See #983.
+        resolve({ ok: false, kind: 'timeout' });
       }, timeoutMs);
 
-      this.pendingResponses.set(conversationId, { resolve, reject, timeout });
+      // `resolve` is the promise's resolve — settling delivers the WaitResult.
+      this.pendingResponses.set(conversationId, { settle: resolve, timeout });
     });
   }
 
