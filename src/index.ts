@@ -100,6 +100,7 @@ import { ExecutiveProfileService } from './executive/service.js';
 import { loadEncryptionKey } from './secrets/crypto.js';
 import { SecretsService } from './secrets/secrets-service.js';
 import { SecretCaptureService } from './secrets/secret-capture-service.js';
+import { SecretCaptureResumeSubscriber } from './secrets/secret-capture-resume-subscriber.js';
 import { channelCredentialKeys } from './channels/http/routes/vault.js';
 import { applyVaultSecrets } from './secrets/apply-vault-secrets.js';
 import { SensitivityClassifier } from './memory/sensitivity.js';
@@ -1575,6 +1576,12 @@ async function main(): Promise<void> {
   // Injected after construction because the ExecutionLayer is created before registryService
   // (which the allowlist thunk depends on). Mirrors setAgentContactId's post-hoc injection.
   executionLayer.setSecretCaptureService(secretCaptureService);
+
+  // Resume-after-capture subscriber (#972) — listens for secret.captured (published by the
+  // capture endpoint on a successful redeem) and re-enters the originating agent with a
+  // synthetic agent.task so it can continue what it was blocked on. Pure router, no DB state.
+  const secretCaptureResumeSubscriber = new SecretCaptureResumeSubscriber(bus, logger);
+  secretCaptureResumeSubscriber.start();
 
   // Agents with enable_task_management: true — read by the BacklogHeartbeat to
   // know which source_agent_ids it may wake (and as the fallback target list).
