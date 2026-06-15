@@ -21,7 +21,7 @@ import type { SkillResult, SkillContext, CallerContext, AgentPersona, ToolDefini
 import { normalizeTimestamp } from '../time/timestamp.js';
 import { isPrincipalOriginated } from '../contacts/principal.js';
 import type { SkillRegistry } from './registry.js';
-import { sanitizeOutput } from './sanitize.js';
+import { sanitizeOutput, sanitizeObjectOutput } from './sanitize.js';
 import { createSecretAccessed, createAutonomySkillBlocked } from '../bus/events.js';
 import type { Logger } from '../logger.js';
 import type { EventBus } from '../bus/bus.js';
@@ -975,19 +975,16 @@ export class ExecutionLayer {
         }
         return { success: true, data: sanitized };
       } else if (result.success && result.data !== null && result.data !== undefined) {
-        const raw = JSON.stringify(result.data);
-        const sanitized = sanitizeOutput(raw, { maxLength: this.skillOutputMaxLength, skipSecretRedaction });
-        if (raw.length > this.skillOutputMaxLength) {
-          skillLogger.warn({ skillName, outputLength: raw.length }, 'Skill output truncated to configured limit');
-        }
-        try {
-          return { success: true, data: JSON.parse(sanitized) };
-        } catch (parseErr) {
-          // Sanitization truncated the JSON mid-structure — return as string rather
-          // than silently dropping the truncation marker.
-          skillLogger.warn({ err: parseErr, skillName }, 'Sanitized output is not valid JSON, returning as string');
-          return { success: true, data: sanitized };
-        }
+        // Sanitize structurally: walk the object and apply tag-stripping + secret
+        // redaction to each string leaf. JSON structure is never exposed to the HTML
+        // stripper, so it cannot be corrupted. No stringify→parse round-trip needed.
+        // Any unexpected throw is caught by the outer try/catch and returned as
+        // { success: false } — correct behavior that stops agent retry loops.
+        const sanitizedData = sanitizeObjectOutput(result.data, {
+          maxLength: this.skillOutputMaxLength,
+          skipSecretRedaction,
+        });
+        return { success: true, data: sanitizedData };
       }
 
       // Handler returned { success: false, error } directly (did not throw).
