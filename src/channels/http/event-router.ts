@@ -72,6 +72,34 @@ export type WaitResult =
 export const WAIT_TIMEOUT_MESSAGE = 'Response timeout — the agent did not respond in time';
 export const WAIT_SUPERSEDED_MESSAGE = 'Superseded by a newer request for the same conversation_id';
 
+/**
+ * Map a non-ok {@link WaitResult} to its HTTP status code and client-facing
+ * message. Shared by the /api/messages and /api/kg/chat/messages handlers so the
+ * status contract can't drift between them — it already did once (rate-limit
+ * rejections returned 403 instead of 429 on the KG route). The `never` guard
+ * forces any new WaitResult variant to be handled here at compile time.
+ *
+ * Mapping: too-large → 413, rate-limited → 429, other policy rejection → 403,
+ * timeout → 504, supersede → 500.
+ */
+export function mapWaitFailureToHttp(result: Extract<WaitResult, { ok: false }>): { status: number; message: string } {
+  switch (result.kind) {
+    case 'rejected':
+      return {
+        status: result.error.reason === 'message_too_large' ? 413 : result.error.statusCode,
+        message: result.error.message,
+      };
+    case 'timeout':
+      return { status: 504, message: WAIT_TIMEOUT_MESSAGE };
+    case 'superseded':
+      return { status: 500, message: WAIT_SUPERSEDED_MESSAGE };
+    default: {
+      const _exhaustive: never = result;
+      throw new Error(`Unhandled WaitResult: ${JSON.stringify(_exhaustive)}`);
+    }
+  }
+}
+
 export interface PendingResponse {
   /** Settle the waiter's promise. Resolving (never rejecting) is what keeps a
    *  late timeout/supersede from leaking as an unhandledRejection — see WaitResult. */
