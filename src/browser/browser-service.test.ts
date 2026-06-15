@@ -14,39 +14,50 @@ import pino from 'pino';
 
 const logger = pino({ level: 'silent' });
 
+// Mock the Ghostery blocker so no real blocklist is fetched in unit tests.
+// fakeBlocker is exposed for the blocker-specific assertions Task 6 adds (it will
+// reference fakeBlocker.enableBlockingInPage); the void below keeps it from tripping
+// noUnusedLocals until then.
+const { fakeBlocker, fromPrebuilt } = vi.hoisted(() => {
+  const fb = { enableBlockingInPage: vi.fn().mockResolvedValue(undefined) };
+  return { fakeBlocker: fb, fromPrebuilt: vi.fn().mockResolvedValue(fb) };
+});
+void fakeBlocker;
+vi.mock('@ghostery/adblocker-playwright', () => ({
+  PlaywrightBlocker: { fromPrebuiltAdsAndTracking: fromPrebuilt },
+}));
+
 // --- Mock Playwright objects ---
 
 function makeMockPage() {
   return {
     on: vi.fn(),
+    close: vi.fn().mockResolvedValue(undefined),
     goto: vi.fn().mockResolvedValue(null),
-    click: vi.fn().mockResolvedValue(null),
-    fill: vi.fn().mockResolvedValue(null),
-    selectOption: vi.fn().mockResolvedValue(null),
     evaluate: vi.fn().mockResolvedValue('page content'),
     screenshot: vi.fn().mockResolvedValue(Buffer.from('fake-png')),
     url: vi.fn().mockReturnValue('https://example.com'),
-    getByText: vi.fn().mockReturnValue({ click: vi.fn().mockResolvedValue(null) }),
-    getByRole: vi.fn().mockReturnValue({ click: vi.fn().mockResolvedValue(null), fill: vi.fn().mockResolvedValue(null) }),
-    getByLabel: vi.fn().mockReturnValue({ click: vi.fn().mockResolvedValue(null), fill: vi.fn().mockResolvedValue(null) }),
-    locator: vi.fn().mockReturnValue({ click: vi.fn().mockResolvedValue(null), fill: vi.fn().mockResolvedValue(null), selectOption: vi.fn().mockResolvedValue(null) }),
   };
 }
 
-function makeMockContext(page: ReturnType<typeof makeMockPage>) {
+function makeMockBrowser() {
+  return {
+    isConnected: vi.fn().mockReturnValue(true),
+    on: vi.fn(),
+    version: vi.fn().mockReturnValue('123.0.0.0'),
+    // Set per-test for incognito cases (Task 5).
+    newContext: vi.fn(),
+    close: vi.fn().mockResolvedValue(undefined),
+  };
+}
+
+// The persistent context is the warm "browser" in the new model. browser() returns
+// the underlying Browser so the service can spin up incognito contexts off it.
+function makeMockContext(page: ReturnType<typeof makeMockPage>, browser: ReturnType<typeof makeMockBrowser>) {
   return {
     newPage: vi.fn().mockResolvedValue(page),
     close: vi.fn().mockResolvedValue(undefined),
-    route: vi.fn().mockResolvedValue(undefined),
-    on: vi.fn(),
-  };
-}
-
-function makeMockBrowser(context: ReturnType<typeof makeMockContext>) {
-  return {
-    newContext: vi.fn().mockResolvedValue(context),
-    isConnected: vi.fn().mockReturnValue(true),
-    close: vi.fn().mockResolvedValue(undefined),
+    browser: vi.fn().mockReturnValue(browser),
     on: vi.fn(),
   };
 }
@@ -56,8 +67,8 @@ function makeMockBrowser(context: ReturnType<typeof makeMockContext>) {
 describe('BrowserService (unit — mocked browser)', () => {
   let service: BrowserService;
   let mockPage: ReturnType<typeof makeMockPage>;
-  let mockContext: ReturnType<typeof makeMockContext>;
   let mockBrowser: ReturnType<typeof makeMockBrowser>;
+  let mockContext: ReturnType<typeof makeMockContext>;
 
   // Isolate unit tests from the host display environment.
   // BrowserService.start() calls maybeStartXvfb() which spawns Xvfb on Linux
@@ -72,15 +83,15 @@ describe('BrowserService (unit — mocked browser)', () => {
     process.env.DISPLAY = savedDisplay ?? ':99';
 
     mockPage = makeMockPage();
-    mockContext = makeMockContext(mockPage);
-    mockBrowser = makeMockBrowser(mockContext);
+    mockBrowser = makeMockBrowser();
+    mockContext = makeMockContext(mockPage, mockBrowser);
 
     service = new BrowserService({
       logger,
       sessionTtlMs: 1000,
       sweepIntervalMs: 60000,
-      // Inject fake browser so no real Playwright process is needed
-      browserFactory: async () => mockBrowser as never,
+      // Inject a fake persistent context so no real Playwright process is needed.
+      contextFactory: async () => mockContext as never,
     });
     await service.start();
   });
@@ -98,15 +109,15 @@ describe('BrowserService (unit — mocked browser)', () => {
     const result = await service.getOrCreateSession(undefined);
     expect(result.sessionId).toBeTruthy();
     expect(typeof result.sessionId).toBe('string');
-    expect(mockBrowser.newContext).toHaveBeenCalledOnce();
+    expect(mockContext.newPage).toHaveBeenCalledOnce();
   });
 
   it('reuses an existing session when a valid session_id is provided', async () => {
     const first = await service.getOrCreateSession(undefined);
     const second = await service.getOrCreateSession(first.sessionId);
     expect(second.sessionId).toBe(first.sessionId);
-    // newContext called only once — second call reused existing session
-    expect(mockBrowser.newContext).toHaveBeenCalledOnce();
+    // newPage called only once — second call reused existing session
+    expect(mockContext.newPage).toHaveBeenCalledOnce();
   });
 
   it('creates a fresh session when the provided session_id has expired', async () => {
@@ -118,14 +129,14 @@ describe('BrowserService (unit — mocked browser)', () => {
 
     const second = await service.getOrCreateSession(first.sessionId);
     expect(second.sessionId).not.toBe(first.sessionId);
-    expect(mockBrowser.newContext).toHaveBeenCalledTimes(2);
-    expect(mockContext.close).toHaveBeenCalledOnce();
+    expect(mockContext.newPage).toHaveBeenCalledTimes(2);
+    expect(mockPage.close).toHaveBeenCalledOnce();
   });
 
   it('closeSession() closes the context and removes the session', async () => {
     const { sessionId } = await service.getOrCreateSession(undefined);
     await service.closeSession(sessionId);
-    expect(mockContext.close).toHaveBeenCalledOnce();
+    expect(mockPage.close).toHaveBeenCalledOnce();
     expect(service.getSession(sessionId)).toBeUndefined();
   });
 
@@ -138,15 +149,15 @@ describe('BrowserService (unit — mocked browser)', () => {
 
     await service.sweep();
     expect(service.getSession(sessionId)).toBeUndefined();
-    expect(mockContext.close).toHaveBeenCalledOnce();
+    expect(mockPage.close).toHaveBeenCalledOnce();
   });
 
   it('stop() closes all sessions and the browser', async () => {
     await service.getOrCreateSession(undefined);
     await service.getOrCreateSession(undefined); // two sessions
     await service.stop();
-    expect(mockContext.close).toHaveBeenCalledTimes(2);
-    expect(mockBrowser.close).toHaveBeenCalledOnce();
+    expect(mockPage.close).toHaveBeenCalledTimes(2);
+    expect(mockContext.close).toHaveBeenCalledOnce();
   });
 });
 

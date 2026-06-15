@@ -1,7 +1,10 @@
 // src/browser/browser-service.ts — manages a warm Playwright browser and session map.
 //
-// A single Chromium browser process is launched at startup and kept warm.
-// Each session gets its own isolated BrowserContext (separate cookies/storage).
+// A single PERSISTENT browser context is launched at startup (the principal's profile)
+// and kept warm. Sessions are PAGES within that one shared context, so they share
+// cookies/storage/cache — the site sees a "returning user", not a fresh anonymous
+// browser each time. An opt-in incognito session instead gets its own isolated ephemeral
+// context spun off the same browser (never touching the persistent profile).
 // Sessions expire after sessionTtlMs of inactivity and are swept on an interval.
 //
 // SCALABILITY @TODO: This implementation runs a single Playwright browser in-process.
@@ -26,11 +29,22 @@ import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
 import { existsSync, readFileSync, rmSync } from 'node:fs';
-import { chromium, type Browser } from 'playwright';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+import { chromium as stealthChromium } from 'playwright-extra';
+import StealthPlugin from 'puppeteer-extra-plugin-stealth';
+import type { BrowserContext, BrowserContextOptions } from 'playwright';
 import { PlaywrightBlocker } from '@ghostery/adblocker-playwright';
 import type { Logger } from '../logger.js';
 import { BrowserSession } from './browser-session.js';
 import type { SessionId } from './types.js';
+
+// Register the stealth plugin once at module load. It patches the residual automation
+// signals (navigator.plugins, window.chrome, WebGL vendor/renderer, permissions.query,
+// and the User-Agent) that --disable-blink-features=AutomationControlled alone leaves
+// exposed. It applies at the browser level, so it covers both the persistent context and
+// any incognito context spun off the same browser.
+stealthChromium.use(StealthPlugin());
 
 interface BrowserServiceOptions {
   logger: Logger;
@@ -38,21 +52,39 @@ interface BrowserServiceOptions {
   sessionTtlMs?: number;
   /** How often to sweep expired sessions in ms. Default: 120_000 (2 minutes). */
   sweepIntervalMs?: number;
+  /** Persistent profile directory. Empty/absent → ${HOME}/.curia/browser-profile. */
+  profileDir?: string;
+  /** Browser channel, e.g. 'chrome' for real Chrome. Absent → bundled Chromium. */
+  channel?: string;
+  /** Context locale (BCP 47). Default 'en-US'. */
+  locale?: string;
+  /** IANA timezone for the context, aligned to the principal. */
+  timezone?: string;
   /**
-   * Optional factory to create the Browser instance.
-   * Defaults to chromium.launch(...). Override in tests to inject a mock.
+   * Optional factory to create the persistent BrowserContext.
+   * Defaults to launchPersistentContext(...). Override in tests to inject a mock.
    */
-  browserFactory?: () => Promise<Browser>;
+  contextFactory?: () => Promise<BrowserContext>;
 }
 
 export class BrowserService {
   private logger: Logger;
   private sessionTtlMs: number;
   private sweepIntervalMs: number;
-  private browserFactory: () => Promise<Browser>;
+  private profileDir: string;
+  private channel: string | undefined;
+  private locale: string;
+  private timezone: string | undefined;
+  private contextFactory: () => Promise<BrowserContext>;
 
-  private browser: Browser | null = null;
+  // The persistent context IS the warm browser in this model. Sessions are pages within
+  // it (shared cookies/storage = "returning user"); incognito sessions get their own
+  // ephemeral context spun off context.browser() (see getOrCreateSession).
+  private context: BrowserContext | null = null;
+  // Ad blocker is loaded lazily on first opt-in (block_ads:true) and cached. Off by
+  // default so login/auth/form-fill flows carry no privacy-extension signal.
   private blocker: PlaywrightBlocker | null = null;
+  private blockerPromise: Promise<PlaywrightBlocker> | null = null;
   private sessions: Map<SessionId, BrowserSession> = new Map();
   private sweepTimer: NodeJS.Timeout | null = null;
   private xvfbProcess: ChildProcess | null = null;
@@ -61,7 +93,13 @@ export class BrowserService {
     this.logger = options.logger.child({ service: 'BrowserService' });
     this.sessionTtlMs = options.sessionTtlMs ?? 600_000;
     this.sweepIntervalMs = options.sweepIntervalMs ?? 120_000;
-    this.browserFactory = options.browserFactory ?? (() => this.launchChromium());
+    this.profileDir = options.profileDir && options.profileDir.length > 0
+      ? options.profileDir
+      : join(homedir(), '.curia', 'browser-profile');
+    this.channel = options.channel && options.channel.length > 0 ? options.channel : undefined;
+    this.locale = options.locale && options.locale.length > 0 ? options.locale : 'en-US';
+    this.timezone = options.timezone;
+    this.contextFactory = options.contextFactory ?? (() => this.launchPersistentContext());
   }
 
   /**
@@ -69,49 +107,39 @@ export class BrowserService {
    * Must be called before any session operations.
    */
   async start(): Promise<void> {
-    if (this.browser !== null) {
+    if (this.context !== null) {
       throw new Error('BrowserService.start() called while already running — call stop() first');
     }
 
     await this.maybeStartXvfb();
-    this.browser = await this.browserFactory();
+    this.context = await this.contextFactory();
 
-    // Restart browser automatically on disconnect (e.g., OOM kill)
-    this.attachDisconnectedHandler(this.browser);
-
-    // Initialize ad blocker in the background — don't block startup on a network download.
-    // Sessions created before initialization completes will run without ad blocking,
-    // which is acceptable for correctness. The blocker will be applied to all contexts
-    // created after it finishes.
-    PlaywrightBlocker.fromPrebuiltAdsAndTracking(fetch).then(blocker => {
-      this.blocker = blocker;
-      this.logger.info('Ad blocker initialized');
-    }).catch((err: unknown) => {
-      this.logger.warn({ err }, 'Ad blocker failed to initialize — continuing without ad blocking');
-    });
+    // Restart the browser automatically on disconnect (e.g., OOM kill).
+    this.attachDisconnectedHandler(this.context);
 
     this.sweepTimer = setInterval(() => void this.sweep(), this.sweepIntervalMs);
-    // Don't let the sweep timer prevent graceful shutdown
     this.sweepTimer.unref();
 
     this.logger.info({ sessionTtlMs: this.sessionTtlMs }, 'BrowserService started');
   }
 
   /**
-   * Attach the 'disconnected' crash-recovery listener to a browser instance.
-   * Called on the initial browser and on every restarted browser so that
-   * crash recovery continues working after the first restart.
+   * Attach the 'disconnected' crash-recovery listener to the persistent context's
+   * underlying browser. On disconnect we clear sessions and relaunch the persistent
+   * context, then re-attach so a second crash is also recovered.
    */
-  private attachDisconnectedHandler(browser: import('playwright').Browser): void {
+  private attachDisconnectedHandler(context: BrowserContext): void {
+    const browser = context.browser();
+    if (!browser) {
+      this.logger.warn('Persistent context has no associated browser — crash recovery disabled');
+      return;
+    }
     browser.on('disconnected', () => {
       this.logger.error('Playwright browser disconnected — clearing sessions and restarting');
       this.sessions.clear();
-      // Non-blocking restart — if it fails, subsequent skill calls return errors
-      void this.browserFactory().then(b => {
-        this.browser = b;
-        // Reattach the handler on the new browser instance so that a second
-        // crash is also recovered. Without this, recovery only works once.
-        this.attachDisconnectedHandler(b);
+      void this.contextFactory().then(ctx => {
+        this.context = ctx;
+        this.attachDisconnectedHandler(ctx);
       }).catch(err => {
         this.logger.error({ err }, 'Browser restart failed');
       });
@@ -137,13 +165,13 @@ export class BrowserService {
     }
     this.sessions.clear();
 
-    if (this.browser) {
+    if (this.context) {
       try {
-        await this.browser.close();
+        await this.context.close();
       } catch (err) {
-        this.logger.error({ err }, 'Error closing browser during shutdown');
+        this.logger.error({ err }, 'Error closing browser context during shutdown');
       }
-      this.browser = null;
+      this.context = null;
     }
 
     if (this.xvfbProcess) {
@@ -159,58 +187,70 @@ export class BrowserService {
    *
    * - No sessionId → always creates a fresh session.
    * - Valid, non-expired sessionId → refreshes TTL and returns existing session.
-   * - Expired sessionId → closes old context, creates a fresh session with a new ID.
+   * - Expired sessionId → closes the old session, creates a fresh session with a new ID.
+   *
+   * opts.incognito → isolated ephemeral context off the same browser (no persistent
+   * profile). opts.blockAds → attach the (lazily-fetched) Ghostery ad blocker to the page.
    *
    * Returns the session and its (possibly new) sessionId.
    */
-  async getOrCreateSession(sessionId: SessionId | undefined): Promise<{ sessionId: SessionId; session: BrowserSession }> {
-    if (!this.browser || !this.browser.isConnected()) {
+  async getOrCreateSession(
+    sessionId: SessionId | undefined,
+    opts: { incognito?: boolean; blockAds?: boolean } = {},
+  ): Promise<{ sessionId: SessionId; session: BrowserSession }> {
+    const browser = this.context?.browser();
+    if (!this.context || !browser || !browser.isConnected()) {
       throw new Error('BrowserService: browser is not running. Call start() first.');
     }
 
     if (sessionId) {
       const existing = this.sessions.get(sessionId);
       if (existing && !existing.isExpired(this.sessionTtlMs)) {
-        // Refresh TTL and return
         existing.lastUsedAt = Date.now();
         return { sessionId, session: existing };
       }
-      // Session expired or not found — close it if it exists and create a fresh one
       if (existing) {
-        this.logger.debug({ sessionId }, 'Session expired — closing and creating fresh context');
+        this.logger.debug({ sessionId }, 'Session expired — closing and creating fresh session');
         await existing.close().catch(err => this.logger.error({ err, sessionId }, 'Error closing expired session'));
         this.sessions.delete(sessionId);
       }
     }
 
-    // Create new isolated context + page
-    const context = await this.browser.newContext({
-      viewport: { width: 1280, height: 720 },
-      userAgent: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-    });
-
+    // Incognito → fresh isolated context off the same browser, never touching the
+    // principal's persistent profile. Persistent (default) → a page in the shared profile.
+    let ownedContext: BrowserContext | null = null;
     let page;
     try {
-      // Apply ad blocker to this context if initialized
-      page = await context.newPage();
-      if (this.blocker) {
-        try {
-          await this.blocker.enableBlockingInPage(page);
-        } catch (err) {
-          this.logger.warn({ err }, 'Ad blocker failed to attach to page — continuing without ad blocking for this session');
+      if (opts.incognito) {
+        ownedContext = await browser.newContext(this.buildContextOptions());
+        page = await ownedContext.newPage();
+      } else {
+        page = await this.context.newPage();
+      }
+      if (opts.blockAds) {
+        const blocker = await this.getBlocker();
+        if (blocker) {
+          try {
+            await blocker.enableBlockingInPage(page);
+          } catch (err) {
+            this.logger.warn({ err }, 'Ad blocker failed to attach to page — continuing without ad blocking for this session');
+          }
         }
       }
     } catch (err) {
-      // If page creation fails, close the context to prevent a resource leak.
-      // Without this, the BrowserContext would never be closed since it's not
-      // yet in this.sessions and stop() only closes sessions in the map.
-      await context.close().catch(closeErr => {
-        this.logger.error({ err: closeErr }, 'Failed to close context during page creation cleanup — possible resource leak');
-      });
+      // Clean up a half-created session to prevent a leak (it's not yet in the map).
+      if (ownedContext) {
+        await ownedContext.close().catch(closeErr => {
+          this.logger.error({ err: closeErr }, 'Failed to close incognito context during cleanup — possible resource leak');
+        });
+      } else if (page) {
+        await page.close().catch(() => {});
+      }
       throw err;
     }
+
     const newSessionId = randomUUID();
-    const session = new BrowserSession(context, page);
+    const session = new BrowserSession(ownedContext ?? this.context, page, ownedContext);
 
     // Crash safety: if the page crashes, invalidate the session so the next
     // skill call starts fresh rather than retrying on a broken page.
@@ -221,7 +261,10 @@ export class BrowserService {
     });
 
     this.sessions.set(newSessionId, session);
-    this.logger.debug({ sessionId: newSessionId }, 'New browser session created');
+    this.logger.debug(
+      { sessionId: newSessionId, incognito: opts.incognito === true, blockAds: opts.blockAds === true },
+      'New browser session created',
+    );
 
     return { sessionId: newSessionId, session };
   }
@@ -266,19 +309,82 @@ export class BrowserService {
 
   // --- Private helpers ---
 
-  private async launchChromium(): Promise<Browser> {
-    return chromium.launch({
-      // headless: false + Xvfb = full browser on a virtual display.
-      // This avoids Cloudflare fingerprinting that targets headless mode's
-      // missing APIs and renderer differences. On macOS dev machines, no Xvfb
-      // is needed — the real display is used directly.
+  /**
+   * Fingerprint/context options shared by the persistent context and any incognito
+   * context. We deliberately DO NOT set userAgent — with the real Chrome channel and the
+   * stealth plugin's UA-override evasion the genuine current UA is sent, so it can never
+   * go stale (the old hardcoded Chrome/122 was a bot tell). timezoneId is set only when a
+   * timezone is configured, aligning the context with the principal.
+   */
+  private buildContextOptions(): BrowserContextOptions {
+    return {
+      viewport: { width: 1280, height: 720 },
+      locale: this.locale,
+      colorScheme: 'light',
+      ...(this.timezone ? { timezoneId: this.timezone } : {}),
+    };
+  }
+
+  /**
+   * Lazily fetch the Ghostery blocklist on first opt-in (block_ads:true) and cache it.
+   * Off by default, so most sessions never pay this cost. A fetch failure logs and returns
+   * null (blocking is best-effort) and clears the cached promise so a later opt-in retries.
+   */
+  private async getBlocker(): Promise<PlaywrightBlocker | null> {
+    if (this.blocker) return this.blocker;
+    try {
+      this.blockerPromise ??= PlaywrightBlocker.fromPrebuiltAdsAndTracking(fetch);
+      this.blocker = await this.blockerPromise;
+      this.logger.info('Ad blocker initialized (first opt-in)');
+      return this.blocker;
+    } catch (err) {
+      this.logger.warn({ err }, 'Ad blocker failed to initialize — continuing without ad blocking');
+      this.blockerPromise = null;
+      return null;
+    }
+  }
+
+  /**
+   * Launch the single persistent browser context (the principal's profile). Tries the
+   * configured channel (e.g. real Chrome) first and falls back to bundled Chromium if it
+   * isn't installed, so the skill degrades instead of failing to boot. Cast through unknown:
+   * playwright-extra returns a playwright-core BrowserContext, structurally identical to the
+   * 'playwright' BrowserContext we type against.
+   */
+  private async launchPersistentContext(): Promise<BrowserContext> {
+    const baseOptions = {
       headless: false,
       args: [
         '--disable-blink-features=AutomationControlled', // removes navigator.webdriver flag
         '--no-sandbox',                                   // required in container environments
         '--disable-dev-shm-usage',                        // prevents /dev/shm OOM in Docker
       ],
-    });
+      ...this.buildContextOptions(),
+    };
+
+    try {
+      const context = await stealthChromium.launchPersistentContext(
+        this.profileDir,
+        this.channel ? { ...baseOptions, channel: this.channel } : baseOptions,
+      ) as unknown as BrowserContext;
+      this.logChannel(context, this.channel);
+      return context;
+    } catch (err) {
+      if (!this.channel) throw err; // no channel to fall back from — a genuine launch failure
+      this.logger.warn({ err, channel: this.channel }, 'Failed to launch with channel — falling back to bundled Chromium');
+      const context = await stealthChromium.launchPersistentContext(
+        this.profileDir,
+        baseOptions,
+      ) as unknown as BrowserContext;
+      this.logChannel(context, undefined);
+      return context;
+    }
+  }
+
+  /** Log the resolved channel + real browser version for observability (UA traceability). */
+  private logChannel(context: BrowserContext, channel: string | undefined): void {
+    const version = context.browser()?.version();
+    this.logger.info({ channel: channel ?? 'chromium', version, profileDir: this.profileDir }, 'Persistent browser context launched');
   }
 
   /**
