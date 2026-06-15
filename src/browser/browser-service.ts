@@ -83,6 +83,9 @@ export class BrowserService {
   private context: BrowserContext | null = null;
   // Ad blocker is loaded lazily on first opt-in (block_ads:true) and cached. Off by
   // default so login/auth/form-fill flows carry no privacy-extension signal.
+  // These fields intentionally survive stop()/restart() — the blocklist is process-global
+  // data independent of the browser process, so it is reused rather than refetched on
+  // each browser restart.
   private blocker: PlaywrightBlocker | null = null;
   private blockerPromise: Promise<PlaywrightBlocker> | null = null;
   private sessions: Map<SessionId, BrowserSession> = new Map();
@@ -103,7 +106,7 @@ export class BrowserService {
   }
 
   /**
-   * Start the browser service: spawn Xvfb if needed, launch Chromium, start sweep timer.
+   * Start the browser service: spawn Xvfb if needed, launch the persistent browser context, start sweep timer.
    * Must be called before any session operations.
    */
   async start(): Promise<void> {
@@ -114,7 +117,7 @@ export class BrowserService {
     await this.maybeStartXvfb();
     this.context = await this.contextFactory();
 
-    // Restart the browser automatically on disconnect (e.g., OOM kill).
+    // Restart the persistent context automatically on disconnect (e.g., OOM kill).
     this.attachDisconnectedHandler(this.context);
 
     this.sweepTimer = setInterval(() => void this.sweep(), this.sweepIntervalMs);
@@ -136,7 +139,15 @@ export class BrowserService {
     }
     browser.on('disconnected', () => {
       this.logger.error('Playwright browser disconnected — clearing sessions and restarting');
+      // Best-effort close of any live sessions before dropping them from the map. On a
+      // genuine crash/OOM kill the pages are already gone and these close() calls no-op;
+      // but if 'disconnected' fires while the process is still alive (explicit close,
+      // transport drop), this prevents leaking the underlying pages/contexts.
+      const orphaned = [...this.sessions.values()];
       this.sessions.clear();
+      for (const session of orphaned) {
+        void session.close().catch(() => { /* browser likely gone — nothing to clean */ });
+      }
       void this.contextFactory().then(ctx => {
         this.context = ctx;
         this.attachDisconnectedHandler(ctx);
