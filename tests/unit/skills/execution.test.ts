@@ -713,4 +713,48 @@ describe('ExecutionLayer', () => {
       }
     });
   });
+
+  it('object-returning skill with HTML body values returns valid object (not corrupted string)', async () => {
+    const handler: SkillHandler = {
+      execute: async () => ({
+        success: true,
+        data: { messages: [{ body: '<style>x{}</style><div>"quoted"</div>' }] },
+      }),
+    };
+    registry.register(makeManifest(), handler);
+
+    const result = await execution.invoke('test-skill', {});
+    expect(result.success).toBe(true);
+    if (result.success) {
+      // Must be a plain object, never a corrupted string
+      expect(typeof result.data).toBe('object');
+      const data = result.data as { messages: Array<{ body: string }> };
+      expect(Array.isArray(data.messages)).toBe(true);
+      expect(typeof data.messages[0]!.body).toBe('string');
+      // Dangerous content stripped
+      expect(data.messages[0]!.body).not.toContain('<style>');
+      expect(data.messages[0]!.body).not.toContain('x{}');
+      // Safe content preserved
+      expect(data.messages[0]!.body).toContain('"quoted"');
+    }
+  });
+
+  it('object-returning skill with clean values returns data unchanged', async () => {
+    const handler: SkillHandler = {
+      execute: async () => ({
+        success: true,
+        data: { count: 5, label: 'results', items: ['a', 'b'] },
+      }),
+    };
+    registry.register(makeManifest(), handler);
+
+    const result = await execution.invoke('test-skill', {});
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const data = result.data as { count: number; label: string; items: string[] };
+      expect(data.count).toBe(5);
+      expect(data.label).toBe('results');
+      expect(data.items).toEqual(['a', 'b']);
+    }
+  });
 });
