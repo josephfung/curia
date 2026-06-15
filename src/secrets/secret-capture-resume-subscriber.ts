@@ -38,6 +38,20 @@ export type ResumeRoutingRegistrar = (
  *  re-arriving would at worst re-enter the agent once, which it tolerates (re-checks its history). */
 const MAX_DISPATCHED_IDS = 10_000;
 
+/**
+ * Internal channels that carry no path back to a human. Resume only works when the link was
+ * minted by an agent running on a real user-facing channel — today that's the coordinator,
+ * which the dispatcher runs directly in the user's conversation. Anything minted by a *delegated*
+ * specialist runs on 'internal' (see the delegate skill, which stamps channelId 'internal' and a
+ * throwaway delegate-<uuid> conversation), so a resume there would publish an outbound.message no
+ * adapter delivers and no user is watching — AND the coordinator's delegate-await that would relay
+ * it has already returned. We skip those with a loud log rather than dead-ending silently.
+ *
+ * Cleanly resuming a delegated specialist is a separate feature: it needs the coordinator to
+ * re-delegate via the delegate skill's resume_token, not a direct re-entry. Tracked as follow-up.
+ */
+const NON_DELIVERABLE_CHANNELS = new Set(['internal', 'bullpen', 'scheduler']);
+
 export class SecretCaptureResumeSubscriber {
   // In-memory guard against double-dispatch on duplicate event delivery. The redeem is already
   // idempotent on consumed_at (one capture → one event), so this only defends against the bus
@@ -79,6 +93,20 @@ export class SecretCaptureResumeSubscriber {
       this.logger.info(
         { eventId: event.id, secretName, hasAgentId: !!agentId, hasConversationId: !!conversationId, hasChannelId: !!channelId },
         'secret.captured has no routable origin — not resuming an agent',
+      );
+      return;
+    }
+
+    // Deliverability guard: a link minted by a delegated specialist runs on an internal channel
+    // (channelId 'internal'/'bullpen'/'scheduler') with a throwaway conversation. Re-entering there
+    // would produce a reply no user can see and bypass the coordinator relay. Skip with a loud log
+    // rather than dead-ending silently. Today only the coordinator mints user-secret links (on a
+    // real channel), so this is a forward guard against a future skill-pinning footgun. Proper
+    // specialist resume needs the coordinator to re-delegate (delegate resume_token) — out of scope.
+    if (NON_DELIVERABLE_CHANNELS.has(channelId)) {
+      this.logger.warn(
+        { eventId: event.id, secretName, agentId, channelId },
+        'secret.captured minted by an agent on a non-user-facing channel — cannot deliver a resume there; skipping (specialist resume requires coordinator re-delegation)',
       );
       return;
     }

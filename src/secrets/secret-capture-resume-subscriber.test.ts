@@ -116,6 +116,15 @@ describe('SecretCaptureResumeSubscriber', () => {
     expect(routingCalls).toHaveLength(0);
   });
 
+  it('skips (no dispatch) when minted on a non-user-facing channel (delegated specialist)', async () => {
+    const { published, emit, routingCalls } = makeSubscriber();
+    // A delegated specialist runs on channelId 'internal' with a throwaway conversation — a resume
+    // there could never reach the user, so it must be skipped rather than dead-ended silently.
+    await emit(makeCapturedEvent({ channelId: 'internal', conversationId: 'delegate-abc', agentId: 'some-specialist' }));
+    expect(published).toHaveLength(0);
+    expect(routingCalls).toHaveLength(0);
+  });
+
   it('falls back to a generic sender when no originator is present', async () => {
     const { published, emit } = makeSubscriber();
     await emit(createSecretCaptured({
