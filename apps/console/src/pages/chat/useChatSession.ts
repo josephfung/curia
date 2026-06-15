@@ -63,6 +63,10 @@ export function useChatSession(): ChatSession {
   const isLoadingMore = useRef(false);
   // Holds the active EventSource so cleanup can close it on unmount.
   const sourceRef = useRef<EventSource | null>(null);
+  // Holds the in-flight reply watchdog timer so cleanup can clear it on unmount
+  // (otherwise a turn that unmounts mid-flight leaves a up-to-5-minute timer that
+  // later fires a post-unmount /history fetch + setState). See send() below.
+  const watchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // One conversationId per chat thread — persisted in localStorage.
   // localStorage.getItem can throw SecurityError in restricted browsing contexts
   // (e.g. Safari private mode with strict settings), so we guard the read.
@@ -100,8 +104,12 @@ export function useChatSession(): ChatSession {
   // ISO timestamp of the oldest loaded message — used as the pagination cursor.
   const oldestTimestamp = useRef<string | null>(null);
 
-  // Close any in-flight SSE connection when the component unmounts.
-  useEffect(() => () => { sourceRef.current?.close(); }, []);
+  // Close any in-flight SSE connection and clear the reply watchdog when the
+  // component unmounts, so neither survives to fire after teardown.
+  useEffect(() => () => {
+    sourceRef.current?.close();
+    if (watchdogRef.current) clearTimeout(watchdogRef.current);
+  }, []);
 
   // On mount, if we have a stored conversationId, load the most recent history page.
   useEffect(() => {
@@ -202,10 +210,11 @@ export function useChatSession(): ChatSession {
     }
     const convId = conversationId.current;
 
-    // Close any stream left open by a prior turn's soft-recovery path before
-    // starting a new one, so we never leak a dangling EventSource.
+    // Close any stream left open by a prior turn's soft-recovery path, and clear
+    // any pending watchdog, before starting a new one — never leak either.
     sourceRef.current?.close();
     sourceRef.current = null;
+    if (watchdogRef.current) { clearTimeout(watchdogRef.current); watchdogRef.current = null; }
 
     const sentAt = Date.now();
     // Optimistic append so the user sees their message immediately.
@@ -217,13 +226,13 @@ export function useChatSession(): ChatSession {
     setSending(true);
 
     let source: EventSource | undefined;
-    let watchdog: ReturnType<typeof setTimeout> | undefined;
     let settled = false;
 
     // Unlock the composer (and stop the watchdog) without touching the stream —
-    // used by the soft-recovery path so a late reply can still render.
+    // used by the soft-recovery path so a late reply can still render. The
+    // watchdog lives in a ref so the unmount cleanup can also clear it.
     const unlock = () => {
-      if (watchdog) { clearTimeout(watchdog); watchdog = undefined; }
+      if (watchdogRef.current) { clearTimeout(watchdogRef.current); watchdogRef.current = null; }
       isSending.current = false;
       setSending(false);
     };
@@ -260,7 +269,10 @@ export function useChatSession(): ChatSession {
       } catch (err) {
         console.error('[useChatSession] recovery history fetch failed:', err);
       }
-      // Nothing to recover yet — soft notice, unlock, keep the stream open.
+      // Nothing to recover yet — soft notice, unlock, keep the stream open so a
+      // late reply still renders. This open stream is closed by one of: a late
+      // SSE reply (onmessage → finalize), the next send() (closes the prior
+      // stream up top), or unmount cleanup. That closure contract is non-local.
       setMessages((prev) => [...prev, makeMessage('status', STILL_WORKING_TEXT)]);
       unlock();
     };
@@ -339,7 +351,7 @@ export function useChatSession(): ChatSession {
       // which case the turn is already finalized and arming the watchdog would
       // later append a duplicate of the already-rendered reply via /history.
       if (!settled) {
-        watchdog = setTimeout(() => { void runRecovery(); }, REPLY_WATCHDOG_MS);
+        watchdogRef.current = setTimeout(() => { void runRecovery(); }, REPLY_WATCHDOG_MS);
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Network error';
