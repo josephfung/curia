@@ -134,6 +134,15 @@ export interface YamlConfig {
   browser?: {
     sessionTtlMs?: number;
     sweepIntervalMs?: number;
+    /**
+     * Persistent browser profile directory. Empty/absent → ${HOME}/.curia/browser-profile.
+     * Must be on a mounted volume in production so cookies/session survive restarts.
+     */
+    profileDir?: string;
+    /** Browser channel, e.g. "chrome" for real Chrome. Empty/absent → bundled Chromium. */
+    channel?: string;
+    /** Context locale (BCP 47). Default "en-US". */
+    locale?: string;
   };
   agents?: {
     coordinator?: { config_path?: string };

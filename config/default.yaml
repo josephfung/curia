@@ -62,6 +62,14 @@ browser:
   sessionTtlMs: 600000   # 10 minutes
   # How often the session sweep runs to close expired sessions (ms).
   sweepIntervalMs: 120000  # 2 minutes
+  # Persistent profile directory. Empty → ${HOME}/.curia/browser-profile.
+  # Mount this on a volume in production so logins survive restarts.
+  profileDir: ""
+  # Browser channel: "chrome" for real Chrome (must be installed in the image),
+  # empty for the bundled Playwright Chromium.
+  channel: ""
+  # Context locale (BCP 47).
+  locale: "en-US"
 
 agents:
   coordinator:
