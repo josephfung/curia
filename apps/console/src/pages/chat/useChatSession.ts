@@ -334,8 +334,13 @@ export function useChatSession(): ChatSession {
       }
 
       // 202 ack received. The reply arrives over SSE; arm the watchdog in case it
-      // never does (suppressed-duplicate turn or agent crash).
-      watchdog = setTimeout(() => { void runRecovery(); }, REPLY_WATCHDOG_MS);
+      // never does (suppressed-duplicate turn or agent crash). Guard on !settled:
+      // a fast reply can fire between the onopen gate and the POST resolving, in
+      // which case the turn is already finalized and arming the watchdog would
+      // later append a duplicate of the already-rendered reply via /history.
+      if (!settled) {
+        watchdog = setTimeout(() => { void runRecovery(); }, REPLY_WATCHDOG_MS);
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Network error';
       setMessages((prev) => [...prev, makeMessage('error', msg)]);
