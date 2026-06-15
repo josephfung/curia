@@ -22,6 +22,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **`secretResolver` capability (skill manifest schema, public API)** — runtime by-reference resolution of dynamic `user.*` secrets; gated to a hard skill allowlist (`web-browser` only) and the `user.*` namespace. (#973)
 - **Agent resume after secret capture** — filling a capture link now publishes a `secret.captured` event (name/routing only, never the value) and a thin subscriber re-enters the originating agent so it can continue what it was blocked on. (#972)
 - **`secret.captured` bus event (public API)** — emitted by the capture endpoint on a successful redeem, carrying secret name/label + routing metadata and never the value. (#972)
+- **Browser incognito sessions** — `incognito:true` on `web-browser` runs in a throwaway isolated context, keeping Curia's own logins out of the principal's profile. (#987)
+- **Persistent browser profile** — the browser now uses a persistent context on a mounted volume, so logins/cookies survive restarts. (#987)
 
 ### Changed
 
@@ -43,6 +45,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **`SkillContext` (public API)** — adds optional `resolveSecretRef(ref)` method, injected only for allowlisted skills declaring `secretResolver` (backward compatible). (#973)
 - **`SecretAccessedEvent` (bus event types, public API)** — payload gains optional `byReference` flag distinguishing dynamic by-reference resolution from declared-secret access (backward compatible). (#973)
 - **Coordinator prompt** — re-derived around a three-way routing decision; delegation-hinted outbound replies now always transfer to the owning specialist. (#957)
+- **`web-browser` ad blocking is now opt-in** (`block_ads:true`) and off by default, so login/auth/form-fill flows no longer trip "privacy extension" bot detection. (#987)
+- **Browser fingerprint hardened** — real Chrome channel where available, current UA via `playwright-extra` + stealth, plus context locale/timezone/colorScheme. (#987)
 
 ### Fixed
 
@@ -53,6 +57,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Chat waiter no longer crashes the process** — `EventRouter.waitForResponse` now resolves a discriminated result instead of rejecting, so a timeout/supersede firing after the client disconnects can't surface as an `unhandledRejection`; a process-level backstop logs and stays up. (#983)
 - **KG chat rate-limit status** — `POST /api/kg/chat/messages` now returns 429 for rate-limited rejections (was a hardcoded 403), matching `/api/messages`. (#983)
 - **Flaky confidence-pipeline idempotency test** — loosened the `fullRecompute` idempotency assertion from 10 to 9 decimal places; the recency component's `new Date()` jitter (~1.5e-10) exceeded the old 5e-11 tolerance and intermittently failed CI.
+- **Browser YAML config now takes effect** — `browser.*` settings were read through a dead cast and silently ignored. (#987, #204)
 
 ### Security
 
